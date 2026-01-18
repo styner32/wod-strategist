@@ -9,16 +9,17 @@ export function usePoseDetection() {
   const plugin = useTensorflowModel(require('../../../assets/models/movenet_thunder.tflite'));
   const { resize } = useResizePlugin();
 
+  const poseResult = useSharedValue<number[]>(new Array(17 * 3).fill(0));
   const isSquatting = useSharedValue(false);
   const repCount = useSharedValue(0);
   const frameCounter = useSharedValue(0);
 
-  // 📡 [요청 반영] 모든 데이터를 다 보여주기 위한 State
+  // 📡 [복구됨] 모든 디버깅 데이터를 포함하는 State
   const [monitorData, setMonitorData] = useState({ 
-    x: 0, y: 0,           // 엉덩이
-    kneeY: 0,             // 무릎
-    squatThresh: 0,       // 앉기 기준
-    standThresh: 0,       // 서기 기준 (이게 중요!)
+    x: 0, y: 0,           // 엉덩이 좌표
+    kneeY: 0,             // 무릎 좌표 (기준)
+    squatThresh: 0,       // 앉기 목표선 (Goal)
+    standThresh: 0,       // 일어서기 목표선 (Reset)
     score: 0,             // 신뢰도
     count: 0,             // 개수
     state: 'STAND'        // 상태
@@ -34,12 +35,14 @@ export function usePoseDetection() {
 
     frameCounter.value += 1;
 
+    // 1. 전처리
     const resized = resize(frame, {
       scale: { width: 256, height: 256 },
       pixelFormat: 'rgb',
       dataType: 'uint8',
     });
 
+    // 2. 추론
     const outputs = plugin.model.runSync([resized]);
     const data = outputs[0];
 
@@ -49,30 +52,31 @@ export function usePoseDetection() {
         return v > 1.0 ? v / 255.0 : v;
       };
 
-      // 1. 좌표 추출
+      // A. 스켈레톤 데이터
+      const newPose = new Array(17 * 3);
+      for (let i = 0; i < data.length; i++) newPose[i] = getVal(i);
+      poseResult.value = newPose;
+
+      // B. 카운팅 로직
       const hipY = (getVal(11*3) + getVal(12*3)) / 2;
       const hipX = (getVal(11*3+1) + getVal(12*3+1)) / 2;
       const kneeY = (getVal(13*3) + getVal(14*3)) / 2;
       const score = (getVal(11*3+2) + getVal(12*3+2)) / 2;
 
-      // 2. [판정 로직 튜닝]
-      // 스쿼트 깊이 (앉기): 무릎 높이(-0.02)
+      // 기준값
       const squatThreshold = kneeY - 0.02; 
-      
-      // 🚨 리셋 높이 (서기): 기준 완화!
-      // 기존 0.15 -> 0.10으로 변경 (덜 일어서도 인정)
       const standThreshold = kneeY - 0.10;
 
       if (score > 0.2) {
         if (!isSquatting.value && hipY > squatThreshold) {
-          isSquatting.value = true; // ⬇️ 앉았다!
+          isSquatting.value = true;
         } else if (isSquatting.value && hipY < standThreshold) {
-          isSquatting.value = false; // ⬆️ 일어났다!
+          isSquatting.value = false;
           repCount.value += 1;
         }
       }
 
-      // 3. 데이터 전송 (매 5프레임)
+      // C. 데이터 전송 (5프레임마다)
       if (frameCounter.value % 5 === 0) {
         updateMonitorSafe({
           x: hipX, 
@@ -88,5 +92,5 @@ export function usePoseDetection() {
     }
   }, [plugin, updateMonitorSafe]);
 
-  return { frameProcessor, monitorData, isModelLoaded: plugin.state === 'loaded' };
+  return { frameProcessor, poseResult, monitorData, isModelLoaded: plugin.state === 'loaded' };
 }

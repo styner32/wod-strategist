@@ -7,17 +7,19 @@
     "icon": "./assets/images/icon.png",
     "scheme": "wodstrategist",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sunjinlee.wodstrategist",
       "infoPlist": {
-        "NSCameraUsageDescription": "AI 코칭을 위해 사용자의 움직임을 분석합니다."
+        "NSCameraUsageDescription": "AI 코칭을 위해 사용자의 움직임을 분석합니다.",
       }
     },
     "android": {
       "package": "com.sunjinlee.wodstrategist",
-      "permissions": ["CAMERA"],
+      "permissions": [
+        "CAMERA"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -49,7 +51,8 @@
         "react-native-vision-camera",
         {
           "cameraPermissionText": "AI 코칭을 위해 사용자의 움직임을 분석합니다.",
-          "enableMicrophonePermission": false
+          "microphonePermissionText": "운동 영상 녹화를 위해 마이크를 사용합니다.",
+          "enableMicrophonePermission": true,
         }
       ],
       [
@@ -58,7 +61,8 @@
           "enableCoreMLDelegate": true,
           "enableAndroidGpuLibraries": true
         }
-      ]
+      ],
+      "react-native-compressor"
     ],
     "experiments": {
       "typedRoutes": true,
