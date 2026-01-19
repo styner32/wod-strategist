@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, useWindow
 import { Video } from 'react-native-compressor';
 import { Camera, useCameraDevice, useCameraPermission, VideoFile } from 'react-native-vision-camera';
 
+import { useHeartRate } from '@/features/health/useHeartRate';
 import { usePoseDetection } from '../../features/ai-coach/frame-processors/usePoseDetection';
 import { SkeletonOverlay } from '../../features/ai-coach/ui/SkeletonOverlay';
 
@@ -13,18 +14,11 @@ export default function VisionTestPage() {
   const { width, height } = useWindowDimensions();
   const camera = useRef<Camera>(null);
 
-  const { frameProcessor, poseResult, monitorData, isModelLoaded } = usePoseDetection();
+  const { frameProcessor, poseResult, monitorData } = usePoseDetection();
   
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // 💓 [Mock] 심박수 시뮬레이션 (130~160 BPM)
-  const [heartRate, setHeartRate] = useState(135);
-  useEffect(() => {
-    const interval = setInterval(() => setHeartRate(Math.floor(130 + Math.random() * 30)), 2000);
-    return () => clearInterval(interval);
-  }, []);
-  
   // 심박수 색상 (Zone)
   const getHrColor = (bpm: number) => bpm < 140 ? '#0f0' : (bpm < 160 ? '#ff0' : '#f00');
 
@@ -38,8 +32,12 @@ export default function VisionTestPage() {
   const dotColor = isSquatting ? '#00FF00' : '#FF0000';
   const isTrapped = monitorData.y > monitorData.standThresh && monitorData.y < monitorData.squatThresh;
 
+  const { bpm, isAuthorized } = useHeartRate();
+
   useEffect(() => { 
-    if (!hasPermission) requestPermission();
+    if (!hasPermission) {
+      requestPermission();
+    }
   }, [hasPermission]);
 
   // 🎬 녹화 함수
@@ -62,7 +60,7 @@ export default function VisionTestPage() {
     setIsProcessing(true);
     try {
       const compressedUri = await Video.compress(video.path, {
-        compressionMethod: 'auto', maxWidth: 1280, quality: 0.8,
+        compressionMethod: 'auto'
       });
       Alert.alert("분석 준비 완료", `영상 압축됨 (720p):\n${compressedUri}`);
     } catch (e) {
@@ -101,7 +99,7 @@ export default function VisionTestPage() {
                    color="yellow" style="stroke" strokeWidth={3} />
              {/* 📈 서기 목표선 (Cyan) */}
              <Line p1={vec(0, standLineY)} p2={vec(width, standLineY)} 
-                   color="cyan" style="stroke" strokeWidth={3} strokeDash={[10, 10]} />
+                   color="cyan" style="stroke" strokeWidth={3} />
              {/* 🔴 내 엉덩이 */}
              <Circle cx={dotX} cy={dotY} r={20} color={dotColor} />
            </>
@@ -139,10 +137,16 @@ export default function VisionTestPage() {
       <View style={styles.hrPanel}>
           <Text style={styles.hrLabel}>HEART RATE</Text>
           <View style={{flexDirection:'row', alignItems:'flex-end'}}>
-             <Text style={[styles.hrValue, { color: getHrColor(heartRate) }]}>{heartRate}</Text>
+             {/* 데이터가 없거나 0이면 대기 표시 */}
+             <Text style={[styles.hrValue, { color: getHrColor(bpm) }]}>
+               {bpm > 0 ? bpm : '--'}
+             </Text>
              <Text style={styles.hrUnit}> BPM</Text>
           </View>
-          <Text style={{color:'#666', fontSize:9}}>Simulated</Text>
+          
+          <Text style={{color:'#666', fontSize:9}}>
+             {isAuthorized ? "Synced via HealthKit" : "Check Permissions"}
+          </Text>
       </View>
 
       {/* 6. 녹화 버튼 */}

@@ -11,8 +11,14 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sunjinlee.wodstrategist",
+      "entitlements": {
+        "com.apple.developer.healthkit": true
+      },
       "infoPlist": {
         "NSCameraUsageDescription": "AI 코칭을 위해 사용자의 움직임을 분석합니다.",
+        "NSMicrophoneUsageDescription": "운동 영상 녹화를 위해 마이크를 사용합니다.",
+        "NSHealthShareUsageDescription": "운동 중 심박수를 모니터링하기 위해 건강 데이터에 접근합니다.",
+        "NSHealthUpdateUsageDescription": "운동 데이터를 건강 앱에 저장합니다."
       }
     },
     "android": {
@@ -52,7 +58,7 @@
         {
           "cameraPermissionText": "AI 코칭을 위해 사용자의 움직임을 분석합니다.",
           "microphonePermissionText": "운동 영상 녹화를 위해 마이크를 사용합니다.",
-          "enableMicrophonePermission": true,
+          "enableMicrophonePermission": true
         }
       ],
       [
@@ -62,7 +68,16 @@
           "enableAndroidGpuLibraries": true
         }
       ],
-      "react-native-compressor"
+      "react-native-compressor",
+      [
+        "react-native-health",
+        {
+          "isClinicalDataEnabled": true,
+          "healthSharePermission": "Custom health share permission",
+          "healthUpdatePermission": "Custom health update permission",
+          "healthClinicalDescription": "Custom health share permission for clinical data"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
