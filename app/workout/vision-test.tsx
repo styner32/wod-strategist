@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Switch, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { Camera, useCameraDevice, useCameraFormat, useCameraPermission } from 'react-native-vision-camera';
 import { Canvas, Line, vec } from '@shopify/react-native-skia';
 import * as MediaLibrary from 'expo-media-library';
@@ -15,11 +15,18 @@ const cameraFormat = [
   { fps: 30 }
 ];
 
+const CHUNK_DURATION_MS = 10000; // 10 seconds
+
 export default function VisionTestPage() {
   const device = useCameraDevice('back');
   const { hasPermission, requestPermission } = useCameraPermission();
   const { width, height } = useWindowDimensions();
   const camera = useRef<Camera>(null);
+
+  // Use a ref to track if we should continue recording chunks,
+  // preventing stale state in closures/timeouts.
+  const isRecordingChunks = useRef(false);
+  const chunkTimer = useRef<NodeJS.Timeout | null>(null);
 
   // 720p 포맷 고정
   const format = useCameraFormat(device, cameraFormat);
@@ -30,6 +37,7 @@ export default function VisionTestPage() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [enableChunks, setEnableChunks] = useState(false);
 
   // UI 좌표 계산 (Updated for Body Parts)
   const headY = monitorData.headY * height;
@@ -41,8 +49,79 @@ export default function VisionTestPage() {
     if (!mediaPermission?.granted) requestMediaPermission();
   }, [hasPermission, mediaPermission]);
 
+  // --- Chunk Recording Logic (Raw Camera) ---
+
+  const startChunkLoop = async () => {
+    if (!camera.current || !isRecordingChunks.current) return;
+
+    try {
+      console.log("📷 Starting new chunk recording...");
+      camera.current.startRecording({
+        onRecordingFinished: async (video) => {
+          console.log("📷 Chunk Finished:", video.path);
+
+          // Save chunk to gallery
+          try {
+             await MediaLibrary.saveToLibraryAsync(video.path);
+             console.log("✅ Chunk saved to gallery");
+          } catch (e) {
+             console.error("Failed to save chunk:", e);
+          }
+
+          // If still recording, start the next chunk immediately
+          if (isRecordingChunks.current) {
+            startChunkLoop();
+          }
+        },
+        onRecordingError: (error) => {
+          console.error("📷 Chunk Recording Error:", error);
+        }
+      });
+
+      // Schedule stop
+      chunkTimer.current = setTimeout(async () => {
+        if (isRecordingChunks.current && camera.current) {
+          try {
+            await camera.current.stopRecording();
+          } catch (e) {
+            console.error("Failed to stop chunk recording:", e);
+          }
+        }
+      }, CHUNK_DURATION_MS);
+
+    } catch (e) {
+      console.error("Failed to start chunk recording:", e);
+    }
+  };
+
+  const startChunkRecording = () => {
+    isRecordingChunks.current = true;
+    startChunkLoop();
+  };
+
+  const stopChunkRecording = async () => {
+    isRecordingChunks.current = false;
+    if (chunkTimer.current) {
+      clearTimeout(chunkTimer.current);
+      chunkTimer.current = null;
+    }
+    // Stop the current recording if active.
+    // This will trigger onRecordingFinished, which checks isRecordingChunks.current (false), so loop stops.
+    if (camera.current) {
+      try {
+        await camera.current.stopRecording();
+      } catch (e) {
+        // Ignore error if not recording
+      }
+    }
+  };
+
+
+  // --- Main Screen Recording Logic (Full Video with Overlays) ---
+
   const handleStartRecording = async () => {
     try {
+      // 1. Start Screen Recorder (Full Video)
       // 마이크 권한 충돌 방지를 위해 mic: false 설정 (필요 시 true)
       // 앱에 이미 카메라 프리뷰가 있으므로 recorder 카메라 오버레이는 끔.
       await startInAppRecording({
@@ -51,12 +130,18 @@ export default function VisionTestPage() {
           enableCamera: false
         },
         onRecordingFinished: (file) => {
-          console.log("📼 Recording Finished:", file.path);
+          console.log("📼 Screen Recording Finished:", file.path);
         }
       });
       
       setIsRecording(true);
-      console.log("✅ Recording Started");
+      console.log("✅ Screen Recording Started");
+
+      // 2. Start Chunk Recording (Raw Camera) if enabled
+      if (enableChunks) {
+        startChunkRecording();
+      }
+
     } catch (error) {
       console.error("Recording Start Error:", error);
       Alert.alert("녹화 시작 실패", "녹화를 시작할 수 없습니다.");
@@ -67,7 +152,12 @@ export default function VisionTestPage() {
     if (!isRecording) return;
 
     try {
-      // 녹화 중단 및 파일 경로 획득
+      setIsProcessing(true); // Show spinner
+
+      // 1. Stop Chunk Recording (safe to call even if not running)
+      await stopChunkRecording();
+
+      // 2. Stop Screen Recorder
       const file = await stopInAppRecording();
       setIsRecording(false);
       console.log("📼 Original Video Path:", file?.path);
@@ -86,6 +176,8 @@ export default function VisionTestPage() {
     } catch (error) {
       console.error("Recording Stop Error:", error);
       Alert.alert("저장 오류", "영상 처리 중 문제가 발생했습니다.");
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -101,7 +193,7 @@ export default function VisionTestPage() {
         format={format}
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
-        video={false} 
+        video={true}
         audio={false}
       />
 
@@ -159,6 +251,17 @@ export default function VisionTestPage() {
           <Text style={styles.dashTitle}>📊 SYSTEM</Text>
           <View style={styles.row}><Text style={styles.label}>RES:</Text><Text style={styles.val}>{format?.videoWidth}x{format?.videoHeight}</Text></View>
           <View style={styles.row}><Text style={styles.label}>CONF:</Text><Text style={styles.val}>{(monitorData.score * 100).toFixed(0)}%</Text></View>
+
+          <View style={[styles.row, { marginTop: 10, alignItems: 'center' }]}>
+            <Text style={styles.label}>RAW VIDEO:</Text>
+            <Switch
+              value={enableChunks}
+              onValueChange={setEnableChunks}
+              trackColor={{ false: "#767577", true: "#81b0ff" }}
+              thumbColor={enableChunks ? "#f5dd4b" : "#f4f3f4"}
+              style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }}
+            />
+          </View>
         </View>
       )}
 
