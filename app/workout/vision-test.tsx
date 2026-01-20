@@ -154,11 +154,11 @@ export default function VisionTestPage() {
       {/* 심박수 패널 */}
       <View style={styles.hrPanel}>
           <Text style={styles.hrLabel}>HEART RATE</Text>
-          <View style={{flexDirection:'row', alignItems:'flex-end'}}>
+          <View style={styles.hrValueContainer}>
              <Text style={[styles.hrValue, { color: bpm > 0 ? '#0f0' : '#888' }]}>{bpm > 0 ? bpm : '--'}</Text>
              <Text style={styles.hrUnit}> BPM</Text>
           </View>
-          <Text style={{color:'#aaa', fontSize:9, marginTop:2}}>State: {hrStatus}</Text>
+          <Text style={styles.hrStatus}>State: {hrStatus}</Text>
       </View>
 
       {/* 녹화 중엔 디버그 숨김 */}
@@ -175,7 +175,7 @@ export default function VisionTestPage() {
         {isProcessing ? (
           <View style={styles.processingBadge}>
              <ActivityIndicator color="#000" />
-             <Text style={{fontWeight:'bold'}}> Saving...</Text>
+             <Text style={styles.processingText}> Saving...</Text>
           </View>
         ) : (
           <TouchableOpacity onPress={isRecording ? handleStopRecording : handleStartRecording} style={[styles.recordBtn, isRecording && styles.recordingBtn]}>
@@ -203,10 +203,22 @@ const styles = StyleSheet.create({
   hrLabel: { color: '#FF0000', fontSize: 10, fontWeight: '900' },
   hrValue: { fontSize: 32, fontWeight: 'bold', fontFamily: 'monospace' },
   hrUnit: { color: '#888', fontSize: 12, marginBottom: 5, fontWeight: 'bold' },
+  hrValueContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+  },
+  hrStatus: {
+    color: '#aaa',
+    fontSize: 9,
+    marginTop: 2,
+  },
   recordControl: { position: 'absolute', bottom: 50, alignSelf: 'center', alignItems: 'center', zIndex: 20 },
   recordBtn: { width: 80, height: 80, borderRadius: 40, borderWidth: 6, borderColor: 'white', justifyContent: 'center', alignItems: 'center' },
   recordingBtn: { borderColor: 'red' },
   innerBtn: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'red' },
   innerRecordingBtn: { width: 30, height: 30, borderRadius: 6 },
-  processingBadge: { flexDirection:'row', backgroundColor:'#00FF00', padding:15, borderRadius:30, alignItems:'center' }
+  processingBadge: { flexDirection:'row', backgroundColor:'#00FF00', padding:15, borderRadius:30, alignItems:'center' },
+  processingText: {
+    fontWeight: 'bold',
+  },
 });
