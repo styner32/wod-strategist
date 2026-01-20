@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Switch, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { Camera, useCameraDevice, useCameraFormat, useCameraPermission } from 'react-native-vision-camera';
 import { Canvas, Line, vec } from '@shopify/react-native-skia';
 import * as MediaLibrary from 'expo-media-library';
@@ -37,6 +37,7 @@ export default function VisionTestPage() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [enableChunks, setEnableChunks] = useState(false);
 
   // UI 좌표 계산 (Updated for Body Parts)
   const headY = monitorData.headY * height;
@@ -136,8 +137,10 @@ export default function VisionTestPage() {
       setIsRecording(true);
       console.log("✅ Screen Recording Started");
 
-      // 2. Start Chunk Recording (Raw Camera)
-      startChunkRecording();
+      // 2. Start Chunk Recording (Raw Camera) if enabled
+      if (enableChunks) {
+        startChunkRecording();
+      }
 
     } catch (error) {
       console.error("Recording Start Error:", error);
@@ -151,7 +154,7 @@ export default function VisionTestPage() {
     try {
       setIsProcessing(true); // Show spinner
 
-      // 1. Stop Chunk Recording
+      // 1. Stop Chunk Recording (safe to call even if not running)
       await stopChunkRecording();
 
       // 2. Stop Screen Recorder
@@ -248,6 +251,17 @@ export default function VisionTestPage() {
           <Text style={styles.dashTitle}>📊 SYSTEM</Text>
           <View style={styles.row}><Text style={styles.label}>RES:</Text><Text style={styles.val}>{format?.videoWidth}x{format?.videoHeight}</Text></View>
           <View style={styles.row}><Text style={styles.label}>CONF:</Text><Text style={styles.val}>{(monitorData.score * 100).toFixed(0)}%</Text></View>
+
+          <View style={[styles.row, { marginTop: 10, alignItems: 'center' }]}>
+            <Text style={styles.label}>RAW VIDEO:</Text>
+            <Switch
+              value={enableChunks}
+              onValueChange={setEnableChunks}
+              trackColor={{ false: "#767577", true: "#81b0ff" }}
+              thumbColor={enableChunks ? "#f5dd4b" : "#f4f3f4"}
+              style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }}
+            />
+          </View>
         </View>
       )}
 
