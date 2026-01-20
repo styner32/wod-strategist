@@ -11,6 +11,11 @@ import { usePoseDetection } from '../../features/ai-coach/frame-processors/usePo
 import { SkeletonOverlay } from '../../features/ai-coach/ui/SkeletonOverlay';
 import { useHeartRate } from '../../features/health/useHeartRate';
 
+const cameraFormat = [
+  { videoResolution: { width: 1280, height: 720 } },
+  { fps: 30 }
+];
+
 export default function VisionTestPage() {
   const device = useCameraDevice('back');
   const { hasPermission, requestPermission } = useCameraPermission();
@@ -18,10 +23,7 @@ export default function VisionTestPage() {
   const camera = useRef<Camera>(null);
 
   // 720p 포맷 고정
-  const format = useCameraFormat(device, [
-    { videoResolution: { width: 1280, height: 720 } },
-    { fps: 30 }
-  ]);
+  const format = useCameraFormat(device, cameraFormat);
 
   const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions();
   const { frameProcessor, poseResult, monitorData } = usePoseDetection();
