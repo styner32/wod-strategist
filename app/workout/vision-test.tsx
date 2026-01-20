@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { Camera, useCameraDevice, useCameraFormat, useCameraPermission } from 'react-native-vision-camera';
-// 📦 [수정] DashPathEffect 추가
-import { Canvas, Circle, DashPathEffect, Line, vec } from '@shopify/react-native-skia';
+import { Canvas, Line, vec } from '@shopify/react-native-skia';
 import * as MediaLibrary from 'expo-media-library';
 import { Video } from 'react-native-compressor';
 import { startInAppRecording, stopInAppRecording } from 'react-native-nitro-screen-recorder';
@@ -30,13 +29,10 @@ export default function VisionTestPage() {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // UI 좌표 계산
-  const dotX = monitorData.x * width;
-  const dotY = monitorData.y * height;
-  const squatLineY = monitorData.squatThresh * height;
-  const standLineY = monitorData.standThresh * height;
-  const dotColor = monitorData.state === 'SQUAT' ? '#00FF00' : '#FF0000';
-  const isTrapped = monitorData.y > monitorData.standThresh && monitorData.y < monitorData.squatThresh;
+  // UI 좌표 계산 (Updated for Body Parts)
+  const headY = monitorData.headY * height;
+  const shoulderY = monitorData.shoulderY * height;
+  const hipY = monitorData.hipY * height;
 
   useEffect(() => { 
     if (!hasPermission) requestPermission();
@@ -111,43 +107,39 @@ export default function VisionTestPage() {
         <SkeletonOverlay pose={poseResult} width={width} height={height} />
       </View>
 
-      {/* 게임 UI */}
+      {/* Body Part Annotations */}
       <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
          {monitorData.score > 0.2 && (
            <>
-             {/* 📉 앉기 목표선 (실선) */}
+             {/* Head Line (Red) */}
              <Line 
-               p1={vec(0, squatLineY)} 
-               p2={vec(width, squatLineY)} 
-               color="yellow" 
+               p1={vec(0, headY)}
+               p2={vec(width, headY)}
+               color="red"
                style="stroke" 
-               strokeWidth={3} 
+               strokeWidth={2}
              />
              
-             {/* 📈 [수정] 서기 목표선 (점선) - DashPathEffect 사용 */}
+             {/* Shoulder Line (Green) */}
              <Line 
-               p1={vec(0, standLineY)} 
-               p2={vec(width, standLineY)} 
-               color="cyan" 
+               p1={vec(0, shoulderY)}
+               p2={vec(width, shoulderY)}
+               color="green"
                style="stroke" 
-               strokeWidth={3}
-             >
-                {/* 🚨 strokeDash prop 대신 자식 컴포넌트로 효과 적용 */}
-                <DashPathEffect intervals={[10, 10]} />
-             </Line>
+               strokeWidth={2}
+             />
 
-             <Circle cx={dotX} cy={dotY} r={20} color={dotColor} />
+             {/* Hip Line (Blue) */}
+             <Line
+               p1={vec(0, hipY)}
+               p2={vec(width, hipY)}
+               color="blue"
+               style="stroke"
+               strokeWidth={2}
+             />
            </>
          )}
       </Canvas>
-
-      {/* 중앙 카운터 */}
-      <View style={styles.counterBox}>
-         <Text style={styles.repCount}>{monitorData.count}</Text>
-         <View style={[styles.badge, { backgroundColor: isTrapped ? 'gray' : dotColor }]}>
-            <Text style={styles.badgeText}>{isTrapped ? "MOVE MORE" : monitorData.state}</Text>
-         </View>
-      </View>
 
       {/* 심박수 패널 */}
       <View style={styles.hrPanel}>
@@ -188,10 +180,6 @@ export default function VisionTestPage() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'black' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  counterBox: { position: 'absolute', top: 120, alignSelf: 'center', alignItems: 'center' },
-  repCount: { color: 'white', fontSize: 100, fontWeight: '900', textShadowColor: 'black', textShadowRadius: 10 },
-  badge: { paddingHorizontal: 15, paddingVertical: 5, borderRadius: 10, marginTop: 5 },
-  badgeText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
   dashboard: { position: 'absolute', top: 50, left: 10, backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8, width: 140, borderWidth: 1, borderColor: '#555', zIndex: 10 },
   dashTitle: { color: '#fff', fontWeight:'bold', fontSize: 10, marginBottom: 5, textAlign:'center' },
   row: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: 2 },

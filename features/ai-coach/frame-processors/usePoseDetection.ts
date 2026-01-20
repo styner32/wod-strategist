@@ -10,19 +10,14 @@ export function usePoseDetection() {
   const { resize } = useResizePlugin();
 
   const poseResult = useSharedValue<number[]>(new Array(17 * 3).fill(0));
-  const isSquatting = useSharedValue(false);
-  const repCount = useSharedValue(0);
   const frameCounter = useSharedValue(0);
 
-  // 📡 [복구됨] 모든 디버깅 데이터를 포함하는 State
+  // 📡 [Modified] Monitor Data for Head, Shoulder, Hip
   const [monitorData, setMonitorData] = useState({ 
-    x: 0, y: 0,           // 엉덩이 좌표
-    kneeY: 0,             // 무릎 좌표 (기준)
-    squatThresh: 0,       // 앉기 목표선 (Goal)
-    standThresh: 0,       // 일어서기 목표선 (Reset)
-    score: 0,             // 신뢰도
-    count: 0,             // 개수
-    state: 'STAND'        // 상태
+    headY: 0,
+    shoulderY: 0,
+    hipY: 0,
+    score: 0,
   });
 
   const updateMonitorSafe = useRunOnJS((data) => {
@@ -35,14 +30,14 @@ export function usePoseDetection() {
 
     frameCounter.value += 1;
 
-    // 1. 전처리
+    // 1. Preprocessing
     const resized = resize(frame, {
       scale: { width: 256, height: 256 },
       pixelFormat: 'rgb',
       dataType: 'uint8',
     });
 
-    // 2. 추론
+    // 2. Inference
     const outputs = plugin.model.runSync([resized]);
     const data = outputs[0];
 
@@ -52,41 +47,31 @@ export function usePoseDetection() {
         return v > 1.0 ? v / 255.0 : v;
       };
 
-      // A. 스켈레톤 데이터
+      // A. Skeleton Data
       const newPose = new Array(17 * 3);
       for (let i = 0; i < data.length; i++) newPose[i] = getVal(i);
       poseResult.value = newPose;
 
-      // B. 카운팅 로직
-      const hipY = (getVal(11*3) + getVal(12*3)) / 2;
-      const hipX = (getVal(11*3+1) + getVal(12*3+1)) / 2;
-      const kneeY = (getVal(13*3) + getVal(14*3)) / 2;
-      const score = (getVal(11*3+2) + getVal(12*3+2)) / 2;
+      // B. Body Part Coordinates
+      // Head (Nose: 0)
+      const headY = getVal(0 * 3);
 
-      // 기준값
-      const squatThreshold = kneeY - 0.02; 
-      const standThreshold = kneeY - 0.10;
+      // Shoulders (Left: 5, Right: 6)
+      const shoulderY = (getVal(5 * 3) + getVal(6 * 3)) / 2;
 
-      if (score > 0.2) {
-        if (!isSquatting.value && hipY > squatThreshold) {
-          isSquatting.value = true;
-        } else if (isSquatting.value && hipY < standThreshold) {
-          isSquatting.value = false;
-          repCount.value += 1;
-        }
-      }
+      // Hips (Left: 11, Right: 12)
+      const hipY = (getVal(11 * 3) + getVal(12 * 3)) / 2;
 
-      // C. 데이터 전송 (5프레임마다)
+      // Score (Avg of hips confidence, or overall confidence)
+      const score = (getVal(11 * 3 + 2) + getVal(12 * 3 + 2)) / 2;
+
+      // C. Data Transfer (Every 5 frames)
       if (frameCounter.value % 5 === 0) {
         updateMonitorSafe({
-          x: hipX, 
-          y: hipY, 
-          kneeY: kneeY,
-          squatThresh: squatThreshold,
-          standThresh: standThreshold,
+          headY: headY,
+          shoulderY: shoulderY,
+          hipY: hipY,
           score: score,
-          count: repCount.value,
-          state: isSquatting.value ? 'SQUAT' : 'STAND'
         });
       }
     }
