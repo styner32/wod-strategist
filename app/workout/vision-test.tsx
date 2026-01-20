@@ -1,12 +1,15 @@
-import { Canvas, Circle, Line, vec } from '@shopify/react-native-skia';
 import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { Camera, useCameraDevice, useCameraFormat, useCameraPermission } from 'react-native-vision-camera';
+// 📦 [수정] DashPathEffect 추가
+import { Canvas, Circle, DashPathEffect, Line, vec } from '@shopify/react-native-skia';
+import * as MediaLibrary from 'expo-media-library';
 import { Video } from 'react-native-compressor';
-import { Camera, useCameraDevice, useCameraPermission, VideoFile } from 'react-native-vision-camera';
+import { startInAppRecording, stopInAppRecording } from 'react-native-nitro-screen-recorder';
 
-import { useHeartRate } from '@/features/health/useHeartRate';
 import { usePoseDetection } from '../../features/ai-coach/frame-processors/usePoseDetection';
 import { SkeletonOverlay } from '../../features/ai-coach/ui/SkeletonOverlay';
+import { useHeartRate } from '../../features/health/useHeartRate';
 
 export default function VisionTestPage() {
   const device = useCameraDevice('back');
@@ -14,59 +17,77 @@ export default function VisionTestPage() {
   const { width, height } = useWindowDimensions();
   const camera = useRef<Camera>(null);
 
+  // 720p 포맷 고정
+  const format = useCameraFormat(device, [
+    { videoResolution: { width: 1280, height: 720 } },
+    { fps: 30 }
+  ]);
+
+  const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions();
   const { frameProcessor, poseResult, monitorData } = usePoseDetection();
-  
+  const { bpm, status: hrStatus } = useHeartRate();
+
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // 심박수 색상 (Zone)
-  const getHrColor = (bpm: number) => bpm < 140 ? '#0f0' : (bpm < 160 ? '#ff0' : '#f00');
-
-  // 좌표 계산
+  // UI 좌표 계산
   const dotX = monitorData.x * width;
   const dotY = monitorData.y * height;
   const squatLineY = monitorData.squatThresh * height;
   const standLineY = monitorData.standThresh * height;
-  
-  const isSquatting = monitorData.state === 'SQUAT';
-  const dotColor = isSquatting ? '#00FF00' : '#FF0000';
+  const dotColor = monitorData.state === 'SQUAT' ? '#00FF00' : '#FF0000';
   const isTrapped = monitorData.y > monitorData.standThresh && monitorData.y < monitorData.squatThresh;
 
-  const { bpm, isAuthorized } = useHeartRate();
-
   useEffect(() => { 
-    if (!hasPermission) {
-      requestPermission();
-    }
-  }, [hasPermission]);
+    if (!hasPermission) requestPermission();
+    if (!mediaPermission?.granted) requestMediaPermission();
+  }, [hasPermission, mediaPermission]);
 
-  // 🎬 녹화 함수
-  const handleRecording = async () => {
-    if (!camera.current) return;
-    if (isRecording) {
-      await camera.current.stopRecording();
-      setIsRecording(false);
-    } else {
-      setIsRecording(true);
-      camera.current.startRecording({
-        fileType: 'mp4',
-        onRecordingFinished: async (video) => processVideo(video),
-        onRecordingError: (e) => console.error(e)
+  const handleStartRecording = async () => {
+    try {
+      // 마이크 권한 충돌 방지를 위해 mic: false 설정 (필요 시 true)
+      // 앱에 이미 카메라 프리뷰가 있으므로 recorder 카메라 오버레이는 끔.
+      await startInAppRecording({
+        options: {
+          enableMic: false,
+          enableCamera: false
+        },
+        onRecordingFinished: (file) => {
+          console.log("📼 Recording Finished:", file.path);
+        }
       });
+      
+      setIsRecording(true);
+      console.log("✅ Recording Started");
+    } catch (error) {
+      console.error("Recording Start Error:", error);
+      Alert.alert("녹화 시작 실패", "녹화를 시작할 수 없습니다.");
     }
   };
 
-  const processVideo = async (video: VideoFile) => {
-    setIsProcessing(true);
+  const handleStopRecording = async () => {
+    if (!isRecording) return;
+
     try {
-      const compressedUri = await Video.compress(video.path, {
-        compressionMethod: 'auto'
-      });
-      Alert.alert("분석 준비 완료", `영상 압축됨 (720p):\n${compressedUri}`);
-    } catch (e) {
-      Alert.alert("Error", "영상 처리 실패");
-    } finally {
-      setIsProcessing(false);
+      // 녹화 중단 및 파일 경로 획득
+      const file = await stopInAppRecording();
+      setIsRecording(false);
+      console.log("📼 Original Video Path:", file?.path);
+
+      if (file?.path) {
+        // 압축 (기존 로직 유지)
+        const compressedUri = await Video.compress(file.path, {
+          compressionMethod: 'auto',
+          maxSize: 1280,
+        });
+
+        // 갤러리 저장 (기존 로직 유지)
+        await MediaLibrary.saveToLibraryAsync(compressedUri);
+        Alert.alert("저장 완료", "운동 영상이 갤러리에 저장되었습니다.");
+      }
+    } catch (error) {
+      console.error("Recording Stop Error:", error);
+      Alert.alert("저장 오류", "영상 처리 중 문제가 발생했습니다.");
     }
   };
 
@@ -79,77 +100,75 @@ export default function VisionTestPage() {
         style={StyleSheet.absoluteFill}
         device={device}
         isActive={true}
+        format={format}
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
-        video={true} 
-        audio={false} // 🚨 [핵심] 오디오를 꺼서 권한 크래시 방지
+        video={false} 
+        audio={false}
       />
 
-      {/* 1. 스켈레톤 */}
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         <SkeletonOverlay pose={poseResult} width={width} height={height} />
       </View>
 
-      {/* 2. 게임 UI (점, 선) */}
+      {/* 게임 UI */}
       <Canvas style={StyleSheet.absoluteFill} pointerEvents="none">
          {monitorData.score > 0.2 && (
            <>
-             {/* 📉 앉기 목표선 (Yellow) */}
-             <Line p1={vec(0, squatLineY)} p2={vec(width, squatLineY)} 
-                   color="yellow" style="stroke" strokeWidth={3} />
-             {/* 📈 서기 목표선 (Cyan) */}
-             <Line p1={vec(0, standLineY)} p2={vec(width, standLineY)} 
-                   color="cyan" style="stroke" strokeWidth={3} />
-             {/* 🔴 내 엉덩이 */}
+             {/* 📉 앉기 목표선 (실선) */}
+             <Line 
+               p1={vec(0, squatLineY)} 
+               p2={vec(width, squatLineY)} 
+               color="yellow" 
+               style="stroke" 
+               strokeWidth={3} 
+             />
+             
+             {/* 📈 [수정] 서기 목표선 (점선) - DashPathEffect 사용 */}
+             <Line 
+               p1={vec(0, standLineY)} 
+               p2={vec(width, standLineY)} 
+               color="cyan" 
+               style="stroke" 
+               strokeWidth={3}
+             >
+                {/* 🚨 strokeDash prop 대신 자식 컴포넌트로 효과 적용 */}
+                <DashPathEffect intervals={[10, 10]} />
+             </Line>
+
              <Circle cx={dotX} cy={dotY} r={20} color={dotColor} />
            </>
          )}
       </Canvas>
 
-      {/* 3. 중앙 카운터 */}
+      {/* 중앙 카운터 */}
       <View style={styles.counterBox}>
          <Text style={styles.repCount}>{monitorData.count}</Text>
          <View style={[styles.badge, { backgroundColor: isTrapped ? 'gray' : dotColor }]}>
-            <Text style={styles.badgeText}>
-               {isTrapped ? "MOVE MORE" : monitorData.state}
-            </Text>
+            <Text style={styles.badgeText}>{isTrapped ? "MOVE MORE" : monitorData.state}</Text>
          </View>
       </View>
 
-      {/* 4. 📊 [복구] 좌측 상세 데이터 패널 */}
-      <View style={styles.dashboard}>
-        <Text style={styles.dashTitle}>📊 TELEMETRY</Text>
-        <View style={styles.row}>
-            <Text style={styles.label}>CONF:</Text>
-            <Text style={[styles.val, {color: monitorData.score>0.4?'#0f0':'#f55'}]}>
-                {(monitorData.score * 100).toFixed(0)}%
-            </Text>
-        </View>
-        <View style={styles.divider} />
-        <View style={styles.row}><Text style={styles.label}>HIP Y:</Text><Text style={styles.val}>{monitorData.y.toFixed(2)}</Text></View>
-        <View style={styles.row}><Text style={styles.label}>KNEE Y:</Text><Text style={styles.val}>{monitorData.kneeY.toFixed(2)}</Text></View>
-        <View style={styles.divider} />
-        <View style={styles.row}><Text style={{color:'cyan', fontSize:10, fontWeight:'bold'}}>RESET:</Text><Text style={styles.val}>{monitorData.standThresh.toFixed(2)}</Text></View>
-        <View style={styles.row}><Text style={{color:'yellow', fontSize:10, fontWeight:'bold'}}>GOAL:</Text><Text style={styles.val}>{monitorData.squatThresh.toFixed(2)}</Text></View>
-      </View>
-
-      {/* 5. 💓 [신규] 우측 심박수 패널 (Mock) */}
+      {/* 심박수 패널 */}
       <View style={styles.hrPanel}>
           <Text style={styles.hrLabel}>HEART RATE</Text>
           <View style={{flexDirection:'row', alignItems:'flex-end'}}>
-             {/* 데이터가 없거나 0이면 대기 표시 */}
-             <Text style={[styles.hrValue, { color: getHrColor(bpm) }]}>
-               {bpm > 0 ? bpm : '--'}
-             </Text>
+             <Text style={[styles.hrValue, { color: bpm > 0 ? '#0f0' : '#888' }]}>{bpm > 0 ? bpm : '--'}</Text>
              <Text style={styles.hrUnit}> BPM</Text>
           </View>
-          
-          <Text style={{color:'#666', fontSize:9}}>
-             {isAuthorized ? "Synced via HealthKit" : "Check Permissions"}
-          </Text>
+          <Text style={{color:'#aaa', fontSize:9, marginTop:2}}>State: {hrStatus}</Text>
       </View>
 
-      {/* 6. 녹화 버튼 */}
+      {/* 녹화 중엔 디버그 숨김 */}
+      {!isRecording && (
+        <View style={styles.dashboard}>
+          <Text style={styles.dashTitle}>📊 SYSTEM</Text>
+          <View style={styles.row}><Text style={styles.label}>RES:</Text><Text style={styles.val}>{format?.videoWidth}x{format?.videoHeight}</Text></View>
+          <View style={styles.row}><Text style={styles.label}>CONF:</Text><Text style={styles.val}>{(monitorData.score * 100).toFixed(0)}%</Text></View>
+        </View>
+      )}
+
+      {/* 녹화 버튼 */}
       <View style={styles.recordControl}>
         {isProcessing ? (
           <View style={styles.processingBadge}>
@@ -157,10 +176,7 @@ export default function VisionTestPage() {
              <Text style={{fontWeight:'bold'}}> Saving...</Text>
           </View>
         ) : (
-          <TouchableOpacity 
-            onPress={handleRecording}
-            style={[styles.recordBtn, isRecording && styles.recordingBtn]}
-          >
+          <TouchableOpacity onPress={isRecording ? handleStopRecording : handleStartRecording} style={[styles.recordBtn, isRecording && styles.recordingBtn]}>
             <View style={[styles.innerBtn, isRecording && styles.innerRecordingBtn]} />
           </TouchableOpacity>
         )}
@@ -172,41 +188,21 @@ export default function VisionTestPage() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'black' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  
   counterBox: { position: 'absolute', top: 120, alignSelf: 'center', alignItems: 'center' },
   repCount: { color: 'white', fontSize: 100, fontWeight: '900', textShadowColor: 'black', textShadowRadius: 10 },
   badge: { paddingHorizontal: 15, paddingVertical: 5, borderRadius: 10, marginTop: 5 },
   badgeText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-
-  // 좌측 디버그 패널
-  dashboard: {
-    position: 'absolute', top: 50, left: 10,
-    backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8,
-    width: 140, borderWidth: 1, borderColor: '#555', zIndex: 10
-  },
+  dashboard: { position: 'absolute', top: 50, left: 10, backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8, width: 140, borderWidth: 1, borderColor: '#555', zIndex: 10 },
   dashTitle: { color: '#fff', fontWeight:'bold', fontSize: 10, marginBottom: 5, textAlign:'center' },
   row: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: 2 },
   label: { color: '#aaa', fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold' },
   val: { color: '#fff', fontSize: 11, fontFamily: 'monospace', fontWeight: 'bold' },
-  divider: { height: 1, backgroundColor: '#444', marginVertical: 3 },
-
-  // 우측 심박수 패널
-  hrPanel: {
-    position: 'absolute', top: 50, right: 10,
-    backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8,
-    alignItems: 'flex-end', borderRightWidth: 3, borderColor: '#FF0000', zIndex: 10
-  },
+  hrPanel: { position: 'absolute', top: 50, right: 10, backgroundColor: 'rgba(0,0,0,0.7)', padding: 10, borderRadius: 8, alignItems: 'flex-end', borderRightWidth: 3, borderColor: '#FF0000', zIndex: 10 },
   hrLabel: { color: '#FF0000', fontSize: 10, fontWeight: '900' },
   hrValue: { fontSize: 32, fontWeight: 'bold', fontFamily: 'monospace' },
   hrUnit: { color: '#888', fontSize: 12, marginBottom: 5, fontWeight: 'bold' },
-
-  // 녹화 버튼
-  recordControl: { position: 'absolute', bottom: 50, alignSelf: 'center', alignItems: 'center' },
-  recordBtn: {
-    width: 80, height: 80, borderRadius: 40,
-    borderWidth: 6, borderColor: 'white',
-    justifyContent: 'center', alignItems: 'center'
-  },
+  recordControl: { position: 'absolute', bottom: 50, alignSelf: 'center', alignItems: 'center', zIndex: 20 },
+  recordBtn: { width: 80, height: 80, borderRadius: 40, borderWidth: 6, borderColor: 'white', justifyContent: 'center', alignItems: 'center' },
   recordingBtn: { borderColor: 'red' },
   innerBtn: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'red' },
   innerRecordingBtn: { width: 30, height: 30, borderRadius: 6 },
