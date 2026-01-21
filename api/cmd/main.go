@@ -18,12 +18,11 @@ func main() {
 
 	// Initialize Database
 	db.Connect()
-	db.Migrate()
 
 	// Initialize Redis Connection for Asynq
-	redisAddr := os.Getenv("REDIS_ADDR")
+	redisAddr := os.Getenv("REDIS_URL")
 	if redisAddr == "" {
-		redisAddr = "localhost:6379"
+		redisAddr = "redis://localhost:6379/1"
 	}
 	redisOpt := asynq.RedisClientOpt{Addr: redisAddr}
 
@@ -51,7 +50,7 @@ func main() {
 	r := server.SetupRouter(client)
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "8088"
 	}
 
 	if err := r.Run(":" + port); err != nil {
