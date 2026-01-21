@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
+	"github.com/wod-strategist/api/internal/logger"
+	"go.uber.org/zap"
 )
 
 const (
@@ -39,7 +40,7 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	log.Printf("Processing video analysis for session: %s", p.SessionID)
+	logger.Log.Info("Processing video analysis", zap.String("session_id", p.SessionID))
 
 	// Update status to PROCESSING (optional, if we tracked specific task IDs, but here we just append results)
 	// For simplicity, we just create a new result when done.
@@ -56,7 +57,7 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	// Clean up local file
 	defer func() {
 		if err := os.Remove(p.FilePath); err != nil {
-			log.Printf("Failed to remove temp file: %v", err)
+			logger.Log.Error("Failed to remove temp file", zap.Error(err))
 		}
 	}()
 
@@ -64,13 +65,13 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	if geminiFile != "" {
 		defer func() {
 			if err := geminiClient.DeleteFile(ctx, geminiFile); err != nil {
-				log.Printf("Failed to delete file from Gemini: %v", err)
+				logger.Log.Error("Failed to delete file from Gemini", zap.Error(err))
 			}
 		}()
 	}
 
 	if err != nil {
-		log.Printf("Analysis failed: %v", err)
+		logger.Log.Error("Analysis failed", zap.Error(err))
 		// Save failure to DB
 		db.DB.Create(&db.AnalysisResult{
 			SessionID: p.SessionID,
@@ -87,6 +88,6 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 		Output:    analysis,
 	})
 
-	log.Printf("Analysis completed for session: %s", p.SessionID)
+	logger.Log.Info("Analysis completed", zap.String("session_id", p.SessionID))
 	return nil
 }
