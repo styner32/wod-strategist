@@ -5,6 +5,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/wod-strategist/api/internal/logger"
+	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -29,16 +31,16 @@ func Connect() {
 	var err error
 	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatal("Failed to connect to database:", err)
+		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
 	}
 
-	log.Println("Database connection established")
+	logger.Log.Info("Database connection established")
 }
 
 func Migrate() {
 	err := DB.AutoMigrate(&AnalysisResult{})
 	if err != nil {
-		log.Fatal("Failed to migrate database:", err)
+		logger.Log.Fatal("Failed to migrate database", zap.Error(err))
 	}
-	log.Println("Database migration completed")
+	logger.Log.Info("Database migration completed")
 }

@@ -5,15 +5,36 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/worker"
+	"go.uber.org/zap"
 )
 
 func SetupRouter(client *asynq.Client) *gin.Engine {
-	r := gin.Default()
+	// Use gin.New() instead of Default() to avoid default logger which uses standard log package
+	r := gin.New()
+	r.Use(gin.Recovery())
+
+	// Add simple middleware to log requests using Zap
+	r.Use(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		start := time.Now()
+		c.Next()
+		latency := time.Since(start)
+		status := c.Writer.Status()
+
+		logger.Log.Info("Request",
+			zap.String("method", c.Request.Method),
+			zap.String("path", path),
+			zap.Int("status", status),
+			zap.Duration("latency", latency),
+		)
+	})
 
 	api := r.Group("/api/v1")
 	{
