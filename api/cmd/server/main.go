@@ -34,11 +34,11 @@ func main() {
 	db.Migrate()
 
 	// Initialize Redis Connection for Asynq Client
-	redisAddr := os.Getenv("REDIS_ADDR")
+	redisAddr := os.Getenv("REDIS_URL")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
-	redisOpt := asynq.RedisClientOpt{Addr: redisAddr}
+	redisOpt := asynq.RedisClientOpt{Addr: redisAddr, DB: 5} // Use DB 5 for Asynq tasks
 	client := asynq.NewClient(redisOpt)
 	defer client.Close()
 

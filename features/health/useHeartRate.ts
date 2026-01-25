@@ -1,77 +1,93 @@
-import { useEffect, useState } from 'react';
-import { NativeModules, Platform } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 
-// 🚨 [핵심 패치] 라이브러리 import 대신 NativeModules 직접 사용
-// RN 0.76 호환성 문제를 해결하기 위해 '다이렉트'로 연결합니다.
 const { AppleHealthKit } = NativeModules;
+const healthKitEmitter = AppleHealthKit ? new NativeEventEmitter(AppleHealthKit) : null;
 
-// 권한 설정 (라이브러리 상수 대신 직접 문자열 사용)
 const PERMISSIONS = {
   permissions: {
-    read: ["HeartRate"], // "HeartRate" 문자열 직접 입력
-    write: [],
-  },
+    read: ["HeartRate"],
+    write: []
+  }
 };
 
 export function useHeartRate() {
-  const [bpm, setBpm] = useState<number>(0);
+  const [bpm, setBpm] = useState(0);
+  const [status, setStatus] = useState("Init");
   const [isAuthorized, setIsAuthorized] = useState(false);
-  const [status, setStatus] = useState("Initializing...");
+  
+  // 1초 내 중복 호출 방지 (Throttle)
+  const lastUpdateRef = useRef<number>(0);
 
-  useEffect(() => {
-    if (Platform.OS !== 'ios') return;
+  // 1. 데이터 조회 함수 (이벤트 & 폴링 공용)
+  const fetchLatestHeartRate = useCallback(() => {
+    const now = Date.now();
+    // 너무 잦은 갱신 방지 (1초 텀)
+    if (now - lastUpdateRef.current < 1000) return;
+    lastUpdateRef.current = now;
 
-    // 1. 네이티브 모듈 연결 확인
-    // 플러그인 설정이 안 되어있으면 여기서 걸러집니다.
-    if (!AppleHealthKit) {
-      console.error("❌ HealthKit Native Module Not Found.");
-      setStatus("Native Module Missing (Rebuild Required)");
-      return;
-    }
-
-    setStatus("Requesting Auth...");
-
-    // 2. 초기화 (이제 함수가 없다는 에러가 안 날 것입니다)
-    AppleHealthKit.initHealthKit(PERMISSIONS, (error: string) => {
-      if (error) {
-        console.log('[HealthKit] Init Error:', error);
-        setStatus(`Error: ${error}`);
-        return;
-      }
-      setIsAuthorized(true);
-      setStatus("Authorized");
-      
-      // 즉시 조회 시작
-      fetchLatestHeartRate();
-    });
-  }, []);
-
-  const fetchLatestHeartRate = () => {
-    // 안전 장치
-    if (!AppleHealthKit || !AppleHealthKit.getHeartRateSamples) return;
+    if (!AppleHealthKit?.getHeartRateSamples) return;
 
     const options = {
       unit: 'bpm',
-      startDate: new Date(new Date().getTime() - 1000 * 60 * 60).toISOString(), // 1시간 전
+      startDate: new Date(Date.now() - 5 * 60 * 1000).toISOString(), // 최근 5분
       limit: 1,
       ascending: false,
     };
 
-    AppleHealthKit.getHeartRateSamples(options, (err: object, results: any[]) => {
-      if (err) return;
-      if (results && results.length > 0) {
-        setBpm(results[0].value);
+    AppleHealthKit.getHeartRateSamples(options, (err: any, res: any[]) => {
+      if (err) {
+        console.error('[HealthKit] Get Heart Rate Samples Error:', err);
+        return;
+      }
+
+      if (res && res.length > 0) {
+        console.log('[HealthKit] Get Heart Rate Samples:', res);
+        setBpm(res[0].value);
         setStatus("Live");
       }
     });
-  };
+  }, []);
 
-  // 3초마다 갱신
+  // 2. 초기화
   useEffect(() => {
-    if (!isAuthorized) return;
-    const interval = setInterval(fetchLatestHeartRate, 3000);
-    return () => clearInterval(interval);
-  }, [isAuthorized]);
+    if (!AppleHealthKit || Platform.OS !== 'ios') return;
+
+    AppleHealthKit.initHealthKit(PERMISSIONS, (err: any) => {
+      if (!err) {
+        setIsAuthorized(true);
+        
+        // [복구] 라이브러리 공식 옵저버 실행
+        // 경고가 뜨더라도 현재 버전에서 사용 가능한 유일한 함수입니다.
+        if (AppleHealthKit.initHeartRateObserver) {
+          AppleHealthKit.initHeartRateObserver({ window: 60 }); 
+        }
+
+        fetchLatestHeartRate();
+      } else {
+        console.warn("HealthKit Init Failed:", err);
+      }
+    });
+  }, [fetchLatestHeartRate]);
+
+  // 3. [핵심] 하이브리드 리스너 (이벤트 + 폴링)
+  useEffect(() => {
+    if (!isAuthorized || !healthKitEmitter) return;
+
+    // (A) 이벤트 리스너: 라이브러리 버전에 따라 이벤트명이 다를 수 있어 안전하게 둘 다 구독
+    const sub1 = healthKitEmitter.addListener('healthKit:HeartRate:new', fetchLatestHeartRate);
+    const sub2 = healthKitEmitter.addListener('healthKit:HeartRate:sample', fetchLatestHeartRate);
+
+    // (B) 강제 폴링: 녹화 중 시스템 부하로 이벤트가 씹힐 때를 대비한 안전장치
+    // 2초마다 무조건 데이터를 긁어옵니다.
+    const pollingInterval = setInterval(fetchLatestHeartRate, 2000);
+
+    return () => {
+      sub1.remove();
+      sub2.remove();
+      clearInterval(pollingInterval);
+    };
+  }, [isAuthorized, fetchLatestHeartRate]);
 
   return { bpm, status };
 }

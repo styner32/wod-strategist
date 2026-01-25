@@ -14,8 +14,7 @@ export default function Dashboard() {
       <View style={styles.menu}>
         <Text style={styles.sectionTitle}>Development Zone</Text>
 
-        {/* 이 버튼을 누르면 /workout/vision-test 경로로 이동합니다 */}
-        <Link href="/workout/vision-test" asChild>
+        <Link href="/workout/visionTestPage" asChild>
           <Pressable style={styles.card}>
             <View style={styles.iconBox}>
               <Text style={styles.icon}>👁️</Text>

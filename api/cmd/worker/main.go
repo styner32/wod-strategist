@@ -27,11 +27,11 @@ func main() {
 	// db.Migrate() // Migration can be done in API server or a separate job, but usually safe to run here too if idempotent
 
 	// Initialize Redis Connection for Asynq
-	redisAddr := os.Getenv("REDIS_ADDR")
+	redisAddr := os.Getenv("REDIS_URL")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
-	redisOpt := asynq.RedisClientOpt{Addr: redisAddr}
+	redisOpt := asynq.RedisClientOpt{Addr: redisAddr, DB: 5} // Use DB 5 for Asynq tasks
 
 	// Start Asynq Server (Worker)
 	srv := asynq.NewServer(

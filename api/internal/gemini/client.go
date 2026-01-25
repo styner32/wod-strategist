@@ -64,7 +64,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 	}
 
 	// Generate content
-	model := c.client.GenerativeModel("gemini-1.5-flash")
+	model := c.client.GenerativeModel("gemini-3-pro-preview")
 	resp, err := model.GenerateContent(ctx, genai.FileData{URI: uploadResult.URI}, genai.Text(prompt))
 	if err != nil {
 		return "", uploadResult.Name, fmt.Errorf("failed to generate content: %w", err)

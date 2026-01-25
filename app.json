@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.sunjinlee.wodstrategist",
       "entitlements": {
-        "com.apple.developer.healthkit": true
+        "com.apple.developer.healthkit": true,
+        "com.apple.developer.healthkit.background-delivery": true
       },
       "infoPlist": {
         "NSCameraUsageDescription": "AI 코칭을 위해 사용자의 움직임을 분석합니다.",
@@ -20,7 +21,10 @@
         "NSHealthShareUsageDescription": "운동 중 심박수를 모니터링하기 위해 건강 데이터에 접근합니다.",
         "NSHealthUpdateUsageDescription": "운동 데이터를 건강 앱에 저장합니다.",
         "NSPhotoLibraryUsageDescription": "사용자가 사진을 선택할 수 있도록 갤러리 접근이 필요합니다.",
-        "NSPhotoLibraryAddUsageDescription": "사용자가 사진을 저장할 수 있도록 갤러리 쓰기 권한이 필요합니다."
+        "NSPhotoLibraryAddUsageDescription": "사용자가 사진을 저장할 수 있도록 갤러리 쓰기 권한이 필요합니다.",
+        "UIBackgroundModes": [
+          "fetch"
+        ]
       }
     },
     "android": {
@@ -94,7 +98,18 @@
           "cameraPermissionText": "운동 영상 녹화를 위해 카메라 권한이 필요합니다.",
           "microphonePermissionText": "운동 영상 녹화를 위해 마이크 권한이 필요합니다."
         }
-      ]
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": [
+            "central"
+          ],
+          "bluetoothAlwaysPermission": "심박계 연결을 위해 블루투스 권한이 필요합니다."
+        }
+      ],
+      "expo-build-properties"
     ],
     "experiments": {
       "typedRoutes": true,

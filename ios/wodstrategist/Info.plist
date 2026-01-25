@@ -49,6 +49,8 @@
       <key>NSAllowsLocalNetworking</key>
       <true/>
     </dict>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>심박계 연결을 위해 블루투스 권한이 필요합니다.</string>
     <key>NSCameraUsageDescription</key>
     <string>AI 코칭을 위해 사용자의 움직임을 분석합니다.</string>
     <key>NSHealthShareUsageDescription</key>
@@ -67,6 +69,11 @@
     </array>
     <key>RCTNewArchEnabled</key>
     <true/>
+    <key>UIBackgroundModes</key>
+    <array>
+      <string>fetch</string>
+      <string>bluetooth-central</string>
+    </array>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>
     <key>UIRequiredDeviceCapabilities</key>

@@ -22,7 +22,7 @@ export default function RootLayout() {
 
         {/* 2. 비전 테스트 페이지 (카메라 화면이므로 헤더 숨김) */}
         <Stack.Screen
-          name="workout/vision-test"
+          name="workout/visionTestPage"
           options={{
             headerShown: false, // 전체화면 모드
             presentation: "fullScreenModal", // 모달 형태로 뜨도록 설정 (선택사항)

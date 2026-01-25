@@ -11,18 +11,23 @@ export function usePoseDetection() {
 
   const poseResult = useSharedValue<number[]>(new Array(17 * 3).fill(0));
   const frameCounter = useSharedValue(0);
+  const lastPose = useSharedValue<number[] | null>(null);
+  const motionEma = useSharedValue(0);
 
-  // 📡 [Modified] Monitor Data for Head, Shoulder, Hip
-  const [monitorData, setMonitorData] = useState({ 
-    headY: 0,
-    shoulderY: 0,
-    hipY: 0,
-    score: 0,
+  const [monitorData, setMonitorData] = useState({
+    isWorkingOut: false,
+    confidence: 0,
+    motion: 0,
   });
 
   const updateMonitorSafe = useRunOnJS((data) => {
     setMonitorData(data);
   }, []);
+
+  const minKeypointScore = 0.3;
+  const minConfidence = 0.2;
+  const minMotion = 0.015;
+  const motionEmaDecay = 0.7;
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
@@ -52,26 +57,41 @@ export function usePoseDetection() {
       for (let i = 0; i < data.length; i++) newPose[i] = getVal(i);
       poseResult.value = newPose;
 
-      // B. Body Part Coordinates
-      // Head (Nose: 0)
-      const headY = getVal(0 * 3);
+      // B. Confidence and motion detection
+      let confidenceSum = 0;
+      for (let i = 0; i < 17; i++) confidenceSum += newPose[i * 3 + 2];
+      const confidence = confidenceSum / 17;
 
-      // Shoulders (Left: 5, Right: 6)
-      const shoulderY = (getVal(5 * 3) + getVal(6 * 3)) / 2;
+      let motion = 0;
+      let motionCount = 0;
+      const prevPose = lastPose.value;
+      if (prevPose) {
+        for (let i = 0; i < 17; i++) {
+          const score = newPose[i * 3 + 2];
+          const prevScore = prevPose[i * 3 + 2];
+          if (score >= minKeypointScore && prevScore >= minKeypointScore) {
+            const dy = newPose[i * 3] - prevPose[i * 3];
+            const dx = newPose[i * 3 + 1] - prevPose[i * 3 + 1];
+            motion += Math.sqrt(dx * dx + dy * dy);
+            motionCount += 1;
+          }
+        }
+      }
+      motion = motionCount > 0 ? motion / motionCount : 0;
+      const smoothedMotion =
+        motionEma.value * motionEmaDecay + motion * (1 - motionEmaDecay);
+      motionEma.value = smoothedMotion;
+      lastPose.value = newPose;
 
-      // Hips (Left: 11, Right: 12)
-      const hipY = (getVal(11 * 3) + getVal(12 * 3)) / 2;
-
-      // Score (Avg of hips confidence, or overall confidence)
-      const score = (getVal(11 * 3 + 2) + getVal(12 * 3 + 2)) / 2;
+      const isWorkingOut =
+        confidence > minConfidence && smoothedMotion > minMotion;
 
       // C. Data Transfer (Every 5 frames)
       if (frameCounter.value % 5 === 0) {
         updateMonitorSafe({
-          headY: headY,
-          shoulderY: shoulderY,
-          hipY: hipY,
-          score: score,
+          isWorkingOut: isWorkingOut,
+          confidence: confidence,
+          motion: smoothedMotion,
         });
       }
     }
