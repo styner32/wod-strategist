@@ -1,4 +1,6 @@
 .env
+.env.docker
+
 tmp/
 bin/
 .DS_Store

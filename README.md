@@ -23,3 +23,9 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    ```bash
    npx expo run:ios --device
    ```
+
+3. Test uploading video to API
+
+   ```bash
+   curl -X POST http://localhost:8088/api/v1/upload -F "session_id=workout-session-002" -F "file=@./tmp/wod_1.MP4"
+   ```

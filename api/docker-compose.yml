@@ -16,6 +16,36 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
+    networks:
+      - wod-local-network
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile_worker
+    env_file:
+      - .env.docker
+    volumes:
+      - ./tmp:/app/tmp
+    networks:
+      - wod-local-network
+    depends_on:
+      - db
+      - redis
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile_api
+    ports:
+      - 8088:8088
+    env_file:
+      - .env.docker
+    volumes:
+      - ./tmp:/app/tmp
+    networks:
+      - wod-local-network
+    depends_on:
+      - db
+      - redis
 
 networks:
   wod-local-network:

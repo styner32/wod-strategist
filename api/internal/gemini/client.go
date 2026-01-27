@@ -7,14 +7,16 @@ import (
 	"time"
 
 	"github.com/google/generative-ai-go/genai"
+	"go.uber.org/zap"
 	"google.golang.org/api/option"
 )
 
 type Client struct {
 	client *genai.Client
+	logger *zap.Logger
 }
 
-func NewClient(ctx context.Context) (*Client, error) {
+func NewClient(ctx context.Context, logger *zap.Logger) (*Client, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("GEMINI_API_KEY is not set")
@@ -25,7 +27,7 @@ func NewClient(ctx context.Context) (*Client, error) {
 		return nil, err
 	}
 
-	return &Client{client: client}, nil
+	return &Client{client: client, logger: logger}, nil
 }
 
 func (c *Client) Close() {
@@ -73,6 +75,8 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
 		return "", uploadResult.Name, fmt.Errorf("no content generated")
 	}
+
+	c.logger.Info("Gemini response", zap.Any("response", resp))
 
 	// Extract text from response
 	var result string

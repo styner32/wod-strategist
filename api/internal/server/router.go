@@ -54,6 +54,7 @@ func SetupRouter(client *asynq.Client) *gin.Engine {
 			// Ensure tmp directory exists
 			tmpDir := "tmp"
 			if err := os.MkdirAll(tmpDir, 0755); err != nil {
+				logger.Log.Error("failed to create temp directory: ", zap.Error(err))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp directory"})
 				return
 			}

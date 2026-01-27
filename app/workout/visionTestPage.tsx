@@ -22,7 +22,7 @@ import {
   useCameraPermission,
 } from "react-native-vision-camera";
 
-import { useHeartRate } from "@/features/health/useHeartRate";
+import { useBleHeartRate } from "@/features/health/useBleHeartRate";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 
@@ -51,8 +51,8 @@ export default function VisionTestPage() {
   const [mediaPermission, requestMediaPermission] =
     MediaLibrary.usePermissions();
   const { frameProcessor, poseResult, monitorData } = usePoseDetection();
-  //   const { bpm, status: hrStatus } = useHeartRate();
-  const { bpm, status: hrStatus } = useHeartRate();
+  const { bpm, status: hrStatus } = useBleHeartRate();
+  // const { bpm, status: hrStatus } = useHeartRate();
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
