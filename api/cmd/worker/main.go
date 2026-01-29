@@ -33,6 +33,8 @@ func main() {
 	}
 	redisOpt := asynq.RedisClientOpt{Addr: redisAddr, DB: 5} // Use DB 5 for Asynq tasks
 
+	logger.Log.Info("Redis connection established", zap.String("redis_addr", redisAddr))
+
 	// Start Asynq Server (Worker)
 	srv := asynq.NewServer(
 		redisOpt,

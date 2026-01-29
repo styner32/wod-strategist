@@ -81,7 +81,6 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	if err != nil {
 		return fmt.Errorf("failed to create gemini client: %w", err)
 	}
-	defer geminiClient.Close()
 
 	analysis, geminiFile, err := geminiClient.AnalyzeVideo(ctx, p.FilePath, AnalysisPrompt)
 

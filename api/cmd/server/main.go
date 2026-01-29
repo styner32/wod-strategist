@@ -38,6 +38,9 @@ func main() {
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
+
+	logger.Log.Info("Redis connection established", zap.String("redis_addr", redisAddr))
+
 	redisOpt := asynq.RedisClientOpt{Addr: redisAddr, DB: 5} // Use DB 5 for Asynq tasks
 	client := asynq.NewClient(redisOpt)
 	defer client.Close()

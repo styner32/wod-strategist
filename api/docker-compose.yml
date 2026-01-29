@@ -4,20 +4,23 @@ services:
     environment:
       - "POSTGRES_HOST_AUTH_METHOD=trust"
       - "POSTGRES_USER=sunjinlee"
+      - "POSTGRES_DB=wod_dev"
     volumes:
       - db-volume:/var/lib/postgresql
     ports:
       - 5432:5432
     networks:
       - wod-local-network
+
   redis:
     image: redis/redis-stack-server:7.4.0-v8
     ports:
-      - "6379:6379"
+      - 6379:6379
     volumes:
       - redis-data:/data
     networks:
       - wod-local-network
+
   worker:
     build:
       context: .
@@ -31,6 +34,7 @@ services:
     depends_on:
       - db
       - redis
+
   api:
     build:
       context: .
