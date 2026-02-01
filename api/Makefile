@@ -10,12 +10,15 @@ MIGRATIONS_DIR ?= internal/db/migrations
 IMAGE_REPO ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)
 CMD_DIR ?= cmd
 
-.PHONY: run run-worker migrate-create get-ip update-image-api update-image-worker test-upload
+.PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-upload help
 
-run:
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $1, $2}'
+
+run: ## Run API server locally
 	go run ./cmd/server/main.go
 
-run-worker:
+run-worker: ## Run worker locally
 	go run ./cmd/worker/main.go
 
 migrate-create: ## Create new migration files. Usage: make migrate-create NAME=your_desc
@@ -24,22 +27,45 @@ ifndef NAME
 endif
 	migrate create -ext sql -dir $(MIGRATIONS_DIR) -seq ${NAME}
 
-get-ip:
+migrate-up: ## Run up migrations
+	migrate -path $(MIGRATIONS_DIR) -database "$(DATABASE_URL)" -verbose up
+
+migrate-down: ## Run down migration (step 1)
+	migrate -path $(MIGRATIONS_DIR) -database "$(DATABASE_URL)" -verbose down 1
+
+get-ip: ## Get local IP (macOS)
 	ipconfig getifaddr en0
 
-update-image-api:
-	docker build --platform linux/amd64 -t $(IMAGE_REPO)/api -f Dockerfile_api --build-arg GIT_COMMIT=$(shell git rev-parse --short HEAD) .
+update-image-api: ## Build and push API image
+	docker build --platform linux/amd64 -t $(IMAGE_REPO)/api:latest -t $(IMAGE_REPO)/api:$(GIT_SHA) -f Dockerfile_api --build-arg GIT_COMMIT=$(GIT_SHA) .
 	docker push $(IMAGE_REPO)/api:latest
+	docker push $(IMAGE_REPO)/api:$(GIT_SHA)
 
-update-image-worker:
-	docker build --platform linux/amd64 -t $(IMAGE_REPO)/worker -f Dockerfile_worker --build-arg GIT_COMMIT=$(shell git rev-parse --short HEAD) .
+update-image-worker: ## Build and push Worker image
+	docker build --platform linux/amd64 -t $(IMAGE_REPO)/worker:latest -t $(IMAGE_REPO)/worker:$(GIT_SHA) -f Dockerfile_worker --build-arg GIT_COMMIT=$(GIT_SHA) .
 	docker push $(IMAGE_REPO)/worker:latest
+	docker push $(IMAGE_REPO)/worker:$(GIT_SHA)
+
+update-image-migrate: ## Build and push Migration image
+	docker build --platform linux/amd64 -t $(IMAGE_REPO)/migrate:latest -f Dockerfile_migrate .
+	docker push $(IMAGE_REPO)/migrate:latest
+
+deploy-api: ## Deploy API to Cloud Run
+	gcloud run deploy $(API_SERVICE_NAME) --image $(IMAGE_REPO)/api:latest --region $(REGION) --project $(PROJECT_ID)
+
+deploy-worker: ## Deploy Worker to Cloud Run Worker Pools
+	gcloud beta run worker-pools deploy $(WORKER_SERVICE_NAME) --image $(IMAGE_REPO)/worker:latest --region $(REGION) --project $(PROJECT_ID)
+
+test-upload: ## Test video upload locally
 
 deploy-api:
 	gcloud run deploy $(API_SERVICE_NAME) --image $(IMAGE_REPO)/api:latest --region $(REGION) --project $(PROJECT_ID)
 
 deploy-worker:
 	gcloud beta run worker-pools deploy $(WORKER_SERVICE_NAME) --image $(IMAGE_REPO)/worker:latest --region $(REGION) --project $(PROJECT_ID)
+
+migrate-up-remote: ## Run up migrations remotely
+	gcloud run jobs execute $(MIGRATE_SERVICE_NAME) --region $(REGION)
 
 test-upload:
 	curl -X POST http://localhost:8088/api/v1/upload -F "session_id=workout-session-001" -F "file=@./tmp/test_wod.mp4"
