@@ -47,3 +47,6 @@ infra/.terraform/
 infra/*.tfstate
 infra/*.tfstate.backup
 infra/*.tfvars
+
+# gcp key
+api/gcp-key.json

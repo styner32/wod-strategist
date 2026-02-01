@@ -27,8 +27,11 @@ services:
       dockerfile: Dockerfile_worker
     env_file:
       - .env.docker
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-key.json
     volumes:
       - ./tmp:/app/tmp
+      - ./gcp-key.json:/app/gcp-key.json
     networks:
       - wod-local-network
     depends_on:
@@ -43,8 +46,11 @@ services:
       - 8088:8088
     env_file:
       - .env.docker
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-key.json
     volumes:
       - ./tmp:/app/tmp
+      - ./gcp-key.json:/app/gcp-key.json
     networks:
       - wod-local-network
     depends_on:
