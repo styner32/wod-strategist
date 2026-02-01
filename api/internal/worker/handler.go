@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/storage"
 	"go.uber.org/zap"
 )
 
@@ -72,7 +75,35 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	logger.Log.Info("Processing video analysis", zap.String("session_id", p.SessionID))
+	logger.Log.Info("Processing video analysis", zap.String("session_id", p.SessionID), zap.String("file_path", p.FilePath))
+
+	// Determine file path (download from GCS if needed)
+	localFilePath := p.FilePath
+	if strings.HasPrefix(p.FilePath, "gs://") {
+		bucketName := os.Getenv("GCS_BUCKET_NAME")
+		if bucketName == "" {
+			// Fallback: try to parse from URI if env not set, or fail
+			// Parsing from URI is better if possible
+			b, _, err := storage.ParseGCSURI(p.FilePath)
+			if err == nil {
+				bucketName = b
+			}
+		}
+
+		storageClient, err := storage.NewClient(ctx, bucketName)
+		if err != nil {
+			return fmt.Errorf("failed to create storage client: %w", err)
+		}
+
+		// Create temp file path
+		tmpFile := filepath.Join("/tmp", fmt.Sprintf("%s_%s", p.SessionID, filepath.Base(p.FilePath)))
+
+		logger.Log.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", tmpFile))
+		if err := storageClient.DownloadFile(ctx, p.FilePath, tmpFile); err != nil {
+			return fmt.Errorf("failed to download file from GCS: %w", err)
+		}
+		localFilePath = tmpFile
+	}
 
 	// Update status to PROCESSING (optional, if we tracked specific task IDs, but here we just append results)
 	// For simplicity, we just create a new result when done.
@@ -82,11 +113,11 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 		return fmt.Errorf("failed to create gemini client: %w", err)
 	}
 
-	analysis, geminiFile, err := geminiClient.AnalyzeVideo(ctx, p.FilePath, AnalysisPrompt)
+	analysis, geminiFile, err := geminiClient.AnalyzeVideo(ctx, localFilePath, AnalysisPrompt)
 
 	// Clean up local file
 	defer func() {
-		if err := os.Remove(p.FilePath); err != nil {
+		if err := os.Remove(localFilePath); err != nil {
 			logger.Log.Error("Failed to remove temp file", zap.Error(err))
 		}
 	}()
