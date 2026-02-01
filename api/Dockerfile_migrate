@@ -1,0 +1,16 @@
+FROM alpine:3.20
+
+# Install golang-migrate
+ARG MIGRATE_VERSION=v4.17.0
+RUN apk add --no-cache curl \
+    && curl -L https://github.com/golang-migrate/migrate/releases/download/${MIGRATE_VERSION}/migrate.linux-amd64.tar.gz | tar xvz \
+    && mv migrate /usr/bin/migrate \
+    && chmod +x /usr/bin/migrate
+
+# Copy migration files
+COPY internal/db/migrations /migrations
+
+# Entrypoint expects command arguments.
+# Example usage: -database "postgres://..." up
+ENTRYPOINT ["migrate", "-path", "/migrations"]
+

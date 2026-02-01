@@ -105,6 +105,32 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
   ]
 }
 
+# Migration Job
+resource "google_cloud_run_v2_job" "migrate" {
+  name     = "${var.app_name}-migrate-${var.environment}"
+  location = var.region
+  launch_stage = "BETA"
+
+  template {
+    template {
+      service_account = google_service_account.run_sa.email
+      vpc_access {
+        connector = google_vpc_access_connector.connector.id
+        egress    = "PRIVATE_RANGES_ONLY"
+      }
+      
+      containers {
+        image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.app_name}-repo-${var.environment}/migrate:latest"
+        args = ["-database", "postgres://appuser:${var.db_password}@${google_sql_database_instance.postgres.private_ip_address}:5432/${google_sql_database.database.name}?sslmode=disable", "up"]
+      }
+    }
+  }
+
+  depends_on = [
+    google_sql_database_instance.postgres
+  ]
+}
+
 # Public access for API
 resource "google_cloud_run_service_iam_member" "public_access" {
   service  = google_cloud_run_v2_service.api.name
