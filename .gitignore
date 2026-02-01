@@ -41,3 +41,9 @@ app-example
 # generated native folders
 /android
 *.log
+
+# infra
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/*.tfvars
