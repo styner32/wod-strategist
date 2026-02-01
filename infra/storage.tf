@@ -1,0 +1,24 @@
+resource "google_storage_bucket" "uploads" {
+  name          = "${var.app_name}-uploads-${var.environment}"
+  location      = var.region
+  force_destroy = var.environment == "prod" ? true : false
+
+  uniform_bucket_level_access = true
+  
+  # Delete files older than 1 day to manage costs/storage
+  lifecycle_rule {
+    condition {
+      age = 1
+    }
+    action {
+      type = "Delete"
+    }
+  }
+}
+
+# Grant Cloud Run Service Account access to the bucket
+resource "google_storage_bucket_iam_member" "run_sa_admin" {
+  bucket = google_storage_bucket.uploads.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.run_sa.email}"
+}

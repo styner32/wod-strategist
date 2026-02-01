@@ -20,27 +20,18 @@ type AnalysisResult struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-var DB *gorm.DB
-
-func Connect() {
+func Connect() *gorm.DB {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		log.Fatal("DATABASE_URL is not set")
 	}
 
 	var err error
-	DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
 	}
 
 	logger.Log.Info("Database connection established")
-}
-
-func Migrate() {
-	err := DB.AutoMigrate(&AnalysisResult{})
-	if err != nil {
-		logger.Log.Fatal("Failed to migrate database", zap.Error(err))
-	}
-	logger.Log.Info("Database migration completed")
+	return db
 }

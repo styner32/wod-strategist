@@ -12,7 +12,9 @@ import (
 	"github.com/hibiken/asynq"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/server"
+	"github.com/wod-strategist/api/internal/storage"
 )
 
 func TestServer(t *testing.T) {
@@ -39,7 +41,13 @@ var _ = Describe("API Server", func() {
 		// or handle the error gracefully if possible.
 		// Actually, let's just create the client; it won't panic until we try to enqueue.
 		client = asynq.NewClient(asynq.RedisClientOpt{Addr: "localhost:6379"})
-		router = server.SetupRouter(client)
+		router = server.SetupRouter(&server.ServerConfig{
+			QueueClient:   client,
+			DB:            db.Connect(),
+			StorageClient: &storage.Client{},
+			BucketName:    "test-bucket",
+			APIKey:        "test-api-key",
+		})
 	})
 
 	AfterEach(func() {

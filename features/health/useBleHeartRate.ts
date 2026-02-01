@@ -1,13 +1,16 @@
 import { Buffer } from "buffer";
 import { useEffect, useRef, useState } from "react";
 import { PermissionsAndroid, Platform } from "react-native";
-import { BleManager, Device, State } from "react-native-ble-plx";
+import { BleManager, Device, State, Subscription } from "react-native-ble-plx";
 
 // [중요] Manager는 컴포넌트 밖에서 한 번만 생성 (메모리 릭 방지)
 const manager = new BleManager();
 
 const HR_SERVICE_UUID = "180D";
 const HR_CHARACTERISTIC_UUID = "2A37";
+const INACTIVITY_TIMEOUT_MS = 15000;
+const RECONNECT_MIN_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 10000;
 
 export function useBleHeartRate() {
   const [bpm, setBpm] = useState(0);
@@ -15,27 +18,153 @@ export function useBleHeartRate() {
     "Init" | "Scanning" | "Connecting" | "Live" | "Error"
   >("Init");
   const deviceRef = useRef<Device | null>(null);
+  const bleStateRef = useRef<State | null>(null);
+  const isMountedRef = useRef(true);
+  const isScanningRef = useRef(false);
+  const isConnectingRef = useRef(false);
+  const isReconnectingRef = useRef(false);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const monitorSubscriptionRef = useRef<Subscription | null>(null);
+  const disconnectSubscriptionRef = useRef<Subscription | null>(null);
 
   useEffect(() => {
     // 1. 블루투스 상태 감지 (PoweredOn 될 때까지 대기)
     const subscription = manager.onStateChange((state) => {
       console.log("🔹 BLE State:", state); // 로그 확인 필수
+      bleStateRef.current = state;
 
       if (state === State.PoweredOn) {
-        startScan();
-        subscription.remove(); // 한 번 켜지면 리스너 해제
+        if (!deviceRef.current && !isScanningRef.current) {
+          startScan();
+        }
+      } else {
+        stopScan();
+        clearInactivityTimer();
+        void cleanupConnection();
+        setStatus("Init");
       }
     }, true); // true: 현재 상태 즉시 검사
 
     return () => {
+      isMountedRef.current = false;
+      clearReconnectTimer();
+      clearInactivityTimer();
       // 클린업: 스캔 중단 및 연결 해제
-      manager.stopDeviceScan();
+      stopScan();
+      cleanupSubscriptions();
       deviceRef.current?.cancelConnection();
       subscription.remove();
     };
   }, []);
 
+  const clearReconnectTimer = () => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  };
+
+  const clearInactivityTimer = () => {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
+  };
+
+  const resetInactivityTimer = () => {
+    clearInactivityTimer();
+    inactivityTimerRef.current = setTimeout(() => {
+      if (!isMountedRef.current) return;
+      console.warn("⚠️ Heart rate inactive. Reconnecting...");
+      requestReconnect("inactive");
+    }, INACTIVITY_TIMEOUT_MS);
+  };
+
+  const cleanupSubscriptions = () => {
+    monitorSubscriptionRef.current?.remove();
+    monitorSubscriptionRef.current = null;
+    disconnectSubscriptionRef.current?.remove();
+    disconnectSubscriptionRef.current = null;
+  };
+
+  const stopScan = () => {
+    if (isScanningRef.current) {
+      manager.stopDeviceScan();
+      isScanningRef.current = false;
+    }
+  };
+
+  const cleanupConnection = async () => {
+    cleanupSubscriptions();
+    clearInactivityTimer();
+    const device = deviceRef.current;
+    deviceRef.current = null;
+    if (device) {
+      try {
+        await device.cancelConnection();
+      } catch (error) {
+        console.warn("Disconnect cleanup error:", error);
+      }
+    }
+  };
+
+  const requestReconnect = (reason: string) => {
+    if (!isMountedRef.current) return;
+    if (reconnectTimerRef.current) return;
+
+    const attempt = reconnectAttemptsRef.current;
+    const delay = Math.min(
+      RECONNECT_MIN_DELAY_MS * 2 ** attempt,
+      RECONNECT_MAX_DELAY_MS,
+    );
+    reconnectAttemptsRef.current = Math.min(attempt + 1, 5);
+
+    console.log(`♻️ Reconnect scheduled (${reason}) in ${delay}ms`);
+    setStatus("Scanning");
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      void reconnectNow(reason);
+    }, delay);
+  };
+
+  const reconnectNow = async (reason: string) => {
+    if (!isMountedRef.current || isReconnectingRef.current) return;
+    isReconnectingRef.current = true;
+
+    try {
+      console.log(`♻️ Reconnecting now (${reason})`);
+      const lastDevice = deviceRef.current;
+      await cleanupConnection();
+      setBpm(0);
+
+      if (lastDevice) {
+        await connectToDevice(lastDevice);
+        if (deviceRef.current) {
+          return;
+        }
+      }
+
+      await startScan();
+    } finally {
+      isReconnectingRef.current = false;
+    }
+  };
+
   const startScan = async () => {
+    if (isScanningRef.current || isConnectingRef.current || deviceRef.current) {
+      return;
+    }
+
+    if (bleStateRef.current && bleStateRef.current !== State.PoweredOn) {
+      return;
+    }
+
+    clearReconnectTimer();
+    stopScan();
+    isScanningRef.current = true;
+
     // Android 권한 요청 (iOS는 Info.plist 자동 처리됨)
     if (Platform.OS === "android") {
       const granted = await PermissionsAndroid.requestMultiple([
@@ -45,8 +174,18 @@ export function useBleHeartRate() {
       ]);
       if (granted["android.permission.BLUETOOTH_SCAN"] !== "granted") {
         console.warn("BLE Permission Denied");
+        isScanningRef.current = false;
+        setStatus("Error");
         return;
       }
+    }
+
+    if (
+      !isMountedRef.current ||
+      (bleStateRef.current && bleStateRef.current !== State.PoweredOn)
+    ) {
+      isScanningRef.current = false;
+      return;
     }
 
     console.log("🚀 Scanning started...");
@@ -58,6 +197,8 @@ export function useBleHeartRate() {
       if (error) {
         console.error("❌ Scan Error:", error);
         setStatus("Error");
+        stopScan();
+        requestReconnect("scan-error");
         return;
       }
 
@@ -74,13 +215,18 @@ export function useBleHeartRate() {
 
       if (isTargetDevice && device) {
         console.log("✅ Target Found:", device.name);
-        manager.stopDeviceScan(); // 찾으면 스캔 즉시 중단
+        stopScan(); // 찾으면 스캔 즉시 중단
         connectToDevice(device);
       }
     });
   };
 
   const connectToDevice = async (device: Device) => {
+    if (isConnectingRef.current) return;
+    isConnectingRef.current = true;
+    clearReconnectTimer();
+    stopScan();
+
     try {
       setStatus("Connecting");
       console.log(`🔗 Connecting to ${device.name}...`);
@@ -90,15 +236,29 @@ export function useBleHeartRate() {
 
       // [필수] 서비스 및 특성 검색
       await connectedDevice.discoverAllServicesAndCharacteristics();
+      cleanupSubscriptions();
       deviceRef.current = connectedDevice;
+      reconnectAttemptsRef.current = 0;
+
+      disconnectSubscriptionRef.current = connectedDevice.onDisconnected(
+        (error) => {
+          console.warn("🔌 Disconnected:", error);
+          clearInactivityTimer();
+          setStatus("Scanning");
+          setBpm(0);
+          requestReconnect("disconnected");
+        },
+      );
 
       console.log("❤️ Monitoring Heart Rate...");
-      connectedDevice.monitorCharacteristicForService(
+      monitorSubscriptionRef.current = connectedDevice.monitorCharacteristicForService(
         HR_SERVICE_UUID,
         HR_CHARACTERISTIC_UUID,
         (error, characteristic) => {
           if (error) {
             console.error("Monitor Error:", error);
+            setStatus("Error");
+            requestReconnect("monitor-error");
             return;
           }
           if (characteristic?.value) {
@@ -106,11 +266,14 @@ export function useBleHeartRate() {
           }
         },
       );
+      resetInactivityTimer();
       setStatus("Live");
     } catch (e) {
       console.error("❌ Connection Failed:", e);
       setStatus("Error");
-      // 실패 시 재스캔 로직을 넣을 수도 있음
+      requestReconnect("connect-failed");
+    } finally {
+      isConnectingRef.current = false;
     }
   };
 
@@ -129,6 +292,7 @@ export function useBleHeartRate() {
 
       // console.log(`BPM: ${heartRate}`);
       setBpm(heartRate);
+      resetInactivityTimer();
     } catch (error) {
       console.warn("Parse Error:", error);
     }
