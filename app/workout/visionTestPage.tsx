@@ -61,7 +61,7 @@ export default function VisionTestPage() {
   useEffect(() => {
     if (!hasPermission) requestPermission();
     if (!mediaPermission?.granted) requestMediaPermission();
-  }, [hasPermission, mediaPermission]);
+  }, [hasPermission, mediaPermission, requestPermission, requestMediaPermission]);
 
   // --- Chunk Recording Logic (Raw Camera) ---
 
