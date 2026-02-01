@@ -24,7 +24,7 @@ resource "google_cloud_run_v2_service" "api" {
     containers {
       # Use a placeholder image initially so `terraform apply` works.
       # User must build/push the real image later.
-      image = "asia-northeast3-docker.pkg.dev/gen-lang-client-0826771503/wod-strategist-repo-dev/api:latest"
+      image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.app_name}-repo-${var.environment}/api:latest"
       
       ports {
         container_port = 8080
@@ -78,7 +78,7 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
     }
 
     containers {
-      image = "asia-northeast3-docker.pkg.dev/gen-lang-client-0826771503/wod-strategist-repo-dev/worker:latest"
+      image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.app_name}-repo-${var.environment}/worker:latest"
       
       env {
         name  = "DATABASE_URL"

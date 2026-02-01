@@ -104,7 +104,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 		result += part.Text
 	}
 
-	return result, uploadResult.URI, nil
+	return result, uploadResult.Name, nil
 }
 
 func (c *Client) DeleteFile(ctx context.Context, name string) error {

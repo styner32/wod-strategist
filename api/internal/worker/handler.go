@@ -14,6 +14,7 @@ import (
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/storage"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 const (
@@ -57,6 +58,20 @@ type VideoAnalysisPayload struct {
 	FilePath  string
 }
 
+type Worker struct {
+	DB            *gorm.DB
+	StorageClient *storage.Client
+	BucketName    string
+}
+
+func NewWorker(db *gorm.DB, storageClient *storage.Client, bucketName string) *Worker {
+	return &Worker{
+		DB:            db,
+		StorageClient: storageClient,
+		BucketName:    bucketName,
+	}
+}
+
 func NewVideoAnalysisTask(sessionID, filePath string) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
 		SessionID: sessionID,
@@ -69,7 +84,7 @@ func NewVideoAnalysisTask(sessionID, filePath string) (*asynq.Task, error) {
 	return asynq.NewTask(TypeVideoAnalysis, data), nil
 }
 
-func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	var p VideoAnalysisPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
@@ -80,26 +95,11 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	// Determine file path (download from GCS if needed)
 	localFilePath := p.FilePath
 	if strings.HasPrefix(p.FilePath, "gs://") {
-		bucketName := os.Getenv("GCS_BUCKET_NAME")
-		if bucketName == "" {
-			// Fallback: try to parse from URI if env not set, or fail
-			// Parsing from URI is better if possible
-			b, _, err := storage.ParseGCSURI(p.FilePath)
-			if err == nil {
-				bucketName = b
-			}
-		}
-
-		storageClient, err := storage.NewClient(ctx, bucketName)
-		if err != nil {
-			return fmt.Errorf("failed to create storage client: %w", err)
-		}
-
 		// Create temp file path
 		tmpFile := filepath.Join("/tmp", fmt.Sprintf("%s_%s", p.SessionID, filepath.Base(p.FilePath)))
 
 		logger.Log.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", tmpFile))
-		if err := storageClient.DownloadFile(ctx, p.FilePath, tmpFile); err != nil {
+		if err := w.StorageClient.DownloadFile(ctx, p.FilePath, tmpFile); err != nil {
 			return fmt.Errorf("failed to download file from GCS: %w", err)
 		}
 		localFilePath = tmpFile
@@ -134,7 +134,7 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	if err != nil {
 		logger.Log.Error("Analysis failed", zap.Error(err))
 		// Save failure to DB
-		db.DB.Create(&db.AnalysisResult{
+		w.DB.Create(&db.AnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
 			Output:    err.Error(),
@@ -143,7 +143,7 @@ func HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	}
 
 	// Save success to DB
-	db.DB.Create(&db.AnalysisResult{
+	w.DB.Create(&db.AnalysisResult{
 		SessionID: p.SessionID,
 		Status:    "COMPLETED",
 		Output:    analysis,

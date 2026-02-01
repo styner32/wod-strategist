@@ -1,7 +1,7 @@
 resource "google_storage_bucket" "uploads" {
   name          = "${var.app_name}-uploads-${var.environment}"
   location      = var.region
-  force_destroy = true
+  force_destroy = var.environment == "prod" ? true : false
 
   uniform_bucket_level_access = true
   

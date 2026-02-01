@@ -14,6 +14,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/server"
+	"github.com/wod-strategist/api/internal/storage"
 	"go.uber.org/zap"
 )
 
@@ -30,8 +31,7 @@ func main() {
 	defer logger.Sync()
 
 	// Initialize Database
-	db.Connect()
-	db.Migrate()
+	dbConn := db.Connect()
 
 	// Initialize Redis Connection for Asynq Client
 	redisAddr := os.Getenv("REDIS_URL")
@@ -45,8 +45,27 @@ func main() {
 	client := asynq.NewClient(redisOpt)
 	defer client.Close()
 
+	// Initialize Storage Client
+	bucketName := os.Getenv("GCS_BUCKET_NAME")
+	if bucketName == "" {
+		logger.Log.Fatal("GCS_BUCKET_NAME not set, uploads will fail")
+	}
+
+	storageClient, err := storage.NewClient(context.Background(), bucketName)
+	if err != nil {
+		logger.Log.Fatal("Failed to create storage client", zap.Error(err))
+	}
+
+	serverConfig := &server.ServerConfig{
+		QueueClient:   client,
+		DB:            dbConn,
+		APIKey:        os.Getenv("API_SECRET"),
+		StorageClient: storageClient,
+		BucketName:    bucketName,
+	}
+
 	// Setup Router
-	r := server.SetupRouter(client)
+	r := server.SetupRouter(serverConfig)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"

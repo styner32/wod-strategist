@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
@@ -9,6 +10,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/storage"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 )
@@ -23,7 +25,7 @@ func main() {
 	defer logger.Sync()
 
 	// Initialize Database
-	db.Connect()
+	dbConn := db.Connect()
 	// db.Migrate() // Migration can be done in API server or a separate job, but usually safe to run here too if idempotent
 
 	// Initialize Redis Connection for Asynq
@@ -46,8 +48,20 @@ func main() {
 		},
 	)
 
+	bucketName := os.Getenv("GCS_BUCKET_NAME")
+	if bucketName == "" {
+		logger.Log.Fatal("GCS_BUCKET_NAME not set, uploads will fail")
+	}
+
+	storageClient, err := storage.NewClient(context.Background(), bucketName)
+	if err != nil {
+		logger.Log.Fatal("Failed to create storage client", zap.Error(err))
+	}
+
+	w := worker.NewWorker(dbConn, storageClient, bucketName)
+
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(worker.TypeVideoAnalysis, worker.HandleVideoAnalysisTask)
+	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")

@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"os"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/storage"
 )
@@ -25,6 +26,19 @@ func NewClient(ctx context.Context, bucketName string) (*Client, error) {
 		bucketName: bucketName,
 		client:     client,
 	}, nil
+}
+
+func (c *Client) GenerateSignedURL(objectName string, method string, expires time.Duration) (string, error) {
+	opts := &storage.SignedURLOptions{
+		Scheme:  storage.SigningSchemeV4,
+		Method:  method,
+		Expires: time.Now().Add(expires),
+	}
+	u, err := c.client.Bucket(c.bucketName).SignedURL(objectName, opts)
+	if err != nil {
+		return "", fmt.Errorf("Bucket(%q).SignedURL: %v", c.bucketName, err)
+	}
+	return u, nil
 }
 
 func (c *Client) UploadFile(ctx context.Context, file multipart.File, filename string) (string, error) {
