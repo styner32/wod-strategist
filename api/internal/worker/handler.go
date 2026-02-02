@@ -90,7 +90,20 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	logger.Log.Info("Processing video analysis", zap.String("session_id", p.SessionID), zap.String("file_path", p.FilePath))
+	retryCount, ok := asynq.GetRetryCount(ctx)
+	if !ok {
+		retryCount = 0
+	}
+
+	logger.Log.Info("Processing video analysis",
+		zap.String("session_id", p.SessionID),
+		zap.String("file_path", p.FilePath),
+		zap.Int("retry_count", int(retryCount)))
+
+	if retryCount >= 3 {
+		logger.Log.Error("Max retries reached. Skipping analysis.")
+		return asynq.SkipRetry
+	}
 
 	// Determine file path (download from GCS if needed)
 	localFilePath := p.FilePath
@@ -115,6 +128,12 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	analysis, geminiFile, err := geminiClient.AnalyzeVideo(ctx, localFilePath, AnalysisPrompt)
 
+	// retry if analysis is empty
+	if analysis == "" {
+		logger.Log.Warn("Analysis failed. Retrying...", zap.Error(err))
+		return fmt.Errorf("analysis is empty")
+	}
+
 	// Clean up local file
 	defer func() {
 		if err := os.Remove(localFilePath); err != nil {
@@ -132,6 +151,11 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 
 	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Log.Error("File not found. Skipping analysis.", zap.Error(err))
+			return asynq.SkipRetry
+		}
+
 		logger.Log.Error("Analysis failed", zap.Error(err))
 		// Save failure to DB
 		w.DB.Create(&db.AnalysisResult{
