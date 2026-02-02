@@ -10,6 +10,8 @@ MIGRATIONS_DIR ?= internal/db/migrations
 IMAGE_REPO ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)
 CMD_DIR ?= cmd
 
+GIT_SHA := $(shell git rev-parse --short HEAD)
+
 .PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-upload help
 
 help: ## Show this help
@@ -47,8 +49,9 @@ update-image-worker: ## Build and push Worker image
 	docker push $(IMAGE_REPO)/worker:$(GIT_SHA)
 
 update-image-migrate: ## Build and push Migration image
-	docker build --platform linux/amd64 -t $(IMAGE_REPO)/migrate:latest -f Dockerfile_migrate .
+	docker build --platform linux/amd64 -t $(IMAGE_REPO)/migrate:latest -t $(IMAGE_REPO)/migrate:$(GIT_SHA) -f Dockerfile_migrate .
 	docker push $(IMAGE_REPO)/migrate:latest
+	docker push $(IMAGE_REPO)/migrate:$(GIT_SHA)
 
 deploy-api: ## Deploy API to Cloud Run
 	gcloud run deploy $(API_SERVICE_NAME) --image $(IMAGE_REPO)/api:latest --region $(REGION) --project $(PROJECT_ID)
@@ -56,16 +59,8 @@ deploy-api: ## Deploy API to Cloud Run
 deploy-worker: ## Deploy Worker to Cloud Run Worker Pools
 	gcloud beta run worker-pools deploy $(WORKER_SERVICE_NAME) --image $(IMAGE_REPO)/worker:latest --region $(REGION) --project $(PROJECT_ID)
 
-test-upload: ## Test video upload locally
-
-deploy-api:
-	gcloud run deploy $(API_SERVICE_NAME) --image $(IMAGE_REPO)/api:latest --region $(REGION) --project $(PROJECT_ID)
-
-deploy-worker:
-	gcloud beta run worker-pools deploy $(WORKER_SERVICE_NAME) --image $(IMAGE_REPO)/worker:latest --region $(REGION) --project $(PROJECT_ID)
-
 migrate-up-remote: ## Run up migrations remotely
 	gcloud run jobs execute $(MIGRATE_SERVICE_NAME) --region $(REGION)
 
-test-upload:
+test-upload: ## Test video upload locally
 	curl -X POST http://localhost:8088/api/v1/upload -F "session_id=workout-session-001" -F "file=@./tmp/test_wod.mp4"

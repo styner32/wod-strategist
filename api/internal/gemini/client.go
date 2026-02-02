@@ -38,7 +38,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 	// Upload file
 	f, err := os.Open(filePath)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to open file: %w", err)
+		return "", "", err
 	}
 	defer f.Close()
 
