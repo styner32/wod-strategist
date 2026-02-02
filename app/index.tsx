@@ -25,6 +25,18 @@ export default function Dashboard() {
             </View>
           </Pressable>
         </Link>
+
+        <Link href="/history" asChild>
+          <Pressable style={styles.card}>
+            <View style={styles.iconBox}>
+              <Text style={styles.icon}>📜</Text>
+            </View>
+            <View>
+              <Text style={styles.cardTitle}>Workout History</Text>
+              <Text style={styles.cardDesc}>View AI Analysis Results</Text>
+            </View>
+          </Pressable>
+        </Link>
       </View>
     </SafeAreaView>
   );

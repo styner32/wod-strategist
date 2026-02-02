@@ -214,6 +214,16 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 
 			c.JSON(http.StatusOK, results)
 		})
+
+		api.GET("/history", func(c *gin.Context) {
+			var results []db.AnalysisResult
+			if err := config.DB.Where("status = ?", "COMPLETED").Order("created_at desc").Limit(20).Find(&results).Error; err != nil {
+				logger.Log.Error("failed to fetch history", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+				return
+			}
+			c.JSON(http.StatusOK, results)
+		})
 	}
 
 	return r
