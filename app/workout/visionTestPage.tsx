@@ -21,10 +21,13 @@ import {
   useCameraFormat,
   useCameraPermission,
 } from "react-native-vision-camera";
+import { router } from "expo-router";
 
 import { useBleHeartRate } from "@/features/health/useBleHeartRate";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
+import { processWorkoutVideo } from "../../features/wod/api";
+import { IconSymbol } from "@/components/ui/icon-symbol";
 
 const cameraFormat = [
   { videoResolution: { width: 1280, height: 720 } },
@@ -56,12 +59,27 @@ export default function VisionTestPage() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [enableChunks, setEnableChunks] = useState(false);
 
   useEffect(() => {
     if (!hasPermission) requestPermission();
     if (!mediaPermission?.granted) requestMediaPermission();
   }, [hasPermission, mediaPermission]);
+
+  const handleUpload = async (fileUri: string) => {
+    try {
+      setIsUploading(true);
+      const sessionId = `session_${Date.now()}`;
+      await processWorkoutVideo(fileUri, sessionId);
+      Alert.alert("Success", "Video uploaded and analysis started!");
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Upload Failed", String(e));
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   // --- Chunk Recording Logic (Raw Camera) ---
 
@@ -193,7 +211,15 @@ export default function VisionTestPage() {
 
         // 갤러리 저장 (기존 로직 유지)
         await MediaLibrary.saveToLibraryAsync(compressedUri);
-        Alert.alert("저장 완료", "운동 영상이 갤러리에 저장되었습니다.");
+        
+        Alert.alert(
+          "Saved",
+          "Video saved to gallery. Upload for AI Coaching?",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Upload", onPress: () => handleUpload(compressedUri) },
+          ]
+        );
       }
     } catch (error) {
       console.error("Recording Stop Error:", error);
@@ -227,6 +253,16 @@ export default function VisionTestPage() {
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         <SkeletonOverlay pose={poseResult} width={width} height={height} />
       </View>
+
+      {/* 닫기 버튼 */}
+      {!isRecording && (
+        <TouchableOpacity 
+          style={styles.closeBtn} 
+          onPress={() => router.back()}
+        >
+          <IconSymbol name="chevron.left" size={32} color="#fff" />
+        </TouchableOpacity>
+      )}
 
       {/* 심박수 패널 */}
       <View style={styles.hrPanel}>
@@ -285,10 +321,12 @@ export default function VisionTestPage() {
 
       {/* 녹화 버튼 */}
       <View style={styles.recordControl}>
-        {isProcessing ? (
+        {isProcessing || isUploading ? (
           <View style={styles.processingBadge}>
             <ActivityIndicator color="#000" />
-            <Text style={styles.processingText}> Saving...</Text>
+            <Text style={styles.processingText}>
+              {isUploading ? " Uploading..." : " Saving..."}
+            </Text>
           </View>
         ) : (
           <TouchableOpacity
@@ -308,9 +346,18 @@ export default function VisionTestPage() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "black" },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  dashboard: {
+  closeBtn: {
     position: "absolute",
     top: 50,
+    left: 10,
+    zIndex: 30,
+    padding: 10,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    borderRadius: 25,
+  },
+  dashboard: {
+    position: "absolute",
+    top: 110,
     left: 10,
     backgroundColor: "rgba(0,0,0,0.7)",
     padding: 10,

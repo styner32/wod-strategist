@@ -28,6 +28,9 @@ export default function RootLayout() {
             presentation: "fullScreenModal", // 모달 형태로 뜨도록 설정 (선택사항)
           }}
         />
+
+        {/* 3. 분석 이력 페이지 */}
+        <Stack.Screen name="history" options={{ title: "History" }} />
       </Stack>
     </SafeAreaProvider>
   );
