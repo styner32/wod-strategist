@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
-  RefreshControl,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { AnalysisResult, fetchAnalysisHistory } from "../history";
@@ -12,9 +11,10 @@ import { AnalysisResult, fetchAnalysisHistory } from "../history";
 export function HistoryList() {
   const [data, setData] = useState<AnalysisResult[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const loadData = async () => {
+    setLoading(true);
     try {
       const history = await fetchAnalysisHistory();
       setData(history);
@@ -22,7 +22,6 @@ export function HistoryList() {
       console.error(e);
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   };
 
@@ -30,47 +29,70 @@ export function HistoryList() {
     loadData();
   }, []);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    loadData();
+  const toggleExpand = (id: number) => {
+    setExpandedId(prev => (prev === id ? null : id));
   };
 
-  const renderItem = ({ item }: { item: AnalysisResult }) => (
-    <View style={styles.card}>
-      <View style={styles.header}>
-        <Text style={styles.sessionId}>{item.session_id}</Text>
-        <Text style={[styles.status, item.status === "COMPLETED" ? styles.success : styles.pending]}>
-          {item.status}
+  const renderItem = (item: AnalysisResult) => {
+    const isExpanded = expandedId === item.id;
+    return (
+      <TouchableOpacity 
+        key={item.id} 
+        style={styles.card} 
+        onPress={() => toggleExpand(item.id)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.header}>
+          <Text style={styles.sessionId}>{item.session_id}</Text>
+          <Text style={[styles.status, item.status === "COMPLETED" ? styles.success : styles.pending]}>
+            {item.status}
+          </Text>
+        </View>
+        <Text style={styles.date}>{new Date(item.created_at).toLocaleString()}</Text>
+        <Text style={styles.output} numberOfLines={isExpanded ? undefined : 3}>
+          {item.output}
         </Text>
-      </View>
-      <Text style={styles.date}>{new Date(item.created_at).toLocaleString()}</Text>
-      <Text style={styles.output} numberOfLines={3}>
-        {item.output}
-      </Text>
-    </View>
-  );
+        <Text style={styles.hint}>
+          {isExpanded ? "Show Less" : "Show More"}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
 
-  if (loading) {
+  if (loading && data.length === 0) {
     return <ActivityIndicator style={{ flex: 1 }} color="#000" />;
   }
 
   return (
-    <FlatList
-      data={data}
-      keyExtractor={(item) => item.id.toString()}
-      renderItem={renderItem}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-      }
-      contentContainerStyle={styles.list}
-      ListEmptyComponent={<Text style={styles.empty}>No workout history found.</Text>}
-    />
+    <View style={styles.list}>
+      <TouchableOpacity onPress={loadData} style={styles.refreshBtn}>
+        <Text style={styles.refreshText}>🔄 Refresh History</Text>
+      </TouchableOpacity>
+      
+      {data.length === 0 ? (
+        <Text style={styles.empty}>No workout history found.</Text>
+      ) : (
+        data.map(renderItem)
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   list: {
     padding: 16,
+    paddingBottom: 40,
+  },
+  refreshBtn: {
+    alignSelf: 'flex-end',
+    marginBottom: 10,
+    padding: 8,
+    backgroundColor: '#eee',
+    borderRadius: 8,
+  },
+  refreshText: {
+    fontSize: 12,
+    fontWeight: "bold",
   },
   card: {
     backgroundColor: "#fff",
@@ -107,6 +129,12 @@ const styles = StyleSheet.create({
   output: {
     fontSize: 14,
     color: "#333",
+  },
+  hint: {
+    fontSize: 11,
+    color: "#999",
+    marginTop: 8,
+    textAlign: "right",
   },
   empty: {
     textAlign: "center",

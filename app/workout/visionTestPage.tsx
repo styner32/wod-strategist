@@ -70,7 +70,14 @@ export default function VisionTestPage() {
   const handleUpload = async (fileUri: string) => {
     try {
       setIsUploading(true);
-      const sessionId = `session_${Date.now()}`;
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const hours = String(now.getHours()).padStart(2, '0');
+      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const sessionId = `WOD-${year}-${month}-${day}-${hours}:${minutes}`;
+      
       await processWorkoutVideo(fileUri, sessionId);
       Alert.alert("Success", "Video uploaded and analysis started!");
     } catch (e) {
