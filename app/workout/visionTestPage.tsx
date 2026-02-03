@@ -84,8 +84,11 @@ export default function VisionTestPage() {
       const hours = String(now.getHours()).padStart(2, '0');
       const minutes = String(now.getMinutes()).padStart(2, '0');
       const sessionId = `WOD-${year}-${month}-${day}-${hours}-${minutes}`;
+
+      // Parse movements string back to array
+      const movementsArray = movements ? movements.split(', ') : [];
       
-      await processWorkoutVideo(fileUri, sessionId, (p) => setProgress(p), movements);
+      await processWorkoutVideo(fileUri, sessionId, (p) => setProgress(p), movementsArray);
       Alert.alert("Success", "Video uploaded and analysis started!");
     } catch (e) {
       console.error(e);
