@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  FlatList,
+  RefreshControl,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -11,10 +13,10 @@ import { AnalysisResult, fetchAnalysisHistory } from "../history";
 export function HistoryList() {
   const [data, setData] = useState<AnalysisResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const loadData = async () => {
-    setLoading(true);
     try {
       const history = await fetchAnalysisHistory();
       setData(history);
@@ -22,6 +24,7 @@ export function HistoryList() {
       console.error(e);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -29,15 +32,19 @@ export function HistoryList() {
     loadData();
   }, []);
 
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadData();
+  };
+
   const toggleExpand = (id: number) => {
     setExpandedId(prev => (prev === id ? null : id));
   };
 
-  const renderItem = (item: AnalysisResult) => {
+  const renderItem = ({ item }: { item: AnalysisResult }) => {
     const isExpanded = expandedId === item.id;
     return (
       <TouchableOpacity 
-        key={item.id} 
         style={styles.card} 
         onPress={() => toggleExpand(item.id)}
         activeOpacity={0.7}
@@ -59,22 +66,22 @@ export function HistoryList() {
     );
   };
 
-  if (loading && data.length === 0) {
+  if (loading && !refreshing) {
     return <ActivityIndicator style={{ flex: 1 }} color="#000" />;
   }
 
   return (
-    <View style={styles.list}>
-      <TouchableOpacity onPress={loadData} style={styles.refreshBtn}>
-        <Text style={styles.refreshText}>🔄 Refresh History</Text>
-      </TouchableOpacity>
-      
-      {data.length === 0 ? (
-        <Text style={styles.empty}>No workout history found.</Text>
-      ) : (
-        data.map(renderItem)
-      )}
-    </View>
+    <FlatList
+      data={data}
+      keyExtractor={(item) => item.id.toString()}
+      renderItem={renderItem}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+      }
+      contentContainerStyle={styles.list}
+      ListEmptyComponent={<Text style={styles.empty}>No workout history found.</Text>}
+      scrollEnabled={false} // Disable internal scrolling to avoid conflict with parent ScrollView
+    />
   );
 }
 

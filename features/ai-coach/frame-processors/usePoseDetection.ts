@@ -5,7 +5,7 @@ import { useFrameProcessor } from 'react-native-vision-camera';
 import { useRunOnJS } from 'react-native-worklets-core';
 import { useResizePlugin } from 'vision-camera-resize-plugin';
 
-export function usePoseDetection() {
+export function usePoseDetection(isRecording: boolean = false) {
   const plugin = useTensorflowModel(require('../../../assets/models/movenet_thunder.tflite'));
   const { resize } = useResizePlugin();
 
@@ -32,6 +32,9 @@ export function usePoseDetection() {
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
     if (plugin.state !== 'loaded' || plugin.model == null) return;
+    
+    // Optimization: Skip inference if not recording
+    if (!isRecording) return;
 
     frameCounter.value += 1;
 
@@ -95,7 +98,7 @@ export function usePoseDetection() {
         });
       }
     }
-  }, [plugin, updateMonitorSafe]);
+  }, [plugin, updateMonitorSafe, isRecording]);
 
   return { frameProcessor, poseResult, monitorData, isModelLoaded: plugin.state === 'loaded' };
 }

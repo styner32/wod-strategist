@@ -18,6 +18,39 @@ import (
 )
 
 var GitCommit = "dev"
+var Movements = []string{
+	"Burpee",
+	"Power Snatch",
+	"Hang Power Snatch",
+	"Squat Snatch",
+	"Hang Squat Snatch",
+	"DB Snatch",
+	"Hang DB Snatch",
+	"Clean & Jerk",
+	"Hang Clean & Jerk",
+	"Power Clean & Jerk",
+	"Hang Power Clean & Jerk",
+	"Squat Clean & Jerk",
+	"Hang Squat Clean & Jerk",
+	"DB Clean & Jerk",
+	"Hang DB Clean & Jerk",
+	"Thruster",
+	"Wallball Shot",
+	"Double-under",
+	"Deadlift",
+	"Back Squat",
+	"Overhead Squat",
+	"Box Jump",
+	"Burpee Box Jump Over",
+	"Handstand Push-up",
+	"Pull-up",
+	"Chest to Bar",
+	"Muscle-up",
+	"Row",
+	"Echo Bike",
+	"Skierg",
+	"Toes to Bar",
+}
 
 type ServerConfig struct {
 	QueueClient   *asynq.Client
@@ -110,17 +143,44 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 		// 2. Notify Upload Complete & Start Analysis
 		api.POST("/upload-complete", func(c *gin.Context) {
 			var req struct {
-				SessionID string `json:"session_id" binding:"required"`
-				GcsURI    string `json:"gcs_uri" binding:"required"`
+				SessionID string   `json:"session_id" binding:"required"`
+				GcsURI    string   `json:"gcs_uri" binding:"required"`
+				Movements []string `json:"movements" binding:"required"`
 			}
+
 			if err := c.ShouldBindJSON(&req); err != nil {
 				logger.Log.Error("failed to bind JSON", zap.Error(err))
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
 
+			// if req.Movements does not appear in Movements, return error
+			if len(req.Movements) > 0 {
+				validMovements := false
+				for _, movement := range req.Movements {
+					for _, m := range Movements {
+						if m == movement {
+							validMovements = true
+							break
+						}
+					}
+				}
+
+				if !validMovements {
+					logger.Log.Error("invalid movements", zap.Strings("movements", req.Movements))
+					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movements"})
+					return
+				}
+			}
+
+			if len(req.Movements) >= 100 {
+				logger.Log.Error("too many movements", zap.Int("count", len(req.Movements)))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "too many movements"})
+				return
+			}
+
 			// Enqueue task with GCS URI
-			task, err := worker.NewVideoAnalysisTask(req.SessionID, req.GcsURI)
+			task, err := worker.NewVideoAnalysisTask(req.SessionID, req.GcsURI, req.Movements...)
 			if err != nil {
 				logger.Log.Error("failed to create task", zap.Error(err))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -217,12 +277,16 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 
 		api.GET("/history", func(c *gin.Context) {
 			var results []db.AnalysisResult
-			if err := config.DB.Where("status = ?", "COMPLETED").Order("created_at desc").Limit(20).Find(&results).Error; err != nil {
+			if err := config.DB.Order("created_at desc").Limit(20).Find(&results).Error; err != nil {
 				logger.Log.Error("failed to fetch history", zap.Error(err))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
 				return
 			}
 			c.JSON(http.StatusOK, results)
+		})
+
+		api.GET("/movements", func(c *gin.Context) {
+			c.JSON(http.StatusOK, Movements)
 		})
 	}
 

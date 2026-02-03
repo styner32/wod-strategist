@@ -21,7 +21,7 @@ import {
   useCameraFormat,
   useCameraPermission,
 } from "react-native-vision-camera";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 
 import { useBleHeartRate } from "@/features/health/useBleHeartRate";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
@@ -29,14 +29,14 @@ import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutVideo } from "../../features/wod/api";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 
-const cameraFormat = [
-  { videoResolution: { width: 1280, height: 720 } },
-  { fps: 30 },
-];
-
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 
 export default function VisionTestPage() {
+  const { resolution, movements } = useLocalSearchParams<{ resolution: string; movements: string }>();
+  
+  const targetWidth = resolution === '1080p' ? 1920 : 1280;
+  const targetHeight = resolution === '1080p' ? 1080 : 720;
+
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
   const { width, height } = useWindowDimensions();
@@ -48,19 +48,25 @@ export default function VisionTestPage() {
   const chunkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isChunkRecordingActive = useRef(false);
 
-  // 720p 포맷 고정
-  const format = useCameraFormat(device, cameraFormat);
+  // 720p or 1080p format based on user selection
+  const format = useCameraFormat(device, [
+    { videoResolution: { width: targetWidth, height: targetHeight } },
+    { fps: 30 },
+  ]);
 
   const [mediaPermission, requestMediaPermission] =
     MediaLibrary.usePermissions();
-  const { frameProcessor, poseResult, monitorData } = usePoseDetection();
-  const { bpm, status: hrStatus } = useBleHeartRate();
-  // const { bpm, status: hrStatus } = useHeartRate();
 
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [enableChunks, setEnableChunks] = useState(false);
+
+  // Pass isRecording to the hook to toggle inference on/off
+  const { frameProcessor, poseResult, monitorData } = usePoseDetection(isRecording);
+  const { bpm, status: hrStatus } = useBleHeartRate();
+  // const { bpm, status: hrStatus } = useHeartRate();
 
   useEffect(() => {
     if (!hasPermission) requestPermission();
@@ -70,21 +76,23 @@ export default function VisionTestPage() {
   const handleUpload = async (fileUri: string) => {
     try {
       setIsUploading(true);
+      setProgress(0);
       const now = new Date();
       const year = now.getFullYear();
       const month = String(now.getMonth() + 1).padStart(2, '0');
       const day = String(now.getDate()).padStart(2, '0');
       const hours = String(now.getHours()).padStart(2, '0');
       const minutes = String(now.getMinutes()).padStart(2, '0');
-      const sessionId = `WOD-${year}-${month}-${day}-${hours}:${minutes}`;
+      const sessionId = `WOD-${year}-${month}-${day}-${hours}-${minutes}`;
       
-      await processWorkoutVideo(fileUri, sessionId);
+      await processWorkoutVideo(fileUri, sessionId, (p) => setProgress(p), movements);
       Alert.alert("Success", "Video uploaded and analysis started!");
     } catch (e) {
       console.error(e);
       Alert.alert("Upload Failed", String(e));
     } finally {
       setIsUploading(false);
+      setProgress(0);
     }
   };
 
@@ -210,18 +218,18 @@ export default function VisionTestPage() {
       console.log("📼 Original Video Path:", file?.path);
 
       if (file?.path) {
-        // 압축 (기존 로직 유지)
+        // A. Save ORIGINAL (Raw) video to Gallery immediately
+        await MediaLibrary.saveToLibraryAsync(file.path);
+        
+        // B. Compress for Upload (Temp file only, do not save to gallery)
         const compressedUri = await Video.compress(file.path, {
-          compressionMethod: "auto",
-          maxSize: 1280,
+          compressionMethod: "auto", // or manual with bitrate
+          maxSize: 720, // 720p is sufficient for AI
         });
 
-        // 갤러리 저장 (기존 로직 유지)
-        await MediaLibrary.saveToLibraryAsync(compressedUri);
-        
         Alert.alert(
           "Saved",
-          "Video saved to gallery. Upload for AI Coaching?",
+          "Original video saved to gallery. Upload for AI Coaching?",
           [
             { text: "Cancel", style: "cancel" },
             { text: "Upload", onPress: () => handleUpload(compressedUri) },
@@ -295,22 +303,27 @@ export default function VisionTestPage() {
             </Text>
           </View>
         )}
-        <View style={styles.row}>
-          <Text style={styles.label}>CONF:</Text>
-          <Text style={styles.val}>
-            {(monitorData.confidence * 100).toFixed(0)}%
-          </Text>
-        </View>
-        <View style={styles.row}>
-          <Text style={styles.label}>MOTION:</Text>
-          <Text style={styles.val}>{monitorData.motion.toFixed(3)}</Text>
-        </View>
-        <View style={styles.row}>
-          <Text style={styles.label}>STATE:</Text>
-          <Text style={styles.val}>
-            {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
-          </Text>
-        </View>
+        
+        {isRecording && (
+          <>
+            <View style={styles.row}>
+              <Text style={styles.label}>CONF:</Text>
+              <Text style={styles.val}>
+                {(monitorData.confidence * 100).toFixed(0)}%
+              </Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>MOTION:</Text>
+              <Text style={styles.val}>{monitorData.motion.toFixed(3)}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>STATE:</Text>
+              <Text style={styles.val}>
+                {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
+              </Text>
+            </View>
+          </>
+        )}
 
         {!isRecording && (
           <View style={[styles.row, { marginTop: 10, alignItems: "center" }]}>
@@ -328,12 +341,17 @@ export default function VisionTestPage() {
 
       {/* 녹화 버튼 */}
       <View style={styles.recordControl}>
-        {isProcessing || isUploading ? (
+        {isProcessing ? (
           <View style={styles.processingBadge}>
             <ActivityIndicator color="#000" />
-            <Text style={styles.processingText}>
-              {isUploading ? " Uploading..." : " Saving..."}
-            </Text>
+            <Text style={styles.processingText}> Saving...</Text>
+          </View>
+        ) : isUploading ? (
+          <View style={styles.uploadingBadge}>
+            <Text style={styles.processingText}>Uploading {Math.round(progress * 100)}%</Text>
+            <View style={styles.progressBarBg}>
+              <View style={[styles.progressBarFill, { width: `${progress * 100}%` }]} />
+            </View>
           </View>
         ) : (
           <TouchableOpacity
@@ -428,6 +446,7 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     alignItems: "center",
     zIndex: 20,
+    width: '80%', // Ensure width for progress bar
   },
   recordBtn: {
     width: 80,
@@ -448,7 +467,29 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     alignItems: "center",
   },
+  uploadingBadge: {
+    backgroundColor: "rgba(0,0,0,0.8)",
+    padding: 15,
+    borderRadius: 12,
+    alignItems: "center",
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#333',
+  },
   processingText: {
     fontWeight: "bold",
+    color: '#fff',
+    marginBottom: 5,
+  },
+  progressBarBg: {
+    width: '100%',
+    height: 6,
+    backgroundColor: '#333',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#00FF00',
   },
 });

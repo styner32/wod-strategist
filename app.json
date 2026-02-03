@@ -109,7 +109,16 @@
           "bluetoothAlwaysPermission": "심박계 연결을 위해 블루투스 권한이 필요합니다."
         }
       ],
-      "expo-build-properties"
+      "expo-build-properties",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "운동 영상을 저장하기 위해 사진 라이브러리에 접근합니다.",
+          "cameraPermission": "AI 코칭을 위해 사용자의 움직임을 분석합니다.",
+          "//": "Disables the microphone permission",
+          "microphonePermission": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
