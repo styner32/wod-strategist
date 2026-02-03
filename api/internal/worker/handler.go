@@ -18,14 +18,14 @@ import (
 )
 
 const (
-	TypeVideoAnalysis = "video:analysis"
-	MovementPrompt    = `
-## 운동 컨텍스트 (선택 입력)
-분석의 정확도를 높이기 위해 아래 정보를 참고해주세요. 정보가 없다면 영상 자체만으로 분석해 주세요.
-- **운동 종목/와드명**: {{ 예: 스쿼트, 프란(Fran), 1RM 측정, 30분 달리기 }}
-- **운동 목표**: {{ 예: 자세 교정, 기록 단축, 완주, 근비대 }}
-- **사용된 무게/강도**: {{ 예: 135lb, 맨몸, 70% 강도 }}
-- **특이사항**: {{ 예: 최근 허리 부상 있음, 3라운드부터 급격히 지침 }}`
+	TypeVideoAnalysis     = "video:analysis"
+	PersonalProfilePrompt = `
+## 개인 프로필
+분석의 정확도를 높이기 위해 개인 정보를 참고해주세요.`
+
+	MovementPrompt = `
+## 운동 컨텍스트
+분석의 정확도를 높이기 위해 아래 운동 정보를 참고해주세요.`
 
 	AnalysisPrompt = `
 # 운동 영상 분석 요청
@@ -56,6 +56,7 @@ const (
 type VideoAnalysisPayload struct {
 	SessionID string
 	FilePath  string
+	Movements []string
 }
 
 type Worker struct {
@@ -72,11 +73,13 @@ func NewWorker(db *gorm.DB, storageClient *storage.Client, bucketName string) *W
 	}
 }
 
-func NewVideoAnalysisTask(sessionID, filePath string) (*asynq.Task, error) {
+func NewVideoAnalysisTask(sessionID, filePath string, movements ...string) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
 		SessionID: sessionID,
 		FilePath:  filePath,
+		Movements: movements,
 	}
+
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -126,7 +129,15 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("failed to create gemini client: %w", err)
 	}
 
-	analysis, geminiFile, err := geminiClient.AnalyzeVideo(ctx, localFilePath, AnalysisPrompt)
+	prompt := AnalysisPrompt
+	if len(p.Movements) > 0 {
+		prompt += fmt.Sprintf("%s\n## 운동 종목: %s", MovementPrompt, strings.Join(p.Movements, ", "))
+	}
+
+	personalProfile := "생년월일: 1984년 10월 17일, 성별: 남, 키: 164cm, 몸무게: 72kg" // customize later when auth is ready
+	prompt += fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
+
+	analysis, geminiFile, err := geminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
 	// retry if analysis is empty
 	if analysis == "" {

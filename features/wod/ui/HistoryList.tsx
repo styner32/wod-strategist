@@ -5,6 +5,7 @@ import {
   RefreshControl,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { AnalysisResult, fetchAnalysisHistory } from "../history";
@@ -13,6 +14,7 @@ export function HistoryList() {
   const [data, setData] = useState<AnalysisResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const loadData = async () => {
     try {
@@ -35,22 +37,36 @@ export function HistoryList() {
     loadData();
   };
 
-  const renderItem = ({ item }: { item: AnalysisResult }) => (
-    <View style={styles.card}>
-      <View style={styles.header}>
-        <Text style={styles.sessionId}>{item.session_id}</Text>
-        <Text style={[styles.status, item.status === "COMPLETED" ? styles.success : styles.pending]}>
-          {item.status}
-        </Text>
-      </View>
-      <Text style={styles.date}>{new Date(item.created_at).toLocaleString()}</Text>
-      <Text style={styles.output} numberOfLines={3}>
-        {item.output}
-      </Text>
-    </View>
-  );
+  const toggleExpand = (id: number) => {
+    setExpandedId(prev => (prev === id ? null : id));
+  };
 
-  if (loading) {
+  const renderItem = ({ item }: { item: AnalysisResult }) => {
+    const isExpanded = expandedId === item.id;
+    return (
+      <TouchableOpacity 
+        style={styles.card} 
+        onPress={() => toggleExpand(item.id)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.header}>
+          <Text style={styles.sessionId}>{item.session_id}</Text>
+          <Text style={[styles.status, item.status === "COMPLETED" ? styles.success : styles.pending]}>
+            {item.status}
+          </Text>
+        </View>
+        <Text style={styles.date}>{new Date(item.created_at).toLocaleString()}</Text>
+        <Text style={styles.output} numberOfLines={isExpanded ? undefined : 3}>
+          {item.output}
+        </Text>
+        <Text style={styles.hint}>
+          {isExpanded ? "Show Less" : "Show More"}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+
+  if (loading && !refreshing) {
     return <ActivityIndicator style={{ flex: 1 }} color="#000" />;
   }
 
@@ -64,6 +80,7 @@ export function HistoryList() {
       }
       contentContainerStyle={styles.list}
       ListEmptyComponent={<Text style={styles.empty}>No workout history found.</Text>}
+      scrollEnabled={false} // Disable internal scrolling to avoid conflict with parent ScrollView
     />
   );
 }
@@ -71,6 +88,18 @@ export function HistoryList() {
 const styles = StyleSheet.create({
   list: {
     padding: 16,
+    paddingBottom: 40,
+  },
+  refreshBtn: {
+    alignSelf: 'flex-end',
+    marginBottom: 10,
+    padding: 8,
+    backgroundColor: '#eee',
+    borderRadius: 8,
+  },
+  refreshText: {
+    fontSize: 12,
+    fontWeight: "bold",
   },
   card: {
     backgroundColor: "#fff",
@@ -107,6 +136,12 @@ const styles = StyleSheet.create({
   output: {
     fontSize: 14,
     color: "#333",
+  },
+  hint: {
+    fontSize: 11,
+    color: "#999",
+    marginTop: 8,
+    textAlign: "right",
   },
   empty: {
     textAlign: "center",

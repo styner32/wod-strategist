@@ -1,6 +1,7 @@
-import { File } from "expo-file-system";
+// import { File } from "expo-file-system"; // Not needed if using Blob
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
+const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
 const API_SECRET_KEY = process.env.EXPO_PUBLIC_API_KEY || "";
 
 export interface UploadResult {
@@ -8,9 +9,19 @@ export interface UploadResult {
   sessionId: string;
 }
 
+export async function fetchMovements(): Promise<string[]> {
+  const res = await fetch(`${API_BASE_URL}/movements`, {
+    headers: { "X-API-Key": API_SECRET_KEY },
+  });
+  if (!res.ok) throw new Error("Failed to fetch movements");
+  return res.json();
+}
+
 export async function processWorkoutVideo(
   fileUri: string,
-  sessionId: string = "session_dev_001"
+  sessionId: string = "session_dev_001",
+  onProgress?: (progress: number) => void,
+  movements?: string[]
 ): Promise<UploadResult> {
   const filename = fileUri.split("/").pop() || "workout.mp4";
 
@@ -37,22 +48,40 @@ export async function processWorkoutVideo(
   const { upload_url, gcs_uri } = await uploadUrlRes.json();
   console.log("✅ Got Signed URL");
 
-  // 2. Upload to GCS (Directly) — recommended API: File + fetch with arrayBuffer()
-  const file = new File(fileUri);
-  const body = await file.arrayBuffer();
-  const uploadRes = await fetch(upload_url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "video/mp4",
-      "X-API-Key": API_SECRET_KEY,
-    },
-    body,
+  // 2. Upload to GCS (Directly) using XHR for Progress
+  // Read local file as Blob first
+  const fileResponse = await fetch(fileUri);
+  const blob = await fileResponse.blob();
+
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", upload_url);
+    xhr.setRequestHeader("Content-Type", "video/mp4");
+
+    if (onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(event.loaded / event.total);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(
+          new Error(
+            `Failed to upload to GCS: ${xhr.status} ${xhr.responseText}`
+          )
+        );
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.send(blob);
   });
 
-  if (uploadRes.status >= 300) {
-    const err = await uploadRes.text();
-    throw new Error(`Failed to upload to GCS: ${err}`);
-  }
   console.log("✅ Uploaded to GCS");
 
   // 3. Notify Complete
@@ -65,6 +94,7 @@ export async function processWorkoutVideo(
     body: JSON.stringify({
       session_id: sessionId,
       gcs_uri: gcs_uri,
+      movements: movements || [], // Pass movements metadata
     }),
   });
 

@@ -14,14 +14,26 @@ export default function Dashboard() {
       <View style={styles.menu}>
         <Text style={styles.sectionTitle}>Development Zone</Text>
 
-        <Link href="/workout/visionTestPage" asChild>
+        <Link href="/workout/setup" asChild>
           <Pressable style={styles.card}>
             <View style={styles.iconBox}>
               <Text style={styles.icon}>👁️</Text>
             </View>
             <View>
-              <Text style={styles.cardTitle}>Vision AI Test</Text>
-              <Text style={styles.cardDesc}>Camera & Skeleton Check</Text>
+              <Text style={styles.cardTitle}>Start Workout</Text>
+              <Text style={styles.cardDesc}>Configure & Record</Text>
+            </View>
+          </Pressable>
+        </Link>
+
+        <Link href="/upload" asChild>
+          <Pressable style={styles.card}>
+            <View style={styles.iconBox}>
+              <Text style={styles.icon}>📤</Text>
+            </View>
+            <View>
+              <Text style={styles.cardTitle}>Upload Video</Text>
+              <Text style={styles.cardDesc}>Analyze from Gallery</Text>
             </View>
           </Pressable>
         </Link>
