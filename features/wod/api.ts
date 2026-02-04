@@ -1,4 +1,8 @@
-// import { File } from "expo-file-system"; // Not needed if using Blob
+import {
+  createUploadTask,
+  FileSystemUploadType,
+  UploadProgressData,
+} from "expo-file-system/legacy";
 
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
@@ -48,39 +52,32 @@ export async function processWorkoutVideo(
   const { upload_url, gcs_uri } = await uploadUrlRes.json();
   console.log("✅ Got Signed URL");
 
-  // 2. Upload to GCS (Directly) using XHR for Progress
-  // Read local file as Blob first
-  const fileResponse = await fetch(fileUri);
-  const blob = await fileResponse.blob();
-
-  await new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", upload_url);
-    xhr.setRequestHeader("Content-Type", "video/mp4");
-
-    if (onProgress) {
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          onProgress(event.loaded / event.total);
-        }
-      };
-    }
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(
-          new Error(
-            `Failed to upload to GCS: ${xhr.status} ${xhr.responseText}`
-          )
-        );
+  // 2. Upload to GCS (Directly) using FileSystem for streaming upload
+  // This avoids loading the entire file into memory as a Blob
+  const uploadTask = createUploadTask(
+    upload_url,
+    fileUri,
+    {
+      httpMethod: "PUT",
+      headers: {
+        "Content-Type": "video/mp4",
+      },
+      uploadType: FileSystemUploadType.BINARY_CONTENT,
+    },
+    (data: UploadProgressData) => {
+      if (onProgress && data.totalBytesExpectedToSend > 0) {
+        onProgress(data.totalBytesSent / data.totalBytesExpectedToSend);
       }
-    };
+    }
+  );
 
-    xhr.onerror = () => reject(new Error("Network error during upload"));
-    xhr.send(blob);
-  });
+  const response = await uploadTask.uploadAsync();
+
+  if (!response || response.status < 200 || response.status >= 300) {
+    throw new Error(
+      `Failed to upload to GCS: ${response?.status} ${response?.body || ""}`
+    );
+  }
 
   console.log("✅ Uploaded to GCS");
 
