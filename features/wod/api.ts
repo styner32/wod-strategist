@@ -25,7 +25,8 @@ export async function processWorkoutVideo(
   fileUri: string,
   sessionId: string = "session_dev_001",
   onProgress?: (progress: number) => void,
-  movements?: string[]
+  movements?: string[],
+  mimeType: string = "video/mp4"
 ): Promise<UploadResult> {
   const filename = fileUri.split("/").pop() || "workout.mp4";
 
@@ -60,7 +61,7 @@ export async function processWorkoutVideo(
     {
       httpMethod: "PUT",
       headers: {
-        "Content-Type": "video/mp4",
+        "Content-Type": mimeType,
       },
       uploadType: FileSystemUploadType.BINARY_CONTENT,
     },
