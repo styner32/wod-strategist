@@ -29,7 +29,9 @@ import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutVideo } from "../../features/wod/api";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 
-const CHUNK_DURATION_MS = 10000; // 10 seconds
+import * as FileSystem from "expo-file-system";
+
+const CHUNK_DURATION_MS = 60000; // 1 minute
 
 export default function VisionTestPage() {
   const { resolution, movements } = useLocalSearchParams<{ resolution: string; movements: string }>();
@@ -62,9 +64,10 @@ export default function VisionTestPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [enableChunks, setEnableChunks] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
 
-  // Pass isRecording to the hook to toggle inference on/off
-  const { frameProcessor, poseResult, monitorData } = usePoseDetection(isRecording);
+  // Pass 'true' to always run inference for debugging
+  const { frameProcessor, poseResult, monitorData } = usePoseDetection(true);
   const { bpm, status: hrStatus } = useBleHeartRate();
   // const { bpm, status: hrStatus } = useHeartRate();
 
@@ -72,6 +75,25 @@ export default function VisionTestPage() {
     if (!hasPermission) requestPermission();
     if (!mediaPermission?.granted) requestMediaPermission();
   }, [hasPermission, mediaPermission]);
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    if (isRecording) {
+      setRecordingDuration(0);
+      interval = setInterval(() => {
+        setRecordingDuration((prev) => prev + 1);
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isRecording]);
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
 
   const handleUpload = async (fileUri: string) => {
     try {
@@ -98,6 +120,45 @@ export default function VisionTestPage() {
       setProgress(0);
     }
   };
+  
+  const handleChunkProcessing = async (chunkPath: string) => {
+      console.log("🔄 Processing Chunk:", chunkPath);
+      try {
+        // 1. Compress to 480p (Lightweight Backup)
+        const compressedUri = await Video.compress(chunkPath, {
+          compressionMethod: "manual",
+          maxWidth: 854,
+          maxHeight: 480,
+          bitrate: 1000000,
+        });
+        console.log("✅ Chunk Compressed:", compressedUri);
+
+        // 2. Upload with current session context
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const currentSessionId = `WOD-${year}-${month}-${day}-${hours}-${minutes}`;
+        const movementsArray = movements ? movements.split(', ') : [];
+
+        await processWorkoutVideo(
+            compressedUri, 
+            currentSessionId, 
+            undefined, 
+            movementsArray, 
+            "video/mp4"
+        );
+        console.log("🚀 Chunk Uploaded & Analysis Started");
+
+        // 3. Cleanup
+        await FileSystem.deleteAsync(compressedUri, { idempotent: true });
+        
+      } catch (e) {
+        console.warn("⚠️ Chunk Processing Failed:", e);
+      }
+  };
 
   // --- Chunk Recording Logic (Raw Camera) ---
 
@@ -112,7 +173,11 @@ export default function VisionTestPage() {
           console.log("📷 Chunk Finished:", video.path);
           isChunkRecordingActive.current = false;
 
-          // Save chunk to gallery
+          // 1. Fire off background processing (Compress & Upload)
+          // We do NOT await this, so the next recording starts instantly.
+          handleChunkProcessing(video.path);
+
+          // 2. Save chunk to gallery (Optional - maybe remove if 'Safety Backup' is the only goal)
           try {
             await MediaLibrary.saveToLibraryAsync(video.path);
             console.log("✅ Chunk saved to gallery");
@@ -296,37 +361,42 @@ export default function VisionTestPage() {
 
       <View style={styles.dashboard}>
         <Text style={styles.dashTitle}>
-          {isRecording ? "🏃 WORKOUT" : "📊 SYSTEM"}
+          {isRecording ? `🏃 WORKOUT ${formatDuration(recordingDuration)}` : "📊 SYSTEM"}
         </Text>
-        {!isRecording && (
-          <View style={styles.row}>
-            <Text style={styles.label}>RES:</Text>
-            <Text style={styles.val}>
-              {format?.videoWidth}x{format?.videoHeight}
-            </Text>
-          </View>
-        )}
-        
-        {isRecording && (
-          <>
-            <View style={styles.row}>
-              <Text style={styles.label}>CONF:</Text>
-              <Text style={styles.val}>
-                {(monitorData.confidence * 100).toFixed(0)}%
-              </Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>MOTION:</Text>
-              <Text style={styles.val}>{monitorData.motion.toFixed(3)}</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>STATE:</Text>
-              <Text style={styles.val}>
-                {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
-              </Text>
-            </View>
-          </>
-        )}
+        <View style={styles.row}>
+          <Text style={styles.label}>RES:</Text>
+          <Text style={styles.val}>
+            {format?.videoWidth}x{format?.videoHeight}
+          </Text>
+        </View>
+
+        <View style={styles.row}>
+          <Text style={styles.label}>CONF:</Text>
+          <Text style={styles.val}>
+            {(monitorData.confidence * 100).toFixed(0)}%
+          </Text>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.label}>MOTION:</Text>
+          <Text style={styles.val}>{monitorData.motion.toFixed(3)}</Text>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.label}>STATE:</Text>
+          <Text style={[
+            styles.val,
+            monitorData.isWorkingOut ? { color: "#0f0" } : (monitorData.idleTime > 5000 ? { color: "#ff0" } : { color: "#fff" })
+          ]}>
+            {monitorData.isWorkingOut ? "ACTIVE" : (monitorData.idleTime > 5000 ? "RESTING" : "IDLE")}
+          </Text>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.label}>ACTIVE:</Text>
+          <Text style={styles.val}>{(monitorData.activeDuration / 1000).toFixed(1)}s</Text>
+        </View>
+        <View style={styles.row}>
+          <Text style={styles.label}>IDLE:</Text>
+          <Text style={styles.val}>{(monitorData.idleTime / 1000).toFixed(1)}s</Text>
+        </View>
 
         {!isRecording && (
           <View style={[styles.row, { marginTop: 10, alignItems: "center" }]}>

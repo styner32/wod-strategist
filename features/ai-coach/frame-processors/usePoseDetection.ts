@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTensorflowModel } from 'react-native-fast-tflite';
 import { useSharedValue } from 'react-native-reanimated';
 import { useFrameProcessor } from 'react-native-vision-camera';
@@ -13,12 +13,23 @@ export function usePoseDetection(isRecording: boolean = false) {
   const frameCounter = useSharedValue(0);
   const lastPose = useSharedValue<number[] | null>(null);
   const motionEma = useSharedValue(0);
+  const lastActiveTime = useSharedValue(Date.now());
+  const activeStartTime = useSharedValue(0);
 
   const [monitorData, setMonitorData] = useState({
     isWorkingOut: false,
     confidence: 0,
     motion: 0,
+    idleTime: 0,
+    activeDuration: 0,
   });
+
+  useEffect(() => {
+    if (isRecording) {
+      lastActiveTime.value = Date.now();
+      activeStartTime.value = 0;
+    }
+  }, [isRecording, lastActiveTime, activeStartTime]);
 
   const updateMonitorSafe = useRunOnJS((data) => {
     setMonitorData(data);
@@ -26,8 +37,8 @@ export function usePoseDetection(isRecording: boolean = false) {
 
   const minKeypointScore = 0.3;
   const minConfidence = 0.2;
-  const minMotion = 0.015;
-  const motionEmaDecay = 0.7;
+  const minMotion = 0.006;
+  const motionEmaDecay = 0.9;
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
@@ -86,15 +97,34 @@ export function usePoseDetection(isRecording: boolean = false) {
       motionEma.value = smoothedMotion;
       lastPose.value = newPose;
 
-      const isWorkingOut =
-        confidence > minConfidence && smoothedMotion > minMotion;
+      // Logic: Only consider "Active" if condition met for > 1 second
+      const rawConditionMet = confidence > minConfidence && smoothedMotion > minMotion;
+      
+      if (rawConditionMet) {
+        if (activeStartTime.value === 0) {
+          activeStartTime.value = Date.now();
+        }
+      } else {
+        activeStartTime.value = 0;
+      }
+
+      const activeDuration = activeStartTime.value > 0 ? (Date.now() - activeStartTime.value) : 0;
+      const isStableWorkingOut = activeDuration >= 1000;
+
+      if (isStableWorkingOut) {
+        lastActiveTime.value = Date.now();
+      }
+
+      const idleTime = Date.now() - lastActiveTime.value;
 
       // C. Data Transfer (Every 5 frames)
       if (frameCounter.value % 5 === 0) {
         updateMonitorSafe({
-          isWorkingOut: isWorkingOut,
+          isWorkingOut: isStableWorkingOut,
           confidence: confidence,
           motion: smoothedMotion,
+          idleTime: idleTime,
+          activeDuration: activeDuration,
         });
       }
     }
