@@ -18,6 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function UploadScreen() {
   const [videoUri, setVideoUri] = useState<string | null>(null);
+  const [videoMimeType, setVideoMimeType] = useState<string | null>(null);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -46,8 +47,9 @@ export default function UploadScreen() {
     });
 
     if (!result.canceled) {
-      const uri = result.assets[0].uri;
+      const { uri, mimeType } = result.assets[0];
       setVideoUri(uri);
+      setVideoMimeType(mimeType || "video/mp4");
 
       try {
         const { uri: thumb } = await VideoThumbnails.getThumbnailAsync(uri, {
@@ -79,7 +81,8 @@ export default function UploadScreen() {
         videoUri,
         sessionId,
         (p) => setProgress(p),
-        selectedMovements
+        selectedMovements,
+        videoMimeType || "video/mp4"
       );
 
       Alert.alert("Success", "Analysis started!", [
@@ -95,6 +98,7 @@ export default function UploadScreen() {
 
   const clearSelection = () => {
     setVideoUri(null);
+    setVideoMimeType(null);
     setThumbnailUri(null);
   };
 
