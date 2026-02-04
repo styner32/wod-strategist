@@ -73,9 +73,13 @@ export async function processWorkoutVideo(
 
   const response = await uploadTask.uploadAsync();
 
-  if (!response || response.status < 200 || response.status >= 300) {
+  if (!response) {
+    throw new Error("Failed to upload to GCS: No response from upload task.");
+  }
+
+  if (response.status < 200 || response.status >= 300) {
     throw new Error(
-      `Failed to upload to GCS: ${response?.status} ${response?.body || ""}`
+      `Failed to upload to GCS: ${response.status} ${response.body || ""}`
     );
   }
 
