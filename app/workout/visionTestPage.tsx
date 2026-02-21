@@ -1,4 +1,5 @@
 import * as MediaLibrary from "expo-media-library";
+import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -21,23 +22,25 @@ import {
   useCameraFormat,
   useCameraPermission,
 } from "react-native-vision-camera";
-import { router, useLocalSearchParams } from "expo-router";
 
+import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useBleHeartRate } from "@/features/health/useBleHeartRate";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutVideo } from "../../features/wod/api";
-import { IconSymbol } from "@/components/ui/icon-symbol";
 
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system";
 
 const CHUNK_DURATION_MS = 60000; // 1 minute
 
 export default function VisionTestPage() {
-  const { resolution, movements } = useLocalSearchParams<{ resolution: string; movements: string }>();
-  
-  const targetWidth = resolution === '1080p' ? 1920 : 1280;
-  const targetHeight = resolution === '1080p' ? 1080 : 720;
+  const { resolution, movements } = useLocalSearchParams<{
+    resolution: string;
+    movements: string;
+  }>();
+
+  const targetWidth = resolution === "1080p" ? 1920 : 1280;
+  const targetHeight = resolution === "1080p" ? 1080 : 720;
 
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
@@ -66,8 +69,8 @@ export default function VisionTestPage() {
   const [enableChunks, setEnableChunks] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
 
-  // Pass 'true' to always run inference for debugging
-  const { frameProcessor, poseResult, monitorData } = usePoseDetection(true);
+  const { frameProcessor, poseResult, monitorData } =
+    usePoseDetection(isRecording);
   const { bpm, status: hrStatus } = useBleHeartRate();
   // const { bpm, status: hrStatus } = useHeartRate();
 
@@ -92,7 +95,21 @@ export default function VisionTestPage() {
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const deleteFileIfExists = (uri: string) => {
+    // Vision libraries may return either a full URI or a raw absolute path.
+    const normalizedUri = uri.includes("://") ? uri : `file://${uri}`;
+
+    try {
+      const file = new File(normalizedUri);
+      if (file.exists) {
+        file.delete();
+      }
+    } catch (error) {
+      console.warn("Failed to delete temporary file:", normalizedUri, error);
+    }
   };
 
   const handleUpload = async (fileUri: string) => {
@@ -101,16 +118,21 @@ export default function VisionTestPage() {
       setProgress(0);
       const now = new Date();
       const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const hours = String(now.getHours()).padStart(2, '0');
-      const minutes = String(now.getMinutes()).padStart(2, '0');
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      const hours = String(now.getHours()).padStart(2, "0");
+      const minutes = String(now.getMinutes()).padStart(2, "0");
       const sessionId = `WOD-${year}-${month}-${day}-${hours}-${minutes}`;
 
       // Parse movements string back to array
-      const movementsArray = movements ? movements.split(', ') : [];
-      
-      await processWorkoutVideo(fileUri, sessionId, (p) => setProgress(p), movementsArray);
+      const movementsArray = movements ? movements.split(", ") : [];
+
+      await processWorkoutVideo(
+        fileUri,
+        sessionId,
+        (p) => setProgress(p),
+        movementsArray,
+      );
       Alert.alert("Success", "Video uploaded and analysis started!");
     } catch (e) {
       console.error(e);
@@ -120,44 +142,44 @@ export default function VisionTestPage() {
       setProgress(0);
     }
   };
-  
+
   const handleChunkProcessing = async (chunkPath: string) => {
-      console.log("🔄 Processing Chunk:", chunkPath);
-      try {
-        // 1. Compress to 480p (Lightweight Backup)
-        const compressedUri = await Video.compress(chunkPath, {
-          compressionMethod: "manual",
-          maxWidth: 854,
-          maxHeight: 480,
-          bitrate: 1000000,
-        });
-        console.log("✅ Chunk Compressed:", compressedUri);
+    console.log("🔄 Processing Chunk:", chunkPath);
+    try {
+      // 1. Compress to 480p (Lightweight Backup)
+      const compressedUri = await Video.compress(chunkPath, {
+        compressionMethod: "manual",
+        bitrate: 1000000,
+      });
+      console.log("✅ Chunk Compressed:", compressedUri);
 
-        // 2. Upload with current session context
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const currentSessionId = `WOD-${year}-${month}-${day}-${hours}-${minutes}`;
-        const movementsArray = movements ? movements.split(', ') : [];
+      // 2. Upload with current session context
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      const hours = String(now.getHours()).padStart(2, "0");
+      const minutes = String(now.getMinutes()).padStart(2, "0");
+      const seconds = String(now.getSeconds()).padStart(2, "0");
+      const currentSessionId = `WOD-${year}-${month}-${day}-${hours}-${minutes}-${seconds}`;
+      const movementsArray = movements ? movements.split(", ") : [];
 
-        await processWorkoutVideo(
-            compressedUri, 
-            currentSessionId, 
-            undefined, 
-            movementsArray, 
-            "video/mp4"
-        );
-        console.log("🚀 Chunk Uploaded & Analysis Started");
+      await processWorkoutVideo(
+        compressedUri,
+        currentSessionId,
+        undefined,
+        movementsArray,
+        "video/mp4",
+      );
+      console.log("🚀 Chunk Uploaded & Analysis Started");
 
-        // 3. Cleanup
-        await FileSystem.deleteAsync(compressedUri, { idempotent: true });
-        
-      } catch (e) {
-        console.warn("⚠️ Chunk Processing Failed:", e);
+      // 3. Cleanup
+      for (const uri of new Set([compressedUri, chunkPath])) {
+        deleteFileIfExists(uri);
       }
+    } catch (e) {
+      console.warn("⚠️ Chunk Processing Failed:", e);
+    }
   };
 
   // --- Chunk Recording Logic (Raw Camera) ---
@@ -288,7 +310,7 @@ export default function VisionTestPage() {
       if (file?.path) {
         // A. Save ORIGINAL (Raw) video to Gallery immediately
         await MediaLibrary.saveToLibraryAsync(file.path);
-        
+
         // B. Compress for Upload (Temp file only, do not save to gallery)
         const compressedUri = await Video.compress(file.path, {
           compressionMethod: "auto", // or manual with bitrate
@@ -301,7 +323,7 @@ export default function VisionTestPage() {
           [
             { text: "Cancel", style: "cancel" },
             { text: "Upload", onPress: () => handleUpload(compressedUri) },
-          ]
+          ],
         );
       }
     } catch (error) {
@@ -339,10 +361,7 @@ export default function VisionTestPage() {
 
       {/* 닫기 버튼 */}
       {!isRecording && (
-        <TouchableOpacity 
-          style={styles.closeBtn} 
-          onPress={() => router.back()}
-        >
+        <TouchableOpacity style={styles.closeBtn} onPress={() => router.back()}>
           <IconSymbol name="chevron.left" size={32} color="#fff" />
         </TouchableOpacity>
       )}
@@ -361,7 +380,9 @@ export default function VisionTestPage() {
 
       <View style={styles.dashboard}>
         <Text style={styles.dashTitle}>
-          {isRecording ? `🏃 WORKOUT ${formatDuration(recordingDuration)}` : "📊 SYSTEM"}
+          {isRecording
+            ? `🏃 WORKOUT ${formatDuration(recordingDuration)}`
+            : "📊 SYSTEM"}
         </Text>
         <View style={styles.row}>
           <Text style={styles.label}>RES:</Text>
@@ -382,20 +403,34 @@ export default function VisionTestPage() {
         </View>
         <View style={styles.row}>
           <Text style={styles.label}>STATE:</Text>
-          <Text style={[
-            styles.val,
-            monitorData.isWorkingOut ? { color: "#0f0" } : (monitorData.idleTime > 5000 ? { color: "#ff0" } : { color: "#fff" })
-          ]}>
-            {monitorData.isWorkingOut ? "ACTIVE" : (monitorData.idleTime > 5000 ? "RESTING" : "IDLE")}
+          <Text
+            style={[
+              styles.val,
+              monitorData.isWorkingOut
+                ? { color: "#0f0" }
+                : monitorData.idleTime > 5000
+                  ? { color: "#ff0" }
+                  : { color: "#fff" },
+            ]}
+          >
+            {monitorData.isWorkingOut
+              ? "ACTIVE"
+              : monitorData.idleTime > 5000
+                ? "RESTING"
+                : "IDLE"}
           </Text>
         </View>
         <View style={styles.row}>
           <Text style={styles.label}>ACTIVE:</Text>
-          <Text style={styles.val}>{(monitorData.activeDuration / 1000).toFixed(1)}s</Text>
+          <Text style={styles.val}>
+            {(monitorData.activeDuration / 1000).toFixed(1)}s
+          </Text>
         </View>
         <View style={styles.row}>
           <Text style={styles.label}>IDLE:</Text>
-          <Text style={styles.val}>{(monitorData.idleTime / 1000).toFixed(1)}s</Text>
+          <Text style={styles.val}>
+            {(monitorData.idleTime / 1000).toFixed(1)}s
+          </Text>
         </View>
 
         {!isRecording && (
@@ -421,9 +456,16 @@ export default function VisionTestPage() {
           </View>
         ) : isUploading ? (
           <View style={styles.uploadingBadge}>
-            <Text style={styles.processingText}>Uploading {Math.round(progress * 100)}%</Text>
+            <Text style={styles.processingText}>
+              Uploading {Math.round(progress * 100)}%
+            </Text>
             <View style={styles.progressBarBg}>
-              <View style={[styles.progressBarFill, { width: `${progress * 100}%` }]} />
+              <View
+                style={[
+                  styles.progressBarFill,
+                  { width: `${progress * 100}%` },
+                ]}
+              />
             </View>
           </View>
         ) : (
@@ -519,7 +561,7 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     alignItems: "center",
     zIndex: 20,
-    width: '80%', // Ensure width for progress bar
+    width: "80%", // Ensure width for progress bar
   },
   recordBtn: {
     width: 80,
@@ -545,24 +587,24 @@ const styles = StyleSheet.create({
     padding: 15,
     borderRadius: 12,
     alignItems: "center",
-    width: '100%',
+    width: "100%",
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: "#333",
   },
   processingText: {
     fontWeight: "bold",
-    color: '#fff',
+    color: "#fff",
     marginBottom: 5,
   },
   progressBarBg: {
-    width: '100%',
+    width: "100%",
     height: 6,
-    backgroundColor: '#333',
+    backgroundColor: "#333",
     borderRadius: 3,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
   progressBarFill: {
-    height: '100%',
-    backgroundColor: '#00FF00',
+    height: "100%",
+    backgroundColor: "#00FF00",
   },
 });
