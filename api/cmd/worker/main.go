@@ -9,6 +9,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/storage"
 	"github.com/wod-strategist/api/internal/worker"
@@ -58,7 +59,12 @@ func main() {
 		logger.Log.Fatal("Failed to create storage client", zap.Error(err))
 	}
 
-	w := worker.NewWorker(dbConn, storageClient, bucketName)
+	geminiClient, err := gemini.NewClient(context.Background(), logger.Log)
+	if err != nil {
+		logger.Log.Fatal("Failed to create gemini client", zap.Error(err))
+	}
+
+	w := worker.NewWorker(dbConn, storageClient, bucketName, geminiClient)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)
