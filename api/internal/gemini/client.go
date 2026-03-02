@@ -81,7 +81,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 	c.logger.Info("File uploaded", zap.Any("file", uploadResult), zap.String("mime_type", mimeType))
 
 	// Generate content
-	resp, err := c.client.Models.GenerateContent(ctx, "gemini-3-pro-preview", []*genai.Content{{
+	resp, err := c.client.Models.GenerateContent(ctx, "gemini-3.1-pro-preview", []*genai.Content{{
 		Role:  genai.RoleUser,
 		Parts: []*genai.Part{{Text: prompt}},
 	}, {
