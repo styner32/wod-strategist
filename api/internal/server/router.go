@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"os"
@@ -102,7 +103,7 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 
 		if apiSecret != "" {
 			apiKey := c.GetHeader("X-API-Key")
-			if apiKey != apiSecret {
+			if subtle.ConstantTimeCompare([]byte(apiKey), []byte(apiSecret)) != 1 {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 				return
 			}
