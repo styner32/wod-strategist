@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -103,7 +104,10 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 
 		if apiSecret != "" {
 			apiKey := c.GetHeader("X-API-Key")
-			if subtle.ConstantTimeCompare([]byte(apiKey), []byte(apiSecret)) != 1 {
+			apiKeyHash := sha256.Sum256([]byte(apiKey))
+			apiSecretHash := sha256.Sum256([]byte(apiSecret))
+
+			if subtle.ConstantTimeCompare(apiKeyHash[:], apiSecretHash[:]) != 1 {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 				return
 			}
