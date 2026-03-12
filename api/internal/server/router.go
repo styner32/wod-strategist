@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,7 +15,6 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
-	"github.com/wod-strategist/api/internal/storage"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -63,12 +64,39 @@ var Movements = []string{
 	"Toes to Bar",
 }
 
+var Injuries = []string{
+	"Neck",
+	"Left Shoulder",
+	"Right Shoulder",
+	"Left Elbow",
+	"Right Elbow",
+	"Wrist",
+	"Upper Back",
+	"Lower Back",
+	"Hip",
+	"Left Hamstring",
+	"Right Hamstring",
+	"Left Knee",
+	"Write Knee",
+	"Left Ankle",
+	"Right Ankle",
+}
+
 type ServerConfig struct {
-	QueueClient   *asynq.Client
+	QueueClient   taskEnqueuer
 	DB            *gorm.DB
-	StorageClient *storage.Client
+	StorageClient objectStorage
 	APIKey        string
 	BucketName    string
+}
+
+type taskEnqueuer interface {
+	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+}
+
+type objectStorage interface {
+	GenerateSignedURL(objectName string, method string, expires time.Duration) (string, error)
+	UploadFile(ctx context.Context, file multipart.File, filename string) (string, error)
 }
 
 func SetupRouter(config *ServerConfig) *gin.Engine {
@@ -104,7 +132,10 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 
 	// API Key Middleware
 	api.Use(func(c *gin.Context) {
-		apiSecret := os.Getenv("API_SECRET")
+		apiSecret := config.APIKey
+		if apiSecret == "" {
+			apiSecret = os.Getenv("API_SECRET")
+		}
 		if apiSecret == "" {
 			logger.Log.Error("API_SECRET is not set, but is required for this endpoint")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -157,9 +188,11 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 		// 2. Notify Upload Complete & Start Analysis
 		api.POST("/upload-complete", func(c *gin.Context) {
 			var req struct {
-				SessionID string   `json:"session_id" binding:"required"`
-				GcsURI    string   `json:"gcs_uri" binding:"required"`
-				Movements []string `json:"movements" binding:"required"`
+				SessionID   string   `json:"session_id" binding:"required"`
+				GcsURI      string   `json:"gcs_uri" binding:"required"`
+				Movements   []string `json:"movements" binding:"required"`
+				Injuries    []string `json:"injuries"`
+				WorkoutType string   `json:"workout_type"`
 			}
 
 			if err := c.ShouldBindJSON(&req); err != nil {
@@ -168,6 +201,7 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 				return
 			}
 
+<<<<<<< HEAD
 			// if req.Movements does not appear in Movements, return error
 			if len(req.Movements) > 0 {
 				if !validateMovements(req.Movements) {
@@ -175,6 +209,20 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movements"})
 					return
 				}
+=======
+			if !worker.IsValidWorkoutType(req.WorkoutType) {
+				logger.Log.Error("invalid workout type", zap.String("workout_type", req.WorkoutType))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workout type"})
+				return
+			}
+
+			workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
+
+			if !allValuesAllowed(req.Movements, Movements) {
+				logger.Log.Error("invalid movements", zap.Strings("movements", req.Movements))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movements"})
+				return
+>>>>>>> 5d0de2c (Enhance workout analysis features and improve API integration)
 			}
 
 			if len(req.Movements) >= 100 {
@@ -183,8 +231,20 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 				return
 			}
 
+			if !allValuesAllowed(req.Injuries, Injuries) {
+				logger.Log.Error("invalid injuries", zap.Strings("injuries", req.Injuries))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid injuries"})
+				return
+			}
+
+			if len(req.Injuries) >= 100 {
+				logger.Log.Error("too many injuries", zap.Int("count", len(req.Injuries)))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "too many injuries"})
+				return
+			}
+
 			// Enqueue task with GCS URI
-			task, err := worker.NewVideoAnalysisTask(req.SessionID, req.GcsURI, req.Movements...)
+			task, err := worker.NewVideoAnalysisTask(req.SessionID, req.GcsURI, workoutType, req.Movements, req.Injuries)
 			if err != nil {
 				logger.Log.Error("failed to create task", zap.Error(err))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -245,7 +305,7 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 			}
 
 			// Enqueue task with GCS URI
-			task, err := worker.NewVideoAnalysisTask(sessionID, gcsURI)
+			task, err := worker.NewVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil)
 			if err != nil {
 				logger.Log.Error("failed to create task", zap.Error(err))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -292,6 +352,10 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 		api.GET("/movements", func(c *gin.Context) {
 			c.JSON(http.StatusOK, Movements)
 		})
+
+		api.GET("/injuries", func(c *gin.Context) {
+			c.JSON(http.StatusOK, Injuries)
+		})
 	}
 
 	return r
@@ -303,5 +367,23 @@ func validateMovements(requested []string) bool {
 			return false
 		}
 	}
+
 	return true
+}
+
+func allValuesAllowed(values []string, allowed []string) bool {
+	if len(values) == 0 {
+		return true
+	}
+
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, value := range allowed {
+		allowedSet[value] = struct{}{}
+	}
+
+	for _, value := range values {
+		if _, ok := allowedSet[value]; !ok {
+			return false
+		}
+	}
 }

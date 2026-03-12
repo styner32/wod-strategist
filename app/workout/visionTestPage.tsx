@@ -24,6 +24,11 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 
 import { useBleHeartRate } from "@/features/health/useBleHeartRate";
+import {
+  buildWorkoutSessionId,
+  formatWorkoutTypeLabel,
+  parseWorkoutType,
+} from "@/features/wod/workoutType";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutVideo } from "../../features/wod/api";
@@ -32,7 +37,19 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 
 export default function VisionTestPage() {
-  const { resolution, movements } = useLocalSearchParams<{ resolution: string; movements: string }>();
+  const {
+    resolution = "720p",
+    movements = "",
+    injuries = "",
+    workoutType: workoutTypeParam,
+  } = useLocalSearchParams<{
+    resolution?: string;
+    movements?: string;
+    injuries?: string;
+    workoutType?: string;
+  }>();
+  const workoutType = parseWorkoutType(workoutTypeParam);
+  const workoutTypeLabel = formatWorkoutTypeLabel(workoutType).toUpperCase();
   
   const targetWidth = resolution === '1080p' ? 1920 : 1280;
   const targetHeight = resolution === '1080p' ? 1080 : 720;
@@ -71,24 +88,24 @@ export default function VisionTestPage() {
   useEffect(() => {
     if (!hasPermission) requestPermission();
     if (!mediaPermission?.granted) requestMediaPermission();
-  }, [hasPermission, mediaPermission]);
+  }, [hasPermission, mediaPermission, requestMediaPermission, requestPermission]);
 
   const handleUpload = async (fileUri: string) => {
     try {
       setIsUploading(true);
       setProgress(0);
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const hours = String(now.getHours()).padStart(2, '0');
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      const sessionId = `WOD-${year}-${month}-${day}-${hours}-${minutes}`;
+      const sessionId = buildWorkoutSessionId(workoutType);
 
       // Parse movements string back to array
       const movementsArray = movements ? movements.split(', ') : [];
+      const injuriesArray = injuries ? injuries.split(', ') : [];
       
-      await processWorkoutVideo(fileUri, sessionId, (p) => setProgress(p), movementsArray);
+      await processWorkoutVideo(fileUri, sessionId, {
+        onProgress: (p) => setProgress(p),
+        movements: movementsArray,
+        injuries: injuriesArray,
+        workoutType,
+      });
       Alert.alert("Success", "Video uploaded and analysis started!");
     } catch (e) {
       console.error(e);
@@ -232,7 +249,9 @@ export default function VisionTestPage() {
 
         Alert.alert(
           "Saved",
-          "Original video saved to gallery. Upload for AI Coaching?",
+          workoutType === "rehab"
+            ? "Original video saved to gallery. Upload for rehab analysis?"
+            : "Original video saved to gallery. Upload for AI coaching?",
           [
             { text: "Cancel", style: "cancel" },
             { text: "Upload", onPress: () => handleUpload(compressedUri) },
@@ -296,8 +315,18 @@ export default function VisionTestPage() {
 
       <View style={styles.dashboard}>
         <Text style={styles.dashTitle}>
-          {isRecording ? "🏃 WORKOUT" : "📊 SYSTEM"}
+          {isRecording ? `${workoutTypeLabel} LIVE` : `${workoutTypeLabel} SETUP`}
         </Text>
+        <View style={styles.row}>
+          <Text style={styles.label}>TYPE:</Text>
+          <Text style={styles.val}>{workoutTypeLabel}</Text>
+        </View>
+        {!isRecording && injuries.length > 0 && (
+          <View style={styles.row}>
+            <Text style={styles.label}>INJ:</Text>
+            <Text style={styles.val}>{injuries.split(", ").length}</Text>
+          </View>
+        )}
         {!isRecording && (
           <View style={styles.row}>
             <Text style={styles.label}>RES:</Text>
@@ -390,7 +419,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.7)",
     padding: 10,
     borderRadius: 8,
-    width: 140,
+    width: 150,
     borderWidth: 1,
     borderColor: "#555",
     zIndex: 10,

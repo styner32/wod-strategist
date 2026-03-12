@@ -1,10 +1,13 @@
 package db
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/wod-strategist/api/internal/logger"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
@@ -21,12 +24,14 @@ type AnalysisResult struct {
 }
 
 func Connect() *gorm.DB {
-	dsn := os.Getenv("DATABASE_URL")
+	dsn, err := normalizeDatabaseURL(os.Getenv("DATABASE_URL"))
+	if err != nil {
+		logger.Log.Fatal("Invalid database configuration", zap.Error(err))
+	}
 	if dsn == "" {
 		log.Fatal("DATABASE_URL is not set")
 	}
 
-	var err error
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
@@ -34,4 +39,30 @@ func Connect() *gorm.DB {
 
 	logger.Log.Info("Database connection established")
 	return db
+}
+
+func normalizeDatabaseURL(raw string) (string, error) {
+	dsn := strings.TrimSpace(raw)
+	if dsn == "" {
+		return "", nil
+	}
+
+	if len(dsn) >= 2 {
+		if dsn[0] == '"' && dsn[len(dsn)-1] == '"' {
+			dsn = dsn[1 : len(dsn)-1]
+		} else if dsn[0] == '\'' && dsn[len(dsn)-1] == '\'' {
+			dsn = dsn[1 : len(dsn)-1]
+		}
+	}
+
+	dsn = strings.TrimSpace(dsn)
+	if dsn == "" {
+		return "", fmt.Errorf("DATABASE_URL is empty after trimming whitespace and quotes")
+	}
+
+	if _, err := pgx.ParseConfig(dsn); err != nil {
+		return "", fmt.Errorf("DATABASE_URL is invalid: %w", err)
+	}
+
+	return dsn, nil
 }

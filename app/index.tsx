@@ -21,7 +21,7 @@ export default function Dashboard() {
             </View>
             <View>
               <Text style={styles.cardTitle}>Start Workout</Text>
-              <Text style={styles.cardDesc}>Configure & Record</Text>
+              <Text style={styles.cardDesc}>Choose type, configure, and record</Text>
             </View>
           </Pressable>
         </Link>
