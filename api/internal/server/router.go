@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -203,7 +203,7 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 			}
 
 			// Validate GCS URI to prevent SSRF and arbitrary file reads/deletions
-if u, err := url.Parse(req.GcsURI); err != nil || u.Scheme != "gs" || u.Host == "" {
+			if u, err := url.Parse(req.GcsURI); err != nil || u.Scheme != "gs" || u.Host == "" {
 				logger.Log.Error("invalid GCS URI: must be a valid gs:// URI with a bucket", zap.String("uri", req.GcsURI))
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid GCS URI"})
 				return
