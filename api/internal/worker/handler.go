@@ -155,6 +155,8 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		zap.String("session_id", p.SessionID),
 		zap.String("file_path", p.FilePath),
 		zap.String("workout_type", NormalizeWorkoutType(p.WorkoutType)),
+		zap.Strings("movements", p.Movements),
+		zap.Strings("injuries", p.Injuries),
 		zap.Int("retry_count", int(retryCount)))
 
 	if retryCount >= 3 {

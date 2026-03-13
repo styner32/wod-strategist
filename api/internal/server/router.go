@@ -201,7 +201,6 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 				return
 			}
 
-<<<<<<< HEAD
 			// if req.Movements does not appear in Movements, return error
 			if len(req.Movements) > 0 {
 				if !validateMovements(req.Movements) {
@@ -209,7 +208,16 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movements"})
 					return
 				}
-=======
+			}
+
+			logger.Log.Info("Submit a video analysis request",
+				zap.String("session_id", req.SessionID),
+				zap.String("gcs_uri", req.GcsURI),
+				zap.Strings("movements", req.Movements),
+				zap.Strings("injuries", req.Injuries),
+				zap.String("workout_type", req.WorkoutType),
+			)
+
 			if !worker.IsValidWorkoutType(req.WorkoutType) {
 				logger.Log.Error("invalid workout type", zap.String("workout_type", req.WorkoutType))
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workout type"})
@@ -222,7 +230,6 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 				logger.Log.Error("invalid movements", zap.Strings("movements", req.Movements))
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movements"})
 				return
->>>>>>> 5d0de2c (Enhance workout analysis features and improve API integration)
 			}
 
 			if len(req.Movements) >= 100 {
@@ -386,4 +393,6 @@ func allValuesAllowed(values []string, allowed []string) bool {
 			return false
 		}
 	}
+
+	return true
 }
