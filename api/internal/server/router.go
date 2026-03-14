@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -156,6 +157,13 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 			if err := c.ShouldBindJSON(&req); err != nil {
 				logger.Log.Error("failed to bind JSON", zap.Error(err))
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+
+			// Validate GCS URI to prevent SSRF and arbitrary file reads/deletions
+			if !strings.HasPrefix(req.GcsURI, "gs://") {
+				logger.Log.Error("invalid GCS URI: must start with gs://", zap.String("uri", req.GcsURI))
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid GCS URI"})
 				return
 			}
 
