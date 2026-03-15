@@ -20,6 +20,15 @@ import (
 )
 
 var GitCommit = "dev"
+var movementsMap map[string]struct{}
+
+func init() {
+	movementsMap = make(map[string]struct{}, len(Movements))
+	for _, m := range Movements {
+		movementsMap[m] = struct{}{}
+	}
+}
+
 var Movements = []string{
 	"Burpee",
 	"Power Snatch",
@@ -161,17 +170,7 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 
 			// if req.Movements does not appear in Movements, return error
 			if len(req.Movements) > 0 {
-				validMovements := false
-				for _, movement := range req.Movements {
-					for _, m := range Movements {
-						if m == movement {
-							validMovements = true
-							break
-						}
-					}
-				}
-
-				if !validMovements {
+				if !validateMovements(req.Movements) {
 					logger.Log.Error("invalid movements", zap.Strings("movements", req.Movements))
 					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movements"})
 					return
@@ -296,4 +295,13 @@ func SetupRouter(config *ServerConfig) *gin.Engine {
 	}
 
 	return r
+}
+
+func validateMovements(requested []string) bool {
+	for _, movement := range requested {
+		if _, ok := movementsMap[movement]; !ok {
+			return false
+		}
+	}
+	return true
 }
