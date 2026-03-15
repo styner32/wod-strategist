@@ -11,12 +11,15 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
+	"github.com/wod-strategist/api/internal/controllers"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/server"
 	"github.com/wod-strategist/api/internal/storage"
 	"go.uber.org/zap"
 )
+
+var GitCommit = "dev"
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -56,16 +59,16 @@ func main() {
 		logger.Log.Fatal("Failed to create storage client", zap.Error(err))
 	}
 
-	serverConfig := &server.ServerConfig{
-		QueueClient:   client,
-		DB:            dbConn,
-		APIKey:        os.Getenv("API_SECRET"),
-		StorageClient: storageClient,
-		BucketName:    bucketName,
-	}
+	handlers := controllers.New(controllers.Config{
+		QueueClient:     client,
+		AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn),
+		StorageClient:   storageClient,
+		BucketName:      bucketName,
+		GitCommit:       GitCommit,
+	})
 
 	// Setup Router
-	r := server.SetupRouter(serverConfig)
+	r := server.SetupRouter(os.Getenv("API_SECRET"), handlers)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
