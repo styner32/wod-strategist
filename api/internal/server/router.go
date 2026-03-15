@@ -77,7 +77,7 @@ var Injuries = []string{
 	"Left Hamstring",
 	"Right Hamstring",
 	"Left Knee",
-	"Write Knee",
+	"Right Knee",
 	"Left Ankle",
 	"Right Ankle",
 }
