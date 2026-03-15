@@ -63,13 +63,15 @@ type Worker struct {
 	DB            *gorm.DB
 	StorageClient *storage.Client
 	BucketName    string
+	GeminiClient  *gemini.Client
 }
 
-func NewWorker(db *gorm.DB, storageClient *storage.Client, bucketName string) *Worker {
+func NewWorker(db *gorm.DB, storageClient *storage.Client, bucketName string, geminiClient *gemini.Client) *Worker {
 	return &Worker{
 		DB:            db,
 		StorageClient: storageClient,
 		BucketName:    bucketName,
+		GeminiClient:  geminiClient,
 	}
 }
 
@@ -124,11 +126,6 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	// Update status to PROCESSING (optional, if we tracked specific task IDs, but here we just append results)
 	// For simplicity, we just create a new result when done.
 
-	geminiClient, err := gemini.NewClient(ctx, logger.Log)
-	if err != nil {
-		return fmt.Errorf("failed to create gemini client: %w", err)
-	}
-
 	prompt := AnalysisPrompt
 	if len(p.Movements) > 0 {
 		prompt += fmt.Sprintf("%s\n## 운동 종목: %s", MovementPrompt, strings.Join(p.Movements, ", "))
@@ -137,7 +134,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	personalProfile := "생년월일: 1984년 10월 17일, 성별: 남, 키: 164cm, 몸무게: 72kg" // customize later when auth is ready
 	prompt += fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
 
-	analysis, geminiFile, err := geminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
 	// retry if analysis is empty
 	if analysis == "" {
@@ -155,7 +152,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	// Clean up Gemini file if it was uploaded
 	if geminiFile != "" {
 		defer func() {
-			if err := geminiClient.DeleteFile(ctx, geminiFile); err != nil {
+			if err := w.GeminiClient.DeleteFile(ctx, geminiFile); err != nil {
 				logger.Log.Error("Failed to delete file from Gemini", zap.Error(err))
 			}
 		}()
