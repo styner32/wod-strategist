@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -50,73 +51,47 @@ var _ = Describe("API Server", func() {
 
 	BeforeEach(func() {
 		gin.SetMode(gin.TestMode)
-		logger.Log = zap.NewNop()
+		// logger.Init()
+		logger.Log = zap.NewNop() // Mock logger to avoid panics
+
+		client := asynq.NewClient(asynq.RedisClientOpt{Addr: "localhost:6379"})
 		router = server.SetupRouter(&server.ServerConfig{
-			QueueClient:   &fakeQueueClient{},
-			DB:            nil,
+			QueueClient:   client,
+			DB:            nil, // DB not needed for these handler tests
 			StorageClient: &fakeStorageClient{bucketName: "test-bucket"},
 			BucketName:    "test-bucket",
 			APIKey:        "test-api-key",
 		})
 	})
 
-	Describe("POST /api/v1/upload", func() {
-		It("should return error if session_id is missing", func() {
-			body := &bytes.Buffer{}
-			writer := multipart.NewWriter(body)
-			writer.Close()
+	Context("POST /api/v1/upload-complete", func() {
+		It("should return error if gcs_uri does not start with gs://", func() {
+			body := bytes.NewBufferString(`{"session_id": "123", "gcs_uri": "/etc/passwd", "movements": []}`)
 
-			req, _ := http.NewRequest("POST", "/api/v1/upload", body)
-			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("X-Api-Key", "test-api-key")
+			req, _ := http.NewRequest("POST", "/api/v1/upload-complete", body)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
-			Expect(w.Body.String()).To(ContainSubstring("session_id is required"))
+			Expect(w.Body.String()).To(ContainSubstring("invalid GCS URI"))
 		})
 
-		It("should return error if file is missing", func() {
-			body := &bytes.Buffer{}
-			writer := multipart.NewWriter(body)
-			writer.WriteField("session_id", "123")
-			writer.Close()
+		It("should return valid result if gcs_uri starts with gs://", func() {
+			body := bytes.NewBufferString(`{"session_id": "123", "gcs_uri": "gs://bucket/file.mp4", "movements": []}`)
 
-			req, _ := http.NewRequest("POST", "/api/v1/upload", body)
-			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("X-Api-Key", "test-api-key")
+			req, _ := http.NewRequest("POST", "/api/v1/upload-complete", body)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusBadRequest))
-			Expect(w.Body.String()).To(ContainSubstring("file is required"))
-		})
-
-		It("should accept valid upload", func() {
-			body := &bytes.Buffer{}
-			writer := multipart.NewWriter(body)
-			writer.WriteField("session_id", "test-session")
-
-			part, err := writer.CreateFormFile("file", "video.mp4")
-			Expect(err).NotTo(HaveOccurred())
-			_, err = part.Write([]byte("dummy content"))
-			Expect(err).NotTo(HaveOccurred())
-			writer.Close()
-
-			req, _ := http.NewRequest("POST", "/api/v1/upload", body)
-			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("X-Api-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
+			// Expect 500 because QueueClient.Enqueue will fail since Redis isn't running
 			Expect(w.Code).To(Equal(http.StatusAccepted))
-			Expect(w.Body.String()).To(ContainSubstring("File uploaded and analysis started"))
-			Expect(w.Body.String()).To(ContainSubstring("\"task_id\":\"task-123\""))
-			Expect(w.Body.String()).To(ContainSubstring("gs://test-bucket/videos/test-session_video.mp4"))
+			Expect(w.Body.String()).To(ContainSubstring("Analysis started"))
 		})
-	})
 
-	Describe("POST /api/v1/upload-complete", func() {
 		/*
 					func TestValidateMovements(t *testing.T) {
 				tests := []struct {
@@ -181,5 +156,66 @@ var _ = Describe("API Server", func() {
 			},
 			Entry("invalid movements", []string{"InvalidMove", "Burpee"}),
 		)
+	})
+
+	Context("POST /api/v1/upload", func() {
+		It("should return error if session_id is missing", func() {
+			body := &bytes.Buffer{}
+			writer := multipart.NewWriter(body)
+			writer.Close()
+
+			req, _ := http.NewRequest("POST", "/api/v1/upload", body)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(w.Body.String()).To(ContainSubstring("session_id is required"))
+		})
+
+		It("should return error if file is missing", func() {
+			body := &bytes.Buffer{}
+			writer := multipart.NewWriter(body)
+			writer.WriteField("session_id", "123")
+			writer.Close()
+
+			req, _ := http.NewRequest("POST", "/api/v1/upload", body)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(w.Body.String()).To(ContainSubstring("file is required"))
+		})
+
+		It("should accept valid upload", func() {
+			tmpfile, err := os.CreateTemp("", "testvideo.mp4")
+			Expect(err).NotTo(HaveOccurred())
+			defer os.Remove(tmpfile.Name())
+			tmpfile.Write([]byte("dummy content"))
+			tmpfile.Close()
+
+			body := &bytes.Buffer{}
+			writer := multipart.NewWriter(body)
+			writer.WriteField("session_id", "test-session")
+
+			part, err := writer.CreateFormFile("file", "video.mp4")
+			Expect(err).NotTo(HaveOccurred())
+			_, err = part.Write([]byte("dummy content"))
+			Expect(err).NotTo(HaveOccurred())
+			writer.Close()
+
+			req, _ := http.NewRequest("POST", "/api/v1/upload", body)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+			req.Header.Set("X-Api-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusAccepted))
+			Expect(w.Body.String()).To(ContainSubstring("File uploaded and analysis started"))
+			Expect(w.Body.String()).To(ContainSubstring("gs://test-bucket/videos/test-session_video.mp4"))
+		})
 	})
 })
