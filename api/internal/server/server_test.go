@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -59,7 +60,7 @@ var _ = Describe("API Server", func() {
 		})
 	})
 
-	Context("POST /api/v1/upload", func() {
+	Describe("POST /api/v1/upload", func() {
 		It("should return error if session_id is missing", func() {
 			body := &bytes.Buffer{}
 			writer := multipart.NewWriter(body)
@@ -113,5 +114,72 @@ var _ = Describe("API Server", func() {
 			Expect(w.Body.String()).To(ContainSubstring("\"task_id\":\"task-123\""))
 			Expect(w.Body.String()).To(ContainSubstring("gs://test-bucket/videos/test-session_video.mp4"))
 		})
+	})
+
+	Describe("POST /api/v1/upload-complete", func() {
+		/*
+					func TestValidateMovements(t *testing.T) {
+				tests := []struct {
+					name      string
+					requested []string
+					want      bool
+				}{
+					{
+						name:      "Valid movement",
+						requested: []string{"Burpee"},
+						want:      true,
+					},
+					{
+						name:      "Invalid movement",
+						requested: []string{"InvalidMove"},
+						want:      false,
+					},
+					{
+						name:      "Mixed valid and invalid (should be false)",
+						requested: []string{"InvalidMove", "Burpee"},
+						want:      false,
+					},
+					{
+						name:      "Empty request",
+						requested: []string{},
+						want:      true,
+					},
+					{
+						name:      "Multiple valid",
+						requested: []string{"Burpee", "Row"},
+						want:      true,
+					},
+				}
+
+				for _, tt := range tests {
+					t.Run(tt.name, func(t *testing.T) {
+						if got := validateMovements(tt.requested); got != tt.want {
+							t.Errorf("validateMovements() = %v, want %v", got, tt.want)
+						}
+					})
+				}
+			}
+		*/
+
+		DescribeTable("should return error if movements are invalid",
+			func(movements []string) {
+				body := &bytes.Buffer{}
+				json.NewEncoder(body).Encode(map[string]interface{}{
+					"session_id": "test-session",
+					"gcs_uri":    "gs://test-bucket/videos/test-session_video.mp4",
+					"movements":  movements,
+				})
+
+				req, _ := http.NewRequest("POST", "/api/v1/upload-complete", body)
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("X-Api-Key", "test-api-key")
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+
+				Expect(w.Code).To(Equal(http.StatusBadRequest))
+				Expect(w.Body.String()).To(ContainSubstring("invalid movements"))
+			},
+			Entry("invalid movements", []string{"InvalidMove", "Burpee"}),
+		)
 	})
 })
