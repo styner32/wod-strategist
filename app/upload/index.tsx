@@ -1,5 +1,14 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { fetchMovements, processWorkoutVideo } from "@/features/wod/api";
+import {
+  fetchInjuries,
+  fetchMovements,
+  processWorkoutVideo,
+} from "@/features/wod/api";
+import {
+  WORKOUT_TYPE_OPTIONS,
+  buildWorkoutSessionId,
+  type WorkoutType,
+} from "@/features/wod/workoutType";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
@@ -17,6 +26,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function UploadScreen() {
+  const [workoutType, setWorkoutType] = useState<WorkoutType>("wod");
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [videoMimeType, setVideoMimeType] = useState<string | null>(null);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
@@ -25,17 +35,31 @@ export default function UploadScreen() {
 
   const [movementOptions, setMovementOptions] = useState<string[]>([]);
   const [selectedMovements, setSelectedMovements] = useState<string[]>([]);
+  const [injuryOptions, setInjuryOptions] = useState<string[]>([]);
+  const [selectedInjuries, setSelectedInjuries] = useState<string[]>([]);
   const [isLoadingMovements, setIsLoadingMovements] = useState(true);
 
   useEffect(() => {
-    fetchMovements()
-      .then(setMovementOptions)
+    Promise.all([fetchMovements(), fetchInjuries()])
+      .then(([movements, injuries]) => {
+        setMovementOptions(movements);
+        setInjuryOptions(injuries);
+      })
+      .catch((error) => {
+        console.error("Failed to load workout metadata", error);
+      })
       .finally(() => setIsLoadingMovements(false));
   }, []);
 
   const toggleMovement = (m: string) => {
     setSelectedMovements((prev) =>
       prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]
+    );
+  };
+
+  const toggleInjury = (injury: string) => {
+    setSelectedInjuries((prev) =>
+      prev.includes(injury) ? prev.filter((x) => x !== injury) : [...prev, injury]
     );
   };
 
@@ -69,21 +93,15 @@ export default function UploadScreen() {
     try {
       setIsUploading(true);
       setProgress(0);
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, "0");
-      const day = String(now.getDate()).padStart(2, "0");
-      const hours = String(now.getHours()).padStart(2, "0");
-      const minutes = String(now.getMinutes()).padStart(2, "0");
-      const sessionId = `WOD-${year}-${month}-${day}-${hours}:${minutes}`;
+      const sessionId = buildWorkoutSessionId(workoutType);
 
-      await processWorkoutVideo(
-        videoUri,
-        sessionId,
-        (p) => setProgress(p),
-        selectedMovements,
-        videoMimeType || "video/mp4"
-      );
+      await processWorkoutVideo(videoUri, sessionId, {
+        onProgress: (p) => setProgress(p),
+        movements: selectedMovements,
+        injuries: selectedInjuries,
+        mimeType: videoMimeType || "video/mp4",
+        workoutType,
+      });
 
       Alert.alert("Success", "Analysis started!", [
         { text: "View History", onPress: () => router.replace("/history") },
@@ -112,6 +130,39 @@ export default function UploadScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Workout Type</Text>
+          <View style={styles.typeGrid}>
+            {WORKOUT_TYPE_OPTIONS.map((option) => {
+              const isSelected = option.value === workoutType;
+              return (
+                <TouchableOpacity
+                  key={option.value}
+                  style={[styles.typeCard, isSelected && styles.typeCardActive]}
+                  onPress={() => setWorkoutType(option.value)}
+                >
+                  <Text
+                    style={[
+                      styles.typeCardTitle,
+                      isSelected && styles.typeCardTitleActive,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.typeCardDescription,
+                      isSelected && styles.typeCardDescriptionActive,
+                    ]}
+                  >
+                    {option.description}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+
         {!videoUri ? (
           <TouchableOpacity style={styles.pickBox} onPress={pickVideo}>
             <IconSymbol name="paperplane.fill" size={48} color="#666" />
@@ -135,7 +186,14 @@ export default function UploadScreen() {
         {videoUri && (
           <View>
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Select Movements</Text>
+              <Text style={styles.sectionTitle}>
+                {workoutType === "rehab" ? "Target Movements" : "Select Movements"}
+              </Text>
+              <Text style={styles.helperText}>
+                {workoutType === "rehab"
+                  ? "Optional: add any movements you want the rehab analysis to focus on."
+                  : "Optional, but recommended to improve coaching accuracy."}
+              </Text>
               {isLoadingMovements ? (
                 <ActivityIndicator color="#007AFF" />
               ) : (
@@ -163,6 +221,40 @@ export default function UploadScreen() {
               )}
             </View>
 
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Known Injuries</Text>
+              <Text style={styles.helperText}>
+                {workoutType === "rehab"
+                  ? "Optional, but recommended for safer rehab analysis."
+                  : "Optional: share any current limitations before this workout."}
+              </Text>
+              {isLoadingMovements ? (
+                <ActivityIndicator color="#007AFF" />
+              ) : (
+                <View style={styles.chipContainer}>
+                  {injuryOptions.map((injury) => {
+                    const isSelected = selectedInjuries.includes(injury);
+                    return (
+                      <TouchableOpacity
+                        key={injury}
+                        onPress={() => toggleInjury(injury)}
+                        style={[styles.chip, isSelected && styles.chipActive]}
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            isSelected && styles.chipTextActive,
+                          ]}
+                        >
+                          {injury}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+
             <TouchableOpacity
               style={[styles.uploadBtn, isUploading && styles.disabledBtn]}
               onPress={handleUpload}
@@ -173,7 +265,9 @@ export default function UploadScreen() {
                   Uploading... {Math.round(progress * 100)}%
                 </Text>
               ) : (
-                <Text style={styles.uploadText}>Analyze WOD</Text>
+                <Text style={styles.uploadText}>
+                  {workoutType === "rehab" ? "Analyze Rehab Session" : "Analyze WOD"}
+                </Text>
               )}
             </TouchableOpacity>
 
@@ -235,12 +329,47 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   section: { marginBottom: 20 },
+  typeGrid: { gap: 12 },
+  typeCard: {
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#333",
+    backgroundColor: "#111",
+  },
+  typeCardActive: {
+    borderColor: "#007AFF",
+    backgroundColor: "#0B1A2F",
+  },
+  typeCardTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  typeCardTitleActive: {
+    color: "#8BC3FF",
+  },
+  typeCardDescription: {
+    color: "#888",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  typeCardDescriptionActive: {
+    color: "#D3E7FF",
+  },
   sectionTitle: {
     color: "#888",
     fontSize: 14,
     fontWeight: "bold",
     textTransform: "uppercase",
     marginBottom: 10,
+  },
+  helperText: {
+    color: "#888",
+    fontSize: 13,
+    marginBottom: 12,
+    lineHeight: 18,
   },
   chipContainer: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   chip: {

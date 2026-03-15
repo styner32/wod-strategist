@@ -4,6 +4,8 @@ import {
   UploadProgressData,
 } from "expo-file-system/legacy";
 
+import type { WorkoutType } from "./workoutType";
+
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
 const API_SECRET_KEY = process.env.EXPO_PUBLIC_API_KEY || "";
@@ -11,6 +13,14 @@ const API_SECRET_KEY = process.env.EXPO_PUBLIC_API_KEY || "";
 export interface UploadResult {
   taskId: string;
   sessionId: string;
+}
+
+export interface ProcessWorkoutVideoOptions {
+  onProgress?: (progress: number) => void;
+  movements?: string[];
+  injuries?: string[];
+  mimeType?: string;
+  workoutType?: WorkoutType;
 }
 
 export async function fetchMovements(): Promise<string[]> {
@@ -21,13 +31,26 @@ export async function fetchMovements(): Promise<string[]> {
   return res.json();
 }
 
+export async function fetchInjuries(): Promise<string[]> {
+  const res = await fetch(`${API_BASE_URL}/injuries`, {
+    headers: { "X-API-Key": API_SECRET_KEY },
+  });
+  if (!res.ok) throw new Error("Failed to fetch injuries");
+  return res.json();
+}
+
 export async function processWorkoutVideo(
   fileUri: string,
   sessionId: string = "session_dev_001",
-  onProgress?: (progress: number) => void,
-  movements?: string[],
-  mimeType: string = "video/mp4"
+  options: ProcessWorkoutVideoOptions = {}
 ): Promise<UploadResult> {
+  const {
+    onProgress,
+    movements = [],
+    injuries = [],
+    mimeType = "video/mp4",
+    workoutType = "wod",
+  } = options;
   const filename = fileUri.split("/").pop() || "workout.mp4";
 
   console.log("🚀 Starting upload process for:", filename);
@@ -96,7 +119,9 @@ export async function processWorkoutVideo(
     body: JSON.stringify({
       session_id: sessionId,
       gcs_uri: gcs_uri,
-      movements: movements || [], // Pass movements metadata
+      movements,
+      injuries,
+      workout_type: workoutType,
     }),
   });
 
