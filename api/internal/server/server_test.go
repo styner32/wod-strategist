@@ -54,7 +54,7 @@ var _ = Describe("API Server", func() {
 		// logger.Init()
 		logger.Log = zap.NewNop() // Mock logger to avoid panics
 
-		client := asynq.NewClient(asynq.RedisClientOpt{Addr: "localhost:6379"})
+		client := &fakeQueueClient{}
 		router = server.SetupRouter(&server.ServerConfig{
 			QueueClient:   client,
 			DB:            nil, // DB not needed for these handler tests

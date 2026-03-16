@@ -168,7 +168,8 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	localFilePath := p.FilePath
 	if strings.HasPrefix(p.FilePath, "gs://") {
 		// Create temp file path
-		tmpFile := filepath.Join("/tmp", fmt.Sprintf("%s_%s", p.SessionID, filepath.Base(p.FilePath)))
+		safeSessionID := filepath.Base(p.SessionID) // Prevent path traversal
+		tmpFile := filepath.Join("/tmp", fmt.Sprintf("%s_%s", safeSessionID, filepath.Base(p.FilePath)))
 
 		logger.Log.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", tmpFile))
 		if err := w.StorageClient.DownloadFile(ctx, p.FilePath, tmpFile); err != nil {
