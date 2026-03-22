@@ -77,12 +77,12 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("returns an error when handlers are nil", func() {
-		_, err := server.SetupRouter("secret", nil)
+		_, err := server.SetupRouter("test", "secret", nil)
 		Expect(err).To(MatchError(server.ErrHandlersRequired))
 	})
 
 	It("allows /health without an API key", func() {
-		router, err := server.SetupRouter("secret", handlers)
+		router, err := server.SetupRouter("test", "secret", handlers)
 		Expect(err).NotTo(HaveOccurred())
 		req := requestForRoute(server.PublicRouteSpecs()[0], "")
 		w := httptest.NewRecorder()
@@ -93,7 +93,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("rejects invalid API keys", func() {
-		router, err := server.SetupRouter("secret", handlers)
+		router, err := server.SetupRouter("test", "secret", handlers)
 		Expect(err).NotTo(HaveOccurred())
 
 		req := requestForRoute(server.ProtectedRouteSpecs()[0], "wrong")
@@ -105,7 +105,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("registers every declared route", func() {
-		router, err := server.SetupRouter("secret", handlers)
+		router, err := server.SetupRouter("test", "secret", handlers)
 		Expect(err).NotTo(HaveOccurred())
 
 		actualRoutes := make(map[string]struct{}, len(router.Routes()))
@@ -119,7 +119,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("dispatches every protected route to the matching handler when authorized", func() {
-		router, err := server.SetupRouter("secret", handlers)
+		router, err := server.SetupRouter("test", "secret", handlers)
 		Expect(err).NotTo(HaveOccurred())
 
 		for _, spec := range server.ProtectedRouteSpecs() {

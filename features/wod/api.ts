@@ -5,6 +5,7 @@ import {
 } from "expo-file-system/legacy";
 
 import type { WorkoutType } from "./workoutType";
+import type { components } from "./schema";
 
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
@@ -77,15 +78,8 @@ export interface ProcessWorkoutVideoOptions {
   workoutType?: WorkoutType;
 }
 
-export interface UploadUrlResponse {
-  upload_url: string;
-  gcs_uri: string;
-}
-
-export interface UploadCompleteResponse {
-  task_id: string;
-  session_id: string;
-}
+export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
+export type UploadCompleteResponse = Required<components["schemas"]["controllers.CompleteUploadResponse"]>;
 
 export async function fetchMovements(): Promise<string[]> {
   return apiClient<string[]>("/movements");

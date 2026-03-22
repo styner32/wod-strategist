@@ -1,0 +1,154 @@
+basePath: /api/v1
+definitions:
+  controllers.CompleteUploadRequest:
+    properties:
+      gcs_uri:
+        type: string
+      injuries:
+        items:
+          type: string
+        type: array
+      movements:
+        items:
+          type: string
+        type: array
+      session_id:
+        type: string
+      workout_type:
+        type: string
+    required:
+    - gcs_uri
+    - movements
+    - session_id
+    - workout_type
+    type: object
+  controllers.CompleteUploadResponse:
+    properties:
+      message:
+        type: string
+      session_id:
+        type: string
+      task_id:
+        type: string
+    type: object
+  controllers.CreateUploadURLRequest:
+    properties:
+      filename:
+        type: string
+      session_id:
+        type: string
+    required:
+    - filename
+    - session_id
+    type: object
+  controllers.CreateUploadURLResponse:
+    properties:
+      gcs_uri:
+        type: string
+      upload_url:
+        type: string
+    type: object
+  controllers.ErrorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+host: localhost:8088
+info:
+  contact: {}
+  description: API for WOD Strategist application.
+  title: WOD Strategist API
+  version: "1.0"
+paths:
+  /injuries:
+    get:
+      description: Returns a list of all supported injuries that can be analyzed
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: string
+            type: array
+      summary: List supported injuries
+      tags:
+      - metadata
+  /movements:
+    get:
+      description: Returns a list of all supported workout movements
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              type: string
+            type: array
+      summary: List supported movements
+      tags:
+      - metadata
+  /upload-complete:
+    post:
+      consumes:
+      - application/json
+      description: Notifies the backend that a video upload is complete and triggers
+        analysis
+      parameters:
+      - description: Upload metadata
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.CompleteUploadRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/controllers.CompleteUploadResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Complete Upload
+      tags:
+      - upload
+  /upload-url:
+    post:
+      consumes:
+      - application/json
+      description: Generates a signed GCS upload URL for a specific video file
+      parameters:
+      - description: Session and filename
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.CreateUploadURLRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.CreateUploadURLResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Create Upload URL
+      tags:
+      - upload
+swagger: "2.0"

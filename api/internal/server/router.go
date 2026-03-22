@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 type Handlers interface {
@@ -143,7 +145,7 @@ func RegisterProtectedRoutes(routes gin.IRoutes, handlers Handlers) error {
 	return nil
 }
 
-func SetupRouter(apiKey string, handlers Handlers) (*gin.Engine, error) {
+func SetupRouter(appEnv string, apiKey string, handlers Handlers) (*gin.Engine, error) {
 	if err := validateHandlers(handlers); err != nil {
 		return nil, err
 	}
@@ -154,6 +156,11 @@ func SetupRouter(apiKey string, handlers Handlers) (*gin.Engine, error) {
 
 	if err := RegisterPublicRoutes(r, handlers); err != nil {
 		return nil, err
+	}
+
+	// Mount Swagger UI only in non-production environments
+	if appEnv != "production" {
+		r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	}
 
 	api := r.Group(APIRoutePrefix)

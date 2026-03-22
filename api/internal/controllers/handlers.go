@@ -21,6 +21,16 @@ func (ctl *Controller) Health(c *gin.Context) {
 	})
 }
 
+// @Summary      Create Upload URL
+// @Description  Generates a signed GCS upload URL for a specific video file
+// @Tags         upload
+// @Accept       json
+// @Produce      json
+// @Param        request body CreateUploadURLRequest true "Session and filename"
+// @Success      200 {object} CreateUploadURLResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /upload-url [post]
 func (ctl *Controller) CreateUploadURL(c *gin.Context) {
 	if ctl.storageClient == nil {
 		logger.Log.Error("storage client is not configured")
@@ -28,10 +38,7 @@ func (ctl *Controller) CreateUploadURL(c *gin.Context) {
 		return
 	}
 
-	var req struct {
-		SessionID string `json:"session_id"`
-		Filename  string `json:"filename"`
-	}
+	var req CreateUploadURLRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -61,6 +68,16 @@ func (ctl *Controller) CreateUploadURL(c *gin.Context) {
 	})
 }
 
+// @Summary      Complete Upload
+// @Description  Notifies the backend that a video upload is complete and triggers analysis
+// @Tags         upload
+// @Accept       json
+// @Produce      json
+// @Param        request body CompleteUploadRequest true "Upload metadata"
+// @Success      202 {object} CompleteUploadResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /upload-complete [post]
 func (ctl *Controller) CompleteUpload(c *gin.Context) {
 	if ctl.queueClient == nil {
 		logger.Log.Error("queue client is not configured")
@@ -68,13 +85,7 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	var req struct {
-		SessionID   string   `json:"session_id"`
-		GCSURI      string   `json:"gcs_uri"`
-		Movements   []string `json:"movements"`
-		Injuries    []string `json:"injuries"`
-		WorkoutType string   `json:"workout_type"`
-	}
+	var req CompleteUploadRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Log.Error("failed to bind JSON", zap.Error(err))
@@ -261,10 +272,22 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, results)
 }
 
+// @Summary      List supported movements
+// @Description  Returns a list of all supported workout movements
+// @Tags         metadata
+// @Produce      json
+// @Success      200 {array} string
+// @Router       /movements [get]
 func (ctl *Controller) ListMovements(c *gin.Context) {
 	c.JSON(http.StatusOK, append([]string(nil), movements...))
 }
 
+// @Summary      List supported injuries
+// @Description  Returns a list of all supported injuries that can be analyzed
+// @Tags         metadata
+// @Produce      json
+// @Success      200 {array} string
+// @Router       /injuries [get]
 func (ctl *Controller) ListInjuries(c *gin.Context) {
 	c.JSON(http.StatusOK, append([]string(nil), injuries...))
 }

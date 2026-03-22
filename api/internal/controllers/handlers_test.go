@@ -128,7 +128,7 @@ func newTestRouter(config Config) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	logger.Log = zap.NewNop()
 	controller := New(config)
-	router, err := server.SetupRouter("test-api-key", controller)
+	router, err := server.SetupRouter("test", "test-api-key", controller)
 	Expect(err).NotTo(HaveOccurred())
 	return router
 }

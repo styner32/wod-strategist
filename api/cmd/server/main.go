@@ -1,3 +1,9 @@
+// @title           WOD Strategist API
+// @version         1.0
+// @description     API for WOD Strategist application.
+
+// @host      localhost:8088
+// @BasePath  /api/v1
 package main
 
 import (
@@ -11,6 +17,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	_ "github.com/wod-strategist/api/docs"
 	"github.com/wod-strategist/api/internal/config"
 	"github.com/wod-strategist/api/internal/controllers"
 	"github.com/wod-strategist/api/internal/db"
@@ -64,7 +71,7 @@ func main() {
 	})
 
 	// Setup Router
-	r, err := server.SetupRouter(cfg.APISecret, handlers)
+	r, err := server.SetupRouter(cfg.AppEnv, cfg.APISecret, handlers)
 	if err != nil {
 		logger.Log.Fatal("Failed to setup router", zap.Error(err))
 	}
