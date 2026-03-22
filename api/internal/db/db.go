@@ -2,14 +2,11 @@ package db
 
 import (
 	"fmt"
-	"log"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/wod-strategist/api/internal/logger"
-	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -23,22 +20,22 @@ type AnalysisResult struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-func Connect() *gorm.DB {
-	dsn, err := normalizeDatabaseURL(os.Getenv("DATABASE_URL"))
+func Connect(databaseURL string) (*gorm.DB, error) {
+	dsn, err := normalizeDatabaseURL(databaseURL)
 	if err != nil {
-		logger.Log.Fatal("Invalid database configuration", zap.Error(err))
+		return nil, fmt.Errorf("invalid database configuration: %w", err)
 	}
 	if dsn == "" {
-		log.Fatal("DATABASE_URL is not set")
+		return nil, fmt.Errorf("DATABASE_URL is not set")
 	}
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
+		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	logger.Log.Info("Database connection established")
-	return db
+	return db, nil
 }
 
 func normalizeDatabaseURL(raw string) (string, error) {

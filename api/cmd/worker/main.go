@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/hibiken/asynq"
-	"github.com/joho/godotenv"
+	"github.com/wod-strategist/api/internal/config"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
@@ -17,23 +18,26 @@ import (
 )
 
 func main() {
-	if err := godotenv.Load(); err != nil {
-		// Log but don't fail
+	cfg, err := config.InitWorker()
+	if err != nil {
+		log.Fatalf("failed to initialize config: %v", err)
 	}
 
 	// Initialize Logger
-	logger.Init()
+	if err := logger.Init(cfg.AppEnv); err != nil {
+		log.Fatalf("failed to initialize logger: %v", err)
+	}
 	defer logger.Sync()
 
 	// Initialize Database
-	dbConn := db.Connect()
+	dbConn, err := db.Connect(cfg.DatabaseURL)
+	if err != nil {
+		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
+	}
 	// db.Migrate() // Migration can be done in API server or a separate job, but usually safe to run here too if idempotent
 
 	// Initialize Redis Connection for Asynq
-	redisAddr := os.Getenv("REDIS_URL")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
+	redisAddr := cfg.RedisURL
 	redisOpt := asynq.RedisClientOpt{Addr: redisAddr, DB: 5} // Use DB 5 for Asynq tasks
 
 	logger.Log.Info("Redis connection established", zap.String("redis_addr", redisAddr))
@@ -49,22 +53,19 @@ func main() {
 		},
 	)
 
-	bucketName := os.Getenv("GCS_BUCKET_NAME")
-	if bucketName == "" {
-		logger.Log.Fatal("GCS_BUCKET_NAME not set, uploads will fail")
-	}
-
-	storageClient, err := storage.NewClient(context.Background(), bucketName)
+	storageClient, err := storage.NewClient(context.Background(), cfg.GCSBucketName)
 	if err != nil {
 		logger.Log.Fatal("Failed to create storage client", zap.Error(err))
 	}
 
-	geminiClient, err := gemini.NewClient(context.Background(), logger.Log)
+	geminiClient, err := gemini.NewClientWithOptions(context.Background(), logger.Log, gemini.Options{
+		APIKey: cfg.GeminiAPIKey,
+	})
 	if err != nil {
 		logger.Log.Fatal("Failed to create gemini client", zap.Error(err))
 	}
 
-	w := worker.NewWorker(dbConn, storageClient, bucketName, geminiClient)
+	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)

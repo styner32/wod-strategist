@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,7 +11,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
-	"github.com/joho/godotenv"
+	"github.com/wod-strategist/api/internal/config"
 	"github.com/wod-strategist/api/internal/controllers"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
@@ -22,25 +23,25 @@ import (
 var GitCommit = "dev"
 
 func main() {
-	if err := godotenv.Load(); err != nil {
-		// Log but don't fail, environment variables might be set directly
-		// However, we can't use logger yet as it's not initialized
-		// Wait until logger is initialized to log this properly?
-		// Actually, we usually load .env before everything else.
+	cfg, err := config.InitServer()
+	if err != nil {
+		log.Fatalf("failed to initialize config: %v", err)
 	}
 
 	// Initialize Logger
-	logger.Init()
+	if err := logger.Init(cfg.AppEnv); err != nil {
+		log.Fatalf("failed to initialize logger: %v", err)
+	}
 	defer logger.Sync()
 
 	// Initialize Database
-	dbConn := db.Connect()
+	dbConn, err := db.Connect(cfg.DatabaseURL)
+	if err != nil {
+		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
+	}
 
 	// Initialize Redis Connection for Asynq Client
-	redisAddr := os.Getenv("REDIS_URL")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
+	redisAddr := cfg.RedisURL
 
 	logger.Log.Info("Redis connection established", zap.String("redis_addr", redisAddr))
 
@@ -49,12 +50,7 @@ func main() {
 	defer client.Close()
 
 	// Initialize Storage Client
-	bucketName := os.Getenv("GCS_BUCKET_NAME")
-	if bucketName == "" {
-		logger.Log.Fatal("GCS_BUCKET_NAME not set, uploads will fail")
-	}
-
-	storageClient, err := storage.NewClient(context.Background(), bucketName)
+	storageClient, err := storage.NewClient(context.Background(), cfg.GCSBucketName)
 	if err != nil {
 		logger.Log.Fatal("Failed to create storage client", zap.Error(err))
 	}
@@ -63,16 +59,16 @@ func main() {
 		QueueClient:     client,
 		AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn),
 		StorageClient:   storageClient,
-		BucketName:      bucketName,
+		BucketName:      cfg.GCSBucketName,
 		GitCommit:       GitCommit,
 	})
 
 	// Setup Router
-	r := server.SetupRouter(os.Getenv("API_SECRET"), handlers)
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+	r, err := server.SetupRouter(cfg.APISecret, handlers)
+	if err != nil {
+		logger.Log.Fatal("Failed to setup router", zap.Error(err))
 	}
+	port := cfg.Port
 
 	srv := &http.Server{
 		Addr:    ":" + port,

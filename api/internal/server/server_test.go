@@ -3,7 +3,6 @@ package server_test
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
 
 	"github.com/gin-gonic/gin"
@@ -55,17 +54,6 @@ func (h *recordingHandlers) ListInjuries(c *gin.Context) {
 	h.record("injuries", c)
 }
 
-func restoreAPISecret() {
-	original, wasSet := os.LookupEnv("API_SECRET")
-	DeferCleanup(func() {
-		if !wasSet {
-			_ = os.Unsetenv("API_SECRET")
-			return
-		}
-		_ = os.Setenv("API_SECRET", original)
-	})
-}
-
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)
@@ -88,14 +76,14 @@ var _ = Describe("SetupRouter", func() {
 		handlers = &recordingHandlers{}
 	})
 
-	It("panics when handlers are nil", func() {
-		Expect(func() {
-			server.SetupRouter("secret", nil)
-		}).To(PanicWith("handlers are required"))
+	It("returns an error when handlers are nil", func() {
+		_, err := server.SetupRouter("secret", nil)
+		Expect(err).To(MatchError(server.ErrHandlersRequired))
 	})
 
 	It("allows /health without an API key", func() {
-		router := server.SetupRouter("secret", handlers)
+		router, err := server.SetupRouter("secret", handlers)
+		Expect(err).NotTo(HaveOccurred())
 		req := requestForRoute(server.PublicRouteSpecs()[0], "")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -104,21 +92,9 @@ var _ = Describe("SetupRouter", func() {
 		Expect(handlers.calls).To(Equal([]string{"health"}))
 	})
 
-	It("rejects protected routes when no API secret is configured", func() {
-		restoreAPISecret()
-		Expect(os.Unsetenv("API_SECRET")).To(Succeed())
-
-		router := server.SetupRouter("", handlers)
-		req := requestForRoute(server.ProtectedRouteSpecs()[0], "")
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		Expect(w.Code).To(Equal(http.StatusUnauthorized))
-		Expect(handlers.calls).To(BeEmpty())
-	})
-
 	It("rejects invalid API keys", func() {
-		router := server.SetupRouter("secret", handlers)
+		router, err := server.SetupRouter("secret", handlers)
+		Expect(err).NotTo(HaveOccurred())
 
 		req := requestForRoute(server.ProtectedRouteSpecs()[0], "wrong")
 		w := httptest.NewRecorder()
@@ -129,7 +105,8 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("registers every declared route", func() {
-		router := server.SetupRouter("secret", handlers)
+		router, err := server.SetupRouter("secret", handlers)
+		Expect(err).NotTo(HaveOccurred())
 
 		actualRoutes := make(map[string]struct{}, len(router.Routes()))
 		for _, route := range router.Routes() {
@@ -142,7 +119,8 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("dispatches every protected route to the matching handler when authorized", func() {
-		router := server.SetupRouter("secret", handlers)
+		router, err := server.SetupRouter("secret", handlers)
+		Expect(err).NotTo(HaveOccurred())
 
 		for _, spec := range server.ProtectedRouteSpecs() {
 			handlers.calls = nil
@@ -154,18 +132,5 @@ var _ = Describe("SetupRouter", func() {
 			Expect(w.Code).To(Equal(http.StatusOK), spec.Path)
 			Expect(handlers.calls).To(Equal([]string{spec.Name}), spec.Path)
 		}
-	})
-
-	It("falls back to API_SECRET from the environment", func() {
-		restoreAPISecret()
-		Expect(os.Setenv("API_SECRET", "env-secret")).To(Succeed())
-
-		router := server.SetupRouter("", handlers)
-		req := requestForRoute(server.ProtectedRouteSpecs()[0], "env-secret")
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		Expect(w.Code).To(Equal(http.StatusOK))
-		Expect(handlers.calls).To(Equal([]string{server.ProtectedRouteSpecs()[0].Name}))
 	})
 })

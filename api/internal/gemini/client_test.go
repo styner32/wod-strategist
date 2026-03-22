@@ -3,8 +3,8 @@ package gemini
 import (
 	"context"
 	"net/http"
-	"os"
 	"path/filepath"
+	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -14,19 +14,9 @@ import (
 )
 
 var _ = Describe("Gemini client", func() {
-	Describe("NewClient", func() {
-		It("returns an error when GEMINI_API_KEY is missing", func() {
-			original := os.Getenv("GEMINI_API_KEY")
-			Expect(os.Unsetenv("GEMINI_API_KEY")).To(Succeed())
-			DeferCleanup(func() {
-				if original == "" {
-					_ = os.Unsetenv("GEMINI_API_KEY")
-					return
-				}
-				_ = os.Setenv("GEMINI_API_KEY", original)
-			})
-
-			client, err := NewClient(context.Background(), zap.NewNop())
+	Describe("NewClientWithOptions", func() {
+		It("returns an error when API key is empty", func() {
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{APIKey: ""})
 			Expect(err).To(HaveOccurred())
 			Expect(client).To(BeNil())
 			Expect(err.Error()).To(ContainSubstring("GEMINI_API_KEY is not set"))

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -18,6 +19,8 @@ type Handlers interface {
 }
 
 const APIRoutePrefix = "/api/v1"
+
+var ErrHandlersRequired = errors.New("handlers are required")
 
 type RouteSpec struct {
 	Name   string
@@ -124,36 +127,49 @@ func ProtectedRouteSpecs() []RouteSpec {
 	return cloneRouteSpecs(protectedRouteDefinitions)
 }
 
-func RegisterPublicRoutes(routes gin.IRoutes, handlers Handlers) {
-	validateHandlers(handlers)
+func RegisterPublicRoutes(routes gin.IRoutes, handlers Handlers) error {
+	if err := validateHandlers(handlers); err != nil {
+		return err
+	}
 	registerRoutes(routes, handlers, publicRouteDefinitions)
+	return nil
 }
 
-func RegisterProtectedRoutes(routes gin.IRoutes, handlers Handlers) {
-	validateHandlers(handlers)
+func RegisterProtectedRoutes(routes gin.IRoutes, handlers Handlers) error {
+	if err := validateHandlers(handlers); err != nil {
+		return err
+	}
 	registerRoutes(routes, handlers, protectedRouteDefinitions)
+	return nil
 }
 
-func SetupRouter(apiKey string, handlers Handlers) *gin.Engine {
-	validateHandlers(handlers)
+func SetupRouter(apiKey string, handlers Handlers) (*gin.Engine, error) {
+	if err := validateHandlers(handlers); err != nil {
+		return nil, err
+	}
 
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(RequestLogger())
 
-	RegisterPublicRoutes(r, handlers)
+	if err := RegisterPublicRoutes(r, handlers); err != nil {
+		return nil, err
+	}
 
 	api := r.Group(APIRoutePrefix)
 	api.Use(APIKeyMiddleware(apiKey))
-	RegisterProtectedRoutes(api, handlers)
+	if err := RegisterProtectedRoutes(api, handlers); err != nil {
+		return nil, err
+	}
 
-	return r
+	return r, nil
 }
 
-func validateHandlers(handlers Handlers) {
+func validateHandlers(handlers Handlers) error {
 	if handlers == nil {
-		panic("handlers are required")
+		return ErrHandlersRequired
 	}
+	return nil
 }
 
 func registerRoutes(routes gin.IRoutes, handlers Handlers, definitions []routeDefinition) {

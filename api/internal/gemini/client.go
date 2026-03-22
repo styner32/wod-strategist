@@ -28,11 +28,6 @@ type Options struct {
 	Sleep        func(time.Duration)
 }
 
-func NewClient(ctx context.Context, logger *zap.Logger) (*Client, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	return NewClientWithOptions(ctx, logger, Options{APIKey: apiKey})
-}
-
 func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Options) (*Client, error) {
 	apiKey := strings.TrimSpace(options.APIKey)
 	if apiKey == "" {
