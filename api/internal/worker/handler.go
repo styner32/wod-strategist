@@ -171,6 +171,13 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	// Determine file path (download from GCS if needed)
 	safeSessionID := filepath.Base(p.SessionID)
+
+	// check if safeSessionID contains path separator
+	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+		logger.Log.Error("Invalid session ID: contains path separator after sanitization", zap.String("session_id", p.SessionID))
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
+
 	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", safeSessionID, filepath.Base(p.FilePath)))
 
 	logger.Log.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
