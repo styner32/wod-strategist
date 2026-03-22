@@ -164,6 +164,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return asynq.SkipRetry
 	}
 
+	// Determine file path (download from GCS if needed)
 	if !strings.HasPrefix(p.FilePath, "gs://") {
 		logger.Log.Error("Invalid file path: must be a GCS URI", zap.String("file_path", p.FilePath))
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
@@ -178,7 +179,8 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
 
-	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", safeSessionID, filepath.Base(p.FilePath)))
+	// make sure ../ is not in the path
+	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
 
 	logger.Log.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
 	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
