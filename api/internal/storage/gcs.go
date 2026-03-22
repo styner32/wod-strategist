@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"google.golang.org/api/option"
 )
 
 type Client struct {
@@ -17,8 +18,8 @@ type Client struct {
 	client     *storage.Client
 }
 
-func NewClient(ctx context.Context, bucketName string) (*Client, error) {
-	client, err := storage.NewClient(ctx)
+func NewClient(ctx context.Context, bucketName string, opts ...option.ClientOption) (*Client, error) {
+	client, err := storage.NewClient(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}

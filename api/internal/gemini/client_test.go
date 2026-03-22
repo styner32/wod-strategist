@@ -1,0 +1,375 @@
+package gemini
+
+import (
+	"context"
+	"net/http"
+	"os"
+	"path/filepath"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/testhelpers"
+	"go.uber.org/zap"
+)
+
+var _ = Describe("Gemini client", func() {
+	Describe("NewClient", func() {
+		It("returns an error when GEMINI_API_KEY is missing", func() {
+			original := os.Getenv("GEMINI_API_KEY")
+			Expect(os.Unsetenv("GEMINI_API_KEY")).To(Succeed())
+			DeferCleanup(func() {
+				if original == "" {
+					_ = os.Unsetenv("GEMINI_API_KEY")
+					return
+				}
+				_ = os.Setenv("GEMINI_API_KEY", original)
+			})
+
+			client, err := NewClient(context.Background(), zap.NewNop())
+			Expect(err).To(HaveOccurred())
+			Expect(client).To(BeNil())
+			Expect(err.Error()).To(ContainSubstring("GEMINI_API_KEY is not set"))
+		})
+	})
+
+	Describe("AnalyzeVideo", func() {
+		const (
+			baseURL = "https://example.test"
+			apiKey  = "test-api-key"
+		)
+
+		var (
+			transport *testhelpers.MockTransport
+			client    *Client
+			videoPath string
+			videoData []byte
+			mimeType  string
+		)
+
+		BeforeEach(func() {
+			transport = testhelpers.NewMockTransport()
+			videoData = []byte{
+				0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'm', 'p', '4', '2',
+				0x00, 0x00, 0x00, 0x00, 'm', 'p', '4', '2', 'i', 's', 'o', 'm',
+			}
+			mimeType = http.DetectContentType(videoData)
+
+			tmpDir := GinkgoT().TempDir()
+			videoPath = filepath.Join(tmpDir, "video.mp4")
+			Expect(os.WriteFile(videoPath, videoData, 0o644)).To(Succeed())
+
+			var err error
+			client, err = NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:       apiKey,
+				BaseURL:      baseURL,
+				HTTPClient:   &http.Client{Transport: transport},
+				PollInterval: time.Millisecond,
+				Sleep:        func(time.Duration) {},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			DeferCleanup(func() {
+				Expect(transport.Verify()).To(Succeed())
+			})
+		})
+
+		It("uploads, polls until active, and generates content", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				MatchHeader("X-Goog-Upload-Protocol", "resumable").
+				MatchHeader("X-Goog-Upload-Command", "start").
+				MatchHeader("X-Goog-Upload-Header-Content-Type", mimeType).
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				MatchHeader("X-Goog-Upload-Command", "upload, finalize").
+				MatchHeader("X-Goog-Upload-Offset", "0").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Status", "final").
+				JSON(map[string]any{
+					"file": map[string]any{
+						"name":     "files/mock-file",
+						"uri":      "https://example.test/files/mock-file",
+						"mimeType": mimeType,
+					},
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-file").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-file",
+					"state": "PROCESSING",
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-file").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-file",
+					"state": "ACTIVE",
+				})
+
+			transport.New(baseURL).
+				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{
+						{
+							"content": map[string]any{
+								"parts": []map[string]any{
+									{"text": "first "},
+									{"text": "second"},
+								},
+							},
+						},
+					},
+				})
+
+			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "analyze this")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("first second"))
+			Expect(geminiFile).To(Equal("files/mock-file"))
+			Expect(transport.Requests()).To(HaveLen(5))
+		})
+
+		It("returns an error when the local file does not exist", func() {
+			result, geminiFile, err := client.AnalyzeVideo(context.Background(), filepath.Join(GinkgoT().TempDir(), "missing.mp4"), "prompt")
+			Expect(err).To(HaveOccurred())
+			Expect(result).To(BeEmpty())
+			Expect(geminiFile).To(BeEmpty())
+			Expect(transport.Requests()).To(BeEmpty())
+		})
+
+		It("returns an error when upload fails", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{
+					"error": map[string]any{
+						"message": "upload failed",
+					},
+				})
+
+			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to upload file"))
+			Expect(result).To(BeEmpty())
+			Expect(geminiFile).To(BeEmpty())
+		})
+
+		It("returns an error when polling file state fails", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Status", "final").
+				JSON(map[string]any{
+					"file": map[string]any{
+						"name": "files/mock-file",
+						"uri":  "https://example.test/files/mock-file",
+					},
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-file").
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{
+					"error": map[string]any{
+						"message": "poll failed",
+					},
+				})
+
+			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to get file info"))
+			Expect(result).To(BeEmpty())
+			Expect(geminiFile).To(Equal("files/mock-file"))
+		})
+
+		It("returns an error when Gemini marks the file as failed", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Status", "final").
+				JSON(map[string]any{
+					"file": map[string]any{
+						"name": "files/mock-file",
+						"uri":  "https://example.test/files/mock-file",
+					},
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-file").
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-file",
+					"state": "FAILED",
+				})
+
+			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("file processing failed"))
+			Expect(result).To(BeEmpty())
+			Expect(geminiFile).To(Equal("files/mock-file"))
+		})
+
+		It("returns an error when generate content fails", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Status", "final").
+				JSON(map[string]any{
+					"file": map[string]any{
+						"name": "files/mock-file",
+						"uri":  "https://example.test/files/mock-file",
+					},
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-file").
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-file",
+					"state": "ACTIVE",
+				})
+
+			transport.New(baseURL).
+				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{
+					"error": map[string]any{
+						"message": "generation failed",
+					},
+				})
+
+			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to generate content"))
+			Expect(result).To(BeEmpty())
+			Expect(geminiFile).To(Equal("files/mock-file"))
+		})
+
+		It("returns an error when no content is generated", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Status", "final").
+				JSON(map[string]any{
+					"file": map[string]any{
+						"name": "files/mock-file",
+						"uri":  "https://example.test/files/mock-file",
+					},
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-file").
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-file",
+					"state": "ACTIVE",
+				})
+
+			transport.New(baseURL).
+				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{},
+				})
+
+			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no content generated"))
+			Expect(result).To(BeEmpty())
+			Expect(geminiFile).To(Equal("files/mock-file"))
+		})
+	})
+
+	Describe("DeleteFile", func() {
+		const (
+			baseURL = "https://example.test"
+			apiKey  = "test-api-key"
+		)
+
+		It("deletes the remote file", func() {
+			transport := testhelpers.NewMockTransport()
+			transport.New(baseURL).
+				Delete("/v1beta/files/mock-file").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     apiKey,
+				BaseURL:    baseURL,
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(client.DeleteFile(context.Background(), "files/mock-file")).To(Succeed())
+			Expect(transport.Verify()).To(Succeed())
+		})
+
+		It("returns an error when delete fails", func() {
+			transport := testhelpers.NewMockTransport()
+			transport.New(baseURL).
+				Delete("/v1beta/files/mock-file").
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{
+					"error": map[string]any{
+						"message": "delete failed",
+					},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     apiKey,
+				BaseURL:    baseURL,
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			err = client.DeleteFile(context.Background(), "files/mock-file")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to delete file"))
+			Expect(transport.Verify()).To(Succeed())
+		})
+	})
+})
