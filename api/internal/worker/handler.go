@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/hibiken/asynq"
@@ -170,17 +169,15 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	// Determine file path (download from GCS if needed)
-	safeSessionID := filepath.Base(p.SessionID)
-
-	// check if safeSessionID contains path separator
-	if strings.ContainsRune(safeSessionID, filepath.Separator) {
-		logger.Log.Error("Invalid session ID: contains path separator after sanitization", zap.String("session_id", p.SessionID))
-		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	// Create a secure temporary file to download from GCS
+	tempFile, err := os.CreateTemp("/tmp", "video-*.mp4")
+	if err != nil {
+		logger.Log.Error("Failed to create temp file", zap.Error(err))
+		return fmt.Errorf("failed to create temp file: %w", err)
 	}
-
-	// make sure ../ is not in the path
-	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+	// Close it immediately since StorageClient.DownloadFile creates/opens it again
+	tempFile.Close()
+	localFilePath := tempFile.Name()
 
 	logger.Log.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
 	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
