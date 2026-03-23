@@ -1,4 +1,5 @@
 import * as MediaLibrary from "expo-media-library";
+import * as ImagePicker from "expo-image-picker";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -31,7 +32,7 @@ import {
 } from "@/features/wod/workoutType";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
-import { processWorkoutVideo } from "../../features/wod/api";
+import { processWorkoutVideo, processWorkoutChunk, fetchChunkAnalysis } from "../../features/wod/api";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
@@ -79,6 +80,29 @@ export default function VisionTestPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [enableChunks, setEnableChunks] = useState(false);
+  const [chunkFeedback, setChunkFeedback] = useState<string | null>(null);
+
+  // Poll for chunk feedback while recording
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    if (isRecording) {
+      interval = setInterval(async () => {
+        try {
+          const sessionId = buildWorkoutSessionId(workoutType);
+          const results = await fetchChunkAnalysis(sessionId);
+          if (results.length > 0) {
+            const latest = results.find(r => r.status === 'COMPLETED');
+            if (latest && latest.output) {
+               setChunkFeedback(latest.output);
+            }
+          }
+        } catch (e) {
+            // Error fetching feedback, ignore to not clutter logs
+        }
+      }, 3000);
+    }
+    return () => clearInterval(interval);
+  }, [isRecording, workoutType]);
 
   // Pass isRecording to the hook to toggle inference on/off
   const { frameProcessor, poseResult, monitorData } = usePoseDetection(isRecording);
@@ -116,6 +140,48 @@ export default function VisionTestPage() {
     }
   };
 
+  const handleTestUpload = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["videos"],
+        allowsEditing: true,
+        quality: 1,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const fileUri = result.assets[0].uri;
+        console.log("📼 Selected test video:", fileUri);
+        
+        setIsProcessing(true);
+        const compressedUri = await Video.compress(fileUri, {
+          compressionMethod: "auto",
+          maxSize: 720,
+        });
+        setIsProcessing(false);
+
+        Alert.alert(
+          "Upload Test Video",
+          "Simulate backend processing with this video?",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Upload", onPress: () => {
+                 const movementsArray = movements ? (movements as string).split(', ') : [];
+                 const injuriesArray = injuries ? (injuries as string).split(', ') : [];
+                 processWorkoutChunk(compressedUri, buildWorkoutSessionId(workoutType), {
+                   movements: movementsArray,
+                   injuries: injuriesArray,
+                   workoutType,
+                 }).then(() => console.log("Test chunk upload triggered!"))
+            } },
+          ]
+        );
+      }
+    } catch (e) {
+      console.error("Failed to pick video:", e);
+      setIsProcessing(false);
+    }
+  };
+
   // --- Chunk Recording Logic (Raw Camera) ---
 
   const startChunkLoop = async () => {
@@ -129,12 +195,30 @@ export default function VisionTestPage() {
           console.log("📷 Chunk Finished:", video.path);
           isChunkRecordingActive.current = false;
 
-          // Save chunk to gallery
+          // Compress and Upload chunk to backend
           try {
-            await MediaLibrary.saveToLibraryAsync(video.path);
-            console.log("✅ Chunk saved to gallery");
+            const sessionId = buildWorkoutSessionId(workoutType);
+            const movementsArray = movements ? movements.split(', ') : [];
+            const injuriesArray = injuries ? injuries.split(', ') : [];
+            
+            Video.compress(video.path, {
+              compressionMethod: "auto",
+              maxSize: 720,
+            }).then((compressedUri) => {
+              processWorkoutChunk(compressedUri, sessionId, {
+                movements: movementsArray,
+                injuries: injuriesArray,
+                workoutType,
+              }).then(() => {
+                console.log("✅ Chunk asynchronously uploaded to backend");
+              }).catch((err) => {
+                console.error("Failed to upload chunk:", err);
+              });
+            }).catch((err) => {
+              console.error("Failed to compress chunk:", err);
+            });
           } catch (e) {
-            console.error("Failed to save chunk:", e);
+            console.error("Failed to process chunk for upload:", e);
           }
 
           // If still recording, start the next chunk immediately
@@ -369,7 +453,24 @@ export default function VisionTestPage() {
             />
           </View>
         )}
+
+        {/* Mock Local Video Test Button */}
+        {!isRecording && (
+          <TouchableOpacity 
+            style={[styles.row, { marginTop: 15, padding: 5, backgroundColor: "#333", borderRadius: 5, justifyContent: "center" }]} 
+            onPress={handleTestUpload}
+          >
+            <Text style={[styles.val, { color: "#4fa8f7" }]}>TEST LOCAL VIDEO</Text>
+          </TouchableOpacity>
+        )}
       </View>
+
+      {/* Chunk Feedback Overlay */}
+      {isRecording && chunkFeedback && (
+        <View style={styles.feedbackOverlay}>
+          <Text style={styles.feedbackText}>{chunkFeedback}</Text>
+        </View>
+      )}
 
       {/* 녹화 버튼 */}
       <View style={styles.recordControl}>
@@ -523,5 +624,22 @@ const styles = StyleSheet.create({
   progressBarFill: {
     height: '100%',
     backgroundColor: '#00FF00',
+  },
+  feedbackOverlay: {
+    position: "absolute",
+    top: 150,
+    alignSelf: "center",
+    backgroundColor: "rgba(255, 0, 0, 0.8)",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
+    maxWidth: "80%",
+    zIndex: 50,
+  },
+  feedbackText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
+    textAlign: "center",
   },
 });

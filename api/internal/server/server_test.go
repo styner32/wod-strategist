@@ -1,19 +1,11 @@
 package server_test
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"testing"
-	"time"
+	"regexp"
 
 	"github.com/gin-gonic/gin"
-	"github.com/hibiken/asynq"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/logger"
@@ -21,200 +13,132 @@ import (
 	"go.uber.org/zap"
 )
 
-type fakeQueueClient struct{}
-
-func (f *fakeQueueClient) Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
-	return &asynq.TaskInfo{ID: "task-123"}, nil
+type recordingHandlers struct {
+	calls []string
 }
 
-type fakeStorageClient struct {
-	bucketName string
+func (h *recordingHandlers) record(route string, c *gin.Context) {
+	h.calls = append(h.calls, route)
+	c.JSON(http.StatusOK, gin.H{"route": route})
 }
 
-func (f *fakeStorageClient) GenerateSignedURL(objectName string, method string, expires time.Duration) (string, error) {
-	return fmt.Sprintf("https://example.test/%s/%s", f.bucketName, objectName), nil
+func (h *recordingHandlers) Health(c *gin.Context) {
+	h.record("health", c)
 }
 
-func (f *fakeStorageClient) UploadFile(ctx context.Context, file multipart.File, filename string) (string, error) {
-	return fmt.Sprintf("gs://%s/%s", f.bucketName, filename), nil
+func (h *recordingHandlers) CreateUploadURL(c *gin.Context) {
+	h.record("upload-url", c)
 }
 
-func TestServer(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Server Suite")
+func (h *recordingHandlers) CompleteUpload(c *gin.Context) {
+	h.record("upload-complete", c)
 }
 
-var _ = Describe("API Server", func() {
-	var (
-		router *gin.Engine
-	)
+func (h *recordingHandlers) Upload(c *gin.Context) {
+	h.record("upload", c)
+}
+
+func (h *recordingHandlers) GetAnalysis(c *gin.Context) {
+	h.record("analysis", c)
+}
+
+func (h *recordingHandlers) GetHistory(c *gin.Context) {
+	h.record("history", c)
+}
+
+func (h *recordingHandlers) ListMovements(c *gin.Context) {
+	h.record("movements", c)
+}
+
+func (h *recordingHandlers) ListInjuries(c *gin.Context) {
+	h.record("injuries", c)
+}
+
+func (h *recordingHandlers) ChunkComplete(c *gin.Context) {
+	h.record("chunk-complete", c)
+}
+
+func (h *recordingHandlers) GetChunkAnalysis(c *gin.Context) {
+	h.record("chunk-analysis", c)
+}
+
+func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
+	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
+	req := httptest.NewRequest(spec.Method, path, nil)
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+	return req
+}
+
+func allRouteSpecs() []server.RouteSpec {
+	return append(server.PublicRouteSpecs(), server.ProtectedRouteSpecs()...)
+}
+
+var _ = Describe("SetupRouter", func() {
+	var handlers *recordingHandlers
 
 	BeforeEach(func() {
 		gin.SetMode(gin.TestMode)
-		// logger.Init()
-		logger.Log = zap.NewNop() // Mock logger to avoid panics
-
-		router = server.SetupRouter(&server.ServerConfig{
-			QueueClient:   &fakeQueueClient{},
-			DB:            nil, // DB not needed for these handler tests
-			StorageClient: &fakeStorageClient{bucketName: "test-bucket"},
-			BucketName:    "test-bucket",
-			APIKey:        "test-api-key",
-		})
+		logger.Log = zap.NewNop()
+		handlers = &recordingHandlers{}
 	})
 
-	Context("POST /api/v1/upload-complete", func() {
-		It("should return error if gcs_uri does not start with gs://", func() {
-			body := bytes.NewBufferString(`{"session_id": "123", "gcs_uri": "/etc/passwd", "movements": []}`)
-
-			req, _ := http.NewRequest("POST", "/api/v1/upload-complete", body)
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-API-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			Expect(w.Code).To(Equal(http.StatusBadRequest))
-			Expect(w.Body.String()).To(ContainSubstring("invalid GCS URI"))
-		})
-
-		It("should return valid result if gcs_uri starts with gs://", func() {
-			body := bytes.NewBufferString(`{"session_id": "123", "gcs_uri": "gs://bucket/file.mp4", "movements": []}`)
-
-			req, _ := http.NewRequest("POST", "/api/v1/upload-complete", body)
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-API-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			// Expect 500 because QueueClient.Enqueue will fail since Redis isn't running
-			Expect(w.Code).To(Equal(http.StatusAccepted))
-			Expect(w.Body.String()).To(ContainSubstring("Analysis started"))
-		})
-
-		/*
-					func TestValidateMovements(t *testing.T) {
-				tests := []struct {
-					name      string
-					requested []string
-					want      bool
-				}{
-					{
-						name:      "Valid movement",
-						requested: []string{"Burpee"},
-						want:      true,
-					},
-					{
-						name:      "Invalid movement",
-						requested: []string{"InvalidMove"},
-						want:      false,
-					},
-					{
-						name:      "Mixed valid and invalid (should be false)",
-						requested: []string{"InvalidMove", "Burpee"},
-						want:      false,
-					},
-					{
-						name:      "Empty request",
-						requested: []string{},
-						want:      true,
-					},
-					{
-						name:      "Multiple valid",
-						requested: []string{"Burpee", "Row"},
-						want:      true,
-					},
-				}
-
-				for _, tt := range tests {
-					t.Run(tt.name, func(t *testing.T) {
-						if got := validateMovements(tt.requested); got != tt.want {
-							t.Errorf("validateMovements() = %v, want %v", got, tt.want)
-						}
-					})
-				}
-			}
-		*/
-
-		DescribeTable("should return error if movements are invalid",
-			func(movements []string) {
-				body := &bytes.Buffer{}
-				json.NewEncoder(body).Encode(map[string]interface{}{
-					"session_id": "test-session",
-					"gcs_uri":    "gs://test-bucket/videos/test-session_video.mp4",
-					"movements":  movements,
-				})
-
-				req, _ := http.NewRequest("POST", "/api/v1/upload-complete", body)
-				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("X-Api-Key", "test-api-key")
-				w := httptest.NewRecorder()
-				router.ServeHTTP(w, req)
-
-				Expect(w.Code).To(Equal(http.StatusBadRequest))
-				Expect(w.Body.String()).To(ContainSubstring("invalid movements"))
-			},
-			Entry("invalid movements", []string{"InvalidMove", "Burpee"}),
-		)
+	It("returns an error when handlers are nil", func() {
+		_, err := server.SetupRouter("test", "secret", nil)
+		Expect(err).To(MatchError(server.ErrHandlersRequired))
 	})
 
-	Context("POST /api/v1/upload", func() {
-		It("should return error if session_id is missing", func() {
-			body := &bytes.Buffer{}
-			writer := multipart.NewWriter(body)
-			writer.Close()
+	It("allows /health without an API key", func() {
+		router, err := server.SetupRouter("test", "secret", handlers)
+		Expect(err).NotTo(HaveOccurred())
+		req := requestForRoute(server.PublicRouteSpecs()[0], "")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
 
-			req, _ := http.NewRequest("POST", "/api/v1/upload", body)
-			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("X-API-Key", "test-api-key")
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(handlers.calls).To(Equal([]string{"health"}))
+	})
+
+	It("rejects invalid API keys", func() {
+		router, err := server.SetupRouter("test", "secret", handlers)
+		Expect(err).NotTo(HaveOccurred())
+
+		req := requestForRoute(server.ProtectedRouteSpecs()[0], "wrong")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusUnauthorized))
+		Expect(handlers.calls).To(BeEmpty())
+	})
+
+	It("registers every declared route", func() {
+		router, err := server.SetupRouter("test", "secret", handlers)
+		Expect(err).NotTo(HaveOccurred())
+
+		actualRoutes := make(map[string]struct{}, len(router.Routes()))
+		for _, route := range router.Routes() {
+			actualRoutes[route.Method+" "+route.Path] = struct{}{}
+		}
+
+		for _, spec := range allRouteSpecs() {
+			Expect(actualRoutes).To(HaveKey(spec.Method + " " + spec.Path))
+		}
+	})
+
+	It("dispatches every protected route to the matching handler when authorized", func() {
+		router, err := server.SetupRouter("test", "secret", handlers)
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, spec := range server.ProtectedRouteSpecs() {
+			handlers.calls = nil
+
+			req := requestForRoute(spec, "secret")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusBadRequest))
-			Expect(w.Body.String()).To(ContainSubstring("session_id is required"))
-		})
-
-		It("should return error if file is missing", func() {
-			body := &bytes.Buffer{}
-			writer := multipart.NewWriter(body)
-			writer.WriteField("session_id", "123")
-			writer.Close()
-
-			req, _ := http.NewRequest("POST", "/api/v1/upload", body)
-			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("X-API-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			Expect(w.Code).To(Equal(http.StatusBadRequest))
-			Expect(w.Body.String()).To(ContainSubstring("file is required"))
-		})
-
-		It("should accept valid upload", func() {
-			tmpfile, err := os.CreateTemp("", "testvideo.mp4")
-			Expect(err).NotTo(HaveOccurred())
-			defer os.Remove(tmpfile.Name())
-			tmpfile.Write([]byte("dummy content"))
-			tmpfile.Close()
-
-			body := &bytes.Buffer{}
-			writer := multipart.NewWriter(body)
-			writer.WriteField("session_id", "test-session")
-
-			part, err := writer.CreateFormFile("file", "video.mp4")
-			Expect(err).NotTo(HaveOccurred())
-			_, err = part.Write([]byte("dummy content"))
-			Expect(err).NotTo(HaveOccurred())
-			writer.Close()
-
-			req, _ := http.NewRequest("POST", "/api/v1/upload", body)
-			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("X-Api-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			Expect(w.Code).To(Equal(http.StatusAccepted))
-			Expect(w.Body.String()).To(ContainSubstring("File uploaded and analysis started"))
-			Expect(w.Body.String()).To(ContainSubstring("gs://test-bucket/videos/test-session_video.mp4"))
-		})
+			Expect(w.Code).To(Equal(http.StatusOK), spec.Path)
+			Expect(handlers.calls).To(Equal([]string{spec.Name}), spec.Path)
+		}
 	})
 })

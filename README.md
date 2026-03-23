@@ -27,3 +27,23 @@
    ```bash
    curl -X POST http://localhost:8088/api/v1/upload -F "session_id=workout-session-002" -F "file=@./tmp/wod_1.MP4"
    ```
+
+## API Typings & Schema
+
+The React Native app shares interface typings generated directly from the Go backend to ensure the API contracts remain strictly aligned. 
+
+### Syncing Changes
+Whenever you update a request or response struct in the Go API (e.g. `api/internal/controllers/dto.go`), update the Swagger comments on your Gin handlers and run the following command from the root directory to immediately sync the changes to your frontend:
+
+```bash
+npm run sync-api
+```
+*(This automatically runs `swag init` in the backend and regenerates `features/wod/schema.d.ts` for the frontend)*
+
+### Verifying Type Mismatches
+After regenerating the API schema, you can verify if your React Native code requires updating by running the TypeScript typechecker:
+
+```bash
+npm run typecheck
+```
+If your frontend code tries to use a response property that was renamed or deleted in your API structs, the compiler will catch it instantly.

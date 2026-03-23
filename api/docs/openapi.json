@@ -1,0 +1,252 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "description": "API for WOD Strategist application.",
+        "title": "WOD Strategist API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "paths": {
+        "/injuries": {
+            "get": {
+                "description": "Returns a list of all supported injuries that can be analyzed",
+                "tags": [
+                    "metadata"
+                ],
+                "summary": "List supported injuries",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/movements": {
+            "get": {
+                "description": "Returns a list of all supported workout movements",
+                "tags": [
+                    "metadata"
+                ],
+                "summary": "List supported movements",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/upload-complete": {
+            "post": {
+                "description": "Notifies the backend that a video upload is complete and triggers analysis",
+                "tags": [
+                    "upload"
+                ],
+                "summary": "Complete Upload",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.CompleteUploadRequest"
+                            }
+                        }
+                    },
+                    "description": "Upload metadata",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.CompleteUploadResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/upload-url": {
+            "post": {
+                "description": "Generates a signed GCS upload URL for a specific video file",
+                "tags": [
+                    "upload"
+                ],
+                "summary": "Create Upload URL",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.CreateUploadURLRequest"
+                            }
+                        }
+                    },
+                    "description": "Session and filename",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.CreateUploadURLResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "servers": [
+        {
+            "url": "//localhost:8088/api/v1"
+        }
+    ],
+    "components": {
+        "schemas": {
+            "controllers.CompleteUploadRequest": {
+                "type": "object",
+                "required": [
+                    "gcs_uri",
+                    "movements",
+                    "session_id",
+                    "workout_type"
+                ],
+                "properties": {
+                    "gcs_uri": {
+                        "type": "string"
+                    },
+                    "injuries": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "movements": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "workout_type": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.CompleteUploadResponse": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "task_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.CreateUploadURLRequest": {
+                "type": "object",
+                "required": [
+                    "filename",
+                    "session_id"
+                ],
+                "properties": {
+                    "filename": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.CreateUploadURLResponse": {
+                "type": "object",
+                "properties": {
+                    "gcs_uri": {
+                        "type": "string"
+                    },
+                    "upload_url": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.ErrorResponse": {
+                "type": "object",
+                "properties": {
+                    "error": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    }
+}

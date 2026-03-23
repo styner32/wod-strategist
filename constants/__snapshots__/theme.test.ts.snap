@@ -1,0 +1,22 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Theme Colors should match the expected color snapshot 1`] = `
+{
+  "dark": {
+    "background": "#151718",
+    "icon": "#9BA1A6",
+    "tabIconDefault": "#9BA1A6",
+    "tabIconSelected": "#fff",
+    "text": "#ECEDEE",
+    "tint": "#fff",
+  },
+  "light": {
+    "background": "#fff",
+    "icon": "#687076",
+    "tabIconDefault": "#687076",
+    "tabIconSelected": "#0a7ea4",
+    "text": "#11181C",
+    "tint": "#0a7ea4",
+  },
+}
+`;

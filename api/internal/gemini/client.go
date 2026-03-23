@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -12,25 +13,64 @@ import (
 )
 
 type Client struct {
-	client *genai.Client
-	logger *zap.Logger
+	client       *genai.Client
+	logger       *zap.Logger
+	pollInterval time.Duration
+	sleep        func(time.Duration)
 }
 
-func NewClient(ctx context.Context, logger *zap.Logger) (*Client, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
+type Options struct {
+	APIKey       string
+	BaseURL      string
+	APIVersion   string
+	HTTPClient   *http.Client
+	PollInterval time.Duration
+	Sleep        func(time.Duration)
+}
+
+func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Options) (*Client, error) {
+	apiKey := strings.TrimSpace(options.APIKey)
 	if apiKey == "" {
 		return nil, fmt.Errorf("GEMINI_API_KEY is not set")
 	}
 
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  apiKey,
-		Backend: genai.BackendGeminiAPI,
-	})
+	config := &genai.ClientConfig{
+		APIKey:     apiKey,
+		Backend:    genai.BackendGeminiAPI,
+		HTTPClient: options.HTTPClient,
+	}
+	if options.BaseURL != "" || options.APIVersion != "" {
+		config.HTTPOptions = genai.HTTPOptions{
+			BaseURL:    options.BaseURL,
+			APIVersion: options.APIVersion,
+		}
+	}
+
+	client, err := genai.NewClient(ctx, config)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Client{client: client, logger: logger}, nil
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	pollInterval := options.PollInterval
+	if pollInterval <= 0 {
+		pollInterval = 2 * time.Second
+	}
+
+	sleep := options.Sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+
+	return &Client{
+		client:       client,
+		logger:       logger,
+		pollInterval: pollInterval,
+		sleep:        sleep,
+	}, nil
 }
 
 // AnalyzeVideo returns the analysis result and the name of the uploaded file on Gemini
@@ -75,7 +115,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 			return "", uploadResult.Name, fmt.Errorf("file processing failed")
 		}
 
-		time.Sleep(2 * time.Second)
+		c.sleep(c.pollInterval)
 	}
 
 	c.logger.Info("File uploaded", zap.Any("file", uploadResult), zap.String("mime_type", mimeType))

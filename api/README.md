@@ -2,6 +2,14 @@
 
 ## Get started
 
+## Configuration
+
+The API and worker load `.env` via `internal/config` during startup and fail fast if required environment variables are missing.
+
+- `cmd/server` requires `DATABASE_URL`, `REDIS_URL`, `GCS_BUCKET_NAME`, and `API_SECRET`. `PORT` is optional and defaults to `8080`.
+- `cmd/worker` requires `DATABASE_URL`, `REDIS_URL`, `GCS_BUCKET_NAME`, and `GEMINI_API_KEY`.
+- Runtime packages under `internal/` should return `error` values to the caller instead of calling `panic` or exiting the process. Startup failure handling belongs in `cmd/server` and `cmd/worker`.
+
 ## Database
 
 ```bash
@@ -26,4 +34,23 @@ psql "postgres://DB_USER:DB_PASS@localhost:5433/wod_dev?sslmode=disable"
 
 ```bash
 gcloud run jobs execute $(MIGRATE_SERVICE_NAME) --region $(REGION)
+```
+
+## API Documentation (Swagger UI)
+
+This project uses `swaggo` to automatically generate OpenAPI documentation from the Go source code comments. 
+
+To view and interact with the Swagger docs:
+
+1. Start the API server:
+   ```bash
+   go run cmd/server/main.go
+   ```
+2. Navigate to the generated Swagger UI in your browser:
+   **[http://localhost:8088/swagger/index.html](http://localhost:8088/swagger/index.html)**
+   *(Or replace `8088` with your custom `PORT`).*
+
+To update the Swagger schema specs after modifying structs or handler comments, run:
+```bash
+swag init -g cmd/server/main.go
 ```

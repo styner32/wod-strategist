@@ -76,14 +76,6 @@
       ],
       "react-native-compressor",
       [
-        "react-native-health",
-        {
-          "isClinicalDataEnabled": false,
-          "healthSharePermission": "Custom health share permission",
-          "healthUpdatePermission": "Custom health update permission"
-        }
-      ],
-      [
         "expo-media-library",
         {
           "photosPermission": "운동 영상을 저장하기 위해 사진 라이브러리에 접근합니다.",
@@ -118,7 +110,10 @@
           "//": "Disables the microphone permission",
           "microphonePermission": false
         }
-      ]
+      ],
+      "expo-font",
+      "expo-image",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
