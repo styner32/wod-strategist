@@ -38,6 +38,18 @@ export default function Dashboard() {
           </Pressable>
         </Link>
 
+        <Link href={"/queue" as any} asChild>
+          <Pressable style={styles.card}>
+            <View style={styles.iconBox}>
+              <Text style={styles.icon}>📋</Text>
+            </View>
+            <View>
+              <Text style={styles.cardTitle}>Video Queue</Text>
+              <Text style={styles.cardDesc}>Encoding & upload status</Text>
+            </View>
+          </Pressable>
+        </Link>
+
         <Link href="/history" asChild>
           <Pressable style={styles.card}>
             <View style={styles.iconBox}>

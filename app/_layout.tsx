@@ -1,6 +1,7 @@
 // src/app/_layout.tsx
 import 'react-native-worklets-core';
 
+import { VideoQueueOverlay } from "@/components/VideoQueueOverlay";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -11,10 +12,10 @@ export default function RootLayout() {
       <StatusBar style="light" />
       <Stack
         screenOptions={{
-          headerStyle: { backgroundColor: "#000" }, // 다크 모드 헤더
+          headerStyle: { backgroundColor: "#000" },
           headerTintColor: "#fff",
           headerTitleStyle: { fontWeight: "bold" },
-          contentStyle: { backgroundColor: "#000" }, // 배경 검정
+          contentStyle: { backgroundColor: "#000" },
         }}
       >
         {/* 1. 메인 대시보드 */}
@@ -27,8 +28,8 @@ export default function RootLayout() {
         <Stack.Screen
           name="workout/visionTestPage"
           options={{
-            headerShown: false, // 전체화면 모드
-            presentation: "fullScreenModal", // 모달 형태로 뜨도록 설정 (선택사항)
+            headerShown: false,
+            presentation: "fullScreenModal",
           }}
         />
 
@@ -37,7 +38,13 @@ export default function RootLayout() {
 
         {/* 4. 비디오 업로드 페이지 */}
         <Stack.Screen name="upload/index" options={{ headerShown: false }} />
+
+        {/* 5. 비디오 큐 페이지 */}
+        <Stack.Screen name="queue" options={{ headerShown: false }} />
       </Stack>
+
+      {/* Global overlay — visible on all screens */}
+      <VideoQueueOverlay />
     </SafeAreaProvider>
   );
 }

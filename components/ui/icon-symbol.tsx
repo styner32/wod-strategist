@@ -21,6 +21,9 @@ const MAPPING = {
   'figure.run': 'directions-run',
   'chevron.left': 'chevron-left',
   'xmark.circle.fill': 'close',
+  'arrow.up.circle.fill': 'cloud-upload',
+  'arrow.clockwise': 'refresh',
+  'trash': 'delete',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**

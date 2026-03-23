@@ -1,8 +1,6 @@
 import * as MediaLibrary from "expo-media-library";
-import * as ImagePicker from "expo-image-picker";
 import React, { useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   StyleSheet,
   Switch,
@@ -11,7 +9,6 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { Video } from "react-native-compressor";
 import {
   startInAppRecording,
   stopInAppRecording,
@@ -22,6 +19,7 @@ import {
   useCameraFormat,
   useCameraPermission,
 } from "react-native-vision-camera";
+import { Video } from "react-native-compressor";
 import { router, useLocalSearchParams } from "expo-router";
 
 import { useBleHeartRate } from "@/features/health/useBleHeartRate";
@@ -32,8 +30,9 @@ import {
 } from "@/features/wod/workoutType";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
-import { processWorkoutVideo, processWorkoutChunk, fetchChunkAnalysis } from "../../features/wod/api";
+import { processWorkoutChunk, fetchChunkAnalysis } from "../../features/wod/api";
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { useVideoQueue } from "@/store/useVideoQueue";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 
@@ -76,11 +75,17 @@ export default function VisionTestPage() {
     MediaLibrary.usePermissions();
 
   const [isRecording, setIsRecording] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
   const [enableChunks, setEnableChunks] = useState(false);
   const [chunkFeedback, setChunkFeedback] = useState<string | null>(null);
+  const [currentItemId, setCurrentItemId] = useState<string | null>(null);
+
+  const enqueue = useVideoQueue((s) => s.enqueue);
+  const startEncoding = useVideoQueue((s) => s.startEncoding);
+  const startUpload = useVideoQueue((s) => s.startUpload);
+  const currentItem = useVideoQueue((s) =>
+    currentItemId ? s.items.find((i) => i.id === currentItemId) ?? null : null
+  );
 
   // Poll for chunk feedback while recording
   useEffect(() => {
@@ -114,73 +119,7 @@ export default function VisionTestPage() {
     if (!mediaPermission?.granted) requestMediaPermission();
   }, [hasPermission, mediaPermission, requestMediaPermission, requestPermission]);
 
-  const handleUpload = async (fileUri: string) => {
-    try {
-      setIsUploading(true);
-      setProgress(0);
-      const sessionId = buildWorkoutSessionId(workoutType);
 
-      // Parse movements string back to array
-      const movementsArray = movements ? movements.split(', ') : [];
-      const injuriesArray = injuries ? injuries.split(', ') : [];
-      
-      await processWorkoutVideo(fileUri, sessionId, {
-        onProgress: (p) => setProgress(p),
-        movements: movementsArray,
-        injuries: injuriesArray,
-        workoutType,
-      });
-      Alert.alert("Success", "Video uploaded and analysis started!");
-    } catch (e) {
-      console.error(e);
-      Alert.alert("Upload Failed", String(e));
-    } finally {
-      setIsUploading(false);
-      setProgress(0);
-    }
-  };
-
-  const handleTestUpload = async () => {
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["videos"],
-        allowsEditing: true,
-        quality: 1,
-      });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const fileUri = result.assets[0].uri;
-        console.log("📼 Selected test video:", fileUri);
-        
-        setIsProcessing(true);
-        const compressedUri = await Video.compress(fileUri, {
-          compressionMethod: "auto",
-          maxSize: 720,
-        });
-        setIsProcessing(false);
-
-        Alert.alert(
-          "Upload Test Video",
-          "Simulate backend processing with this video?",
-          [
-            { text: "Cancel", style: "cancel" },
-            { text: "Upload", onPress: () => {
-                 const movementsArray = movements ? (movements as string).split(', ') : [];
-                 const injuriesArray = injuries ? (injuries as string).split(', ') : [];
-                 processWorkoutChunk(compressedUri, buildWorkoutSessionId(workoutType), {
-                   movements: movementsArray,
-                   injuries: injuriesArray,
-                   workoutType,
-                 }).then(() => console.log("Test chunk upload triggered!"))
-            } },
-          ]
-        );
-      }
-    } catch (e) {
-      console.error("Failed to pick video:", e);
-      setIsProcessing(false);
-    }
-  };
 
   // --- Chunk Recording Logic (Raw Camera) ---
 
@@ -311,7 +250,7 @@ export default function VisionTestPage() {
     if (!isRecording) return;
 
     try {
-      setIsProcessing(true); // Show spinner
+      setIsSaving(true);
 
       // 1. Stop Chunk Recording (safe to call even if not running)
       await stopChunkRecording();
@@ -322,31 +261,29 @@ export default function VisionTestPage() {
       console.log("📼 Original Video Path:", file?.path);
 
       if (file?.path) {
-        // A. Save ORIGINAL (Raw) video to Gallery immediately
+        // Save to gallery (for testing — will be optional later)
         await MediaLibrary.saveToLibraryAsync(file.path);
-        
-        // B. Compress for Upload (Temp file only, do not save to gallery)
-        const compressedUri = await Video.compress(file.path, {
-          compressionMethod: "auto", // or manual with bitrate
-          maxSize: 720, // 720p is sufficient for AI
+
+        // Enqueue as RECORDED — user decides when to encode
+        const sessionId = buildWorkoutSessionId(workoutType);
+        const movementsArray = movements ? movements.split(", ") : [];
+        const injuriesArray = injuries ? injuries.split(", ") : [];
+
+        const itemId = enqueue(file.path, {
+          sessionId,
+          workoutType,
+          movements: movementsArray,
+          injuries: injuriesArray,
         });
 
-        Alert.alert(
-          "Saved",
-          workoutType === "rehab"
-            ? "Original video saved to gallery. Upload for rehab analysis?"
-            : "Original video saved to gallery. Upload for AI coaching?",
-          [
-            { text: "Cancel", style: "cancel" },
-            { text: "Upload", onPress: () => handleUpload(compressedUri) },
-          ]
-        );
+        // Navigate to queue — user can encode/upload from there
+        router.replace("/queue" as any);
       }
     } catch (error) {
       console.error("Recording Stop Error:", error);
-      Alert.alert("저장 오류", "영상 처리 중 문제가 발생했습니다.");
+      Alert.alert("Error", "Failed to save recording.");
     } finally {
-      setIsProcessing(false);
+      setIsSaving(false);
     }
   };
 
@@ -454,15 +391,6 @@ export default function VisionTestPage() {
           </View>
         )}
 
-        {/* Mock Local Video Test Button */}
-        {!isRecording && (
-          <TouchableOpacity 
-            style={[styles.row, { marginTop: 15, padding: 5, backgroundColor: "#333", borderRadius: 5, justifyContent: "center" }]} 
-            onPress={handleTestUpload}
-          >
-            <Text style={[styles.val, { color: "#4fa8f7" }]}>TEST LOCAL VIDEO</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
       {/* Chunk Feedback Overlay */}
@@ -472,19 +400,133 @@ export default function VisionTestPage() {
         </View>
       )}
 
-      {/* 녹화 버튼 */}
+      {/* Post-recording footer */}
       <View style={styles.recordControl}>
-        {isProcessing ? (
-          <View style={styles.processingBadge}>
-            <ActivityIndicator color="#000" />
-            <Text style={styles.processingText}> Saving...</Text>
-          </View>
-        ) : isUploading ? (
-          <View style={styles.uploadingBadge}>
-            <Text style={styles.processingText}>Uploading {Math.round(progress * 100)}%</Text>
-            <View style={styles.progressBarBg}>
-              <View style={[styles.progressBarFill, { width: `${progress * 100}%` }]} />
+        {isSaving ? (
+          <View style={styles.postRecordingFooter}>
+            <Text style={styles.footerStatus}>Saving...</Text>
+            <View style={styles.footerProgressBg}>
+              <View
+                style={[styles.footerProgressFill, { width: "100%", backgroundColor: "#30D158" }]}
+              />
             </View>
+          </View>
+        ) : currentItem ? (
+          <View style={styles.postRecordingFooter}>
+            {currentItem.status === "RECORDED" && (
+              <>
+                <Text style={styles.footerStatus}>Recording saved</Text>
+                <TouchableOpacity
+                  style={styles.encodeBtn}
+                  onPress={() => startEncoding(currentItem.id)}
+                >
+                  <Text style={styles.encodeBtnText}>Encode Video</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.footerLinkBtn}
+                  onPress={() => router.back()}
+                >
+                  <Text style={styles.footerLinkText}>Skip for now</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {currentItem.status === "ENCODING" && (
+              <>
+                <Text style={styles.footerStatus}>Encoding...</Text>
+                <View style={styles.footerProgressBg}>
+                  <View
+                    style={[
+                      styles.footerProgressFill,
+                      { width: `${Math.round(currentItem.progress * 100)}%` },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.footerPercent}>
+                  {Math.round(currentItem.progress * 100)}%
+                </Text>
+                <TouchableOpacity
+                  style={styles.footerLinkBtn}
+                  onPress={() => router.back()}
+                >
+                  <Text style={styles.footerLinkText}>Continue in background</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {currentItem.status === "READY" && (
+              <>
+                <Text style={[styles.footerStatus, { color: "#30D158" }]}>
+                  ✅ Ready to upload
+                </Text>
+                <TouchableOpacity
+                  style={styles.encodeBtn}
+                  onPress={() => startUpload(currentItem.id)}
+                >
+                  <Text style={styles.encodeBtnText}>Upload now</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.footerLinkBtn}
+                  onPress={() => router.push("/queue" as any)}
+                >
+                  <Text style={styles.footerLinkText}>Go to Queue</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {currentItem.status === "UPLOADING" && (
+              <>
+                <Text style={styles.footerStatus}>Uploading...</Text>
+                <View style={styles.footerProgressBg}>
+                  <View
+                    style={[
+                      styles.footerProgressFill,
+                      {
+                        width: `${Math.round(currentItem.progress * 100)}%`,
+                        backgroundColor: "#64D2FF",
+                      },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.footerPercent}>
+                  {Math.round(currentItem.progress * 100)}%
+                </Text>
+                <TouchableOpacity
+                  style={styles.footerLinkBtn}
+                  onPress={() => router.back()}
+                >
+                  <Text style={styles.footerLinkText}>Continue in background</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {currentItem.status === "DONE" && (
+              <>
+                <Text style={[styles.footerStatus, { color: "#30D158" }]}>
+                  ✅ Upload complete!
+                </Text>
+                <TouchableOpacity
+                  style={styles.footerLinkBtn}
+                  onPress={() => router.back()}
+                >
+                  <Text style={styles.footerLinkText}>Done</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {currentItem.status === "ERROR" && (
+              <>
+                <Text style={[styles.footerStatus, { color: "#FF453A" }]}>
+                  ❌ {currentItem.error || "An error occurred"}
+                </Text>
+                <TouchableOpacity
+                  style={styles.footerLinkBtn}
+                  onPress={() => router.push("/queue" as any)}
+                >
+                  <Text style={styles.footerLinkText}>View in Queue</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         ) : (
           <TouchableOpacity
@@ -593,37 +635,60 @@ const styles = StyleSheet.create({
   recordingBtn: { borderColor: "red" },
   innerBtn: { width: 60, height: 60, borderRadius: 30, backgroundColor: "red" },
   innerRecordingBtn: { width: 30, height: 30, borderRadius: 6 },
-  processingBadge: {
-    flexDirection: "row",
-    backgroundColor: "#00FF00",
-    padding: 15,
-    borderRadius: 30,
+
+  postRecordingFooter: {
     alignItems: "center",
-  },
-  uploadingBadge: {
-    backgroundColor: "rgba(0,0,0,0.8)",
-    padding: 15,
-    borderRadius: 12,
-    alignItems: "center",
-    width: '100%',
+    backgroundColor: "rgba(0, 0, 0, 0.85)",
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: "#333",
+    width: "100%",
+    gap: 10,
   },
-  processingText: {
+  footerStatus: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  encodeBtn: {
+    backgroundColor: "#fff",
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 10,
+    width: "100%",
+    alignItems: "center",
+  },
+  encodeBtnText: {
+    color: "#000",
+    fontSize: 16,
     fontWeight: "bold",
-    color: '#fff',
-    marginBottom: 5,
   },
-  progressBarBg: {
-    width: '100%',
+  footerLinkBtn: {
+    paddingVertical: 6,
+  },
+  footerLinkText: {
+    color: "#888",
+    fontSize: 14,
+    textDecorationLine: "underline",
+  },
+  footerProgressBg: {
+    width: "100%",
     height: 6,
-    backgroundColor: '#333',
+    backgroundColor: "#333",
     borderRadius: 3,
-    overflow: 'hidden',
+    overflow: "hidden",
   },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: '#00FF00',
+  footerProgressFill: {
+    height: "100%",
+    backgroundColor: "#FFD60A",
+    borderRadius: 3,
+  },
+  footerPercent: {
+    color: "#aaa",
+    fontSize: 13,
+    fontFamily: "monospace",
   },
   feedbackOverlay: {
     position: "absolute",
