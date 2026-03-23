@@ -1,0 +1,13 @@
+SessionID: REHAB-2026-03-25-10-48
+WorkoutType: rehab
+ProfileID: 0
+
+
+
+curl -H "X-API-Key: ec4fb2cc0a4a61471f4efe6229a8f676" -X POST https://wod-strategist-api-dev-620752272029.asia-northeast3.run.app/api/v1/merge-chunks -H "Content-Type: application/json" -d "{\"session_id\":\"REHAB-2026-03-25-10-48\",\"workout_type\":\"rehab\",\"movements\":[\"squat\"],\"injuries\":[\"knee\"],\"profile_id\":0}"
+
+curl -H "X-API-Key: ec4fb2cc0a4a61471f4efe6229a8f676" -X GET https://wod-strategist-api-dev-620752272029.asia-northeast3.run.app/api/v1/subtitles/WOD-2026-03-27-10-27
+
+curl -H "X-API-Key: ec4fb2cc0a4a61471f4efe6229a8f676" -X POST https://wod-strategist-api-dev-620752272029.asia-northeast3.run.app/api/v1/merge-chunks -H "Content-Type: application/json" -d "{\"session_id\":\"WOD-2026-03-27-10-27\",\"workout_type\":\"wod\",\"movements\":[\"\"],\"injuries\":[\"right ankle\"],\"profile_id\":0}"
+
+ffmpeg -i hardsubbed.mp4 -vf "subtitles=1.srt" -preset ultrafast -c:a copy -y hardsubbed_output.mp4

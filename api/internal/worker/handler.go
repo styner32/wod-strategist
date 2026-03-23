@@ -267,16 +267,20 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		}
 
 		logger.Log.Error("Analysis failed", zap.Error(err))
+
 		// Save failure to DB
 		failedResult := &db.AnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
-			Output:    err.Error(),
+			Output:    "An internal error occurred during analysis.",
 		}
+
 		if p.ProfileID > 0 {
 			failedResult.ProfileID = &p.ProfileID
 		}
+
 		w.DB.Create(failedResult)
+
 		return err
 	}
 
@@ -353,6 +357,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 
 	if err != nil {
+<<<<<<< HEAD
 		chunkFailed := &db.ChunkAnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
@@ -366,6 +371,14 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 			chunkFailed.EndSecs = &p.EndSecs
 		}
 		w.DB.Create(chunkFailed)
+=======
+		logger.Log.Error("Chunk analysis failed", zap.Error(err))
+		w.DB.Create(&db.ChunkAnalysisResult{
+			SessionID: p.SessionID,
+			Status:    "FAILED",
+			Output:    "An internal error occurred during chunk analysis.",
+		})
+>>>>>>> 0c10649 (Fix information exposure in worker analysis errors)
 		return err
 	}
 

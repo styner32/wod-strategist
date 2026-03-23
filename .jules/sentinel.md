@@ -21,3 +21,9 @@
 **Vulnerability:** A path traversal vulnerability existed in `api/internal/worker/handler.go` where `p.SessionID` was directly used in `filepath.Join("/tmp", fmt.Sprintf("%s_%s", p.SessionID, filepath.Base(p.FilePath)))` to construct a temporary file path when downloading a file from GCS. An attacker could potentially supply a malicious `SessionID` (e.g., `../../etc/cron.d/`) to write downloaded files to unintended locations on the worker's filesystem.
 **Learning:** Even if `SessionID` is sanitized at the API boundary, it should be re-sanitized when constructing local file paths inside background workers. The payload is re-created from JSON by the worker and may come from a manipulated queue or bypass API validation.
 **Prevention:** Always apply `filepath.Base()` to any dynamically generated string (like IDs or filenames) that is used as a path segment in `filepath.Join()`, especially before creating or opening local files.
+
+## 2024-05-20 - Prevent Information Exposure in Analysis Errors
+
+**Vulnerability:** In `api/internal/worker/handler.go`, when a video or chunk analysis failed (e.g., due to downstream Gemini API errors, GCS download errors, or local filesystem permission issues), the raw `err.Error()` was saved to the database in the `Output` field of the results table. These results are exposed to the user via the `/analysis` and `/history` endpoints.
+**Learning:** Returning or saving unhandled raw error strings from backend components (like file system errors containing `/tmp/` paths, or third-party service errors) directly to user-facing payloads leaks internal system details. This information exposure (CWE-209) violates the principle of failing securely.
+**Prevention:** Always catch raw internal errors, securely log them on the server side using the application's logging framework, and replace the user-facing output with safe, generic error messages (e.g., "An internal error occurred during analysis.").
