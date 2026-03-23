@@ -1997,7 +1997,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - RNReanimated (4.1.6):
+  - RNReanimated (4.1.7):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2019,10 +2019,10 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
-    - RNReanimated/reanimated (= 4.1.6)
+    - RNReanimated/reanimated (= 4.1.7)
     - RNWorklets
     - Yoga
-  - RNReanimated/reanimated (4.1.6):
+  - RNReanimated/reanimated (4.1.7):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2044,10 +2044,10 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
-    - RNReanimated/reanimated/apple (= 4.1.6)
+    - RNReanimated/reanimated/apple (= 4.1.7)
     - RNWorklets
     - Yoga
-  - RNReanimated/reanimated/apple (4.1.6):
+  - RNReanimated/reanimated/apple (4.1.7):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2118,7 +2118,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - RNWorklets (0.7.2):
+  - RNWorklets (0.8.1):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2140,9 +2140,10 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
-    - RNWorklets/worklets (= 0.7.2)
+    - RNWorklets/apple (= 0.8.1)
+    - RNWorklets/common (= 0.8.1)
     - Yoga
-  - RNWorklets/worklets (0.7.2):
+  - RNWorklets/apple (0.8.1):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2164,9 +2165,8 @@ PODS:
     - ReactCommon/turbomodule/bridging
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
-    - RNWorklets/worklets/apple (= 0.7.2)
     - Yoga
-  - RNWorklets/worklets/apple (0.7.2):
+  - RNWorklets/common (0.8.1):
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -2667,9 +2667,9 @@ SPEC CHECKSUMS:
   ReactNativeDependencies: 71ce9c28beb282aa720ea7b46980fff9669f428a
   RNAppleHealthKit: 86ef7ab70f762b802f5c5289372de360cca701f9
   RNGestureHandler: 2914750df066d89bf9d8f48a10ad5f0051108ac3
-  RNReanimated: e5c702a3e24cc1c68b2de67671713f35461678f4
+  RNReanimated: 41f496c18437fd0aa841234917af84e98fd5b9a2
   RNScreens: d8d6f1792f6e7ac12b0190d33d8d390efc0c1845
-  RNWorklets: 2fb11aebe21ea76d0c5456e92d2f23e0cad91a68
+  RNWorklets: bf1b71c9d21741508451cc31240eba37366831d9
   SDWebImage: e9c98383c7572d713c1a0d7dd2783b10599b9838
   SDWebImageAVIFCoder: afe194a084e851f70228e4be35ef651df0fc5c57
   SDWebImageSVGCoder: 15a300a97ec1c8ac958f009c02220ac0402e936c

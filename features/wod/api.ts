@@ -81,6 +81,19 @@ export interface ProcessWorkoutVideoOptions {
 export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
 export type UploadCompleteResponse = Required<components["schemas"]["controllers.CompleteUploadResponse"]>;
 
+export interface ChunkAnalysisResult {
+  id: number;
+  session_id: string;
+  status: string;
+  output: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function fetchChunkAnalysis(sessionId: string): Promise<ChunkAnalysisResult[]> {
+  return apiClient<ChunkAnalysisResult[]>(`/chunk-analysis/${sessionId}`);
+}
+
 export async function fetchMovements(): Promise<string[]> {
   return apiClient<string[]>("/movements");
 }
@@ -155,6 +168,25 @@ export async function notifyUploadComplete(
   });
 }
 
+export async function notifyChunkUploadComplete(
+  sessionId: string,
+  gcsUri: string,
+  movements: string[],
+  injuries: string[],
+  workoutType: string
+): Promise<UploadCompleteResponse> {
+  return apiClient<UploadCompleteResponse>("/chunk-complete", {
+    method: "POST",
+    bodyPayload: {
+      session_id: sessionId,
+      gcs_uri: gcsUri,
+      movements,
+      injuries,
+      workout_type: workoutType,
+    },
+  });
+}
+
 /**
  * Orchestrates the full 3-step workout upload flow.
  */
@@ -188,6 +220,36 @@ export async function processWorkoutVideo(
     workoutType
   );
   console.log("✅ Analysis Started:", result);
+
+  return {
+    taskId: result.task_id,
+    sessionId: result.session_id,
+  };
+}
+
+export async function processWorkoutChunk(
+  fileUri: string,
+  sessionId: string,
+  options: ProcessWorkoutVideoOptions = {}
+): Promise<UploadResult> {
+  const {
+    movements = [],
+    injuries = [],
+    mimeType = "video/mp4",
+    workoutType = "wod",
+  } = options;
+  const filename = fileUri.split("/").pop() || "chunk.mp4";
+
+  const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename);
+  await uploadToGcs(upload_url, fileUri, mimeType);
+
+  const result = await notifyChunkUploadComplete(
+    sessionId,
+    gcs_uri,
+    movements,
+    injuries,
+    workoutType
+  );
 
   return {
     taskId: result.task_id,
