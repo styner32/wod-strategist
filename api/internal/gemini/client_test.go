@@ -3,8 +3,8 @@ package gemini
 import (
 	"context"
 	"net/http"
-	"path/filepath"
 	"os"
+	"path/filepath"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
