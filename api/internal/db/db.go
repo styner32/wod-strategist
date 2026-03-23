@@ -20,6 +20,15 @@ type AnalysisResult struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type ChunkAnalysisResult struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	SessionID string    `gorm:"index;not null" json:"session_id"`
+	Status    string    `json:"status"` // PENDING, COMPLETED, FAILED
+	Output    string    `json:"output"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 func Connect(databaseURL string) (*gorm.DB, error) {
 	dsn, err := normalizeDatabaseURL(databaseURL)
 	if err != nil {

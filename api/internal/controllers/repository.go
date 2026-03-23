@@ -43,3 +43,16 @@ func (r *GormAnalysisResultRepository) ListRecent(ctx context.Context, limit int
 
 	return results, nil
 }
+
+func (r *GormAnalysisResultRepository) FindChunksBySessionID(ctx context.Context, sessionID string) ([]db.ChunkAnalysisResult, error) {
+	if r.db == nil {
+		return nil, errRepositoryNotConfigured
+	}
+
+	var results []db.ChunkAnalysisResult
+	if err := r.db.WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at desc").Find(&results).Error; err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}

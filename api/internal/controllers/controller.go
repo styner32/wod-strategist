@@ -24,6 +24,7 @@ type ObjectStorage interface {
 type AnalysisResultRepository interface {
 	FindBySessionID(ctx context.Context, sessionID string) ([]db.AnalysisResult, error)
 	ListRecent(ctx context.Context, limit int) ([]db.AnalysisResult, error)
+	FindChunksBySessionID(ctx context.Context, sessionID string) ([]db.ChunkAnalysisResult, error)
 }
 
 type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string) (*asynq.Task, error)
@@ -35,6 +36,7 @@ type Config struct {
 	BucketName           string
 	GitCommit            string
 	NewVideoAnalysisTask VideoAnalysisTaskFactory
+	NewChunkAnalysisTask VideoAnalysisTaskFactory
 }
 
 type Controller struct {
@@ -44,6 +46,7 @@ type Controller struct {
 	bucketName           string
 	gitCommit            string
 	newVideoAnalysisTask VideoAnalysisTaskFactory
+	newChunkAnalysisTask VideoAnalysisTaskFactory
 }
 
 func New(config Config) *Controller {
@@ -57,6 +60,11 @@ func New(config Config) *Controller {
 		commit = defaultGitCommit
 	}
 
+	chunkTaskFactory := config.NewChunkAnalysisTask
+	if chunkTaskFactory == nil {
+		chunkTaskFactory = worker.NewChunkAnalysisTask
+	}
+
 	return &Controller{
 		queueClient:          config.QueueClient,
 		analysisResults:      config.AnalysisResults,
@@ -64,5 +72,6 @@ func New(config Config) *Controller {
 		bucketName:           config.BucketName,
 		gitCommit:            commit,
 		newVideoAnalysisTask: taskFactory,
+		newChunkAnalysisTask: chunkTaskFactory,
 	}
 }

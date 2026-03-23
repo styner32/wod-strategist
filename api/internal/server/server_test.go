@@ -54,6 +54,14 @@ func (h *recordingHandlers) ListInjuries(c *gin.Context) {
 	h.record("injuries", c)
 }
 
+func (h *recordingHandlers) ChunkComplete(c *gin.Context) {
+	h.record("chunk-complete", c)
+}
+
+func (h *recordingHandlers) GetChunkAnalysis(c *gin.Context) {
+	h.record("chunk-analysis", c)
+}
+
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)

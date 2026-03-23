@@ -15,9 +15,11 @@ type Handlers interface {
 	CompleteUpload(*gin.Context)
 	Upload(*gin.Context)
 	GetAnalysis(*gin.Context)
+	GetChunkAnalysis(*gin.Context)
 	GetHistory(*gin.Context)
 	ListMovements(*gin.Context)
 	ListInjuries(*gin.Context)
+	ChunkComplete(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -117,6 +119,26 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/injuries", handlers.ListInjuries)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "chunk-complete",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/chunk-complete",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/chunk-complete", handlers.ChunkComplete)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "chunk-analysis",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/chunk-analysis/:session_id",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/chunk-analysis/:session_id", handlers.GetChunkAnalysis)
 		},
 	},
 }

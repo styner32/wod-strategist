@@ -255,6 +255,29 @@ func (ctl *Controller) GetAnalysis(c *gin.Context) {
 	c.JSON(http.StatusOK, results)
 }
 
+// @Summary      Get Chunk Analysis
+// @Description  Fetches the partial analysis chunks for a given session
+// @Tags         analysis
+// @Produce      json
+// @Success      200 {array} db.ChunkAnalysisResult
+// @Router       /chunk-analysis/:session_id [get]
+func (ctl *Controller) GetChunkAnalysis(c *gin.Context) {
+	if ctl.analysisResults == nil {
+		logger.Log.Error("analysis result repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch results"})
+		return
+	}
+
+	results, err := ctl.analysisResults.FindChunksBySessionID(c.Request.Context(), c.Param("session_id"))
+	if err != nil {
+		logger.Log.Error("failed to fetch chunk results", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chunk results"})
+		return
+	}
+
+	c.JSON(http.StatusOK, results)
+}
+
 func (ctl *Controller) GetHistory(c *gin.Context) {
 	if ctl.analysisResults == nil {
 		logger.Log.Error("analysis result repository is not configured")
@@ -314,4 +337,69 @@ func isValidGCSURI(raw string) bool {
 		return false
 	}
 	return u.Host != "" && u.Scheme == "gs"
+}
+
+// @Summary      Chunk Complete
+// @Description  Notifies the backend that a chunk upload is complete and triggers chunk analysis
+// @Tags         upload
+// @Accept       json
+// @Produce      json
+// @Param        request body CompleteUploadRequest true "Upload metadata"
+// @Success      202 {object} CompleteUploadResponse
+// @Router       /chunk-complete [post]
+func (ctl *Controller) ChunkComplete(c *gin.Context) {
+	if ctl.queueClient == nil {
+		logger.Log.Error("queue client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	var req CompleteUploadRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Log.Error("failed to bind JSON", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+	req.GCSURI = trimRequiredString(req.GCSURI)
+	req.WorkoutType = trimRequiredString(req.WorkoutType)
+
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if req.GCSURI == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "gcs_uri is required"})
+		return
+	}
+
+	if !isValidGCSURI(req.GCSURI) {
+		logger.Log.Error("invalid GCS URI: must be a valid gs:// URI with a bucket", zap.String("uri", req.GCSURI))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid GCS URI"})
+		return
+	}
+
+	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
+
+	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries)
+	if err != nil {
+		logger.Log.Error("failed to create chunk task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue chunk task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":    "Chunk analysis started",
+		"task_id":    info.ID,
+		"session_id": req.SessionID,
+	})
 }

@@ -77,6 +77,7 @@ func (f *fakeStorageClient) UploadFile(ctx context.Context, file multipart.File,
 
 type fakeAnalysisResultRepository struct {
 	results      []db.AnalysisResult
+	chunkResults []db.ChunkAnalysisResult
 	err          error
 	sessionID    string
 	historyLimit int
@@ -94,6 +95,12 @@ func (f *fakeAnalysisResultRepository) ListRecent(ctx context.Context, limit int
 	f.listCalled = true
 	f.historyLimit = limit
 	return f.results, f.err
+}
+
+func (f *fakeAnalysisResultRepository) FindChunksBySessionID(ctx context.Context, sessionID string) ([]db.ChunkAnalysisResult, error) {
+	f.findCalled = true
+	f.sessionID = sessionID
+	return f.chunkResults, f.err
 }
 
 type taskFactoryCall struct {

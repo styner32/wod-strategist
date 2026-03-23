@@ -69,6 +69,7 @@ func main() {
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)
+	mux.HandleFunc(worker.TypeChunkAnalysis, w.HandleChunkAnalysisTask)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")

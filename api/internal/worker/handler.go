@@ -19,6 +19,7 @@ import (
 
 const (
 	TypeVideoAnalysis     = "video:analysis"
+	TypeChunkAnalysis     = "chunk:analysis"
 	WorkoutTypeWOD        = "wod"
 	WorkoutTypeRehab      = "rehab"
 	PersonalProfilePrompt = `
@@ -85,6 +86,13 @@ const (
    - 훌륭한 통제력으로 자세가 가장 안정적인 '모범 구간'과, 보상 작용이나 불안정성이 노출되어 '주의가 필요한 구간'(시작 시간 - 종료 시간)을 나열해 주세요.
    - 각 구간을 왜 주의 깊게 모니터링해야 하는지 부상 방지 관점에서 한 문장으로 요약해 주세요.
 	`
+
+	ChunkAnalysisPrompt = `
+# 운동 청크 영상 분석 요청 (실시간 피드백)
+
+당신은 전문 코치입니다. 방금 수행된 10초 분량의 짧은 영상이 주어집니다. 
+오직 딱 1~2문장으로, 즉각적인 자세 교정 또는 격려 피드백만 짧게 제시하세요.
+(예: "허리가 굽고 있습니다, 가슴을 펴고 복압을 유지하세요!" 또는 "아주 좋습니다!")`
 )
 
 type VideoAnalysisPayload struct {
@@ -138,6 +146,22 @@ func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []s
 		return nil, err
 	}
 	return asynq.NewTask(TypeVideoAnalysis, data), nil
+}
+
+func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string) (*asynq.Task, error) {
+	payload := VideoAnalysisPayload{
+		SessionID:   sessionID,
+		FilePath:    filePath,
+		WorkoutType: NormalizeWorkoutType(workoutType),
+		Movements:   movements,
+		Injuries:    injuries,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeChunkAnalysis, data), nil
 }
 
 func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
@@ -239,6 +263,82 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	})
 
 	logger.Log.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))
+	return nil
+}
+
+func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) error {
+	var p VideoAnalysisPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+	}
+
+	retryCount, ok := asynq.GetRetryCount(ctx)
+	if !ok {
+		retryCount = 0
+	}
+
+	logger.Log.Info("Processing chunk analysis",
+		zap.String("session_id", p.SessionID),
+		zap.String("file_path", p.FilePath),
+		zap.Int("retry_count", int(retryCount)))
+
+	if retryCount >= 3 {
+		logger.Log.Error("Max retries reached. Skipping chunk analysis.")
+		return asynq.SkipRetry
+	}
+
+	if !strings.HasPrefix(p.FilePath, "gs://") {
+		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
+	}
+
+	safeSessionID := filepath.Base(p.SessionID)
+	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
+
+	localFilePath := filepath.Join("/tmp", fmt.Sprintf("chunk_%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+
+	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
+	}
+
+	prompt := ChunkAnalysisPrompt
+	if len(p.Movements) > 0 {
+		prompt += fmt.Sprintf("\n컨텍스트: 진행 중인 운동은 %s 입니다.", strings.Join(p.Movements, ", "))
+	}
+
+	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+
+	if analysis == "" {
+		return fmt.Errorf("chunk analysis is empty")
+	}
+
+	defer func() {
+		os.Remove(localFilePath)
+	}()
+
+	if geminiFile != "" {
+		defer func() {
+			w.GeminiClient.DeleteFile(ctx, geminiFile)
+		}()
+	}
+
+	if err != nil {
+		w.DB.Create(&db.ChunkAnalysisResult{
+			SessionID: p.SessionID,
+			Status:    "FAILED",
+			Output:    err.Error(),
+		})
+		return err
+	}
+
+	w.DB.Create(&db.ChunkAnalysisResult{
+		SessionID: p.SessionID,
+		Status:    "COMPLETED",
+		Output:    analysis,
+	})
+
+	logger.Log.Info("Chunk analysis completed", zap.String("session_id", p.SessionID))
 	return nil
 }
 
