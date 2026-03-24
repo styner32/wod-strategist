@@ -21,3 +21,9 @@
 **Vulnerability:** A path traversal vulnerability existed in `api/internal/worker/handler.go` where `p.SessionID` was directly used in `filepath.Join("/tmp", fmt.Sprintf("%s_%s", p.SessionID, filepath.Base(p.FilePath)))` to construct a temporary file path when downloading a file from GCS. An attacker could potentially supply a malicious `SessionID` (e.g., `../../etc/cron.d/`) to write downloaded files to unintended locations on the worker's filesystem.
 **Learning:** Even if `SessionID` is sanitized at the API boundary, it should be re-sanitized when constructing local file paths inside background workers. The payload is re-created from JSON by the worker and may come from a manipulated queue or bypass API validation.
 **Prevention:** Always apply `filepath.Base()` to any dynamically generated string (like IDs or filenames) that is used as a path segment in `filepath.Join()`, especially before creating or opening local files.
+
+## 2025-05-24 - Prevent Information Exposure (CWE-209) in Database Error Logging
+
+**Vulnerability:** Internal error messages (`err.Error()`) and stack traces were being directly saved to the database in the `Output` field of the `AnalysisResult` and `ChunkAnalysisResult` models when background tasks failed. This field is user-facing, resulting in the leakage of internal system details and third-party API error details (e.g., Gemini or GCS errors) to the client.
+**Learning:** Detailed error messages are crucial for debugging but must be strictly confined to server-side logs. Writing raw errors to database fields that are returned via public APIs exposes sensitive internal architecture and state.
+**Prevention:** Use generic error messages (e.g., "Analysis failed due to an internal error.") for any client-facing output. Log the actual, detailed errors strictly server-side using the logging framework (e.g., `logger.Log.Error("...", zap.Error(err))`).
