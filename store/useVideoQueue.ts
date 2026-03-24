@@ -1,4 +1,4 @@
-import { deleteAsync } from "expo-file-system";
+import { File } from "expo-file-system";
 import { Video } from "react-native-compressor";
 import { create } from "zustand";
 
@@ -64,8 +64,11 @@ function generateId(): string {
 
 async function safeDelete(uri: string): Promise<void> {
   try {
-    await deleteAsync(uri, { idempotent: true });
-    console.log("🗑️ Deleted temp file:", uri);
+    const file = new File(uri);
+    if (file.exists) {
+      file.delete();
+      console.log("🗑️ Deleted temp file:", uri);
+    }
   } catch (e) {
     console.warn("⚠️ Failed to delete temp file:", uri, e);
   }
@@ -117,10 +120,14 @@ export const useVideoQueue = create<VideoQueueState>((set, get) => ({
     const item = get().items.find((i) => i.id === id);
     if (!item || item.status !== "READY" || !item.compressedUri) return;
 
+    console.log("☁️ Upload will use compressedUri:", item.compressedUri);
+    console.log("☁️ (rawUri was:", item.rawUri, ")");
+
     get()._updateItem(id, { status: "UPLOADING", progress: 0, error: undefined });
 
-    // Fire-and-forget upload
-    _runUpload(id, item, get);
+    // Re-read the item to get the freshest state (compressedUri from encoding)
+    const freshItem = get().items.find((i) => i.id === id)!;
+    _runUpload(id, freshItem, get);
   },
 
   retry: (id) => {
@@ -164,15 +171,29 @@ async function _runEncoding(
   get: () => VideoQueueState
 ) {
   try {
-    console.log("🎬 Starting encoding for:", id);
+    console.log("🎬 Starting encoding for:", id, "rawUri:", rawUri);
 
-    const compressedUri = await Video.compress(rawUri, {
+    let compressedUri = await Video.compress(rawUri, {
       compressionMethod: "auto",
       maxSize: 720,
       progressDivider: 5,
     });
 
-    console.log("✅ Encoding complete:", id);
+    // Rename compressed file with _encoded suffix for easier debugging
+    try {
+      const srcFile = new File(compressedUri);
+      const dir = compressedUri.substring(0, compressedUri.lastIndexOf("/"));
+      const ext = compressedUri.substring(compressedUri.lastIndexOf("."));
+      const encodedName = `${id}_encoded${ext}`;
+      const destPath = `${dir}/${encodedName}`;
+      srcFile.move(new File(destPath));
+      compressedUri = destPath;
+      console.log("📝 Renamed encoded file to:", compressedUri);
+    } catch (renameErr) {
+      console.warn("⚠️ Could not rename encoded file, using original path", renameErr);
+    }
+
+    console.log("✅ Encoding complete:", id, "compressedUri:", compressedUri);
 
     get()._updateItem(id, {
       status: "READY",

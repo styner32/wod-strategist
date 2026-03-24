@@ -264,12 +264,27 @@ export default function VisionTestPage() {
         // Save to gallery (for testing — will be optional later)
         await MediaLibrary.saveToLibraryAsync(file.path);
 
+        // Rename raw file with _raw suffix for debugging
+        let rawPath = file.path;
+        try {
+          const { File: FSFile } = require("expo-file-system");
+          const dir = rawPath.substring(0, rawPath.lastIndexOf("/"));
+          const ext = rawPath.substring(rawPath.lastIndexOf("."));
+          const rawName = `recording_raw_${Date.now()}${ext}`;
+          const destPath = `${dir}/${rawName}`;
+          new FSFile(rawPath).move(new FSFile(destPath));
+          rawPath = destPath;
+          console.log("📝 Renamed raw file to:", rawPath);
+        } catch (renameErr) {
+          console.warn("⚠️ Could not rename raw file:", renameErr);
+        }
+
         // Enqueue as RECORDED — user decides when to encode
         const sessionId = buildWorkoutSessionId(workoutType);
         const movementsArray = movements ? movements.split(", ") : [];
         const injuriesArray = injuries ? injuries.split(", ") : [];
 
-        const itemId = enqueue(file.path, {
+        const itemId = enqueue(rawPath, {
           sessionId,
           workoutType,
           movements: movementsArray,

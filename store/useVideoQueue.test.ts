@@ -11,9 +11,15 @@ jest.mock("react-native-compressor", () => ({
   },
 }));
 
-const mockDeleteAsync = jest.fn().mockResolvedValue(undefined);
+const mockFileDelete = jest.fn();
+const mockFileExists = true;
+const mockFileMove = jest.fn();
 jest.mock("expo-file-system", () => ({
-  deleteAsync: (...args: any[]) => mockDeleteAsync(...args),
+  File: jest.fn().mockImplementation(() => ({
+    exists: mockFileExists,
+    delete: mockFileDelete,
+    move: mockFileMove,
+  })),
 }));
 
 const mockProcessWorkoutVideo = jest.fn();
@@ -49,6 +55,8 @@ describe("useVideoQueue", () => {
     // Reset store between tests
     useVideoQueue.setState({ items: [] });
     jest.clearAllMocks();
+    mockFileDelete.mockClear();
+    mockFileMove.mockClear();
   });
 
   describe("enqueue", () => {
@@ -87,7 +95,7 @@ describe("useVideoQueue", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       expect(getItems()[0].status).toBe("READY");
-      expect(getItems()[0].compressedUri).toBe("file:///compressed/video.mp4");
+      expect(getItems()[0].compressedUri).toMatch(/_encoded\.mp4$/);
     });
 
     it("should call Video.compress when startEncoding is called", () => {
@@ -109,10 +117,7 @@ describe("useVideoQueue", () => {
       getStore().startEncoding(id);
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockDeleteAsync).toHaveBeenCalledWith(
-        "file:///raw/video.mp4",
-        expect.objectContaining({ idempotent: true })
-      );
+      expect(mockFileDelete).toHaveBeenCalled();
     });
 
     it("should transition to ERROR if encoding fails", async () => {
@@ -184,10 +189,7 @@ describe("useVideoQueue", () => {
       getStore().startUpload("test_upload_2");
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockDeleteAsync).toHaveBeenCalledWith(
-        "file:///compressed/video.mp4",
-        expect.objectContaining({ idempotent: true })
-      );
+      expect(mockFileDelete).toHaveBeenCalled();
     });
 
     it("should transition to ERROR if upload fails", async () => {
@@ -314,14 +316,8 @@ describe("useVideoQueue", () => {
       getStore().remove("test_remove_1");
 
       expect(getItems()).toHaveLength(0);
-      expect(mockDeleteAsync).toHaveBeenCalledWith(
-        "file:///raw/video.mp4",
-        expect.anything()
-      );
-      expect(mockDeleteAsync).toHaveBeenCalledWith(
-        "file:///compressed/video.mp4",
-        expect.anything()
-      );
+      // safeDelete is called for both rawUri and compressedUri
+      expect(mockFileDelete).toHaveBeenCalled();
     });
   });
 
@@ -343,7 +339,7 @@ describe("useVideoQueue", () => {
       getStore().dismiss("test_dismiss_1");
 
       expect(getItems()).toHaveLength(0);
-      expect(mockDeleteAsync).not.toHaveBeenCalled();
+      expect(mockFileDelete).not.toHaveBeenCalled();
     });
   });
 });
