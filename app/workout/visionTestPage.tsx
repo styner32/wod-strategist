@@ -2,6 +2,8 @@ import * as MediaLibrary from "expo-media-library";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Alert,
+  Linking,
+  Platform,
   StyleSheet,
   Switch,
   Text,
@@ -64,6 +66,9 @@ export default function VisionTestPage() {
   const isRecordingChunks = useRef(false);
   const chunkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isChunkRecordingActive = useRef(false);
+
+  // Android: resolve function for the continuous camera recording promise
+  const androidRecordingResolve = useRef<((video: { path: string }) => void) | null>(null);
 
   // 720p or 1080p format based on user selection
   const format = useCameraFormat(device, [
@@ -216,29 +221,47 @@ export default function VisionTestPage() {
     }
   };
 
-  // --- Main Screen Recording Logic (Full Video with Overlays) ---
+  // --- Main Recording Logic ---
 
   const handleStartRecording = async () => {
     try {
-      // 1. Start Screen Recorder (Full Video)
-      // 마이크 권한 충돌 방지를 위해 mic: false 설정 (필요 시 true)
-      // 앱에 이미 카메라 프리뷰가 있으므로 recorder 카메라 오버레이는 끔.
-      await startInAppRecording({
-        options: {
-          enableMic: false,
-          enableCamera: false,
-        },
-        onRecordingFinished: (file) => {
-          console.log("📼 Screen Recording Finished:", file.path);
-        },
-      });
+      if (Platform.OS === 'ios') {
+        // iOS: use screen recorder for full video with overlays
+        await startInAppRecording({
+          options: {
+            enableMic: false,
+            enableCamera: false,
+          },
+          onRecordingFinished: (file) => {
+            console.log("📼 Screen Recording Finished:", file.path);
+          },
+        });
 
-      setIsRecording(true);
-      console.log("✅ Screen Recording Started");
+        setIsRecording(true);
+        console.log("✅ Recording Started (iOS Screen Recorder)");
 
-      // 2. Start Chunk Recording (Raw Camera) if enabled
-      if (enableChunks) {
-        startChunkRecording();
+        // Optionally start chunk recording for real-time backend analysis
+        if (enableChunks) {
+          startChunkRecording();
+        }
+      } else {
+        // Android: use continuous camera recording (screen recorder not available)
+        if (!camera.current) return;
+
+        camera.current.startRecording({
+          onRecordingFinished: (video) => {
+            console.log("📼 Camera Recording Finished:", video.path);
+            androidRecordingResolve.current?.(video);
+            androidRecordingResolve.current = null;
+          },
+          onRecordingError: (error) => {
+            console.error("📷 Camera Recording Error:", error);
+            androidRecordingResolve.current = null;
+          },
+        });
+
+        setIsRecording(true);
+        console.log("✅ Recording Started (Android Camera)");
       }
     } catch (error) {
       console.error("Recording Start Error:", error);
@@ -252,13 +275,27 @@ export default function VisionTestPage() {
     try {
       setIsSaving(true);
 
-      // 1. Stop Chunk Recording (safe to call even if not running)
-      await stopChunkRecording();
+      let file: { path: string } | undefined;
 
-      // 2. Stop Screen Recorder
-      const file = await stopInAppRecording();
+      if (Platform.OS === 'ios') {
+        // 1. Stop Chunk Recording (safe to call even if not running)
+        await stopChunkRecording();
+
+        // 2. Stop Screen Recorder
+        file = await stopInAppRecording();
+      } else {
+        // Android: stop camera recording and wait for the video file
+        if (camera.current) {
+          const videoPromise = new Promise<{ path: string }>((resolve) => {
+            androidRecordingResolve.current = resolve;
+          });
+          await camera.current.stopRecording();
+          file = await videoPromise;
+        }
+      }
+
       setIsRecording(false);
-      console.log("📼 Original Video Path:", file?.path);
+      console.log("📼 Video Path:", file?.path);
 
       if (file?.path) {
         // Save to gallery (for testing — will be optional later)
@@ -302,10 +339,46 @@ export default function VisionTestPage() {
     }
   };
 
+  if (!hasPermission) {
+    return (
+      <View style={styles.center}>
+        <Text style={{ color: "#fff", fontSize: 18, marginBottom: 16 }}>
+          Camera Permission Required
+        </Text>
+        <TouchableOpacity
+          onPress={async () => {
+            const result = await requestPermission();
+            if (!result) {
+              // Permission permanently denied — direct to settings
+              Alert.alert(
+                "Permission Denied",
+                "Camera permission was permanently denied. Please enable it in Settings.",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  { text: "Open Settings", onPress: () => Linking.openSettings() },
+                ]
+              );
+            }
+          }}
+          style={{
+            backgroundColor: "#fff",
+            paddingVertical: 12,
+            paddingHorizontal: 32,
+            borderRadius: 10,
+          }}
+        >
+          <Text style={{ color: "#000", fontWeight: "bold", fontSize: 16 }}>
+            Grant Camera Access
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   if (!device)
     return (
       <View style={styles.center}>
-        <Text>No Camera</Text>
+        <Text style={{ color: "#fff" }}>No Camera</Text>
       </View>
     );
 
