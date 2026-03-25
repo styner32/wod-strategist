@@ -102,6 +102,7 @@ type VideoAnalysisPayload struct {
 	WorkoutType string
 	Movements   []string
 	Injuries    []string
+	ProfileID   uint
 }
 
 type Worker struct {
@@ -133,13 +134,14 @@ func IsValidWorkoutType(workoutType string) bool {
 		strings.EqualFold(workoutType, WorkoutTypeRehab)
 }
 
-func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string) (*asynq.Task, error) {
+func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
 		SessionID:   sessionID,
 		FilePath:    filePath,
 		WorkoutType: NormalizeWorkoutType(workoutType),
 		Movements:   movements,
 		Injuries:    injuries,
+		ProfileID:   profileID,
 	}
 
 	data, err := json.Marshal(payload)
@@ -149,13 +151,14 @@ func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []s
 	return asynq.NewTask(TypeVideoAnalysis, data), nil
 }
 
-func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string) (*asynq.Task, error) {
+func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
 		SessionID:   sessionID,
 		FilePath:    filePath,
 		WorkoutType: NormalizeWorkoutType(workoutType),
 		Movements:   movements,
 		Injuries:    injuries,
+		ProfileID:   profileID,
 	}
 
 	data, err := json.Marshal(payload)
@@ -214,7 +217,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	// Update status to PROCESSING (optional, if we tracked specific task IDs, but here we just append results)
 	// For simplicity, we just create a new result when done.
-	prompt := buildAnalysisPrompt(p)
+	prompt := w.buildAnalysisPrompt(p)
 
 	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
@@ -248,20 +251,28 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 		logger.Log.Error("Analysis failed", zap.Error(err))
 		// Save failure to DB
-		w.DB.Create(&db.AnalysisResult{
+		failedResult := &db.AnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
 			Output:    err.Error(),
-		})
+		}
+		if p.ProfileID > 0 {
+			failedResult.ProfileID = &p.ProfileID
+		}
+		w.DB.Create(failedResult)
 		return err
 	}
 
 	// Save success to DB
-	w.DB.Create(&db.AnalysisResult{
+	result := &db.AnalysisResult{
 		SessionID: p.SessionID,
 		Status:    "COMPLETED",
 		Output:    analysis,
-	})
+	}
+	if p.ProfileID > 0 {
+		result.ProfileID = &p.ProfileID
+	}
+	w.DB.Create(result)
 
 	logger.Log.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))
 	return nil
@@ -325,25 +336,33 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 
 	if err != nil {
-		w.DB.Create(&db.ChunkAnalysisResult{
+		chunkFailed := &db.ChunkAnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
 			Output:    err.Error(),
-		})
+		}
+		if p.ProfileID > 0 {
+			chunkFailed.ProfileID = &p.ProfileID
+		}
+		w.DB.Create(chunkFailed)
 		return err
 	}
 
-	w.DB.Create(&db.ChunkAnalysisResult{
+	chunkResult := &db.ChunkAnalysisResult{
 		SessionID: p.SessionID,
 		Status:    "COMPLETED",
 		Output:    analysis,
-	})
+	}
+	if p.ProfileID > 0 {
+		chunkResult.ProfileID = &p.ProfileID
+	}
+	w.DB.Create(chunkResult)
 
 	logger.Log.Info("Chunk analysis completed", zap.String("session_id", p.SessionID))
 	return nil
 }
 
-func buildAnalysisPrompt(p VideoAnalysisPayload) string {
+func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload) string {
 	prompt := AnalysisPrompt
 	if NormalizeWorkoutType(p.WorkoutType) == WorkoutTypeRehab {
 		prompt = RehabilitationPrompt
@@ -357,6 +376,27 @@ func buildAnalysisPrompt(p VideoAnalysisPayload) string {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
 	}
 
-	personalProfile := "생년월일: 1984년 10월 17일, 성별: 남, 키: 164cm, 몸무게: 72kg" // customize later when auth is ready
+	// Look up profile from DB; fall back to hardcoded default if not found
+	personalProfile := "생년월일: 1984년 10월 17일, 성별: 남, 키: 164cm, 몸무게: 72kg"
+	if p.ProfileID > 0 && w.DB != nil {
+		var profile db.Profile
+		if err := w.DB.First(&profile, p.ProfileID).Error; err == nil {
+			genderKo := "기타"
+			switch profile.Gender {
+			case "male":
+				genderKo = "남"
+			case "female":
+				genderKo = "여"
+			}
+			personalProfile = fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg",
+				profile.BirthYear, profile.BirthMonth, profile.BirthDay,
+				genderKo, profile.HeightCm, profile.WeightKg)
+		} else {
+			logger.Log.Warn("Profile not found, using default", zap.Uint("profile_id", p.ProfileID), zap.Error(err))
+		}
+	}
+
+	logger.Log.Warn("Personal Profile", zap.Uint("profile_id", p.ProfileID), zap.String("personal_profile", personalProfile))
+
 	return prompt + fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
 }

@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
@@ -153,7 +155,7 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		zap.String("workout_type", workoutType),
 	)
 
-	task, err := ctl.newVideoAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries)
+	task, err := ctl.newVideoAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID)
 	if err != nil {
 		logger.Log.Error("failed to create task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -216,7 +218,7 @@ func (ctl *Controller) Upload(c *gin.Context) {
 		return
 	}
 
-	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil)
+	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, 0)
 	if err != nil {
 		logger.Log.Error("failed to create task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -285,7 +287,15 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		return
 	}
 
-	results, err := ctl.analysisResults.ListRecent(c.Request.Context(), 20)
+	var profileID uint
+	if pidStr := c.Query("profile_id"); pidStr != "" {
+		pid, err := strconv.ParseUint(pidStr, 10, 32)
+		if err == nil {
+			profileID = uint(pid)
+		}
+	}
+
+	results, err := ctl.analysisResults.ListRecent(c.Request.Context(), 20, profileID)
 	if err != nil {
 		logger.Log.Error("failed to fetch history", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
@@ -383,7 +393,7 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
-	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries)
+	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID)
 	if err != nil {
 		logger.Log.Error("failed to create chunk task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -401,5 +411,80 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		"message":    "Chunk analysis started",
 		"task_id":    info.ID,
 		"session_id": req.SessionID,
+	})
+}
+
+// ==========================================
+// Profile Handlers
+// ==========================================
+
+func (ctl *Controller) CreateProfile(c *gin.Context) {
+	if ctl.profiles == nil {
+		logger.Log.Error("profile repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "profiles not configured"})
+		return
+	}
+
+	var req CreateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
+		return
+	}
+
+	profile := &db.Profile{
+		BirthYear:  req.BirthYear,
+		BirthMonth: req.BirthMonth,
+		BirthDay:   req.BirthDay,
+		Gender:     req.Gender,
+		HeightCm:   req.HeightCm,
+		WeightKg:   req.WeightKg,
+	}
+
+	if err := ctl.profiles.Create(c.Request.Context(), profile); err != nil {
+		logger.Log.Error("failed to create profile", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create profile"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, ProfileResponse{
+		ID:         profile.ID,
+		BirthYear:  profile.BirthYear,
+		BirthMonth: profile.BirthMonth,
+		BirthDay:   profile.BirthDay,
+		Gender:     profile.Gender,
+		HeightCm:   profile.HeightCm,
+		WeightKg:   profile.WeightKg,
+	})
+}
+
+func (ctl *Controller) GetProfile(c *gin.Context) {
+	if ctl.profiles == nil {
+		logger.Log.Error("profile repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "profiles not configured"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile id"})
+		return
+	}
+
+	profile, err := ctl.profiles.FindByID(c.Request.Context(), uint(id))
+	if err != nil {
+		logger.Log.Error("failed to find profile", zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, ProfileResponse{
+		ID:         profile.ID,
+		BirthYear:  profile.BirthYear,
+		BirthMonth: profile.BirthMonth,
+		BirthDay:   profile.BirthDay,
+		Gender:     profile.Gender,
+		HeightCm:   profile.HeightCm,
+		WeightKg:   profile.WeightKg,
 	})
 }

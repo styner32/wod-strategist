@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -91,7 +92,7 @@ func (f *fakeAnalysisResultRepository) FindBySessionID(ctx context.Context, sess
 	return f.results, f.err
 }
 
-func (f *fakeAnalysisResultRepository) ListRecent(ctx context.Context, limit int) ([]db.AnalysisResult, error) {
+func (f *fakeAnalysisResultRepository) ListRecent(ctx context.Context, limit int, profileID uint) ([]db.AnalysisResult, error) {
 	f.listCalled = true
 	f.historyLimit = limit
 	return f.results, f.err
@@ -117,7 +118,7 @@ type fakeTaskFactory struct {
 	err  error
 }
 
-func (f *fakeTaskFactory) Build(sessionID, filePath, workoutType string, movements []string, injuries []string) (*asynq.Task, error) {
+func (f *fakeTaskFactory) Build(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
 	f.call = taskFactoryCall{
 		sessionID:   sessionID,
 		filePath:    filePath,
@@ -129,6 +130,33 @@ func (f *fakeTaskFactory) Build(sessionID, filePath, workoutType string, movemen
 		f.task = asynq.NewTask(worker.TypeVideoAnalysis, []byte(`{}`))
 	}
 	return f.task, f.err
+}
+
+type fakeProfileRepository struct {
+	profile *db.Profile
+	err     error
+	called  bool
+}
+
+func (f *fakeProfileRepository) Create(ctx context.Context, profile *db.Profile) error {
+	f.called = true
+	if f.err != nil {
+		return f.err
+	}
+	profile.ID = 1 // simulate auto-increment
+	f.profile = profile
+	return nil
+}
+
+func (f *fakeProfileRepository) FindByID(ctx context.Context, id uint) (*db.Profile, error) {
+	f.called = true
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.profile != nil && f.profile.ID == id {
+		return f.profile, nil
+	}
+	return nil, fmt.Errorf("not found")
 }
 
 func newTestRouter(config Config) *gin.Engine {

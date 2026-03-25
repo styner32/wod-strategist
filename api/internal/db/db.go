@@ -11,9 +11,22 @@ import (
 	"gorm.io/gorm"
 )
 
+type Profile struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	BirthYear  int       `json:"birth_year"`
+	BirthMonth int       `json:"birth_month"`
+	BirthDay   int       `json:"birth_day"`
+	Gender     string    `json:"gender"` // male, female, other
+	HeightCm   int       `json:"height_cm"`
+	WeightKg   float64   `json:"weight_kg"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 type AnalysisResult struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	SessionID string    `gorm:"index;not null" json:"session_id"`
+	ProfileID *uint     `gorm:"index" json:"profile_id,omitempty"`
 	Status    string    `json:"status"` // PENDING, COMPLETED, FAILED
 	Output    string    `json:"output"`
 	CreatedAt time.Time `json:"created_at"`
@@ -23,6 +36,7 @@ type AnalysisResult struct {
 type ChunkAnalysisResult struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	SessionID string    `gorm:"index;not null" json:"session_id"`
+	ProfileID *uint     `gorm:"index" json:"profile_id,omitempty"`
 	Status    string    `json:"status"` // PENDING, COMPLETED, FAILED
 	Output    string    `json:"output"`
 	CreatedAt time.Time `json:"created_at"`

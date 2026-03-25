@@ -20,6 +20,8 @@ type Handlers interface {
 	ListMovements(*gin.Context)
 	ListInjuries(*gin.Context)
 	ChunkComplete(*gin.Context)
+	CreateProfile(*gin.Context)
+	GetProfile(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -139,6 +141,26 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/chunk-analysis/:session_id", handlers.GetChunkAnalysis)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "create-profile",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/profiles",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/profiles", handlers.CreateProfile)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "get-profile",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/profiles/:id",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/profiles/:id", handlers.GetProfile)
 		},
 	},
 }

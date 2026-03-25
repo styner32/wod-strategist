@@ -10,12 +10,15 @@ import (
 )
 
 var _ = Describe("buildAnalysisPrompt", func() {
+	var w *Worker
+
 	BeforeEach(func() {
 		logger.Log = zap.NewNop()
+		w = &Worker{}
 	})
 
 	It("uses the WOD prompt and keeps injury context when the workout type is wod", func() {
-		prompt := buildAnalysisPrompt(VideoAnalysisPayload{
+		prompt := w.buildAnalysisPrompt(VideoAnalysisPayload{
 			WorkoutType: WorkoutTypeWOD,
 			Movements:   []string{"Burpee"},
 			Injuries:    []string{"Shoulder"},
@@ -28,7 +31,7 @@ var _ = Describe("buildAnalysisPrompt", func() {
 	})
 
 	It("uses the rehab prompt for rehab workouts", func() {
-		prompt := buildAnalysisPrompt(VideoAnalysisPayload{
+		prompt := w.buildAnalysisPrompt(VideoAnalysisPayload{
 			WorkoutType: WorkoutTypeRehab,
 			Movements:   []string{"Back Squat"},
 			Injuries:    []string{"Lower Back"},
@@ -37,6 +40,15 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		Expect(prompt).To(ContainSubstring("# 운동 영상 분석 요청 (재활 및 안전 복귀)"))
 		Expect(prompt).To(ContainSubstring("## 운동 종목: Back Squat"))
 		Expect(prompt).To(ContainSubstring("## 알려진 부상 사항: Lower Back"))
+	})
+
+	It("uses the default profile when ProfileID is 0", func() {
+		prompt := w.buildAnalysisPrompt(VideoAnalysisPayload{
+			WorkoutType: WorkoutTypeWOD,
+			ProfileID:   0,
+		})
+
+		Expect(prompt).To(ContainSubstring("1984년 10월 17일"))
 	})
 })
 
@@ -52,6 +64,7 @@ var _ = Describe("NewVideoAnalysisTask", func() {
 			"REHAB",
 			[]string{"Burpee"},
 			[]string{"Knee"},
+			42,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -60,5 +73,7 @@ var _ = Describe("NewVideoAnalysisTask", func() {
 		Expect(payload.WorkoutType).To(Equal(WorkoutTypeRehab))
 		Expect(payload.Movements).To(Equal([]string{"Burpee"}))
 		Expect(payload.Injuries).To(Equal([]string{"Knee"}))
+		Expect(payload.ProfileID).To(Equal(uint(42)))
 	})
 })
+

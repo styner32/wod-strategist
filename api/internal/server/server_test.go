@@ -62,6 +62,14 @@ func (h *recordingHandlers) GetChunkAnalysis(c *gin.Context) {
 	h.record("chunk-analysis", c)
 }
 
+func (h *recordingHandlers) CreateProfile(c *gin.Context) {
+	h.record("create-profile", c)
+}
+
+func (h *recordingHandlers) GetProfile(c *gin.Context) {
+	h.record("get-profile", c)
+}
+
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)
