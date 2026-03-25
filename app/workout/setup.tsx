@@ -57,12 +57,12 @@ export default function WorkoutSetup() {
         workoutType,
         movements: selectedMovements.join(', '),
         injuries: selectedInjuries.join(', '),
+        autoRecord: 'true',
       },
     });
   };
 
-  const movementsRequired = workoutType === 'wod';
-  const canStart = !movementsRequired || selectedMovements.length > 0;
+  const canStart = true;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -199,6 +199,9 @@ export default function WorkoutSetup() {
           <Text style={styles.hint}>Sent with the upload as extra analysis context.</Text>
         </View>
 
+      </ScrollView>
+
+      <View style={styles.bottomBar}>
         <TouchableOpacity 
           style={[styles.startBtn, !canStart && styles.disabledBtn]} 
           onPress={handleStart}
@@ -209,8 +212,7 @@ export default function WorkoutSetup() {
           </Text>
           <IconSymbol name="figure.run" size={24} color="#000" />
         </TouchableOpacity>
-
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -226,7 +228,7 @@ const styles = StyleSheet.create({
   },
   backBtn: { marginRight: 15 },
   title: { fontSize: 20, fontWeight: 'bold', color: '#fff' },
-  content: { padding: 20 },
+  content: { padding: 20, paddingBottom: 100 },
   section: { marginBottom: 30 },
   sectionTitle: { color: '#007AFF', fontSize: 14, fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 15 },
   typeGrid: { gap: 12 },
@@ -281,6 +283,17 @@ const styles = StyleSheet.create({
   chipText: { color: '#888', fontSize: 14 },
   chipTextActive: { color: '#fff', fontWeight: 'bold' },
   hint: { color: '#666', fontSize: 12, marginTop: 12 },
+  bottomBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 20,
+    paddingBottom: 34,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    borderTopWidth: 1,
+    borderTopColor: '#222',
+  },
   startBtn: {
     backgroundColor: '#fff',
     padding: 18,
@@ -289,7 +302,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 10,
-    marginTop: 20,
   },
   disabledBtn: { opacity: 0.5 },
   startText: { color: '#000', fontSize: 18, fontWeight: 'bold' },

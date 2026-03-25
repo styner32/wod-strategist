@@ -4,6 +4,25 @@ import { useVideoQueue, type VideoItem } from "./useVideoQueue";
 // Mocks
 // ==========================================
 
+jest.mock("@react-native-async-storage/async-storage", () => {
+  const store = new Map<string, string>();
+  return {
+    __esModule: true,
+    default: {
+      getItem: jest.fn((key: string) => Promise.resolve(store.get(key) ?? null)),
+      setItem: jest.fn((key: string, value: string) => {
+        store.set(key, value);
+        return Promise.resolve();
+      }),
+      removeItem: jest.fn((key: string) => {
+        store.delete(key);
+        return Promise.resolve();
+      }),
+    },
+  };
+});
+
+
 const mockCompress = jest.fn();
 jest.mock("react-native-compressor", () => ({
   Video: {
@@ -25,6 +44,11 @@ jest.mock("expo-file-system", () => ({
 const mockProcessWorkoutVideo = jest.fn();
 jest.mock("@/features/wod/api", () => ({
   processWorkoutVideo: (...args: any[]) => mockProcessWorkoutVideo(...args),
+}));
+
+const mockSaveToLibraryAsync = jest.fn();
+jest.mock("expo-media-library", () => ({
+  saveToLibraryAsync: (...args: any[]) => mockSaveToLibraryAsync(...args),
 }));
 
 // ==========================================
@@ -57,6 +81,7 @@ describe("useVideoQueue", () => {
     jest.clearAllMocks();
     mockFileDelete.mockClear();
     mockFileMove.mockClear();
+    mockSaveToLibraryAsync.mockClear();
   });
 
   describe("enqueue", () => {
@@ -69,6 +94,7 @@ describe("useVideoQueue", () => {
       expect(items[0].rawUri).toBe("file:///raw/video.mp4");
       expect(items[0].sessionId).toBe("test_session_001");
       expect(items[0].workoutType).toBe("wod");
+      expect(items[0].gallerySaved).toBe(false);
     });
 
     it("should return the item id", () => {
@@ -148,6 +174,7 @@ describe("useVideoQueue", () => {
         status: "READY",
         progress: 1,
         createdAt: Date.now(),
+        gallerySaved: false,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -178,6 +205,7 @@ describe("useVideoQueue", () => {
         status: "READY",
         progress: 1,
         createdAt: Date.now(),
+        gallerySaved: false,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -204,6 +232,7 @@ describe("useVideoQueue", () => {
         status: "READY",
         progress: 1,
         createdAt: Date.now(),
+        gallerySaved: false,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -227,6 +256,7 @@ describe("useVideoQueue", () => {
         status: "ENCODING",
         progress: 0.5,
         createdAt: Date.now(),
+        gallerySaved: false,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -252,6 +282,7 @@ describe("useVideoQueue", () => {
         error: "Previous failure",
         progress: 0,
         createdAt: Date.now(),
+        gallerySaved: false,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -280,6 +311,7 @@ describe("useVideoQueue", () => {
         error: "Network error",
         progress: 0,
         createdAt: Date.now(),
+        gallerySaved: false,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -310,6 +342,7 @@ describe("useVideoQueue", () => {
         status: "READY",
         progress: 1,
         createdAt: Date.now(),
+        gallerySaved: false,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -333,6 +366,7 @@ describe("useVideoQueue", () => {
         status: "DONE",
         progress: 1,
         createdAt: Date.now(),
+        gallerySaved: false,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -340,6 +374,37 @@ describe("useVideoQueue", () => {
 
       expect(getItems()).toHaveLength(0);
       expect(mockFileDelete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("saveToGallery", () => {
+    it("should set gallerySaved to true on success", async () => {
+      mockSaveToLibraryAsync.mockResolvedValue(undefined);
+
+      const id = getStore().enqueue("file:///raw/video.mp4", defaultMetadata);
+      expect(getItems()[0].gallerySaved).toBe(false);
+
+      const result = await getStore().saveToGallery(id);
+
+      expect(result).toBe(true);
+      expect(getItems()[0].gallerySaved).toBe(true);
+      expect(mockSaveToLibraryAsync).toHaveBeenCalledWith("file:///raw/video.mp4");
+    });
+
+    it("should return false and keep gallerySaved false on failure", async () => {
+      mockSaveToLibraryAsync.mockRejectedValue(new Error("No space"));
+
+      const id = getStore().enqueue("file:///raw/video.mp4", defaultMetadata);
+
+      const result = await getStore().saveToGallery(id);
+
+      expect(result).toBe(false);
+      expect(getItems()[0].gallerySaved).toBe(false);
+    });
+
+    it("should return false for non-existent item", async () => {
+      const result = await getStore().saveToGallery("nonexistent");
+      expect(result).toBe(false);
     });
   });
 });

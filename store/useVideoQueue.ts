@@ -1,6 +1,9 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { File } from "expo-file-system";
+import * as MediaLibrary from "expo-media-library";
 import { Video } from "react-native-compressor";
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 import { processWorkoutVideo } from "@/features/wod/api";
 import type { WorkoutType } from "@/features/wod/workoutType";
@@ -30,6 +33,8 @@ export interface VideoItem {
   error?: string;
   errorStep?: "encode" | "upload";
   createdAt: number;
+  profileId?: number;
+  gallerySaved: boolean;
 }
 
 export interface EnqueueMetadata {
@@ -37,6 +42,7 @@ export interface EnqueueMetadata {
   workoutType: WorkoutType;
   movements: string[];
   injuries: string[];
+  profileId?: number;
 }
 
 interface VideoQueueState {
@@ -49,6 +55,7 @@ interface VideoQueueState {
   retry: (id: string) => void;
   remove: (id: string) => void;
   dismiss: (id: string) => void;
+  saveToGallery: (id: string) => Promise<boolean>;
 
   // Internal (used by actions)
   _updateItem: (id: string, patch: Partial<VideoItem>) => void;
@@ -78,7 +85,7 @@ async function safeDelete(uri: string): Promise<void> {
 // Store
 // ==========================================
 
-export const useVideoQueue = create<VideoQueueState>((set, get) => ({
+export const useVideoQueue = create<VideoQueueState>()(persist((set, get) => ({
   items: [],
 
   _updateItem: (id, patch) => {
@@ -102,6 +109,8 @@ export const useVideoQueue = create<VideoQueueState>((set, get) => ({
       status: "RECORDED",
       progress: 0,
       createdAt: Date.now(),
+      profileId: metadata.profileId,
+      gallerySaved: false,
     };
 
     set((state) => ({ items: [item, ...state.items] }));
@@ -159,7 +168,32 @@ export const useVideoQueue = create<VideoQueueState>((set, get) => ({
       items: state.items.filter((i) => i.id !== id),
     }));
   },
-}));
+
+  saveToGallery: async (id) => {
+    const item = get().items.find((i) => i.id === id);
+    if (!item) return false;
+
+    // Use rawUri (preferred for debugging quality)
+    const uri = item.rawUri;
+    if (!uri) return false;
+
+    try {
+      await MediaLibrary.saveToLibraryAsync(uri);
+      get()._updateItem(id, { gallerySaved: true });
+      console.log("📱 Saved to gallery:", uri);
+      return true;
+    } catch (e) {
+      console.warn("⚠️ Gallery save failed:", e);
+      return false;
+    }
+  },
+}),
+{
+  name: "video-queue",
+  storage: createJSONStorage(() => AsyncStorage),
+  partialize: (state) => ({ items: state.items }),
+}
+));
 
 // ==========================================
 // Async Workers (outside component lifecycle)
@@ -226,6 +260,7 @@ async function _runUpload(
       movements: item.movements,
       injuries: item.injuries,
       workoutType: item.workoutType,
+      profileId: item.profileId,
     });
 
     console.log("✅ Upload complete:", id);

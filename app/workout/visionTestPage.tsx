@@ -35,6 +35,7 @@ import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutChunk, fetchChunkAnalysis } from "../../features/wod/api";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useVideoQueue } from "@/store/useVideoQueue";
+import { useProfileStore } from "@/store/useProfileStore";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 
@@ -44,11 +45,13 @@ export default function VisionTestPage() {
     movements = "",
     injuries = "",
     workoutType: workoutTypeParam,
+    autoRecord,
   } = useLocalSearchParams<{
     resolution?: string;
     movements?: string;
     injuries?: string;
     workoutType?: string;
+    autoRecord?: string;
   }>();
   const workoutType = parseWorkoutType(workoutTypeParam);
   const workoutTypeLabel = formatWorkoutTypeLabel(workoutType).toUpperCase();
@@ -70,6 +73,11 @@ export default function VisionTestPage() {
   // Android: resolve function for the continuous camera recording promise
   const androidRecordingResolve = useRef<((video: { path: string }) => void) | null>(null);
 
+  // Store chunk paths locally (Android: used as final video source)
+  const chunkPaths = useRef<string[]>([]);
+  // Promise resolve for waiting on the last chunk's onRecordingFinished
+  const lastChunkResolve = useRef<((path: string) => void) | null>(null);
+
   // 720p or 1080p format based on user selection
   const format = useCameraFormat(device, [
     { videoResolution: { width: targetWidth, height: targetHeight } },
@@ -81,13 +89,15 @@ export default function VisionTestPage() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [enableChunks, setEnableChunks] = useState(false);
+  const [enableChunks, setEnableChunks] = useState(true);
   const [chunkFeedback, setChunkFeedback] = useState<string | null>(null);
   const [currentItemId, setCurrentItemId] = useState<string | null>(null);
+  const [isCameraReady, setIsCameraReady] = useState(false);
 
   const enqueue = useVideoQueue((s) => s.enqueue);
   const startEncoding = useVideoQueue((s) => s.startEncoding);
   const startUpload = useVideoQueue((s) => s.startUpload);
+  const profileId = useProfileStore((s) => s.backendId);
   const currentItem = useVideoQueue((s) =>
     currentItemId ? s.items.find((i) => i.id === currentItemId) ?? null : null
   );
@@ -124,6 +134,23 @@ export default function VisionTestPage() {
     if (!mediaPermission?.granted) requestMediaPermission();
   }, [hasPermission, mediaPermission, requestMediaPermission, requestPermission]);
 
+  // Auto-start recording when navigated from setup with autoRecord
+  const hasAutoStarted = useRef(false);
+  useEffect(() => {
+    if (
+      autoRecord === 'true' &&
+      !hasAutoStarted.current &&
+      hasPermission &&
+      device &&
+      isCameraReady &&
+      camera.current &&
+      !isRecording
+    ) {
+      hasAutoStarted.current = true;
+      handleStartRecording();
+    }
+  }, [autoRecord, hasPermission, device, isCameraReady, isRecording]);
+
 
 
   // --- Chunk Recording Logic (Raw Camera) ---
@@ -138,6 +165,32 @@ export default function VisionTestPage() {
         onRecordingFinished: async (video) => {
           console.log("📷 Chunk Finished:", video.path);
           isChunkRecordingActive.current = false;
+
+          // Keep local copy for Android final video assembly
+          chunkPaths.current.push(video.path);
+
+          // Resolve the last-chunk promise if we're waiting for it
+          if (lastChunkResolve.current) {
+            lastChunkResolve.current(video.path);
+            lastChunkResolve.current = null;
+          }
+
+          // Android: save each chunk to gallery immediately (all footage preserved as segments)
+          if (Platform.OS !== 'ios') {
+            try {
+              await MediaLibrary.saveToLibraryAsync(video.path);
+              console.log("📱 Chunk saved to gallery:", video.path);
+            } catch (e) {
+              console.warn("⚠️ Failed to save chunk to gallery:", e);
+            } finally {
+              // Always clean up temp chunk file (gallery copy is separate)
+              try {
+                const { File: FSFile } = require("expo-file-system");
+                const f = new FSFile(video.path);
+                if (f.exists) f.delete();
+              } catch (_) {}
+            }
+          }
 
           // Compress and Upload chunk to backend
           try {
@@ -157,6 +210,13 @@ export default function VisionTestPage() {
                 console.log("✅ Chunk asynchronously uploaded to backend");
               }).catch((err) => {
                 console.error("Failed to upload chunk:", err);
+              }).finally(() => {
+                // Clean up compressed temp file
+                try {
+                  const { File: FSFile } = require("expo-file-system");
+                  const f = new FSFile(compressedUri);
+                  if (f.exists) f.delete();
+                } catch (_) {}
               });
             }).catch((err) => {
               console.error("Failed to compress chunk:", err);
@@ -245,7 +305,12 @@ export default function VisionTestPage() {
           startChunkRecording();
         }
       } else {
-        // Android: use continuous camera recording (screen recorder not available)
+        // Android: single continuous camera recording
+        // TODO(android-chunks): Android camera only supports one recording at a time,
+        // so chunk-based recording can't run alongside the main recording.
+        // Future plan: enable chunk recording on Android (like iOS) and merge
+        // chunks server-side in the Go backend. This will unlock real-time
+        // AI analysis feedback on Android during workouts.
         if (!camera.current) return;
 
         camera.current.startRecording({
@@ -298,8 +363,20 @@ export default function VisionTestPage() {
       console.log("📼 Video Path:", file?.path);
 
       if (file?.path) {
-        // Save to gallery (for testing — will be optional later)
-        await MediaLibrary.saveToLibraryAsync(file.path);
+        // Save to gallery (best-effort — retry available from queue)
+        let gallerySaved = false;
+        try {
+          await MediaLibrary.saveToLibraryAsync(file.path);
+          gallerySaved = true;
+        } catch (gallerySaveErr) {
+          console.warn("⚠️ Gallery save failed (low storage?):", gallerySaveErr);
+          Alert.alert(
+            "Gallery Save Failed",
+            "Could not save to gallery (device storage may be full). " +
+            "Your video is still queued — you can save to gallery later from the queue.",
+            [{ text: "OK" }]
+          );
+        }
 
         // Rename raw file with _raw suffix for debugging
         let rawPath = file.path;
@@ -326,11 +403,20 @@ export default function VisionTestPage() {
           workoutType,
           movements: movementsArray,
           injuries: injuriesArray,
+          profileId: profileId ?? undefined,
         });
+
+        // Update gallerySaved status on the enqueued item
+        if (gallerySaved) {
+          useVideoQueue.getState()._updateItem(itemId, { gallerySaved: true });
+        }
 
         // Navigate to queue — user can encode/upload from there
         router.replace("/queue" as any);
       }
+
+      // Clean up chunk paths for next session
+      chunkPaths.current = [];
     } catch (error) {
       console.error("Recording Stop Error:", error);
       Alert.alert("Error", "Failed to save recording.");
@@ -394,6 +480,7 @@ export default function VisionTestPage() {
         pixelFormat="yuv"
         video={true}
         audio={false}
+        onInitialized={() => setIsCameraReady(true)}
       />
 
       <View style={StyleSheet.absoluteFill} pointerEvents="none">

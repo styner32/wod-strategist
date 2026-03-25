@@ -5,14 +5,16 @@ const API_KEY = process.env.EXPO_PUBLIC_API_KEY || "";
 export interface AnalysisResult {
   id: number;
   session_id: string;
+  profile_id?: number;
   status: string;
   output: string;
   created_at: string;
   updated_at: string;
 }
 
-export async function fetchAnalysisHistory(): Promise<AnalysisResult[]> {
-  const fullUrl = `${API_BASE_URL}/history`;
+export async function fetchAnalysisHistory(profileId?: number): Promise<AnalysisResult[]> {
+  const params = profileId ? `?profile_id=${profileId}` : "";
+  const fullUrl = `${API_BASE_URL}/history${params}`;
   const res = await fetch(fullUrl, {
     headers: {
       "X-API-Key": API_KEY,

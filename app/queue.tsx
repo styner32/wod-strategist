@@ -1,13 +1,15 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { useOrphanedVideos } from "@/store/useOrphanedVideos";
 import {
   useVideoQueue,
   type VideoItem,
   type VideoStatus,
 } from "@/store/useVideoQueue";
 import { router } from "expo-router";
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
-  FlatList,
+  Alert,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -33,7 +35,7 @@ function formatTime(ts: number): string {
 }
 
 function VideoItemRow({ item }: { item: VideoItem }) {
-  const { startEncoding, startUpload, retry, remove, dismiss } = useVideoQueue();
+  const { startEncoding, startUpload, retry, remove, dismiss, saveToGallery } = useVideoQueue();
   const config = STATUS_CONFIG[item.status];
 
   return (
@@ -145,13 +147,43 @@ function VideoItemRow({ item }: { item: VideoItem }) {
             <IconSymbol name="trash" size={16} color="#FF453A" />
           </TouchableOpacity>
         )}
+
+        {/* Save to Gallery (retry) */}
+        {!item.gallerySaved && (
+          <TouchableOpacity
+            style={styles.actionBtnSecondary}
+            onPress={async () => {
+              const ok = await saveToGallery(item.id);
+              if (ok) {
+                Alert.alert("Saved", "Video saved to gallery.");
+              } else {
+                Alert.alert("Failed", "Could not save to gallery. Check device storage.");
+              }
+            }}
+          >
+            <Text style={styles.actionBtnSecondaryText}>📱 Save to Gallery</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function QueueScreen() {
   const items = useVideoQueue((s) => s.items);
+  const { orphans, scanning, scan, deleteFile, saveToGallery, deleteAll } =
+    useOrphanedVideos();
+  const [showOrphans, setShowOrphans] = useState(true);
+
+  useEffect(() => {
+    scan();
+  }, [scan]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -163,23 +195,122 @@ export default function QueueScreen() {
         <Text style={styles.badge}>{items.length}</Text>
       </View>
 
-      {items.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyIcon}>📭</Text>
-          <Text style={styles.emptyText}>No videos in queue</Text>
-          <Text style={styles.emptySubtext}>
-            Record a workout to get started
+      <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+        {/* Queue Items */}
+        {items.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyIcon}>📭</Text>
+            <Text style={styles.emptyText}>No videos in queue</Text>
+            <Text style={styles.emptySubtext}>
+              Record a workout to get started
+            </Text>
+          </View>
+        ) : (
+          items.map((item) => <VideoItemRow key={item.id} item={item} />)
+        )}
+
+        {/* Orphaned Files Section */}
+        <TouchableOpacity
+          style={styles.orphanHeader}
+          onPress={() => setShowOrphans(!showOrphans)}
+        >
+          <Text style={styles.orphanTitle}>
+            {showOrphans ? "▼" : "▶"} Orphaned Files
           </Text>
-        </View>
-      ) : (
-        <FlatList
-          data={items}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <VideoItemRow item={item} />}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+          <Text style={styles.orphanCount}>
+            {scanning ? "Scanning..." : `${orphans.length} file${orphans.length !== 1 ? "s" : ""}`}
+          </Text>
+        </TouchableOpacity>
+
+        {showOrphans && (
+          <>
+            {orphans.length === 0 && !scanning ? (
+              <View style={styles.orphanEmpty}>
+                <Text style={styles.orphanEmptyText}>No orphaned files found ✓</Text>
+              </View>
+            ) : (
+              orphans.map((orphan) => (
+                <View key={orphan.path} style={styles.orphanCard}>
+                  <View style={styles.orphanInfo}>
+                    <Text style={styles.orphanName} numberOfLines={1}>
+                      {orphan.name}
+                    </Text>
+                    <Text style={styles.orphanSize}>
+                      {formatBytes(orphan.size)}
+                    </Text>
+                  </View>
+                  <View style={styles.orphanActions}>
+                    <TouchableOpacity
+                      style={styles.actionBtnSecondary}
+                      onPress={async () => {
+                        const ok = await saveToGallery(orphan.path);
+                        if (ok) {
+                          Alert.alert("Saved", "Saved to gallery and deleted temp file.");
+                        } else {
+                          Alert.alert("Failed", "Could not save to gallery. Check device storage.");
+                        }
+                      }}
+                    >
+                      <Text style={styles.actionBtnSecondaryText}>📱 Gallery</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.actionBtnDestructive}
+                      onPress={() => {
+                        Alert.alert(
+                          "Delete File",
+                          `Delete ${orphan.name}?`,
+                          [
+                            { text: "Cancel", style: "cancel" },
+                            {
+                              text: "Delete",
+                              style: "destructive",
+                              onPress: () => deleteFile(orphan.path),
+                            },
+                          ]
+                        );
+                      }}
+                    >
+                      <IconSymbol name="trash" size={14} color="#FF453A" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))
+            )}
+
+            {orphans.length > 1 && (
+              <TouchableOpacity
+                style={styles.deleteAllBtn}
+                onPress={() => {
+                  Alert.alert(
+                    "Delete All Orphans",
+                    `Delete ${orphans.length} orphaned video files?`,
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      {
+                        text: "Delete All",
+                        style: "destructive",
+                        onPress: deleteAll,
+                      },
+                    ]
+                  );
+                }}
+              >
+                <Text style={styles.deleteAllText}>🗑️ Delete All Orphans</Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={styles.rescanBtn}
+              onPress={scan}
+              disabled={scanning}
+            >
+              <Text style={styles.rescanText}>
+                {scanning ? "Scanning..." : "🔄 Rescan"}
+              </Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -306,12 +437,92 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   emptyState: {
-    flex: 1,
     justifyContent: "center",
     alignItems: "center",
     gap: 8,
+    paddingVertical: 40,
   },
   emptyIcon: { fontSize: 48 },
   emptyText: { color: "#fff", fontSize: 18, fontWeight: "bold" },
   emptySubtext: { color: "#666", fontSize: 14 },
+
+  // Orphaned files section
+  orphanHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    marginTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: "#222",
+  },
+  orphanTitle: {
+    color: "#aaa",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  orphanCount: {
+    color: "#666",
+    fontSize: 12,
+  },
+  orphanEmpty: {
+    alignItems: "center",
+    paddingVertical: 16,
+  },
+  orphanEmptyText: {
+    color: "#555",
+    fontSize: 13,
+  },
+  orphanCard: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#1A1A1A",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#2A2A2A",
+  },
+  orphanInfo: {
+    flex: 1,
+    marginRight: 10,
+  },
+  orphanName: {
+    color: "#ccc",
+    fontSize: 12,
+    fontFamily: "monospace",
+  },
+  orphanSize: {
+    color: "#666",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  orphanActions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  deleteAllBtn: {
+    alignItems: "center",
+    paddingVertical: 10,
+    marginTop: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#3D0A08",
+  },
+  deleteAllText: {
+    color: "#FF453A",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  rescanBtn: {
+    alignItems: "center",
+    paddingVertical: 10,
+    marginTop: 4,
+  },
+  rescanText: {
+    color: "#666",
+    fontSize: 13,
+  },
 });

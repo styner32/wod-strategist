@@ -2,11 +2,17 @@
 import 'react-native-worklets-core';
 
 import { VideoQueueOverlay } from "@/components/VideoQueueOverlay";
+import { useProfileStore } from "@/store/useProfileStore";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
+import { useEffect } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 export default function RootLayout() {
+  useEffect(() => {
+    useProfileStore.getState().hydrate();
+  }, []);
+
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />
@@ -20,6 +26,9 @@ export default function RootLayout() {
       >
         {/* 1. 메인 대시보드 */}
         <Stack.Screen name="index" options={{ title: "WOD Strategist" }} />
+
+        {/* 1.1 프로필 설정 */}
+        <Stack.Screen name="profile" options={{ title: "My Profile", presentation: "modal" }} />
 
         {/* 1.5. 워크아웃 설정 */}
         <Stack.Screen name="workout/setup" options={{ title: "Setup", presentation: "modal" }} />

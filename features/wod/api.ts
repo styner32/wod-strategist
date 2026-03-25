@@ -76,6 +76,7 @@ export interface ProcessWorkoutVideoOptions {
   injuries?: string[];
   mimeType?: string;
   workoutType?: WorkoutType;
+  profileId?: number;
 }
 
 export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
@@ -100,6 +101,42 @@ export async function fetchMovements(): Promise<string[]> {
 
 export async function fetchInjuries(): Promise<string[]> {
   return apiClient<string[]>("/injuries");
+}
+
+// ==========================================
+// Profile API
+// ==========================================
+
+export interface ProfileResponse {
+  id: number;
+  birth_year: number;
+  birth_month: number;
+  birth_day: number;
+  gender: string;
+  height_cm: number;
+  weight_kg: number;
+}
+
+export interface CreateProfileRequest {
+  birth_year: number;
+  birth_month: number;
+  birth_day: number;
+  gender: string;
+  height_cm: number;
+  weight_kg: number;
+}
+
+export async function createProfile(
+  data: CreateProfileRequest
+): Promise<ProfileResponse> {
+  return apiClient<ProfileResponse>("/profiles", {
+    method: "POST",
+    bodyPayload: data,
+  });
+}
+
+export async function getProfile(id: number): Promise<ProfileResponse> {
+  return apiClient<ProfileResponse>(`/profiles/${id}`);
 }
 
 /** Step 1: Request a signed upload URL from our API */
@@ -154,7 +191,8 @@ export async function notifyUploadComplete(
   gcsUri: string,
   movements: string[],
   injuries: string[],
-  workoutType: string
+  workoutType: string,
+  profileId?: number
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/upload-complete", {
     method: "POST",
@@ -164,6 +202,7 @@ export async function notifyUploadComplete(
       movements,
       injuries,
       workout_type: workoutType,
+      ...(profileId ? { profile_id: profileId } : {}),
     },
   });
 }
@@ -173,7 +212,8 @@ export async function notifyChunkUploadComplete(
   gcsUri: string,
   movements: string[],
   injuries: string[],
-  workoutType: string
+  workoutType: string,
+  profileId?: number
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
@@ -183,6 +223,7 @@ export async function notifyChunkUploadComplete(
       movements,
       injuries,
       workout_type: workoutType,
+      ...(profileId ? { profile_id: profileId } : {}),
     },
   });
 }
@@ -201,6 +242,7 @@ export async function processWorkoutVideo(
     injuries = [],
     mimeType = "video/mp4",
     workoutType = "wod",
+    profileId,
   } = options;
   const filename = fileUri.split("/").pop() || "workout.mp4";
 
@@ -217,7 +259,8 @@ export async function processWorkoutVideo(
     gcs_uri,
     movements,
     injuries,
-    workoutType
+    workoutType,
+    profileId
   );
   console.log("✅ Analysis Started:", result);
 
@@ -237,6 +280,7 @@ export async function processWorkoutChunk(
     injuries = [],
     mimeType = "video/mp4",
     workoutType = "wod",
+    profileId,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
 
@@ -248,7 +292,8 @@ export async function processWorkoutChunk(
     gcs_uri,
     movements,
     injuries,
-    workoutType
+    workoutType,
+    profileId
   );
 
   return {
