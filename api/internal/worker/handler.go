@@ -247,10 +247,11 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 		logger.Log.Error("Analysis failed", zap.Error(err))
 		// Save failure to DB
+		// Security: Do not expose raw internal error strings to the user.
 		w.DB.Create(&db.AnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
-			Output:    err.Error(),
+			Output:    "An error occurred during video analysis.",
 		})
 		return err
 	}
@@ -324,10 +325,11 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 
 	if err != nil {
+		// Security: Do not expose raw internal error strings to the user.
 		w.DB.Create(&db.ChunkAnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
-			Output:    err.Error(),
+			Output:    "An error occurred during chunk analysis.",
 		})
 		return err
 	}
