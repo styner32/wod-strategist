@@ -22,6 +22,7 @@ type Handlers interface {
 	ChunkComplete(*gin.Context)
 	CreateProfile(*gin.Context)
 	GetProfile(*gin.Context)
+	MergeChunks(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -161,6 +162,16 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/profiles/:id", handlers.GetProfile)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "merge-chunks",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/merge-chunks",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/merge-chunks", handlers.MergeChunks)
 		},
 	},
 }

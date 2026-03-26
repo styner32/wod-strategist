@@ -47,3 +47,17 @@ type ProfileResponse struct {
 	HeightCm   int     `json:"height_cm"`
 	WeightKg   float64 `json:"weight_kg"`
 }
+
+type MergeChunksRequest struct {
+	SessionID   string   `json:"session_id"`
+	WorkoutType string   `json:"workout_type"`
+	Movements   []string `json:"movements"`
+	Injuries    []string `json:"injuries"`
+	ProfileID   uint     `json:"profile_id,omitempty"`
+}
+
+type MergeChunksResponse struct {
+	Message   string `json:"message"`
+	TaskID    string `json:"task_id"`
+	SessionID string `json:"session_id"`
+}

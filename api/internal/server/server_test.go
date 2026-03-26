@@ -70,6 +70,10 @@ func (h *recordingHandlers) GetProfile(c *gin.Context) {
 	h.record("get-profile", c)
 }
 
+func (h *recordingHandlers) MergeChunks(c *gin.Context) {
+	h.record("merge-chunks", c)
+}
+
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)

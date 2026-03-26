@@ -76,6 +76,10 @@ func (f *fakeStorageClient) UploadFile(ctx context.Context, file multipart.File,
 	return f.uploadURI, f.uploadErr
 }
 
+func (f *fakeStorageClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	return nil, nil
+}
+
 type fakeAnalysisResultRepository struct {
 	results      []db.AnalysisResult
 	chunkResults []db.ChunkAnalysisResult

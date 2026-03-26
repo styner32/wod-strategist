@@ -488,3 +488,63 @@ func (ctl *Controller) GetProfile(c *gin.Context) {
 		WeightKg:   profile.WeightKg,
 	})
 }
+
+// @Summary      Merge Chunks
+// @Description  Triggers server-side merging of all uploaded chunks for a session, then runs full video analysis
+// @Tags         upload
+// @Accept       json
+// @Produce      json
+// @Param        request body MergeChunksRequest true "Session and workout metadata"
+// @Success      202 {object} MergeChunksResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /merge-chunks [post]
+func (ctl *Controller) MergeChunks(c *gin.Context) {
+	if ctl.queueClient == nil {
+		logger.Log.Error("queue client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	var req MergeChunksRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Log.Error("failed to bind JSON", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+	req.WorkoutType = trimRequiredString(req.WorkoutType)
+
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
+
+	// The merge task uses the session ID to discover chunks in GCS (prefix = "videos/<sessionId>")
+	// We pass a placeholder GCS URI — the worker will list objects by prefix instead.
+	placeholderGCSURI := fmt.Sprintf("gs://%s/videos/%s", ctl.bucketName, req.SessionID)
+
+	task, err := ctl.newMergeChunksTask(req.SessionID, placeholderGCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID)
+	if err != nil {
+		logger.Log.Error("failed to create merge task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue merge task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":    "Merge started",
+		"task_id":    info.ID,
+		"session_id": req.SessionID,
+	})
+}

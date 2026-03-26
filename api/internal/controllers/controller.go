@@ -19,6 +19,7 @@ type QueueClient interface {
 type ObjectStorage interface {
 	GenerateSignedURL(objectName string, method string, expires time.Duration) (string, error)
 	UploadFile(ctx context.Context, file multipart.File, filename string) (string, error)
+	ListObjects(ctx context.Context, prefix string) ([]string, error)
 }
 
 type AnalysisResultRepository interface {
@@ -43,6 +44,7 @@ type Config struct {
 	GitCommit            string
 	NewVideoAnalysisTask VideoAnalysisTaskFactory
 	NewChunkAnalysisTask VideoAnalysisTaskFactory
+	NewMergeChunksTask   VideoAnalysisTaskFactory
 }
 
 type Controller struct {
@@ -54,6 +56,7 @@ type Controller struct {
 	gitCommit            string
 	newVideoAnalysisTask VideoAnalysisTaskFactory
 	newChunkAnalysisTask VideoAnalysisTaskFactory
+	newMergeChunksTask   VideoAnalysisTaskFactory
 }
 
 func New(config Config) *Controller {
@@ -72,6 +75,11 @@ func New(config Config) *Controller {
 		chunkTaskFactory = worker.NewChunkAnalysisTask
 	}
 
+	mergeTaskFactory := config.NewMergeChunksTask
+	if mergeTaskFactory == nil {
+		mergeTaskFactory = worker.NewMergeChunksTask
+	}
+
 	return &Controller{
 		queueClient:          config.QueueClient,
 		analysisResults:      config.AnalysisResults,
@@ -81,5 +89,6 @@ func New(config Config) *Controller {
 		gitCommit:            commit,
 		newVideoAnalysisTask: taskFactory,
 		newChunkAnalysisTask: chunkTaskFactory,
+		newMergeChunksTask:   mergeTaskFactory,
 	}
 }

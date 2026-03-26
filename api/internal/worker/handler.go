@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -20,6 +21,7 @@ import (
 const (
 	TypeVideoAnalysis     = "video:analysis"
 	TypeChunkAnalysis     = "chunk:analysis"
+	TypeMergeChunks       = "merge:chunks"
 	WorkoutTypeWOD        = "wod"
 	WorkoutTypeRehab      = "rehab"
 	PersonalProfilePrompt = `
@@ -105,19 +107,25 @@ type VideoAnalysisPayload struct {
 	ProfileID   uint
 }
 
+type QueueClient interface {
+	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
+}
+
 type Worker struct {
 	DB            *gorm.DB
 	StorageClient *storage.Client
 	BucketName    string
 	GeminiClient  *gemini.Client
+	QueueClient   QueueClient
 }
 
-func NewWorker(db *gorm.DB, storageClient *storage.Client, bucketName string, geminiClient *gemini.Client) *Worker {
+func NewWorker(db *gorm.DB, storageClient *storage.Client, bucketName string, geminiClient *gemini.Client, queueClient QueueClient) *Worker {
 	return &Worker{
 		DB:            db,
 		StorageClient: storageClient,
 		BucketName:    bucketName,
 		GeminiClient:  geminiClient,
+		QueueClient:   queueClient,
 	}
 }
 
@@ -399,4 +407,140 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload) string {
 	logger.Log.Warn("Personal Profile", zap.Uint("profile_id", p.ProfileID), zap.String("personal_profile", personalProfile))
 
 	return prompt + fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
+}
+
+func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
+	payload := VideoAnalysisPayload{
+		SessionID:   sessionID,
+		FilePath:    filePath,
+		WorkoutType: NormalizeWorkoutType(workoutType),
+		Movements:   movements,
+		Injuries:    injuries,
+		ProfileID:   profileID,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeMergeChunks, data), nil
+}
+
+func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error {
+	var p VideoAnalysisPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+	}
+
+	logger.Log.Info("Processing merge chunks",
+		zap.String("session_id", p.SessionID),
+		zap.String("file_path", p.FilePath))
+
+	// Extract session prefix from the placeholder GCS URI (e.g. "videos/session_xxx")
+	_, prefix, err := storage.ParseGCSURI(p.FilePath)
+	if err != nil {
+		return fmt.Errorf("invalid GCS URI for merge prefix: %w", asynq.SkipRetry)
+	}
+
+	// 1. List all chunk objects matching the session prefix
+	objects, err := w.StorageClient.ListObjects(ctx, prefix)
+	if err != nil {
+		return fmt.Errorf("failed to list chunk objects: %w", err)
+	}
+
+	if len(objects) == 0 {
+		logger.Log.Warn("No chunk objects found for session", zap.String("prefix", prefix))
+		return fmt.Errorf("no chunks found: %w", asynq.SkipRetry)
+	}
+
+	// Sort objects to ensure chronological order (filenames contain timestamps)
+	sortStrings(objects)
+
+	logger.Log.Info("Found chunk objects", zap.Int("count", len(objects)), zap.Strings("objects", objects))
+
+	// 2. Download all chunks to /tmp/
+	tmpDir := filepath.Join("/tmp", fmt.Sprintf("merge_%s_%d", strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_"), os.Getpid()))
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create merge temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	var localChunkPaths []string
+	for i, obj := range objects {
+		localPath := filepath.Join(tmpDir, fmt.Sprintf("chunk_%03d_%s", i, filepath.Base(obj)))
+		gcsURI := fmt.Sprintf("gs://%s/%s", w.BucketName, obj)
+		if err := w.StorageClient.DownloadFile(ctx, gcsURI, localPath); err != nil {
+			return fmt.Errorf("failed to download chunk %s: %w", obj, err)
+		}
+		localChunkPaths = append(localChunkPaths, localPath)
+		logger.Log.Info("Downloaded chunk", zap.Int("index", i), zap.String("object", obj))
+	}
+
+	// 3. Create FFmpeg concat file list and merge in a single pass
+	concatListPath := filepath.Join(tmpDir, "concat_list.txt")
+	var concatEntries []string
+	for _, lp := range localChunkPaths {
+		concatEntries = append(concatEntries, fmt.Sprintf("file '%s'", lp))
+	}
+	if err := os.WriteFile(concatListPath, []byte(strings.Join(concatEntries, "\n")), 0o644); err != nil {
+		return fmt.Errorf("failed to write concat list: %w", err)
+	}
+
+	mergedPath := filepath.Join(tmpDir, fmt.Sprintf("merged_%s.mp4", p.SessionID))
+	if err := runFFmpegConcat(ctx, concatListPath, mergedPath); err != nil {
+		return fmt.Errorf("ffmpeg merge failed: %w", err)
+	}
+
+	// 4. Upload merged file to GCS
+	mergedObjectName := fmt.Sprintf("videos/%s_merged.mp4", p.SessionID)
+	mergedGCSURI, err := w.StorageClient.UploadFromFile(ctx, mergedPath, mergedObjectName)
+	if err != nil {
+		return fmt.Errorf("failed to upload merged video: %w", err)
+	}
+
+	logger.Log.Info("Merged video uploaded", zap.String("gcs_uri", mergedGCSURI))
+
+	// 5. Enqueue full video analysis on the merged file
+	analysisTask, err := NewVideoAnalysisTask(p.SessionID, mergedGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID)
+	if err != nil {
+		return fmt.Errorf("failed to create analysis task for merged video: %w", err)
+	}
+
+	if _, err := w.QueueClient.Enqueue(analysisTask); err != nil {
+		return fmt.Errorf("failed to enqueue analysis task for merged video: %w", err)
+	}
+
+	logger.Log.Info("Analysis enqueued for merged video", zap.String("session_id", p.SessionID))
+	return nil
+}
+
+func runFFmpegConcat(ctx context.Context, concatListPath, outputPath string) error {
+	args := []string{
+		"-f", "concat",
+		"-safe", "0",
+		"-i", concatListPath,
+		"-c", "copy",
+		"-y",
+		outputPath,
+	}
+
+	logger.Log.Info("Running FFmpeg", zap.Strings("args", args))
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Log.Error("FFmpeg failed", zap.Error(err), zap.String("output", string(output)))
+		return fmt.Errorf("ffmpeg: %s: %w", string(output), err)
+	}
+
+	logger.Log.Info("FFmpeg merge completed", zap.String("output_path", outputPath))
+	return nil
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
 }

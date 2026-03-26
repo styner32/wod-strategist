@@ -81,6 +81,38 @@ func (c *Client) DownloadFile(ctx context.Context, gcsURI, destPath string) erro
 	return nil
 }
 
+// ListObjects returns the object names under the given prefix in the client's bucket.
+func (c *Client) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	it := c.client.Bucket(c.bucketName).Objects(ctx, &storage.Query{Prefix: prefix})
+	var objects []string
+	for {
+		attrs, err := it.Next()
+		if err != nil {
+			break
+		}
+		objects = append(objects, attrs.Name)
+	}
+	return objects, nil
+}
+
+// UploadFromFile uploads a local file to GCS and returns the gs:// URI.
+func (c *Client) UploadFromFile(ctx context.Context, localPath, objectName string) (string, error) {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return "", fmt.Errorf("os.Open: %v", err)
+	}
+	defer f.Close()
+
+	wc := c.client.Bucket(c.bucketName).Object(objectName).NewWriter(ctx)
+	if _, err := io.Copy(wc, f); err != nil {
+		return "", fmt.Errorf("io.Copy: %v", err)
+	}
+	if err := wc.Close(); err != nil {
+		return "", fmt.Errorf("Writer.Close: %v", err)
+	}
+	return fmt.Sprintf("gs://%s/%s", c.bucketName, objectName), nil
+}
+
 func ParseGCSURI(uri string) (bucket, object string, err error) {
 	if !strings.HasPrefix(uri, "gs://") {
 		return "", "", fmt.Errorf("invalid GCS URI: %s", uri)
