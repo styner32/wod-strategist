@@ -32,7 +32,7 @@ import {
 } from "@/features/wod/workoutType";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
-import { processWorkoutChunk, fetchChunkAnalysis } from "../../features/wod/api";
+import { processWorkoutChunk, fetchChunkAnalysis, mergeChunks } from "../../features/wod/api";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useVideoQueue } from "@/store/useVideoQueue";
 import { useProfileStore } from "@/store/useProfileStore";
@@ -78,6 +78,9 @@ export default function VisionTestPage() {
   // Promise resolve for waiting on the last chunk's onRecordingFinished
   const lastChunkResolve = useRef<((path: string) => void) | null>(null);
 
+  // Session ID computed once at recording start, reused for all chunks + merge
+  const sessionIdRef = useRef<string>("");
+
   // 720p or 1080p format based on user selection
   const format = useCameraFormat(device, [
     { videoResolution: { width: targetWidth, height: targetHeight } },
@@ -93,6 +96,9 @@ export default function VisionTestPage() {
   const [chunkFeedback, setChunkFeedback] = useState<string | null>(null);
   const [currentItemId, setCurrentItemId] = useState<string | null>(null);
   const [isCameraReady, setIsCameraReady] = useState(false);
+  const [chunkCount, setChunkCount] = useState(0);
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergeComplete, setMergeComplete] = useState(false);
 
   const enqueue = useVideoQueue((s) => s.enqueue);
   const startEncoding = useVideoQueue((s) => s.startEncoding);
@@ -108,7 +114,7 @@ export default function VisionTestPage() {
     if (isRecording) {
       interval = setInterval(async () => {
         try {
-          const sessionId = buildWorkoutSessionId(workoutType);
+          const sessionId = sessionIdRef.current;
           const results = await fetchChunkAnalysis(sessionId);
           if (results.length > 0) {
             const latest = results.find(r => r.status === 'COMPLETED');
@@ -168,6 +174,7 @@ export default function VisionTestPage() {
 
           // Keep local copy for Android final video assembly
           chunkPaths.current.push(video.path);
+          setChunkCount(prev => prev + 1);
 
           // Resolve the last-chunk promise if we're waiting for it
           if (lastChunkResolve.current) {
@@ -194,7 +201,7 @@ export default function VisionTestPage() {
 
           // Compress and Upload chunk to backend
           try {
-            const sessionId = buildWorkoutSessionId(workoutType);
+            const sessionId = sessionIdRef.current;
             const movementsArray = movements ? movements.split(', ') : [];
             const injuriesArray = injuries ? injuries.split(', ') : [];
             
@@ -300,6 +307,9 @@ export default function VisionTestPage() {
         setIsRecording(true);
         console.log("✅ Recording Started (iOS Screen Recorder)");
 
+        // Compute session ID once for the entire recording session
+        sessionIdRef.current = buildWorkoutSessionId(workoutType);
+
         // Optionally start chunk recording for real-time backend analysis
         if (enableChunks) {
           startChunkRecording();
@@ -327,6 +337,9 @@ export default function VisionTestPage() {
 
         setIsRecording(true);
         console.log("✅ Recording Started (Android Camera)");
+
+        // Compute session ID once for the entire recording session
+        sessionIdRef.current = buildWorkoutSessionId(workoutType);
       }
     } catch (error) {
       console.error("Recording Start Error:", error);
@@ -394,7 +407,7 @@ export default function VisionTestPage() {
         }
 
         // Enqueue as RECORDED — user decides when to encode
-        const sessionId = buildWorkoutSessionId(workoutType);
+        const sessionId = sessionIdRef.current;
         const movementsArray = movements ? movements.split(", ") : [];
         const injuriesArray = injuries ? injuries.split(", ") : [];
 
@@ -422,6 +435,36 @@ export default function VisionTestPage() {
       Alert.alert("Error", "Failed to save recording.");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleMergeChunks = async () => {
+    if (chunkCount === 0) return;
+
+    try {
+      setIsMerging(true);
+      const sessionId = sessionIdRef.current;
+      const movementsArray = movements ? movements.split(", ") : [];
+      const injuriesArray = injuries ? injuries.split(", ") : [];
+
+      await mergeChunks(sessionId, {
+        workoutType,
+        movements: movementsArray,
+        injuries: injuriesArray,
+        profileId: profileId ?? undefined,
+      });
+
+      setMergeComplete(true);
+      Alert.alert(
+        "Merge Started",
+        "Your chunks are being merged and analyzed on the server. Check history for results.",
+        [{ text: "OK" }]
+      );
+    } catch (e) {
+      console.error("❌ Merge failed:", e);
+      Alert.alert("Merge Failed", "Could not start chunk merge. Please try again.");
+    } finally {
+      setIsMerging(false);
     }
   };
 
@@ -597,6 +640,22 @@ export default function VisionTestPage() {
                 >
                   <Text style={styles.encodeBtnText}>Encode Video</Text>
                 </TouchableOpacity>
+                {chunkCount > 0 && !mergeComplete && (
+                  <TouchableOpacity
+                    style={[styles.encodeBtn, { backgroundColor: "#64D2FF" }]}
+                    onPress={handleMergeChunks}
+                    disabled={isMerging}
+                  >
+                    <Text style={[styles.encodeBtnText, { color: "#000" }]}>
+                      {isMerging ? "Merging..." : `🔗 Merge & Analyze ${chunkCount} Chunks`}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                {mergeComplete && (
+                  <Text style={[styles.footerStatus, { color: "#64D2FF", fontSize: 13 }]}>
+                    ✅ Merge queued on server
+                  </Text>
+                )}
                 <TouchableOpacity
                   style={styles.footerLinkBtn}
                   onPress={() => router.back()}
@@ -680,6 +739,22 @@ export default function VisionTestPage() {
                 <Text style={[styles.footerStatus, { color: "#30D158" }]}>
                   ✅ Upload complete!
                 </Text>
+                {chunkCount > 0 && !mergeComplete && (
+                  <TouchableOpacity
+                    style={styles.encodeBtn}
+                    onPress={handleMergeChunks}
+                    disabled={isMerging}
+                  >
+                    <Text style={styles.encodeBtnText}>
+                      {isMerging ? "Merging..." : `🔗 Merge & Analyze ${chunkCount} Chunks`}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                {mergeComplete && (
+                  <Text style={[styles.footerStatus, { color: "#64D2FF", fontSize: 13 }]}>
+                    ✅ Merge queued on server
+                  </Text>
+                )}
                 <TouchableOpacity
                   style={styles.footerLinkBtn}
                   onPress={() => router.back()}

@@ -301,3 +301,52 @@ export async function processWorkoutChunk(
     sessionId: result.session_id,
   };
 }
+
+export interface MergeChunksResult {
+  taskId: string;
+  sessionId: string;
+  message: string;
+}
+
+/**
+ * Triggers server-side merging of all uploaded chunks for a session.
+ * The backend downloads chunks from GCS, merges with FFmpeg, then
+ * enqueues a full video analysis task on the merged video.
+ */
+export async function mergeChunks(
+  sessionId: string,
+  options: {
+    workoutType?: WorkoutType;
+    movements?: string[];
+    injuries?: string[];
+    profileId?: number;
+  } = {}
+): Promise<MergeChunksResult> {
+  const {
+    workoutType = "wod",
+    movements = [],
+    injuries = [],
+    profileId,
+  } = options;
+
+  const result = await apiClient<{
+    task_id: string;
+    session_id: string;
+    message: string;
+  }>("/merge-chunks", {
+    method: "POST",
+    bodyPayload: {
+      session_id: sessionId,
+      workout_type: workoutType,
+      movements,
+      injuries,
+      ...(profileId ? { profile_id: profileId } : {}),
+    },
+  });
+
+  return {
+    taskId: result.task_id,
+    sessionId: result.session_id,
+    message: result.message,
+  };
+}
