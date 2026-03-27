@@ -250,7 +250,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		w.DB.Create(&db.AnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
-			Output:    err.Error(),
+			Output:    "Analysis failed due to an internal error.",
 		})
 		return err
 	}
@@ -327,7 +327,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		w.DB.Create(&db.ChunkAnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
-			Output:    err.Error(),
+			Output:    "Chunk analysis failed due to an internal error.",
 		})
 		return err
 	}
