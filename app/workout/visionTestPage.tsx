@@ -39,6 +39,12 @@ import { useProfileStore } from "@/store/useProfileStore";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function VisionTestPage() {
   const {
     resolution = "720p",
@@ -81,6 +87,11 @@ export default function VisionTestPage() {
   // Session ID computed once at recording start, reused for all chunks + merge
   const sessionIdRef = useRef<string>("");
 
+  // Track recording session start time for chunk timing
+  const recordingStartTime = useRef<number>(0);
+  // Track individual chunk start time
+  const chunkStartTime = useRef<number>(0);
+
   // 720p or 1080p format based on user selection
   const format = useCameraFormat(device, [
     { videoResolution: { width: targetWidth, height: targetHeight } },
@@ -103,6 +114,7 @@ export default function VisionTestPage() {
   const enqueue = useVideoQueue((s) => s.enqueue);
   const startEncoding = useVideoQueue((s) => s.startEncoding);
   const startUpload = useVideoQueue((s) => s.startUpload);
+  const cancelUpload = useVideoQueue((s) => s.cancelUpload);
   const profileId = useProfileStore((s) => s.backendId);
   const currentItem = useVideoQueue((s) =>
     currentItemId ? s.items.find((i) => i.id === currentItemId) ?? null : null
@@ -167,10 +179,16 @@ export default function VisionTestPage() {
     try {
       console.log("📷 Starting new chunk recording...");
       isChunkRecordingActive.current = true;
+      chunkStartTime.current = Date.now();
       camera.current.startRecording({
         onRecordingFinished: async (video) => {
           console.log("📷 Chunk Finished:", video.path);
           isChunkRecordingActive.current = false;
+
+          // Compute chunk timing relative to recording start
+          const chunkEndTime = Date.now();
+          const startSecs = (chunkStartTime.current - recordingStartTime.current) / 1000;
+          const endSecs = (chunkEndTime - recordingStartTime.current) / 1000;
 
           // Keep local copy for Android final video assembly
           chunkPaths.current.push(video.path);
@@ -199,37 +217,44 @@ export default function VisionTestPage() {
             }
           }
 
-          // Compress and Upload chunk to backend
-          try {
-            const sessionId = sessionIdRef.current;
-            const movementsArray = movements ? movements.split(', ') : [];
-            const injuriesArray = injuries ? injuries.split(', ') : [];
-            
-            Video.compress(video.path, {
-              compressionMethod: "auto",
-              maxSize: 720,
-            }).then((compressedUri) => {
-              processWorkoutChunk(compressedUri, sessionId, {
-                movements: movementsArray,
-                injuries: injuriesArray,
-                workoutType,
-              }).then(() => {
-                console.log("✅ Chunk asynchronously uploaded to backend");
+          // Skip upload if recording has already been stopped
+          if (!isRecordingChunks.current) {
+            console.log("⏹️ Recording stopped — skipping chunk upload");
+          } else {
+            // Compress and Upload chunk to backend
+            try {
+              const sessionId = sessionIdRef.current;
+              const movementsArray = movements ? movements.split(', ') : [];
+              const injuriesArray = injuries ? injuries.split(', ') : [];
+              
+              Video.compress(video.path, {
+                compressionMethod: "auto",
+                maxSize: 720,
+              }).then((compressedUri) => {
+                processWorkoutChunk(compressedUri, sessionId, {
+                  movements: movementsArray,
+                  injuries: injuriesArray,
+                  workoutType,
+                  startSecs,
+                  endSecs,
+                }).then(() => {
+                  console.log("✅ Chunk asynchronously uploaded to backend");
+                }).catch((err) => {
+                  console.error("Failed to upload chunk:", err);
+                }).finally(() => {
+                  // Clean up compressed temp file
+                  try {
+                    const { File: FSFile } = require("expo-file-system");
+                    const f = new FSFile(compressedUri);
+                    if (f.exists) f.delete();
+                  } catch (_) {}
+                });
               }).catch((err) => {
-                console.error("Failed to upload chunk:", err);
-              }).finally(() => {
-                // Clean up compressed temp file
-                try {
-                  const { File: FSFile } = require("expo-file-system");
-                  const f = new FSFile(compressedUri);
-                  if (f.exists) f.delete();
-                } catch (_) {}
+                console.error("Failed to compress chunk:", err);
               });
-            }).catch((err) => {
-              console.error("Failed to compress chunk:", err);
-            });
-          } catch (e) {
-            console.error("Failed to process chunk for upload:", e);
+            } catch (e) {
+              console.error("Failed to process chunk for upload:", e);
+            }
           }
 
           // If still recording, start the next chunk immediately
@@ -309,6 +334,7 @@ export default function VisionTestPage() {
 
         // Compute session ID once for the entire recording session
         sessionIdRef.current = buildWorkoutSessionId(workoutType);
+        recordingStartTime.current = Date.now();
 
         // Optionally start chunk recording for real-time backend analysis
         if (enableChunks) {
@@ -340,6 +366,7 @@ export default function VisionTestPage() {
 
         // Compute session ID once for the entire recording session
         sessionIdRef.current = buildWorkoutSessionId(workoutType);
+        recordingStartTime.current = Date.now();
       }
     } catch (error) {
       console.error("Recording Start Error:", error);
@@ -688,16 +715,23 @@ export default function VisionTestPage() {
               </>
             )}
 
-            {currentItem.status === "READY" && (
+            {currentItem.status === "ENCODED" && (
               <>
                 <Text style={[styles.footerStatus, { color: "#30D158" }]}>
-                  ✅ Ready to upload
+                  ✅ Ready to upload{currentItem.compressedSize ? ` (${formatBytes(currentItem.compressedSize)})` : ""}
                 </Text>
+                {currentItem.error && (
+                  <Text style={[styles.footerStatus, { color: "#FF453A", fontSize: 12 }]}>
+                    ⚠️ {currentItem.error}
+                  </Text>
+                )}
                 <TouchableOpacity
                   style={styles.encodeBtn}
                   onPress={() => startUpload(currentItem.id)}
                 >
-                  <Text style={styles.encodeBtnText}>Upload now</Text>
+                  <Text style={styles.encodeBtnText}>
+                    Upload now{currentItem.compressedSize ? ` (${formatBytes(currentItem.compressedSize)})` : ""}
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.footerLinkBtn}
@@ -727,6 +761,12 @@ export default function VisionTestPage() {
                 </Text>
                 <TouchableOpacity
                   style={styles.footerLinkBtn}
+                  onPress={() => cancelUpload(currentItem.id)}
+                >
+                  <Text style={[styles.footerLinkText, { color: "#FF453A" }]}>Cancel Upload</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.footerLinkBtn}
                   onPress={() => router.back()}
                 >
                   <Text style={styles.footerLinkText}>Continue in background</Text>
@@ -734,7 +774,7 @@ export default function VisionTestPage() {
               </>
             )}
 
-            {currentItem.status === "DONE" && (
+            {currentItem.status === "UPLOADED" && (
               <>
                 <Text style={[styles.footerStatus, { color: "#30D158" }]}>
                   ✅ Upload complete!
@@ -764,18 +804,11 @@ export default function VisionTestPage() {
               </>
             )}
 
-            {currentItem.status === "ERROR" && (
-              <>
-                <Text style={[styles.footerStatus, { color: "#FF453A" }]}>
-                  ❌ {currentItem.error || "An error occurred"}
-                </Text>
-                <TouchableOpacity
-                  style={styles.footerLinkBtn}
-                  onPress={() => router.push("/queue" as any)}
-                >
-                  <Text style={styles.footerLinkText}>View in Queue</Text>
-                </TouchableOpacity>
-              </>
+            {/* Inline error display for RECORDED state (e.g. encoding failed) */}
+            {currentItem.status === "RECORDED" && currentItem.error && (
+              <Text style={[styles.footerStatus, { color: "#FF453A", fontSize: 12 }]}>
+                ⚠️ {currentItem.error}
+              </Text>
             )}
           </View>
         ) : (

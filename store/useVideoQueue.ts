@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { File } from "expo-file-system";
 import * as MediaLibrary from "expo-media-library";
 import { Video } from "react-native-compressor";
+import { Alert } from "react-native";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
@@ -13,25 +14,24 @@ import type { WorkoutType } from "@/features/wod/workoutType";
 // ==========================================
 
 export type VideoStatus =
-  | "RECORDED"
-  | "ENCODING"
-  | "READY"
-  | "UPLOADING"
-  | "DONE"
-  | "ERROR";
+  | "RECORDED"   // raw file exists, ready to encode
+  | "ENCODING"   // transient: encoding in progress
+  | "ENCODED"    // compressed file exists, ready to upload
+  | "UPLOADING"  // transient: upload in progress
+  | "UPLOADED";  // upload complete, files can be cleaned up
 
 export interface VideoItem {
   id: string;
   rawUri: string;
   compressedUri?: string;
+  compressedSize?: number; // bytes
   sessionId: string;
   workoutType: WorkoutType;
   movements: string[];
   injuries: string[];
   status: VideoStatus;
   progress: number;
-  error?: string;
-  errorStep?: "encode" | "upload";
+  error?: string;        // last error message (shown inline, cleared on next action)
   createdAt: number;
   profileId?: number;
   gallerySaved: boolean;
@@ -52,7 +52,7 @@ interface VideoQueueState {
   enqueue: (rawUri: string, metadata: EnqueueMetadata) => string;
   startEncoding: (id: string) => void;
   startUpload: (id: string) => void;
-  retry: (id: string) => void;
+  cancelUpload: (id: string) => void;
   remove: (id: string) => void;
   dismiss: (id: string) => void;
   saveToGallery: (id: string) => Promise<boolean>;
@@ -80,6 +80,15 @@ async function safeDelete(uri: string): Promise<void> {
     console.warn("⚠️ Failed to delete temp file:", uri, e);
   }
 }
+
+// ==========================================
+// Upload cancellation tracking
+// ==========================================
+
+/** Active upload cancel handles, keyed by item ID */
+const activeUploadCancels = new Map<string, () => Promise<void>>();
+/** Monotonic generation counter per item — incremented on each cancel/re-upload */
+const uploadGeneration = new Map<string, number>();
 
 // ==========================================
 // Store
@@ -119,37 +128,110 @@ export const useVideoQueue = create<VideoQueueState>()(persist((set, get) => ({
 
   startEncoding: (id) => {
     const item = get().items.find((i) => i.id === id);
-    if (!item || item.status !== "RECORDED") return;
+    console.log("🎬 [startEncoding] called", {
+      id,
+      found: !!item,
+      status: item?.status,
+      rawUri: item?.rawUri,
+    });
+    if (!item || (item.status !== "RECORDED" && item.status !== "ENCODED")) {
+      console.warn("🎬 [startEncoding] Skipped — item not in RECORDED or ENCODED state");
+      return;
+    }
 
-    get()._updateItem(id, { status: "ENCODING", progress: 0 });
+    // Validate raw file exists
+    try {
+      const rawFile = new File(item.rawUri);
+      if (!rawFile.exists) {
+        console.error("🎬 [startEncoding] Raw file does not exist:", item.rawUri);
+        get()._updateItem(id, {
+          error: "Original raw file is missing. Cannot encode.",
+        });
+        return;
+      }
+    } catch (e) {
+      console.warn("🎬 [startEncoding] Could not check raw file:", e);
+    }
+
+    // Clean up old compressed file if re-encoding
+    if (item.compressedUri) {
+      safeDelete(item.compressedUri);
+    }
+
+    get()._updateItem(id, {
+      status: "ENCODING",
+      progress: 0,
+      error: undefined,
+      compressedUri: undefined,
+      compressedSize: undefined,
+    });
     _runEncoding(id, item.rawUri, get);
   },
 
   startUpload: (id) => {
     const item = get().items.find((i) => i.id === id);
-    if (!item || item.status !== "READY" || !item.compressedUri) return;
+    console.log("☁️ [startUpload] called", {
+      id,
+      found: !!item,
+      status: item?.status,
+      compressedUri: item?.compressedUri,
+    });
+    if (!item || (item.status !== "ENCODED" && item.status !== "UPLOADED")) {
+      console.warn("☁️ [startUpload] Skipped — item not in ENCODED or UPLOADED state");
+      return;
+    }
+    if (!item.compressedUri) {
+      console.warn("☁️ [startUpload] Skipped — no compressedUri");
+      get()._updateItem(id, {
+        error: "No compressed file. Try encoding first.",
+      });
+      return;
+    }
 
-    console.log("☁️ Upload will use compressedUri:", item.compressedUri);
-    console.log("☁️ (rawUri was:", item.rawUri, ")");
+    // Validate compressed file exists
+    try {
+      const compressedFile = new File(item.compressedUri);
+      if (!compressedFile.exists) {
+        console.error("☁️ [startUpload] Compressed file does not exist:", item.compressedUri);
+        get()._updateItem(id, {
+          status: "RECORDED",
+          error: "Compressed file missing. Please re-encode.",
+          compressedUri: undefined,
+          compressedSize: undefined,
+        });
+        return;
+      }
+    } catch (e) {
+      console.warn("☁️ [startUpload] Could not check compressed file:", e);
+    }
+
+    // Increment generation so any previous stale upload is invalidated
+    const gen = (uploadGeneration.get(id) ?? 0) + 1;
+    uploadGeneration.set(id, gen);
 
     get()._updateItem(id, { status: "UPLOADING", progress: 0, error: undefined });
 
-    // Re-read the item to get the freshest state (compressedUri from encoding)
+    // Re-read the item to get the freshest state
     const freshItem = get().items.find((i) => i.id === id)!;
-    _runUpload(id, freshItem, get);
+    _runUpload(id, freshItem, get, gen);
   },
 
-  retry: (id) => {
+  cancelUpload: (id) => {
     const item = get().items.find((i) => i.id === id);
-    if (!item || item.status !== "ERROR") return;
+    if (!item || item.status !== "UPLOADING") return;
 
-    if (item.errorStep === "encode") {
-      get()._updateItem(id, { status: "ENCODING", progress: 0, error: undefined });
-      _runEncoding(id, item.rawUri, get);
-    } else if (item.errorStep === "upload" && item.compressedUri) {
-      get()._updateItem(id, { status: "UPLOADING", progress: 0, error: undefined });
-      _runUpload(id, item, get);
+    console.log("🛑 Cancelling upload for:", id);
+
+    // Increment generation to invalidate the in-flight _runUpload
+    uploadGeneration.set(id, (uploadGeneration.get(id) ?? 0) + 1);
+
+    const cancel = activeUploadCancels.get(id);
+    if (cancel) {
+      cancel().catch((e) => console.warn("⚠️ Cancel error (safe to ignore):", e));
+      activeUploadCancels.delete(id);
     }
+
+    get()._updateItem(id, { status: "ENCODED", progress: 0, error: undefined });
   },
 
   remove: (id) => {
@@ -164,6 +246,11 @@ export const useVideoQueue = create<VideoQueueState>()(persist((set, get) => ({
   },
 
   dismiss: (id) => {
+    const item = get().items.find((i) => i.id === id);
+    if (item) {
+      if (item.rawUri) safeDelete(item.rawUri);
+      if (item.compressedUri) safeDelete(item.compressedUri);
+    }
     set((state) => ({
       items: state.items.filter((i) => i.id !== id),
     }));
@@ -173,7 +260,6 @@ export const useVideoQueue = create<VideoQueueState>()(persist((set, get) => ({
     const item = get().items.find((i) => i.id === id);
     if (!item) return false;
 
-    // Use rawUri (preferred for debugging quality)
     const uri = item.rawUri;
     if (!uri) return false;
 
@@ -229,20 +315,32 @@ async function _runEncoding(
 
     console.log("✅ Encoding complete:", id, "compressedUri:", compressedUri);
 
+    // Read compressed file size so the user can see it before uploading
+    let compressedSize: number | undefined;
+    try {
+      const compressedFile = new File(compressedUri);
+      compressedSize = compressedFile.size ?? undefined;
+    } catch (e) {
+      console.warn("⚠️ Could not read compressed file size:", e);
+    }
+
     get()._updateItem(id, {
-      status: "READY",
+      status: "ENCODED",
       compressedUri,
+      compressedSize,
       progress: 1,
     });
 
-    // Delete raw temp file (gallery copy is separate)
-    await safeDelete(rawUri);
+    // NOTE: We intentionally do NOT delete the raw file here.
+    // It's kept so the user can re-encode later if needed.
+    // Files are cleaned up on dismiss/remove.
   } catch (e) {
-    console.error("❌ Encoding failed:", id, e);
+    // On encoding failure, revert to RECORDED so user can try again
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    console.error("❌ Encoding failed:", id, errorMsg);
     get()._updateItem(id, {
-      status: "ERROR",
-      error: String(e),
-      errorStep: "encode",
+      status: "RECORDED",
+      error: `Encoding failed: ${errorMsg}`,
     });
   }
 }
@@ -250,33 +348,68 @@ async function _runEncoding(
 async function _runUpload(
   id: string,
   item: VideoItem,
-  get: () => VideoQueueState
+  get: () => VideoQueueState,
+  generation: number
 ) {
-  try {
-    console.log("☁️ Starting upload for:", id);
+  const isStale = () => uploadGeneration.get(id) !== generation;
 
-    await processWorkoutVideo(item.compressedUri!, item.sessionId, {
-      onProgress: (p) => get()._updateItem(id, { progress: p }),
+  try {
+    console.log("☁️ [UPLOAD START]", {
+      id,
+      generation,
+      compressedUri: item.compressedUri,
+      sessionId: item.sessionId,
+    });
+
+    if (!item.compressedUri) {
+      get()._updateItem(id, {
+        status: "ENCODED",
+        error: "No compressed file URI.",
+      });
+      return;
+    }
+
+    console.log("☁️ [UPLOAD] Calling processWorkoutVideo...");
+
+    await processWorkoutVideo(item.compressedUri, item.sessionId, {
+      onProgress: (p) => {
+        if (!isStale()) get()._updateItem(id, { progress: p });
+      },
+      onCancelReady: (cancel) => {
+        activeUploadCancels.set(id, cancel);
+      },
       movements: item.movements,
       injuries: item.injuries,
       workoutType: item.workoutType,
       profileId: item.profileId,
     });
 
-    console.log("✅ Upload complete:", id);
+    activeUploadCancels.delete(id);
 
-    get()._updateItem(id, { status: "DONE", progress: 1 });
-
-    // Delete compressed temp file
-    if (item.compressedUri) {
-      await safeDelete(item.compressedUri);
+    if (isStale()) {
+      console.log("🛑 Upload stale (cancelled/superseded), ignoring result:", id);
+      return;
     }
+
+    console.log("✅ [UPLOAD] Upload complete:", id);
+    get()._updateItem(id, { status: "UPLOADED", progress: 1, error: undefined });
+
+    // NOTE: We intentionally do NOT delete files here.
+    // Files are cleaned up on dismiss/remove.
   } catch (e) {
-    console.error("❌ Upload failed:", id, e);
+    activeUploadCancels.delete(id);
+
+    if (isStale()) {
+      console.log("🛑 Upload stale (cancelled/superseded), ignoring error:", id);
+      return;
+    }
+
+    // On upload failure, revert to ENCODED so user can try again
+    const errorMsg = e instanceof Error ? e.message : String(e);
+    console.error("❌ [UPLOAD] Upload failed:", id, errorMsg);
     get()._updateItem(id, {
-      status: "ERROR",
-      error: String(e),
-      errorStep: "upload",
+      status: "ENCODED",
+      error: `Upload failed: ${errorMsg}`,
     });
   }
 }
@@ -291,9 +424,9 @@ export const useActiveItems = () =>
     s.items.filter((i) => i.status === "ENCODING" || i.status === "UPLOADING")
   );
 
-/** Returns count of items in queue (excluding DONE) */
+/** Returns count of items in queue (excluding UPLOADED) */
 export const useQueueCount = () =>
-  useVideoQueue((s) => s.items.filter((i) => i.status !== "DONE").length);
+  useVideoQueue((s) => s.items.filter((i) => i.status !== "UPLOADED").length);
 
 /** Returns true if any item is actively processing */
 export const useIsProcessing = () =>

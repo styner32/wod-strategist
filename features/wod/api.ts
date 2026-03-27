@@ -72,11 +72,14 @@ export interface UploadResult {
 
 export interface ProcessWorkoutVideoOptions {
   onProgress?: (progress: number) => void;
+  onCancelReady?: (cancel: () => Promise<void>) => void;
   movements?: string[];
   injuries?: string[];
   mimeType?: string;
   workoutType?: WorkoutType;
   profileId?: number;
+  startSecs?: number;
+  endSecs?: number;
 }
 
 export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
@@ -87,6 +90,8 @@ export interface ChunkAnalysisResult {
   session_id: string;
   status: string;
   output: string;
+  start_secs?: number;
+  end_secs?: number;
   created_at: string;
   updated_at: string;
 }
@@ -155,7 +160,8 @@ export async function uploadToGcs(
   uploadUrl: string,
   fileUri: string,
   mimeType: string,
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number) => void,
+  onCancelReady?: (cancel: () => Promise<void>) => void
 ): Promise<void> {
   const uploadTask = createUploadTask(
     uploadUrl,
@@ -171,6 +177,9 @@ export async function uploadToGcs(
       }
     }
   );
+
+  // Expose the cancel function to the caller before starting
+  onCancelReady?.(() => uploadTask.cancelAsync());
 
   const response = await uploadTask.uploadAsync();
 
@@ -213,7 +222,9 @@ export async function notifyChunkUploadComplete(
   movements: string[],
   injuries: string[],
   workoutType: string,
-  profileId?: number
+  profileId?: number,
+  startSecs?: number,
+  endSecs?: number
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
@@ -224,6 +235,8 @@ export async function notifyChunkUploadComplete(
       injuries,
       workout_type: workoutType,
       ...(profileId ? { profile_id: profileId } : {}),
+      ...(startSecs !== undefined ? { start_secs: startSecs } : {}),
+      ...(endSecs !== undefined ? { end_secs: endSecs } : {}),
     },
   });
 }
@@ -238,6 +251,7 @@ export async function processWorkoutVideo(
 ): Promise<UploadResult> {
   const {
     onProgress,
+    onCancelReady,
     movements = [],
     injuries = [],
     mimeType = "video/mp4",
@@ -251,7 +265,7 @@ export async function processWorkoutVideo(
   const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename);
   console.log("✅ Got Signed URL");
 
-  await uploadToGcs(upload_url, fileUri, mimeType, onProgress);
+  await uploadToGcs(upload_url, fileUri, mimeType, onProgress, onCancelReady);
   console.log("✅ Uploaded to GCS");
 
   const result = await notifyUploadComplete(
@@ -281,6 +295,8 @@ export async function processWorkoutChunk(
     mimeType = "video/mp4",
     workoutType = "wod",
     profileId,
+    startSecs,
+    endSecs,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
 
@@ -293,7 +309,9 @@ export async function processWorkoutChunk(
     movements,
     injuries,
     workoutType,
-    profileId
+    profileId,
+    startSecs,
+    endSecs
   );
 
   return {

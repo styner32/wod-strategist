@@ -33,11 +33,13 @@ jest.mock("react-native-compressor", () => ({
 const mockFileDelete = jest.fn();
 const mockFileExists = true;
 const mockFileMove = jest.fn();
+const mockFileSize = 1024;
 jest.mock("expo-file-system", () => ({
   File: jest.fn().mockImplementation(() => ({
     exists: mockFileExists,
     delete: mockFileDelete,
     move: mockFileMove,
+    size: mockFileSize,
   })),
 }));
 
@@ -49,6 +51,10 @@ jest.mock("@/features/wod/api", () => ({
 const mockSaveToLibraryAsync = jest.fn();
 jest.mock("expo-media-library", () => ({
   saveToLibraryAsync: (...args: any[]) => mockSaveToLibraryAsync(...args),
+}));
+
+jest.mock("react-native", () => ({
+  Alert: { alert: jest.fn() },
 }));
 
 // ==========================================
@@ -109,7 +115,7 @@ describe("useVideoQueue", () => {
       expect(mockCompress).not.toHaveBeenCalled();
     });
 
-    it("should transition RECORDED → ENCODING → READY after startEncoding succeeds", async () => {
+    it("should transition RECORDED → ENCODING → ENCODED after startEncoding succeeds", async () => {
       mockCompress.mockResolvedValue("file:///compressed/video.mp4");
 
       const id = getStore().enqueue("file:///raw/video.mp4", defaultMetadata);
@@ -120,7 +126,7 @@ describe("useVideoQueue", () => {
 
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(getItems()[0].status).toBe("READY");
+      expect(getItems()[0].status).toBe("ENCODED");
       expect(getItems()[0].compressedUri).toMatch(/_encoded\.mp4$/);
     });
 
@@ -136,17 +142,18 @@ describe("useVideoQueue", () => {
       );
     });
 
-    it("should delete raw file after encoding succeeds", async () => {
+    it("should NOT delete raw file after encoding succeeds", async () => {
       mockCompress.mockResolvedValue("file:///compressed/video.mp4");
 
       const id = getStore().enqueue("file:///raw/video.mp4", defaultMetadata);
       getStore().startEncoding(id);
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockFileDelete).toHaveBeenCalled();
+      // Raw file should be preserved for re-encoding
+      expect(mockFileDelete).not.toHaveBeenCalled();
     });
 
-    it("should transition to ERROR if encoding fails", async () => {
+    it("should revert to RECORDED with error if encoding fails", async () => {
       mockCompress.mockRejectedValue(new Error("Compress failed"));
 
       const id = getStore().enqueue("file:///raw/video.mp4", defaultMetadata);
@@ -154,15 +161,13 @@ describe("useVideoQueue", () => {
       await new Promise((r) => setTimeout(r, 50));
 
       const items = getItems();
-      expect(items[0].status).toBe("ERROR");
-      expect(items[0].errorStep).toBe("encode");
+      expect(items[0].status).toBe("RECORDED");
       expect(items[0].error).toContain("Compress failed");
     });
   });
 
   describe("startUpload", () => {
-    it("should transition READY → UPLOADING → DONE", async () => {
-      // Manually set up a READY item
+    it("should transition ENCODED → UPLOADING → UPLOADED", async () => {
       const item: VideoItem = {
         id: "test_upload_1",
         rawUri: "file:///raw/video.mp4",
@@ -171,7 +176,7 @@ describe("useVideoQueue", () => {
         workoutType: "wod",
         movements: ["Squat"],
         injuries: [],
-        status: "READY",
+        status: "ENCODED",
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
@@ -190,10 +195,10 @@ describe("useVideoQueue", () => {
 
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(getItems()[0].status).toBe("DONE");
+      expect(getItems()[0].status).toBe("UPLOADED");
     });
 
-    it("should delete compressed file after upload succeeds", async () => {
+    it("should NOT delete compressed file after upload succeeds", async () => {
       const item: VideoItem = {
         id: "test_upload_2",
         rawUri: "file:///raw/video.mp4",
@@ -202,7 +207,7 @@ describe("useVideoQueue", () => {
         workoutType: "wod",
         movements: [],
         injuries: [],
-        status: "READY",
+        status: "ENCODED",
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
@@ -217,10 +222,11 @@ describe("useVideoQueue", () => {
       getStore().startUpload("test_upload_2");
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(mockFileDelete).toHaveBeenCalled();
+      // Files are only deleted on dismiss/remove
+      expect(mockFileDelete).not.toHaveBeenCalled();
     });
 
-    it("should transition to ERROR if upload fails", async () => {
+    it("should revert to ENCODED with error if upload fails", async () => {
       const item: VideoItem = {
         id: "test_upload_3",
         rawUri: "file:///raw/video.mp4",
@@ -229,7 +235,7 @@ describe("useVideoQueue", () => {
         workoutType: "wod",
         movements: [],
         injuries: [],
-        status: "READY",
+        status: "ENCODED",
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
@@ -241,11 +247,11 @@ describe("useVideoQueue", () => {
       getStore().startUpload("test_upload_3");
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(getItems()[0].status).toBe("ERROR");
-      expect(getItems()[0].errorStep).toBe("upload");
+      expect(getItems()[0].status).toBe("ENCODED");
+      expect(getItems()[0].error).toContain("Network error");
     });
 
-    it("should not start upload for non-READY items", () => {
+    it("should not start upload for non-ENCODED items", () => {
       const item: VideoItem = {
         id: "test_upload_4",
         rawUri: "file:///raw/video.mp4",
@@ -268,64 +274,32 @@ describe("useVideoQueue", () => {
     });
   });
 
-  describe("retry", () => {
-    it("should retry encoding for encode errors", async () => {
+  describe("re-encode from ENCODED state", () => {
+    it("should allow startEncoding from ENCODED state", async () => {
       const item: VideoItem = {
-        id: "test_retry_1",
-        rawUri: "file:///raw/video.mp4",
-        sessionId: "session_001",
-        workoutType: "wod",
-        movements: [],
-        injuries: [],
-        status: "ERROR",
-        errorStep: "encode",
-        error: "Previous failure",
-        progress: 0,
-        createdAt: Date.now(),
-        gallerySaved: false,
-      };
-      useVideoQueue.setState({ items: [item] });
-
-      mockCompress.mockResolvedValue("file:///compressed/video.mp4");
-
-      getStore().retry("test_retry_1");
-
-      expect(getItems()[0].status).toBe("ENCODING");
-      expect(mockCompress).toHaveBeenCalled();
-
-      await new Promise((r) => setTimeout(r, 50));
-      expect(getItems()[0].status).toBe("READY");
-    });
-
-    it("should retry upload for upload errors", async () => {
-      const item: VideoItem = {
-        id: "test_retry_2",
+        id: "test_reencode_1",
         rawUri: "file:///raw/video.mp4",
         compressedUri: "file:///compressed/video.mp4",
         sessionId: "session_001",
         workoutType: "wod",
         movements: [],
         injuries: [],
-        status: "ERROR",
-        errorStep: "upload",
-        error: "Network error",
-        progress: 0,
+        status: "ENCODED",
+        progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
       };
       useVideoQueue.setState({ items: [item] });
 
-      mockProcessWorkoutVideo.mockResolvedValue({
-        taskId: "task_789",
-        sessionId: "session_001",
-      });
+      mockCompress.mockResolvedValue("file:///compressed/video2.mp4");
 
-      getStore().retry("test_retry_2");
+      getStore().startEncoding("test_reencode_1");
 
-      expect(getItems()[0].status).toBe("UPLOADING");
+      expect(getItems()[0].status).toBe("ENCODING");
+      expect(mockCompress).toHaveBeenCalled();
 
       await new Promise((r) => setTimeout(r, 50));
-      expect(getItems()[0].status).toBe("DONE");
+      expect(getItems()[0].status).toBe("ENCODED");
     });
   });
 
@@ -339,7 +313,7 @@ describe("useVideoQueue", () => {
         workoutType: "wod",
         movements: [],
         injuries: [],
-        status: "READY",
+        status: "ENCODED",
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
@@ -355,15 +329,16 @@ describe("useVideoQueue", () => {
   });
 
   describe("dismiss", () => {
-    it("should remove item without deleting files", () => {
+    it("should remove item and delete files", () => {
       const item: VideoItem = {
         id: "test_dismiss_1",
         rawUri: "file:///raw/video.mp4",
+        compressedUri: "file:///compressed/video.mp4",
         sessionId: "session_001",
         workoutType: "wod",
         movements: [],
         injuries: [],
-        status: "DONE",
+        status: "UPLOADED",
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
@@ -373,7 +348,8 @@ describe("useVideoQueue", () => {
       getStore().dismiss("test_dismiss_1");
 
       expect(getItems()).toHaveLength(0);
-      expect(mockFileDelete).not.toHaveBeenCalled();
+      // dismiss now also cleans up files
+      expect(mockFileDelete).toHaveBeenCalled();
     });
   });
 

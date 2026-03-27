@@ -23,10 +23,9 @@ const STATUS_CONFIG: Record<
 > = {
   RECORDED: { label: "Recorded", color: "#A0A0A0", bgColor: "#2A2A2A" },
   ENCODING: { label: "Encoding", color: "#FFD60A", bgColor: "#3D3200" },
-  READY: { label: "Ready", color: "#30D158", bgColor: "#0A3D1A" },
+  ENCODED: { label: "Ready", color: "#30D158", bgColor: "#0A3D1A" },
   UPLOADING: { label: "Uploading", color: "#64D2FF", bgColor: "#002B3D" },
-  DONE: { label: "Done", color: "#30D158", bgColor: "#0A3D1A" },
-  ERROR: { label: "Error", color: "#FF453A", bgColor: "#3D0A08" },
+  UPLOADED: { label: "Uploaded", color: "#30D158", bgColor: "#0A3D1A" },
 };
 
 function formatTime(ts: number): string {
@@ -35,7 +34,7 @@ function formatTime(ts: number): string {
 }
 
 function VideoItemRow({ item }: { item: VideoItem }) {
-  const { startEncoding, startUpload, retry, remove, dismiss, saveToGallery } = useVideoQueue();
+  const { startEncoding, startUpload, cancelUpload, remove, dismiss, saveToGallery } = useVideoQueue();
   const config = STATUS_CONFIG[item.status];
 
   return (
@@ -69,8 +68,8 @@ function VideoItemRow({ item }: { item: VideoItem }) {
         </View>
       )}
 
-      {/* Error message */}
-      {item.status === "ERROR" && item.error && (
+      {/* Error message (shown inline, clears on next action) */}
+      {item.error && (
         <Text style={styles.errorText} numberOfLines={2}>
           {item.error}
         </Text>
@@ -100,55 +99,66 @@ function VideoItemRow({ item }: { item: VideoItem }) {
           </>
         )}
 
-        {item.status === "READY" && (
-          <TouchableOpacity
-            style={styles.actionBtnPrimary}
-            onPress={() => startUpload(item.id)}
-          >
-            <IconSymbol name="arrow.up.circle.fill" size={16} color="#000" />
-            <Text style={styles.actionBtnPrimaryText}>Upload</Text>
-          </TouchableOpacity>
-        )}
-
-        {item.status === "ERROR" && (
+        {item.status === "ENCODED" && (
           <>
             <TouchableOpacity
               style={styles.actionBtnPrimary}
-              onPress={() => retry(item.id)}
+              onPress={() => startUpload(item.id)}
             >
-              <IconSymbol name="arrow.clockwise" size={16} color="#000" />
-              <Text style={styles.actionBtnPrimaryText}>Retry</Text>
+              <IconSymbol name="arrow.up.circle.fill" size={16} color="#000" />
+              <Text style={styles.actionBtnPrimaryText}>
+                Upload{item.compressedSize ? ` (${formatBytes(item.compressedSize)})` : ""}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtnSecondary}
+              onPress={() => startEncoding(item.id)}
+            >
+              <Text style={styles.actionBtnSecondaryText}>Re-encode</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnDestructive}
               onPress={() => remove(item.id)}
             >
               <IconSymbol name="trash" size={16} color="#FF453A" />
-              <Text style={styles.actionBtnDestructiveText}>Delete</Text>
             </TouchableOpacity>
           </>
         )}
 
-        {item.status === "DONE" && (
-          <TouchableOpacity
-            style={styles.actionBtnSecondary}
-            onPress={() => dismiss(item.id)}
-          >
-            <Text style={styles.actionBtnSecondaryText}>Dismiss</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Always allow delete for non-active items */}
-        {item.status === "READY" && (
+        {item.status === "UPLOADING" && (
           <TouchableOpacity
             style={styles.actionBtnDestructive}
-            onPress={() => remove(item.id)}
+            onPress={() => cancelUpload(item.id)}
           >
-            <IconSymbol name="trash" size={16} color="#FF453A" />
+            <IconSymbol name="xmark.circle.fill" size={16} color="#FF453A" />
+            <Text style={styles.actionBtnDestructiveText}>Cancel Upload</Text>
           </TouchableOpacity>
         )}
 
-        {/* Save to Gallery (retry) */}
+        {item.status === "UPLOADED" && (
+          <>
+            <TouchableOpacity
+              style={styles.actionBtnSecondary}
+              onPress={() => startUpload(item.id)}
+            >
+              <Text style={styles.actionBtnSecondaryText}>Re-upload</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtnSecondary}
+              onPress={() => startEncoding(item.id)}
+            >
+              <Text style={styles.actionBtnSecondaryText}>Re-encode</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionBtnPrimary}
+              onPress={() => dismiss(item.id)}
+            >
+              <Text style={styles.actionBtnPrimaryText}>Dismiss</Text>
+            </TouchableOpacity>
+          </>
+        )}
+
+        {/* Save to Gallery */}
         {!item.gallerySaved && (
           <TouchableOpacity
             style={styles.actionBtnSecondary}
@@ -396,6 +406,7 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: "row",
     gap: 10,
+    flexWrap: "wrap",
   },
   actionBtnPrimary: {
     flexDirection: "row",

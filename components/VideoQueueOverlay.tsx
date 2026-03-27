@@ -25,9 +25,11 @@ export function VideoQueueOverlay() {
   const activeItem = items.find(
     (i) => i.status === "ENCODING" || i.status === "UPLOADING"
   );
-  const readyCount = items.filter((i) => i.status === "READY").length;
-  const errorCount = items.filter((i) => i.status === "ERROR").length;
+  const readyCount = items.filter((i) => i.status === "ENCODED").length;
+  const uploadedCount = items.filter((i) => i.status === "UPLOADED").length;
   const recordedCount = items.filter((i) => i.status === "RECORDED").length;
+  // Check for items with errors (any state can have an error message)
+  const errorCount = items.filter((i) => !!i.error).length;
 
   let statusText = "";
   let statusColor = "#30D158";
@@ -41,7 +43,7 @@ export function VideoQueueOverlay() {
       statusColor = "#64D2FF";
     }
   } else if (errorCount > 0) {
-    statusText = `${errorCount} failed`;
+    statusText = `${errorCount} need attention`;
     statusColor = "#FF453A";
   } else if (readyCount > 0) {
     statusText = `${readyCount} ready to upload`;
@@ -49,6 +51,9 @@ export function VideoQueueOverlay() {
   } else if (recordedCount > 0) {
     statusText = `${recordedCount} awaiting encode`;
     statusColor = "#A0A0A0";
+  } else if (uploadedCount > 0) {
+    statusText = `${uploadedCount} uploaded`;
+    statusColor = "#30D158";
   }
 
   return (
