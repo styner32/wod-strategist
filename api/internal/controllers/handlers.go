@@ -364,7 +364,7 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		return
 	}
 
-	var req CompleteUploadRequest
+	var req ChunkCompleteRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Log.Error("failed to bind JSON", zap.Error(err))
@@ -393,7 +393,7 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
-	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID)
+	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs)
 	if err != nil {
 		logger.Log.Error("failed to create chunk task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})

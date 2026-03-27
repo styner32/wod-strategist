@@ -114,6 +114,8 @@ type taskFactoryCall struct {
 	workoutType string
 	movements   []string
 	injuries    []string
+	startSecs   float64
+	endSecs     float64
 }
 
 type fakeTaskFactory struct {
@@ -132,6 +134,28 @@ func (f *fakeTaskFactory) Build(sessionID, filePath, workoutType string, movemen
 	}
 	if f.task == nil {
 		f.task = asynq.NewTask(worker.TypeVideoAnalysis, []byte(`{}`))
+	}
+	return f.task, f.err
+}
+
+type fakeChunkTaskFactory struct {
+	call taskFactoryCall
+	task *asynq.Task
+	err  error
+}
+
+func (f *fakeChunkTaskFactory) Build(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error) {
+	f.call = taskFactoryCall{
+		sessionID:   sessionID,
+		filePath:    filePath,
+		workoutType: workoutType,
+		movements:   append([]string(nil), movements...),
+		injuries:    append([]string(nil), injuries...),
+		startSecs:   startSecs,
+		endSecs:     endSecs,
+	}
+	if f.task == nil {
+		f.task = asynq.NewTask(worker.TypeChunkAnalysis, []byte(`{}`))
 	}
 	return f.task, f.err
 }

@@ -105,6 +105,8 @@ type VideoAnalysisPayload struct {
 	Movements   []string
 	Injuries    []string
 	ProfileID   uint
+	StartSecs   float64
+	EndSecs     float64
 }
 
 type QueueClient interface {
@@ -159,7 +161,7 @@ func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []s
 	return asynq.NewTask(TypeVideoAnalysis, data), nil
 }
 
-func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
+func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
 		SessionID:   sessionID,
 		FilePath:    filePath,
@@ -167,6 +169,8 @@ func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []s
 		Movements:   movements,
 		Injuries:    injuries,
 		ProfileID:   profileID,
+		StartSecs:   startSecs,
+		EndSecs:     endSecs,
 	}
 
 	data, err := json.Marshal(payload)
@@ -352,6 +356,10 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		if p.ProfileID > 0 {
 			chunkFailed.ProfileID = &p.ProfileID
 		}
+		if p.StartSecs > 0 || p.EndSecs > 0 {
+			chunkFailed.StartSecs = &p.StartSecs
+			chunkFailed.EndSecs = &p.EndSecs
+		}
 		w.DB.Create(chunkFailed)
 		return err
 	}
@@ -363,6 +371,10 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 	if p.ProfileID > 0 {
 		chunkResult.ProfileID = &p.ProfileID
+	}
+	if p.StartSecs > 0 || p.EndSecs > 0 {
+		chunkResult.StartSecs = &p.StartSecs
+		chunkResult.EndSecs = &p.EndSecs
 	}
 	w.DB.Create(chunkResult)
 

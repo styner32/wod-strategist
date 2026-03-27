@@ -61,3 +61,14 @@ type MergeChunksResponse struct {
 	TaskID    string `json:"task_id"`
 	SessionID string `json:"session_id"`
 }
+
+type ChunkCompleteRequest struct {
+	SessionID   string   `json:"session_id"`
+	GCSURI      string   `json:"gcs_uri"`
+	Movements   []string `json:"movements"`
+	Injuries    []string `json:"injuries"`
+	WorkoutType string   `json:"workout_type"`
+	ProfileID   uint     `json:"profile_id,omitempty"`
+	StartSecs   float64  `json:"start_secs"`
+	EndSecs     float64  `json:"end_secs"`
+}

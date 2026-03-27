@@ -77,3 +77,31 @@ var _ = Describe("NewVideoAnalysisTask", func() {
 	})
 })
 
+var _ = Describe("NewChunkAnalysisTask", func() {
+	BeforeEach(func() {
+		logger.Log = zap.NewNop()
+	})
+
+	It("includes timing fields in the payload", func() {
+		task, err := NewChunkAnalysisTask(
+			"session-1",
+			"gs://bucket/chunk.mp4",
+			"wod",
+			[]string{"Deadlift"},
+			nil,
+			7,
+			10.5,
+			20.5,
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		var payload VideoAnalysisPayload
+		Expect(json.Unmarshal(task.Payload(), &payload)).To(Succeed())
+		Expect(payload.SessionID).To(Equal("session-1"))
+		Expect(payload.StartSecs).To(Equal(10.5))
+		Expect(payload.EndSecs).To(Equal(20.5))
+		Expect(payload.Movements).To(Equal([]string{"Deadlift"}))
+		Expect(payload.ProfileID).To(Equal(uint(7)))
+	})
+})
+
