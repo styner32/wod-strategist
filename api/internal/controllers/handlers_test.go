@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -75,6 +76,10 @@ func (f *fakeStorageClient) UploadFile(ctx context.Context, file multipart.File,
 	return f.uploadURI, f.uploadErr
 }
 
+func (f *fakeStorageClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	return nil, nil
+}
+
 type fakeAnalysisResultRepository struct {
 	results      []db.AnalysisResult
 	chunkResults []db.ChunkAnalysisResult
@@ -91,7 +96,7 @@ func (f *fakeAnalysisResultRepository) FindBySessionID(ctx context.Context, sess
 	return f.results, f.err
 }
 
-func (f *fakeAnalysisResultRepository) ListRecent(ctx context.Context, limit int) ([]db.AnalysisResult, error) {
+func (f *fakeAnalysisResultRepository) ListRecent(ctx context.Context, limit int, profileID uint) ([]db.AnalysisResult, error) {
 	f.listCalled = true
 	f.historyLimit = limit
 	return f.results, f.err
@@ -109,6 +114,8 @@ type taskFactoryCall struct {
 	workoutType string
 	movements   []string
 	injuries    []string
+	startSecs   float64
+	endSecs     float64
 }
 
 type fakeTaskFactory struct {
@@ -117,7 +124,7 @@ type fakeTaskFactory struct {
 	err  error
 }
 
-func (f *fakeTaskFactory) Build(sessionID, filePath, workoutType string, movements []string, injuries []string) (*asynq.Task, error) {
+func (f *fakeTaskFactory) Build(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
 	f.call = taskFactoryCall{
 		sessionID:   sessionID,
 		filePath:    filePath,
@@ -129,6 +136,55 @@ func (f *fakeTaskFactory) Build(sessionID, filePath, workoutType string, movemen
 		f.task = asynq.NewTask(worker.TypeVideoAnalysis, []byte(`{}`))
 	}
 	return f.task, f.err
+}
+
+type fakeChunkTaskFactory struct {
+	call taskFactoryCall
+	task *asynq.Task
+	err  error
+}
+
+func (f *fakeChunkTaskFactory) Build(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error) {
+	f.call = taskFactoryCall{
+		sessionID:   sessionID,
+		filePath:    filePath,
+		workoutType: workoutType,
+		movements:   append([]string(nil), movements...),
+		injuries:    append([]string(nil), injuries...),
+		startSecs:   startSecs,
+		endSecs:     endSecs,
+	}
+	if f.task == nil {
+		f.task = asynq.NewTask(worker.TypeChunkAnalysis, []byte(`{}`))
+	}
+	return f.task, f.err
+}
+
+type fakeProfileRepository struct {
+	profile *db.Profile
+	err     error
+	called  bool
+}
+
+func (f *fakeProfileRepository) Create(ctx context.Context, profile *db.Profile) error {
+	f.called = true
+	if f.err != nil {
+		return f.err
+	}
+	profile.ID = 1 // simulate auto-increment
+	f.profile = profile
+	return nil
+}
+
+func (f *fakeProfileRepository) FindByID(ctx context.Context, id uint) (*db.Profile, error) {
+	f.called = true
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.profile != nil && f.profile.ID == id {
+		return f.profile, nil
+	}
+	return nil, fmt.Errorf("not found")
 }
 
 func newTestRouter(config Config) *gin.Engine {
@@ -533,6 +589,84 @@ var _ = Describe("Controller handlers", func() {
 			Expect(json.Unmarshal(w.Body.Bytes(), &got)).To(Succeed())
 			Expect(got).To(HaveLen(len(injuries)))
 			Expect(got[0]).To(Equal(injuries[0]))
+		})
+	})
+
+	Describe("GET /api/v1/subtitles/:session_id", func() {
+		It("returns SRT with correct format for completed chunks sorted by start_secs", func() {
+			start1, end1 := 10.0, 20.0
+			start2, end2 := 0.0, 10.0
+			repo := &fakeAnalysisResultRepository{
+				chunkResults: []db.ChunkAnalysisResult{
+					{ID: 1, SessionID: "session-1", Status: "COMPLETED", Output: "Second chunk", StartSecs: &start1, EndSecs: &end1},
+					{ID: 2, SessionID: "session-1", Status: "COMPLETED", Output: "First chunk", StartSecs: &start2, EndSecs: &end2},
+				},
+			}
+			router := newTestRouter(Config{AnalysisResults: repo})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(w.Header().Get("Content-Type")).To(Equal("text/plain; charset=utf-8"))
+			Expect(w.Header().Get("Content-Disposition")).To(ContainSubstring("session-1.srt"))
+
+			body := w.Body.String()
+			Expect(body).To(ContainSubstring("1\n00:00:00,000 --> 00:00:10,000\nFirst chunk\n"))
+			Expect(body).To(ContainSubstring("2\n00:00:10,000 --> 00:00:20,000\nSecond chunk\n"))
+		})
+
+		It("returns empty body when no completed chunks exist", func() {
+			start, end := 0.0, 10.0
+			repo := &fakeAnalysisResultRepository{
+				chunkResults: []db.ChunkAnalysisResult{
+					{ID: 1, SessionID: "session-1", Status: "FAILED", Output: "error", StartSecs: &start, EndSecs: &end},
+				},
+			}
+			router := newTestRouter(Config{AnalysisResults: repo})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(w.Body.String()).To(BeEmpty())
+		})
+
+		It("skips chunks without start/end timestamps", func() {
+			start, end := 0.0, 10.0
+			repo := &fakeAnalysisResultRepository{
+				chunkResults: []db.ChunkAnalysisResult{
+					{ID: 1, SessionID: "session-1", Status: "COMPLETED", Output: "has timestamps", StartSecs: &start, EndSecs: &end},
+					{ID: 2, SessionID: "session-1", Status: "COMPLETED", Output: "no timestamps"},
+				},
+			}
+			router := newTestRouter(Config{AnalysisResults: repo})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			body := w.Body.String()
+			Expect(body).To(ContainSubstring("has timestamps"))
+			Expect(body).NotTo(ContainSubstring("no timestamps"))
+		})
+
+		It("returns internal error when repository fails", func() {
+			router := newTestRouter(Config{AnalysisResults: &fakeAnalysisResultRepository{err: errors.New("boom")}})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusInternalServerError))
+			Expect(decodeMapBody(w)["error"]).To(Equal("failed to fetch chunk results"))
 		})
 	})
 })

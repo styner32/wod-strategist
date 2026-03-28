@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime/multipart"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -79,6 +80,54 @@ func (c *Client) DownloadFile(ctx context.Context, gcsURI, destPath string) erro
 		return fmt.Errorf("io.Copy: %v", err)
 	}
 	return nil
+}
+
+// ListObjects returns the object names under the given prefix in the client's bucket,
+// sorted by creation time (oldest first) to guarantee chronological order.
+func (c *Client) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	type objectEntry struct {
+		name    string
+		created time.Time
+	}
+
+	it := c.client.Bucket(c.bucketName).Objects(ctx, &storage.Query{Prefix: prefix})
+	var entries []objectEntry
+	for {
+		attrs, err := it.Next()
+		if err != nil {
+			break
+		}
+		entries = append(entries, objectEntry{name: attrs.Name, created: attrs.Created})
+	}
+
+	// Sort by creation time to guarantee chronological order
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].created.Before(entries[j].created)
+	})
+
+	objects := make([]string, len(entries))
+	for i, e := range entries {
+		objects[i] = e.name
+	}
+	return objects, nil
+}
+
+// UploadFromFile uploads a local file to GCS and returns the gs:// URI.
+func (c *Client) UploadFromFile(ctx context.Context, localPath, objectName string) (string, error) {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return "", fmt.Errorf("os.Open: %v", err)
+	}
+	defer f.Close()
+
+	wc := c.client.Bucket(c.bucketName).Object(objectName).NewWriter(ctx)
+	if _, err := io.Copy(wc, f); err != nil {
+		return "", fmt.Errorf("io.Copy: %v", err)
+	}
+	if err := wc.Close(); err != nil {
+		return "", fmt.Errorf("Writer.Close: %v", err)
+	}
+	return fmt.Sprintf("gs://%s/%s", c.bucketName, objectName), nil
 }
 
 func ParseGCSURI(uri string) (bucket, object string, err error) {

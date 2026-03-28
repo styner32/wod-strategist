@@ -65,11 +65,15 @@ func main() {
 		logger.Log.Fatal("Failed to create gemini client", zap.Error(err))
 	}
 
-	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient)
+	// Create Asynq client for enqueueing tasks from workers (e.g. merge → analysis)
+	queueClient := asynq.NewClient(redisOpt)
+
+	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)
 	mux.HandleFunc(worker.TypeChunkAnalysis, w.HandleChunkAnalysisTask)
+	mux.HandleFunc(worker.TypeMergeChunks, w.HandleMergeChunksTask)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")

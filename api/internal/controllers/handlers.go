@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/subtitle"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 )
@@ -153,7 +156,7 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		zap.String("workout_type", workoutType),
 	)
 
-	task, err := ctl.newVideoAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries)
+	task, err := ctl.newVideoAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID)
 	if err != nil {
 		logger.Log.Error("failed to create task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -216,7 +219,7 @@ func (ctl *Controller) Upload(c *gin.Context) {
 		return
 	}
 
-	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil)
+	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, 0)
 	if err != nil {
 		logger.Log.Error("failed to create task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -285,7 +288,15 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		return
 	}
 
-	results, err := ctl.analysisResults.ListRecent(c.Request.Context(), 20)
+	var profileID uint
+	if pidStr := c.Query("profile_id"); pidStr != "" {
+		pid, err := strconv.ParseUint(pidStr, 10, 32)
+		if err == nil {
+			profileID = uint(pid)
+		}
+	}
+
+	results, err := ctl.analysisResults.ListRecent(c.Request.Context(), 20, profileID)
 	if err != nil {
 		logger.Log.Error("failed to fetch history", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
@@ -354,7 +365,7 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		return
 	}
 
-	var req CompleteUploadRequest
+	var req ChunkCompleteRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Log.Error("failed to bind JSON", zap.Error(err))
@@ -383,7 +394,7 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
-	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries)
+	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs)
 	if err != nil {
 		logger.Log.Error("failed to create chunk task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -402,4 +413,169 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		"task_id":    info.ID,
 		"session_id": req.SessionID,
 	})
+}
+
+// ==========================================
+// Profile Handlers
+// ==========================================
+
+func (ctl *Controller) CreateProfile(c *gin.Context) {
+	if ctl.profiles == nil {
+		logger.Log.Error("profile repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "profiles not configured"})
+		return
+	}
+
+	var req CreateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
+		return
+	}
+
+	profile := &db.Profile{
+		BirthYear:  req.BirthYear,
+		BirthMonth: req.BirthMonth,
+		BirthDay:   req.BirthDay,
+		Gender:     req.Gender,
+		HeightCm:   req.HeightCm,
+		WeightKg:   req.WeightKg,
+	}
+
+	if err := ctl.profiles.Create(c.Request.Context(), profile); err != nil {
+		logger.Log.Error("failed to create profile", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create profile"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, ProfileResponse{
+		ID:         profile.ID,
+		BirthYear:  profile.BirthYear,
+		BirthMonth: profile.BirthMonth,
+		BirthDay:   profile.BirthDay,
+		Gender:     profile.Gender,
+		HeightCm:   profile.HeightCm,
+		WeightKg:   profile.WeightKg,
+	})
+}
+
+func (ctl *Controller) GetProfile(c *gin.Context) {
+	if ctl.profiles == nil {
+		logger.Log.Error("profile repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "profiles not configured"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile id"})
+		return
+	}
+
+	profile, err := ctl.profiles.FindByID(c.Request.Context(), uint(id))
+	if err != nil {
+		logger.Log.Error("failed to find profile", zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, ProfileResponse{
+		ID:         profile.ID,
+		BirthYear:  profile.BirthYear,
+		BirthMonth: profile.BirthMonth,
+		BirthDay:   profile.BirthDay,
+		Gender:     profile.Gender,
+		HeightCm:   profile.HeightCm,
+		WeightKg:   profile.WeightKg,
+	})
+}
+
+// @Summary      Merge Chunks
+// @Description  Triggers server-side merging of all uploaded chunks for a session, then runs full video analysis
+// @Tags         upload
+// @Accept       json
+// @Produce      json
+// @Param        request body MergeChunksRequest true "Session and workout metadata"
+// @Success      202 {object} MergeChunksResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /merge-chunks [post]
+func (ctl *Controller) MergeChunks(c *gin.Context) {
+	if ctl.queueClient == nil {
+		logger.Log.Error("queue client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	var req MergeChunksRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Log.Error("failed to bind JSON", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+	req.WorkoutType = trimRequiredString(req.WorkoutType)
+
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
+
+	// The merge task uses the session ID to discover chunks in GCS (prefix = "videos/<sessionId>")
+	// We pass a placeholder GCS URI — the worker will list objects by prefix instead.
+	placeholderGCSURI := fmt.Sprintf("gs://%s/videos/%s", ctl.bucketName, req.SessionID)
+
+	task, err := ctl.newMergeChunksTask(req.SessionID, placeholderGCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID)
+	if err != nil {
+		logger.Log.Error("failed to create merge task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue merge task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":    "Merge started",
+		"task_id":    info.ID,
+		"session_id": req.SessionID,
+	})
+}
+
+// @Summary      Get Subtitles
+// @Description  Returns chunk analysis feedback as an SRT subtitle file for a given session
+// @Tags         analysis
+// @Produce      text/plain
+// @Param        session_id path string true "Session ID"
+// @Success      200 {string} string "SRT subtitle content"
+// @Failure      500 {object} ErrorResponse
+// @Router       /subtitles/:session_id [get]
+func (ctl *Controller) GetSubtitles(c *gin.Context) {
+	if ctl.analysisResults == nil {
+		logger.Log.Error("analysis result repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch results"})
+		return
+	}
+
+	sessionID := c.Param("session_id")
+
+	chunks, err := ctl.analysisResults.FindChunksBySessionID(c.Request.Context(), sessionID)
+	if err != nil {
+		logger.Log.Error("failed to fetch chunk results for subtitles", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chunk results"})
+		return
+	}
+
+	srt := subtitle.FormatSRT(chunks)
+
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.srt"`, sessionID))
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(srt))
 }

@@ -65,6 +65,7 @@ func main() {
 	handlers := controllers.New(controllers.Config{
 		QueueClient:     client,
 		AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn),
+		Profiles:        controllers.NewGormProfileRepository(dbConn),
 		StorageClient:   storageClient,
 		BucketName:      cfg.GCSBucketName,
 		GitCommit:       GitCommit,

@@ -31,13 +31,17 @@ func (r *GormAnalysisResultRepository) FindBySessionID(ctx context.Context, sess
 	return results, nil
 }
 
-func (r *GormAnalysisResultRepository) ListRecent(ctx context.Context, limit int) ([]db.AnalysisResult, error) {
+func (r *GormAnalysisResultRepository) ListRecent(ctx context.Context, limit int, profileID uint) ([]db.AnalysisResult, error) {
 	if r.db == nil {
 		return nil, errRepositoryNotConfigured
 	}
 
 	var results []db.AnalysisResult
-	if err := r.db.WithContext(ctx).Order("created_at desc").Limit(limit).Find(&results).Error; err != nil {
+	q := r.db.WithContext(ctx).Order("created_at desc").Limit(limit)
+	if profileID > 0 {
+		q = q.Where("profile_id = ?", profileID)
+	}
+	if err := q.Find(&results).Error; err != nil {
 		return nil, err
 	}
 
@@ -56,3 +60,36 @@ func (r *GormAnalysisResultRepository) FindChunksBySessionID(ctx context.Context
 
 	return results, nil
 }
+
+// ==========================================
+// Profile Repository
+// ==========================================
+
+var errProfileRepositoryNotConfigured = errors.New("profile repository is not configured")
+
+type GormProfileRepository struct {
+	db *gorm.DB
+}
+
+func NewGormProfileRepository(dbConn *gorm.DB) *GormProfileRepository {
+	return &GormProfileRepository{db: dbConn}
+}
+
+func (r *GormProfileRepository) Create(ctx context.Context, profile *db.Profile) error {
+	if r.db == nil {
+		return errProfileRepositoryNotConfigured
+	}
+	return r.db.WithContext(ctx).Create(profile).Error
+}
+
+func (r *GormProfileRepository) FindByID(ctx context.Context, id uint) (*db.Profile, error) {
+	if r.db == nil {
+		return nil, errProfileRepositoryNotConfigured
+	}
+	var profile db.Profile
+	if err := r.db.WithContext(ctx).First(&profile, id).Error; err != nil {
+		return nil, err
+	}
+	return &profile, nil
+}
+

@@ -80,6 +80,13 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
     containers {
       image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.app_name}-repo-${var.environment}/worker:latest"
       
+      resources {
+        limits = {
+          memory = "4Gi"
+          cpu    = "1"
+        }
+      }
+
       env {
         name  = "DATABASE_URL"
         value = "postgres://appuser:${var.db_password}@${google_sql_database_instance.postgres.private_ip_address}:5432/${google_sql_database.database.name}?sslmode=disable"

@@ -2,17 +2,23 @@ package worker
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/storage"
+	"github.com/wod-strategist/api/internal/subtitle"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -20,6 +26,7 @@ import (
 const (
 	TypeVideoAnalysis     = "video:analysis"
 	TypeChunkAnalysis     = "chunk:analysis"
+	TypeMergeChunks       = "merge:chunks"
 	WorkoutTypeWOD        = "wod"
 	WorkoutTypeRehab      = "rehab"
 	PersonalProfilePrompt = `
@@ -40,8 +47,9 @@ const (
 ## 분석 요청 사항
 당신은 전문 스포츠 생체역학 전문가이자 코치입니다. 위 컨텍스트와 첨부된 영상을 바탕으로 다음 항목을 분석해 주세요.
 
-1. **동작 분석 (Movement Analysis)**:
+1. **동작 분석 및 체형 평가 (Movement & Posture Analysis)**:
    - 전반적인 자세의 정확도와 가동 범위를 평가해주세요.
+   - 평소 체형의 불균형이나 의심되는 증상(예: 거북목, 라운드 숄더, 일자허리, 골반 비대칭 등)이 관찰된다면 함께 짚어주세요.
    - (입력된 운동 종목이 있다면) 해당 종목의 표준 기술(Standard)과 비교해 주세요.
 
 2. **강점 및 약점 (Strengths & Weaknesses)**:
@@ -101,6 +109,13 @@ type VideoAnalysisPayload struct {
 	WorkoutType string
 	Movements   []string
 	Injuries    []string
+	ProfileID   uint
+	StartSecs   float64
+	EndSecs     float64
+}
+
+type QueueClient interface {
+	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 }
 
 type Worker struct {
@@ -108,14 +123,16 @@ type Worker struct {
 	StorageClient *storage.Client
 	BucketName    string
 	GeminiClient  *gemini.Client
+	QueueClient   QueueClient
 }
 
-func NewWorker(db *gorm.DB, storageClient *storage.Client, bucketName string, geminiClient *gemini.Client) *Worker {
+func NewWorker(db *gorm.DB, storageClient *storage.Client, bucketName string, geminiClient *gemini.Client, queueClient QueueClient) *Worker {
 	return &Worker{
 		DB:            db,
 		StorageClient: storageClient,
 		BucketName:    bucketName,
 		GeminiClient:  geminiClient,
+		QueueClient:   queueClient,
 	}
 }
 
@@ -132,13 +149,14 @@ func IsValidWorkoutType(workoutType string) bool {
 		strings.EqualFold(workoutType, WorkoutTypeRehab)
 }
 
-func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string) (*asynq.Task, error) {
+func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
 		SessionID:   sessionID,
 		FilePath:    filePath,
 		WorkoutType: NormalizeWorkoutType(workoutType),
 		Movements:   movements,
 		Injuries:    injuries,
+		ProfileID:   profileID,
 	}
 
 	data, err := json.Marshal(payload)
@@ -148,13 +166,16 @@ func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []s
 	return asynq.NewTask(TypeVideoAnalysis, data), nil
 }
 
-func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string) (*asynq.Task, error) {
+func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
 		SessionID:   sessionID,
 		FilePath:    filePath,
 		WorkoutType: NormalizeWorkoutType(workoutType),
 		Movements:   movements,
 		Injuries:    injuries,
+		ProfileID:   profileID,
+		StartSecs:   startSecs,
+		EndSecs:     endSecs,
 	}
 
 	data, err := json.Marshal(payload)
@@ -213,7 +234,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	// Update status to PROCESSING (optional, if we tracked specific task IDs, but here we just append results)
 	// For simplicity, we just create a new result when done.
-	prompt := buildAnalysisPrompt(p)
+	prompt := w.buildAnalysisPrompt(p)
 
 	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
@@ -247,20 +268,28 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 		logger.Log.Error("Analysis failed", zap.Error(err))
 		// Save failure to DB
-		w.DB.Create(&db.AnalysisResult{
+		failedResult := &db.AnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
 			Output:    err.Error(),
-		})
+		}
+		if p.ProfileID > 0 {
+			failedResult.ProfileID = &p.ProfileID
+		}
+		w.DB.Create(failedResult)
 		return err
 	}
 
 	// Save success to DB
-	w.DB.Create(&db.AnalysisResult{
+	result := &db.AnalysisResult{
 		SessionID: p.SessionID,
 		Status:    "COMPLETED",
 		Output:    analysis,
-	})
+	}
+	if p.ProfileID > 0 {
+		result.ProfileID = &p.ProfileID
+	}
+	w.DB.Create(result)
 
 	logger.Log.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))
 	return nil
@@ -324,25 +353,41 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 
 	if err != nil {
-		w.DB.Create(&db.ChunkAnalysisResult{
+		chunkFailed := &db.ChunkAnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
 			Output:    err.Error(),
-		})
+		}
+		if p.ProfileID > 0 {
+			chunkFailed.ProfileID = &p.ProfileID
+		}
+		if p.StartSecs > 0 || p.EndSecs > 0 {
+			chunkFailed.StartSecs = &p.StartSecs
+			chunkFailed.EndSecs = &p.EndSecs
+		}
+		w.DB.Create(chunkFailed)
 		return err
 	}
 
-	w.DB.Create(&db.ChunkAnalysisResult{
+	chunkResult := &db.ChunkAnalysisResult{
 		SessionID: p.SessionID,
 		Status:    "COMPLETED",
 		Output:    analysis,
-	})
+	}
+	if p.ProfileID > 0 {
+		chunkResult.ProfileID = &p.ProfileID
+	}
+	if p.StartSecs > 0 || p.EndSecs > 0 {
+		chunkResult.StartSecs = &p.StartSecs
+		chunkResult.EndSecs = &p.EndSecs
+	}
+	w.DB.Create(chunkResult)
 
 	logger.Log.Info("Chunk analysis completed", zap.String("session_id", p.SessionID))
 	return nil
 }
 
-func buildAnalysisPrompt(p VideoAnalysisPayload) string {
+func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload) string {
 	prompt := AnalysisPrompt
 	if NormalizeWorkoutType(p.WorkoutType) == WorkoutTypeRehab {
 		prompt = RehabilitationPrompt
@@ -356,6 +401,382 @@ func buildAnalysisPrompt(p VideoAnalysisPayload) string {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
 	}
 
-	personalProfile := "생년월일: 1984년 10월 17일, 성별: 남, 키: 164cm, 몸무게: 72kg" // customize later when auth is ready
+	// Look up profile from DB; fall back to hardcoded default if not found
+	personalProfile := "생년월일: 1984년 10월 17일, 성별: 남, 키: 164cm, 몸무게: 72kg"
+	if p.ProfileID > 0 && w.DB != nil {
+		var profile db.Profile
+		if err := w.DB.First(&profile, p.ProfileID).Error; err == nil {
+			genderKo := "기타"
+			switch profile.Gender {
+			case "male":
+				genderKo = "남"
+			case "female":
+				genderKo = "여"
+			}
+			personalProfile = fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg",
+				profile.BirthYear, profile.BirthMonth, profile.BirthDay,
+				genderKo, profile.HeightCm, profile.WeightKg)
+		} else {
+			logger.Log.Warn("Profile not found, using default", zap.Uint("profile_id", p.ProfileID), zap.Error(err))
+		}
+	}
+
+	logger.Log.Warn("Personal Profile", zap.Uint("profile_id", p.ProfileID), zap.String("personal_profile", personalProfile))
+
 	return prompt + fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
+}
+
+func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
+	payload := VideoAnalysisPayload{
+		SessionID:   sessionID,
+		FilePath:    filePath,
+		WorkoutType: NormalizeWorkoutType(workoutType),
+		Movements:   movements,
+		Injuries:    injuries,
+		ProfileID:   profileID,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeMergeChunks, data), nil
+}
+
+func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error {
+	var p VideoAnalysisPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+	}
+
+	logger.Log.Info("Processing merge chunks",
+		zap.String("session_id", p.SessionID),
+		zap.String("file_path", p.FilePath))
+
+	// Extract session prefix from the placeholder GCS URI (e.g. "videos/session_xxx")
+	_, prefix, err := storage.ParseGCSURI(p.FilePath)
+	if err != nil {
+		return fmt.Errorf("invalid GCS URI for merge prefix: %w", asynq.SkipRetry)
+	}
+
+	// 1. List all chunk objects matching the session prefix
+	objects, err := w.StorageClient.ListObjects(ctx, prefix)
+	if err != nil {
+		return fmt.Errorf("failed to list chunk objects: %w", err)
+	}
+
+	// Filter out previously merged/hardsubbed files that share the same prefix
+	var chunkObjects []string
+	for _, obj := range objects {
+		base := filepath.Base(obj)
+		if strings.Contains(base, "_merged_") || strings.Contains(base, "_hardsubbed_") {
+			logger.Log.Info("Skipping non-chunk object", zap.String("object", obj))
+			continue
+		}
+		chunkObjects = append(chunkObjects, obj)
+	}
+	objects = chunkObjects
+
+	if len(objects) == 0 {
+		logger.Log.Warn("No chunk objects found for session (after filtering)", zap.String("prefix", prefix))
+		return fmt.Errorf("no chunks found: %w", asynq.SkipRetry)
+	}
+
+	// Sort objects to ensure chronological order (filenames contain timestamps)
+	sortStrings(objects)
+
+	logger.Log.Info("Found chunk objects", zap.Int("count", len(objects)), zap.Strings("objects", objects))
+
+	// 2. Download all chunks to /tmp/
+	tmpDir := filepath.Join("/tmp", fmt.Sprintf("merge_%s_%d", strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_"), os.Getpid()))
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create merge temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	var localChunkPaths []string
+	for i, obj := range objects {
+		localPath := filepath.Join(tmpDir, fmt.Sprintf("chunk_%03d_%s", i, filepath.Base(obj)))
+		gcsURI := fmt.Sprintf("gs://%s/%s", w.BucketName, obj)
+		if err := w.StorageClient.DownloadFile(ctx, gcsURI, localPath); err != nil {
+			return fmt.Errorf("failed to download chunk %s: %w", obj, err)
+		}
+		localChunkPaths = append(localChunkPaths, localPath)
+		logger.Log.Info("Downloaded chunk", zap.Int("index", i), zap.String("object", obj))
+	}
+
+	// 3. Create FFmpeg concat file list and merge in a single pass
+	concatListPath := filepath.Join(tmpDir, "concat_list.txt")
+	var concatEntries []string
+	for _, lp := range localChunkPaths {
+		concatEntries = append(concatEntries, fmt.Sprintf("file '%s'", lp))
+	}
+	if err := os.WriteFile(concatListPath, []byte(strings.Join(concatEntries, "\n")), 0o644); err != nil {
+		return fmt.Errorf("failed to write concat list: %w", err)
+	}
+
+	mergedPath := filepath.Join(tmpDir, fmt.Sprintf("merged_%s.mp4", p.SessionID))
+	if err := runFFmpegConcat(ctx, concatListPath, mergedPath); err != nil {
+		return fmt.Errorf("ffmpeg merge failed: %w", err)
+	}
+
+	// 4. Upload merged file to GCS
+	randSuffix := randomHex(4)
+	mergedObjectName := fmt.Sprintf("videos/%s_merged_%s.mp4", p.SessionID, randSuffix)
+	mergedGCSURI, err := w.StorageClient.UploadFromFile(ctx, mergedPath, mergedObjectName)
+	if err != nil {
+		return fmt.Errorf("failed to upload merged video: %w", err)
+	}
+
+	logger.Log.Info("Merged video uploaded", zap.String("gcs_uri", mergedGCSURI))
+
+	// 5. Hard-sub: burn chunk analysis subtitles into the merged video.
+	//
+	// WARNING: Hard-subbing requires full decode → re-encode of every frame.
+	// For a 5-min 720p video, expect ~200–400 MB RAM and ~2–5 min CPU time.
+	// Uses -preset ultrafast to minimise CPU time at the cost of ~40% larger files.
+	// Requires FFmpeg compiled with --enable-libass (subtitles filter).
+	//
+	// This step is best-effort: if it fails (e.g. missing libass, DB error,
+	// insufficient resources), we log the error and proceed without hard-subs.
+	// TODO: Consider moving to a separate, resource-heavy worker queue.
+	hardSubGCSURI := w.tryHardSub(ctx, p, tmpDir, mergedPath, randSuffix)
+
+	// 6. Enqueue full video analysis on the merged file
+	analysisTask, err := NewVideoAnalysisTask(p.SessionID, mergedGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID)
+	if err != nil {
+		return fmt.Errorf("failed to create analysis task for merged video: %w", err)
+	}
+
+	if _, err := w.QueueClient.Enqueue(analysisTask); err != nil {
+		return fmt.Errorf("failed to enqueue analysis task for merged video: %w", err)
+	}
+
+	logger.Log.Info("Analysis enqueued for merged video",
+		zap.String("session_id", p.SessionID),
+		zap.String("hardsub_uri", hardSubGCSURI))
+	return nil
+}
+
+// tryHardSub attempts to burn chunk analysis subtitles into the merged video.
+// Returns the GCS URI of the hard-subbed video on success, or empty string on
+// failure. Errors are logged but never propagated — hard-sub is best-effort.
+func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir, mergedPath, randSuffix string) string {
+	logger.Log.Info("Hard-sub: starting",
+		zap.String("session_id", p.SessionID),
+		zap.String("tmp_dir", tmpDir),
+		zap.String("merged_path", mergedPath),
+		zap.String("rand_suffix", randSuffix))
+
+	// Verify merged video exists and is non-empty
+	if fi, err := os.Stat(mergedPath); err != nil {
+		logger.Log.Warn("Hard-sub: merged video file not found, skipping",
+			zap.String("merged_path", mergedPath), zap.Error(err))
+		return ""
+	} else {
+		logger.Log.Info("Hard-sub: merged video file OK",
+			zap.String("merged_path", mergedPath),
+			zap.Int64("size_bytes", fi.Size()))
+	}
+
+	var chunks []db.ChunkAnalysisResult
+	if err := w.DB.Where("session_id = ? AND status = ?", p.SessionID, "COMPLETED").
+		Order("start_secs ASC").
+		Find(&chunks).Error; err != nil {
+		logger.Log.Warn("Hard-sub: failed to query chunk analysis, skipping",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return ""
+	}
+
+	logger.Log.Info("Hard-sub: queried chunk analysis",
+		zap.String("session_id", p.SessionID),
+		zap.Int("total_chunks", len(chunks)))
+
+	// Log each chunk's details for debugging
+	for i, ch := range chunks {
+		var startSecs, endSecs float64
+		if ch.StartSecs != nil {
+			startSecs = *ch.StartSecs
+		}
+		if ch.EndSecs != nil {
+			endSecs = *ch.EndSecs
+		}
+		outputPreview := ch.Output
+		if len(outputPreview) > 80 {
+			outputPreview = outputPreview[:80] + "..."
+		}
+		logger.Log.Info("Hard-sub: chunk detail",
+			zap.Int("index", i),
+			zap.String("status", ch.Status),
+			zap.Float64("start_secs", startSecs),
+			zap.Float64("end_secs", endSecs),
+			zap.Bool("has_start", ch.StartSecs != nil),
+			zap.Bool("has_end", ch.EndSecs != nil),
+			zap.Int("output_len", len(ch.Output)),
+			zap.String("output_preview", outputPreview))
+	}
+
+	srt := subtitle.FormatSRT(chunks)
+	if srt == "" {
+		logger.Log.Info("Hard-sub: no subtitle content, skipping",
+			zap.String("session_id", p.SessionID),
+			zap.Int("total_chunks", len(chunks)))
+		return ""
+	}
+
+	// Log SRT preview for debugging (first 200 chars)
+	srtPreview := srt
+	if len(srtPreview) > 200 {
+		srtPreview = srtPreview[:200] + "..."
+	}
+	logger.Log.Info("Hard-sub: generated SRT",
+		zap.String("session_id", p.SessionID),
+		zap.Int("srt_length", len(srt)),
+		zap.String("srt_preview", srtPreview))
+
+	srtPath := filepath.Join(tmpDir, "feedback.srt")
+	if err := os.WriteFile(srtPath, []byte(srt), 0o644); err != nil {
+		logger.Log.Warn("Hard-sub: failed to write SRT file, skipping", zap.Error(err))
+		return ""
+	}
+
+	// Verify SRT file was written correctly
+	if fi, err := os.Stat(srtPath); err != nil {
+		logger.Log.Warn("Hard-sub: SRT file stat failed after write",
+			zap.String("srt_path", srtPath), zap.Error(err))
+		return ""
+	} else {
+		logger.Log.Info("Hard-sub: SRT file written OK",
+			zap.String("srt_path", srtPath),
+			zap.Int64("size_bytes", fi.Size()))
+	}
+
+	hardSubPath := filepath.Join(tmpDir, fmt.Sprintf("hardsubbed_%s.mp4", p.SessionID))
+
+	logger.Log.Info("Hard-sub: starting FFmpeg",
+		zap.String("input", mergedPath),
+		zap.String("srt", srtPath),
+		zap.String("output", hardSubPath))
+
+	// Log resource usage before and after for observability
+	var memBefore runtime.MemStats
+	runtime.ReadMemStats(&memBefore)
+	start := time.Now()
+
+	if err := runFFmpegHardSub(ctx, mergedPath, srtPath, hardSubPath); err != nil {
+		logger.Log.Warn("Hard-sub: FFmpeg failed, skipping",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return ""
+	}
+
+	var memAfter runtime.MemStats
+	runtime.ReadMemStats(&memAfter)
+	elapsed := time.Since(start)
+
+	// Verify output file exists and is non-empty
+	var hardSubSizeBytes int64
+	if fi, err := os.Stat(hardSubPath); err != nil {
+		logger.Log.Warn("Hard-sub: output file not found after FFmpeg",
+			zap.String("output_path", hardSubPath), zap.Error(err))
+		return ""
+	} else {
+		hardSubSizeBytes = fi.Size()
+		if hardSubSizeBytes == 0 {
+			logger.Log.Warn("Hard-sub: output file is empty",
+				zap.String("output_path", hardSubPath))
+			return ""
+		}
+	}
+
+	logger.Log.Info("Hard-sub: FFmpeg completed",
+		zap.String("session_id", p.SessionID),
+		zap.Duration("duration", elapsed),
+		zap.Int64("output_size_bytes", hardSubSizeBytes),
+		zap.Uint64("mem_alloc_before_mb", memBefore.Alloc/1024/1024),
+		zap.Uint64("mem_alloc_after_mb", memAfter.Alloc/1024/1024),
+		zap.Uint64("mem_sys_mb", memAfter.Sys/1024/1024))
+
+	hardSubObjectName := fmt.Sprintf("videos/%s_hardsubbed_%s.mp4", p.SessionID, randSuffix)
+	logger.Log.Info("Hard-sub: uploading to GCS",
+		zap.String("object_name", hardSubObjectName),
+		zap.Int64("file_size_bytes", hardSubSizeBytes))
+
+	hardSubGCSURI, err := w.StorageClient.UploadFromFile(ctx, hardSubPath, hardSubObjectName)
+	if err != nil {
+		logger.Log.Warn("Hard-sub: failed to upload hard-subbed video, skipping",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return ""
+	}
+
+	logger.Log.Info("Hard-sub: uploaded",
+		zap.String("session_id", p.SessionID),
+		zap.String("gcs_uri", hardSubGCSURI))
+	return hardSubGCSURI
+}
+
+func runFFmpegConcat(ctx context.Context, concatListPath, outputPath string) error {
+	args := []string{
+		"-f", "concat",
+		"-safe", "0",
+		"-i", concatListPath,
+		"-c", "copy",
+		"-y",
+		outputPath,
+	}
+
+	logger.Log.Info("Running FFmpeg", zap.Strings("args", args))
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Log.Error("FFmpeg failed", zap.Error(err), zap.String("output", string(output)))
+		return fmt.Errorf("ffmpeg: %s: %w", string(output), err)
+	}
+
+	logger.Log.Info("FFmpeg merge completed", zap.String("output_path", outputPath))
+	return nil
+}
+
+// runFFmpegHardSub burns subtitles from an SRT file into a video using FFmpeg.
+//
+// WARNING: This runs a full decode→filter→re-encode pipeline.
+// CPU: ~100% single core for realtime-to-3x duration.
+// Memory: ~200–400 MB for 720p.
+// Uses -preset ultrafast to reduce CPU time at cost of ~40% larger output.
+func runFFmpegHardSub(ctx context.Context, inputPath, srtPath, outputPath string) error {
+	args := []string{
+		"-i", inputPath,
+		"-vf", fmt.Sprintf("subtitles=%s", srtPath),
+		"-preset", "ultrafast",
+		"-c:a", "copy",
+		"-y",
+		outputPath,
+	}
+
+	logger.Log.Info("Running FFmpeg hard-sub", zap.Strings("args", args))
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Log.Error("FFmpeg hard-sub failed", zap.Error(err), zap.String("output", string(output)))
+		return fmt.Errorf("ffmpeg hardsub: %s: %w", string(output), err)
+	}
+
+	logger.Log.Info("FFmpeg hard-sub completed", zap.String("output_path", outputPath))
+	return nil
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
+}
+
+// randomHex returns a cryptographically random hex string of n bytes (2n hex chars).
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

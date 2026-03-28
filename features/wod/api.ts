@@ -72,10 +72,14 @@ export interface UploadResult {
 
 export interface ProcessWorkoutVideoOptions {
   onProgress?: (progress: number) => void;
+  onCancelReady?: (cancel: () => Promise<void>) => void;
   movements?: string[];
   injuries?: string[];
   mimeType?: string;
   workoutType?: WorkoutType;
+  profileId?: number;
+  startSecs?: number;
+  endSecs?: number;
 }
 
 export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
@@ -86,6 +90,8 @@ export interface ChunkAnalysisResult {
   session_id: string;
   status: string;
   output: string;
+  start_secs?: number;
+  end_secs?: number;
   created_at: string;
   updated_at: string;
 }
@@ -100,6 +106,42 @@ export async function fetchMovements(): Promise<string[]> {
 
 export async function fetchInjuries(): Promise<string[]> {
   return apiClient<string[]>("/injuries");
+}
+
+// ==========================================
+// Profile API
+// ==========================================
+
+export interface ProfileResponse {
+  id: number;
+  birth_year: number;
+  birth_month: number;
+  birth_day: number;
+  gender: string;
+  height_cm: number;
+  weight_kg: number;
+}
+
+export interface CreateProfileRequest {
+  birth_year: number;
+  birth_month: number;
+  birth_day: number;
+  gender: string;
+  height_cm: number;
+  weight_kg: number;
+}
+
+export async function createProfile(
+  data: CreateProfileRequest
+): Promise<ProfileResponse> {
+  return apiClient<ProfileResponse>("/profiles", {
+    method: "POST",
+    bodyPayload: data,
+  });
+}
+
+export async function getProfile(id: number): Promise<ProfileResponse> {
+  return apiClient<ProfileResponse>(`/profiles/${id}`);
 }
 
 /** Step 1: Request a signed upload URL from our API */
@@ -118,7 +160,8 @@ export async function uploadToGcs(
   uploadUrl: string,
   fileUri: string,
   mimeType: string,
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number) => void,
+  onCancelReady?: (cancel: () => Promise<void>) => void
 ): Promise<void> {
   const uploadTask = createUploadTask(
     uploadUrl,
@@ -134,6 +177,9 @@ export async function uploadToGcs(
       }
     }
   );
+
+  // Expose the cancel function to the caller before starting
+  onCancelReady?.(() => uploadTask.cancelAsync());
 
   const response = await uploadTask.uploadAsync();
 
@@ -154,7 +200,8 @@ export async function notifyUploadComplete(
   gcsUri: string,
   movements: string[],
   injuries: string[],
-  workoutType: string
+  workoutType: string,
+  profileId?: number
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/upload-complete", {
     method: "POST",
@@ -164,6 +211,7 @@ export async function notifyUploadComplete(
       movements,
       injuries,
       workout_type: workoutType,
+      ...(profileId ? { profile_id: profileId } : {}),
     },
   });
 }
@@ -173,7 +221,10 @@ export async function notifyChunkUploadComplete(
   gcsUri: string,
   movements: string[],
   injuries: string[],
-  workoutType: string
+  workoutType: string,
+  profileId?: number,
+  startSecs?: number,
+  endSecs?: number
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
@@ -183,6 +234,9 @@ export async function notifyChunkUploadComplete(
       movements,
       injuries,
       workout_type: workoutType,
+      ...(profileId ? { profile_id: profileId } : {}),
+      ...(startSecs !== undefined ? { start_secs: startSecs } : {}),
+      ...(endSecs !== undefined ? { end_secs: endSecs } : {}),
     },
   });
 }
@@ -197,10 +251,12 @@ export async function processWorkoutVideo(
 ): Promise<UploadResult> {
   const {
     onProgress,
+    onCancelReady,
     movements = [],
     injuries = [],
     mimeType = "video/mp4",
     workoutType = "wod",
+    profileId,
   } = options;
   const filename = fileUri.split("/").pop() || "workout.mp4";
 
@@ -209,7 +265,7 @@ export async function processWorkoutVideo(
   const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename);
   console.log("✅ Got Signed URL");
 
-  await uploadToGcs(upload_url, fileUri, mimeType, onProgress);
+  await uploadToGcs(upload_url, fileUri, mimeType, onProgress, onCancelReady);
   console.log("✅ Uploaded to GCS");
 
   const result = await notifyUploadComplete(
@@ -217,7 +273,8 @@ export async function processWorkoutVideo(
     gcs_uri,
     movements,
     injuries,
-    workoutType
+    workoutType,
+    profileId
   );
   console.log("✅ Analysis Started:", result);
 
@@ -237,6 +294,9 @@ export async function processWorkoutChunk(
     injuries = [],
     mimeType = "video/mp4",
     workoutType = "wod",
+    profileId,
+    startSecs,
+    endSecs,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
 
@@ -248,11 +308,63 @@ export async function processWorkoutChunk(
     gcs_uri,
     movements,
     injuries,
-    workoutType
+    workoutType,
+    profileId,
+    startSecs,
+    endSecs
   );
 
   return {
     taskId: result.task_id,
     sessionId: result.session_id,
+  };
+}
+
+export interface MergeChunksResult {
+  taskId: string;
+  sessionId: string;
+  message: string;
+}
+
+/**
+ * Triggers server-side merging of all uploaded chunks for a session.
+ * The backend downloads chunks from GCS, merges with FFmpeg, then
+ * enqueues a full video analysis task on the merged video.
+ */
+export async function mergeChunks(
+  sessionId: string,
+  options: {
+    workoutType?: WorkoutType;
+    movements?: string[];
+    injuries?: string[];
+    profileId?: number;
+  } = {}
+): Promise<MergeChunksResult> {
+  const {
+    workoutType = "wod",
+    movements = [],
+    injuries = [],
+    profileId,
+  } = options;
+
+  const result = await apiClient<{
+    task_id: string;
+    session_id: string;
+    message: string;
+  }>("/merge-chunks", {
+    method: "POST",
+    bodyPayload: {
+      session_id: sessionId,
+      workout_type: workoutType,
+      movements,
+      injuries,
+      ...(profileId ? { profile_id: profileId } : {}),
+    },
+  });
+
+  return {
+    taskId: result.task_id,
+    sessionId: result.session_id,
+    message: result.message,
   };
 }

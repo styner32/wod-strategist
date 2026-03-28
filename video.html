@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Local MP4 + SRT Player</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background-color: #121212;
+      color: #ffffff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem;
+      margin: 0;
+    }
+
+    .file-controls {
+      background-color: #1e1e1e;
+      padding: 1.5rem;
+      border-radius: 8px;
+      margin-bottom: 2rem;
+      border: 1px solid #333;
+      width: 100%;
+      max-width: 600px;
+    }
+
+    .input-group {
+      margin-bottom: 1rem;
+    }
+
+    .input-group:last-child {
+      margin-bottom: 0;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: bold;
+      color: #4CAF50;
+    }
+
+    input[type="file"] {
+      color: #ccc;
+    }
+
+    .video-container {
+      width: 800px;
+      /* Default starting width */
+      min-width: 320px;
+      /* Prevent it from getting too small */
+      max-width: 100vw;
+      /* Prevent it from overflowing the screen width */
+      resize: both;
+      /* Adds the drag-to-resize handle */
+      overflow: hidden;
+      /* Required for 'resize' to work */
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+      background-color: #000;
+
+      /* Center it and give it some breathing room */
+      margin: 0 auto;
+
+      /* Optional: maintain a general video shape while resizing */
+      aspect-ratio: 16 / 9;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      /* Ensures the video letterboxes correctly without stretching */
+      object-fit: contain;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="file-controls">
+    <div class="input-group">
+      <label for="videoInput">1. Select Video (.mp4)</label>
+      <input type="file" id="videoInput" accept="video/mp4, video/x-m4v, video/*">
+    </div>
+    <div class="input-group">
+      <label for="srtInput">2. Select Subtitles (.srt)</label>
+      <input type="file" id="srtInput" accept=".srt">
+    </div>
+  </div>
+
+  <div class="video-container">
+    <video id="videoPlayer" controls playsinline>
+      <track id="subtitleTrack" kind="subtitles" srclang="en" label="English" default>
+      Your browser does not support the video tag.
+    </video>
+  </div>
+
+  <script>
+    const videoInput = document.getElementById('videoInput');
+    const srtInput = document.getElementById('srtInput');
+    const videoPlayer = document.getElementById('videoPlayer');
+    const subtitleTrack = document.getElementById('subtitleTrack');
+
+    // 1. Handle the Video File
+    videoInput.addEventListener('change', function (event) {
+      const file = event.target.files[0];
+      if (file) {
+        // Create a temporary local URL for the video file
+        const videoURL = URL.createObjectURL(file);
+        videoPlayer.src = videoURL;
+      }
+    });
+
+    // 2. Handle the SRT File and convert it on the fly
+    srtInput.addEventListener('change', async function (event) {
+      const file = event.target.files[0];
+      if (file) {
+        // Read the SRT file as text
+        const srtText = await file.text();
+
+        // Convert SRT format to WebVTT format
+        // SRT uses commas for milliseconds (00:00:01,000)
+        // VTT uses periods for milliseconds (00:00:01.000)
+        const vttText = "WEBVTT\n\n" + srtText.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+
+        // Package the new VTT text into a Blob (a file-like object)
+        const blob = new Blob([vttText], { type: 'text/vtt' });
+
+        // Create a temporary local URL for the new subtitle data
+        const vttURL = URL.createObjectURL(blob);
+
+        // Load it into the video player's track
+        subtitleTrack.src = vttURL;
+      }
+    });
+  </script>
+
+</body>
+
+</html>
