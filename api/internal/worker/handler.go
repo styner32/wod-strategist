@@ -465,8 +465,20 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		return fmt.Errorf("failed to list chunk objects: %w", err)
 	}
 
+	// Filter out previously merged/hardsubbed files that share the same prefix
+	var chunkObjects []string
+	for _, obj := range objects {
+		base := filepath.Base(obj)
+		if strings.Contains(base, "_merged_") || strings.Contains(base, "_hardsubbed_") {
+			logger.Log.Info("Skipping non-chunk object", zap.String("object", obj))
+			continue
+		}
+		chunkObjects = append(chunkObjects, obj)
+	}
+	objects = chunkObjects
+
 	if len(objects) == 0 {
-		logger.Log.Warn("No chunk objects found for session", zap.String("prefix", prefix))
+		logger.Log.Warn("No chunk objects found for session (after filtering)", zap.String("prefix", prefix))
 		return fmt.Errorf("no chunks found: %w", asynq.SkipRetry)
 	}
 
@@ -550,6 +562,23 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 // Returns the GCS URI of the hard-subbed video on success, or empty string on
 // failure. Errors are logged but never propagated — hard-sub is best-effort.
 func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir, mergedPath, randSuffix string) string {
+	logger.Log.Info("Hard-sub: starting",
+		zap.String("session_id", p.SessionID),
+		zap.String("tmp_dir", tmpDir),
+		zap.String("merged_path", mergedPath),
+		zap.String("rand_suffix", randSuffix))
+
+	// Verify merged video exists and is non-empty
+	if fi, err := os.Stat(mergedPath); err != nil {
+		logger.Log.Warn("Hard-sub: merged video file not found, skipping",
+			zap.String("merged_path", mergedPath), zap.Error(err))
+		return ""
+	} else {
+		logger.Log.Info("Hard-sub: merged video file OK",
+			zap.String("merged_path", mergedPath),
+			zap.Int64("size_bytes", fi.Size()))
+	}
+
 	var chunks []db.ChunkAnalysisResult
 	if err := w.DB.Where("session_id = ? AND status = ?", p.SessionID, "COMPLETED").
 		Order("start_secs ASC").
@@ -562,6 +591,30 @@ func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir,
 	logger.Log.Info("Hard-sub: queried chunk analysis",
 		zap.String("session_id", p.SessionID),
 		zap.Int("total_chunks", len(chunks)))
+
+	// Log each chunk's details for debugging
+	for i, ch := range chunks {
+		var startSecs, endSecs float64
+		if ch.StartSecs != nil {
+			startSecs = *ch.StartSecs
+		}
+		if ch.EndSecs != nil {
+			endSecs = *ch.EndSecs
+		}
+		outputPreview := ch.Output
+		if len(outputPreview) > 80 {
+			outputPreview = outputPreview[:80] + "..."
+		}
+		logger.Log.Info("Hard-sub: chunk detail",
+			zap.Int("index", i),
+			zap.String("status", ch.Status),
+			zap.Float64("start_secs", startSecs),
+			zap.Float64("end_secs", endSecs),
+			zap.Bool("has_start", ch.StartSecs != nil),
+			zap.Bool("has_end", ch.EndSecs != nil),
+			zap.Int("output_len", len(ch.Output)),
+			zap.String("output_preview", outputPreview))
+	}
 
 	srt := subtitle.FormatSRT(chunks)
 	if srt == "" {
@@ -587,7 +640,23 @@ func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir,
 		return ""
 	}
 
+	// Verify SRT file was written correctly
+	if fi, err := os.Stat(srtPath); err != nil {
+		logger.Log.Warn("Hard-sub: SRT file stat failed after write",
+			zap.String("srt_path", srtPath), zap.Error(err))
+		return ""
+	} else {
+		logger.Log.Info("Hard-sub: SRT file written OK",
+			zap.String("srt_path", srtPath),
+			zap.Int64("size_bytes", fi.Size()))
+	}
+
 	hardSubPath := filepath.Join(tmpDir, fmt.Sprintf("hardsubbed_%s.mp4", p.SessionID))
+
+	logger.Log.Info("Hard-sub: starting FFmpeg",
+		zap.String("input", mergedPath),
+		zap.String("srt", srtPath),
+		zap.String("output", hardSubPath))
 
 	// Log resource usage before and after for observability
 	var memBefore runtime.MemStats
@@ -604,10 +673,19 @@ func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir,
 	runtime.ReadMemStats(&memAfter)
 	elapsed := time.Since(start)
 
-	// Log output file size for comparison with input
+	// Verify output file exists and is non-empty
 	var hardSubSizeBytes int64
-	if fi, err := os.Stat(hardSubPath); err == nil {
+	if fi, err := os.Stat(hardSubPath); err != nil {
+		logger.Log.Warn("Hard-sub: output file not found after FFmpeg",
+			zap.String("output_path", hardSubPath), zap.Error(err))
+		return ""
+	} else {
 		hardSubSizeBytes = fi.Size()
+		if hardSubSizeBytes == 0 {
+			logger.Log.Warn("Hard-sub: output file is empty",
+				zap.String("output_path", hardSubPath))
+			return ""
+		}
 	}
 
 	logger.Log.Info("Hard-sub: FFmpeg completed",
@@ -619,6 +697,10 @@ func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir,
 		zap.Uint64("mem_sys_mb", memAfter.Sys/1024/1024))
 
 	hardSubObjectName := fmt.Sprintf("videos/%s_hardsubbed_%s.mp4", p.SessionID, randSuffix)
+	logger.Log.Info("Hard-sub: uploading to GCS",
+		zap.String("object_name", hardSubObjectName),
+		zap.Int64("file_size_bytes", hardSubSizeBytes))
+
 	hardSubGCSURI, err := w.StorageClient.UploadFromFile(ctx, hardSubPath, hardSubObjectName)
 	if err != nil {
 		logger.Log.Warn("Hard-sub: failed to upload hard-subbed video, skipping",
