@@ -98,7 +98,7 @@ const (
 	ChunkAnalysisPrompt = `
 # 운동 청크 영상 분석 요청 (실시간 피드백)
 
-당신은 전문 코치입니다. 방금 수행된 10초 분량의 짧은 영상이 주어집니다. 
+당신은 전문 코치입니다. 방금 수행된 10초 분량의 짧은 영상이 주어집니다.
 오직 딱 1~2문장으로, 즉각적인 자세 교정 또는 격려 피드백만 짧게 제시하세요.
 (예: "허리가 굽고 있습니다, 가슴을 펴고 복압을 유지하세요!" 또는 "아주 좋습니다!")`
 )
@@ -361,7 +361,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		chunkFailed := &db.ChunkAnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
-			Output:    "An internal error occurred during chunk analysis.",
+			Output:    err.Error(),
 		}
 		if p.ProfileID > 0 {
 			chunkFailed.ProfileID = &p.ProfileID

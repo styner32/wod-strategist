@@ -1,7 +1,6 @@
-1. **Fix API Key Timing Attack Vulnerability in Go Backend (`api/internal/server/router.go`)**
-   - The current code compares the provided `X-API-Key` to the `API_SECRET` environment variable using a direct string comparison (`apiKey != apiSecret`).
-   - This makes the API key comparison vulnerable to a timing attack, where an attacker could theoretically guess the API key character by character based on the time it takes for the comparison to fail.
-   - The fix is to use `crypto/subtle.ConstantTimeCompare` instead of `!=`.
+1. **Fix Information Exposure in Chunk Analysis Errors (`api/internal/worker/handler.go`)**
+   - The `HandleChunkAnalysisTask` function currently sets the `Output` field of the failed `ChunkAnalysisResult` to `err.Error()`. This exposes raw internal errors to the user.
+   - The fix is to replace `err.Error()` with a safe, generic error message like `"An internal error occurred during chunk analysis."` and ensure the raw error is only logged on the server side (which is already happening).
 
 2. **Run Tests to Verify Fix**
    - Run `go test ./...` in the `api/` directory (with a dummy database URL as required by tests) to ensure the API still works correctly.

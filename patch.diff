@@ -1,0 +1,11 @@
+--- api/internal/worker/handler.go
++++ api/internal/worker/handler.go
+@@ -370,7 +370,7 @@
+		chunkFailed := &db.ChunkAnalysisResult{
+			SessionID: p.SessionID,
+			Status:    "FAILED",
+-			Output:    err.Error(),
++			Output:    "An internal error occurred during chunk analysis.",
+		}
+		if p.ProfileID > 0 {
+			chunkFailed.ProfileID = &p.ProfileID
