@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime/multipart"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -81,16 +82,32 @@ func (c *Client) DownloadFile(ctx context.Context, gcsURI, destPath string) erro
 	return nil
 }
 
-// ListObjects returns the object names under the given prefix in the client's bucket.
+// ListObjects returns the object names under the given prefix in the client's bucket,
+// sorted by creation time (oldest first) to guarantee chronological order.
 func (c *Client) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	type objectEntry struct {
+		name    string
+		created time.Time
+	}
+
 	it := c.client.Bucket(c.bucketName).Objects(ctx, &storage.Query{Prefix: prefix})
-	var objects []string
+	var entries []objectEntry
 	for {
 		attrs, err := it.Next()
 		if err != nil {
 			break
 		}
-		objects = append(objects, attrs.Name)
+		entries = append(entries, objectEntry{name: attrs.Name, created: attrs.Created})
+	}
+
+	// Sort by creation time to guarantee chronological order
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].created.Before(entries[j].created)
+	})
+
+	objects := make([]string, len(entries))
+	for i, e := range entries {
+		objects[i] = e.name
 	}
 	return objects, nil
 }

@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/worker ./cmd/worke
 FROM alpine:3.20
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates ffmpeg \
+RUN apk add --no-cache ca-certificates ffmpeg libass \
 	&& adduser -D -g '' appuser
 
 COPY --chown=appuser:appuser --from=builder /out/worker ./worker

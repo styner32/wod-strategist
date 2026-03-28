@@ -2,18 +2,23 @@ package worker
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/storage"
+	"github.com/wod-strategist/api/internal/subtitle"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -504,7 +509,8 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	}
 
 	// 4. Upload merged file to GCS
-	mergedObjectName := fmt.Sprintf("videos/%s_merged.mp4", p.SessionID)
+	randSuffix := randomHex(4)
+	mergedObjectName := fmt.Sprintf("videos/%s_merged_%s.mp4", p.SessionID, randSuffix)
 	mergedGCSURI, err := w.StorageClient.UploadFromFile(ctx, mergedPath, mergedObjectName)
 	if err != nil {
 		return fmt.Errorf("failed to upload merged video: %w", err)
@@ -512,7 +518,19 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 
 	logger.Log.Info("Merged video uploaded", zap.String("gcs_uri", mergedGCSURI))
 
-	// 5. Enqueue full video analysis on the merged file
+	// 5. Hard-sub: burn chunk analysis subtitles into the merged video.
+	//
+	// WARNING: Hard-subbing requires full decode → re-encode of every frame.
+	// For a 5-min 720p video, expect ~200–400 MB RAM and ~2–5 min CPU time.
+	// Uses -preset ultrafast to minimise CPU time at the cost of ~40% larger files.
+	// Requires FFmpeg compiled with --enable-libass (subtitles filter).
+	//
+	// This step is best-effort: if it fails (e.g. missing libass, DB error,
+	// insufficient resources), we log the error and proceed without hard-subs.
+	// TODO: Consider moving to a separate, resource-heavy worker queue.
+	hardSubGCSURI := w.tryHardSub(ctx, p, tmpDir, mergedPath, randSuffix)
+
+	// 6. Enqueue full video analysis on the merged file
 	analysisTask, err := NewVideoAnalysisTask(p.SessionID, mergedGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID)
 	if err != nil {
 		return fmt.Errorf("failed to create analysis task for merged video: %w", err)
@@ -522,8 +540,96 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		return fmt.Errorf("failed to enqueue analysis task for merged video: %w", err)
 	}
 
-	logger.Log.Info("Analysis enqueued for merged video", zap.String("session_id", p.SessionID))
+	logger.Log.Info("Analysis enqueued for merged video",
+		zap.String("session_id", p.SessionID),
+		zap.String("hardsub_uri", hardSubGCSURI))
 	return nil
+}
+
+// tryHardSub attempts to burn chunk analysis subtitles into the merged video.
+// Returns the GCS URI of the hard-subbed video on success, or empty string on
+// failure. Errors are logged but never propagated — hard-sub is best-effort.
+func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir, mergedPath, randSuffix string) string {
+	var chunks []db.ChunkAnalysisResult
+	if err := w.DB.Where("session_id = ? AND status = ?", p.SessionID, "COMPLETED").
+		Order("start_secs ASC").
+		Find(&chunks).Error; err != nil {
+		logger.Log.Warn("Hard-sub: failed to query chunk analysis, skipping",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return ""
+	}
+
+	logger.Log.Info("Hard-sub: queried chunk analysis",
+		zap.String("session_id", p.SessionID),
+		zap.Int("total_chunks", len(chunks)))
+
+	srt := subtitle.FormatSRT(chunks)
+	if srt == "" {
+		logger.Log.Info("Hard-sub: no subtitle content, skipping",
+			zap.String("session_id", p.SessionID),
+			zap.Int("total_chunks", len(chunks)))
+		return ""
+	}
+
+	// Log SRT preview for debugging (first 200 chars)
+	srtPreview := srt
+	if len(srtPreview) > 200 {
+		srtPreview = srtPreview[:200] + "..."
+	}
+	logger.Log.Info("Hard-sub: generated SRT",
+		zap.String("session_id", p.SessionID),
+		zap.Int("srt_length", len(srt)),
+		zap.String("srt_preview", srtPreview))
+
+	srtPath := filepath.Join(tmpDir, "feedback.srt")
+	if err := os.WriteFile(srtPath, []byte(srt), 0o644); err != nil {
+		logger.Log.Warn("Hard-sub: failed to write SRT file, skipping", zap.Error(err))
+		return ""
+	}
+
+	hardSubPath := filepath.Join(tmpDir, fmt.Sprintf("hardsubbed_%s.mp4", p.SessionID))
+
+	// Log resource usage before and after for observability
+	var memBefore runtime.MemStats
+	runtime.ReadMemStats(&memBefore)
+	start := time.Now()
+
+	if err := runFFmpegHardSub(ctx, mergedPath, srtPath, hardSubPath); err != nil {
+		logger.Log.Warn("Hard-sub: FFmpeg failed, skipping",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return ""
+	}
+
+	var memAfter runtime.MemStats
+	runtime.ReadMemStats(&memAfter)
+	elapsed := time.Since(start)
+
+	// Log output file size for comparison with input
+	var hardSubSizeBytes int64
+	if fi, err := os.Stat(hardSubPath); err == nil {
+		hardSubSizeBytes = fi.Size()
+	}
+
+	logger.Log.Info("Hard-sub: FFmpeg completed",
+		zap.String("session_id", p.SessionID),
+		zap.Duration("duration", elapsed),
+		zap.Int64("output_size_bytes", hardSubSizeBytes),
+		zap.Uint64("mem_alloc_before_mb", memBefore.Alloc/1024/1024),
+		zap.Uint64("mem_alloc_after_mb", memAfter.Alloc/1024/1024),
+		zap.Uint64("mem_sys_mb", memAfter.Sys/1024/1024))
+
+	hardSubObjectName := fmt.Sprintf("videos/%s_hardsubbed_%s.mp4", p.SessionID, randSuffix)
+	hardSubGCSURI, err := w.StorageClient.UploadFromFile(ctx, hardSubPath, hardSubObjectName)
+	if err != nil {
+		logger.Log.Warn("Hard-sub: failed to upload hard-subbed video, skipping",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return ""
+	}
+
+	logger.Log.Info("Hard-sub: uploaded",
+		zap.String("session_id", p.SessionID),
+		zap.String("gcs_uri", hardSubGCSURI))
+	return hardSubGCSURI
 }
 
 func runFFmpegConcat(ctx context.Context, concatListPath, outputPath string) error {
@@ -549,10 +655,46 @@ func runFFmpegConcat(ctx context.Context, concatListPath, outputPath string) err
 	return nil
 }
 
+// runFFmpegHardSub burns subtitles from an SRT file into a video using FFmpeg.
+//
+// WARNING: This runs a full decode→filter→re-encode pipeline.
+// CPU: ~100% single core for realtime-to-3x duration.
+// Memory: ~200–400 MB for 720p.
+// Uses -preset ultrafast to reduce CPU time at cost of ~40% larger output.
+func runFFmpegHardSub(ctx context.Context, inputPath, srtPath, outputPath string) error {
+	args := []string{
+		"-i", inputPath,
+		"-vf", fmt.Sprintf("subtitles=%s", srtPath),
+		"-preset", "ultrafast",
+		"-c:a", "copy",
+		"-y",
+		outputPath,
+	}
+
+	logger.Log.Info("Running FFmpeg hard-sub", zap.Strings("args", args))
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Log.Error("FFmpeg hard-sub failed", zap.Error(err), zap.String("output", string(output)))
+		return fmt.Errorf("ffmpeg hardsub: %s: %w", string(output), err)
+	}
+
+	logger.Log.Info("FFmpeg hard-sub completed", zap.String("output_path", outputPath))
+	return nil
+}
+
 func sortStrings(s []string) {
 	for i := 1; i < len(s); i++ {
 		for j := i; j > 0 && s[j-1] > s[j]; j-- {
 			s[j-1], s[j] = s[j], s[j-1]
 		}
 	}
+}
+
+// randomHex returns a cryptographically random hex string of n bytes (2n hex chars).
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

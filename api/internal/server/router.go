@@ -23,6 +23,7 @@ type Handlers interface {
 	CreateProfile(*gin.Context)
 	GetProfile(*gin.Context)
 	MergeChunks(*gin.Context)
+	GetSubtitles(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -172,6 +173,16 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.POST("/merge-chunks", handlers.MergeChunks)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "subtitles",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/subtitles/:session_id",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/subtitles/:session_id", handlers.GetSubtitles)
 		},
 	},
 }

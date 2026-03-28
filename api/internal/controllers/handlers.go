@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/subtitle"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 )
@@ -547,4 +548,34 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 		"task_id":    info.ID,
 		"session_id": req.SessionID,
 	})
+}
+
+// @Summary      Get Subtitles
+// @Description  Returns chunk analysis feedback as an SRT subtitle file for a given session
+// @Tags         analysis
+// @Produce      text/plain
+// @Param        session_id path string true "Session ID"
+// @Success      200 {string} string "SRT subtitle content"
+// @Failure      500 {object} ErrorResponse
+// @Router       /subtitles/:session_id [get]
+func (ctl *Controller) GetSubtitles(c *gin.Context) {
+	if ctl.analysisResults == nil {
+		logger.Log.Error("analysis result repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch results"})
+		return
+	}
+
+	sessionID := c.Param("session_id")
+
+	chunks, err := ctl.analysisResults.FindChunksBySessionID(c.Request.Context(), sessionID)
+	if err != nil {
+		logger.Log.Error("failed to fetch chunk results for subtitles", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chunk results"})
+		return
+	}
+
+	srt := subtitle.FormatSRT(chunks)
+
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.srt"`, sessionID))
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(srt))
 }

@@ -74,6 +74,10 @@ func (h *recordingHandlers) MergeChunks(c *gin.Context) {
 	h.record("merge-chunks", c)
 }
 
+func (h *recordingHandlers) GetSubtitles(c *gin.Context) {
+	h.record("subtitles", c)
+}
+
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)

@@ -591,6 +591,84 @@ var _ = Describe("Controller handlers", func() {
 			Expect(got[0]).To(Equal(injuries[0]))
 		})
 	})
+
+	Describe("GET /api/v1/subtitles/:session_id", func() {
+		It("returns SRT with correct format for completed chunks sorted by start_secs", func() {
+			start1, end1 := 10.0, 20.0
+			start2, end2 := 0.0, 10.0
+			repo := &fakeAnalysisResultRepository{
+				chunkResults: []db.ChunkAnalysisResult{
+					{ID: 1, SessionID: "session-1", Status: "COMPLETED", Output: "Second chunk", StartSecs: &start1, EndSecs: &end1},
+					{ID: 2, SessionID: "session-1", Status: "COMPLETED", Output: "First chunk", StartSecs: &start2, EndSecs: &end2},
+				},
+			}
+			router := newTestRouter(Config{AnalysisResults: repo})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(w.Header().Get("Content-Type")).To(Equal("text/plain; charset=utf-8"))
+			Expect(w.Header().Get("Content-Disposition")).To(ContainSubstring("session-1.srt"))
+
+			body := w.Body.String()
+			Expect(body).To(ContainSubstring("1\n00:00:00,000 --> 00:00:10,000\nFirst chunk\n"))
+			Expect(body).To(ContainSubstring("2\n00:00:10,000 --> 00:00:20,000\nSecond chunk\n"))
+		})
+
+		It("returns empty body when no completed chunks exist", func() {
+			start, end := 0.0, 10.0
+			repo := &fakeAnalysisResultRepository{
+				chunkResults: []db.ChunkAnalysisResult{
+					{ID: 1, SessionID: "session-1", Status: "FAILED", Output: "error", StartSecs: &start, EndSecs: &end},
+				},
+			}
+			router := newTestRouter(Config{AnalysisResults: repo})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(w.Body.String()).To(BeEmpty())
+		})
+
+		It("skips chunks without start/end timestamps", func() {
+			start, end := 0.0, 10.0
+			repo := &fakeAnalysisResultRepository{
+				chunkResults: []db.ChunkAnalysisResult{
+					{ID: 1, SessionID: "session-1", Status: "COMPLETED", Output: "has timestamps", StartSecs: &start, EndSecs: &end},
+					{ID: 2, SessionID: "session-1", Status: "COMPLETED", Output: "no timestamps"},
+				},
+			}
+			router := newTestRouter(Config{AnalysisResults: repo})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			body := w.Body.String()
+			Expect(body).To(ContainSubstring("has timestamps"))
+			Expect(body).NotTo(ContainSubstring("no timestamps"))
+		})
+
+		It("returns internal error when repository fails", func() {
+			router := newTestRouter(Config{AnalysisResults: &fakeAnalysisResultRepository{err: errors.New("boom")}})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusInternalServerError))
+			Expect(decodeMapBody(w)["error"]).To(Equal("failed to fetch chunk results"))
+		})
+	})
 })
 
 var _ = Describe("validation helpers", func() {
