@@ -78,6 +78,14 @@ func (h *recordingHandlers) GetSubtitles(c *gin.Context) {
 	h.record("subtitles", c)
 }
 
+func (h *recordingHandlers) GenerateHighlight(c *gin.Context) {
+	h.record("generate-highlight", c)
+}
+
+func (h *recordingHandlers) GetHighlight(c *gin.Context) {
+	h.record("highlight", c)
+}
+
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)

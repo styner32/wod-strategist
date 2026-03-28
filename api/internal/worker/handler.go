@@ -29,6 +29,7 @@ const (
 	TypeChunkAnalysis     = "chunk:analysis"
 	TypeMergeChunks       = "merge:chunks"
 	TypeInjuryAnalysis    = "injury:analysis"
+	TypeGenerateHighlight = "highlight:generate"
 	WorkoutTypeWOD        = "wod"
 	PersonalProfilePrompt = `
 ## 개인 프로필
@@ -67,6 +68,15 @@ const (
 
 5. **핵심 구간 타임스탬프 (Key Timestamps)**:
    - 피드백과 관련된 비디오의 중요 구간(시작 시간 - 종료 시간)을 나열하고, 해당 구간을 주목해야 하는 이유를 한 문장으로 요약해 주세요.`
+
+	HighlightSelectionPrompt = `
+
+7. **하이라이트 구간 (Highlight Segments)**:
+   - 소셜 미디어 공유나 퍼포먼스 비교에 적합한 핵심 구간을 선별하세요.
+   - 카테고리: best_form (가장 좋은 자세), worst_form (가장 나쁜 자세), fatigue_point (피로 시작 지점), key_moment (핵심 순간)
+   - 각 구간은 3~15초 권장, 전체 합계 60초 이내로 제한하세요.
+   - 반드시 아래 형식의 JSON 코드 블록으로 출력하세요:
+` + "```highlights\n" + `[{"start":"0:15","end":"0:28","type":"best_form","reason":"완벽한 스내치 풀 익스텐션"},{"start":"2:30","end":"2:45","type":"worst_form","reason":"무릎 내전과 등 굽음 관찰"}]` + "\n```"
 
 	InjuryTimestampPrompt = `
 
@@ -109,8 +119,8 @@ const (
 - 부상 사항이 있으면 → 해당 부위에 위험한 움직임이 보일 때만 안전 경고를 우선하세요.`
 )
 
-// jsonBlockRegex matches fenced ```json ... ``` blocks in Gemini output.
-var jsonBlockRegex = regexp.MustCompile("(?s)```json\\s*(\\[.*?\\])\\s*```")
+// jsonBlockRegex matches fenced ```json ... ``` or ```highlights ... ``` blocks in Gemini output.
+var jsonBlockRegex = regexp.MustCompile("(?is)```(?:json|highlights)\\s*(\\[.*?\\])\\s*```")
 
 type VideoAnalysisPayload struct {
 	SessionID   string
@@ -129,6 +139,20 @@ type InjuryAnalysisPayload struct {
 	Injuries        []string
 	ProfileID       uint
 	FocusTimestamps string // JSON array [{"start":"0:32","end":"0:45","reason":"..."}]
+}
+
+type HighlightPayload struct {
+	SessionID   string
+	ProfileID   uint
+	MaxDuration int // max highlight duration in seconds (default 60)
+}
+
+// HighlightSegment represents a single highlight clip selected from the analysis.
+type HighlightSegment struct {
+	Start  string `json:"start"`  // e.g. "0:15" or "1:30"
+	End    string `json:"end"`    // e.g. "0:28" or "1:45"
+	Type   string `json:"type"`   // best_form, worst_form, fatigue_point, key_moment
+	Reason string `json:"reason"` // human-readable reason
 }
 
 type QueueClient interface {
@@ -312,12 +336,16 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return err
 	}
 
+	// Parse highlight segments from analysis output
+	highlightSegments := parseHighlightSegments(analysis)
+
 	// Save success to DB
 	result := &db.AnalysisResult{
-		SessionID:    p.SessionID,
-		Status:       "COMPLETED",
-		Output:       analysis,
-		AnalysisType: db.AnalysisTypeWOD,
+		SessionID:         p.SessionID,
+		Status:            "COMPLETED",
+		Output:            analysis,
+		AnalysisType:      db.AnalysisTypeWOD,
+		HighlightSegments: highlightSegments,
 	}
 	if p.ProfileID > 0 {
 		result.ProfileID = &p.ProfileID
@@ -443,6 +471,9 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload) string {
 		prompt += fmt.Sprintf("%s\n   - 부상 부위: %s", InjuryTimestampPrompt, strings.Join(p.Injuries, ", "))
 	}
 
+	// Always request highlight segments for short-form video generation
+	prompt += HighlightSelectionPrompt
+
 	if len(p.Movements) > 0 {
 		prompt += fmt.Sprintf("%s\n## 운동 종목: %s", MovementPrompt, strings.Join(p.Movements, ", "))
 	}
@@ -518,16 +549,55 @@ func (w *Worker) lookupProfileString(profileID uint) string {
 // parseInjuryTimestamps extracts the JSON array from the injury-relevant timestamp
 // section of the WOD analysis output. Returns the raw JSON string, or empty on failure.
 func parseInjuryTimestamps(analysisOutput string) string {
-	matches := jsonBlockRegex.FindStringSubmatch(analysisOutput)
-	if len(matches) < 2 {
-		return ""
+	matches := jsonBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
+	for _, match := range matches {
+		// Validate it's actually a JSON array
+		var parsed []json.RawMessage
+		if err := json.Unmarshal([]byte(match[1]), &parsed); err == nil && len(parsed) > 0 {
+			var check struct {
+				Start string `json:"start"`
+				Type  string `json:"type"`
+			}
+			if err := json.Unmarshal(parsed[0], &check); err == nil {
+				if check.Start != "" && check.Type == "" {
+					return match[1]
+				}
+			}
+		}
 	}
-	// Validate it's actually a JSON array
-	var parsed []json.RawMessage
-	if err := json.Unmarshal([]byte(matches[1]), &parsed); err != nil {
-		return ""
+	return ""
+}
+
+// parseHighlightSegments extracts the JSON array from the ```highlights``` code block
+// in the WOD analysis output. Returns the raw JSON string, or empty on failure.
+func parseHighlightSegments(analysisOutput string) string {
+	matches := jsonBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
+	for _, match := range matches {
+		// Validate it's a valid JSON array of highlight segments
+		var parsed []HighlightSegment
+		if err := json.Unmarshal([]byte(match[1]), &parsed); err == nil && len(parsed) > 0 {
+			if parsed[0].Type != "" {
+				return match[1]
+			}
+		}
 	}
-	return matches[1]
+	return ""
+}
+
+// parseTimestampToSeconds converts a "M:SS" or "MM:SS" timestamp string to seconds.
+func parseTimestampToSeconds(ts string) (float64, error) {
+	parts := strings.SplitN(ts, ":", 2)
+	if len(parts) != 2 {
+		return 0, fmt.Errorf("invalid timestamp format: %s", ts)
+	}
+	var minutes, seconds float64
+	if _, err := fmt.Sscanf(parts[0], "%f", &minutes); err != nil {
+		return 0, fmt.Errorf("invalid minutes in timestamp %s: %w", ts, err)
+	}
+	if _, err := fmt.Sscanf(parts[1], "%f", &seconds); err != nil {
+		return 0, fmt.Errorf("invalid seconds in timestamp %s: %w", ts, err)
+	}
+	return minutes*60 + seconds, nil
 }
 
 func (w *Worker) HandleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) error {
@@ -979,3 +1049,366 @@ func randomHex(n int) string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+func NewGenerateHighlightTask(sessionID string, profileID uint, maxDuration int) (*asynq.Task, error) {
+	if maxDuration <= 0 {
+		maxDuration = 60
+	}
+	payload := HighlightPayload{
+		SessionID:   sessionID,
+		ProfileID:   profileID,
+		MaxDuration: maxDuration,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeGenerateHighlight, data), nil
+}
+
+func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task) error {
+	var p HighlightPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+	}
+
+	retryCount, ok := asynq.GetRetryCount(ctx)
+	if !ok {
+		retryCount = 0
+	}
+
+	logger.Log.Info("Processing highlight generation",
+		zap.String("session_id", p.SessionID),
+		zap.Int("max_duration", p.MaxDuration),
+		zap.Int("retry_count", int(retryCount)))
+
+	if retryCount >= 3 {
+		logger.Log.Error("Max retries reached. Skipping highlight generation.")
+		return asynq.SkipRetry
+	}
+
+	// 1. Query the WOD analysis result for this session
+	var analysisResult db.AnalysisResult
+	if err := w.DB.Where("session_id = ? AND analysis_type = ? AND status = ?",
+		p.SessionID, db.AnalysisTypeWOD, "COMPLETED").
+		Order("created_at DESC").
+		First(&analysisResult).Error; err != nil {
+		logger.Log.Error("No completed WOD analysis found for highlight generation",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return fmt.Errorf("no completed WOD analysis found: %w", asynq.SkipRetry)
+	}
+
+	if analysisResult.HighlightSegments == "" {
+		logger.Log.Warn("No highlight segments in WOD analysis",
+			zap.String("session_id", p.SessionID))
+		return fmt.Errorf("no highlight segments available: %w", asynq.SkipRetry)
+	}
+
+	// 2. Parse highlight segments
+	var segments []HighlightSegment
+	if err := json.Unmarshal([]byte(analysisResult.HighlightSegments), &segments); err != nil {
+		logger.Log.Error("Failed to parse highlight segments",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return fmt.Errorf("invalid highlight segments JSON: %w", asynq.SkipRetry)
+	}
+
+	if len(segments) == 0 {
+		logger.Log.Warn("Empty highlight segments array",
+			zap.String("session_id", p.SessionID))
+		return fmt.Errorf("no highlight segments: %w", asynq.SkipRetry)
+	}
+
+	logger.Log.Info("Highlight segments parsed",
+		zap.String("session_id", p.SessionID),
+		zap.Int("segment_count", len(segments)))
+
+	// 3. Query chunk analysis results to get time range → GCS mappings
+	var chunks []db.ChunkAnalysisResult
+	if err := w.DB.Where("session_id = ? AND status = ?", p.SessionID, "COMPLETED").
+		Order("start_secs ASC").
+		Find(&chunks).Error; err != nil {
+		logger.Log.Error("Failed to query chunk analysis results",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return fmt.Errorf("failed to query chunks: %w", err)
+	}
+
+	// 4. List chunk video objects in GCS
+	prefix := fmt.Sprintf("videos/%s", p.SessionID)
+	objects, err := w.StorageClient.ListObjects(ctx, prefix)
+	if err != nil {
+		return fmt.Errorf("failed to list video objects: %w", err)
+	}
+
+	// Filter out merged/hardsubbed/highlight files
+	var chunkObjects []string
+	for _, obj := range objects {
+		base := filepath.Base(obj)
+		if strings.Contains(base, "_merged_") || strings.Contains(base, "_hardsubbed_") || strings.Contains(base, "_highlight_") {
+			continue
+		}
+		chunkObjects = append(chunkObjects, obj)
+	}
+
+	if len(chunkObjects) == 0 {
+		logger.Log.Error("No chunk video files found in GCS",
+			zap.String("session_id", p.SessionID), zap.String("prefix", prefix))
+		return fmt.Errorf("no chunk videos found: %w", asynq.SkipRetry)
+	}
+
+	sortStrings(chunkObjects)
+
+	logger.Log.Info("Found chunk video files",
+		zap.String("session_id", p.SessionID),
+		zap.Int("chunk_count", len(chunkObjects)),
+		zap.Int("chunk_analysis_count", len(chunks)))
+
+	for i, obj := range chunkObjects {
+		var start, end float64 = -1, -1
+		if i < len(chunks) {
+			if chunks[i].StartSecs != nil {
+				start = *chunks[i].StartSecs
+			}
+			if chunks[i].EndSecs != nil {
+				end = *chunks[i].EndSecs
+			}
+		}
+		logger.Log.Info("Chunk Mapping", 
+			zap.Int("index", i), 
+			zap.String("object", obj), 
+			zap.Float64("start_secs", start), 
+			zap.Float64("end_secs", end))
+	}
+
+	// 5. Create temp directory
+	safeSessionID := strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_")
+	tmpDir := filepath.Join("/tmp", fmt.Sprintf("highlight_%s_%d", safeSessionID, os.Getpid()))
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create highlight temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// 6. For each highlight segment, find the matching chunk, download it, trim it
+	var trimmedPaths []string
+	var totalDuration float64
+
+	for i, seg := range segments {
+		segStartSecs, err := parseTimestampToSeconds(seg.Start)
+		if err != nil {
+			logger.Log.Warn("Skipping segment with invalid start timestamp",
+				zap.Int("index", i), zap.String("start", seg.Start), zap.Error(err))
+			continue
+		}
+		segEndSecs, err := parseTimestampToSeconds(seg.End)
+		if err != nil {
+			logger.Log.Warn("Skipping segment with invalid end timestamp",
+				zap.Int("index", i), zap.String("end", seg.End), zap.Error(err))
+			continue
+		}
+
+		segDuration := segEndSecs - segStartSecs
+		if segDuration <= 0 {
+			logger.Log.Warn("Skipping segment with non-positive duration",
+				zap.Int("index", i), zap.Float64("start", segStartSecs), zap.Float64("end", segEndSecs))
+			continue
+		}
+
+		// Respect max duration
+		if totalDuration+segDuration > float64(p.MaxDuration) {
+			logger.Log.Info("Max duration reached, stopping segment collection",
+				zap.Float64("total_so_far", totalDuration),
+				zap.Int("max_duration", p.MaxDuration))
+			break
+		}
+
+		// Find which chunk covers this timestamp range
+		chunkIdx := findChunkForTimestamp(chunks, chunkObjects, segStartSecs)
+		if chunkIdx < 0 || chunkIdx >= len(chunkObjects) {
+			logger.Log.Warn("No chunk found for highlight segment timestamp",
+				zap.Int("index", i), zap.Float64("start_secs", segStartSecs))
+			continue
+		}
+
+		chunkObj := chunkObjects[chunkIdx]
+		chunkLocalPath := filepath.Join(tmpDir, fmt.Sprintf("chunk_%03d_%s", i, filepath.Base(chunkObj)))
+		chunkGCSURI := fmt.Sprintf("gs://%s/%s", w.BucketName, chunkObj)
+
+		// Download chunk (skip if already downloaded for a previous segment)
+		if _, err := os.Stat(chunkLocalPath); os.IsNotExist(err) {
+			if err := w.StorageClient.DownloadFile(ctx, chunkGCSURI, chunkLocalPath); err != nil {
+				logger.Log.Warn("Failed to download chunk for highlight",
+					zap.String("chunk", chunkObj), zap.Error(err))
+				continue
+			}
+		}
+
+		// Calculate the trim offset within this chunk
+		var chunkStartSecs float64
+		if chunkIdx < len(chunks) && chunks[chunkIdx].StartSecs != nil {
+			chunkStartSecs = *chunks[chunkIdx].StartSecs
+		}
+		trimStart := segStartSecs - chunkStartSecs
+		if trimStart < 0 {
+			trimStart = 0
+		}
+
+		logger.Log.Info("Highlight segment mapping",
+			zap.Int("segment_index", i),
+			zap.Float64("seg_start_secs", segStartSecs),
+			zap.Float64("seg_end_secs", segEndSecs),
+			zap.Int("resolved_chunk_idx", chunkIdx),
+			zap.String("chunk_object", chunkObj),
+			zap.Float64("chunk_start_secs", chunkStartSecs),
+			zap.Float64("trim_start", trimStart),
+			zap.Float64("seg_duration", segDuration))
+
+		trimmedPath := filepath.Join(tmpDir, fmt.Sprintf("trimmed_%03d.mp4", i))
+		if err := runFFmpegTrim(ctx, chunkLocalPath, trimmedPath, trimStart, segDuration); err != nil {
+			logger.Log.Warn("FFmpeg trim failed for highlight segment",
+				zap.Int("index", i), zap.Error(err))
+			continue
+		}
+
+		trimmedPaths = append(trimmedPaths, trimmedPath)
+		totalDuration += segDuration
+
+		logger.Log.Info("Highlight segment trimmed",
+			zap.Int("index", i),
+			zap.String("type", seg.Type),
+			zap.Float64("start", segStartSecs),
+			zap.Float64("end", segEndSecs),
+			zap.Float64("trim_offset", trimStart),
+			zap.String("reason", seg.Reason))
+	}
+
+	if len(trimmedPaths) == 0 {
+		logger.Log.Error("No highlight segments could be extracted",
+			zap.String("session_id", p.SessionID))
+
+		failedResult := &db.HighlightResult{
+			SessionID: p.SessionID,
+			Status:    "FAILED",
+			Segments:  analysisResult.HighlightSegments,
+			Output:    "No highlight segments could be extracted from chunk videos",
+		}
+		if p.ProfileID > 0 {
+			failedResult.ProfileID = &p.ProfileID
+		}
+		w.DB.Create(failedResult)
+		return fmt.Errorf("no segments extracted: %w", asynq.SkipRetry)
+	}
+
+	// 7. Concatenate trimmed segments
+	concatListPath := filepath.Join(tmpDir, "highlight_concat.txt")
+	var concatEntries []string
+	for _, tp := range trimmedPaths {
+		concatEntries = append(concatEntries, fmt.Sprintf("file '%s'", tp))
+	}
+	if err := os.WriteFile(concatListPath, []byte(strings.Join(concatEntries, "\n")), 0o644); err != nil {
+		return fmt.Errorf("failed to write highlight concat list: %w", err)
+	}
+
+	highlightPath := filepath.Join(tmpDir, fmt.Sprintf("highlight_%s.mp4", p.SessionID))
+	if err := runFFmpegConcat(ctx, concatListPath, highlightPath); err != nil {
+		return fmt.Errorf("ffmpeg highlight concat failed: %w", err)
+	}
+
+	// 8. Upload highlight video
+	randSuffix := randomHex(4)
+	highlightObjectName := fmt.Sprintf("highlights/%s_highlight_%s.mp4", p.SessionID, randSuffix)
+	highlightGCSURI, err := w.StorageClient.UploadFromFile(ctx, highlightPath, highlightObjectName)
+	if err != nil {
+		return fmt.Errorf("failed to upload highlight video: %w", err)
+	}
+
+	// 9. Save result to DB
+	result := &db.HighlightResult{
+		SessionID:   p.SessionID,
+		Status:      "COMPLETED",
+		GCSURI:      highlightGCSURI,
+		Segments:    analysisResult.HighlightSegments,
+		DurationSec: totalDuration,
+		Output:      fmt.Sprintf("Generated %d highlight segments (%.1fs total)", len(trimmedPaths), totalDuration),
+	}
+	if p.ProfileID > 0 {
+		result.ProfileID = &p.ProfileID
+	}
+	w.DB.Create(result)
+
+	logger.Log.Info("Highlight video generated",
+		zap.String("session_id", p.SessionID),
+		zap.String("gcs_uri", highlightGCSURI),
+		zap.Int("segment_count", len(trimmedPaths)),
+		zap.Float64("total_duration", totalDuration))
+
+	return nil
+}
+
+// findChunkForTimestamp finds the index of the chunk object that covers the given
+// timestamp in seconds. It uses chunk analysis results to map time ranges to chunks.
+// Falls back to positional mapping if chunk analysis data is incomplete.
+func findChunkForTimestamp(chunks []db.ChunkAnalysisResult, chunkObjects []string, timestampSecs float64) int {
+	// Try to find by chunk analysis time ranges
+	for i, ch := range chunks {
+		if ch.StartSecs != nil && ch.EndSecs != nil {
+			if timestampSecs >= *ch.StartSecs && timestampSecs < *ch.EndSecs {
+				if i < len(chunkObjects) {
+					return i
+				}
+			}
+		}
+	}
+
+	// Fallback: if chunks don't have time data, estimate by dividing evenly
+	if len(chunks) == 0 || len(chunkObjects) == 0 {
+		return -1
+	}
+
+	// Find the last chunk's end time to estimate total duration
+	var maxEndSecs float64
+	for _, ch := range chunks {
+		if ch.EndSecs != nil && *ch.EndSecs > maxEndSecs {
+			maxEndSecs = *ch.EndSecs
+		}
+	}
+	if maxEndSecs <= 0 {
+		return -1
+	}
+
+	// Estimate which chunk by position
+	chunkDuration := maxEndSecs / float64(len(chunkObjects))
+	idx := int(timestampSecs / chunkDuration)
+	if idx >= len(chunkObjects) {
+		idx = len(chunkObjects) - 1
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	return idx
+}
+
+// runFFmpegTrim extracts a clip from inputPath starting at startSecs for durationSecs.
+func runFFmpegTrim(ctx context.Context, inputPath, outputPath string, startSecs, durationSecs float64) error {
+	args := []string{
+		"-ss", fmt.Sprintf("%.3f", startSecs),
+		"-i", inputPath,
+		"-t", fmt.Sprintf("%.3f", durationSecs),
+		"-c", "copy",
+		"-avoid_negative_ts", "make_zero",
+		"-y",
+		outputPath,
+	}
+
+	logger.Log.Info("Running FFmpeg trim", zap.Strings("args", args))
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Log.Error("FFmpeg trim failed", zap.Error(err), zap.String("output", string(output)))
+		return fmt.Errorf("ffmpeg trim: %s: %w", string(output), err)
+	}
+
+	logger.Log.Info("FFmpeg trim completed", zap.String("output_path", outputPath))
+	return nil
+}
+

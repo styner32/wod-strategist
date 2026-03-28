@@ -29,14 +29,28 @@ const (
 )
 
 type AnalysisResult struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	SessionID    string    `gorm:"index;not null" json:"session_id"`
-	ProfileID    *uint     `gorm:"index" json:"profile_id,omitempty"`
-	AnalysisType string    `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
-	Status       string    `json:"status"`                           // PENDING, COMPLETED, FAILED
-	Output       string    `json:"output"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                uint      `gorm:"primaryKey" json:"id"`
+	SessionID         string    `gorm:"index;not null" json:"session_id"`
+	ProfileID         *uint     `gorm:"index" json:"profile_id,omitempty"`
+	AnalysisType      string    `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
+	Status            string    `json:"status"`                           // PENDING, COMPLETED, FAILED
+	Output            string    `json:"output"`
+	HighlightSegments string    `json:"highlight_segments"` // JSON array of highlight segments
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+type HighlightResult struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	SessionID   string    `gorm:"index;not null" json:"session_id"`
+	ProfileID   *uint     `gorm:"index" json:"profile_id,omitempty"`
+	Status      string    `json:"status"`       // PENDING, PROCESSING, COMPLETED, FAILED
+	GCSURI      string    `json:"gcs_uri"`      // gs:// URI of the highlight video
+	Segments    string    `json:"segments"`     // JSON: selected segments used
+	DurationSec float64   `json:"duration_sec"` // total highlight duration in seconds
+	Output      string    `json:"output"`       // error message or AI summary
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type ChunkAnalysisResult struct {

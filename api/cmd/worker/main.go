@@ -75,6 +75,7 @@ func main() {
 	mux.HandleFunc(worker.TypeChunkAnalysis, w.HandleChunkAnalysisTask)
 	mux.HandleFunc(worker.TypeMergeChunks, w.HandleMergeChunksTask)
 	mux.HandleFunc(worker.TypeInjuryAnalysis, w.HandleInjuryAnalysisTask)
+	mux.HandleFunc(worker.TypeGenerateHighlight, w.HandleGenerateHighlightTask)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")
