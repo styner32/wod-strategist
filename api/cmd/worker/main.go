@@ -74,6 +74,7 @@ func main() {
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)
 	mux.HandleFunc(worker.TypeChunkAnalysis, w.HandleChunkAnalysisTask)
 	mux.HandleFunc(worker.TypeMergeChunks, w.HandleMergeChunksTask)
+	mux.HandleFunc(worker.TypeInjuryAnalysis, w.HandleInjuryAnalysisTask)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")

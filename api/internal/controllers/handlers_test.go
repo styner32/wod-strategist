@@ -328,7 +328,6 @@ var _ = Describe("Controller handlers", func() {
 			Entry("missing movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4"}`, http.StatusBadRequest, "movements is required"),
 			Entry("invalid gcs scheme", `{"session_id":"session-1","gcs_uri":"https://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "invalid GCS URI"),
 			Entry("missing gcs bucket", `{"session_id":"session-1","gcs_uri":"gs:///video.mp4","movements":[]}`, http.StatusBadRequest, "invalid GCS URI"),
-			Entry("invalid workout type", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"workout_type":"strength"}`, http.StatusBadRequest, "invalid workout type"),
 			Entry("invalid movement", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Invalid"]}`, http.StatusBadRequest, "invalid movements"),
 			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":`+repeatedJSONString("Burpee", 100)+`}`, http.StatusBadRequest, "too many movements"),
 			Entry("invalid injury", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":["Head"]}`, http.StatusBadRequest, "invalid injuries"),
@@ -356,7 +355,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(w.Code).To(Equal(http.StatusInternalServerError))
 			Expect(queue.called).To(BeTrue())
 			Expect(decodeMapBody(w)["error"]).To(Equal("failed to enqueue task"))
-			Expect(taskFactory.call.workoutType).To(Equal(worker.WorkoutTypeRehab))
+			Expect(taskFactory.call.workoutType).To(Equal(worker.WorkoutTypeWOD))
 		})
 
 		It("accepts empty movements and normalizes the default workout type", func() {

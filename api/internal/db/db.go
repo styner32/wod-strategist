@@ -23,14 +23,20 @@ type Profile struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+const (
+	AnalysisTypeWOD              = "wod"
+	AnalysisTypeInjurySupplement = "injury_supplement"
+)
+
 type AnalysisResult struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	SessionID string    `gorm:"index;not null" json:"session_id"`
-	ProfileID *uint     `gorm:"index" json:"profile_id,omitempty"`
-	Status    string    `json:"status"` // PENDING, COMPLETED, FAILED
-	Output    string    `json:"output"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	SessionID    string    `gorm:"index;not null" json:"session_id"`
+	ProfileID    *uint     `gorm:"index" json:"profile_id,omitempty"`
+	AnalysisType string    `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
+	Status       string    `json:"status"`                           // PENDING, COMPLETED, FAILED
+	Output       string    `json:"output"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type ChunkAnalysisResult struct {

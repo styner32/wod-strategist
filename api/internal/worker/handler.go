@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -27,8 +28,8 @@ const (
 	TypeVideoAnalysis     = "video:analysis"
 	TypeChunkAnalysis     = "chunk:analysis"
 	TypeMergeChunks       = "merge:chunks"
+	TypeInjuryAnalysis    = "injury:analysis"
 	WorkoutTypeWOD        = "wod"
-	WorkoutTypeRehab      = "rehab"
 	PersonalProfilePrompt = `
 ## 개인 프로필
 분석의 정확도를 높이기 위해 개인 정보를 참고해주세요.`
@@ -67,41 +68,49 @@ const (
 5. **핵심 구간 타임스탬프 (Key Timestamps)**:
    - 피드백과 관련된 비디오의 중요 구간(시작 시간 - 종료 시간)을 나열하고, 해당 구간을 주목해야 하는 이유를 한 문장으로 요약해 주세요.`
 
-	RehabilitationPrompt = `
-# 운동 영상 분석 요청 (재활 및 안전 복귀)
+	InjuryTimestampPrompt = `
+
+6. **부상 관련 타임스탬프 (Injury-Relevant Timestamps)**:
+   - 아래 부상 부위가 활발히 사용되거나 위험에 노출되는 구간을 JSON 배열로 출력하세요.
+   - 반드시 아래 형식의 JSON 코드 블록으로 출력하세요:
+` + "```json\n" + `[{"start": "0:32", "end": "0:45", "reason": "무릎 내전 관찰"}]` + "\n```"
+
+	InjuryAnalysisPrompt = `
+# 부상 부위 집중 분석 (Injury-Focused Supplement)
+
+당신은 전문 스포츠 재활 치료사(Physical Therapist)이자 교정 운동 전문가입니다.
+아래 타임스탬프 구간만 집중적으로 분석해 주세요. 전체 영상을 다시 분석할 필요 없습니다.
 
 ## 분석 요청 사항
-당신은 전문 스포츠 재활 치료사(Physical Therapist)이자 교정 운동 전문가입니다. 위 컨텍스트와 첨부된 영상을 바탕으로, 퍼포먼스 향상보다는 **부상 악화 방지, 통제력 확보, 그리고 안전한 기능 회복**에 초점을 맞추어 다음 항목을 분석해 주세요.
-(※ 참고: 사용자는 현재 부상 회복 중이거나 좌식(Seated) 등 제한된 환경에서 운동 중일 수 있습니다. 해당 부위에 무리가 가지 않는지 철저히 관찰하세요.)
 
 1. **안정성 및 통제력 분석 (Stability & Control Analysis)**:
-   - 동작이 관절에 무리가 없는 안전한 가동 범위(Pain-free ROM) 내에서 부드럽게 수행되고 있는지 평가해 주세요.
-   - 제한된 자세(예: 의자에 앉아 하체 고정)에서도 척추 중립(Neutral Spine)과 코어의 안정성이 흔들림 없이 유지되는지 분석해 주세요.
+   - 해당 구간에서 부상 부위 관절에 무리가 없는 안전한 가동 범위(Pain-free ROM) 내에서 동작이 수행되고 있는지 평가해 주세요.
+   - 척추 중립(Neutral Spine)과 코어의 안정성이 유지되는지 확인해 주세요.
 
-2. **보상 작용 및 불균형 (Compensations & Imbalances)**:
-   - 통증을 피하거나 근력 저하를 메우기 위해 다른 관절을 무리하게 사용하는 **'보상 작용'**(예: 어깨 으쓱임, 허리 과신전, 목 빠짐, 상체 반동 등)이 관찰되는지 꼼꼼히 확인해 주세요.
-   - 신체 좌우의 움직임 궤적, 가동 범위, 밸런스에 비대칭이 발생하는지 평가해 주세요.
+2. **보상 작용 및 위험 패턴 (Compensations & Risk Patterns)**:
+   - 부상 부위를 보호하기 위한 보상 작용(어깨 으쓱임, 허리 과신전, 목 빠짐, 상체 반동 등)이 관찰되는지 확인해 주세요.
+   - 부상 악화 위험이 있는 움직임 패턴을 구체적으로 지적해 주세요.
 
-3. **템포 및 긴장도 분석 (Tempo & Tension Analysis)**:
-   - 동작의 속도, 특히 중량을 버티며 내리는 구간(신장성 수축)에서 템포가 차분하고 일정하게 통제되고 있는지 평가해 주세요.
-   - 근육의 피로나 관절의 불안정성으로 인해 텐션이 풀리거나 반동을 쓰기 시작하여 부상 위험이 높아지는 **정확한 시점(분:초)**을 지목해 주세요.
-
-4. **안전 복귀 솔루션 (Safe Return-to-Play Feedback)**:
-   - 부상 부위에 스트레스를 주지 않으면서 현재 동작의 질을 높일 수 있는 즉각적인 자세/호흡 교정 팁 3가지를 제안해 주세요.
-   - 무리한 동작이 관찰되었다면 가동 범위를 제한하거나 난이도를 낮춘 대체 운동(Regression)을 조언하고, 향후 본 훈련(Active WOD)으로 돌아가기 위한 점진적 과부하 가이드를 포함해 주세요.
-
-5. **핵심 모니터링 구간 타임스탬프 (Key Timestamps)**:
-   - 훌륭한 통제력으로 자세가 가장 안정적인 '모범 구간'과, 보상 작용이나 불안정성이 노출되어 '주의가 필요한 구간'(시작 시간 - 종료 시간)을 나열해 주세요.
-   - 각 구간을 왜 주의 깊게 모니터링해야 하는지 부상 방지 관점에서 한 문장으로 요약해 주세요.
-	`
+3. **안전 복귀 솔루션 (Safe Return-to-Play Feedback)**:
+   - 부상 부위에 스트레스를 주지 않으면서 동작의 질을 높일 수 있는 즉각적인 자세/호흡 교정 팁 3가지를 제안해 주세요.
+   - 무리한 동작이 관찰되었다면 가동 범위를 제한하거나 난이도를 낮춘 대체 운동(Regression)을 조언해 주세요.`
 
 	ChunkAnalysisPrompt = `
 # 운동 청크 영상 분석 요청 (실시간 피드백)
 
-당신은 전문 코치입니다. 방금 수행된 10초 분량의 짧은 영상이 주어집니다. 
-오직 딱 1~2문장으로, 즉각적인 자세 교정 또는 격려 피드백만 짧게 제시하세요.
-(예: "허리가 굽고 있습니다, 가슴을 펴고 복압을 유지하세요!" 또는 "아주 좋습니다!")`
+당신은 실시간 코칭을 제공하는 전문 코치입니다.
+방금 수행된 약 10초 분량의 짧은 영상 클립이 주어집니다.
+
+## 규칙
+- **반드시 1~2문장**으로만 답하세요. 길게 쓰지 마세요.
+- 아래 컨텍스트를 참고하되, 컨텍스트 자체를 반복하지 마세요.
+- 자세 교정이 필요하면 → 구체적인 교정 큐(예: "팔꿈치를 더 높이 유지하세요")를 제시하세요.
+- 자세가 좋으면 → 어떤 점이 좋은지 짧게 격려하세요.
+- 부상 사항이 있으면 → 해당 부위에 위험한 움직임이 보일 때만 안전 경고를 우선하세요.`
 )
+
+// jsonBlockRegex matches fenced ```json ... ``` blocks in Gemini output.
+var jsonBlockRegex = regexp.MustCompile("(?s)```json\\s*(\\[.*?\\])\\s*```")
 
 type VideoAnalysisPayload struct {
 	SessionID   string
@@ -112,6 +121,14 @@ type VideoAnalysisPayload struct {
 	ProfileID   uint
 	StartSecs   float64
 	EndSecs     float64
+}
+
+type InjuryAnalysisPayload struct {
+	SessionID       string
+	FilePath        string
+	Injuries        []string
+	ProfileID       uint
+	FocusTimestamps string // JSON array [{"start":"0:32","end":"0:45","reason":"..."}]
 }
 
 type QueueClient interface {
@@ -137,16 +154,11 @@ func NewWorker(db *gorm.DB, storageClient *storage.Client, bucketName string, ge
 }
 
 func NormalizeWorkoutType(workoutType string) string {
-	if strings.EqualFold(workoutType, WorkoutTypeRehab) {
-		return WorkoutTypeRehab
-	}
 	return WorkoutTypeWOD
 }
 
 func IsValidWorkoutType(workoutType string) bool {
-	return workoutType == "" ||
-		strings.EqualFold(workoutType, WorkoutTypeWOD) ||
-		strings.EqualFold(workoutType, WorkoutTypeRehab)
+	return true // All values normalize to "wod"
 }
 
 func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
@@ -183,6 +195,22 @@ func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []s
 		return nil, err
 	}
 	return asynq.NewTask(TypeChunkAnalysis, data), nil
+}
+
+func NewInjuryAnalysisTask(sessionID, filePath string, injuries []string, profileID uint, focusTimestamps string) (*asynq.Task, error) {
+	payload := InjuryAnalysisPayload{
+		SessionID:       sessionID,
+		FilePath:        filePath,
+		Injuries:        injuries,
+		ProfileID:       profileID,
+		FocusTimestamps: focusTimestamps,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeInjuryAnalysis, data), nil
 }
 
 func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
@@ -286,9 +314,10 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	// Save success to DB
 	result := &db.AnalysisResult{
-		SessionID: p.SessionID,
-		Status:    "COMPLETED",
-		Output:    analysis,
+		SessionID:    p.SessionID,
+		Status:       "COMPLETED",
+		Output:       analysis,
+		AnalysisType: db.AnalysisTypeWOD,
 	}
 	if p.ProfileID > 0 {
 		result.ProfileID = &p.ProfileID
@@ -296,6 +325,23 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	w.DB.Create(result)
 
 	logger.Log.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))
+
+	// Agentic follow-up: if injuries are present, enqueue injury-focused re-analysis
+	if len(p.Injuries) > 0 {
+		focusTimestamps := parseInjuryTimestamps(analysis)
+		injuryTask, taskErr := NewInjuryAnalysisTask(p.SessionID, p.FilePath, p.Injuries, p.ProfileID, focusTimestamps)
+		if taskErr != nil {
+			logger.Log.Error("Failed to create injury analysis task", zap.Error(taskErr))
+		} else if _, enqErr := w.QueueClient.Enqueue(injuryTask); enqErr != nil {
+			logger.Log.Error("Failed to enqueue injury analysis task", zap.Error(enqErr))
+		} else {
+			logger.Log.Info("Injury analysis enqueued",
+				zap.String("session_id", p.SessionID),
+				zap.Strings("injuries", p.Injuries),
+				zap.String("focus_timestamps", focusTimestamps))
+		}
+	}
+
 	return nil
 }
 
@@ -335,10 +381,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
 	}
 
-	prompt := ChunkAnalysisPrompt
-	if len(p.Movements) > 0 {
-		prompt += fmt.Sprintf("\n컨텍스트: 진행 중인 운동은 %s 입니다.", strings.Join(p.Movements, ", "))
-	}
+	prompt := w.buildChunkAnalysisPrompt(p)
 
 	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
@@ -394,8 +437,10 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload) string {
 	prompt := AnalysisPrompt
-	if NormalizeWorkoutType(p.WorkoutType) == WorkoutTypeRehab {
-		prompt = RehabilitationPrompt
+
+	// When injuries are present, add a section requesting structured injury timestamps
+	if len(p.Injuries) > 0 {
+		prompt += fmt.Sprintf("%s\n   - 부상 부위: %s", InjuryTimestampPrompt, strings.Join(p.Injuries, ", "))
 	}
 
 	if len(p.Movements) > 0 {
@@ -406,11 +451,53 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload) string {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
 	}
 
-	// Look up profile from DB; fall back to hardcoded default if not found
+	personalProfile := w.lookupProfileString(p.ProfileID)
+
+	logger.Log.Info("Personal Profile", zap.Uint("profile_id", p.ProfileID), zap.String("personal_profile", personalProfile))
+
+	return prompt + fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
+}
+
+func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
+	prompt := ChunkAnalysisPrompt
+
+	if len(p.Movements) > 0 {
+		prompt += fmt.Sprintf("\n\n## 운동 종목\n%s", strings.Join(p.Movements, ", "))
+	}
+
+	if len(p.Injuries) > 0 {
+		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", strings.Join(p.Injuries, ", "))
+	}
+
+	personalProfile := w.lookupProfileString(p.ProfileID)
+	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
+
+	return prompt
+}
+
+func (w *Worker) buildInjuryAnalysisPrompt(p InjuryAnalysisPayload) string {
+	prompt := InjuryAnalysisPrompt
+
+	if p.FocusTimestamps != "" {
+		prompt += fmt.Sprintf("\n\n## 집중 분석 구간 (Focus Timestamps)\n```json\n%s\n```", p.FocusTimestamps)
+	} else {
+		prompt += "\n\n## 집중 분석 구간\n타임스탬프가 제공되지 않았습니다. 전체 영상에서 부상 부위 관련 움직임을 분석해 주세요."
+	}
+
+	prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s", strings.Join(p.Injuries, ", "))
+
+	personalProfile := w.lookupProfileString(p.ProfileID)
+	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
+
+	return prompt
+}
+
+// lookupProfileString returns a human-readable profile string for the given profile ID.
+func (w *Worker) lookupProfileString(profileID uint) string {
 	personalProfile := "생년월일: 1984년 10월 17일, 성별: 남, 키: 164cm, 몸무게: 72kg"
-	if p.ProfileID > 0 && w.DB != nil {
+	if profileID > 0 && w.DB != nil {
 		var profile db.Profile
-		if err := w.DB.First(&profile, p.ProfileID).Error; err == nil {
+		if err := w.DB.First(&profile, profileID).Error; err == nil {
 			genderKo := "기타"
 			switch profile.Gender {
 			case "male":
@@ -422,13 +509,120 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload) string {
 				profile.BirthYear, profile.BirthMonth, profile.BirthDay,
 				genderKo, profile.HeightCm, profile.WeightKg)
 		} else {
-			logger.Log.Warn("Profile not found, using default", zap.Uint("profile_id", p.ProfileID), zap.Error(err))
+			logger.Log.Warn("Profile not found, using default", zap.Uint("profile_id", profileID), zap.Error(err))
 		}
 	}
+	return personalProfile
+}
 
-	logger.Log.Warn("Personal Profile", zap.Uint("profile_id", p.ProfileID), zap.String("personal_profile", personalProfile))
+// parseInjuryTimestamps extracts the JSON array from the injury-relevant timestamp
+// section of the WOD analysis output. Returns the raw JSON string, or empty on failure.
+func parseInjuryTimestamps(analysisOutput string) string {
+	matches := jsonBlockRegex.FindStringSubmatch(analysisOutput)
+	if len(matches) < 2 {
+		return ""
+	}
+	// Validate it's actually a JSON array
+	var parsed []json.RawMessage
+	if err := json.Unmarshal([]byte(matches[1]), &parsed); err != nil {
+		return ""
+	}
+	return matches[1]
+}
 
-	return prompt + fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
+func (w *Worker) HandleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) error {
+	var p InjuryAnalysisPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+	}
+
+	retryCount, ok := asynq.GetRetryCount(ctx)
+	if !ok {
+		retryCount = 0
+	}
+
+	logger.Log.Info("Processing injury analysis",
+		zap.String("session_id", p.SessionID),
+		zap.String("file_path", p.FilePath),
+		zap.Strings("injuries", p.Injuries),
+		zap.String("focus_timestamps", p.FocusTimestamps),
+		zap.Int("retry_count", int(retryCount)))
+
+	if retryCount >= 3 {
+		logger.Log.Error("Max retries reached. Skipping injury analysis.")
+		return asynq.SkipRetry
+	}
+
+	if !strings.HasPrefix(p.FilePath, "gs://") {
+		logger.Log.Error("Invalid file path: must be a GCS URI", zap.String("file_path", p.FilePath))
+		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
+	}
+
+	safeSessionID := filepath.Base(p.SessionID)
+	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
+
+	localFilePath := filepath.Join("/tmp", fmt.Sprintf("injury_%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+
+	logger.Log.Info("Downloading file from GCS for injury analysis", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
+	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+		return fmt.Errorf("failed to download file from GCS: %w", err)
+	}
+
+	defer func() {
+		if err := os.Remove(localFilePath); err != nil {
+			logger.Log.Error("Failed to remove temp file", zap.Error(err))
+		}
+	}()
+
+	prompt := w.buildInjuryAnalysisPrompt(p)
+
+	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+
+	if geminiFile != "" {
+		defer func() {
+			if delErr := w.GeminiClient.DeleteFile(ctx, geminiFile); delErr != nil {
+				logger.Log.Error("Failed to delete file from Gemini", zap.Error(delErr))
+			}
+		}()
+	}
+
+	if analysis == "" {
+		logger.Log.Warn("Injury analysis returned empty. Retrying...", zap.Error(err))
+		return fmt.Errorf("injury analysis is empty")
+	}
+
+	if err != nil {
+		logger.Log.Error("Injury analysis failed", zap.Error(err))
+		failedResult := &db.AnalysisResult{
+			SessionID:    p.SessionID,
+			AnalysisType: db.AnalysisTypeInjurySupplement,
+			Status:       "FAILED",
+			Output:       "An internal error occurred during injury analysis.",
+		}
+		if p.ProfileID > 0 {
+			failedResult.ProfileID = &p.ProfileID
+		}
+		w.DB.Create(failedResult)
+		return err
+	}
+
+	result := &db.AnalysisResult{
+		SessionID:    p.SessionID,
+		AnalysisType: db.AnalysisTypeInjurySupplement,
+		Status:       "COMPLETED",
+		Output:       analysis,
+	}
+	if p.ProfileID > 0 {
+		result.ProfileID = &p.ProfileID
+	}
+	w.DB.Create(result)
+
+	logger.Log.Info("Injury analysis completed",
+		zap.String("session_id", p.SessionID),
+		zap.String("analysis", analysis))
+	return nil
 }
 
 func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {

@@ -5,9 +5,7 @@ import {
   processWorkoutVideo,
 } from "@/features/wod/api";
 import {
-  WORKOUT_TYPE_OPTIONS,
   buildWorkoutSessionId,
-  type WorkoutType,
 } from "@/features/wod/workoutType";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
@@ -26,7 +24,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function UploadScreen() {
-  const [workoutType, setWorkoutType] = useState<WorkoutType>("wod");
+  const workoutType = "wod";
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [videoMimeType, setVideoMimeType] = useState<string | null>(null);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
@@ -130,39 +128,6 @@ export default function UploadScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Workout Type</Text>
-          <View style={styles.typeGrid}>
-            {WORKOUT_TYPE_OPTIONS.map((option) => {
-              const isSelected = option.value === workoutType;
-              return (
-                <TouchableOpacity
-                  key={option.value}
-                  style={[styles.typeCard, isSelected && styles.typeCardActive]}
-                  onPress={() => setWorkoutType(option.value)}
-                >
-                  <Text
-                    style={[
-                      styles.typeCardTitle,
-                      isSelected && styles.typeCardTitleActive,
-                    ]}
-                  >
-                    {option.label}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.typeCardDescription,
-                      isSelected && styles.typeCardDescriptionActive,
-                    ]}
-                  >
-                    {option.description}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
         {!videoUri ? (
           <TouchableOpacity style={styles.pickBox} onPress={pickVideo}>
             <IconSymbol name="paperplane.fill" size={48} color="#666" />
@@ -186,13 +151,9 @@ export default function UploadScreen() {
         {videoUri && (
           <View>
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>
-                {workoutType === "rehab" ? "Target Movements" : "Select Movements"}
-              </Text>
+              <Text style={styles.sectionTitle}>Select Movements</Text>
               <Text style={styles.helperText}>
-                {workoutType === "rehab"
-                  ? "Optional: add any movements you want the rehab analysis to focus on."
-                  : "Optional, but recommended to improve coaching accuracy."}
+                Optional, but recommended to improve coaching accuracy.
               </Text>
               {isLoadingMovements ? (
                 <ActivityIndicator color="#007AFF" />
@@ -224,9 +185,7 @@ export default function UploadScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Known Injuries</Text>
               <Text style={styles.helperText}>
-                {workoutType === "rehab"
-                  ? "Optional, but recommended for safer rehab analysis."
-                  : "Optional: share any current limitations before this workout."}
+                Optional: share any current limitations before this workout.
               </Text>
               {isLoadingMovements ? (
                 <ActivityIndicator color="#007AFF" />
@@ -266,7 +225,7 @@ export default function UploadScreen() {
                 </Text>
               ) : (
                 <Text style={styles.uploadText}>
-                  {workoutType === "rehab" ? "Analyze Rehab Session" : "Analyze WOD"}
+                  Analyze WOD
                 </Text>
               )}
             </TouchableOpacity>
