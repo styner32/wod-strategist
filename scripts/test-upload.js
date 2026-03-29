@@ -1,40 +1,38 @@
-// scripts/test-upload.js
-const fs = require("fs");
-const path = require("path");
+const fs = require("node:fs");
+const path = require("node:path");
 const dotenv = require("dotenv");
+
 dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, "../api/.env") });
 
-const API_BASE = process.env.EXPO_PUBLIC_API_URL;
-const API_KEY = process.env.EXPO_PUBLIC_API_KEY || "";
+const defaultApiBase = process.env.EXPO_PUBLIC_API_URL;
+const API_BASE = defaultApiBase.replace(/\/+$/, "");
+const API_KEY = process.env.EXPO_PUBLIC_API_KEY
 
-if (API_BASE === undefined || API_KEY === undefined) {
-  console.error("API_BASE or API_KEY is not set");
+if (!API_KEY) {
+  console.error("API key is not set. Use EXPO_PUBLIC_API_KEY, API_KEY, or API_SECRET.");
   process.exit(1);
 }
 
-const FILE_PATH = path.join(process.cwd(), "./api/tmp/wod_large.mp4"); // Change this to the path of the video you want to upload
-console.log("FILE_PATH:", FILE_PATH);
+const inputArg = process.argv[2] || process.env.VIDEO_PATH || path.resolve(__dirname, "../api/tmp/wod_large.mp4");
+const FILE_PATH = path.isAbsolute(inputArg) ? inputArg : path.resolve(process.cwd(), inputArg);
 
-const SESSION_ID = "test-session-" + Date.now();
+const SESSION_ID = "WOD-2026-03-28-001";
 
-// Ensure dummy file exists
 if (!fs.existsSync(FILE_PATH)) {
-  console.log("Creating dummy video file...");
-  // Create a 5MB dummy file to test "size" slightly better than empty
-  const buffer = Buffer.alloc(5 * 1024 * 1024, "a");
-  const dir = path.dirname(FILE_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(FILE_PATH, buffer);
+  console.error(`Video file not found: ${FILE_PATH}`);
+  process.exit(1);
 }
 
 async function run() {
   try {
-    console.log(`🚀 Starting Test Upload: ${SESSION_ID}`);
+    console.log(`Starting test upload: ${SESSION_ID}`);
+    console.log(`API base: ${API_BASE}`);
+    console.log(`Video path: ${FILE_PATH}`);
     const stats = fs.statSync(FILE_PATH);
-    console.log(`📁 File Size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`File size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
-    // 1. Get Signed URL
-    console.log("\n1️⃣ Requesting Upload URL...");
+    console.log("\n1. Requesting upload URL...");
     const urlRes = await fetch(`${API_BASE}/upload-url`, {
       method: "POST",
       headers: {
@@ -50,18 +48,17 @@ async function run() {
     if (!urlRes.ok)
       throw new Error(`Step 1 Failed: ${urlRes.status} ${await urlRes.text()}`);
     const { upload_url, gcs_uri } = await urlRes.json();
-    console.log("✅ Got URL:", upload_url.substring(0, 50) + "...");
-    console.log("✅ GCS URI:", gcs_uri);
+    console.log("Received signed URL");
+    console.log("GCS URI:", gcs_uri);
 
-    // 2. Upload to GCS
-    console.log("\n2️⃣ Uploading to GCS...");
+    console.log("\n2. Uploading to GCS...");
     const fileStream = fs.readFileSync(FILE_PATH);
 
     const uploadRes = await fetch(upload_url, {
       method: "PUT",
       headers: {
         "Content-Type": "video/mp4",
-        // 'Content-Length': stats.size.toString() // fetch handles this usually
+        "Content-Length": stats.size.toString(),
       },
       body: fileStream,
     });
@@ -70,10 +67,9 @@ async function run() {
       throw new Error(
         `Step 2 Failed: ${uploadRes.status} ${await uploadRes.text()}`
       );
-    console.log("✅ Upload Success (Status 200)");
+    console.log(`Upload succeeded with status ${uploadRes.status}`);
 
-    // 3. Notify Complete
-    console.log("\n3️⃣ Notifying API...");
+    console.log("\n3. Notifying API...");
     const completeRes = await fetch(`${API_BASE}/upload-complete`, {
       method: "POST",
       headers: {
@@ -83,6 +79,9 @@ async function run() {
       body: JSON.stringify({
         session_id: SESSION_ID,
         gcs_uri: gcs_uri,
+        movements: [],
+        injuries: [],
+        workout_type: "wod",
       }),
     });
 
@@ -91,9 +90,10 @@ async function run() {
         `Step 3 Failed: ${completeRes.status} ${await completeRes.text()}`
       );
     const result = await completeRes.json();
-    console.log("✅ Flow Complete:", result);
+    console.log("Flow complete:", result);
   } catch (error) {
-    console.error("\n❌ Error:", error.message);
+    console.error("\nError:", error.message);
+    process.exitCode = 1;
   }
 }
 

@@ -54,3 +54,39 @@ To update the Swagger schema specs after modifying structs or handler comments, 
 ```bash
 swag init -g cmd/server/main.go
 ```
+
+## Local Chunk Upload Replay
+
+If you want to reuse an existing workout video instead of recording from the phone every time, you can replay the chunk upload flow locally from `api/`.
+
+Prerequisites:
+
+- API server and worker running locally
+- `ffmpeg` and `ffprobe` installed
+- Valid storage configuration in `api/.env` or your shell environment
+
+Run:
+
+```bash
+cd api
+make test-chunk-upload VIDEO=./tmp/test_wod.mp4 CHUNK_SECS=10
+```
+
+Optional variables:
+
+- `MOVEMENTS=Burpee,Pull-up`
+- `INJURIES=Left Knee`
+- `WORKOUT_TYPE=rehab`
+- `PROFILE_ID=1`
+- `AUTO_MERGE=0` to upload/analyze chunks without merging
+- `KEEP_CHUNKS=1` to keep the generated local chunk files for inspection
+
+The replay script uses the real chunk flow:
+
+1. Split one saved `.mp4` into ordered chunk files with `ffmpeg`
+2. Call `POST /api/v1/upload-url` for each chunk
+3. Upload each chunk to GCS with the signed URL
+4. Call `POST /api/v1/chunk-complete` with `start_secs` and `end_secs`
+5. Optionally call `POST /api/v1/merge-chunks`
+
+This is not a fully offline path yet. The current API still uploads chunk files to the configured GCS bucket because the repo does not include a local storage emulator flow.

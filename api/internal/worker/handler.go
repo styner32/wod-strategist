@@ -74,9 +74,10 @@ const (
 7. **하이라이트 구간 (Highlight Segments)**:
    - 소셜 미디어 공유나 퍼포먼스 비교에 적합한 핵심 구간을 선별하세요.
    - 카테고리: best_form (가장 좋은 자세), worst_form (가장 나쁜 자세), fatigue_point (피로 시작 지점), key_moment (핵심 순간)
-   - 각 구간은 3~15초 권장, 전체 합계 60초 이내로 제한하세요.
+   - 영상 길이를 고려하여 **각 카테고리당 가능한 한 2개 이상의 구간**을 찾아주세요.
+   - 각 구간은 3~15초 권장, 전체 시간 합계 제한은 없습니다. 자유롭게 유의미한 구간을 모두 추출하세요.
    - 반드시 아래 형식의 JSON 코드 블록으로 출력하세요:
-` + "```highlights\n" + `[{"start":"0:15","end":"0:28","type":"best_form","reason":"완벽한 스내치 풀 익스텐션"},{"start":"2:30","end":"2:45","type":"worst_form","reason":"무릎 내전과 등 굽음 관찰"}]` + "\n```"
+` + "```json\n" + `[{"start":"0:15","end":"0:28","type":"best_form","reason":"완벽한 스내치 풀 익스텐션"},{"start":"1:10","end":"1:20","type":"best_form","reason":"코어가 매우 안정적인 두번째 움직임"},{"start":"2:30","end":"2:45","type":"worst_form","reason":"무릎 내전과 등 굽음 관찰"}]` + "\n```"
 
 	InjuryTimestampPrompt = `
 
@@ -1190,6 +1191,8 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 
 	// 6. For each highlight segment, find the matching chunk, download it, trim it
 	var trimmedPaths []string
+	var trimmedDurations []float64
+	var validSegments []HighlightSegment
 	var totalDuration float64
 
 	for i, seg := range segments {
@@ -1270,6 +1273,8 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		}
 
 		trimmedPaths = append(trimmedPaths, trimmedPath)
+		trimmedDurations = append(trimmedDurations, segDuration)
+		validSegments = append(validSegments, seg)
 		totalDuration += segDuration
 
 		logger.Log.Info("Highlight segment trimmed",
@@ -1298,48 +1303,96 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		return fmt.Errorf("no segments extracted: %w", asynq.SkipRetry)
 	}
 
-	// 7. Concatenate trimmed segments
-	concatListPath := filepath.Join(tmpDir, "highlight_concat.txt")
-	var concatEntries []string
-	for _, tp := range trimmedPaths {
-		concatEntries = append(concatEntries, fmt.Sprintf("file '%s'", tp))
-	}
-	if err := os.WriteFile(concatListPath, []byte(strings.Join(concatEntries, "\n")), 0o644); err != nil {
-		return fmt.Errorf("failed to write highlight concat list: %w", err)
+	// 7. Group segments into different versions
+	type highlightGroup struct {
+		Title   string
+		Prefix  string
+		Indices []int
 	}
 
-	highlightPath := filepath.Join(tmpDir, fmt.Sprintf("highlight_%s.mp4", p.SessionID))
-	if err := runFFmpegConcat(ctx, concatListPath, highlightPath); err != nil {
-		return fmt.Errorf("ffmpeg highlight concat failed: %w", err)
+	groups := []highlightGroup{
+		{Title: "Highlight Reel", Prefix: "full"},
+		{Title: "Best Forms", Prefix: "best"},
+		{Title: "Areas for Improvement", Prefix: "improvement"},
+		{Title: "Key Moments", Prefix: "key"},
 	}
 
-	// 8. Upload highlight video
-	randSuffix := randomHex(4)
-	highlightObjectName := fmt.Sprintf("highlights/%s_highlight_%s.mp4", p.SessionID, randSuffix)
-	highlightGCSURI, err := w.StorageClient.UploadFromFile(ctx, highlightPath, highlightObjectName)
-	if err != nil {
-		return fmt.Errorf("failed to upload highlight video: %w", err)
+	for i, seg := range validSegments {
+		groups[0].Indices = append(groups[0].Indices, i)
+		switch seg.Type {
+		case "best_form":
+			groups[1].Indices = append(groups[1].Indices, i)
+		case "worst_form", "fatigue_point":
+			groups[2].Indices = append(groups[2].Indices, i)
+		case "key_moment":
+			groups[3].Indices = append(groups[3].Indices, i)
+		}
 	}
 
-	// 9. Save result to DB
-	result := &db.HighlightResult{
-		SessionID:   p.SessionID,
-		Status:      "COMPLETED",
-		GCSURI:      highlightGCSURI,
-		Segments:    analysisResult.HighlightSegments,
-		DurationSec: totalDuration,
-		Output:      fmt.Sprintf("Generated %d highlight segments (%.1fs total)", len(trimmedPaths), totalDuration),
-	}
-	if p.ProfileID > 0 {
-		result.ProfileID = &p.ProfileID
-	}
-	w.DB.Create(result)
+	var generatedCount int
+	for _, group := range groups {
+		if len(group.Indices) == 0 {
+			continue
+		}
 
-	logger.Log.Info("Highlight video generated",
-		zap.String("session_id", p.SessionID),
-		zap.String("gcs_uri", highlightGCSURI),
-		zap.Int("segment_count", len(trimmedPaths)),
-		zap.Float64("total_duration", totalDuration))
+		concatListPath := filepath.Join(tmpDir, fmt.Sprintf("hl_concat_%s.txt", group.Prefix))
+		var concatEntries []string
+		var groupSegments []HighlightSegment
+		var groupDuration float64
+
+		for _, idx := range group.Indices {
+			concatEntries = append(concatEntries, fmt.Sprintf("file '%s'", trimmedPaths[idx]))
+			groupSegments = append(groupSegments, validSegments[idx])
+			groupDuration += trimmedDurations[idx]
+		}
+
+		if err := os.WriteFile(concatListPath, []byte(strings.Join(concatEntries, "\n")), 0o644); err != nil {
+			logger.Log.Error("Failed to write concat list", zap.Error(err))
+			continue
+		}
+
+		highlightPath := filepath.Join(tmpDir, fmt.Sprintf("hl_%s_%s.mp4", group.Prefix, p.SessionID))
+		if err := runFFmpegConcat(ctx, concatListPath, highlightPath); err != nil {
+			logger.Log.Error("Failed to concat highlight group", zap.String("group", group.Title), zap.Error(err))
+			continue
+		}
+
+		randSuffix := randomHex(4)
+		gcsObjectName := fmt.Sprintf("highlights/%s_hl_%s_%s.mp4", p.SessionID, group.Prefix, randSuffix)
+		gcsURI, err := w.StorageClient.UploadFromFile(ctx, highlightPath, gcsObjectName)
+		if err != nil {
+			logger.Log.Error("Failed to upload highlight", zap.String("group", group.Title), zap.Error(err))
+			continue
+		}
+
+		segsJSON, _ := json.Marshal(groupSegments)
+
+		result := &db.HighlightResult{
+			SessionID:   p.SessionID,
+			Title:       group.Title,
+			Status:      "COMPLETED",
+			GCSURI:      gcsURI,
+			Segments:    string(segsJSON),
+			DurationSec: groupDuration,
+			Output:      fmt.Sprintf("Generated %d highlight segments (%.1fs total) for %s", len(group.Indices), groupDuration, group.Title),
+		}
+		if p.ProfileID > 0 {
+			result.ProfileID = &p.ProfileID
+		}
+		w.DB.Create(result)
+		generatedCount++
+
+		logger.Log.Info("Highlight video version generated",
+			zap.String("session_id", p.SessionID),
+			zap.String("title", group.Title),
+			zap.String("gcs_uri", gcsURI),
+			zap.Int("segment_count", len(group.Indices)),
+			zap.Float64("duration", groupDuration))
+	}
+
+	if generatedCount == 0 {
+		return fmt.Errorf("failed to generate any highlight groups")
+	}
 
 	return nil
 }

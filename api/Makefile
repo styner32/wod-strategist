@@ -12,7 +12,7 @@ CMD_DIR ?= cmd
 
 GIT_SHA := $(shell git rev-parse --short HEAD)
 
-.PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-upload help test
+.PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-upload test-chunk-upload help test
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $1, $2}'
@@ -63,7 +63,11 @@ migrate-up-remote: ## Run up migrations remotely
 	gcloud run jobs execute $(MIGRATE_SERVICE_NAME) --region $(REGION)
 
 test-upload: ## Test video upload locally
-	curl -X POST http://localhost:8088/api/v1/upload -F "session_id=workout-session-001" -F "file=@./tmp/test_wod.mp4"
+	node --env-file=../.env ../scripts/test-upload.js
+
+test-chunk-upload: ## Replay chunk upload from a saved video. Usage: make test-chunk-upload
+	node --env-file=../.env \
+		../scripts/test-chunk-upload.js
 
 test: ## Run the tests
 	go test ./... -v

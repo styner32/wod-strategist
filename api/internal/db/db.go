@@ -44,6 +44,7 @@ type HighlightResult struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	SessionID   string    `gorm:"index;not null" json:"session_id"`
 	ProfileID   *uint     `gorm:"index" json:"profile_id,omitempty"`
+	Title       string    `json:"title"`        // e.g. "Full Reel", "Best Forms"
 	Status      string    `json:"status"`       // PENDING, PROCESSING, COMPLETED, FAILED
 	GCSURI      string    `json:"gcs_uri"`      // gs:// URI of the highlight video
 	Segments    string    `json:"segments"`     // JSON: selected segments used
