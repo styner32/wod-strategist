@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"regexp"
 	"runtime"
 	"strings"
@@ -76,15 +77,15 @@ const (
    - 카테고리: best_form (가장 좋은 자세), worst_form (가장 나쁜 자세), fatigue_point (피로 시작 지점), key_moment (핵심 순간)
    - 영상 길이를 고려하여 **각 카테고리당 가능한 한 2개 이상의 구간**을 찾아주세요.
    - 각 구간은 3~15초 권장, 전체 시간 합계 제한은 없습니다. 자유롭게 유의미한 구간을 모두 추출하세요.
-   - 반드시 아래 형식의 JSON 코드 블록으로 출력하세요:
-` + "```json\n" + `[{"start":"0:15","end":"0:28","type":"best_form","reason":"완벽한 스내치 풀 익스텐션"},{"start":"1:10","end":"1:20","type":"best_form","reason":"코어가 매우 안정적인 두번째 움직임"},{"start":"2:30","end":"2:45","type":"worst_form","reason":"무릎 내전과 등 굽음 관찰"}]` + "\n```"
+   - 반드시 아래 형식의 **highlights** JSON 코드 블록으로 출력하세요 (json이 아닌 highlights 태그 사용):
+` + "```highlights\n" + `[{"start":"0:15","end":"0:28","type":"best_form","reason":"완벽한 스내치 풀 익스텐션"},{"start":"1:10","end":"1:20","type":"best_form","reason":"코어가 매우 안정적인 두번째 움직임"},{"start":"2:30","end":"2:45","type":"worst_form","reason":"무릎 내전과 등 굽음 관찰"}]` + "\n```"
 
 	InjuryTimestampPrompt = `
 
 6. **부상 관련 타임스탬프 (Injury-Relevant Timestamps)**:
    - 아래 부상 부위가 활발히 사용되거나 위험에 노출되는 구간을 JSON 배열로 출력하세요.
-   - 반드시 아래 형식의 JSON 코드 블록으로 출력하세요:
-` + "```json\n" + `[{"start": "0:32", "end": "0:45", "reason": "무릎 내전 관찰"}]` + "\n```"
+   - 반드시 아래 형식의 **injury_timestamps** JSON 코드 블록으로 출력하세요 (json이 아닌 injury_timestamps 태그 사용):
+` + "```injury_timestamps\n" + `[{"start": "0:32", "end": "0:45", "reason": "무릎 내전 관찰"}]` + "\n```"
 
 	InjuryAnalysisPrompt = `
 # 부상 부위 집중 분석 (Injury-Focused Supplement)
@@ -120,8 +121,11 @@ const (
 - 부상 사항이 있으면 → 해당 부위에 위험한 움직임이 보일 때만 안전 경고를 우선하세요.`
 )
 
-// jsonBlockRegex matches fenced ```json ... ``` or ```highlights ... ``` blocks in Gemini output.
-var jsonBlockRegex = regexp.MustCompile("(?is)```(?:json|highlights)\\s*(\\[.*?\\])\\s*```")
+// highlightBlockRegex matches fenced ```highlights ... ``` blocks in Gemini output.
+var highlightBlockRegex = regexp.MustCompile("(?is)```highlights\\s*(\\[.*?\\])\\s*```")
+
+// injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ``` blocks in Gemini output.
+var injuryTimestampBlockRegex = regexp.MustCompile("(?is)```injury_timestamps\\s*(\\[.*?\\])\\s*```")
 
 type VideoAnalysisPayload struct {
 	SessionID   string
@@ -547,42 +551,34 @@ func (w *Worker) lookupProfileString(profileID uint) string {
 	return personalProfile
 }
 
-// parseInjuryTimestamps extracts the JSON array from the injury-relevant timestamp
-// section of the WOD analysis output. Returns the raw JSON string, or empty on failure.
+// parseInjuryTimestamps extracts the JSON array from the ```injury_timestamps``` code block
+// in the WOD analysis output. Returns the raw JSON string, or empty on failure.
 func parseInjuryTimestamps(analysisOutput string) string {
-	matches := jsonBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
-	for _, match := range matches {
-		// Validate it's actually a JSON array
-		var parsed []json.RawMessage
-		if err := json.Unmarshal([]byte(match[1]), &parsed); err == nil && len(parsed) > 0 {
-			var check struct {
-				Start string `json:"start"`
-				Type  string `json:"type"`
-			}
-			if err := json.Unmarshal(parsed[0], &check); err == nil {
-				if check.Start != "" && check.Type == "" {
-					return match[1]
-				}
-			}
-		}
+	match := injuryTimestampBlockRegex.FindStringSubmatch(analysisOutput)
+	if match == nil {
+		return ""
 	}
-	return ""
+	// Sanity-check: must be a non-empty JSON array.
+	var parsed []json.RawMessage
+	if err := json.Unmarshal([]byte(match[1]), &parsed); err != nil || len(parsed) == 0 {
+		return ""
+	}
+	return match[1]
 }
 
 // parseHighlightSegments extracts the JSON array from the ```highlights``` code block
 // in the WOD analysis output. Returns the raw JSON string, or empty on failure.
 func parseHighlightSegments(analysisOutput string) string {
-	matches := jsonBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
-	for _, match := range matches {
-		// Validate it's a valid JSON array of highlight segments
-		var parsed []HighlightSegment
-		if err := json.Unmarshal([]byte(match[1]), &parsed); err == nil && len(parsed) > 0 {
-			if parsed[0].Type != "" {
-				return match[1]
-			}
-		}
+	match := highlightBlockRegex.FindStringSubmatch(analysisOutput)
+	if match == nil {
+		return ""
 	}
-	return ""
+	// Sanity-check: must be a non-empty array of valid HighlightSegments.
+	var parsed []HighlightSegment
+	if err := json.Unmarshal([]byte(match[1]), &parsed); err != nil || len(parsed) == 0 {
+		return ""
+	}
+	return match[1]
 }
 
 // parseTimestampToSeconds converts a "M:SS" or "MM:SS" timestamp string to seconds.
@@ -753,7 +749,7 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	}
 
 	// Sort objects to ensure chronological order (filenames contain timestamps)
-	sortStrings(objects)
+	sort.Strings(objects)
 
 	logger.Log.Info("Found chunk objects", zap.Int("count", len(objects)), zap.Strings("objects", objects))
 
@@ -1044,13 +1040,7 @@ func runFFmpegHardSub(ctx context.Context, inputPath, srtPath, outputPath string
 	return nil
 }
 
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j-1] > s[j]; j-- {
-			s[j-1], s[j] = s[j], s[j-1]
-		}
-	}
-}
+
 
 // randomHex returns a cryptographically random hex string of n bytes (2n hex chars).
 func randomHex(n int) string {
@@ -1165,7 +1155,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		return fmt.Errorf("no chunk videos found: %w", asynq.SkipRetry)
 	}
 
-	sortStrings(chunkObjects)
+	sort.Strings(chunkObjects)
 
 	logger.Log.Info("Found chunk video files",
 		zap.String("session_id", p.SessionID),
@@ -1504,7 +1494,7 @@ func buildMusicPrompt(segments []HighlightSegment) string {
 			"Driving, motivating, electronic/EDM style with strong beats. "+
 			"Suitable for a social media sports highlight video. "+
 			"Best form segments: %d, fatigue points: %d, key moments: %d.",
-		intensity, bpm, bestCount, fatigueCount, keyCount,
+		bpm, intensity, bestCount, fatigueCount, keyCount,
 	)
 }
 
