@@ -1,0 +1,153 @@
+package worker
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/hibiken/asynq"
+	"github.com/wod-strategist/api/internal/db"
+	"go.uber.org/zap"
+)
+
+const ChunkAnalysisPrompt = `
+# 운동 청크 영상 분석 요청 (실시간 피드백)
+
+당신은 실시간 코칭을 제공하는 전문 코치입니다.
+방금 수행된 약 10초 분량의 짧은 영상 클립이 주어집니다.
+
+## 규칙
+- **반드시 1~2문장**으로만 답하세요. 길게 쓰지 마세요.
+- 아래 컨텍스트를 참고하되, 컨텍스트 자체를 반복하지 마세요.
+- 자세 교정이 필요하면 → 구체적인 교정 큐(예: "팔꿈치를 더 높이 유지하세요")를 제시하세요.
+- 자세가 좋으면 → 어떤 점이 좋은지 짧게 격려하세요.
+- 부상 사항이 있으면 → 해당 부위에 위험한 움직임이 보일 때만 안전 경고를 우선하세요.`
+
+func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error) {
+	payload := VideoAnalysisPayload{
+		SessionID:   sessionID,
+		FilePath:    filePath,
+		WorkoutType: NormalizeWorkoutType(workoutType),
+		Movements:   movements,
+		Injuries:    injuries,
+		ProfileID:   profileID,
+		StartSecs:   startSecs,
+		EndSecs:     endSecs,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeChunkAnalysis, data), nil
+}
+
+func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) error {
+	var p VideoAnalysisPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+	}
+
+	retryCount, ok := asynq.GetRetryCount(ctx)
+	if !ok {
+		retryCount = 0
+	}
+
+	w.logger.Info("Processing chunk analysis",
+		zap.String("session_id", p.SessionID),
+		zap.String("file_path", p.FilePath),
+		zap.Int("retry_count", int(retryCount)))
+
+	if retryCount >= 3 {
+		w.logger.Error("Max retries reached. Skipping chunk analysis.")
+		return asynq.SkipRetry
+	}
+
+	if !strings.HasPrefix(p.FilePath, "gs://") {
+		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
+	}
+
+	safeSessionID := filepath.Base(p.SessionID)
+	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
+
+	localFilePath := filepath.Join("/tmp", fmt.Sprintf("chunk_%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+
+	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
+	}
+
+	prompt := w.buildChunkAnalysisPrompt(p)
+
+	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+
+	defer func() {
+		os.Remove(localFilePath)
+	}()
+
+	if geminiFile != "" {
+		defer func() {
+			w.GeminiClient.DeleteFile(ctx, geminiFile)
+		}()
+	}
+
+	if analysis == "" {
+		return fmt.Errorf("chunk analysis is empty")
+	}
+
+	if err != nil {
+		w.logger.Error("Chunk analysis failed", zap.Error(err))
+		chunkFailed := &db.ChunkAnalysisResult{
+			SessionID: p.SessionID,
+			Status:    "FAILED",
+			Output:    "An internal error occurred during chunk analysis.",
+		}
+		if p.ProfileID > 0 {
+			chunkFailed.ProfileID = &p.ProfileID
+		}
+		if p.StartSecs > 0 || p.EndSecs > 0 {
+			chunkFailed.StartSecs = &p.StartSecs
+			chunkFailed.EndSecs = &p.EndSecs
+		}
+		w.DB.Create(chunkFailed)
+		return err
+	}
+
+	chunkResult := &db.ChunkAnalysisResult{
+		SessionID: p.SessionID,
+		Status:    "COMPLETED",
+		Output:    analysis,
+	}
+	if p.ProfileID > 0 {
+		chunkResult.ProfileID = &p.ProfileID
+	}
+	if p.StartSecs > 0 || p.EndSecs > 0 {
+		chunkResult.StartSecs = &p.StartSecs
+		chunkResult.EndSecs = &p.EndSecs
+	}
+	w.DB.Create(chunkResult)
+
+	w.logger.Info("Chunk analysis completed", zap.String("session_id", p.SessionID))
+	return nil
+}
+
+func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
+	prompt := ChunkAnalysisPrompt
+
+	if len(p.Movements) > 0 {
+		prompt += fmt.Sprintf("\n\n## 운동 종목\n%s", strings.Join(p.Movements, ", "))
+	}
+
+	if len(p.Injuries) > 0 {
+		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", strings.Join(p.Injuries, ", "))
+	}
+
+	personalProfile := w.lookupProfileString(p.ProfileID)
+	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
+
+	return prompt
+}

@@ -68,7 +68,7 @@ func main() {
 	// Create Asynq client for enqueueing tasks from workers (e.g. merge → analysis)
 	queueClient := asynq.NewClient(redisOpt)
 
-	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient)
+	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient, logger.Log)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)
