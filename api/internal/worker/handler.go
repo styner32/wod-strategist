@@ -719,6 +719,12 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		zap.String("session_id", p.SessionID),
 		zap.String("file_path", p.FilePath))
 
+	safeSessionID := filepath.Base(p.SessionID)
+	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+		logger.Log.Error("Invalid session ID: contains path separator after sanitization", zap.String("session_id", p.SessionID))
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
+
 	// Extract session prefix from the placeholder GCS URI (e.g. "videos/session_xxx")
 	_, prefix, err := storage.ParseGCSURI(p.FilePath)
 	if err != nil {
@@ -754,7 +760,7 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	logger.Log.Info("Found chunk objects", zap.Int("count", len(objects)), zap.Strings("objects", objects))
 
 	// 2. Download all chunks to /tmp/
-	tmpDir := filepath.Join("/tmp", fmt.Sprintf("merge_%s_%d", strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_"), os.Getpid()))
+	tmpDir := filepath.Join("/tmp", fmt.Sprintf("merge_%s_%d", strings.ReplaceAll(safeSessionID, ".", "_"), os.Getpid()))
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create merge temp dir: %w", err)
 	}
@@ -781,7 +787,7 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		return fmt.Errorf("failed to write concat list: %w", err)
 	}
 
-	mergedPath := filepath.Join(tmpDir, fmt.Sprintf("merged_%s.mp4", p.SessionID))
+	mergedPath := filepath.Join(tmpDir, fmt.Sprintf("merged_%s.mp4", safeSessionID))
 	if err := runFFmpegConcat(ctx, concatListPath, mergedPath); err != nil {
 		return fmt.Errorf("ffmpeg merge failed: %w", err)
 	}
@@ -917,7 +923,8 @@ func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir,
 			zap.Int64("size_bytes", fi.Size()))
 	}
 
-	hardSubPath := filepath.Join(tmpDir, fmt.Sprintf("hardsubbed_%s.mp4", p.SessionID))
+	safeSessionID := filepath.Base(p.SessionID)
+	hardSubPath := filepath.Join(tmpDir, fmt.Sprintf("hardsubbed_%s.mp4", safeSessionID))
 
 	logger.Log.Info("Hard-sub: starting FFmpeg",
 		zap.String("input", mergedPath),
@@ -1087,6 +1094,12 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		return asynq.SkipRetry
 	}
 
+	safeSessionID := filepath.Base(p.SessionID)
+	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+		logger.Log.Error("Invalid session ID: contains path separator after sanitization", zap.String("session_id", p.SessionID))
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
+
 	// 1. Query the WOD analysis result for this session
 	var analysisResult db.AnalysisResult
 	if err := w.DB.Where("session_id = ? AND analysis_type = ? AND status = ?",
@@ -1180,8 +1193,8 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 	}
 
 	// 5. Create temp directory
-	safeSessionID := strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_")
-	tmpDir := filepath.Join("/tmp", fmt.Sprintf("highlight_%s_%d", safeSessionID, os.Getpid()))
+	safeSessionIDDir := strings.ReplaceAll(safeSessionID, ".", "_")
+	tmpDir := filepath.Join("/tmp", fmt.Sprintf("highlight_%s_%d", safeSessionIDDir, os.Getpid()))
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create highlight temp dir: %w", err)
 	}
@@ -1363,14 +1376,14 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			continue
 		}
 
-		rawConcatPath := filepath.Join(tmpDir, fmt.Sprintf("hl_raw_%s_%s.mp4", group.Prefix, p.SessionID))
+		rawConcatPath := filepath.Join(tmpDir, fmt.Sprintf("hl_raw_%s_%s.mp4", group.Prefix, safeSessionID))
 		if err := runFFmpegConcat(ctx, concatListPath, rawConcatPath); err != nil {
 			logger.Log.Error("Failed to concat highlight group", zap.String("group", group.Title), zap.Error(err))
 			continue
 		}
 
 		// Apply cinematic polish (color grade + fades + watermark + music mix)
-		polishedPath := filepath.Join(tmpDir, fmt.Sprintf("hl_polished_%s_%s.mp4", group.Prefix, p.SessionID))
+		polishedPath := filepath.Join(tmpDir, fmt.Sprintf("hl_polished_%s_%s.mp4", group.Prefix, safeSessionID))
 		uploadPath := rawConcatPath // fallback to raw if polish fails
 		if err := runFFmpegFinalPolish(ctx, rawConcatPath, musicPath, polishedPath, groupDuration); err != nil {
 			logger.Log.Warn("FFmpeg polish failed, uploading raw concat instead",

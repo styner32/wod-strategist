@@ -133,7 +133,7 @@ var _ = Describe("buildInjuryAnalysisPrompt", func() {
 
 var _ = Describe("parseInjuryTimestamps", func() {
 	It("extracts valid JSON from fenced code block", func() {
-		input := "Some analysis text...\n```json\n[{\"start\":\"0:32\",\"end\":\"0:45\",\"reason\":\"무릎 내전\"}]\n```\nMore text."
+		input := "Some analysis text...\n```injury_timestamps\n[{\"start\":\"0:32\",\"end\":\"0:45\",\"reason\":\"무릎 내전\"}]\n```\nMore text."
 		result := parseInjuryTimestamps(input)
 		Expect(result).To(ContainSubstring("0:32"))
 	})
@@ -144,7 +144,7 @@ var _ = Describe("parseInjuryTimestamps", func() {
 	})
 
 	It("returns empty for invalid JSON in block", func() {
-		input := "```json\nnot valid json\n```"
+		input := "```injury_timestamps\nnot valid json\n```"
 		result := parseInjuryTimestamps(input)
 		Expect(result).To(BeEmpty())
 	})
