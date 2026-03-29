@@ -579,3 +579,95 @@ func (ctl *Controller) GetSubtitles(c *gin.Context) {
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.srt"`, sessionID))
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(srt))
 }
+
+// @Summary      Generate Highlight
+// @Description  Triggers short-form highlight video generation from WOD analysis for a session
+// @Tags         highlight
+// @Accept       json
+// @Produce      json
+// @Param        request body GenerateHighlightRequest true "Session ID and options"
+// @Success      202 {object} map[string]string
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /generate-highlight [post]
+func (ctl *Controller) GenerateHighlight(c *gin.Context) {
+	if ctl.queueClient == nil {
+		logger.Log.Error("queue client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	var req GenerateHighlightRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Log.Error("failed to bind JSON", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	if req.MaxDuration <= 0 {
+		req.MaxDuration = 60
+	}
+	if req.MaxDuration > 120 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "max_duration cannot exceed 120 seconds"})
+		return
+	}
+
+	logger.Log.Info("Submit a highlight generation request",
+		zap.String("session_id", req.SessionID),
+		zap.Int("max_duration", req.MaxDuration),
+		zap.Uint("profile_id", req.ProfileID))
+
+	task, err := ctl.newGenerateHighlight(req.SessionID, req.ProfileID, req.MaxDuration)
+	if err != nil {
+		logger.Log.Error("failed to create highlight task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue highlight task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":    "Highlight generation started",
+		"task_id":    info.ID,
+		"session_id": req.SessionID,
+	})
+}
+
+// @Summary      Get Highlight
+// @Description  Returns highlight generation results for a given session
+// @Tags         highlight
+// @Produce      json
+// @Param        session_id path string true "Session ID"
+// @Success      200 {array} db.HighlightResult
+// @Failure      500 {object} ErrorResponse
+// @Router       /highlight/:session_id [get]
+func (ctl *Controller) GetHighlight(c *gin.Context) {
+	if ctl.highlightResults == nil {
+		logger.Log.Error("highlight result repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch highlights"})
+		return
+	}
+
+	results, err := ctl.highlightResults.FindBySessionID(c.Request.Context(), c.Param("session_id"))
+	if err != nil {
+		logger.Log.Error("failed to fetch highlight results", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch highlights"})
+		return
+	}
+
+	c.JSON(http.StatusOK, results)
+}
+

@@ -1,0 +1,1 @@
+ALTER TABLE highlight_results ADD COLUMN IF NOT EXISTS music_gcs_uri TEXT NOT NULL DEFAULT '';

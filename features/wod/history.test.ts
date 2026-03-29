@@ -16,7 +16,7 @@ const mockData: AnalysisResult[] = [
   },
   {
     id: 2,
-    session_id: "REHAB-2026-03-20-09-30",
+    session_id: "WOD-2026-03-20-09-30",
     status: "completed",
     output: "Mobility improving steadily.",
     created_at: "2026-03-20T09:30:00Z",
@@ -71,7 +71,7 @@ describe("fetchAnalysisHistory", () => {
     expect(result[1]).toEqual(
       expect.objectContaining({
         id: 2,
-        session_id: "REHAB-2026-03-20-09-30",
+        session_id: "WOD-2026-03-20-09-30",
       })
     );
   });

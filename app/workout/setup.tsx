@@ -1,9 +1,5 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { fetchInjuries, fetchMovements } from '@/features/wod/api';
-import {
-  WORKOUT_TYPE_OPTIONS,
-  type WorkoutType,
-} from '@/features/wod/workoutType';
 import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
@@ -17,7 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function WorkoutSetup() {
-  const [workoutType, setWorkoutType] = useState<WorkoutType>('wod');
+  const workoutType = 'wod';
   const [resolution, setResolution] = useState<'720p' | '1080p'>('720p');
   const [movementOptions, setMovementOptions] = useState<string[]>([]);
   const [selectedMovements, setSelectedMovements] = useState<string[]>([]);
@@ -74,39 +70,6 @@ export default function WorkoutSetup() {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Workout Type</Text>
-          <View style={styles.typeGrid}>
-            {WORKOUT_TYPE_OPTIONS.map((option) => {
-              const isSelected = option.value === workoutType;
-              return (
-                <TouchableOpacity
-                  key={option.value}
-                  style={[styles.typeCard, isSelected && styles.typeCardActive]}
-                  onPress={() => setWorkoutType(option.value)}
-                >
-                  <Text
-                    style={[
-                      styles.typeCardTitle,
-                      isSelected && styles.typeCardTitleActive,
-                    ]}
-                  >
-                    {option.label}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.typeCardDescription,
-                      isSelected && styles.typeCardDescriptionActive,
-                    ]}
-                  >
-                    {option.description}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-
         {/* Resolution Config */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Video Quality</Text>
@@ -132,14 +95,8 @@ export default function WorkoutSetup() {
 
         {/* Movements Config */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>
-            {workoutType === 'rehab' ? 'Target Movements' : 'Planned Movements'}
-          </Text>
-          <Text style={styles.label}>
-            {workoutType === 'rehab'
-              ? 'Optional: select any exercises to highlight during rehab analysis.'
-              : 'Select what you will perform:'}
-          </Text>
+          <Text style={styles.sectionTitle}>Planned Movements</Text>
+          <Text style={styles.label}>Select what you will perform:</Text>
           
           {loading ? (
             <ActivityIndicator color="#007AFF" />
@@ -162,18 +119,14 @@ export default function WorkoutSetup() {
             </View>
           )}
           <Text style={styles.hint}>
-            {workoutType === 'rehab'
-              ? 'Rehab sessions can start without movement selection.'
-              : 'Used to guide the AI analysis. Select at least one to start.'}
+            Used to guide the AI analysis. Select at least one to start.
           </Text>
         </View>
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Known Injuries</Text>
           <Text style={styles.label}>
-            {workoutType === 'rehab'
-              ? 'Optional, but recommended for safer rehab feedback.'
-              : 'Optional: add any current limitations the coach should consider.'}
+            Optional: add any current limitations the coach should consider.
           </Text>
 
           {loading ? (
@@ -207,9 +160,7 @@ export default function WorkoutSetup() {
           onPress={handleStart}
           disabled={!canStart}
         >
-          <Text style={styles.startText}>
-            {workoutType === 'rehab' ? 'Start Rehab Session' : 'Start Workout'}
-          </Text>
+          <Text style={styles.startText}>Start Workout</Text>
           <IconSymbol name="figure.run" size={24} color="#000" />
         </TouchableOpacity>
       </View>

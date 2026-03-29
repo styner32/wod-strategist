@@ -93,3 +93,30 @@ func (r *GormProfileRepository) FindByID(ctx context.Context, id uint) (*db.Prof
 	return &profile, nil
 }
 
+// ==========================================
+// Highlight Result Repository
+// ==========================================
+
+var errHighlightRepositoryNotConfigured = errors.New("highlight result repository is not configured")
+
+type GormHighlightResultRepository struct {
+	db *gorm.DB
+}
+
+func NewGormHighlightResultRepository(dbConn *gorm.DB) *GormHighlightResultRepository {
+	return &GormHighlightResultRepository{db: dbConn}
+}
+
+func (r *GormHighlightResultRepository) FindBySessionID(ctx context.Context, sessionID string) ([]db.HighlightResult, error) {
+	if r.db == nil {
+		return nil, errHighlightRepositoryNotConfigured
+	}
+
+	var results []db.HighlightResult
+	if err := r.db.WithContext(ctx).Where("session_id = ?", sessionID).Order("created_at desc").Find(&results).Error; err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+

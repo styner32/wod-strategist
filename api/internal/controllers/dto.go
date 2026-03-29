@@ -72,3 +72,10 @@ type ChunkCompleteRequest struct {
 	StartSecs   float64  `json:"start_secs"`
 	EndSecs     float64  `json:"end_secs"`
 }
+
+type GenerateHighlightRequest struct {
+	SessionID   string `json:"session_id"`
+	ProfileID   uint   `json:"profile_id,omitempty"`
+	MaxDuration int    `json:"max_duration,omitempty"` // seconds, default 60
+}
+

@@ -33,32 +33,42 @@ type ProfileRepository interface {
 	FindByID(ctx context.Context, id uint) (*db.Profile, error)
 }
 
+type HighlightResultRepository interface {
+	FindBySessionID(ctx context.Context, sessionID string) ([]db.HighlightResult, error)
+}
+
 type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error)
 
 type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error)
 
+type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int) (*asynq.Task, error)
+
 type Config struct {
-	QueueClient          QueueClient
-	AnalysisResults      AnalysisResultRepository
-	Profiles             ProfileRepository
-	StorageClient        ObjectStorage
-	BucketName           string
-	GitCommit            string
-	NewVideoAnalysisTask VideoAnalysisTaskFactory
-	NewChunkAnalysisTask ChunkAnalysisTaskFactory
-	NewMergeChunksTask   VideoAnalysisTaskFactory
+	QueueClient            QueueClient
+	AnalysisResults        AnalysisResultRepository
+	Profiles               ProfileRepository
+	HighlightResults       HighlightResultRepository
+	StorageClient          ObjectStorage
+	BucketName             string
+	GitCommit              string
+	NewVideoAnalysisTask   VideoAnalysisTaskFactory
+	NewChunkAnalysisTask   ChunkAnalysisTaskFactory
+	NewMergeChunksTask     VideoAnalysisTaskFactory
+	NewGenerateHighlight   HighlightTaskFactory
 }
 
 type Controller struct {
-	queueClient          QueueClient
-	analysisResults      AnalysisResultRepository
-	profiles             ProfileRepository
-	storageClient        ObjectStorage
-	bucketName           string
-	gitCommit            string
-	newVideoAnalysisTask VideoAnalysisTaskFactory
-	newChunkAnalysisTask ChunkAnalysisTaskFactory
-	newMergeChunksTask   VideoAnalysisTaskFactory
+	queueClient            QueueClient
+	analysisResults        AnalysisResultRepository
+	profiles               ProfileRepository
+	highlightResults       HighlightResultRepository
+	storageClient          ObjectStorage
+	bucketName             string
+	gitCommit              string
+	newVideoAnalysisTask   VideoAnalysisTaskFactory
+	newChunkAnalysisTask   ChunkAnalysisTaskFactory
+	newMergeChunksTask     VideoAnalysisTaskFactory
+	newGenerateHighlight   HighlightTaskFactory
 }
 
 func New(config Config) *Controller {
@@ -82,15 +92,22 @@ func New(config Config) *Controller {
 		mergeTaskFactory = worker.NewMergeChunksTask
 	}
 
+	highlightTaskFactory := config.NewGenerateHighlight
+	if highlightTaskFactory == nil {
+		highlightTaskFactory = worker.NewGenerateHighlightTask
+	}
+
 	return &Controller{
 		queueClient:          config.QueueClient,
 		analysisResults:      config.AnalysisResults,
 		profiles:             config.Profiles,
+		highlightResults:     config.HighlightResults,
 		storageClient:        config.StorageClient,
 		bucketName:           config.BucketName,
 		gitCommit:            commit,
 		newVideoAnalysisTask: taskFactory,
 		newChunkAnalysisTask: chunkTaskFactory,
 		newMergeChunksTask:   mergeTaskFactory,
+		newGenerateHighlight: highlightTaskFactory,
 	}
 }

@@ -1,30 +1,13 @@
-export type WorkoutType = "wod" | "rehab";
+export type WorkoutType = "wod";
 
 export const DEFAULT_WORKOUT_TYPE: WorkoutType = "wod";
 
-export const WORKOUT_TYPE_OPTIONS: Array<{
-  value: WorkoutType;
-  label: string;
-  description: string;
-}> = [
-  {
-    value: "wod",
-    label: "WOD",
-    description: "Performance and movement coaching for regular training.",
-  },
-  {
-    value: "rehab",
-    label: "Rehab",
-    description: "Safer return-to-training feedback for recovery work.",
-  },
-];
-
 export function parseWorkoutType(value?: string | null): WorkoutType {
-  return value === "rehab" ? "rehab" : DEFAULT_WORKOUT_TYPE;
+  return DEFAULT_WORKOUT_TYPE;
 }
 
 export function formatWorkoutTypeLabel(value: WorkoutType): string {
-  return value === "rehab" ? "Rehab" : "WOD";
+  return "WOD";
 }
 
 export function buildWorkoutSessionId(
@@ -36,7 +19,6 @@ export function buildWorkoutSessionId(
   const day = String(now.getDate()).padStart(2, "0");
   const hours = String(now.getHours()).padStart(2, "0");
   const minutes = String(now.getMinutes()).padStart(2, "0");
-  const prefix = workoutType === "rehab" ? "REHAB" : "WOD";
 
-  return `${prefix}-${year}-${month}-${day}-${hours}-${minutes}`;
+  return `WOD-${year}-${month}-${day}-${hours}-${minutes}`;
 }

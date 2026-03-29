@@ -24,6 +24,8 @@ type Handlers interface {
 	GetProfile(*gin.Context)
 	MergeChunks(*gin.Context)
 	GetSubtitles(*gin.Context)
+	GenerateHighlight(*gin.Context)
+	GetHighlight(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -183,6 +185,26 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/subtitles/:session_id", handlers.GetSubtitles)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "generate-highlight",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/generate-highlight",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/generate-highlight", handlers.GenerateHighlight)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "highlight",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/highlight/:session_id",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/highlight/:session_id", handlers.GetHighlight)
 		},
 	},
 }
