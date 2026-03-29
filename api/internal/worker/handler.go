@@ -433,7 +433,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		chunkFailed := &db.ChunkAnalysisResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
-			Output:    err.Error(),
+			Output:    "An internal error occurred during chunk analysis.",
 		}
 		if p.ProfileID > 0 {
 			chunkFailed.ProfileID = &p.ProfileID
@@ -984,17 +984,25 @@ func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir,
 	return hardSubGCSURI
 }
 
+// runFFmpegConcat concatenates video files listed in concatListPath into outputPath.
+// Re-encodes to 30 fps / AAC to normalise frame-rate and PTS timestamps across
+// chunks, preventing playback-speed artifacts that occur when source chunks are
+// recorded at variable or high frame rates (e.g. 60/120 fps slo-mo on iOS).
 func runFFmpegConcat(ctx context.Context, concatListPath, outputPath string) error {
 	args := []string{
 		"-f", "concat",
 		"-safe", "0",
 		"-i", concatListPath,
-		"-c", "copy",
+		// Normalise to 30 fps so variable-frame-rate chunks play at real speed.
+		"-vf", "fps=30",
+		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+		"-c:a", "aac", "-b:a", "128k",
+		"-movflags", "+faststart",
 		"-y",
 		outputPath,
 	}
 
-	logger.Log.Info("Running FFmpeg", zap.Strings("args", args))
+	logger.Log.Info("Running FFmpeg concat (re-encode to 30fps)", zap.Strings("args", args))
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	output, err := cmd.CombinedOutput()
@@ -1174,10 +1182,10 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 				end = *chunks[i].EndSecs
 			}
 		}
-		logger.Log.Info("Chunk Mapping", 
-			zap.Int("index", i), 
-			zap.String("object", obj), 
-			zap.Float64("start_secs", start), 
+		logger.Log.Info("Chunk Mapping",
+			zap.Int("index", i),
+			zap.String("object", obj),
+			zap.Float64("start_secs", start),
 			zap.Float64("end_secs", end))
 	}
 
@@ -1329,6 +1337,20 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		}
 	}
 
+	// 7b. Generate workout music once for the whole session (best-effort, reused across groups)
+	musicPath := tryGenerateMusic(ctx, w, p, validSegments, tmpDir)
+	musicGCSURI := ""
+	if musicPath != "" {
+		randSuffix := randomHex(4)
+		musicObjName := fmt.Sprintf("highlights/%s_music_%s.mp3", p.SessionID, randSuffix)
+		if uri, uploadErr := w.StorageClient.UploadFromFile(ctx, musicPath, musicObjName); uploadErr == nil {
+			musicGCSURI = uri
+			logger.Log.Info("Music track uploaded", zap.String("gcs_uri", musicGCSURI))
+		} else {
+			logger.Log.Warn("Failed to upload music track", zap.Error(uploadErr))
+		}
+	}
+
 	var generatedCount int
 	for _, group := range groups {
 		if len(group.Indices) == 0 {
@@ -1351,15 +1373,25 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			continue
 		}
 
-		highlightPath := filepath.Join(tmpDir, fmt.Sprintf("hl_%s_%s.mp4", group.Prefix, p.SessionID))
-		if err := runFFmpegConcat(ctx, concatListPath, highlightPath); err != nil {
+		rawConcatPath := filepath.Join(tmpDir, fmt.Sprintf("hl_raw_%s_%s.mp4", group.Prefix, p.SessionID))
+		if err := runFFmpegConcat(ctx, concatListPath, rawConcatPath); err != nil {
 			logger.Log.Error("Failed to concat highlight group", zap.String("group", group.Title), zap.Error(err))
 			continue
 		}
 
+		// Apply cinematic polish (color grade + fades + watermark + music mix)
+		polishedPath := filepath.Join(tmpDir, fmt.Sprintf("hl_polished_%s_%s.mp4", group.Prefix, p.SessionID))
+		uploadPath := rawConcatPath // fallback to raw if polish fails
+		if err := runFFmpegFinalPolish(ctx, rawConcatPath, musicPath, polishedPath, groupDuration); err != nil {
+			logger.Log.Warn("FFmpeg polish failed, uploading raw concat instead",
+				zap.String("group", group.Title), zap.Error(err))
+		} else {
+			uploadPath = polishedPath
+		}
+
 		randSuffix := randomHex(4)
 		gcsObjectName := fmt.Sprintf("highlights/%s_hl_%s_%s.mp4", p.SessionID, group.Prefix, randSuffix)
-		gcsURI, err := w.StorageClient.UploadFromFile(ctx, highlightPath, gcsObjectName)
+		gcsURI, err := w.StorageClient.UploadFromFile(ctx, uploadPath, gcsObjectName)
 		if err != nil {
 			logger.Log.Error("Failed to upload highlight", zap.String("group", group.Title), zap.Error(err))
 			continue
@@ -1372,6 +1404,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			Title:       group.Title,
 			Status:      "COMPLETED",
 			GCSURI:      gcsURI,
+			MusicGCSURI: musicGCSURI,
 			Segments:    string(segsJSON),
 			DurationSec: groupDuration,
 			Output:      fmt.Sprintf("Generated %d highlight segments (%.1fs total) for %s", len(group.Indices), groupDuration, group.Title),
@@ -1386,6 +1419,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			zap.String("session_id", p.SessionID),
 			zap.String("title", group.Title),
 			zap.String("gcs_uri", gcsURI),
+			zap.String("music_gcs_uri", musicGCSURI),
 			zap.Int("segment_count", len(group.Indices)),
 			zap.Float64("duration", groupDuration))
 	}
@@ -1440,6 +1474,146 @@ func findChunkForTimestamp(chunks []db.ChunkAnalysisResult, chunkObjects []strin
 	return idx
 }
 
+// buildMusicPrompt constructs a Lyria 3 text prompt from this session's highlight segments.
+// It infers workout intensity from the distribution of segment types.
+func buildMusicPrompt(segments []HighlightSegment) string {
+	var bestCount, worstCount, fatigueCount, keyCount int
+	for _, s := range segments {
+		switch s.Type {
+		case "best_form":
+			bestCount++
+		case "worst_form":
+			worstCount++
+		case "fatigue_point":
+			fatigueCount++
+		case "key_moment":
+			keyCount++
+		}
+	}
+
+	intensity := "high"
+	bpm := "140-150"
+	if fatigueCount == 0 && worstCount == 0 {
+		intensity = "moderate"
+		bpm = "120-130"
+	}
+
+	return fmt.Sprintf(
+		"A 30-second high-energy CrossFit workout music track for a highlight reel. "+
+			"Instrumental only, no vocals. BPM %s. Intensity: %s. "+
+			"Driving, motivating, electronic/EDM style with strong beats. "+
+			"Suitable for a social media sports highlight video. "+
+			"Best form segments: %d, fatigue points: %d, key moments: %d.",
+		intensity, bpm, bestCount, fatigueCount, keyCount,
+	)
+}
+
+// tryGenerateMusic calls Lyria 3 Clip to generate workout music for this session.
+// Returns the local path to the generated MP3, or empty string if generation fails.
+// Errors are logged but never propagated — music is best-effort.
+func tryGenerateMusic(ctx context.Context, w *Worker, p HighlightPayload, segments []HighlightSegment, tmpDir string) string {
+	prompt := buildMusicPrompt(segments)
+	musicPath := filepath.Join(tmpDir, "music.mp3")
+
+	logger.Log.Info("Generating workout music via Lyria 3 Clip",
+		zap.String("session_id", p.SessionID),
+		zap.String("prompt", prompt))
+
+	if err := w.GeminiClient.GenerateWorkoutMusic(ctx, "lyria-3-clip-preview", prompt, musicPath); err != nil {
+		logger.Log.Warn("Music generation failed, continuing without music",
+			zap.String("session_id", p.SessionID),
+			zap.Error(err))
+		return ""
+	}
+
+	logger.Log.Info("Music generation completed",
+		zap.String("session_id", p.SessionID),
+		zap.String("music_path", musicPath))
+	return musicPath
+}
+
+// runFFmpegFinalPolish applies cinematic post-processing to a highlight video:
+//   - Slow-motion effect (0.5× speed via setpts=2.0*PTS + fps=60 interpolation)
+//     for a dramatic highlight feel — this is the intentional cinematic slow-mo
+//     that belongs ONLY in highlights, not in the plain merged video.
+//   - Color grade: lifted blacks, +15% saturation, slight contrast boost
+//   - Fade in (0.5s) and fade out (0.5s)
+//   - "WOD Strategist" watermark, bottom-right, semi-transparent
+//   - If musicPath is non-empty: mixes Lyria-generated music at low volume under original audio
+//
+// Uses libx264 + AAC re-encode at CRF 23 / preset fast for quality/speed balance.
+// Falls back gracefully — caller should use raw concat path if this returns an error.
+func runFFmpegFinalPolish(ctx context.Context, inputPath, musicPath, outputPath string, durationSecs float64) error {
+	// Slow-motion doubles the duration; adjust fade-out accordingly.
+	slowDuration := durationSecs * 2.0
+	fadeOutStart := slowDuration - 0.5
+	if fadeOutStart < 0 {
+		fadeOutStart = 0
+	}
+
+	// Build video filter chain:
+	//   slow-mo (setpts) → fps interpolation → fade in/out → cinematic color grade → watermark
+	// setpts=2.0*PTS slows video to 0.5× speed; minterpolate fills in new frames smoothly.
+	vf := fmt.Sprintf(
+		"setpts=2.0*PTS,"+
+			"minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:vsbmc=1,"+
+			"fade=t=in:st=0:d=0.5,"+
+			"fade=t=out:st=%.3f:d=0.5,"+
+			"eq=contrast=1.08:brightness=0.02:saturation=1.15:gamma=1.05,"+
+			"drawtext=text='WOD Strategist':font=sans:fontsize=18:"+
+			"fontcolor=white@0.45:x=w-tw-12:y=h-th-12",
+		fadeOutStart,
+	)
+
+	var args []string
+
+	if musicPath != "" {
+		// Two-input mode: video + music
+		// Audio filter: duck music to 20% volume, fade it in/out, mix with original audio
+		afMusic := fmt.Sprintf(
+			"[1:a]volume=0.20,afade=t=in:ss=0:d=0.5,afade=t=out:st=%.3f:d=0.5[amusic];"+
+				"[0:a][amusic]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+			fadeOutStart,
+		)
+		args = []string{
+			"-i", inputPath,
+			"-i", musicPath,
+			"-filter_complex", afMusic,
+			"-vf", vf,
+			"-map", "0:v",
+			"-map", "[aout]",
+			"-c:v", "libx264", "-preset", "fast", "-crf", "23",
+			"-c:a", "aac", "-b:a", "128k",
+			"-movflags", "+faststart",
+			"-y", outputPath,
+		}
+	} else {
+		// Single-input mode: video only — effects + color grade, copy audio
+		args = []string{
+			"-i", inputPath,
+			"-vf", vf,
+			"-map", "0:v",
+			"-map", "0:a?",
+			"-c:v", "libx264", "-preset", "fast", "-crf", "23",
+			"-c:a", "aac", "-b:a", "128k",
+			"-movflags", "+faststart",
+			"-y", outputPath,
+		}
+	}
+
+	logger.Log.Info("Running FFmpeg final polish", zap.Strings("args", args))
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		logger.Log.Error("FFmpeg polish failed", zap.Error(err), zap.String("output", string(out)))
+		return fmt.Errorf("ffmpeg polish: %s: %w", string(out), err)
+	}
+
+	logger.Log.Info("FFmpeg polish completed", zap.String("output_path", outputPath))
+	return nil
+}
+
 // runFFmpegTrim extracts a clip from inputPath starting at startSecs for durationSecs.
 func runFFmpegTrim(ctx context.Context, inputPath, outputPath string, startSecs, durationSecs float64) error {
 	args := []string{
@@ -1464,4 +1638,3 @@ func runFFmpegTrim(ctx context.Context, inputPath, outputPath string, startSecs,
 	logger.Log.Info("FFmpeg trim completed", zap.String("output_path", outputPath))
 	return nil
 }
-

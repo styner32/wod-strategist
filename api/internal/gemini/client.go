@@ -156,3 +156,44 @@ func (c *Client) DeleteFile(ctx context.Context, name string) error {
 	c.logger.Info("File deleted", zap.Any("response", resp))
 	return nil
 }
+
+// GenerateWorkoutMusic generates a music clip using the Lyria 3 model and writes
+// the resulting MP3 audio to outputPath.
+// Use "lyria-3-clip-preview" for a 30-second clip or "lyria-3-pro-preview" for
+// a full-length song (2-3 minutes).
+func (c *Client) GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error {
+	c.logger.Info("Generating workout music",
+		zap.String("model", model),
+		zap.String("prompt", prompt),
+		zap.String("output", outputPath))
+
+	resp, err := c.client.Models.GenerateContent(ctx, model, genai.Text(prompt), &genai.GenerateContentConfig{
+		ResponseModalities: []string{"AUDIO", "TEXT"},
+	})
+	if err != nil {
+		return fmt.Errorf("lyria generate_content failed: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+		return fmt.Errorf("lyria returned no candidates")
+	}
+
+	var audioData []byte
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+			audioData = part.InlineData.Data
+			break
+		}
+	}
+
+	if len(audioData) == 0 {
+		return fmt.Errorf("lyria returned no audio data in part.InlineData")
+	}
+
+	if err := os.WriteFile(outputPath, audioData, 0o644); err != nil {
+		return fmt.Errorf("failed to write music to %s: %w", outputPath, err)
+	}
+
+	c.logger.Info("Workout music written", zap.String("path", outputPath), zap.Int("bytes", len(audioData)))
+	return nil
+}
