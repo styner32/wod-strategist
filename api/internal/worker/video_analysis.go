@@ -84,7 +84,7 @@ const (
 var highlightBlockRegex = regexp.MustCompile("(?is)```highlights\\s*(\\[.*?\\])\\s*```")
 
 // injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ``` blocks in Gemini output.
-var injuryTimestampBlockRegex = regexp.MustCompile("(?is)```injury_timestamps\\s*(\\[.*?\\])\\s*```")
+var injuryTimestampBlockRegex = regexp.MustCompile("(?is)```(?:injury_timestamps|json)\\s*(\\[.*?\\])\\s*```")
 
 func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
@@ -858,7 +858,6 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 
 	return prompt
 }
-
 
 // parseHighlightSegments extracts the JSON array from the ```highlights``` code block
 // in the WOD analysis output. Returns the raw JSON string, or empty on failure.
