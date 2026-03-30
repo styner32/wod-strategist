@@ -162,7 +162,16 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		}
 	})
 
-	It("persists a COMPLETED AnalysisResult with InjurySupplement type", func() {
+	It("appends injury output to existing WOD analysis row", func() {
+		// Pre-create a WOD analysis row for the session
+		wodResult := &db.AnalysisResult{
+			SessionID:    "sess-injury-001",
+			AnalysisType: db.AnalysisTypeWOD,
+			Status:       "COMPLETED",
+			Output:       "WOD analysis output",
+		}
+		Expect(dbConn.Create(wodResult).Error).NotTo(HaveOccurred())
+
 		timestamps := `[{"start":"0:32","end":"0:45","reason":"무릎 내전 관찰"}]`
 		transport := setupGeminiTransport(injuryAnalysis)
 
@@ -179,15 +188,20 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		Expect(transport.Verify()).To(Succeed())
 		Expect(transport.Requests()).To(HaveLen(5))
 
+		// Verify injury output is on the same WOD row
 		var result db.AnalysisResult
-		Expect(dbConn.Where("session_id = ?", "sess-injury-001").First(&result).Error).
-			NotTo(HaveOccurred())
-		Expect(result.Status).To(Equal("COMPLETED"))
-		Expect(result.AnalysisType).To(Equal(db.AnalysisTypeInjurySupplement))
-		Expect(result.Output).To(Equal(injuryAnalysis))
+		Expect(dbConn.First(&result, wodResult.ID).Error).NotTo(HaveOccurred())
+		Expect(result.AnalysisType).To(Equal(db.AnalysisTypeWOD))
+		Expect(result.Output).To(Equal("WOD analysis output"))
+		Expect(result.InjuryOutput).To(Equal(injuryAnalysis))
+
+		// No separate injury_supplement row should exist
+		var count int64
+		dbConn.Model(&db.AnalysisResult{}).Where("session_id = ? AND analysis_type = ?", "sess-injury-001", db.AnalysisTypeInjurySupplement).Count(&count)
+		Expect(count).To(BeZero())
 	})
 
-	It("sets ProfileID on the result when ProfileID > 0", func() {
+	It("falls back to standalone row with ProfileID when no WOD row exists", func() {
 		profile := db.Profile{
 			BirthYear: 1992, BirthMonth: 9, BirthDay: 20,
 			Gender: "male", HeightCm: 180, WeightKg: 82.0,
@@ -208,11 +222,14 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		Expect(w.HandleInjuryAnalysisTask(context.Background(), task)).To(Succeed())
 		Expect(transport.Verify()).To(Succeed())
 
+		// Falls back to creating a standalone injury_supplement row
 		var result db.AnalysisResult
 		Expect(dbConn.Where("session_id = ?", "sess-injury-profile-001").First(&result).Error).
 			NotTo(HaveOccurred())
+		Expect(result.AnalysisType).To(Equal(db.AnalysisTypeInjurySupplement))
 		Expect(result.ProfileID).NotTo(BeNil())
 		Expect(*result.ProfileID).To(Equal(profile.ID))
+		Expect(result.Output).To(Equal(injuryAnalysis))
 	})
 
 	It("returns an error and saves no record when Gemini returns empty candidates", func() {

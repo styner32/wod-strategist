@@ -35,6 +35,66 @@
       margin-bottom: 0;
     }
 
+    .repeat-controls {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.75rem;
+      align-items: end;
+    }
+
+    .repeat-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.45rem;
+      border: 1px solid #444;
+      border-radius: 6px;
+      background-color: #111;
+      color: #eee;
+    }
+
+    .repeat-meta {
+      width: 100%;
+      padding: 0.7rem;
+      box-sizing: border-box;
+      min-height: 2.75rem;
+      border-radius: 6px;
+      background-color: #101010;
+      border: 1px dashed #444;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+
+    .button-group button {
+      flex: 1;
+      padding: 0.55rem 0.7rem;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #2e7d32;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .button-group button:disabled {
+      background: #555;
+      cursor: not-allowed;
+    }
+
+    .loop-status {
+      margin-top: 0.75rem;
+      min-height: 1.2rem;
+      color: #ddd;
+      font-size: 0.95rem;
+    }
+
+    .loop-status.error {
+      color: #ff6d6d;
+    }
+
     label {
       display: block;
       margin-bottom: 0.5rem;
@@ -84,11 +144,24 @@
       <label for="videoInput">1. Select Video (.mp4)</label>
       <input type="file" id="videoInput" accept="video/mp4, video/x-m4v, video/*">
     </div>
-    <div class="input-group">
-      <label for="srtInput">2. Select Subtitles (.srt)</label>
-      <input type="file" id="srtInput" accept=".srt">
+      <div class="input-group">
+        <label for="srtInput">2. Select Subtitles (.srt)</label>
+        <input type="file" id="srtInput" accept=".srt">
+      </div>
+      <div class="input-group">
+        <label>3. Repeat Range</label>
+        <div class="repeat-controls">
+          <input id="repeatStart" class="repeat-input" type="text" placeholder="Start (mm:ss or hh:mm:ss)">
+          <input id="repeatEnd" class="repeat-input" type="text" placeholder="End (mm:ss or hh:mm:ss)">
+          <input id="repeatCount" class="repeat-input" type="number" min="0" step="1" value="0" placeholder="Repeat count (0 = infinite)">
+        </div>
+        <div class="button-group">
+          <button id="startLoopBtn" type="button">Start Loop</button>
+          <button id="stopLoopBtn" type="button" disabled>Stop Loop</button>
+        </div>
+        <div id="loopStatus" class="loop-status repeat-meta" role="status" aria-live="polite"></div>
+      </div>
     </div>
-  </div>
 
   <div class="video-container">
     <video id="videoPlayer" controls playsinline>
@@ -102,6 +175,159 @@
     const srtInput = document.getElementById('srtInput');
     const videoPlayer = document.getElementById('videoPlayer');
     const subtitleTrack = document.getElementById('subtitleTrack');
+    const repeatStartInput = document.getElementById('repeatStart');
+    const repeatEndInput = document.getElementById('repeatEnd');
+    const repeatCountInput = document.getElementById('repeatCount');
+    const startLoopBtn = document.getElementById('startLoopBtn');
+    const stopLoopBtn = document.getElementById('stopLoopBtn');
+    const loopStatus = document.getElementById('loopStatus');
+
+    const LOOP_EPSILON = 0.05;
+    const loopState = {
+      active: false,
+      start: 0,
+      end: 0,
+      repeatsRemaining: 0,
+      infinite: false,
+    };
+
+    function setLoopStatus(message, isError = false) {
+      loopStatus.textContent = message || '';
+      if (isError) {
+        loopStatus.classList.add('error');
+      } else {
+        loopStatus.classList.remove('error');
+      }
+    }
+
+    function formatTime(totalSeconds) {
+      if (!Number.isFinite(totalSeconds) || totalSeconds < 0) {
+        return '00:00.000';
+      }
+      const whole = Math.floor(totalSeconds);
+      const millis = Math.max(0, Math.round((totalSeconds - whole) * 1000));
+      const h = Math.floor(whole / 3600);
+      const m = Math.floor((whole % 3600) / 60);
+      const s = whole % 60;
+      const prefix = h > 0 ? `${h.toString().padStart(2, '0')}:` : '';
+      const sec = `${s.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
+      return `${prefix}${m.toString().padStart(2, '0')}:${sec}`;
+    }
+
+    function parseTimestampToSeconds(value) {
+      const trimmed = (value || '').trim();
+      if (!trimmed) {
+        return NaN;
+      }
+
+      const parts = trimmed.split(':');
+      if (parts.length < 2 || parts.length > 3) {
+        return NaN;
+      }
+
+      const seconds = Number.parseFloat(parts[parts.length - 1]);
+      if (!Number.isFinite(seconds) || seconds < 0 || seconds >= 60) {
+        return NaN;
+      }
+
+      if (parts.length === 2) {
+        const minutes = Number.parseInt(parts[0], 10);
+        if (!Number.isFinite(minutes) || minutes < 0) {
+          return NaN;
+        }
+        return minutes * 60 + seconds;
+      }
+
+      const hours = Number.parseInt(parts[0], 10);
+      const minutes = Number.parseInt(parts[1], 10);
+      if (!Number.isFinite(hours) || hours < 0 || !Number.isFinite(minutes) || minutes < 0 || minutes >= 60) {
+        return NaN;
+      }
+      return hours * 3600 + minutes * 60 + seconds;
+    }
+
+    function stopLoop(message = 'Loop stopped.') {
+      if (!loopState.active) {
+        return;
+      }
+      loopState.active = false;
+      startLoopBtn.disabled = false;
+      stopLoopBtn.disabled = true;
+      setLoopStatus(message);
+    }
+
+    function startLoop() {
+      if (!videoPlayer.src) {
+        setLoopStatus('Please select a video first.', true);
+        return;
+      }
+
+      const startSeconds = parseTimestampToSeconds(repeatStartInput.value);
+      const endSeconds = parseTimestampToSeconds(repeatEndInput.value);
+      if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds)) {
+        setLoopStatus('Invalid timestamp format. Use mm:ss or hh:mm:ss (fraction optional).', true);
+        return;
+      }
+      if (endSeconds <= startSeconds) {
+        setLoopStatus('Repeat end must be later than repeat start.', true);
+        return;
+      }
+
+      const videoDuration = Number(videoPlayer.duration);
+      if (Number.isFinite(videoDuration) && videoDuration > 0) {
+        if (startSeconds < 0 || endSeconds > videoDuration) {
+          setLoopStatus(`Timestamp range must be between 00:00.000 and ${formatTime(videoDuration)}.`, true);
+          return;
+        }
+      }
+
+      const repeatCount = Number.parseInt(repeatCountInput.value, 10);
+      if (!Number.isFinite(repeatCount) || Number.isNaN(repeatCount) || repeatCount < 0) {
+        setLoopStatus('Repeat count must be a non-negative integer.', true);
+        return;
+      }
+
+      loopState.active = true;
+      loopState.start = startSeconds;
+      loopState.end = endSeconds;
+      loopState.infinite = repeatCount === 0;
+      loopState.repeatsRemaining = repeatCount;
+
+      startLoopBtn.disabled = true;
+      stopLoopBtn.disabled = false;
+      if (loopState.infinite) {
+        setLoopStatus(`Looping from ${formatTime(startSeconds)} to ${formatTime(endSeconds)} indefinitely.`);
+      } else {
+        setLoopStatus(`Looping from ${formatTime(startSeconds)} to ${formatTime(endSeconds)} (${repeatCount} repeat(s)).`);
+      }
+
+      if (videoPlayer.currentTime < startSeconds || videoPlayer.currentTime > endSeconds) {
+        videoPlayer.currentTime = startSeconds;
+      }
+      videoPlayer.play().catch(() => {});
+    }
+
+    function handleLoopTimeUpdate() {
+      if (!loopState.active) {
+        return;
+      }
+      if (videoPlayer.currentTime < loopState.end - LOOP_EPSILON) {
+        return;
+      }
+      if (!loopState.infinite) {
+        if (loopState.repeatsRemaining <= 0) {
+          stopLoop('Loop complete. Continuing playback.');
+          return;
+        }
+        loopState.repeatsRemaining -= 1;
+      }
+
+      videoPlayer.currentTime = loopState.start;
+      if (!loopState.infinite && loopState.repeatsRemaining >= 0) {
+        setLoopStatus(`Looping from ${formatTime(loopState.start)} to ${formatTime(loopState.end)} (${loopState.repeatsRemaining} repeat(s) left).`);
+      }
+      videoPlayer.play().catch(() => {});
+    }
 
     // 1. Handle the Video File
     videoInput.addEventListener('change', function (event) {
@@ -112,6 +338,12 @@
         videoPlayer.src = videoURL;
       }
     });
+
+    startLoopBtn.addEventListener('click', startLoop);
+    stopLoopBtn.addEventListener('click', () => {
+      stopLoop();
+    });
+    videoPlayer.addEventListener('timeupdate', handleLoopTimeUpdate);
 
     // 2. Handle the SRT File and convert it on the fly
     srtInput.addEventListener('change', async function (event) {

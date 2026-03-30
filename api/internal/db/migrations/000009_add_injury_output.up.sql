@@ -1,0 +1,1 @@
+ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS injury_output TEXT DEFAULT '' NOT NULL;

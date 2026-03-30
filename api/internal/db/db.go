@@ -35,7 +35,8 @@ type AnalysisResult struct {
 	AnalysisType      string    `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
 	Status            string    `json:"status"`                           // PENDING, COMPLETED, FAILED
 	Output            string    `json:"output"`
-	HighlightSegments string    `json:"highlight_segments"` // JSON array of highlight segments
+	InjuryOutput      string    `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
+	HighlightSegments string    `json:"highlight_segments"`      // JSON array of highlight segments
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }

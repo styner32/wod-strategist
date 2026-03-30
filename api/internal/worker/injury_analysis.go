@@ -123,29 +123,49 @@ func (w *Worker) HandleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) er
 
 	if err != nil {
 		w.logger.Error("Injury analysis failed", zap.Error(err))
-		failedResult := &db.AnalysisResult{
-			SessionID:    p.SessionID,
-			AnalysisType: db.AnalysisTypeInjurySupplement,
-			Status:       "FAILED",
-			Output:       "An internal error occurred during injury analysis.",
+		// Update existing WOD row with failure note, or create standalone row
+		var existing db.AnalysisResult
+		if findErr := w.DB.Where("session_id = ? AND analysis_type = ?", p.SessionID, db.AnalysisTypeWOD).First(&existing).Error; findErr == nil {
+			failureNote := "An internal error occurred during injury analysis."
+			if existing.InjuryOutput != "" {
+				failureNote = existing.InjuryOutput + "\n\n---\n\n" + failureNote
+			}
+			w.DB.Model(&existing).Update("injury_output", failureNote)
+		} else {
+			failedResult := &db.AnalysisResult{
+				SessionID:    p.SessionID,
+				AnalysisType: db.AnalysisTypeInjurySupplement,
+				Status:       "FAILED",
+				Output:       "An internal error occurred during injury analysis.",
+			}
+			if p.ProfileID > 0 {
+				failedResult.ProfileID = &p.ProfileID
+			}
+			w.DB.Create(failedResult)
 		}
-		if p.ProfileID > 0 {
-			failedResult.ProfileID = &p.ProfileID
-		}
-		w.DB.Create(failedResult)
 		return err
 	}
 
-	result := &db.AnalysisResult{
-		SessionID:    p.SessionID,
-		AnalysisType: db.AnalysisTypeInjurySupplement,
-		Status:       "COMPLETED",
-		Output:       analysis,
+	// Append injury output to existing WOD analysis row, or create standalone row as fallback
+	var existing db.AnalysisResult
+	if findErr := w.DB.Where("session_id = ? AND analysis_type = ?", p.SessionID, db.AnalysisTypeWOD).First(&existing).Error; findErr == nil {
+		newInjuryOutput := analysis
+		if existing.InjuryOutput != "" {
+			newInjuryOutput = existing.InjuryOutput + "\n\n---\n\n" + analysis
+		}
+		w.DB.Model(&existing).Update("injury_output", newInjuryOutput)
+	} else {
+		result := &db.AnalysisResult{
+			SessionID:    p.SessionID,
+			AnalysisType: db.AnalysisTypeInjurySupplement,
+			Status:       "COMPLETED",
+			Output:       analysis,
+		}
+		if p.ProfileID > 0 {
+			result.ProfileID = &p.ProfileID
+		}
+		w.DB.Create(result)
 	}
-	if p.ProfileID > 0 {
-		result.ProfileID = &p.ProfileID
-	}
-	w.DB.Create(result)
 
 	w.logger.Info("Injury analysis completed",
 		zap.String("session_id", p.SessionID),
