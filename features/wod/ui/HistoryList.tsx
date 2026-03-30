@@ -9,16 +9,24 @@ import {
   View,
 } from "react-native";
 import { AnalysisResult, fetchAnalysisHistory } from "../history";
+import { useProfileId } from "@/store/useProfileStore";
 
 export function HistoryList() {
+  const profileId = useProfileId();
   const [data, setData] = useState<AnalysisResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const loadData = async () => {
+    if (!profileId) {
+      setData([]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     try {
-      const history = await fetchAnalysisHistory();
+      const history = await fetchAnalysisHistory(profileId);
       setData(history);
     } catch (e) {
       console.error(e);
@@ -29,8 +37,9 @@ export function HistoryList() {
   };
 
   useEffect(() => {
+    setLoading(true);
     loadData();
-  }, []);
+  }, [profileId]);
 
   const onRefresh = () => {
     setRefreshing(true);

@@ -33,7 +33,7 @@ export interface VideoItem {
   progress: number;
   error?: string;        // last error message (shown inline, cleared on next action)
   createdAt: number;
-  profileId?: number;
+  profileId: number;
   gallerySaved: boolean;
 }
 
@@ -42,7 +42,7 @@ export interface EnqueueMetadata {
   workoutType: WorkoutType;
   movements: string[];
   injuries: string[];
-  profileId?: number;
+  profileId: number;
 }
 
 interface VideoQueueState {

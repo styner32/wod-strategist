@@ -77,7 +77,7 @@ export interface ProcessWorkoutVideoOptions {
   injuries?: string[];
   mimeType?: string;
   workoutType?: WorkoutType;
-  profileId?: number;
+  profileId: number;
   startSecs?: number;
   endSecs?: number;
 }
@@ -114,6 +114,18 @@ export async function fetchInjuries(): Promise<string[]> {
 
 export interface ProfileResponse {
   id: number;
+  name: string;
+  birth_year: number;
+  birth_month: number;
+  birth_day: number;
+  gender: string;
+  height_cm: number;
+  weight_kg: number;
+  archived_at?: string;
+}
+
+export interface CreateProfileRequest {
+  name?: string;
   birth_year: number;
   birth_month: number;
   birth_day: number;
@@ -122,13 +134,14 @@ export interface ProfileResponse {
   weight_kg: number;
 }
 
-export interface CreateProfileRequest {
-  birth_year: number;
-  birth_month: number;
-  birth_day: number;
-  gender: string;
-  height_cm: number;
-  weight_kg: number;
+export interface UpdateProfileRequest {
+  name?: string;
+  birth_year?: number;
+  birth_month?: number;
+  birth_day?: number;
+  gender?: string;
+  height_cm?: number;
+  weight_kg?: number;
 }
 
 export async function createProfile(
@@ -142,6 +155,35 @@ export async function createProfile(
 
 export async function getProfile(id: number): Promise<ProfileResponse> {
   return apiClient<ProfileResponse>(`/profiles/${id}`);
+}
+
+export async function listProfiles(
+  includeArchived = false
+): Promise<ProfileResponse[]> {
+  const params = includeArchived ? "?include_archived=true" : "";
+  return apiClient<ProfileResponse[]>(`/profiles${params}`);
+}
+
+export async function updateProfile(
+  id: number,
+  data: UpdateProfileRequest
+): Promise<ProfileResponse> {
+  return apiClient<ProfileResponse>(`/profiles/${id}`, {
+    method: "PUT",
+    bodyPayload: data,
+  });
+}
+
+export async function archiveProfile(id: number): Promise<void> {
+  return apiClient(`/profiles/${id}/archive`, {
+    method: "POST",
+  });
+}
+
+export async function unarchiveProfile(id: number): Promise<void> {
+  return apiClient(`/profiles/${id}/unarchive`, {
+    method: "POST",
+  });
 }
 
 /** Step 1: Request a signed upload URL from our API */
@@ -194,14 +236,13 @@ export async function uploadToGcs(
   }
 }
 
-/** Step 3: Tell the backend the video is uploaded and ready for processing */
 export async function notifyUploadComplete(
   sessionId: string,
   gcsUri: string,
   movements: string[],
   injuries: string[],
   workoutType: string,
-  profileId?: number
+  profileId: number
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/upload-complete", {
     method: "POST",
@@ -211,7 +252,7 @@ export async function notifyUploadComplete(
       movements,
       injuries,
       workout_type: workoutType,
-      ...(profileId ? { profile_id: profileId } : {}),
+      profile_id: profileId,
     },
   });
 }
@@ -222,7 +263,7 @@ export async function notifyChunkUploadComplete(
   movements: string[],
   injuries: string[],
   workoutType: string,
-  profileId?: number,
+  profileId: number,
   startSecs?: number,
   endSecs?: number
 ): Promise<UploadCompleteResponse> {
@@ -234,7 +275,7 @@ export async function notifyChunkUploadComplete(
       movements,
       injuries,
       workout_type: workoutType,
-      ...(profileId ? { profile_id: profileId } : {}),
+      profile_id: profileId,
       ...(startSecs !== undefined ? { start_secs: startSecs } : {}),
       ...(endSecs !== undefined ? { end_secs: endSecs } : {}),
     },
@@ -247,7 +288,7 @@ export async function notifyChunkUploadComplete(
 export async function processWorkoutVideo(
   fileUri: string,
   sessionId: string = "session_dev_001",
-  options: ProcessWorkoutVideoOptions = {}
+  options: ProcessWorkoutVideoOptions
 ): Promise<UploadResult> {
   const {
     onProgress,
@@ -287,7 +328,7 @@ export async function processWorkoutVideo(
 export async function processWorkoutChunk(
   fileUri: string,
   sessionId: string,
-  options: ProcessWorkoutVideoOptions = {}
+  options: ProcessWorkoutVideoOptions
 ): Promise<UploadResult> {
   const {
     movements = [],
@@ -337,8 +378,8 @@ export async function mergeChunks(
     workoutType?: WorkoutType;
     movements?: string[];
     injuries?: string[];
-    profileId?: number;
-  } = {}
+    profileId: number;
+  }
 ): Promise<MergeChunksResult> {
   const {
     workoutType = "wod",
@@ -358,7 +399,7 @@ export async function mergeChunks(
       workout_type: workoutType,
       movements,
       injuries,
-      ...(profileId ? { profile_id: profileId } : {}),
+      profile_id: profileId,
     },
   });
 

@@ -31,6 +31,10 @@ type AnalysisResultRepository interface {
 type ProfileRepository interface {
 	Create(ctx context.Context, profile *db.Profile) error
 	FindByID(ctx context.Context, id uint) (*db.Profile, error)
+	ListAll(ctx context.Context, includeArchived bool) ([]db.Profile, error)
+	Update(ctx context.Context, profile *db.Profile) error
+	Archive(ctx context.Context, id uint) error
+	Unarchive(ctx context.Context, id uint) error
 }
 
 type HighlightResultRepository interface {

@@ -70,6 +70,22 @@ func (h *recordingHandlers) GetProfile(c *gin.Context) {
 	h.record("get-profile", c)
 }
 
+func (h *recordingHandlers) ListProfiles(c *gin.Context) {
+	h.record("list-profiles", c)
+}
+
+func (h *recordingHandlers) UpdateProfile(c *gin.Context) {
+	h.record("update-profile", c)
+}
+
+func (h *recordingHandlers) ArchiveProfile(c *gin.Context) {
+	h.record("archive-profile", c)
+}
+
+func (h *recordingHandlers) UnarchiveProfile(c *gin.Context) {
+	h.record("unarchive-profile", c)
+}
+
 func (h *recordingHandlers) MergeChunks(c *gin.Context) {
 	h.record("merge-chunks", c)
 }

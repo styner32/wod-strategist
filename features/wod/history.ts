@@ -12,9 +12,8 @@ export interface AnalysisResult {
   updated_at: string;
 }
 
-export async function fetchAnalysisHistory(profileId?: number): Promise<AnalysisResult[]> {
-  const params = profileId ? `?profile_id=${profileId}` : "";
-  const fullUrl = `${API_BASE_URL}/history${params}`;
+export async function fetchAnalysisHistory(profileId: number): Promise<AnalysisResult[]> {
+  const fullUrl = `${API_BASE_URL}/history?profile_id=${profileId}`;
   const res = await fetch(fullUrl, {
     headers: {
       "X-API-Key": API_KEY,

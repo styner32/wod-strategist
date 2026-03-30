@@ -1,6 +1,14 @@
 import * as SecureStore from "expo-secure-store";
 import { create } from "zustand";
-import { createProfile } from "@/features/wod/api";
+import {
+  listProfiles as apiListProfiles,
+  createProfile as apiCreateProfile,
+  updateProfile as apiUpdateProfile,
+  archiveProfile as apiArchiveProfile,
+  type ProfileResponse,
+  type CreateProfileRequest,
+  type UpdateProfileRequest,
+} from "@/features/wod/api";
 
 // ==========================================
 // Types
@@ -8,106 +16,91 @@ import { createProfile } from "@/features/wod/api";
 
 export type Gender = "male" | "female" | "other";
 
-export interface UserProfile {
-  birthYear: number | null;
-  birthMonth: number | null;
-  birthDay: number | null;
-  gender: Gender | null;
-  heightCm: number | null;
-  weightKg: number | null;
+export interface Profile {
+  id: number;
+  name: string;
+  birthYear: number;
+  birthMonth: number;
+  birthDay: number;
+  gender: Gender;
+  heightCm: number;
+  weightKg: number;
 }
 
-interface ProfileState extends UserProfile {
+interface ProfileState {
   isLoaded: boolean;
-  /** Backend ID returned after profile creation */
-  backendId: number | null;
+  profiles: Profile[];
+  /** Currently selected profile ID (persisted locally) */
+  activeProfileId: number | null;
 
-  /** Load profile from on-device storage (call once on app start) */
+  /** Load profiles from backend + restore activeProfileId from local storage */
   hydrate: () => Promise<void>;
 
-  /** Update one or more profile fields and persist */
-  updateProfile: (patch: Partial<UserProfile>) => void;
+  /** Refresh profiles list from backend */
+  loadProfiles: () => Promise<void>;
 
-  /** Clear all profile data */
-  clearProfile: () => void;
+  /** Select a profile as active */
+  selectProfile: (id: number) => void;
+
+  /** Create a new profile on the backend and add to local list */
+  createProfile: (data: CreateProfileRequest) => Promise<Profile>;
+
+  /** Update an existing profile on the backend */
+  updateProfile: (id: number, data: UpdateProfileRequest) => Promise<Profile>;
+
+  /** Archive a profile (soft-delete) */
+  archiveProfile: (id: number) => Promise<void>;
+
+  /** Clear the active profile selection */
+  clearActiveProfile: () => void;
 }
 
 // ==========================================
 // Constants
 // ==========================================
 
-const STORAGE_KEY = "wod_user_profile";
-
-const EMPTY_PROFILE: UserProfile = {
-  birthYear: null,
-  birthMonth: null,
-  birthDay: null,
-  gender: null,
-  heightCm: null,
-  weightKg: null,
-};
+const ACTIVE_PROFILE_KEY = "wod_active_profile_id";
 
 // ==========================================
 // Helpers
 // ==========================================
 
-interface PersistedProfile extends UserProfile {
-  backendId?: number | null;
+function toProfile(res: ProfileResponse): Profile {
+  return {
+    id: res.id,
+    name: res.name,
+    birthYear: res.birth_year,
+    birthMonth: res.birth_month,
+    birthDay: res.birth_day,
+    gender: res.gender as Gender,
+    heightCm: res.height_cm,
+    weightKg: res.weight_kg,
+  };
 }
 
-async function persistProfile(
-  profile: UserProfile,
-  backendId: number | null
-): Promise<void> {
+async function persistActiveId(id: number | null): Promise<void> {
   try {
-    const data: PersistedProfile = { ...profile, backendId };
-    await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(data));
+    if (id !== null) {
+      await SecureStore.setItemAsync(ACTIVE_PROFILE_KEY, String(id));
+    } else {
+      await SecureStore.deleteItemAsync(ACTIVE_PROFILE_KEY);
+    }
   } catch (e) {
-    console.warn("⚠️ Failed to persist profile:", e);
+    console.warn("⚠️ Failed to persist active profile ID:", e);
   }
 }
 
-async function loadProfile(): Promise<PersistedProfile | null> {
+async function loadActiveId(): Promise<number | null> {
   try {
-    const raw = await SecureStore.getItemAsync(STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as PersistedProfile;
+    const raw = await SecureStore.getItemAsync(ACTIVE_PROFILE_KEY);
+    if (raw) {
+      const id = parseInt(raw, 10);
+      return isNaN(id) ? null : id;
+    }
   } catch (e) {
-    console.warn("⚠️ Failed to load profile:", e);
+    console.warn("⚠️ Failed to load active profile ID:", e);
   }
   return null;
-}
-
-/** Fire-and-forget sync to backend; updates store with backend ID on success */
-async function syncToBackend(
-  profile: UserProfile,
-  set: (partial: Partial<ProfileState>) => void
-): Promise<void> {
-  if (
-    profile.birthYear == null ||
-    profile.birthMonth == null ||
-    profile.birthDay == null ||
-    profile.gender == null ||
-    profile.heightCm == null ||
-    profile.weightKg == null
-  ) {
-    return;
-  }
-
-  try {
-    const res = await createProfile({
-      birth_year: profile.birthYear,
-      birth_month: profile.birthMonth,
-      birth_day: profile.birthDay,
-      gender: profile.gender,
-      height_cm: profile.heightCm,
-      weight_kg: profile.weightKg,
-    });
-    set({ backendId: res.id });
-    await persistProfile(profile, res.id);
-    console.log("✅ Profile synced to backend, id:", res.id);
-  } catch (e) {
-    console.warn("⚠️ Failed to sync profile to backend:", e);
-  }
 }
 
 // ==========================================
@@ -115,43 +108,81 @@ async function syncToBackend(
 // ==========================================
 
 export const useProfileStore = create<ProfileState>((set, get) => ({
-  ...EMPTY_PROFILE,
   isLoaded: false,
-  backendId: null,
+  profiles: [],
+  activeProfileId: null,
 
   hydrate: async () => {
-    const saved = await loadProfile();
-    if (saved) {
-      set({
-        ...saved,
-        backendId: saved.backendId ?? null,
-        isLoaded: true,
-      });
-    } else {
-      set({ isLoaded: true });
-    }
-  },
+    const [savedId, profiles] = await Promise.all([
+      loadActiveId(),
+      apiListProfiles().catch(() => [] as ProfileResponse[]),
+    ]);
 
-  updateProfile: (patch) => {
-    set((state) => {
-      const updated: UserProfile = {
-        birthYear: patch.birthYear ?? state.birthYear,
-        birthMonth: patch.birthMonth ?? state.birthMonth,
-        birthDay: patch.birthDay ?? state.birthDay,
-        gender: patch.gender ?? state.gender,
-        heightCm: patch.heightCm ?? state.heightCm,
-        weightKg: patch.weightKg ?? state.weightKg,
-      };
-      persistProfile(updated, state.backendId);
-      // Sync to backend in the background
-      syncToBackend(updated, set);
-      return updated;
+    const profileList = profiles.map(toProfile);
+
+    // Validate that savedId still exists in the list
+    const validId =
+      savedId !== null && profileList.some((p) => p.id === savedId)
+        ? savedId
+        : null;
+
+    set({
+      isLoaded: true,
+      profiles: profileList,
+      activeProfileId: validId,
     });
   },
 
-  clearProfile: () => {
-    set({ ...EMPTY_PROFILE, backendId: null });
-    SecureStore.deleteItemAsync(STORAGE_KEY).catch(() => {});
+  loadProfiles: async () => {
+    try {
+      const profiles = await apiListProfiles();
+      set({ profiles: profiles.map(toProfile) });
+    } catch (e) {
+      console.warn("⚠️ Failed to load profiles:", e);
+    }
+  },
+
+  selectProfile: (id) => {
+    set({ activeProfileId: id });
+    persistActiveId(id);
+  },
+
+  createProfile: async (data) => {
+    const res = await apiCreateProfile(data);
+    const profile = toProfile(res);
+    set((state) => ({
+      profiles: [...state.profiles, profile],
+      activeProfileId: profile.id,
+    }));
+    await persistActiveId(profile.id);
+    return profile;
+  },
+
+  updateProfile: async (id, data) => {
+    const res = await apiUpdateProfile(id, data);
+    const updated = toProfile(res);
+    set((state) => ({
+      profiles: state.profiles.map((p) => (p.id === id ? updated : p)),
+    }));
+    return updated;
+  },
+
+  archiveProfile: async (id) => {
+    await apiArchiveProfile(id);
+    set((state) => {
+      const newProfiles = state.profiles.filter((p) => p.id !== id);
+      const newActiveId =
+        state.activeProfileId === id ? null : state.activeProfileId;
+      if (state.activeProfileId === id) {
+        persistActiveId(null);
+      }
+      return { profiles: newProfiles, activeProfileId: newActiveId };
+    });
+  },
+
+  clearActiveProfile: () => {
+    set({ activeProfileId: null });
+    persistActiveId(null);
   },
 }));
 
@@ -159,33 +190,43 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
 // Selectors
 // ==========================================
 
-/** Returns a short summary string like "M · 1990 · 178cm · 85kg" or null if profile is empty */
+/** Returns the currently active profile, or null if none selected */
+export function useActiveProfile(): Profile | null {
+  return useProfileStore((s) => {
+    if (s.activeProfileId === null) return null;
+    return s.profiles.find((p) => p.id === s.activeProfileId) ?? null;
+  });
+}
+
+/** Returns a short summary string like "M · 1990 · 178cm · 85kg" or null if no active profile */
 export function useProfileSummary(): string | null {
   return useProfileStore((s) => {
+    if (s.activeProfileId === null) return null;
+    const profile = s.profiles.find((p) => p.id === s.activeProfileId);
+    if (!profile) return null;
+
     const parts: string[] = [];
-    if (s.gender) parts.push(s.gender === "male" ? "M" : s.gender === "female" ? "F" : "O");
-    if (s.birthYear) parts.push(String(s.birthYear));
-    if (s.heightCm) parts.push(`${s.heightCm}cm`);
-    if (s.weightKg) parts.push(`${s.weightKg}kg`);
+    if (profile.gender)
+      parts.push(
+        profile.gender === "male"
+          ? "M"
+          : profile.gender === "female"
+            ? "F"
+            : "O"
+      );
+    if (profile.birthYear) parts.push(String(profile.birthYear));
+    if (profile.heightCm) parts.push(`${profile.heightCm}cm`);
+    if (profile.weightKg) parts.push(`${profile.weightKg}kg`);
     return parts.length > 0 ? parts.join(" · ") : null;
   });
 }
 
-/** Returns true if the profile has been fully filled out */
+/** Returns true if a profile is currently selected */
 export function useIsProfileComplete(): boolean {
-  return useProfileStore(
-    (s) =>
-      s.birthYear !== null &&
-      s.birthMonth !== null &&
-      s.birthDay !== null &&
-      s.gender !== null &&
-      s.heightCm !== null &&
-      s.weightKg !== null
-  );
+  return useProfileStore((s) => s.activeProfileId !== null);
 }
 
-/** Returns the backend profile ID, or undefined if not yet synced */
+/** Returns the backend profile ID, or undefined if not yet selected */
 export function useProfileId(): number | undefined {
-  return useProfileStore((s) => s.backendId ?? undefined);
+  return useProfileStore((s) => s.activeProfileId ?? undefined);
 }
-

@@ -1,0 +1,2 @@
+ALTER TABLE profiles DROP COLUMN IF EXISTS name;
+ALTER TABLE profiles DROP COLUMN IF EXISTS archived_at;

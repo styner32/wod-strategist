@@ -44,7 +44,7 @@ describe("fetchAnalysisHistory", () => {
       })
     );
 
-    await fetchAnalysisHistory();
+    await fetchAnalysisHistory(1);
 
     expect(capturedMethod).toBe("GET");
     // API_KEY defaults to "" when EXPO_PUBLIC_API_KEY is not set
@@ -58,7 +58,7 @@ describe("fetchAnalysisHistory", () => {
       })
     );
 
-    const result = await fetchAnalysisHistory();
+    const result = await fetchAnalysisHistory(1);
 
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual(
@@ -83,7 +83,7 @@ describe("fetchAnalysisHistory", () => {
       })
     );
 
-    await expect(fetchAnalysisHistory()).rejects.toThrow(
+    await expect(fetchAnalysisHistory(1)).rejects.toThrow(
       /Failed to fetch history/
     );
   });
@@ -95,7 +95,7 @@ describe("fetchAnalysisHistory", () => {
       })
     );
 
-    await expect(fetchAnalysisHistory()).rejects.toThrow(
+    await expect(fetchAnalysisHistory(1)).rejects.toThrow(
       /Failed to fetch history/
     );
   });

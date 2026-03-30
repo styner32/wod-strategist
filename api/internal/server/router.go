@@ -22,6 +22,10 @@ type Handlers interface {
 	ChunkComplete(*gin.Context)
 	CreateProfile(*gin.Context)
 	GetProfile(*gin.Context)
+	ListProfiles(*gin.Context)
+	UpdateProfile(*gin.Context)
+	ArchiveProfile(*gin.Context)
+	UnarchiveProfile(*gin.Context)
 	MergeChunks(*gin.Context)
 	GetSubtitles(*gin.Context)
 	GenerateHighlight(*gin.Context)
@@ -165,6 +169,46 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/profiles/:id", handlers.GetProfile)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "list-profiles",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/profiles",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/profiles", handlers.ListProfiles)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "update-profile",
+			Method: http.MethodPut,
+			Path:   APIRoutePrefix + "/profiles/:id",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.PUT("/profiles/:id", handlers.UpdateProfile)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "archive-profile",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/profiles/:id/archive",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/profiles/:id/archive", handlers.ArchiveProfile)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "unarchive-profile",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/profiles/:id/unarchive",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/profiles/:id/unarchive", handlers.UnarchiveProfile)
 		},
 	},
 	{

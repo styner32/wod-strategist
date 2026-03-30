@@ -187,6 +187,33 @@ func (f *fakeProfileRepository) FindByID(ctx context.Context, id uint) (*db.Prof
 	return nil, fmt.Errorf("not found")
 }
 
+func (f *fakeProfileRepository) ListAll(ctx context.Context, includeArchived bool) ([]db.Profile, error) {
+	f.called = true
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.profile != nil {
+		return []db.Profile{*f.profile}, nil
+	}
+	return nil, nil
+}
+
+func (f *fakeProfileRepository) Update(ctx context.Context, profile *db.Profile) error {
+	f.called = true
+	f.profile = profile
+	return f.err
+}
+
+func (f *fakeProfileRepository) Archive(ctx context.Context, id uint) error {
+	f.called = true
+	return f.err
+}
+
+func (f *fakeProfileRepository) Unarchive(ctx context.Context, id uint) error {
+	f.called = true
+	return f.err
+}
+
 func newTestRouter(config Config) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	logger.Log = zap.NewNop()
@@ -326,18 +353,19 @@ var _ = Describe("Controller handlers", func() {
 			Entry("missing session id", `{"gcs_uri":"gs://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "session_id is required"),
 			Entry("missing gcs uri", `{"session_id":"session-1","movements":[]}`, http.StatusBadRequest, "gcs_uri is required"),
 			Entry("missing movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4"}`, http.StatusBadRequest, "movements is required"),
-			Entry("invalid gcs scheme", `{"session_id":"session-1","gcs_uri":"https://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "invalid GCS URI"),
-			Entry("missing gcs bucket", `{"session_id":"session-1","gcs_uri":"gs:///video.mp4","movements":[]}`, http.StatusBadRequest, "invalid GCS URI"),
-			Entry("invalid movement", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Invalid"]}`, http.StatusBadRequest, "invalid movements"),
-			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":`+repeatedJSONString("Burpee", 100)+`}`, http.StatusBadRequest, "too many movements"),
-			Entry("invalid injury", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":["Head"]}`, http.StatusBadRequest, "invalid injuries"),
-			Entry("too many injuries", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":`+repeatedJSONString("Left Knee", 100)+`}`, http.StatusBadRequest, "too many injuries"),
+			Entry("missing profile id", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "profile_id is required"),
+			Entry("invalid gcs scheme", `{"session_id":"session-1","gcs_uri":"https://bucket/video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
+			Entry("missing gcs bucket", `{"session_id":"session-1","gcs_uri":"gs:///video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
+			Entry("invalid movement", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Invalid"],"profile_id":1}`, http.StatusBadRequest, "invalid movements"),
+			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":`+repeatedJSONString("Burpee", 100)+`,"profile_id":1}`, http.StatusBadRequest, "too many movements"),
+			Entry("invalid injury", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":["Head"],"profile_id":1}`, http.StatusBadRequest, "invalid injuries"),
+			Entry("too many injuries", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":`+repeatedJSONString("Left Knee", 100)+`,"profile_id":1}`, http.StatusBadRequest, "too many injuries"),
 		)
 
 		It("returns internal error when task creation fails", func() {
 			taskFactory.err = errors.New("boom")
 
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"]}`)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"],"profile_id":1}`)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -348,7 +376,7 @@ var _ = Describe("Controller handlers", func() {
 		It("returns internal error when enqueue fails", func() {
 			queue.err = errors.New("boom")
 
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"],"injuries":["Left Knee"],"workout_type":"rehab"}`)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"],"injuries":["Left Knee"],"workout_type":"rehab","profile_id":1}`)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -361,7 +389,7 @@ var _ = Describe("Controller handlers", func() {
 		It("accepts empty movements and normalizes the default workout type", func() {
 			queue.info = &asynq.TaskInfo{ID: "task-999"}
 
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[]}`)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"profile_id":1}`)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -534,7 +562,7 @@ var _ = Describe("Controller handlers", func() {
 			}
 			router := newTestRouter(Config{AnalysisResults: repo})
 
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/history", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
@@ -544,10 +572,22 @@ var _ = Describe("Controller handlers", func() {
 			Expect(repo.historyLimit).To(Equal(20))
 		})
 
+		It("returns bad request when profile_id is missing", func() {
+			router := newTestRouter(Config{AnalysisResults: &fakeAnalysisResultRepository{}})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/history", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(decodeMapBody(w)["error"]).To(Equal("profile_id is required"))
+		})
+
 		It("returns internal error when repository fails", func() {
 			router := newTestRouter(Config{AnalysisResults: &fakeAnalysisResultRepository{err: errors.New("boom")}})
 
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/history", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)

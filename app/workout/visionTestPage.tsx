@@ -115,7 +115,7 @@ export default function VisionTestPage() {
   const startEncoding = useVideoQueue((s) => s.startEncoding);
   const startUpload = useVideoQueue((s) => s.startUpload);
   const cancelUpload = useVideoQueue((s) => s.cancelUpload);
-  const profileId = useProfileStore((s) => s.backendId);
+  const profileId = useProfileStore((s) => s.activeProfileId);
   const currentItem = useVideoQueue((s) =>
     currentItemId ? s.items.find((i) => i.id === currentItemId) ?? null : null
   );
@@ -235,6 +235,7 @@ export default function VisionTestPage() {
                   movements: movementsArray,
                   injuries: injuriesArray,
                   workoutType,
+                  profileId: profileId!,
                   startSecs,
                   endSecs,
                 }).then(() => {
@@ -316,6 +317,15 @@ export default function VisionTestPage() {
   // --- Main Recording Logic ---
 
   const handleStartRecording = async () => {
+    if (!profileId) {
+      Alert.alert(
+        "Profile Required",
+        "Please select a profile before recording.",
+        [{ text: "OK", onPress: () => router.push("/profiles" as any) }]
+      );
+      return;
+    }
+
     try {
       if (Platform.OS === 'ios') {
         // iOS: use screen recorder for full video with overlays
@@ -443,7 +453,7 @@ export default function VisionTestPage() {
           workoutType,
           movements: movementsArray,
           injuries: injuriesArray,
-          profileId: profileId ?? undefined,
+          profileId: profileId!,
         });
 
         // Update gallerySaved status on the enqueued item
@@ -478,7 +488,7 @@ export default function VisionTestPage() {
         workoutType,
         movements: movementsArray,
         injuries: injuriesArray,
-        profileId: profileId ?? undefined,
+        profileId: profileId!,
       });
 
       setMergeComplete(true);

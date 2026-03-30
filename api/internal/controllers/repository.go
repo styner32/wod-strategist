@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/wod-strategist/api/internal/db"
 	"gorm.io/gorm"
@@ -91,6 +92,43 @@ func (r *GormProfileRepository) FindByID(ctx context.Context, id uint) (*db.Prof
 		return nil, err
 	}
 	return &profile, nil
+}
+
+func (r *GormProfileRepository) ListAll(ctx context.Context, includeArchived bool) ([]db.Profile, error) {
+	if r.db == nil {
+		return nil, errProfileRepositoryNotConfigured
+	}
+	var profiles []db.Profile
+	q := r.db.WithContext(ctx).Order("created_at asc")
+	if !includeArchived {
+		q = q.Where("archived_at IS NULL")
+	}
+	if err := q.Find(&profiles).Error; err != nil {
+		return nil, err
+	}
+	return profiles, nil
+}
+
+func (r *GormProfileRepository) Update(ctx context.Context, profile *db.Profile) error {
+	if r.db == nil {
+		return errProfileRepositoryNotConfigured
+	}
+	return r.db.WithContext(ctx).Save(profile).Error
+}
+
+func (r *GormProfileRepository) Archive(ctx context.Context, id uint) error {
+	if r.db == nil {
+		return errProfileRepositoryNotConfigured
+	}
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&db.Profile{}).Where("id = ?", id).Update("archived_at", now).Error
+}
+
+func (r *GormProfileRepository) Unarchive(ctx context.Context, id uint) error {
+	if r.db == nil {
+		return errProfileRepositoryNotConfigured
+	}
+	return r.db.WithContext(ctx).Model(&db.Profile{}).Where("id = ?", id).Update("archived_at", nil).Error
 }
 
 // ==========================================
