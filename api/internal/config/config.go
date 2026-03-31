@@ -14,6 +14,11 @@ import (
 
 const defaultPort = "8080"
 
+var defaultDevAllowedOrigins = []string{
+	"http://localhost:3000",
+	"http://127.0.0.1:3000",
+}
+
 type Common struct {
 	DatabaseURL   string
 	RedisURL      string
@@ -23,8 +28,9 @@ type Common struct {
 
 type Server struct {
 	Common
-	APISecret string
-	Port      string
+	APISecret         string
+	Port              string
+	DevAllowedOrigins []string
 }
 
 type Worker struct {
@@ -49,8 +55,9 @@ func InitServer() (Server, error) {
 			GCSBucketName: strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
 			AppEnv:        appEnv,
 		},
-		APISecret: strings.TrimSpace(os.Getenv("API_SECRET")),
-		Port:      strings.TrimSpace(os.Getenv("PORT")),
+		APISecret:         strings.TrimSpace(os.Getenv("API_SECRET")),
+		Port:              strings.TrimSpace(os.Getenv("PORT")),
+		DevAllowedOrigins: parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
 	}
 	if cfg.Port == "" {
 		cfg.Port = defaultPort
@@ -194,4 +201,26 @@ func loadEnvFile() {
 	loadEnvOnce.Do(func() {
 		_ = godotenv.Load()
 	})
+}
+
+func parseListEnv(name string, fallback []string) []string {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return append([]string(nil), fallback...)
+	}
+
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+
+	if len(values) == 0 {
+		return append([]string(nil), fallback...)
+	}
+
+	return values
 }

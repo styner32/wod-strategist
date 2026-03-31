@@ -73,7 +73,7 @@ func main() {
 	})
 
 	// Setup Router
-	r, err := server.SetupRouter(cfg.AppEnv, cfg.APISecret, handlers)
+	r, err := server.SetupRouter(cfg.AppEnv, cfg.APISecret, cfg.DevAllowedOrigins, handlers)
 	if err != nil {
 		logger.Log.Fatal("Failed to setup router", zap.Error(err))
 	}

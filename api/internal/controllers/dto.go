@@ -92,3 +92,59 @@ type GenerateHighlightRequest struct {
 	MaxDuration int    `json:"max_duration,omitempty"` // seconds, default 60
 }
 
+type ChunkAnalysisSummaryResponse struct {
+	Total     int `json:"total"`
+	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
+	Pending   int `json:"pending"`
+}
+
+type FullAnalysisStatusResponse struct {
+	AnalysisType string `json:"analysis_type"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+type SessionAssetResponse struct {
+	Kind       string `json:"kind"`
+	Variant    string `json:"variant"`
+	Label      string `json:"label"`
+	GCSURI     string `json:"gcs_uri"`
+	PublicURL  string `json:"public_url,omitempty"`
+	ObjectName string `json:"object_name"`
+	CacheKey   string `json:"cache_key"`
+	CreatedAt  string `json:"created_at"`
+}
+
+type SessionAssetsResponse struct {
+	SessionID         string                       `json:"session_id"`
+	SubtitleAvailable bool                         `json:"subtitle_available"`
+	ChunkSummary      ChunkAnalysisSummaryResponse `json:"chunk_summary"`
+	FullAnalysis      *FullAnalysisStatusResponse  `json:"full_analysis,omitempty"`
+	Assets            []SessionAssetResponse       `json:"assets"`
+}
+
+type PlayURLResponse struct {
+	SessionID string `json:"session_id"`
+	Kind      string `json:"kind"`
+	Variant   string `json:"variant"`
+	GCSURI    string `json:"gcs_uri"`
+	PublicURL string `json:"public_url,omitempty"`
+	SignedURL string `json:"signed_url"`
+	ExpiresAt string `json:"expires_at"`
+	CacheKey  string `json:"cache_key"`
+}
+
+type SessionCatalogItemResponse struct {
+	SessionID       string `json:"session_id"`
+	LatestCreatedAt string `json:"latest_created_at"`
+	ChunkCount      int    `json:"chunk_count"`
+	HasMerged       bool   `json:"has_merged"`
+	HasHardsubbed   bool   `json:"has_hardsubbed"`
+	HighlightCount  int    `json:"highlight_count"`
+}
+
+type SessionCatalogResponse struct {
+	Sessions []SessionCatalogItemResponse `json:"sessions"`
+}

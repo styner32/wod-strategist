@@ -2,6 +2,11 @@ package testhelpers
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
 	"net/http"
 	"os"
 
@@ -26,6 +31,27 @@ func NewStorageClient(bucketName string, transport http.RoundTripper) (*storage.
 		option.WithHTTPClient(&http.Client{Transport: transport}),
 		option.WithoutAuthentication(),
 	)
+}
+
+// NewStorageClientWithSigning returns a real storage.Client with test signing
+// credentials injected, allowing GenerateSignedURL to work without real GCP auth.
+// Use this in controller tests that exercise the upload-url endpoint.
+func NewStorageClientWithSigning(bucketName string, transport http.RoundTripper) (*storage.Client, error) {
+	client, err := NewStorageClient(bucketName, transport)
+	if err != nil {
+		return nil, err
+	}
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("generate test RSA key: %w", err)
+	}
+	pemKey := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	client.SetSigningCredentials("test@test.iam.gserviceaccount.com", pemKey)
+	return client, nil
 }
 
 // ---------------------------------------------------------------------------

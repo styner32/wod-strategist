@@ -28,6 +28,49 @@ func RequestLogger() gin.HandlerFunc {
 	}
 }
 
+func DevelopmentCORS(allowedOrigins []string) gin.HandlerFunc {
+	allowed := make(map[string]struct{}, len(allowedOrigins))
+	for _, origin := range allowedOrigins {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed != "" {
+			allowed[trimmed] = struct{}{}
+		}
+	}
+
+	allowMethods := "GET, POST, OPTIONS"
+	allowHeaders := "Content-Type, X-API-Key"
+
+	return func(c *gin.Context) {
+		origin := strings.TrimSpace(c.GetHeader("Origin"))
+		if origin == "" {
+			c.Next()
+			return
+		}
+
+		if _, ok := allowed[origin]; !ok {
+			if c.Request.Method == http.MethodOptions {
+				c.AbortWithStatus(http.StatusForbidden)
+				return
+			}
+			c.Next()
+			return
+		}
+
+		c.Header("Access-Control-Allow-Origin", origin)
+		c.Header("Vary", "Origin")
+		c.Header("Access-Control-Allow-Methods", allowMethods)
+		c.Header("Access-Control-Allow-Headers", allowHeaders)
+		c.Header("Access-Control-Max-Age", "3600")
+
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	}
+}
+
 func APIKeyMiddleware(configuredKey string) gin.HandlerFunc {
 	apiSecret := strings.TrimSpace(configuredKey)
 	apiSecretHash := sha256.Sum256([]byte(apiSecret))

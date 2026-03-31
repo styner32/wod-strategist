@@ -30,6 +30,9 @@ type Handlers interface {
 	GetSubtitles(*gin.Context)
 	GenerateHighlight(*gin.Context)
 	GetHighlight(*gin.Context)
+	ListSessionCatalog(*gin.Context)
+	GetSessionAssets(*gin.Context)
+	GetPlayURL(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -223,6 +226,36 @@ var protectedRouteDefinitions = []routeDefinition{
 	},
 	{
 		spec: RouteSpec{
+			Name:   "dev-sessions",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/dev/sessions",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/dev/sessions", handlers.ListSessionCatalog)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "dev-session-assets",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/dev/sessions/:session_id/assets",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/dev/sessions/:session_id/assets", handlers.GetSessionAssets)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "dev-session-play-url",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/dev/sessions/:session_id/play-url",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/dev/sessions/:session_id/play-url", handlers.GetPlayURL)
+		},
+	},
+	{
+		spec: RouteSpec{
 			Name:   "subtitles",
 			Method: http.MethodGet,
 			Path:   APIRoutePrefix + "/subtitles/:session_id",
@@ -277,7 +310,7 @@ func RegisterProtectedRoutes(routes gin.IRoutes, handlers Handlers) error {
 	return nil
 }
 
-func SetupRouter(appEnv string, apiKey string, handlers Handlers) (*gin.Engine, error) {
+func SetupRouter(appEnv string, apiKey string, allowedOrigins []string, handlers Handlers) (*gin.Engine, error) {
 	if err := validateHandlers(handlers); err != nil {
 		return nil, err
 	}
@@ -285,6 +318,7 @@ func SetupRouter(appEnv string, apiKey string, handlers Handlers) (*gin.Engine, 
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(RequestLogger())
+	r.Use(DevelopmentCORS(allowedOrigins))
 
 	if err := RegisterPublicRoutes(r, handlers); err != nil {
 		return nil, err

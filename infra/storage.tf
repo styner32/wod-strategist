@@ -4,7 +4,14 @@ resource "google_storage_bucket" "uploads" {
   force_destroy = var.environment == "prod" ? true : false
 
   uniform_bucket_level_access = true
-  
+
+  cors {
+    origin          = var.local_static_origins
+    method          = ["GET", "HEAD", "PUT", "OPTIONS"]
+    response_header = ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "x-goog-resumable"]
+    max_age_seconds = 3600
+  }
+
   # Delete files older than 1 day to manage costs/storage
   lifecycle_rule {
     condition {

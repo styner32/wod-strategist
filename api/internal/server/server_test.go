@@ -102,6 +102,18 @@ func (h *recordingHandlers) GetHighlight(c *gin.Context) {
 	h.record("highlight", c)
 }
 
+func (h *recordingHandlers) ListSessionCatalog(c *gin.Context) {
+	h.record("dev-sessions", c)
+}
+
+func (h *recordingHandlers) GetSessionAssets(c *gin.Context) {
+	h.record("dev-session-assets", c)
+}
+
+func (h *recordingHandlers) GetPlayURL(c *gin.Context) {
+	h.record("dev-session-play-url", c)
+}
+
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)
@@ -125,12 +137,12 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("returns an error when handlers are nil", func() {
-		_, err := server.SetupRouter("test", "secret", nil)
+		_, err := server.SetupRouter("test", "secret", nil, nil)
 		Expect(err).To(MatchError(server.ErrHandlersRequired))
 	})
 
 	It("allows /health without an API key", func() {
-		router, err := server.SetupRouter("test", "secret", handlers)
+		router, err := server.SetupRouter("test", "secret", nil, handlers)
 		Expect(err).NotTo(HaveOccurred())
 		req := requestForRoute(server.PublicRouteSpecs()[0], "")
 		w := httptest.NewRecorder()
@@ -141,7 +153,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("rejects invalid API keys", func() {
-		router, err := server.SetupRouter("test", "secret", handlers)
+		router, err := server.SetupRouter("test", "secret", nil, handlers)
 		Expect(err).NotTo(HaveOccurred())
 
 		req := requestForRoute(server.ProtectedRouteSpecs()[0], "wrong")
@@ -153,7 +165,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("registers every declared route", func() {
-		router, err := server.SetupRouter("test", "secret", handlers)
+		router, err := server.SetupRouter("test", "secret", nil, handlers)
 		Expect(err).NotTo(HaveOccurred())
 
 		actualRoutes := make(map[string]struct{}, len(router.Routes()))
@@ -167,7 +179,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("dispatches every protected route to the matching handler when authorized", func() {
-		router, err := server.SetupRouter("test", "secret", handlers)
+		router, err := server.SetupRouter("test", "secret", nil, handlers)
 		Expect(err).NotTo(HaveOccurred())
 
 		for _, spec := range server.ProtectedRouteSpecs() {
@@ -180,5 +192,23 @@ var _ = Describe("SetupRouter", func() {
 			Expect(w.Code).To(Equal(http.StatusOK), spec.Path)
 			Expect(handlers.calls).To(Equal([]string{spec.Name}), spec.Path)
 		}
+	})
+
+	It("handles development CORS preflight before API key auth", func() {
+		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:3000"}, handlers)
+		Expect(err).NotTo(HaveOccurred())
+
+		req := httptest.NewRequest(http.MethodOptions, "/api/v1/history", nil)
+		req.Header.Set("Origin", "http://localhost:3000")
+		req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+		req.Header.Set("Access-Control-Request-Headers", "X-API-Key")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusNoContent))
+		Expect(w.Header().Get("Access-Control-Allow-Origin")).To(Equal("http://localhost:3000"))
+		Expect(w.Header().Get("Access-Control-Allow-Methods")).To(ContainSubstring(http.MethodGet))
+		Expect(w.Header().Get("Access-Control-Allow-Headers")).To(ContainSubstring("X-API-Key"))
+		Expect(handlers.calls).To(BeEmpty())
 	})
 })
