@@ -162,7 +162,7 @@ async function run() {
     throw new Error(`Video file not found: ${INPUT_VIDEO}`);
   }
 
-  const profileId = parseOptionalUint(process.env.PROFILE_ID);
+  const profileId = 1;
 
   await ensureBinaryExists("ffmpeg");
   await ensureBinaryExists("ffprobe");
@@ -213,7 +213,7 @@ async function run() {
         movements: MOVEMENTS,
         injuries: INJURIES,
         workout_type: WORKOUT_TYPE,
-        ...(profileId !== undefined ? { profile_id: profileId } : {}),
+        profile_id: profileId,
         start_secs: startSecs,
         end_secs: endSecs,
       });

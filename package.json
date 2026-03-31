@@ -11,6 +11,7 @@
     "lint": "expo lint",
     "test": "NODE_PATH=__mocks__ jest",
     "typecheck": "tsc --noEmit",
+    "qa:video": "node ./scripts/serve-video-qa.js",
     "generate-types": "swagger2openapi ./api/docs/swagger.json -o ./api/docs/openapi.json && openapi-typescript ./api/docs/openapi.json -o ./features/wod/schema.d.ts",
     "sync-api": "cd api && swag init -g cmd/server/main.go && cd .. && npm run generate-types"
   },

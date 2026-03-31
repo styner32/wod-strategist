@@ -561,6 +561,14 @@ export default function VisionTestPage() {
         video={true}
         audio={false}
         onInitialized={() => setIsCameraReady(true)}
+        onError={(error) => {
+          // Filter out harmless orphan-deletion warning (VisionCamera bug in v4.x)
+          if (error.message?.includes("delete orphan")) {
+            console.log("📷 Ignoring orphan cleanup warning");
+            return;
+          }
+          console.error("📷 Camera Error:", error.code, error.message);
+        }}
       />
 
       <View style={StyleSheet.absoluteFill} pointerEvents="none">

@@ -38,3 +38,9 @@ variable "api_secret" {
   type        = string
   sensitive   = true
 }
+
+variable "local_static_origins" {
+  description = "Origins allowed to access the uploads bucket directly for local QA tooling"
+  type        = list(string)
+  default     = ["http://localhost:3000", "http://127.0.0.1:3000"]
+}
