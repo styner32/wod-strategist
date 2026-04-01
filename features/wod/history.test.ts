@@ -9,6 +9,7 @@ const mockData: AnalysisResult[] = [
   {
     id: 1,
     session_id: "WOD-2026-03-22-14-05",
+    analysis_type: "wod",
     status: "completed",
     output: "Good form on squats. Watch your depth.",
     created_at: "2026-03-22T14:05:00Z",
@@ -17,6 +18,7 @@ const mockData: AnalysisResult[] = [
   {
     id: 2,
     session_id: "WOD-2026-03-20-09-30",
+    analysis_type: "wod",
     status: "completed",
     output: "Mobility improving steadily.",
     created_at: "2026-03-20T09:30:00Z",

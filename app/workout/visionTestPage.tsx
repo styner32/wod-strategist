@@ -1,4 +1,5 @@
 import * as MediaLibrary from "expo-media-library";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -141,6 +142,18 @@ export default function VisionTestPage() {
     }
     return () => clearInterval(interval);
   }, [isRecording, workoutType]);
+
+  // Keep screen awake while recording (prevents Android/iOS sleep)
+  useEffect(() => {
+    if (isRecording) {
+      void activateKeepAwakeAsync('recording');
+    } else {
+      deactivateKeepAwake('recording');
+    }
+    return () => {
+      deactivateKeepAwake('recording');
+    };
+  }, [isRecording]);
 
   // Pass isRecording to the hook to toggle inference on/off
   const { frameProcessor, poseResult, monitorData } = usePoseDetection(isRecording);

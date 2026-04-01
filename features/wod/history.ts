@@ -6,8 +6,11 @@ export interface AnalysisResult {
   id: number;
   session_id: string;
   profile_id?: number;
+  analysis_type: string; // "wod" | "injury_supplement"
   status: string;
   output: string;
+  injury_output?: string;
+  highlight_segments?: string;
   created_at: string;
   updated_at: string;
 }
