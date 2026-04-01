@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/hibiken/asynq"
@@ -95,9 +94,10 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		zap.String("session_id", p.SessionID),
 		zap.Int("segment_count", len(segments)))
 
-	// 3. Query chunk analysis results to get time range → GCS mappings
+	// 3. Query chunk analysis results to get time range → GCS file path mappings
 	var chunks []db.ChunkAnalysisResult
-	if err := w.DB.Where("session_id = ? AND status = ?", p.SessionID, "COMPLETED").
+	if err := w.DB.Where("session_id = ? AND status = ? AND file_path != ''",
+		p.SessionID, "COMPLETED").
 		Order("start_secs ASC").
 		Find(&chunks).Error; err != nil {
 		w.logger.Error("Failed to query chunk analysis results",
@@ -105,54 +105,32 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		return fmt.Errorf("failed to query chunks: %w", err)
 	}
 
-	// 4. List chunk video objects in GCS
-	prefix := fmt.Sprintf("videos/%s", p.SessionID)
-	objects, err := w.StorageClient.ListObjects(ctx, prefix)
-	if err != nil {
-		return fmt.Errorf("failed to list video objects: %w", err)
+	if len(chunks) == 0 {
+		w.logger.Error("No chunk records with file_path found",
+			zap.String("session_id", p.SessionID))
+		return fmt.Errorf("no chunk records found: %w", asynq.SkipRetry)
 	}
 
-	// Filter out merged/hardsubbed/highlight files
-	var chunkObjects []string
-	for _, obj := range objects {
-		base := filepath.Base(obj)
-		if strings.Contains(base, "_merged_") || strings.Contains(base, "_hardsubbed_") || strings.Contains(base, "_highlight_") {
-			continue
-		}
-		chunkObjects = append(chunkObjects, obj)
-	}
-
-	if len(chunkObjects) == 0 {
-		w.logger.Error("No chunk video files found in GCS",
-			zap.String("session_id", p.SessionID), zap.String("prefix", prefix))
-		return fmt.Errorf("no chunk videos found: %w", asynq.SkipRetry)
-	}
-
-	sort.Strings(chunkObjects)
-
-	w.logger.Info("Found chunk video files",
+	w.logger.Info("Found chunk records",
 		zap.String("session_id", p.SessionID),
-		zap.Int("chunk_count", len(chunkObjects)),
-		zap.Int("chunk_analysis_count", len(chunks)))
+		zap.Int("chunk_count", len(chunks)))
 
-	for i, obj := range chunkObjects {
+	for i, ch := range chunks {
 		var start, end float64 = -1, -1
-		if i < len(chunks) {
-			if chunks[i].StartSecs != nil {
-				start = *chunks[i].StartSecs
-			}
-			if chunks[i].EndSecs != nil {
-				end = *chunks[i].EndSecs
-			}
+		if ch.StartSecs != nil {
+			start = *ch.StartSecs
+		}
+		if ch.EndSecs != nil {
+			end = *ch.EndSecs
 		}
 		w.logger.Info("Chunk Mapping",
 			zap.Int("index", i),
-			zap.String("object", obj),
+			zap.String("file_path", ch.FilePath),
 			zap.Float64("start_secs", start),
 			zap.Float64("end_secs", end))
 	}
 
-	// 5. Create temp directory
+	// 4. Create temp directory
 	safeSessionID := strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_")
 	tmpDir := filepath.Join("/tmp", fmt.Sprintf("highlight_%s_%d", safeSessionID, os.Getpid()))
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
@@ -160,7 +138,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// 6. For each highlight segment, find the matching chunk, download it, trim it
+	// 5. For each highlight segment, find the matching chunk, download it, trim it
 	var trimmedPaths []string
 	var trimmedDurations []float64
 	var validSegments []HighlightSegment
@@ -195,30 +173,29 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			break
 		}
 
-		// Find which chunk covers this timestamp range
-		chunkIdx := findChunkForTimestamp(chunks, chunkObjects, segStartSecs)
-		if chunkIdx < 0 || chunkIdx >= len(chunkObjects) {
+		// Find which chunk covers this timestamp range (uses DB records directly)
+		chunkIdx := findChunkForTimestamp(chunks, segStartSecs)
+		if chunkIdx < 0 || chunkIdx >= len(chunks) {
 			w.logger.Warn("No chunk found for highlight segment timestamp",
 				zap.Int("index", i), zap.Float64("start_secs", segStartSecs))
 			continue
 		}
 
-		chunkObj := chunkObjects[chunkIdx]
-		chunkLocalPath := filepath.Join(tmpDir, fmt.Sprintf("chunk_%03d_%s", i, filepath.Base(chunkObj)))
-		chunkGCSURI := fmt.Sprintf("gs://%s/%s", w.BucketName, chunkObj)
+		chunkGCSURI := chunks[chunkIdx].FilePath
+		chunkLocalPath := filepath.Join(tmpDir, fmt.Sprintf("chunk_%03d.mp4", chunkIdx))
 
 		// Download chunk (skip if already downloaded for a previous segment)
 		if _, err := os.Stat(chunkLocalPath); os.IsNotExist(err) {
 			if err := w.StorageClient.DownloadFile(ctx, chunkGCSURI, chunkLocalPath); err != nil {
 				w.logger.Warn("Failed to download chunk for highlight",
-					zap.String("chunk", chunkObj), zap.Error(err))
+					zap.String("gcs_uri", chunkGCSURI), zap.Error(err))
 				continue
 			}
 		}
 
 		// Calculate the trim offset within this chunk
 		var chunkStartSecs float64
-		if chunkIdx < len(chunks) && chunks[chunkIdx].StartSecs != nil {
+		if chunks[chunkIdx].StartSecs != nil {
 			chunkStartSecs = *chunks[chunkIdx].StartSecs
 		}
 		trimStart := segStartSecs - chunkStartSecs
@@ -231,7 +208,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			zap.Float64("seg_start_secs", segStartSecs),
 			zap.Float64("seg_end_secs", segEndSecs),
 			zap.Int("resolved_chunk_idx", chunkIdx),
-			zap.String("chunk_object", chunkObj),
+			zap.String("chunk_gcs_uri", chunkGCSURI),
 			zap.Float64("chunk_start_secs", chunkStartSecs),
 			zap.Float64("trim_start", trimStart),
 			zap.Float64("seg_duration", segDuration))
@@ -397,20 +374,18 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 // findChunkForTimestamp finds the index of the chunk object that covers the given
 // timestamp in seconds. It uses chunk analysis results to map time ranges to chunks.
 // Falls back to positional mapping if chunk analysis data is incomplete.
-func findChunkForTimestamp(chunks []db.ChunkAnalysisResult, chunkObjects []string, timestampSecs float64) int {
+func findChunkForTimestamp(chunks []db.ChunkAnalysisResult, timestampSecs float64) int {
 	// Try to find by chunk analysis time ranges
 	for i, ch := range chunks {
 		if ch.StartSecs != nil && ch.EndSecs != nil {
 			if timestampSecs >= *ch.StartSecs && timestampSecs < *ch.EndSecs {
-				if i < len(chunkObjects) {
-					return i
-				}
+				return i
 			}
 		}
 	}
 
-	// Fallback: if chunks don't have time data, estimate by dividing evenly
-	if len(chunks) == 0 || len(chunkObjects) == 0 {
+	// Fallback: estimate by dividing evenly
+	if len(chunks) == 0 {
 		return -1
 	}
 
@@ -426,10 +401,10 @@ func findChunkForTimestamp(chunks []db.ChunkAnalysisResult, chunkObjects []strin
 	}
 
 	// Estimate which chunk by position
-	chunkDuration := maxEndSecs / float64(len(chunkObjects))
+	chunkDuration := maxEndSecs / float64(len(chunks))
 	idx := int(timestampSecs / chunkDuration)
-	if idx >= len(chunkObjects) {
-		idx = len(chunkObjects) - 1
+	if idx >= len(chunks) {
+		idx = len(chunks) - 1
 	}
 	if idx < 0 {
 		idx = 0

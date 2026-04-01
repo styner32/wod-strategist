@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/hibiken/asynq"
@@ -19,12 +20,49 @@ const ChunkAnalysisPrompt = `
 당신은 실시간 코칭을 제공하는 전문 코치입니다.
 방금 수행된 약 10초 분량의 짧은 영상 클립이 주어집니다.
 
+## 필수: 운동 종목 식별
+먼저, 영상에서 수행 중인 운동 종목을 식별하세요.
+- 운동이 보이면 → 첫 줄에 반드시 [EXERCISE: 영어 운동 이름] 태그를 출력하세요.
+  (예: [EXERCISE: Snatch], [EXERCISE: Back Squat], [EXERCISE: Pull-up], [EXERCISE: Burpee])
+- 운동이 보이지 않으면 (휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그만 출력하세요.
+
 ## 규칙
-- **반드시 1~2문장**으로만 답하세요. 길게 쓰지 마세요.
+- 운동이 감지된 경우: [EXERCISE: ...] 태그 다음 줄에 **반드시 1~2문장**으로만 코칭 피드백을 답하세요.
+- 운동이 감지되지 않은 경우: [NO_EXERCISE] 태그만 출력하고 추가 피드백을 작성하지 마세요.
 - 아래 컨텍스트를 참고하되, 컨텍스트 자체를 반복하지 마세요.
 - 자세 교정이 필요하면 → 구체적인 교정 큐(예: "팔꿈치를 더 높이 유지하세요")를 제시하세요.
 - 자세가 좋으면 → 어떤 점이 좋은지 짧게 격려하세요.
 - 부상 사항이 있으면 → 해당 부위에 위험한 움직임이 보일 때만 안전 경고를 우선하세요.`
+
+// exerciseTagRegex matches [EXERCISE: <name>] tags in chunk analysis output.
+var exerciseTagRegex = regexp.MustCompile(`(?i)\[EXERCISE:\s*(.+?)\]`)
+
+// noExerciseTag is the tag indicating no exercise was detected in the chunk.
+const noExerciseTag = "[NO_EXERCISE]"
+
+// parseChunkExercise extracts the detected exercise name from chunk analysis output.
+// Returns the exercise name (e.g. "Snatch") or empty string if no exercise detected.
+func parseChunkExercise(analysis string) string {
+	if strings.Contains(strings.ToUpper(analysis), noExerciseTag) {
+		return ""
+	}
+	match := exerciseTagRegex.FindStringSubmatch(analysis)
+	if len(match) > 1 {
+		return strings.TrimSpace(match[1])
+	}
+	return ""
+}
+
+// stripExerciseTag removes the [EXERCISE: ...] or [NO_EXERCISE] tag from the output,
+// leaving just the coaching feedback.
+func stripExerciseTag(analysis string) string {
+	// Remove [EXERCISE: ...] tag
+	result := exerciseTagRegex.ReplaceAllString(analysis, "")
+	// Remove [NO_EXERCISE] tag (case insensitive)
+	result = strings.ReplaceAll(result, noExerciseTag, "")
+	result = strings.ReplaceAll(result, strings.ToLower(noExerciseTag), "")
+	return strings.TrimSpace(result)
+}
 
 func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
@@ -103,6 +141,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		w.logger.Error("Chunk analysis failed", zap.Error(err))
 		chunkFailed := &db.ChunkAnalysisResult{
 			SessionID: p.SessionID,
+			FilePath:  p.FilePath,
 			Status:    "FAILED",
 			Output:    "An internal error occurred during chunk analysis.",
 		}
@@ -117,10 +156,17 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return err
 	}
 
+	// Extract exercise type detected by the model from the response
+	detectedExercise := parseChunkExercise(analysis)
+	// Strip the tag from the output, leaving just coaching feedback
+	cleanOutput := stripExerciseTag(analysis)
+
 	chunkResult := &db.ChunkAnalysisResult{
-		SessionID: p.SessionID,
-		Status:    "COMPLETED",
-		Output:    analysis,
+		SessionID:    p.SessionID,
+		FilePath:     p.FilePath,
+		ExerciseType: detectedExercise,
+		Status:       "COMPLETED",
+		Output:       cleanOutput,
 	}
 	if p.ProfileID > 0 {
 		chunkResult.ProfileID = &p.ProfileID
@@ -131,7 +177,9 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 	w.DB.Create(chunkResult)
 
-	w.logger.Info("Chunk analysis completed", zap.String("session_id", p.SessionID))
+	w.logger.Info("Chunk analysis completed",
+		zap.String("session_id", p.SessionID),
+		zap.String("detected_exercise", detectedExercise))
 	return nil
 }
 
@@ -139,7 +187,7 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 	prompt := ChunkAnalysisPrompt
 
 	if len(p.Movements) > 0 {
-		prompt += fmt.Sprintf("\n\n## 운동 종목\n%s", strings.Join(p.Movements, ", "))
+		prompt += fmt.Sprintf("\n\n## 확인된 운동 종목 (사용자 입력)\n아래 운동들은 이 세션에서 **확실히 수행되는 운동**입니다. AI 감지가 불확실할 경우 이 목록을 우선 참고하세요.\n%s", strings.Join(p.Movements, ", "))
 	}
 
 	if len(p.Injuries) > 0 {

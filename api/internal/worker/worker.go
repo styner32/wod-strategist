@@ -5,10 +5,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -51,9 +54,15 @@ type StorageClient interface {
 
 // GeminiClient is the minimal interface over gemini.Client used by handlers.
 type GeminiClient interface {
+	// File-upload based analysis (used by chunk analysis, legacy path)
 	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, error)
 	DeleteFile(ctx context.Context, name string) error
 	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error
+
+	// Two-pass analysis: upload → index (Flash) → per-segment analysis (Pro)
+	UploadVideo(ctx context.Context, filePath string) (*gemini.UploadResult, error)
+	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, error)
+	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, error)
 }
 
 // QueueClient is the minimal interface over asynq.Client used by handlers.
@@ -68,6 +77,7 @@ type Worker struct {
 	BucketName    string
 	GeminiClient  GeminiClient
 	QueueClient   QueueClient
+	UseCache      bool // enable context caching for long video analysis
 	logger        *zap.Logger
 }
 
@@ -137,4 +147,23 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// probeVideoDuration uses ffprobe to determine the duration of a video file in seconds.
+// Returns 0 if ffprobe is unavailable or the probe fails. Best-effort only.
+func probeVideoDuration(ctx context.Context, filePath string) float64 {
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	var duration float64
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%f", &duration); err != nil {
+		return 0
+	}
+	return duration
 }

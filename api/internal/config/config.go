@@ -36,6 +36,8 @@ type Server struct {
 type Worker struct {
 	Common
 	GeminiAPIKey string
+	GeminiModel  string // GEMINI_MODEL — default "gemini-3.1-pro-preview"
+	UseCache     bool   // GEMINI_USE_CACHE — enable context caching for long videos
 }
 
 var loadEnvOnce sync.Once
@@ -99,6 +101,11 @@ func InitWorker() (Worker, error) {
 			AppEnv:        appEnv,
 		},
 		GeminiAPIKey: strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		GeminiModel:  strings.TrimSpace(os.Getenv("GEMINI_MODEL")),
+		UseCache:     strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_USE_CACHE")), "true"),
+	}
+	if cfg.GeminiModel == "" {
+		cfg.GeminiModel = "gemini-3.1-pro-preview"
 	}
 
 	if err := validateRequired(

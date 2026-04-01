@@ -101,8 +101,8 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 		Expect(err).To(MatchError(ContainSubstring("invalid highlight segments JSON")))
 	})
 
-	It("returns SkipRetry when no chunk video files are found in GCS", func() {
-		// fakeStorage.ListObjects returns nil → no chunk files
+	It("returns SkipRetry when no chunk records with file_path are found", func() {
+		// No ChunkAnalysisResult records with file_path → returns error
 		Expect(dbConn.Create(&db.AnalysisResult{
 			SessionID:         "sess-hl-nochunks",
 			AnalysisType:      db.AnalysisTypeWOD,
@@ -115,7 +115,7 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		err = w.HandleGenerateHighlightTask(context.Background(), task)
-		Expect(err).To(MatchError(ContainSubstring("no chunk videos found")))
+		Expect(err).To(MatchError(ContainSubstring("no chunk records found")))
 	})
 
 	Context("when ffmpeg is available", func() {
@@ -136,21 +136,22 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 
 			start1, end1 := 0.0, 20.0
 			start2, end2 := 20.0, 50.0
+
+			tiny := createTinyMP4(GinkgoT())
+			chunk1URI := "gs://test-bucket/videos/sess-hl-happy/chunk_001.mp4"
+			chunk2URI := "gs://test-bucket/videos/sess-hl-happy/chunk_002.mp4"
+
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
-				SessionID: "sess-hl-happy", Status: "COMPLETED",
+				SessionID: "sess-hl-happy", Status: "COMPLETED", FilePath: chunk1URI,
 				Output: "좋아요", StartSecs: &start1, EndSecs: &end1,
 			}).Error).NotTo(HaveOccurred())
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
-				SessionID: "sess-hl-happy", Status: "COMPLETED",
+				SessionID: "sess-hl-happy", Status: "COMPLETED", FilePath: chunk2URI,
 				Output: "계속하세요", StartSecs: &start2, EndSecs: &end2,
 			}).Error).NotTo(HaveOccurred())
 
-			tiny := createTinyMP4(GinkgoT())
+			// fakeStorage serves the tiny mp4 for any DownloadFile call
 			w.StorageClient = &listableStorage{
-				objects: []string{
-					"videos/sess-hl-happy/chunk_001.mp4",
-					"videos/sess-hl-happy/chunk_002.mp4",
-				},
 				downloadPath: tiny,
 			}
 

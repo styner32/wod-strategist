@@ -17,8 +17,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/wod-strategist/api/internal/gemini"
 )
 
 // ---------------------------------------------------------------------------
@@ -94,6 +96,22 @@ func (f *fakeGemini) AnalyzeVideo(_ context.Context, _, _ string) (string, strin
 func (f *fakeGemini) DeleteFile(_ context.Context, _ string) error { return nil }
 
 func (f *fakeGemini) GenerateWorkoutMusic(_ context.Context, _, _, _ string) error { return nil }
+
+func (f *fakeGemini) UploadVideo(_ context.Context, _ string) (*gemini.UploadResult, error) {
+	return &gemini.UploadResult{
+		FileName: "files/mock-file",
+		FileURI:  "https://example.test/files/mock-file",
+		MIMEType: "video/mp4",
+	}, nil
+}
+
+func (f *fakeGemini) IndexVideo(_ context.Context, _, _, _ string) (string, error) {
+	return f.analysis, f.analyzeErr
+}
+
+func (f *fakeGemini) AnalyzeSegment(_ context.Context, _ string, _ string, _, _ time.Duration, _ string) (string, error) {
+	return f.analysis, f.analyzeErr
+}
 
 // ---------------------------------------------------------------------------
 // Task payload helpers

@@ -31,7 +31,8 @@ var _ = Describe("buildChunkAnalysisPrompt", func() {
 		})
 
 		Expect(prompt).To(ContainSubstring("실시간 피드백"))
-		Expect(prompt).To(ContainSubstring("## 운동 종목"))
+		Expect(prompt).To(ContainSubstring("확인된 운동 종목"))
+		Expect(prompt).To(ContainSubstring("확실히 수행되는 운동"))
 		Expect(prompt).To(ContainSubstring("Deadlift"))
 		Expect(prompt).To(ContainSubstring("## 알려진 부상 사항"))
 		Expect(prompt).To(ContainSubstring("Knee"))
@@ -43,7 +44,7 @@ var _ = Describe("buildChunkAnalysisPrompt", func() {
 		prompt := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{})
 
 		Expect(prompt).To(ContainSubstring("## 개인 프로필"))
-		Expect(prompt).NotTo(ContainSubstring("## 운동 종목"))
+		Expect(prompt).NotTo(ContainSubstring("확인된 운동 종목"))
 		Expect(prompt).NotTo(ContainSubstring("## 알려진 부상 사항"))
 	})
 })
@@ -77,7 +78,8 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 	const (
 		geminiBaseURL = "https://generativelanguage.googleapis.com"
 		geminiAPIKey  = "test-api-key"
-		chunkAnalysis = "엉덩이를 더 내려주세요. 코어가 흔들리고 있습니다."
+		chunkAnalysis    = "[EXERCISE: Deadlift]\n엉덩이를 더 내려주세요. 코어가 흔들리고 있습니다."
+	chunkNoExercise = "[NO_EXERCISE]"
 	)
 
 	var (
@@ -186,7 +188,10 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 		Expect(dbConn.Where("session_id = ?", "sess-chunk-001").First(&result).Error).
 			NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal("COMPLETED"))
-		Expect(result.Output).To(Equal(chunkAnalysis))
+		// Exercise type is now detected from the model response, not from user input
+		Expect(result.ExerciseType).To(Equal("Deadlift"))
+		// Output should be stripped of the exercise tag
+		Expect(result.Output).To(Equal("엉덩이를 더 내려주세요. 코어가 흔들리고 있습니다."))
 		Expect(result.StartSecs).NotTo(BeNil())
 		Expect(*result.StartSecs).To(BeNumerically("~", 0.0))
 		Expect(result.EndSecs).NotTo(BeNil())

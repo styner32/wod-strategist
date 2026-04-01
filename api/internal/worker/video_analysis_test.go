@@ -20,8 +20,6 @@ import (
 // Unit tests — no DB required
 // ---------------------------------------------------------------------------
 
-
-
 var _ = Describe("buildAnalysisPrompt", func() {
 	var w *Worker
 
@@ -34,7 +32,7 @@ var _ = Describe("buildAnalysisPrompt", func() {
 			WorkoutType: WorkoutTypeWOD,
 			Movements:   []string{"Burpee"},
 			Injuries:    []string{"Shoulder"},
-		})
+		}, 0)
 
 		Expect(prompt).To(ContainSubstring("# 운동 영상 분석 요청"))
 		Expect(prompt).To(ContainSubstring("## 운동 종목: Burpee"))
@@ -46,7 +44,7 @@ var _ = Describe("buildAnalysisPrompt", func() {
 			WorkoutType: WorkoutTypeWOD,
 			Movements:   []string{"Back Squat"},
 			Injuries:    []string{"Lower Back"},
-		})
+		}, 0)
 
 		Expect(prompt).To(ContainSubstring("부상 관련 타임스탬프"))
 		Expect(prompt).To(ContainSubstring("부상 부위: Lower Back"))
@@ -57,7 +55,7 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		prompt := w.buildAnalysisPrompt(VideoAnalysisPayload{
 			WorkoutType: WorkoutTypeWOD,
 			Movements:   []string{"Burpee"},
-		})
+		}, 0)
 
 		Expect(prompt).NotTo(ContainSubstring("부상 관련 타임스탬프"))
 	})
@@ -66,7 +64,7 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		prompt := w.buildAnalysisPrompt(VideoAnalysisPayload{
 			WorkoutType: WorkoutTypeWOD,
 			ProfileID:   0,
-		})
+		}, 0)
 
 		Expect(prompt).To(ContainSubstring("1984년 10월 17일"))
 	})
@@ -138,11 +136,11 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	)
 
 	var (
-		dbConn    *gorm.DB
-		storage   *fakeStorage
+		dbConn      *gorm.DB
+		storage     *fakeStorage
 		queueClient *asynq.Client
 		inspector   *asynq.Inspector
-		w          *Worker
+		w           *Worker
 	)
 
 	// setupGeminiTransport creates a real gemini.Client backed by MockTransport
@@ -396,5 +394,413 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 
 		err := w.HandleVideoAnalysisTask(context.Background(), task)
 		Expect(err).To(MatchError(ContainSubstring("invalid file path")))
+	})
+})
+
+var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
+	const (
+		geminiBaseURL = "https://generativelanguage.googleapis.com"
+		geminiAPIKey  = "test-api-key"
+	)
+
+	var (
+		dbConn      *gorm.DB
+		queueClient *asynq.Client
+		inspector   *asynq.Inspector
+		w           *Worker
+	)
+
+	// setupTwoPassTransport: upload → poll → analyzeSegment x2 (Pro) → deleteFile
+	// No IndexVideo mock — chunks in DB provide the segment index.
+	// Since seeded chunks have different exercise types (Snatch + Pull-up),
+	// mergeSegmentsByMovement produces 2 segments → 2 generateContent calls.
+	setupTwoPassTransport := func(segmentAnalysis string, hasInjuries bool) *testhelpers.MockTransport {
+		transport := testhelpers.NewMockTransport()
+		realClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:       geminiAPIKey,
+			BaseURL:      geminiBaseURL,
+			HTTPClient:   &http.Client{Transport: transport},
+			PollInterval: time.Millisecond,
+			Sleep:        func(time.Duration) {},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		w.GeminiClient = realClient
+
+		transport.New(geminiBaseURL).
+			Post("/upload/v1beta/files").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			Header("X-Goog-Upload-Url", geminiBaseURL+"/upload-session").
+			JSON(map[string]any{})
+
+		transport.New(geminiBaseURL).
+			Post("/upload-session").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			Header("X-Goog-Upload-Status", "final").
+			JSON(map[string]any{
+				"file": map[string]any{
+					"name": "files/mock-two-pass",
+					"uri":  geminiBaseURL + "/files/mock-two-pass",
+				},
+			})
+
+		transport.New(geminiBaseURL).
+			Get("/v1beta/files/mock-two-pass").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			JSON(map[string]any{
+				"name":  "files/mock-two-pass",
+				"state": "ACTIVE",
+			})
+
+		// Segment 1 (Snatch) analysis
+		transport.New(geminiBaseURL).
+			Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			JSON(map[string]any{
+				"candidates": []map[string]any{{
+					"content": map[string]any{
+						"parts": []map[string]any{{"text": segmentAnalysis}},
+					},
+				}},
+			})
+
+		// Segment 2 (Pull-up) analysis
+		transport.New(geminiBaseURL).
+			Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			JSON(map[string]any{
+				"candidates": []map[string]any{{
+					"content": map[string]any{
+						"parts": []map[string]any{{"text": segmentAnalysis}},
+					},
+				}},
+			})
+
+		if !hasInjuries {
+			transport.New(geminiBaseURL).
+				Delete("/v1beta/files/mock-two-pass").
+				MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{})
+		}
+
+		return transport
+	}
+
+	seedChunks := func(sessionID string) {
+		start0 := 0.0
+		end0 := 45.0
+		start1 := 50.0
+		end1 := 90.0
+		Expect(dbConn.Create(&db.ChunkAnalysisResult{
+			SessionID:    sessionID,
+			FilePath:     "gs://test-bucket/videos/" + sessionID + "/chunk_0.mp4",
+			Status:       "COMPLETED",
+			ExerciseType: "Snatch",
+			Output:       "좋은 스내치 자세입니다",
+			StartSecs:    &start0,
+			EndSecs:      &end0,
+		}).Error).NotTo(HaveOccurred())
+		Expect(dbConn.Create(&db.ChunkAnalysisResult{
+			SessionID:    sessionID,
+			FilePath:     "gs://test-bucket/videos/" + sessionID + "/chunk_1.mp4",
+			Status:       "COMPLETED",
+			ExerciseType: "Pull-up",
+			Output:       "풀업 킵핑 동작이 안정적입니다",
+			StartSecs:    &start1,
+			EndSecs:      &end1,
+		}).Error).NotTo(HaveOccurred())
+	}
+
+	BeforeEach(func() {
+		var err error
+		dbConn, err = testhelpers.InitDB()
+		Expect(err).NotTo(HaveOccurred())
+		testhelpers.CleanupDB(dbConn)
+
+		queueClient = testhelpers.NewQueueClient()
+		inspector = testhelpers.NewQueueInspector()
+		testhelpers.CleanupQueue(inspector)
+
+		w = &Worker{
+			DB:            dbConn,
+			StorageClient: &fakeStorage{},
+			GeminiClient:  nil,
+			QueueClient:   queueClient,
+			BucketName:    "test-bucket",
+			UseCache:      true,
+			logger:        zap.NewNop(),
+		}
+	})
+
+	It("persists COMPLETED result using chunk-based segments (no injuries)", func() {
+		seedChunks("sess-twopass-001")
+		transport := setupTwoPassTransport(analysisWithHighlights, false)
+
+		task := makeVideoAnalysisTask(VideoAnalysisPayload{
+			SessionID:   "sess-twopass-001",
+			FilePath:    "gs://test-bucket/videos/sess-twopass-001/merged.mp4",
+			WorkoutType: WorkoutTypeWOD,
+			Movements:   []string{"Snatch"},
+		})
+		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
+
+		Expect(transport.Verify()).To(Succeed())
+		// 6 requests: upload + finalize + poll + analyzeSegment x2 + deleteFile
+		Expect(transport.Requests()).To(HaveLen(6))
+
+		var result db.AnalysisResult
+		Expect(dbConn.Where("session_id = ?", "sess-twopass-001").First(&result).Error).
+			NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal("COMPLETED"))
+		Expect(result.Output).To(ContainSubstring("훌륭한 운동이었습니다"))
+
+		pending, err := inspector.ListPendingTasks("default")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pending).To(BeEmpty())
+	})
+
+	It("enqueues injury task with file URI and does NOT delete file", func() {
+		seedChunks("sess-twopass-inj-001")
+		analysisWithInjury := analysisWithHighlights + "\n```injury_timestamps\n" +
+			`[{"start":"0:32","end":"0:45","reason":"무릎 내전 관찰"}]` + "\n```"
+
+		transport := setupTwoPassTransport(analysisWithInjury, true)
+
+		task := makeVideoAnalysisTask(VideoAnalysisPayload{
+			SessionID: "sess-twopass-inj-001",
+			FilePath:  "gs://test-bucket/videos/sess-twopass-inj-001/merged.mp4",
+			Injuries:  []string{"Knee"},
+		})
+
+		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
+		Expect(transport.Verify()).To(Succeed())
+		// 5 requests: upload + finalize + poll + analyzeSegment x2 (no deleteFile)
+		Expect(transport.Requests()).To(HaveLen(5))
+
+		pending, err := inspector.ListPendingTasks("default")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pending).To(HaveLen(1))
+		Expect(pending[0].Type).To(Equal(TypeInjuryAnalysis))
+
+		var injPayload InjuryAnalysisPayload
+		Expect(json.Unmarshal(pending[0].Payload, &injPayload)).To(Succeed())
+		Expect(injPayload.GeminiFileURI).To(ContainSubstring("/files/mock-two-pass"))
+		Expect(injPayload.GeminiFileName).To(Equal("files/mock-two-pass"))
+		Expect(injPayload.FocusTimestamps).To(ContainSubstring("0:32"))
+	})
+})
+
+
+var _ = Describe("parseSegments", func() {
+	It("extracts segments from JSON in code fence", func() {
+		text := "Some text\n```json\n[{\"start\":\"0:30\",\"end\":\"1:00\",\"type\":\"Snatch\",\"description\":\"desc\"}]\n```\nMore text"
+		segments := parseSegments(text)
+		Expect(segments).To(HaveLen(1))
+		Expect(segments[0].Type).To(Equal("Snatch"))
+		Expect(segments[0].Start).To(Equal("0:30"))
+	})
+
+	It("returns empty for unparseable text", func() {
+		segments := parseSegments("no json here")
+		Expect(segments).To(BeEmpty())
+	})
+})
+
+var _ = Describe("convertToSeconds", func() {
+	It("parses MM:SS format", func() {
+		Expect(convertToSeconds("1:30")).To(Equal(90 * time.Second))
+		Expect(convertToSeconds("0:45")).To(Equal(45 * time.Second))
+		Expect(convertToSeconds("10:00")).To(Equal(600 * time.Second))
+	})
+
+	It("handles plain seconds", func() {
+		Expect(convertToSeconds("30s")).To(Equal(30 * time.Second))
+		Expect(convertToSeconds("60")).To(Equal(60 * time.Second))
+	})
+
+	It("returns 0 for unparseable input", func() {
+		Expect(convertToSeconds("invalid")).To(Equal(time.Duration(0)))
+	})
+})
+
+// ---------------------------------------------------------------------------
+// parseChunkExercise & stripExerciseTag
+// ---------------------------------------------------------------------------
+
+var _ = Describe("parseChunkExercise", func() {
+	It("extracts exercise name from [EXERCISE: ...] tag", func() {
+		Expect(parseChunkExercise("[EXERCISE: Snatch]\nGreat form")).To(Equal("Snatch"))
+		Expect(parseChunkExercise("[EXERCISE: Back Squat]\nKeep it up")).To(Equal("Back Squat"))
+		Expect(parseChunkExercise("[EXERCISE: Pull-up]\nNice kipping")).To(Equal("Pull-up"))
+	})
+
+	It("returns empty string for [NO_EXERCISE]", func() {
+		Expect(parseChunkExercise("[NO_EXERCISE]")).To(BeEmpty())
+		Expect(parseChunkExercise("[NO_EXERCISE]\n")).To(BeEmpty())
+	})
+
+	It("returns empty string when no tag found", func() {
+		Expect(parseChunkExercise("Just some text")).To(BeEmpty())
+	})
+
+	It("is case-insensitive", func() {
+		Expect(parseChunkExercise("[exercise: deadlift]\nFeedback")).To(Equal("deadlift"))
+	})
+})
+
+var _ = Describe("stripExerciseTag", func() {
+	It("removes [EXERCISE: ...] tag and trims", func() {
+		result := stripExerciseTag("[EXERCISE: Snatch]\nGreat form on the pull")
+		Expect(result).To(Equal("Great form on the pull"))
+	})
+
+	It("removes [NO_EXERCISE] tag", func() {
+		result := stripExerciseTag("[NO_EXERCISE]")
+		Expect(result).To(BeEmpty())
+	})
+
+	It("returns original text when no tag present", func() {
+		result := stripExerciseTag("Just feedback text")
+		Expect(result).To(Equal("Just feedback text"))
+	})
+})
+
+// ---------------------------------------------------------------------------
+// mergeSegmentsByMovement
+// ---------------------------------------------------------------------------
+
+var _ = Describe("mergeSegmentsByMovement", func() {
+	It("merges consecutive segments with the same exercise type", func() {
+		segments := []Segment{
+			{Start: "0:00", End: "0:10", Type: "Snatch", Description: "rep 1"},
+			{Start: "0:10", End: "0:20", Type: "Snatch", Description: "rep 2"},
+			{Start: "0:20", End: "0:30", Type: "Snatch", Description: "rep 3"},
+			{Start: "0:30", End: "0:40", Type: "Burpee", Description: "fast"},
+			{Start: "0:40", End: "0:50", Type: "Burpee", Description: "slower"},
+		}
+
+		merged := mergeSegmentsByMovement(segments)
+		Expect(merged).To(HaveLen(2))
+		Expect(merged[0].Type).To(Equal("Snatch"))
+		Expect(merged[0].Start).To(Equal("0:00"))
+		Expect(merged[0].End).To(Equal("0:30"))
+		Expect(merged[1].Type).To(Equal("Burpee"))
+		Expect(merged[1].Start).To(Equal("0:30"))
+		Expect(merged[1].End).To(Equal("0:50"))
+	})
+
+	It("handles alternating movement types", func() {
+		segments := []Segment{
+			{Start: "0:00", End: "0:10", Type: "Snatch", Description: "s1"},
+			{Start: "0:10", End: "0:20", Type: "Burpee", Description: "b1"},
+			{Start: "0:20", End: "0:30", Type: "Snatch", Description: "s2"},
+		}
+
+		merged := mergeSegmentsByMovement(segments)
+		Expect(merged).To(HaveLen(3))
+	})
+
+	It("merges case-insensitively", func() {
+		segments := []Segment{
+			{Start: "0:00", End: "0:10", Type: "snatch", Description: "lower"},
+			{Start: "0:10", End: "0:20", Type: "Snatch", Description: "upper"},
+		}
+
+		merged := mergeSegmentsByMovement(segments)
+		Expect(merged).To(HaveLen(1))
+		Expect(merged[0].End).To(Equal("0:20"))
+	})
+
+	It("returns empty for empty input", func() {
+		Expect(mergeSegmentsByMovement(nil)).To(BeNil())
+	})
+
+	It("returns single segment unchanged", func() {
+		segments := []Segment{{Start: "0:00", End: "0:10", Type: "Snatch"}}
+		merged := mergeSegmentsByMovement(segments)
+		Expect(merged).To(HaveLen(1))
+	})
+})
+
+// ---------------------------------------------------------------------------
+// maxSegmentsForDuration
+// ---------------------------------------------------------------------------
+
+var _ = Describe("maxSegmentsForDuration", func() {
+	It("returns 1 segment per 2 minutes", func() {
+		Expect(maxSegmentsForDuration(10 * time.Minute)).To(Equal(5))
+		Expect(maxSegmentsForDuration(30 * time.Minute)).To(Equal(15))
+	})
+
+	It("has a minimum of 3", func() {
+		Expect(maxSegmentsForDuration(2 * time.Minute)).To(Equal(3))
+		Expect(maxSegmentsForDuration(0)).To(Equal(3))
+	})
+
+	It("has a maximum of 20", func() {
+		Expect(maxSegmentsForDuration(60 * time.Minute)).To(Equal(20))
+	})
+})
+
+// ---------------------------------------------------------------------------
+// parseTriagedSegments
+// ---------------------------------------------------------------------------
+
+var _ = Describe("parseTriagedSegments", func() {
+	allSegments := []Segment{
+		{Start: "0:00", End: "0:30", Type: "Snatch"},
+		{Start: "0:30", End: "1:00", Type: "Burpee"},
+		{Start: "1:00", End: "1:30", Type: "Pull-up"},
+		{Start: "1:30", End: "2:00", Type: "Back Squat"},
+	}
+
+	It("selects segments by index and returns in chronological order", func() {
+		output := "```json\n" +
+			`[{"index": 3, "score": 9, "reason": "form"}, {"index": 0, "score": 8, "reason": "technique"}]` +
+			"\n```"
+
+		result := parseTriagedSegments(output, allSegments, 5)
+		Expect(result).To(HaveLen(2))
+		// Should be in chronological order (0, 3), not score order (3, 0)
+		Expect(result[0].Type).To(Equal("Snatch"))
+		Expect(result[1].Type).To(Equal("Back Squat"))
+	})
+
+	It("caps at maxSegs", func() {
+		output := "```json\n" +
+			`[{"index": 0, "score": 9}, {"index": 1, "score": 8}, {"index": 2, "score": 7}, {"index": 3, "score": 6}]` +
+			"\n```"
+
+		result := parseTriagedSegments(output, allSegments, 2)
+		Expect(result).To(HaveLen(2))
+	})
+
+	It("ignores out-of-range indices", func() {
+		output := "```json\n" +
+			`[{"index": 99, "score": 9}, {"index": 1, "score": 8}]` +
+			"\n```"
+
+		result := parseTriagedSegments(output, allSegments, 5)
+		Expect(result).To(HaveLen(1))
+		Expect(result[0].Type).To(Equal("Burpee"))
+	})
+
+	It("returns nil for unparseable output", func() {
+		result := parseTriagedSegments("not json", allSegments, 5)
+		Expect(result).To(BeNil())
+	})
+
+	It("deduplicates repeated indices", func() {
+		output := "```json\n" +
+			`[{"index": 1, "score": 9}, {"index": 1, "score": 8}, {"index": 2, "score": 7}]` +
+			"\n```"
+
+		result := parseTriagedSegments(output, allSegments, 5)
+		Expect(result).To(HaveLen(2))
 	})
 })

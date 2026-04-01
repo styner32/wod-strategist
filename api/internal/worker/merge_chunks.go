@@ -46,39 +46,56 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		zap.String("session_id", p.SessionID),
 		zap.String("file_path", p.FilePath))
 
-	// Extract session prefix from the placeholder GCS URI (e.g. "videos/session_xxx")
-	_, prefix, err := storage.ParseGCSURI(p.FilePath)
-	if err != nil {
-		return fmt.Errorf("invalid GCS URI for merge prefix: %w", asynq.SkipRetry)
+	// 1. Determine chronological chunk order from DB (ordered by start_secs).
+	//    Each ChunkAnalysisResult stores the GCS URI in FilePath.
+	var chunkRecords []db.ChunkAnalysisResult
+	if err := w.DB.Where("session_id = ? AND status = ? AND file_path != ''",
+		p.SessionID, "COMPLETED").
+		Order("start_secs ASC").
+		Find(&chunkRecords).Error; err != nil {
+		return fmt.Errorf("failed to query chunk records: %w", err)
 	}
 
-	// 1. List all chunk objects matching the session prefix
-	objects, err := w.StorageClient.ListObjects(ctx, prefix)
-	if err != nil {
-		return fmt.Errorf("failed to list chunk objects: %w", err)
-	}
-
-	// Filter out previously merged/hardsubbed files that share the same prefix
-	var chunkObjects []string
-	for _, obj := range objects {
-		base := filepath.Base(obj)
-		if strings.Contains(base, "_merged_") || strings.Contains(base, "_hardsubbed_") {
-			w.logger.Info("Skipping non-chunk object", zap.String("object", obj))
-			continue
+	// Build the ordered list of GCS URIs from DB records.
+	var objects []string
+	if len(chunkRecords) > 0 {
+		for _, rec := range chunkRecords {
+			objects = append(objects, rec.FilePath)
 		}
-		chunkObjects = append(chunkObjects, obj)
+		w.logger.Info("Chunk order resolved from DB (start_secs)",
+			zap.Int("count", len(objects)),
+			zap.Strings("objects", objects))
+	} else {
+		// Fallback: list from GCS and sort alphabetically (legacy chunks without file_path).
+		w.logger.Warn("No chunk records with file_path found, falling back to GCS listing",
+			zap.String("session_id", p.SessionID))
+
+		_, prefix, err := storage.ParseGCSURI(p.FilePath)
+		if err != nil {
+			return fmt.Errorf("invalid GCS URI for merge prefix: %w", asynq.SkipRetry)
+		}
+
+		listed, err := w.StorageClient.ListObjects(ctx, prefix)
+		if err != nil {
+			return fmt.Errorf("failed to list chunk objects: %w", err)
+		}
+
+		for _, obj := range listed {
+			base := filepath.Base(obj)
+			if strings.Contains(base, "_merged_") || strings.Contains(base, "_hardsubbed_") || strings.Contains(base, "_encoded_") {
+				continue
+			}
+			objects = append(objects, fmt.Sprintf("gs://%s/%s", w.BucketName, obj))
+		}
+		sort.Strings(objects)
 	}
-	objects = chunkObjects
 
 	if len(objects) == 0 {
-		w.logger.Warn("No chunk objects found for session (after filtering)", zap.String("prefix", prefix))
+		w.logger.Warn("No chunk objects found for session", zap.String("session_id", p.SessionID))
 		return fmt.Errorf("no chunks found: %w", asynq.SkipRetry)
 	}
 
-	// Sort objects to ensure chronological order (filenames contain timestamps)
-	sort.Strings(objects)
-
-	w.logger.Info("Found chunk objects", zap.Int("count", len(objects)), zap.Strings("objects", objects))
+	w.logger.Info("Chunks to merge", zap.Int("count", len(objects)), zap.Strings("uris", objects))
 
 	// 2. Download all chunks to /tmp/
 	tmpDir := filepath.Join("/tmp", fmt.Sprintf("merge_%s_%d", strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_"), os.Getpid()))
@@ -88,14 +105,13 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	defer os.RemoveAll(tmpDir)
 
 	var localChunkPaths []string
-	for i, obj := range objects {
-		localPath := filepath.Join(tmpDir, fmt.Sprintf("chunk_%03d_%s", i, filepath.Base(obj)))
-		gcsURI := fmt.Sprintf("gs://%s/%s", w.BucketName, obj)
+	for i, gcsURI := range objects {
+		localPath := filepath.Join(tmpDir, fmt.Sprintf("chunk_%03d.mp4", i))
 		if err := w.StorageClient.DownloadFile(ctx, gcsURI, localPath); err != nil {
-			return fmt.Errorf("failed to download chunk %s: %w", obj, err)
+			return fmt.Errorf("failed to download chunk %s: %w", gcsURI, err)
 		}
 		localChunkPaths = append(localChunkPaths, localPath)
-		w.logger.Info("Downloaded chunk", zap.Int("index", i), zap.String("object", obj))
+		w.logger.Info("Downloaded chunk", zap.Int("index", i), zap.String("gcs_uri", gcsURI))
 	}
 
 	// 3. Create FFmpeg concat file list and merge in a single pass

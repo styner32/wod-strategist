@@ -40,6 +40,10 @@ type InjuryAnalysisPayload struct {
 	Injuries        []string
 	ProfileID       uint
 	FocusTimestamps string // JSON array [{"start":"0:32","end":"0:45","reason":"..."}]
+	// Gemini file info — if set, reuse the uploaded file instead of re-uploading
+	GeminiFileURI  string `json:"gemini_file_uri,omitempty"`
+	GeminiFileName string `json:"gemini_file_name,omitempty"`
+	GeminiMIMEType string `json:"gemini_mime_type,omitempty"`
 }
 
 func NewInjuryAnalysisTask(sessionID, filePath string, injuries []string, profileID uint, focusTimestamps string) (*asynq.Task, error) {
@@ -90,6 +94,113 @@ func (w *Worker) HandleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) er
 	if strings.ContainsRune(safeSessionID, filepath.Separator) {
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
+
+	// Use two-pass path when a Gemini file URI was passed from video analysis
+	if p.GeminiFileURI != "" {
+		return w.handleInjuryAnalysisWithFile(ctx, p)
+	}
+	return w.handleInjuryAnalysisLegacy(ctx, p, safeSessionID)
+}
+
+// handleInjuryAnalysisWithFile reuses the Gemini file from video analysis.
+// It analyzes each focus timestamp segment individually using AnalyzeSegment,
+// then deletes the file since it's the last consumer.
+func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnalysisPayload) error {
+	// Always clean up the Gemini file since we are the last consumer.
+	defer func() {
+		if err := w.GeminiClient.DeleteFile(ctx, p.GeminiFileName); err != nil {
+			w.logger.Error("Failed to delete Gemini file after injury analysis", zap.Error(err))
+		}
+	}()
+
+	prompt := w.buildInjuryAnalysisPrompt(p)
+
+	// Parse focus timestamps to get segment ranges
+	type focusEntry struct {
+		Start  string `json:"start"`
+		End    string `json:"end"`
+		Reason string `json:"reason"`
+	}
+	var focusEntries []focusEntry
+	if p.FocusTimestamps != "" {
+		_ = json.Unmarshal([]byte(p.FocusTimestamps), &focusEntries)
+	}
+
+	var allAnalysis strings.Builder
+
+	if len(focusEntries) > 0 {
+		// Analyze each injury focus segment individually
+		for i, entry := range focusEntries {
+			start := convertToSeconds(entry.Start)
+			end := convertToSeconds(entry.End)
+
+			segPrompt := fmt.Sprintf("%s\n\n## 분석 구간: %s ~ %s\n사유: %s", prompt, entry.Start, entry.End, entry.Reason)
+
+			w.logger.Info("Analyzing injury segment",
+				zap.Int("segment", i+1),
+				zap.String("start", entry.Start),
+				zap.String("end", entry.End),
+				zap.String("reason", entry.Reason))
+
+			segAnalysis, err := w.GeminiClient.AnalyzeSegment(
+				ctx, p.GeminiFileURI, p.GeminiMIMEType, start, end, segPrompt,
+			)
+			if err != nil {
+				w.logger.Error("Injury segment analysis failed", zap.Error(err))
+				continue
+			}
+
+			allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 부상 분석 구간 %d: %s ~ %s (%s)\n\n", i+1, entry.Start, entry.End, entry.Reason))
+			allAnalysis.WriteString(segAnalysis)
+		}
+	} else {
+		// No specific timestamps — analyze full video with the injury prompt
+		analysis, err := w.GeminiClient.AnalyzeSegment(
+			ctx, p.GeminiFileURI, p.GeminiMIMEType, 0, 0, prompt,
+		)
+		if err != nil {
+			w.logger.Error("Full injury analysis failed", zap.Error(err))
+		} else {
+			allAnalysis.WriteString(analysis)
+		}
+	}
+
+	analysis := allAnalysis.String()
+
+	if analysis == "" {
+		w.logger.Warn("Injury analysis returned empty. Retrying...")
+		return fmt.Errorf("injury analysis is empty")
+	}
+
+	// Persist — append to existing result if present
+	var existing db.AnalysisResult
+	if findErr := w.DB.Where("session_id = ? AND analysis_type = ?", p.SessionID, db.AnalysisTypeWOD).First(&existing).Error; findErr == nil {
+		newInjuryOutput := analysis
+		if existing.InjuryOutput != "" {
+			newInjuryOutput = existing.InjuryOutput + "\n\n---\n\n" + analysis
+		}
+		w.DB.Model(&existing).Update("injury_output", newInjuryOutput)
+	} else {
+		result := &db.AnalysisResult{
+			SessionID:    p.SessionID,
+			AnalysisType: db.AnalysisTypeInjurySupplement,
+			Status:       "COMPLETED",
+			Output:       analysis,
+		}
+		if p.ProfileID > 0 {
+			result.ProfileID = &p.ProfileID
+		}
+		w.DB.Create(result)
+	}
+
+	w.logger.Info("Injury analysis with file completed",
+		zap.String("session_id", p.SessionID),
+		zap.String("file_name", p.GeminiFileName))
+	return nil
+}
+
+// handleInjuryAnalysisLegacy is the original file-upload based path.
+func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysisPayload, safeSessionID string) error {
 
 	localFilePath := filepath.Join("/tmp", fmt.Sprintf("injury_%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
 
