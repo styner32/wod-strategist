@@ -27,3 +27,9 @@
 **Vulnerability:** In `api/internal/worker/handler.go`, when a video or chunk analysis failed (e.g., due to downstream Gemini API errors, GCS download errors, or local filesystem permission issues), the raw `err.Error()` was saved to the database in the `Output` field of the results table. These results are exposed to the user via the `/analysis` and `/history` endpoints.
 **Learning:** Returning or saving unhandled raw error strings from backend components (like file system errors containing `/tmp/` paths, or third-party service errors) directly to user-facing payloads leaks internal system details. This information exposure (CWE-209) violates the principle of failing securely.
 **Prevention:** Always catch raw internal errors, securely log them on the server side using the application's logging framework, and replace the user-facing output with safe, generic error messages (e.g., "An internal error occurred during analysis.").
+
+## 2025-04-02 - Prevent Information Exposure in CreateProfile Endpoint
+
+**Vulnerability:** The `/profiles` endpoint for creating a new profile was leaking internal JSON binding errors by directly appending `err.Error()` to the error message returned in the `c.JSON(http.StatusBadRequest, ...)` response.
+**Learning:** Returning unhandled or dynamically generated error strings directly to the client violates the fail securely principle and exposes internal system structure (CWE-209). This issue was a regression or oversight in an otherwise well-secured API where other endpoints properly logged the error server-side instead.
+**Prevention:** Always log the actual error on the server side using the application's logger and return a safe, static, and generic error message to the client (e.g., "invalid request body").

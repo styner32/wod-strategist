@@ -119,4 +119,3 @@ func (r *GormHighlightResultRepository) FindBySessionID(ctx context.Context, ses
 
 	return results, nil
 }
-

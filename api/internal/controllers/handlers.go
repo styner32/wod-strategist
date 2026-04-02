@@ -428,7 +428,8 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 
 	var req CreateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
+		logger.Log.Error("failed to bind JSON", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
@@ -670,4 +671,3 @@ func (ctl *Controller) GetHighlight(c *gin.Context) {
 
 	c.JSON(http.StatusOK, results)
 }
-

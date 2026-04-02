@@ -44,31 +44,31 @@ type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, move
 type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int) (*asynq.Task, error)
 
 type Config struct {
-	QueueClient            QueueClient
-	AnalysisResults        AnalysisResultRepository
-	Profiles               ProfileRepository
-	HighlightResults       HighlightResultRepository
-	StorageClient          ObjectStorage
-	BucketName             string
-	GitCommit              string
-	NewVideoAnalysisTask   VideoAnalysisTaskFactory
-	NewChunkAnalysisTask   ChunkAnalysisTaskFactory
-	NewMergeChunksTask     VideoAnalysisTaskFactory
-	NewGenerateHighlight   HighlightTaskFactory
+	QueueClient          QueueClient
+	AnalysisResults      AnalysisResultRepository
+	Profiles             ProfileRepository
+	HighlightResults     HighlightResultRepository
+	StorageClient        ObjectStorage
+	BucketName           string
+	GitCommit            string
+	NewVideoAnalysisTask VideoAnalysisTaskFactory
+	NewChunkAnalysisTask ChunkAnalysisTaskFactory
+	NewMergeChunksTask   VideoAnalysisTaskFactory
+	NewGenerateHighlight HighlightTaskFactory
 }
 
 type Controller struct {
-	queueClient            QueueClient
-	analysisResults        AnalysisResultRepository
-	profiles               ProfileRepository
-	highlightResults       HighlightResultRepository
-	storageClient          ObjectStorage
-	bucketName             string
-	gitCommit              string
-	newVideoAnalysisTask   VideoAnalysisTaskFactory
-	newChunkAnalysisTask   ChunkAnalysisTaskFactory
-	newMergeChunksTask     VideoAnalysisTaskFactory
-	newGenerateHighlight   HighlightTaskFactory
+	queueClient          QueueClient
+	analysisResults      AnalysisResultRepository
+	profiles             ProfileRepository
+	highlightResults     HighlightResultRepository
+	storageClient        ObjectStorage
+	bucketName           string
+	gitCommit            string
+	newVideoAnalysisTask VideoAnalysisTaskFactory
+	newChunkAnalysisTask ChunkAnalysisTaskFactory
+	newMergeChunksTask   VideoAnalysisTaskFactory
+	newGenerateHighlight HighlightTaskFactory
 }
 
 func New(config Config) *Controller {

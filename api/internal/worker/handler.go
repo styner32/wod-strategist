@@ -9,9 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -1039,8 +1039,6 @@ func runFFmpegHardSub(ctx context.Context, inputPath, srtPath, outputPath string
 	logger.Log.Info("FFmpeg hard-sub completed", zap.String("output_path", outputPath))
 	return nil
 }
-
-
 
 // randomHex returns a cryptographically random hex string of n bytes (2n hex chars).
 func randomHex(n int) string {
