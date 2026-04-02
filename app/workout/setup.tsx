@@ -4,8 +4,10 @@ import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
   View,
@@ -15,6 +17,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 export default function WorkoutSetup() {
   const workoutType = 'wod';
   const [resolution, setResolution] = useState<'720p' | '1080p'>('720p');
+  // Performance toggles: default to power-saving on Android, full quality on iOS
+  const isAndroid = Platform.OS === 'android';
+  const [showSkeleton, setShowSkeleton] = useState(!isAndroid);
+  const [lowFps, setLowFps] = useState(isAndroid);
+  const [force720p, setForce720p] = useState(isAndroid);
+  const [skipCompression, setSkipCompression] = useState(isAndroid);
   const [movementOptions, setMovementOptions] = useState<string[]>([]);
   const [selectedMovements, setSelectedMovements] = useState<string[]>([]);
   const [injuryOptions, setInjuryOptions] = useState<string[]>([]);
@@ -49,11 +57,15 @@ export default function WorkoutSetup() {
     router.push({
       pathname: '/workout/visionTestPage',
       params: {
-        resolution,
+        resolution: force720p ? '720p' : resolution,
         workoutType,
         movements: selectedMovements.join(', '),
         injuries: selectedInjuries.join(', '),
         autoRecord: 'true',
+        showSkeleton: showSkeleton ? 'true' : 'false',
+        lowFps: lowFps ? 'true' : 'false',
+        force720p: force720p ? 'true' : 'false',
+        skipCompression: skipCompression ? 'true' : 'false',
       },
     });
   };
@@ -91,6 +103,56 @@ export default function WorkoutSetup() {
             </View>
           </View>
           <Text style={styles.hint}>720p is recommended for faster AI processing.</Text>
+          <View style={[styles.optionRow, { marginTop: 16 }]}>
+            <View>
+              <Text style={styles.optionLabel}>Skeleton Overlay</Text>
+              <Text style={[styles.hint, { marginTop: 2 }]}>
+                {isAndroid ? 'May reduce stability on Android' : 'Real-time pose lines'}
+              </Text>
+            </View>
+            <Switch
+              value={showSkeleton}
+              onValueChange={setShowSkeleton}
+              trackColor={{ false: '#767577', true: '#81b0ff' }}
+              thumbColor={showSkeleton ? '#f5dd4b' : '#f4f3f4'}
+            />
+          </View>
+          <View style={[styles.optionRow, { marginTop: 16 }]}>
+            <View>
+              <Text style={styles.optionLabel}>Low FPS (24fps)</Text>
+              <Text style={[styles.hint, { marginTop: 2 }]}>Reduces encoder + inference load</Text>
+            </View>
+            <Switch
+              value={lowFps}
+              onValueChange={setLowFps}
+              trackColor={{ false: '#767577', true: '#81b0ff' }}
+              thumbColor={lowFps ? '#f5dd4b' : '#f4f3f4'}
+            />
+          </View>
+          <View style={[styles.optionRow, { marginTop: 16 }]}>
+            <View>
+              <Text style={styles.optionLabel}>Force 720p</Text>
+              <Text style={[styles.hint, { marginTop: 2 }]}>Override resolution to 720p</Text>
+            </View>
+            <Switch
+              value={force720p}
+              onValueChange={setForce720p}
+              trackColor={{ false: '#767577', true: '#81b0ff' }}
+              thumbColor={force720p ? '#f5dd4b' : '#f4f3f4'}
+            />
+          </View>
+          <View style={[styles.optionRow, { marginTop: 16 }]}>
+            <View>
+              <Text style={styles.optionLabel}>Skip Chunk Compression</Text>
+              <Text style={[styles.hint, { marginTop: 2 }]}>Upload raw chunks (saves CPU)</Text>
+            </View>
+            <Switch
+              value={skipCompression}
+              onValueChange={setSkipCompression}
+              trackColor={{ false: '#767577', true: '#81b0ff' }}
+              thumbColor={skipCompression ? '#f5dd4b' : '#f4f3f4'}
+            />
+          </View>
         </View>
 
         {/* Movements Config */}

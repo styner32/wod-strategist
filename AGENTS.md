@@ -246,3 +246,38 @@ UploadVideo → [file ACTIVE] → IndexVideo / AnalyzeSegment (reuse fileURI) �
 3. **Require visual evidence** — prompt says "describe the equipment, stance, and movement you see" instead of "describe the exercise."
 4. **Post-filter** — `filterSegments()` removes any segments exceeding video duration (5s tolerance).
 5. **Profile context** — include height/weight/gender so the model can identify the correct person in a multi-person gym.
+
+## Android Recording Performance
+
+Android devices crash with OOM when camera recording, TFLite inference, and Skia rendering run concurrently at full FPS. Optimizations are controlled by **user-configurable toggles** in the setup page — do NOT hardcode `Platform.OS === 'android'` checks.
+
+### Configurable flags (setup.tsx → visionTestPage.tsx via route params)
+
+| Flag | Param | Android default | iOS default |
+|---|---|---|---|
+| Skeleton Overlay | `showSkeleton` | OFF | ON |
+| Low FPS (24fps) | `lowFps` | ON | OFF |
+| Force 720p | `force720p` | ON | OFF |
+| Skip Chunk Compression | `skipCompression` | ON | OFF |
+
+### Non-configurable (hardcoded per platform)
+
+| Optimization | File | Android | iOS |
+|---|---|---|---|
+| Inference FPS throttle | `usePoseDetection.ts` | 5 fps | 15 fps |
+| `android:largeHeap` | `AndroidManifest.xml` | `true` | N/A |
+
+### Pattern for reading flags in visionTestPage.tsx
+
+```typescript
+const flag = flagParam !== undefined
+  ? flagParam === 'true'
+  : IS_ANDROID; // or !IS_ANDROID depending on semantics
+```
+
+### Rules for AI assistants
+
+- **Never hardcode `IS_ANDROID`** for performance gating in `visionTestPage.tsx` — always use the configurable param pattern above.
+- The `usePoseDetection.ts` throttle uses `runAtTargetFps()` from `react-native-vision-camera` — this is the single most impactful fix for Android OOM. Do not remove it.
+- The recording dashboard shows **OPT FLAGS** during recording for debugging — keep this in sync when adding new flags.
+

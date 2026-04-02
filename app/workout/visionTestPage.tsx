@@ -39,6 +39,7 @@ import { useVideoQueue } from "@/store/useVideoQueue";
 import { useProfileStore } from "@/store/useProfileStore";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
+const IS_ANDROID = Platform.OS === 'android';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -53,18 +54,46 @@ export default function VisionTestPage() {
     injuries = "",
     workoutType: workoutTypeParam,
     autoRecord,
+    showSkeleton: showSkeletonParam,
+    lowFps: lowFpsParam,
+    force720p: force720pParam,
+    skipCompression: skipCompressionParam,
   } = useLocalSearchParams<{
     resolution?: string;
     movements?: string;
     injuries?: string;
     workoutType?: string;
     autoRecord?: string;
+    showSkeleton?: string;
+    lowFps?: string;
+    force720p?: string;
+    skipCompression?: string;
   }>();
+
+  // Performance flags — default to power-saving on Android, full quality on iOS
+  const showSkeleton = showSkeletonParam !== undefined
+    ? showSkeletonParam === 'true'
+    : !IS_ANDROID;
+  const lowFps = lowFpsParam !== undefined
+    ? lowFpsParam === 'true'
+    : IS_ANDROID;
+  const force720p = force720pParam !== undefined
+    ? force720pParam === 'true'
+    : IS_ANDROID;
+  const skipCompression = skipCompressionParam !== undefined
+    ? skipCompressionParam === 'true'
+    : IS_ANDROID;
+
   const workoutType = parseWorkoutType(workoutTypeParam);
   const workoutTypeLabel = formatWorkoutTypeLabel(workoutType).toUpperCase();
   
-  const targetWidth = resolution === '1080p' ? 1920 : 1280;
-  const targetHeight = resolution === '1080p' ? 1080 : 720;
+  // Resolution: honor force720p toggle
+  const effectiveResolution = force720p ? '720p' : resolution;
+  const targetWidth = effectiveResolution === '1080p' ? 1920 : 1280;
+  const targetHeight = effectiveResolution === '1080p' ? 1080 : 720;
+
+  // FPS: honor lowFps toggle
+  const targetFps = lowFps ? 24 : 30;
 
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
@@ -93,10 +122,10 @@ export default function VisionTestPage() {
   // Track individual chunk start time
   const chunkStartTime = useRef<number>(0);
 
-  // 720p or 1080p format based on user selection
+  // 720p or 1080p format based on user/platform selection
   const format = useCameraFormat(device, [
     { videoResolution: { width: targetWidth, height: targetHeight } },
-    { fps: 30 },
+    { fps: targetFps },
   ]);
 
   const [mediaPermission, requestMediaPermission] =
@@ -234,17 +263,14 @@ export default function VisionTestPage() {
           if (!isRecordingChunks.current) {
             console.log("⏹️ Recording stopped — skipping chunk upload");
           } else {
-            // Compress and Upload chunk to backend
+            // Compress (iOS only) and Upload chunk to backend
             try {
               const sessionId = sessionIdRef.current;
               const movementsArray = movements ? movements.split(', ') : [];
               const injuriesArray = injuries ? injuries.split(', ') : [];
-              
-              Video.compress(video.path, {
-                compressionMethod: "auto",
-                maxSize: 720,
-              }).then((compressedUri) => {
-                processWorkoutChunk(compressedUri, sessionId, {
+
+              const uploadChunk = (uri: string, shouldCleanup: boolean) => {
+                processWorkoutChunk(uri, sessionId, {
                   movements: movementsArray,
                   injuries: injuriesArray,
                   workoutType,
@@ -256,16 +282,31 @@ export default function VisionTestPage() {
                 }).catch((err) => {
                   console.error("Failed to upload chunk:", err);
                 }).finally(() => {
-                  // Clean up compressed temp file
-                  try {
-                    const { File: FSFile } = require("expo-file-system");
-                    const f = new FSFile(compressedUri);
-                    if (f.exists) f.delete();
-                  } catch (_) {}
+                  if (shouldCleanup) {
+                    try {
+                      const { File: FSFile } = require("expo-file-system");
+                      const f = new FSFile(uri);
+                      if (f.exists) f.delete();
+                    } catch (_) {}
+                  }
                 });
-              }).catch((err) => {
-                console.error("Failed to compress chunk:", err);
-              });
+              };
+
+              if (skipCompression) {
+                // Skip re-compression — upload raw chunk directly.
+                // Saves CPU when camera already encodes at low resolution/fps.
+                uploadChunk(video.path, false);
+              } else {
+                // Compress before upload (useful when screen recorder outputs larger files)
+                Video.compress(video.path, {
+                  compressionMethod: "auto",
+                  maxSize: 720,
+                }).then((compressedUri) => {
+                  uploadChunk(compressedUri, true);
+                }).catch((err) => {
+                  console.error("Failed to compress chunk:", err);
+                });
+              }
             } catch (e) {
               console.error("Failed to process chunk for upload:", e);
             }
@@ -569,6 +610,7 @@ export default function VisionTestPage() {
         device={device}
         isActive={true}
         format={format}
+        fps={targetFps}
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
         video={true}
@@ -584,9 +626,13 @@ export default function VisionTestPage() {
         }}
       />
 
-      <View style={StyleSheet.absoluteFill} pointerEvents="none">
-        <SkeletonOverlay pose={poseResult} width={width} height={height} />
-      </View>
+      {/* Skeleton overlay: controlled by user toggle in setup page.
+          Default OFF on Android (saves GPU/memory), ON on iOS. */}
+      {showSkeleton && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
+          <SkeletonOverlay pose={poseResult} width={width} height={height} />
+        </View>
+      )}
 
       {/* 닫기 버튼 */}
       {!isRecording && (
@@ -649,6 +695,17 @@ export default function VisionTestPage() {
               <Text style={styles.label}>STATE:</Text>
               <Text style={styles.val}>
                 {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
+              </Text>
+            </View>
+            <View style={{ marginTop: 6, borderTopWidth: 1, borderTopColor: '#333', paddingTop: 4 }}>
+              <Text style={[styles.label, { fontSize: 8, color: '#666' }]}>OPT FLAGS</Text>
+              <Text style={{ color: '#555', fontSize: 9, fontFamily: 'monospace' }}>
+                {[
+                  lowFps ? '24fps' : '30fps',
+                  force720p ? '720p' : (effectiveResolution === '1080p' ? '1080p' : '720p'),
+                  skipCompression ? 'raw' : 'compress',
+                  showSkeleton ? 'skel' : 'no-skel',
+                ].join(' · ')}
               </Text>
             </View>
           </>
