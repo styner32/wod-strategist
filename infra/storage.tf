@@ -11,16 +11,6 @@ resource "google_storage_bucket" "uploads" {
     response_header = ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "x-goog-resumable"]
     max_age_seconds = 3600
   }
-
-  # Delete files older than 1 day to manage costs/storage
-  lifecycle_rule {
-    condition {
-      age = 1
-    }
-    action {
-      type = "Delete"
-    }
-  }
 }
 
 # Grant Cloud Run Service Account access to the bucket
