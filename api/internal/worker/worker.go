@@ -17,12 +17,13 @@ import (
 )
 
 const (
-	TypeVideoAnalysis     = "video:analysis"
-	TypeChunkAnalysis     = "chunk:analysis"
-	TypeMergeChunks       = "merge:chunks"
-	TypeInjuryAnalysis    = "injury:analysis"
-	TypeGenerateHighlight = "highlight:generate"
-	WorkoutTypeWOD        = "wod"
+	TypeVideoAnalysis      = "video:analysis"
+	TypeChunkAnalysis      = "chunk:analysis"
+	TypeMergeChunks        = "merge:chunks"
+	TypeInjuryAnalysis     = "injury:analysis"
+	TypeGenerateHighlight  = "highlight:generate"
+	TypeVerifyHighlights   = "highlight:verify"
+	WorkoutTypeWOD         = "wod"
 )
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.
@@ -63,6 +64,9 @@ type GeminiClient interface {
 	UploadVideo(ctx context.Context, filePath string) (*gemini.UploadResult, error)
 	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, error)
 	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, error)
+
+	// Lightweight Flash model query (e.g. verification)
+	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, error)
 }
 
 // QueueClient is the minimal interface over asynq.Client used by handlers.

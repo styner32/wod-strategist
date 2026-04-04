@@ -826,3 +826,58 @@ func (ctl *Controller) GetHighlight(c *gin.Context) {
 	c.JSON(http.StatusOK, results)
 }
 
+// @Summary      Verify Highlights
+// @Description  Triggers verification of highlight segments to detect hallucinated movements
+// @Tags         highlight
+// @Accept       json
+// @Produce      json
+// @Param        request body VerifyHighlightsRequest true "Session ID"
+// @Success      202 {object} map[string]string
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /verify-highlights [post]
+func (ctl *Controller) VerifyHighlights(c *gin.Context) {
+	if ctl.queueClient == nil {
+		logger.Log.Error("queue client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	var req VerifyHighlightsRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Log.Error("failed to bind JSON", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	logger.Log.Info("Submit a highlight verification request",
+		zap.String("session_id", req.SessionID))
+
+	task, err := ctl.newVerifyHighlightsTask(req.SessionID)
+	if err != nil {
+		logger.Log.Error("failed to create verify highlights task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue verify highlights task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":    "Highlight verification started",
+		"task_id":    info.ID,
+		"session_id": req.SessionID,
+	})
+}

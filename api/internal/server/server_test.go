@@ -102,6 +102,10 @@ func (h *recordingHandlers) GetHighlight(c *gin.Context) {
 	h.record("highlight", c)
 }
 
+func (h *recordingHandlers) VerifyHighlights(c *gin.Context) {
+	h.record("verify-highlights", c)
+}
+
 func (h *recordingHandlers) ListSessionCatalog(c *gin.Context) {
 	h.record("dev-sessions", c)
 }

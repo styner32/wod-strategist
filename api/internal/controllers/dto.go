@@ -92,6 +92,10 @@ type GenerateHighlightRequest struct {
 	MaxDuration int    `json:"max_duration,omitempty"` // seconds, default 60
 }
 
+type VerifyHighlightsRequest struct {
+	SessionID string `json:"session_id"`
+}
+
 type ChunkAnalysisSummaryResponse struct {
 	Total     int `json:"total"`
 	Completed int `json:"completed"`

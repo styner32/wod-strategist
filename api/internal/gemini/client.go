@@ -403,3 +403,38 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 
 	return result, nil
 }
+
+// QueryVideoFlash sends a prompt against an already-uploaded video using the
+// lightweight Flash model. Ideal for simple verification tasks (e.g. confirming
+// whether a movement is visible at a given timestamp) where Pro-level depth
+// is unnecessary.
+func (c *Client) QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, error) {
+	c.logger.Info("Querying video with Flash",
+		zap.String("file_uri", fileURI),
+		zap.String("model", flashModel))
+
+	resp, err := c.client.Models.GenerateContent(ctx, flashModel, []*genai.Content{{
+		Role: genai.RoleUser,
+		Parts: []*genai.Part{
+			{FileData: &genai.FileData{FileURI: fileURI, MIMEType: mimeType}},
+			genai.NewPartFromText(prompt),
+		},
+	}}, &genai.GenerateContentConfig{
+		MediaResolution: genai.MediaResolutionHigh,
+	})
+	if err != nil {
+		return "", fmt.Errorf("flash query failed: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", fmt.Errorf("no content from flash query")
+	}
+
+	var result string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		result += part.Text
+	}
+
+	c.logger.Info("Flash query completed", zap.Int("response_length", len(result)))
+	return result, nil
+}

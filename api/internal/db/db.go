@@ -39,6 +39,7 @@ type AnalysisResult struct {
 	Output            string    `json:"output"`
 	InjuryOutput      string    `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
 	HighlightSegments string    `json:"highlight_segments"`      // JSON array of highlight segments
+	Verified          *bool     `json:"verified,omitempty"`       // nil=unchecked, true=confirmed, false=hallucination detected
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }

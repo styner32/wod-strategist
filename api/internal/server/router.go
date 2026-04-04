@@ -30,6 +30,7 @@ type Handlers interface {
 	GetSubtitles(*gin.Context)
 	GenerateHighlight(*gin.Context)
 	GetHighlight(*gin.Context)
+	VerifyHighlights(*gin.Context)
 	ListSessionCatalog(*gin.Context)
 	GetSessionAssets(*gin.Context)
 	GetPlayURL(*gin.Context)
@@ -282,6 +283,16 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/highlight/:session_id", handlers.GetHighlight)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "verify-highlights",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/verify-highlights",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/verify-highlights", handlers.VerifyHighlights)
 		},
 	},
 }
