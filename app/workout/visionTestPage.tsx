@@ -58,6 +58,7 @@ export default function VisionTestPage() {
     lowFps: lowFpsParam,
     force720p: force720pParam,
     skipCompression: skipCompressionParam,
+    serialUpload: serialUploadParam,
   } = useLocalSearchParams<{
     resolution?: string;
     movements?: string;
@@ -68,6 +69,7 @@ export default function VisionTestPage() {
     lowFps?: string;
     force720p?: string;
     skipCompression?: string;
+    serialUpload?: string;
   }>();
 
   // Performance flags — default to power-saving on Android, full quality on iOS
@@ -82,6 +84,9 @@ export default function VisionTestPage() {
     : IS_ANDROID;
   const skipCompression = skipCompressionParam !== undefined
     ? skipCompressionParam === 'true'
+    : IS_ANDROID;
+  const serialUpload = serialUploadParam !== undefined
+    ? serialUploadParam === 'true'
     : IS_ANDROID;
 
   const workoutType = parseWorkoutType(workoutTypeParam);
@@ -106,8 +111,7 @@ export default function VisionTestPage() {
   const chunkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isChunkRecordingActive = useRef(false);
 
-  // Android: resolve function for the continuous camera recording promise
-  const androidRecordingResolve = useRef<((video: { path: string }) => void) | null>(null);
+
 
   // Store chunk paths locally (Android: used as final video source)
   const chunkPaths = useRef<string[]>([]);
@@ -121,6 +125,45 @@ export default function VisionTestPage() {
   const recordingStartTime = useRef<number>(0);
   // Track individual chunk start time
   const chunkStartTime = useRef<number>(0);
+
+  // --- Upload monitoring ---
+  const [pendingUploads, setPendingUploads] = useState(0);
+  const [inflightUploads, setInflightUploads] = useState(0);
+
+  // --- Serial Upload Queue ---
+  // Prevents concurrent uploads from piling up in memory on slow connections.
+  // Each chunk upload is queued and processed one at a time.
+  const uploadQueue = useRef<Array<() => Promise<void>>>([]);
+  const isUploading = useRef(false);
+
+  const drainUploadQueue = async () => {
+    if (isUploading.current) return; // already draining
+    isUploading.current = true;
+    while (uploadQueue.current.length > 0) {
+      const task = uploadQueue.current.shift()!;
+      setPendingUploads(uploadQueue.current.length);
+      setInflightUploads(prev => prev + 1);
+      try {
+        await task();
+      } catch (err) {
+        console.error("Upload queue task failed:", err);
+      }
+      setInflightUploads(prev => Math.max(0, prev - 1));
+    }
+    isUploading.current = false;
+  };
+
+  const enqueueUpload = (task: () => Promise<void>) => {
+    uploadQueue.current.push(task);
+    setPendingUploads(uploadQueue.current.length);
+    drainUploadQueue();
+  };
+
+  // Track fire-and-forget (concurrent) uploads
+  const trackUpload = (task: () => Promise<void>) => {
+    setInflightUploads(prev => prev + 1);
+    task().finally(() => setInflightUploads(prev => Math.max(0, prev - 1)));
+  };
 
   // 720p or 1080p format based on user/platform selection
   const format = useCameraFormat(device, [
@@ -140,6 +183,8 @@ export default function VisionTestPage() {
   const [chunkCount, setChunkCount] = useState(0);
   const [isMerging, setIsMerging] = useState(false);
   const [mergeComplete, setMergeComplete] = useState(false);
+  // Android: track auto-merge-and-navigate state after stopping
+  const [androidAutoMerging, setAndroidAutoMerging] = useState(false);
 
   const enqueue = useVideoQueue((s) => s.enqueue);
   const startEncoding = useVideoQueue((s) => s.startEncoding);
@@ -223,6 +268,9 @@ export default function VisionTestPage() {
       isChunkRecordingActive.current = true;
       chunkStartTime.current = Date.now();
       camera.current.startRecording({
+        // Android: force mp4 + HEVC to reduce chunk size (12MB → ~2-4MB).
+        // iOS: use VisionCamera defaults (chunks are already small via screen recorder).
+        ...(IS_ANDROID ? { fileType: 'mp4' as const, videoCodec: 'h265' as const } : {}),
         onRecordingFinished: async (video) => {
           console.log("📷 Chunk Finished:", video.path);
           isChunkRecordingActive.current = false;
@@ -242,22 +290,7 @@ export default function VisionTestPage() {
             lastChunkResolve.current = null;
           }
 
-          // Android: save each chunk to gallery immediately (all footage preserved as segments)
-          if (Platform.OS !== 'ios') {
-            try {
-              await MediaLibrary.saveToLibraryAsync(video.path);
-              console.log("📱 Chunk saved to gallery:", video.path);
-            } catch (e) {
-              console.warn("⚠️ Failed to save chunk to gallery:", e);
-            } finally {
-              // Always clean up temp chunk file (gallery copy is separate)
-              try {
-                const { File: FSFile } = require("expo-file-system");
-                const f = new FSFile(video.path);
-                if (f.exists) f.delete();
-              } catch (_) {}
-            }
-          }
+
 
           // Skip upload if recording has already been stopped
           if (!isRecordingChunks.current) {
@@ -269,19 +302,20 @@ export default function VisionTestPage() {
               const movementsArray = movements ? movements.split(', ') : [];
               const injuriesArray = injuries ? injuries.split(', ') : [];
 
-              const uploadChunk = (uri: string, shouldCleanup: boolean) => {
-                processWorkoutChunk(uri, sessionId, {
-                  movements: movementsArray,
-                  injuries: injuriesArray,
-                  workoutType,
-                  profileId: profileId!,
-                  startSecs,
-                  endSecs,
-                }).then(() => {
-                  console.log("✅ Chunk asynchronously uploaded to backend");
-                }).catch((err) => {
+              const doUpload = async (uri: string, shouldCleanup: boolean) => {
+                try {
+                  await processWorkoutChunk(uri, sessionId, {
+                    movements: movementsArray,
+                    injuries: injuriesArray,
+                    workoutType,
+                    profileId: profileId!,
+                    startSecs,
+                    endSecs,
+                  });
+                  console.log("✅ Chunk uploaded to backend");
+                } catch (err) {
                   console.error("Failed to upload chunk:", err);
-                }).finally(() => {
+                } finally {
                   if (shouldCleanup) {
                     try {
                       const { File: FSFile } = require("expo-file-system");
@@ -289,20 +323,29 @@ export default function VisionTestPage() {
                       if (f.exists) f.delete();
                     } catch (_) {}
                   }
-                });
+                }
               };
 
               if (skipCompression) {
                 // Skip re-compression — upload raw chunk directly.
-                // Saves CPU when camera already encodes at low resolution/fps.
-                uploadChunk(video.path, false);
+                const uploadTask = () => doUpload(video.path, false);
+                if (serialUpload) {
+                  enqueueUpload(uploadTask);
+                } else {
+                  trackUpload(uploadTask);
+                }
               } else {
-                // Compress before upload (useful when screen recorder outputs larger files)
+                // Compress before upload, then dispatch
                 Video.compress(video.path, {
                   compressionMethod: "auto",
                   maxSize: 720,
                 }).then((compressedUri) => {
-                  uploadChunk(compressedUri, true);
+                  const uploadTask = () => doUpload(compressedUri, true);
+                  if (serialUpload) {
+                    enqueueUpload(uploadTask);
+                  } else {
+                    trackUpload(uploadTask);
+                  }
                 }).catch((err) => {
                   console.error("Failed to compress chunk:", err);
                 });
@@ -312,9 +355,18 @@ export default function VisionTestPage() {
             }
           }
 
-          // If still recording, start the next chunk immediately
+          // If still recording, start the next chunk after a short delay.
+          // The camera HAL (especially Samsung) needs time to finalize the
+          // previous recording before accepting a new startRecording() call.
+          // In release builds (no debug overhead), calling immediately causes
+          // a native crash (CameraDeviceClient BUFFER_ERROR / DEVICE_ERROR).
           if (isRecordingChunks.current) {
-            startChunkLoop();
+            if (IS_ANDROID) {
+              // Android: 500ms cooldown for camera HAL to finalize.
+              setTimeout(() => startChunkLoop(), 500);
+            } else {
+              startChunkLoop();
+            }
           }
         },
         onRecordingError: (error) => {
@@ -405,32 +457,23 @@ export default function VisionTestPage() {
           startChunkRecording();
         }
       } else {
-        // Android: single continuous camera recording
-        // TODO(android-chunks): Android camera only supports one recording at a time,
-        // so chunk-based recording can't run alongside the main recording.
-        // Future plan: enable chunk recording on Android (like iOS) and merge
-        // chunks server-side in the Go backend. This will unlock real-time
-        // AI analysis feedback on Android during workouts.
+        // Android: chunk-only streaming mode.
+        // Android camera only supports one recording at a time, so we can't
+        // run a continuous recording alongside chunk recording.
+        // Instead, we record sequential 10s chunks, upload each for real-time
+        // analysis, and auto-merge on the server when the user stops.
+        // Trade-off: no local gallery save of the final video.
         if (!camera.current) return;
 
-        camera.current.startRecording({
-          onRecordingFinished: (video) => {
-            console.log("📼 Camera Recording Finished:", video.path);
-            androidRecordingResolve.current?.(video);
-            androidRecordingResolve.current = null;
-          },
-          onRecordingError: (error) => {
-            console.error("📷 Camera Recording Error:", error);
-            androidRecordingResolve.current = null;
-          },
-        });
-
         setIsRecording(true);
-        console.log("✅ Recording Started (Android Camera)");
+        console.log("✅ Recording Started (Android Chunk Streaming)");
 
         // Compute session ID once for the entire recording session
         sessionIdRef.current = buildWorkoutSessionId(workoutType);
         recordingStartTime.current = Date.now();
+
+        // Start chunk recording loop (same mechanism as iOS chunks)
+        startChunkRecording();
       }
     } catch (error) {
       console.error("Recording Start Error:", error);
@@ -453,14 +496,47 @@ export default function VisionTestPage() {
         // 2. Stop Screen Recorder
         file = await stopInAppRecording();
       } else {
-        // Android: stop camera recording and wait for the video file
-        if (camera.current) {
-          const videoPromise = new Promise<{ path: string }>((resolve) => {
-            androidRecordingResolve.current = resolve;
-          });
-          await camera.current.stopRecording();
-          file = await videoPromise;
+        // Android: stop chunk streaming and auto-merge on server
+        await stopChunkRecording();
+        setIsRecording(false);
+
+        if (chunkCount > 0) {
+          // Auto-trigger server-side merge + analysis
+          setAndroidAutoMerging(true);
+          try {
+            const sessionId = sessionIdRef.current;
+            const movementsArray = movements ? movements.split(", ") : [];
+            const injuriesArray = injuries ? injuries.split(", ") : [];
+
+            // Small delay to let the last chunk upload reach the server
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            await mergeChunks(sessionId, {
+              workoutType,
+              movements: movementsArray,
+              injuries: injuriesArray,
+              profileId: profileId!,
+            });
+
+            console.log("✅ Auto-merge triggered for Android session");
+          } catch (e) {
+            console.error("❌ Auto-merge failed:", e);
+            Alert.alert(
+              "Merge Failed",
+              "Could not start merge. You can try again from history.",
+              [{ text: "OK" }]
+            );
+          } finally {
+            setAndroidAutoMerging(false);
+          }
         }
+
+        // Clean up and navigate to history
+        chunkPaths.current = [];
+        setChunkCount(0);
+        setIsSaving(false);
+        router.replace("/history" as any);
+        return;
       }
 
       setIsRecording(false);
@@ -705,13 +781,17 @@ export default function VisionTestPage() {
                   force720p ? '720p' : (effectiveResolution === '1080p' ? '1080p' : '720p'),
                   skipCompression ? 'raw' : 'compress',
                   showSkeleton ? 'skel' : 'no-skel',
+                  serialUpload ? 'serial' : 'parallel',
                 ].join(' · ')}
+              </Text>
+              <Text style={{ color: inflightUploads > 2 ? '#FF453A' : '#555', fontSize: 9, fontFamily: 'monospace', marginTop: 2 }}>
+                UL: {inflightUploads} inflight · {pendingUploads} queued · {chunkCount} chunks
               </Text>
             </View>
           </>
         )}
 
-        {!isRecording && (
+        {!isRecording && !IS_ANDROID && (
           <View style={[styles.row, { marginTop: 10, alignItems: "center" }]}>
             <Text style={styles.label}>RAW VIDEO:</Text>
             <Switch
@@ -735,7 +815,19 @@ export default function VisionTestPage() {
 
       {/* Post-recording footer */}
       <View style={styles.recordControl}>
-        {isSaving ? (
+        {androidAutoMerging ? (
+          <View style={styles.postRecordingFooter}>
+            <Text style={styles.footerStatus}>🔗 Merging & Analyzing...</Text>
+            <Text style={[styles.footerStatus, { color: '#888', fontSize: 13 }]}>
+              {chunkCount} chunks uploaded. Redirecting to history...
+            </Text>
+            <View style={styles.footerProgressBg}>
+              <View
+                style={[styles.footerProgressFill, { width: "100%", backgroundColor: "#64D2FF" }]}
+              />
+            </View>
+          </View>
+        ) : isSaving ? (
           <View style={styles.postRecordingFooter}>
             <Text style={styles.footerStatus}>Saving...</Text>
             <View style={styles.footerProgressBg}>

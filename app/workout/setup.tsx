@@ -23,6 +23,7 @@ export default function WorkoutSetup() {
   const [lowFps, setLowFps] = useState(isAndroid);
   const [force720p, setForce720p] = useState(isAndroid);
   const [skipCompression, setSkipCompression] = useState(isAndroid);
+  const [serialUpload, setSerialUpload] = useState(isAndroid);
   const [movementOptions, setMovementOptions] = useState<string[]>([]);
   const [selectedMovements, setSelectedMovements] = useState<string[]>([]);
   const [injuryOptions, setInjuryOptions] = useState<string[]>([]);
@@ -66,6 +67,7 @@ export default function WorkoutSetup() {
         lowFps: lowFps ? 'true' : 'false',
         force720p: force720p ? 'true' : 'false',
         skipCompression: skipCompression ? 'true' : 'false',
+        serialUpload: serialUpload ? 'true' : 'false',
       },
     });
   };
@@ -151,6 +153,18 @@ export default function WorkoutSetup() {
               onValueChange={setSkipCompression}
               trackColor={{ false: '#767577', true: '#81b0ff' }}
               thumbColor={skipCompression ? '#f5dd4b' : '#f4f3f4'}
+            />
+          </View>
+          <View style={[styles.optionRow, { marginTop: 16 }]}>
+            <View>
+              <Text style={styles.optionLabel}>Serial Upload</Text>
+              <Text style={[styles.hint, { marginTop: 2 }]}>Queue uploads 1-at-a-time (prevents OOM)</Text>
+            </View>
+            <Switch
+              value={serialUpload}
+              onValueChange={setSerialUpload}
+              trackColor={{ false: '#767577', true: '#81b0ff' }}
+              thumbColor={serialUpload ? '#f5dd4b' : '#f4f3f4'}
             />
           </View>
         </View>

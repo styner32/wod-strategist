@@ -4,8 +4,8 @@ import {
   UploadProgressData,
 } from "expo-file-system/legacy";
 
-import type { WorkoutType } from "./workoutType";
 import type { components } from "./schema";
+import type { WorkoutType } from "./workoutType";
 
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
@@ -340,6 +340,14 @@ export async function processWorkoutChunk(
     endSecs,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
+
+  // DEBUG: Simulate slow upload. Set to 0 for normal behavior.
+  // e.g. 15000 = each upload takes 15s extra, causing pile-up with 10s chunks.
+  const DEBUG_SLOW_UPLOAD_MS = 0;
+  if (DEBUG_SLOW_UPLOAD_MS > 0) {
+    console.warn(`⏳ DEBUG: Simulating slow upload (${DEBUG_SLOW_UPLOAD_MS}ms delay)`);
+    await new Promise(resolve => setTimeout(resolve, DEBUG_SLOW_UPLOAD_MS));
+  }
 
   const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename);
   await uploadToGcs(upload_url, fileUri, mimeType);
