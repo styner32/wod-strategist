@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"os"
 
 	"github.com/hibiken/asynq"
 	. "github.com/onsi/ginkgo/v2"
@@ -10,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/testhelpers"
 )
 
@@ -40,10 +42,11 @@ var _ = Describe("NewMergeChunksTask", func() {
 
 var _ = Describe("HandleMergeChunksTask", func() {
 	var (
-		dbConn      *gorm.DB
-		queueClient *asynq.Client
-		inspector   *asynq.Inspector
-		w           *Worker
+		dbConn           *gorm.DB
+		storageTransport *testhelpers.MockTransport
+		queueClient      *asynq.Client
+		inspector        *asynq.Inspector
+		w                *Worker
 	)
 
 	BeforeEach(func() {
@@ -56,17 +59,20 @@ var _ = Describe("HandleMergeChunksTask", func() {
 		inspector = testhelpers.NewQueueInspector()
 		testhelpers.CleanupQueue(inspector)
 
+		storageTransport = testhelpers.NewMockTransport()
+		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(sErr).NotTo(HaveOccurred())
+
 		w = &Worker{
-			DB:          dbConn,
-			QueueClient: queueClient,
-			BucketName:  "test-bucket",
-			logger:      zap.NewNop(),
+			DB:            dbConn,
+			StorageClient: storageClient,
+			QueueClient:   queueClient,
+			BucketName:    "test-bucket",
+			logger:        zap.NewNop(),
 		}
 	})
 
 	It("returns SkipRetry immediately when the GCS URI is invalid", func() {
-		w.StorageClient = &fakeStorage{}
-
 		task, err := NewMergeChunksTask(
 			"sess-merge-baduri",
 			"/not/a/gcs/uri",
@@ -82,7 +88,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 	})
 
 	It("returns SkipRetry when no chunk objects are found", func() {
-		w.StorageClient = &fakeStorage{} // ListObjects returns nil
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-merge-nochunks", nil)
 
 		task, err := NewMergeChunksTask(
 			"sess-merge-nochunks",
@@ -99,12 +105,10 @@ var _ = Describe("HandleMergeChunksTask", func() {
 	})
 
 	It("skips merged/hardsubbed objects when filtering", func() {
-		w.StorageClient = &listableStorage{
-			objects: []string{
-				"videos/sess-filter-001/file_merged_abc.mp4",
-				"videos/sess-filter-001/file_hardsubbed_abc.mp4",
-			},
-		}
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-filter-001", []string{
+			"videos/sess-filter-001/file_merged_abc.mp4",
+			"videos/sess-filter-001/file_hardsubbed_abc.mp4",
+		})
 
 		task, err := NewMergeChunksTask(
 			"sess-filter-001",
@@ -126,12 +130,33 @@ var _ = Describe("HandleMergeChunksTask", func() {
 
 		It("enqueues a video:analysis task after merging chunks", func() {
 			tmpFile := createTinyMP4(GinkgoT())
+			mp4Bytes, readErr := os.ReadFile(tmpFile)
+			Expect(readErr).NotTo(HaveOccurred())
 
-			w.StorageClient = &listableStorage{
-				objects:      []string{"videos/sess-merge-001/chunk_001.mp4"},
-				downloadPath: tmpFile,
-			}
-			w.GeminiClient = &fakeGemini{} // not called by merge, required as interface
+			// Seed chunk records in DB so the handler uses DB-ordered paths
+			start0 := 0.0
+			end0 := 1.0
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: "sess-merge-001",
+				FilePath:  "gs://test-bucket/videos/sess-merge-001/chunk_001.mp4",
+				Status:    "COMPLETED",
+				Output:    "good form",
+				StartSecs: &start0,
+				EndSecs:   &end0,
+			}).Error).NotTo(HaveOccurred())
+
+			// Create a fresh transport for this test with all the GCS expectations
+			ffmpegTransport := testhelpers.NewMockTransport()
+			ffmpegStorageClient, sErr := testhelpers.NewStorageClient("test-bucket", ffmpegTransport)
+			Expect(sErr).NotTo(HaveOccurred())
+			w.StorageClient = ffmpegStorageClient
+
+			// DownloadFile for the chunk (serve real mp4 bytes so ffmpeg can process it)
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/sess-merge-001/chunk_001.mp4", mp4Bytes)
+			// UploadFromFile for the merged video
+			testhelpers.MockGCSUpload(ffmpegTransport, "test-bucket", "merged")
+			// UploadFromFile for the hard-subbed video (best-effort, may or may not be called)
+			testhelpers.MockGCSUpload(ffmpegTransport, "test-bucket", "hardsubbed")
 
 			task, err := NewMergeChunksTask(
 				"sess-merge-001",

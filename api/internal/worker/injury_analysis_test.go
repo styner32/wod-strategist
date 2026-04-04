@@ -79,10 +79,10 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 	)
 
 	var (
-		dbConn      *gorm.DB
-		storage     *fakeStorage
-		queueClient *asynq.Client
-		w           *Worker
+		dbConn           *gorm.DB
+		storageTransport *testhelpers.MockTransport
+		queueClient      *asynq.Client
+		w                *Worker
 	)
 
 	setupGeminiTransport := func(generateContentText string) *testhelpers.MockTransport {
@@ -149,12 +149,15 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		Expect(err).NotTo(HaveOccurred())
 		testhelpers.CleanupDB(dbConn)
 
-		storage = &fakeStorage{}
+		storageTransport = testhelpers.NewMockTransport()
+		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(sErr).NotTo(HaveOccurred())
+
 		queueClient = testhelpers.NewQueueClient()
 
 		w = &Worker{
 			DB:            dbConn,
-			StorageClient: storage,
+			StorageClient: storageClient,
 			GeminiClient:  nil,
 			QueueClient:   queueClient,
 			BucketName:    "test-bucket",
@@ -173,6 +176,7 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		Expect(dbConn.Create(wodResult).Error).NotTo(HaveOccurred())
 
 		timestamps := `[{"start":"0:32","end":"0:45","reason":"무릎 내전 관찰"}]`
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-injury-001/full.mp4")
 		transport := setupGeminiTransport(injuryAnalysis)
 
 		task, err := NewInjuryAnalysisTask(
@@ -208,6 +212,7 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		}
 		Expect(dbConn.Create(&profile).Error).NotTo(HaveOccurred())
 
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-injury-profile-001/full.mp4")
 		transport := setupGeminiTransport(injuryAnalysis)
 
 		task, err := NewInjuryAnalysisTask(
@@ -233,6 +238,8 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 	})
 
 	It("returns an error and saves no record when Gemini returns empty candidates", func() {
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-injury-empty-001/full.mp4")
+
 		transport := testhelpers.NewMockTransport()
 		realClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
 			APIKey:       geminiAPIKey,

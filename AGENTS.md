@@ -33,6 +33,16 @@
 - The `down.sql` must use `DROP COLUMN IF EXISTS` for safe rollback.
 - Do **not** call `db.AutoMigrate()` anywhere — it bypasses version history and makes rollbacks impossible.
 
+### Testing philosophy: prefer real clients over interface fakes
+
+Do **not** create `fake*` structs that implement an interface solely for testing (e.g. `fakeStorage`, `fakeQueue`). Instead, use real clients backed by `testhelpers.MockTransport` to intercept HTTP at the transport layer.
+
+**Why:**
+1. **IDE navigation breaks** — "Go to Definition" on a fake's method lands on the *interface* signature, not the fake implementation. This makes tests harder to navigate and debug.
+2. **Behavior drift is invisible** — if the real client changes how it parses URIs, retries, or encodes requests, a fake won't catch the regression because it's a completely separate implementation.
+
+**Pattern:** wire real clients with `&http.Client{Transport: mockTransport}` and register expected HTTP calls. This tests the actual code path end-to-end while keeping tests deterministic.
+
 ## Integration Testing for Worker Tasks
 
 Worker handler tests (`internal/worker/*_test.go`) follow a **three-layer real-client** strategy.
@@ -102,20 +112,27 @@ seedChunks := func(sessionID string) {
 
 **Important:** Defer cleanup (`DeleteFile`) is registered **before** any early-return check (e.g. empty analysis). This prevents Gemini file leaks and is what the `MockTransport.Verify()` assertion catches.
 
-### Layer 3 — GCS Storage: fakeStorage or real client + MockTransport
+### Layer 3 — GCS Storage: real client + MockTransport
 
-- **`fakeStorage`** (in `worker_test_helpers_test.go`): use when storage is incidental to the test (e.g. the handler downloads a file but GCS behaviour is not what you're verifying). `DownloadFile` writes a 1-byte sentinel; `ListObjects` returns nil.
-- **`testhelpers.NewStorageClient(bucketName, transport)`**: use when you need to verify exact GCS HTTP interactions. Returns a real `storage.Client` backed by `MockTransport`.
+Use `testhelpers.NewStorageClient(bucketName, transport)` for all tests. Returns a real `storage.Client` backed by `MockTransport`. Register GCS expectations with the `MockGCS*` helpers:
+  - `testhelpers.MockGCSDownload(transport, "gs://bucket/object")` — 1-byte sentinel response
+  - `testhelpers.MockGCSDownloadWithBody(transport, "gs://bucket/object", body)` — custom body (use for ffmpeg tests that need a real mp4)
+  - `testhelpers.MockGCSListObjects(transport, bucket, prefix, objects)` — list objects response
+  - `testhelpers.MockGCSUpload(transport, bucket, objectName)` — upload response
 
 ```go
-// When GCS is incidental:
-w.StorageClient = &fakeStorage{}
+// Standard pattern (most tests):
+storageTransport = testhelpers.NewMockTransport()
+storageClient, _ := testhelpers.NewStorageClient("my-bucket", storageTransport)
+w.StorageClient = storageClient
 
-// When GCS calls need explicit verification:
-transport := testhelpers.NewMockTransport()
-transport.New("https://storage.googleapis.com").Get("/bucket/object").Reply(200).BodyString("data")
-client, _ := testhelpers.NewStorageClient("my-bucket", transport)
-w.StorageClient = client
+// Register per-test expectations:
+testhelpers.MockGCSDownload(storageTransport, "gs://my-bucket/videos/session/chunk.mp4")
+testhelpers.MockGCSListObjects(storageTransport, "my-bucket", "videos/session", []string{"chunk_001.mp4"})
+
+// When ffmpeg needs a real mp4 file on disk:
+mp4Bytes, _ := os.ReadFile(createTinyMP4(GinkgoT()))
+testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://my-bucket/chunk.mp4", mp4Bytes)
 ```
 
 ### Layer 4 — Queue (asynq / Redis): real client + Inspector
@@ -148,17 +165,13 @@ The real queue uses **Redis DB 15** — separate from the app's DB 5 — so test
 
 ### Shared test helpers (`worker_test_helpers_test.go`)
 
-All shared fakes and utilities live in one file so future migration to exported `testhelpers` is a single-file move:
+All shared utilities live in one file:
 
 | Symbol | Purpose |
 |---|---|
-| `fakeStorage` | Incidental storage stub (DownloadFile → sentinel byte) |
-| `listableStorage` | Storage stub with configurable `ListObjects` + optional real file serving (used by merge/highlight tests) |
-| `fakeGemini` | Gemini stub for tests where Gemini is NOT the subject (e.g. merge_chunks) |
 | `makeVideoAnalysisTask(p)` | Marshals a payload into an `*asynq.Task` |
 | `hasFfmpeg()` | Returns true if ffmpeg is in PATH |
 | `createTinyMP4(t)` | Creates a 1-second black mp4 via ffmpeg; skips test if unavailable |
-| `copyFile / writeFile` | File system helpers used by `listableStorage` |
 
 ### FFmpeg-dependent tests
 

@@ -3,6 +3,9 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"os"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -10,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/testhelpers"
 )
 
@@ -45,16 +49,38 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 		w      *Worker
 	)
 
+	const (
+		geminiBaseURL = "https://generativelanguage.googleapis.com"
+		geminiAPIKey  = "test-api-key"
+	)
+
 	BeforeEach(func() {
 		var err error
 		dbConn, err = testhelpers.InitDB()
 		Expect(err).NotTo(HaveOccurred())
 		testhelpers.CleanupDB(dbConn)
 
+		storageTransport := testhelpers.NewMockTransport()
+		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(sErr).NotTo(HaveOccurred())
+
+		// Real Gemini client backed by MockTransport — GenerateWorkoutMusic
+		// calls generateContent on the lyria model. We return an empty response
+		// (no InlineData) so the call is best-effort and fails gracefully.
+		geminiTransport := testhelpers.NewMockTransport()
+		geminiClient, gErr := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:       geminiAPIKey,
+			BaseURL:      geminiBaseURL,
+			HTTPClient:   &http.Client{Transport: geminiTransport},
+			PollInterval: time.Millisecond,
+			Sleep:        func(time.Duration) {},
+		})
+		Expect(gErr).NotTo(HaveOccurred())
+
 		w = &Worker{
 			DB:            dbConn,
-			StorageClient: &fakeStorage{},
-			GeminiClient:  &fakeGemini{}, // music generation is best-effort; fake is fine
+			StorageClient: storageClient,
+			GeminiClient:  geminiClient,
 			QueueClient:   testhelpers.NewQueueClient(),
 			BucketName:    "test-bucket",
 			logger:        zap.NewNop(),
@@ -138,6 +164,9 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 			start2, end2 := 20.0, 50.0
 
 			tiny := createTinyMP4(GinkgoT())
+			mp4Bytes, readErr := os.ReadFile(tiny)
+			Expect(readErr).NotTo(HaveOccurred())
+
 			chunk1URI := "gs://test-bucket/videos/sess-hl-happy/chunk_001.mp4"
 			chunk2URI := "gs://test-bucket/videos/sess-hl-happy/chunk_002.mp4"
 
@@ -150,10 +179,44 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 				Output: "계속하세요", StartSecs: &start2, EndSecs: &end2,
 			}).Error).NotTo(HaveOccurred())
 
-			// fakeStorage serves the tiny mp4 for any DownloadFile call
-			w.StorageClient = &listableStorage{
-				downloadPath: tiny,
+			// Create a fresh transport with all GCS expectations for this test
+			ffmpegTransport := testhelpers.NewMockTransport()
+			ffmpegStorageClient, sErr := testhelpers.NewStorageClient("test-bucket", ffmpegTransport)
+			Expect(sErr).NotTo(HaveOccurred())
+			w.StorageClient = ffmpegStorageClient
+
+			// MockGCSDownload for each chunk (serve real mp4 bytes so ffmpeg can process it)
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, chunk1URI, mp4Bytes)
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, chunk2URI, mp4Bytes)
+			// Uploads for each highlight group (full, best, key) + potentially music
+			// The handler makes multiple uploads; register enough mocks
+			for i := 0; i < 5; i++ {
+				testhelpers.MockGCSUpload(ffmpegTransport, "test-bucket", "highlight")
 			}
+
+			// Wire a Gemini transport that returns empty audio (best-effort music fails gracefully)
+			geminiTransport := testhelpers.NewMockTransport()
+			geminiClient, gErr := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+				APIKey:       geminiAPIKey,
+				BaseURL:      geminiBaseURL,
+				HTTPClient:   &http.Client{Transport: geminiTransport},
+				PollInterval: time.Millisecond,
+				Sleep:        func(time.Duration) {},
+			})
+			Expect(gErr).NotTo(HaveOccurred())
+			w.GeminiClient = geminiClient
+
+			// Music generation: generateContent returns no InlineData → best-effort fails gracefully
+			geminiTransport.New(geminiBaseURL).
+				Post("/v1beta/models/lyria-3-clip-preview:generateContent").
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"parts": []map[string]any{{"text": "no audio"}},
+						},
+					}},
+				})
 
 			task, err := NewGenerateHighlightTask("sess-hl-happy", 0, 60)
 			Expect(err).NotTo(HaveOccurred())

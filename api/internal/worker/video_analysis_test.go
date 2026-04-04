@@ -136,11 +136,11 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	)
 
 	var (
-		dbConn      *gorm.DB
-		storage     *fakeStorage
-		queueClient *asynq.Client
-		inspector   *asynq.Inspector
-		w           *Worker
+		dbConn           *gorm.DB
+		storageTransport *testhelpers.MockTransport
+		queueClient      *asynq.Client
+		inspector        *asynq.Inspector
+		w                *Worker
 	)
 
 	// setupGeminiTransport creates a real gemini.Client backed by MockTransport
@@ -211,14 +211,17 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		Expect(err).NotTo(HaveOccurred())
 		testhelpers.CleanupDB(dbConn)
 
-		storage = &fakeStorage{}
+		storageTransport = testhelpers.NewMockTransport()
+		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(sErr).NotTo(HaveOccurred())
+
 		queueClient = testhelpers.NewQueueClient()
 		inspector = testhelpers.NewQueueInspector()
 		testhelpers.CleanupQueue(inspector)
 
 		w = &Worker{
 			DB:            dbConn,
-			StorageClient: storage,
+			StorageClient: storageClient,
 			GeminiClient:  nil, // set per-test via setupGeminiTransport
 			QueueClient:   queueClient,
 			BucketName:    "test-bucket",
@@ -227,6 +230,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	})
 
 	It("persists a COMPLETED AnalysisResult with parsed highlight segments", func() {
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-happy-001/chunk_001.mp4")
 		transport := setupGeminiTransport(analysisWithHighlights)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
@@ -262,6 +266,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		}
 		Expect(dbConn.Create(&profile).Error).NotTo(HaveOccurred())
 
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-profile-001/chunk_001.mp4")
 		transport := setupGeminiTransport(analysisWithHighlights)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
@@ -284,6 +289,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		analysisWithInjury := analysisWithHighlights + "\n```injury_timestamps\n" +
 			`[{"start":"0:32","end":"0:45","reason":"무릎 내전 관찰"}]` + "\n```"
 
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-injury-001/chunk_001.mp4")
 		transport := setupGeminiTransport(analysisWithInjury)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
@@ -309,6 +315,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	})
 
 	It("does NOT enqueue an injury task when there are no injuries", func() {
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-no-injury-001/chunk_001.mp4")
 		transport := setupGeminiTransport(analysisWithHighlights)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
@@ -326,6 +333,8 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	})
 
 	It("returns an error and saves no record when Gemini returns empty analysis", func() {
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-empty-001/chunk.mp4")
+
 		transport := testhelpers.NewMockTransport()
 		realClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
 			APIKey:       geminiAPIKey,
@@ -404,10 +413,11 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 	)
 
 	var (
-		dbConn      *gorm.DB
-		queueClient *asynq.Client
-		inspector   *asynq.Inspector
-		w           *Worker
+		dbConn           *gorm.DB
+		storageTransport *testhelpers.MockTransport
+		queueClient      *asynq.Client
+		inspector        *asynq.Inspector
+		w                *Worker
 	)
 
 	// setupTwoPassTransport: upload → poll → analyzeSegment x2 (Pro) → deleteFile
@@ -526,9 +536,13 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		inspector = testhelpers.NewQueueInspector()
 		testhelpers.CleanupQueue(inspector)
 
+		storageTransport = testhelpers.NewMockTransport()
+		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(sErr).NotTo(HaveOccurred())
+
 		w = &Worker{
 			DB:            dbConn,
-			StorageClient: &fakeStorage{},
+			StorageClient: storageClient,
 			GeminiClient:  nil,
 			QueueClient:   queueClient,
 			BucketName:    "test-bucket",
@@ -539,6 +553,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 	It("persists COMPLETED result using chunk-based segments (no injuries)", func() {
 		seedChunks("sess-twopass-001")
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-twopass-001/merged.mp4")
 		transport := setupTwoPassTransport(analysisWithHighlights, false)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
@@ -569,6 +584,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		analysisWithInjury := analysisWithHighlights + "\n```injury_timestamps\n" +
 			`[{"start":"0:32","end":"0:45","reason":"무릎 내전 관찰"}]` + "\n```"
 
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-twopass-inj-001/merged.mp4")
 		transport := setupTwoPassTransport(analysisWithInjury, true)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{

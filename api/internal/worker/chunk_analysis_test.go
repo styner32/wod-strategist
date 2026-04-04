@@ -83,10 +83,10 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 	)
 
 	var (
-		dbConn      *gorm.DB
-		storage     *fakeStorage
-		queueClient *asynq.Client
-		w           *Worker
+		dbConn           *gorm.DB
+		storageTransport *testhelpers.MockTransport
+		queueClient      *asynq.Client
+		w                *Worker
 	)
 
 	setupGeminiTransport := func(generateContentText string) *testhelpers.MockTransport {
@@ -153,12 +153,15 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 		Expect(err).NotTo(HaveOccurred())
 		testhelpers.CleanupDB(dbConn)
 
-		storage = &fakeStorage{}
+		storageTransport = testhelpers.NewMockTransport()
+		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(sErr).NotTo(HaveOccurred())
+
 		queueClient = testhelpers.NewQueueClient()
 
 		w = &Worker{
 			DB:            dbConn,
-			StorageClient: storage,
+			StorageClient: storageClient,
 			GeminiClient:  nil,
 			QueueClient:   queueClient,
 			BucketName:    "test-bucket",
@@ -167,6 +170,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 	})
 
 	It("persists a COMPLETED ChunkAnalysisResult", func() {
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/chunks/sess-chunk-001/chunk_001.mp4")
 		transport := setupGeminiTransport(chunkAnalysis)
 
 		task, err := NewChunkAnalysisTask(
@@ -205,6 +209,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 		}
 		Expect(dbConn.Create(&profile).Error).NotTo(HaveOccurred())
 
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/chunks/sess-chunk-profile-001/chunk_001.mp4")
 		transport := setupGeminiTransport(chunkAnalysis)
 
 		task, err := NewChunkAnalysisTask(
@@ -228,6 +233,8 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 	})
 
 	It("returns an error and saves no record when Gemini returns empty candidates", func() {
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/chunks/sess-chunk-empty-001/chunk.mp4")
+
 		transport := testhelpers.NewMockTransport()
 		realClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
 			APIKey:       geminiAPIKey,
