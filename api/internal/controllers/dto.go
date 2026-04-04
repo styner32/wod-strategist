@@ -78,4 +78,3 @@ type GenerateHighlightRequest struct {
 	ProfileID   uint   `json:"profile_id,omitempty"`
 	MaxDuration int    `json:"max_duration,omitempty"` // seconds, default 60
 }
-

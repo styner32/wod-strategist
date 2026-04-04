@@ -27,3 +27,9 @@
 **Vulnerability:** In `api/internal/worker/handler.go`, when a video or chunk analysis failed (e.g., due to downstream Gemini API errors, GCS download errors, or local filesystem permission issues), the raw `err.Error()` was saved to the database in the `Output` field of the results table. These results are exposed to the user via the `/analysis` and `/history` endpoints.
 **Learning:** Returning or saving unhandled raw error strings from backend components (like file system errors containing `/tmp/` paths, or third-party service errors) directly to user-facing payloads leaks internal system details. This information exposure (CWE-209) violates the principle of failing securely.
 **Prevention:** Always catch raw internal errors, securely log them on the server side using the application's logging framework, and replace the user-facing output with safe, generic error messages (e.g., "An internal error occurred during analysis.").
+
+## 2025-05-18 - Prevent Path Traversal in Highlight and Merge Chunk Handlers
+
+**Vulnerability:** Path traversal vulnerabilities existed in `api/internal/worker/handler.go` inside `HandleMergeChunksTask` and `HandleHighlightGenerationTask` (specifically when generating `mergedPath`, `hardSubPath`, `rawConcatPath`, and `polishedPath`). The `p.SessionID` from the payload was directly appended in `filepath.Join` calls without being sanitized by `filepath.Base`.
+**Learning:** Background workers that rely on IDs from payloads (even those generated internally) must consistently apply sanitization because payloads can be manipulated or bypass API boundary validations.
+**Prevention:** Always use `filepath.Base()` and validate against path separators (`strings.ContainsRune(id, filepath.Separator)`) before passing variables derived from queue payloads to functions that perform I/O like `filepath.Join()`.
