@@ -20,12 +20,15 @@ const state = {
   chunkFiles: [],
   sessionCatalog: [],
   assetResponse: null,
+  analysisResults: [],
+  latestAnalysis: null,
   assetMap: new Map(),
   playerSlots: {
     left: {
       objectUrl: null,
       subtitleUrl: null,
       asset: null,
+      playbackRange: null,
     },
     right: {
       objectUrl: null,
@@ -44,6 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   logLine("Workbench ready.");
   renderSessionCatalog([]);
+  renderAnalysisPanel(null);
   maybeRefreshSessionCatalog();
 
   if (refs.sessionId.value.trim()) {
@@ -92,11 +96,20 @@ function cacheDom() {
   refs.leftPlayerLabel = document.getElementById("leftPlayerLabel");
   refs.leftPlayerMeta = document.getElementById("leftPlayerMeta");
   refs.leftPlayerCard = document.querySelector('.player-card[data-slot="left"]');
+  refs.leftLocalVideoInput = document.getElementById("leftLocalVideoInput");
+  refs.clearLeftPlayerBtn = document.getElementById("clearLeftPlayerBtn");
   refs.rightVideo = document.getElementById("rightVideo");
   refs.rightTrack = document.getElementById("rightTrack");
   refs.rightPlayerLabel = document.getElementById("rightPlayerLabel");
   refs.rightPlayerMeta = document.getElementById("rightPlayerMeta");
   refs.rightPlayerCard = document.querySelector('.player-card[data-slot="right"]');
+  refs.rightLocalVideoInput = document.getElementById("rightLocalVideoInput");
+  refs.clearRightPlayerBtn = document.getElementById("clearRightPlayerBtn");
+  refs.refreshAnalysisBtn = document.getElementById("refreshAnalysisBtn");
+  refs.analysisPanelTitle = document.getElementById("analysisPanelTitle");
+  refs.analysisPanelMeta = document.getElementById("analysisPanelMeta");
+  refs.analysisPanelStatus = document.getElementById("analysisPanelStatus");
+  refs.analysisContent = document.getElementById("analysisContent");
 }
 
 function bindEvents() {
@@ -132,6 +145,44 @@ function bindEvents() {
     runCatalogButton(refs.refreshCatalogBtn, "Loading...", async () => {
       await refreshSessionCatalog();
     });
+  });
+
+  refs.refreshAnalysisBtn.addEventListener("click", () => {
+    runButtonAction(refs.refreshAnalysisBtn, "Loading...", async () => {
+      const sessionId = refs.sessionId.value.trim();
+      if (!sessionId) {
+        throw new Error("Session ID is required.");
+      }
+      await refreshSessionAnalysis(sessionId);
+    });
+  });
+
+  refs.leftLocalVideoInput.addEventListener("change", (event) => {
+    runLocalVideoAction(refs.leftLocalVideoInput, async () => {
+      const file = event.target.files?.[0];
+      if (!file) {
+        return;
+      }
+      await loadLocalFileIntoSlot("left", file);
+    });
+  });
+
+  refs.rightLocalVideoInput.addEventListener("change", (event) => {
+    runLocalVideoAction(refs.rightLocalVideoInput, async () => {
+      const file = event.target.files?.[0];
+      if (!file) {
+        return;
+      }
+      await loadLocalFileIntoSlot("right", file);
+    });
+  });
+
+  refs.clearLeftPlayerBtn.addEventListener("click", () => {
+    clearPlayerSlot("left");
+  });
+
+  refs.clearRightPlayerBtn.addEventListener("click", () => {
+    clearPlayerSlot("right");
   });
 
   refs.uploadChunksBtn.addEventListener("click", () => {
@@ -192,6 +243,18 @@ function bindEvents() {
       await selectExistingSession(button.dataset.sessionId || "");
     });
   });
+
+  refs.analysisContent.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-action='play-range']");
+    if (!link) {
+      return;
+    }
+
+    event.preventDefault();
+    playRangeOnLeft(link.dataset.start || "", link.dataset.end || "", link.textContent || "");
+  });
+
+  refs.leftVideo.addEventListener("timeupdate", handleLeftRangePlayback);
 }
 
 function restorePersistedState() {
@@ -533,8 +596,18 @@ async function refreshSessionAssets() {
   }
 
   setStatus(refs.sessionStatus, "Refreshing session assets...");
+  setStatus(refs.analysisPanelStatus, "Loading analysis...");
 
-  const response = await apiRequest(`/dev/sessions/${encodeURIComponent(sessionId)}/assets`);
+  const [assetResult, analysisResult] = await Promise.allSettled([
+    apiRequest(`/dev/sessions/${encodeURIComponent(sessionId)}/assets`),
+    fetchSessionAnalysis(sessionId),
+  ]);
+
+  if (assetResult.status !== "fulfilled") {
+    throw assetResult.reason;
+  }
+
+  const response = assetResult.value;
   state.assetResponse = response;
   state.assetMap.clear();
 
@@ -542,8 +615,27 @@ async function refreshSessionAssets() {
   renderAssets(response.assets || []);
   renderSessionCatalog(state.sessionCatalog);
 
+  if (analysisResult.status === "fulfilled") {
+    state.analysisResults = analysisResult.value.records;
+    state.latestAnalysis = analysisResult.value.latest;
+    renderAnalysisPanel(state.latestAnalysis);
+  } else {
+    state.analysisResults = [];
+    state.latestAnalysis = null;
+    renderAnalysisError(analysisResult.reason);
+  }
+
   setStatus(refs.sessionStatus, `Loaded ${response.assets.length} asset(s) for ${sessionId}.`);
   logLine(`Session ${sessionId} refreshed with ${response.assets.length} asset(s).`);
+}
+
+async function refreshSessionAnalysis(sessionId) {
+  setStatus(refs.analysisPanelStatus, "Loading analysis...");
+  const result = await fetchSessionAnalysis(sessionId);
+  state.analysisResults = result.records;
+  state.latestAnalysis = result.latest;
+  renderAnalysisPanel(result.latest);
+  logLine(`Analysis refreshed for ${sessionId}.`);
 }
 
 function renderSummary(response) {
@@ -602,6 +694,348 @@ function renderAssets(assets) {
   updateCacheBadges().catch((error) => {
     logLine(`Failed to update cache badges: ${error.message}`, "error");
   });
+}
+
+async function fetchSessionAnalysis(sessionId) {
+  const records = await apiRequest(`/analysis/${encodeURIComponent(sessionId)}`);
+  const list = Array.isArray(records) ? records : [];
+  return {
+    records: list,
+    latest: selectLatestAnalysis(list),
+  };
+}
+
+function selectLatestAnalysis(records) {
+  if (!Array.isArray(records) || records.length === 0) {
+    return null;
+  }
+
+  const withOutput = records.filter((record) => String(record.output || "").trim());
+  const preferred = withOutput.filter((record) => isPrimaryAnalysisType(record.analysis_type));
+  const candidates = preferred.length ? preferred : withOutput.length ? withOutput : records;
+  return [...candidates].sort(compareAnalysisRecordsDesc)[0] || null;
+}
+
+function compareAnalysisRecordsDesc(left, right) {
+  const leftTime = analysisRecordTime(left);
+  const rightTime = analysisRecordTime(right);
+  return rightTime - leftTime;
+}
+
+function analysisRecordTime(record) {
+  const raw = record?.updated_at || record?.created_at || "";
+  const value = new Date(raw).getTime();
+  return Number.isNaN(value) ? 0 : value;
+}
+
+function isPrimaryAnalysisType(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "" || normalized === "wod";
+}
+
+function renderAnalysisPanel(record) {
+  if (!record) {
+    refs.analysisPanelTitle.textContent = "Latest Session Analysis";
+    refs.analysisPanelMeta.textContent = "Refresh a session to load the latest analysis.";
+    refs.analysisContent.classList.add("empty-state");
+    refs.analysisContent.innerHTML = `No analysis loaded yet.`;
+    setStatus(refs.analysisPanelStatus, "No analysis loaded yet.");
+    return;
+  }
+
+  refs.analysisPanelTitle.textContent = formatAnalysisTitle(record);
+  refs.analysisPanelMeta.textContent = `${String(record.status || "unknown").toUpperCase()} · ${formatTimestamp(record.updated_at || record.created_at)}`;
+  refs.analysisContent.classList.remove("empty-state");
+  refs.analysisContent.innerHTML = renderAnalysisDocument(record);
+  setStatus(refs.analysisPanelStatus, "Latest analysis loaded.");
+}
+
+function renderAnalysisError(error) {
+  refs.analysisPanelTitle.textContent = "Latest Session Analysis";
+  refs.analysisPanelMeta.textContent = "Analysis request failed.";
+  refs.analysisContent.classList.add("empty-state");
+  refs.analysisContent.innerHTML = `Could not load analysis for this session.`;
+  setStatus(refs.analysisPanelStatus, toMessage(error));
+  logLine(`Analysis refresh failed: ${toMessage(error)}`, "error");
+}
+
+function formatAnalysisTitle(record) {
+  const type = String(record.analysis_type || "wod")
+    .replaceAll("_", " ")
+    .trim();
+  return `${type.charAt(0).toUpperCase()}${type.slice(1)} Analysis`;
+}
+
+function renderAnalysisDocument(record) {
+  const normalized = normalizeAnalysisText(record.output || "");
+  const rendered = renderAnalysisMarkup(normalized);
+  const fallbackHighlights = rendered.hasHighlights
+    ? ""
+    : renderHighlightSegments(record.highlight_segments);
+  const body = rendered.html || `<p class="analysis-paragraph">No formatted analysis text available.</p>`;
+  return `${body}${fallbackHighlights}`;
+}
+
+function normalizeAnalysisText(raw) {
+  const source = String(raw || "").trim();
+  if (!source) {
+    return "";
+  }
+
+  let text = source.replace(/\r\n?/g, "\n");
+  text = text.replace(/```highlights\s*(\[[\s\S]*?\])\s*```/g, "```highlights\n$1\n```");
+
+  const segments = splitCodeFences(text);
+  return segments
+    .map((segment) => {
+      if (segment.type === "code") {
+        return segment.content;
+      }
+
+      let value = segment.content;
+      value = value.replace(/\s*---\s*/g, "\n\n---\n\n");
+      value = value.replace(/\s*(###)\s+/g, "\n\n### ");
+      value = value.replace(/\s*(##)\s+/g, "\n\n## ");
+      value = value.replace(/\s+(\d+\.\s+)/g, "\n$1");
+      value = value.replace(/\s+\*\s+(?=\*\*|[^\s*])/g, "\n* ");
+      value = value.replace(/\n{3,}/g, "\n\n");
+      return value.trim();
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function splitCodeFences(source) {
+  const segments = [];
+  const pattern = /```[\s\S]*?```/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = pattern.exec(source)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ type: "text", content: source.slice(lastIndex, match.index) });
+    }
+    segments.push({ type: "code", content: match[0] });
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < source.length) {
+    segments.push({ type: "text", content: source.slice(lastIndex) });
+  }
+
+  return segments;
+}
+
+function renderAnalysisMarkup(text) {
+  const lines = text.split("\n");
+  const html = [];
+  let paragraph = [];
+  let listType = null;
+  let listItems = [];
+  let hasHighlights = false;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) {
+      return;
+    }
+    html.push(`<p class="analysis-paragraph">${formatInline(paragraph.join(" "))}</p>`);
+    paragraph = [];
+  };
+
+  const flushList = () => {
+    if (!listType || !listItems.length) {
+      listType = null;
+      listItems = [];
+      return;
+    }
+    const className = listType === "ol" ? "analysis-ordered" : "analysis-list";
+    html.push(
+      `<${listType} class="${className}">${listItems
+        .map((item) => `<li>${formatInline(item)}</li>`)
+        .join("")}</${listType}>`
+    );
+    listType = null;
+    listItems = [];
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index];
+    const line = rawLine.trim();
+
+    if (!line) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    if (line.startsWith("```")) {
+      flushParagraph();
+      flushList();
+
+      const info = line.slice(3).trim().toLowerCase();
+      const codeLines = [];
+      index += 1;
+      while (index < lines.length && !lines[index].trim().startsWith("```")) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+
+      if (info.startsWith("highlights")) {
+        html.push(renderHighlightsBlock(codeLines.join("\n")));
+        hasHighlights = true;
+      } else {
+        html.push(`<pre class="analysis-code">${escapeHtml(codeLines.join("\n").trim())}</pre>`);
+      }
+      continue;
+    }
+
+    if (line === "---") {
+      flushParagraph();
+      flushList();
+      html.push(`<hr class="analysis-divider" />`);
+      continue;
+    }
+
+    if (line.startsWith("## ")) {
+      flushParagraph();
+      flushList();
+      html.push(`<h3 class="analysis-heading-lg">${formatInline(line.slice(3))}</h3>`);
+      continue;
+    }
+
+    if (line.startsWith("### ")) {
+      flushParagraph();
+      flushList();
+      html.push(`<h4 class="analysis-heading-md">${formatInline(line.slice(4))}</h4>`);
+      continue;
+    }
+
+    if (/^\d+\.\s/.test(line)) {
+      flushParagraph();
+      const item = line.replace(/^\d+\.\s+/, "");
+      if (listType !== "ol") {
+        flushList();
+        listType = "ol";
+      }
+      listItems.push(item);
+      continue;
+    }
+
+    if (line.startsWith("* ")) {
+      flushParagraph();
+      const item = line.slice(2);
+      if (listType !== "ul") {
+        flushList();
+        listType = "ul";
+      }
+      listItems.push(item);
+      continue;
+    }
+
+    paragraph.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+
+  return {
+    html: html.join(""),
+    hasHighlights,
+  };
+}
+
+function renderHighlightsBlock(raw) {
+  const parsed = parseHighlightSegments(raw);
+  if (!parsed.length) {
+    return `<pre class="analysis-code">${escapeHtml(raw.trim())}</pre>`;
+  }
+  return renderHighlightCards(parsed);
+}
+
+function renderHighlightSegments(raw) {
+  const parsed = parseHighlightSegments(raw);
+  if (!parsed.length) {
+    return "";
+  }
+  return `<h4 class="analysis-heading-md">Highlight Segments</h4>${renderHighlightCards(parsed)}`;
+}
+
+function renderHighlightCards(segments) {
+  return `
+    <div class="analysis-highlight-grid">
+      ${segments
+        .map((segment) => {
+          const type = formatHighlightType(segment.type);
+          const range = `${segment.start || "?"} - ${segment.end || "?"}`;
+          const reason = segment.reason || "No reason provided.";
+          return `
+            <article class="analysis-highlight-card">
+              <div class="analysis-highlight-meta">
+                <span class="analysis-highlight-type">${escapeHtml(type)}</span>
+                ${renderTimeRangeLink(segment.start, segment.end, range)}
+              </div>
+              <p class="analysis-paragraph">${formatInline(reason)}</p>
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function parseHighlightSegments(raw) {
+  const source = String(raw || "").trim();
+  if (!source) {
+    return [];
+  }
+
+  let jsonText = source;
+  const arrayStart = source.indexOf("[");
+  const arrayEnd = source.lastIndexOf("]");
+  if (arrayStart >= 0 && arrayEnd > arrayStart) {
+    jsonText = source.slice(arrayStart, arrayEnd + 1);
+  }
+
+  try {
+    const parsed = JSON.parse(jsonText);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatHighlightType(value) {
+  return String(value || "highlight")
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatInline(text) {
+  let escaped = escapeHtml(String(text || ""));
+  escaped = linkifyTimeRanges(escaped);
+  escaped = escaped.replace(/`([^`]+)`/g, "<code>$1</code>");
+  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  return escaped;
+}
+
+function linkifyTimeRanges(text) {
+  return String(text).replace(
+    /\b(\d{1,2}:\d{2}(?::\d{2})?)\s*(?:~|-|–|—)\s*(\d{1,2}:\d{2}(?::\d{2})?)\b/g,
+    (_, start, end) => renderTimeRangeLink(start, end, `${start} - ${end}`)
+  );
+}
+
+function renderTimeRangeLink(start, end, label) {
+  if (!parseClockToSeconds(start) && parseClockToSeconds(start) !== 0) {
+    return `<span>${escapeHtml(label)}</span>`;
+  }
+  if (!parseClockToSeconds(end) && parseClockToSeconds(end) !== 0) {
+    return `<span>${escapeHtml(label)}</span>`;
+  }
+
+  return `<a href="#" class="analysis-timestamp-link" data-action="play-range" data-start="${escapeHtml(
+    start
+  )}" data-end="${escapeHtml(end)}">${escapeHtml(label)}</a>`;
 }
 
 function renderAssetCard(asset, assetKey) {
@@ -684,6 +1118,40 @@ async function loadAssetIntoSlot(slotName, asset, forceRefresh) {
   setStatus(refs.sessionStatus, `Loaded ${asset.label} into the ${slotName.toUpperCase()} player.`);
   logLine(`Loaded ${asset.label} into ${slotName.toUpperCase()} (${playable.source}).`);
   await updateCacheBadges();
+}
+
+async function loadLocalFileIntoSlot(slotName, file) {
+  const videoRef = slotName === "left" ? refs.leftVideo : refs.rightVideo;
+  const labelRef = slotName === "left" ? refs.leftPlayerLabel : refs.rightPlayerLabel;
+  const metaRef = slotName === "left" ? refs.leftPlayerMeta : refs.rightPlayerMeta;
+  const trackRef = slotName === "left" ? refs.leftTrack : refs.rightTrack;
+
+  releaseSlot(slotName);
+  setPlayerOrientation(slotName, "portrait");
+
+  const objectUrl = URL.createObjectURL(file);
+  state.playerSlots[slotName].objectUrl = objectUrl;
+  state.playerSlots[slotName].asset = {
+    kind: "local",
+    label: file.name,
+  };
+
+  labelRef.textContent = `${file.name} (local)`;
+  metaRef.textContent = "Loading local file...";
+
+  videoRef.src = objectUrl;
+  videoRef.load();
+  await waitForVideoMetadata(videoRef);
+  setPlayerOrientation(slotName, detectVideoOrientation(videoRef));
+
+  trackRef.removeAttribute("src");
+  if (videoRef.textTracks && videoRef.textTracks[0]) {
+    videoRef.textTracks[0].mode = "disabled";
+  }
+
+  metaRef.textContent = `Local file · ${formatVideoMeta(videoRef)} · ${formatBytes(file.size)}`;
+  setStatus(refs.sessionStatus, `Loaded local video into the ${slotName.toUpperCase()} player.`);
+  logLine(`Loaded local video into ${slotName.toUpperCase()}: ${file.name}.`);
 }
 
 async function openAssetSignedUrl(asset) {
@@ -781,13 +1249,35 @@ async function uploadFileToSignedUrl(uploadUrl, file) {
 }
 
 function releaseSlot(slotName) {
+  const videoRef = slotName === "left" ? refs.leftVideo : refs.rightVideo;
+  const labelRef = slotName === "left" ? refs.leftPlayerLabel : refs.rightPlayerLabel;
+  const metaRef = slotName === "left" ? refs.leftPlayerMeta : refs.rightPlayerMeta;
+  const trackRef = slotName === "left" ? refs.leftTrack : refs.rightTrack;
   const slot = state.playerSlots[slotName];
+
+  videoRef.pause();
+  videoRef.removeAttribute("src");
+  videoRef.load();
+  trackRef.removeAttribute("src");
+  if (videoRef.textTracks && videoRef.textTracks[0]) {
+    videoRef.textTracks[0].mode = "disabled";
+  }
+
   if (slot.objectUrl) {
     URL.revokeObjectURL(slot.objectUrl);
     slot.objectUrl = null;
   }
   slot.asset = null;
+  slot.playbackRange = null;
   setPlayerOrientation(slotName, "portrait");
+
+  labelRef.textContent = "No asset loaded";
+  metaRef.textContent = "Pick an asset below.";
+}
+
+function clearPlayerSlot(slotName) {
+  releaseSlot(slotName);
+  setStatus(refs.sessionStatus, `Cleared the ${slotName.toUpperCase()} player.`);
 }
 
 async function apiRequest(path, options = {}) {
@@ -905,6 +1395,44 @@ async function waitForVideoMetadata(video) {
   });
 }
 
+function playRangeOnLeft(startLabel, endLabel, sourceLabel) {
+  if (!state.playerSlots.left.asset || !refs.leftVideo.currentSrc) {
+    setStatus(refs.analysisPanelStatus, "Load a video into the LEFT player first.");
+    return;
+  }
+
+  const startSeconds = parseClockToSeconds(startLabel);
+  const endSeconds = parseClockToSeconds(endLabel);
+  if (!Number.isFinite(startSeconds) || !Number.isFinite(endSeconds) || endSeconds <= startSeconds) {
+    setStatus(refs.analysisPanelStatus, "Could not parse the selected time range.");
+    return;
+  }
+
+  state.playerSlots.left.playbackRange = {
+    start: startSeconds,
+    end: endSeconds,
+  };
+
+  refs.leftVideo.currentTime = startSeconds;
+  refs.leftVideo.play().catch((error) => {
+    setStatus(refs.analysisPanelStatus, `Range playback failed: ${toMessage(error)}`);
+  });
+
+  setStatus(refs.analysisPanelStatus, `Playing LEFT: ${sourceLabel || `${startLabel} - ${endLabel}`}`);
+}
+
+function handleLeftRangePlayback() {
+  const range = state.playerSlots.left.playbackRange;
+  if (!range) {
+    return;
+  }
+
+  if (refs.leftVideo.currentTime >= range.end - 0.05) {
+    refs.leftVideo.pause();
+    state.playerSlots.left.playbackRange = null;
+  }
+}
+
 function buildAssetKey(asset) {
   return `${asset.kind}:${asset.variant || "default"}:${asset.object_name}`;
 }
@@ -933,6 +1461,38 @@ function basename(value) {
     .split("/")
     .filter(Boolean)
     .pop() || "";
+}
+
+function parseClockToSeconds(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return Number.NaN;
+  }
+
+  const parts = raw.split(":");
+  if (parts.length < 2 || parts.length > 3) {
+    return Number.NaN;
+  }
+
+  const seconds = Number.parseFloat(parts[parts.length - 1]);
+  if (!Number.isFinite(seconds) || seconds < 0 || seconds >= 60) {
+    return Number.NaN;
+  }
+
+  if (parts.length === 2) {
+    const minutes = Number.parseInt(parts[0], 10);
+    if (!Number.isFinite(minutes) || minutes < 0) {
+      return Number.NaN;
+    }
+    return minutes * 60 + seconds;
+  }
+
+  const hours = Number.parseInt(parts[0], 10);
+  const minutes = Number.parseInt(parts[1], 10);
+  if (!Number.isFinite(hours) || hours < 0 || !Number.isFinite(minutes) || minutes < 0 || minutes >= 60) {
+    return Number.NaN;
+  }
+  return hours * 3600 + minutes * 60 + seconds;
 }
 
 function roundSeconds(value) {
@@ -1061,6 +1621,18 @@ async function runCatalogButton(button, busyLabel, fn) {
   } finally {
     button.disabled = false;
     button.textContent = originalText;
+  }
+}
+
+async function runLocalVideoAction(input, fn) {
+  try {
+    await fn();
+  } catch (error) {
+    const message = toMessage(error);
+    setStatus(refs.sessionStatus, message);
+    logLine(message, "error");
+  } finally {
+    input.value = "";
   }
 }
 

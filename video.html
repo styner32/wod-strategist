@@ -159,28 +159,59 @@
             </div>
           </div>
 
-          <div class="comparison-grid">
-            <article class="player-card" data-slot="left" data-orientation="portrait">
-              <div class="player-meta">
-                <span class="slot-label">LEFT</span>
-                <strong id="leftPlayerLabel">No asset loaded</strong>
-                <span id="leftPlayerMeta" class="muted">Pick an asset below.</span>
-              </div>
-              <video id="leftVideo" controls playsinline preload="metadata">
-                <track id="leftTrack" kind="subtitles" srclang="en" label="Session subtitles" default />
-              </video>
-            </article>
+          <div class="compare-controls">
+            <label class="file-button">
+              <span>Load Local Left</span>
+              <input id="leftLocalVideoInput" type="file" accept="video/*" />
+            </label>
+            <button type="button" id="clearLeftPlayerBtn" class="ghost compact">Clear Left</button>
+            <label class="file-button">
+              <span>Load Local Right</span>
+              <input id="rightLocalVideoInput" type="file" accept="video/*" />
+            </label>
+            <button type="button" id="clearRightPlayerBtn" class="ghost compact">Clear Right</button>
+          </div>
 
-            <article class="player-card" data-slot="right" data-orientation="portrait">
-              <div class="player-meta">
-                <span class="slot-label">RIGHT</span>
-                <strong id="rightPlayerLabel">No asset loaded</strong>
-                <span id="rightPlayerMeta" class="muted">Pick an asset below.</span>
+          <div class="compare-workspace">
+            <div class="comparison-grid">
+              <article class="player-card" data-slot="left" data-orientation="portrait">
+                <div class="player-meta">
+                  <span class="slot-label">LEFT</span>
+                  <strong id="leftPlayerLabel">No asset loaded</strong>
+                  <span id="leftPlayerMeta" class="muted">Pick an asset below.</span>
+                </div>
+                <video id="leftVideo" controls playsinline preload="metadata">
+                  <track id="leftTrack" kind="subtitles" srclang="en" label="Session subtitles" default />
+                </video>
+              </article>
+
+              <article class="player-card" data-slot="right" data-orientation="portrait">
+                <div class="player-meta">
+                  <span class="slot-label">RIGHT</span>
+                  <strong id="rightPlayerLabel">No asset loaded</strong>
+                  <span id="rightPlayerMeta" class="muted">Pick an asset below.</span>
+                </div>
+                <video id="rightVideo" controls playsinline preload="metadata">
+                  <track id="rightTrack" kind="subtitles" srclang="en" label="Session subtitles" default />
+                </video>
+              </article>
+            </div>
+
+            <aside class="analysis-panel">
+              <div class="analysis-panel-header">
+                <div>
+                  <p class="panel-kicker">ANALYSIS</p>
+                  <h3 id="analysisPanelTitle">Latest Session Analysis</h3>
+                  <p id="analysisPanelMeta" class="muted">Refresh a session to load the latest analysis.</p>
+                </div>
+                <button type="button" id="refreshAnalysisBtn" class="ghost compact">Reload Analysis</button>
               </div>
-              <video id="rightVideo" controls playsinline preload="metadata">
-                <track id="rightTrack" kind="subtitles" srclang="en" label="Session subtitles" default />
-              </video>
-            </article>
+
+              <p id="analysisPanelStatus" class="status-line" aria-live="polite"></p>
+              <div id="analysisContent" class="analysis-content empty-state">
+                No analysis loaded yet.
+              </div>
+            </aside>
           </div>
         </section>
 
