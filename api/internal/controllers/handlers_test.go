@@ -2,12 +2,12 @@ package controllers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"time"
 
@@ -100,46 +100,11 @@ func gcsUploadURL(bucket, objectName string) string {
 	return "/upload/storage/v1/b/" + bucket + "/o?alt=json&name=" + objectName + "&prettyPrint=false&projection=full&uploadType=multipart"
 }
 
-type stubObjectStorage struct {
-	signedURL string
-	signedErr error
-	listErr   error
-	listInfos map[string][]storage.ObjectInfo
-}
-
-func (s *stubObjectStorage) GenerateSignedURL(_ string, _ string, _ time.Duration) (string, error) {
-	if s.signedErr != nil {
-		return "", s.signedErr
-	}
-	return s.signedURL, nil
-}
-
-func (s *stubObjectStorage) UploadFile(_ context.Context, _ multipart.File, _ string) (string, error) {
-	return "", nil
-}
-
-func (s *stubObjectStorage) ListObjects(ctx context.Context, prefix string) ([]string, error) {
-	infos, err := s.ListObjectInfos(ctx, prefix)
-	if err != nil {
-		return nil, err
-	}
-
-	objects := make([]string, len(infos))
-	for i, info := range infos {
-		objects[i] = info.Name
-	}
-	return objects, nil
-}
-
-func (s *stubObjectStorage) ListObjectInfos(_ context.Context, prefix string) ([]storage.ObjectInfo, error) {
-	if s.listErr != nil {
-		return nil, s.listErr
-	}
-
-	infos := s.listInfos[prefix]
-	cloned := make([]storage.ObjectInfo, len(infos))
-	copy(cloned, infos)
-	return cloned, nil
+// gcsListObjectsURL builds the URL path the GCS JSON API uses to list objects
+// under a prefix. MockTransport checks only the query params specified in the
+// expectation, so other params (alt, prettyPrint, projection) are ignored.
+func gcsListObjectsURL(bucket, prefix string) string {
+	return "/storage/v1/b/" + bucket + "/o?prefix=" + url.QueryEscape(prefix)
 }
 
 // ---------------------------------------------------------------------------
@@ -663,20 +628,34 @@ var _ = Describe("Controller handlers", func() {
 
 	Describe("GET /api/v1/dev/sessions", func() {
 		It("lists existing sessions discovered from stored assets", func() {
-			storageClient := &stubObjectStorage{
-				listInfos: map[string][]storage.ObjectInfo{
-					"videos/": {
-						{Name: "videos/WOD-2026-03-30-10-34_chunk_0001_front.mp4", Created: time.Date(2026, 3, 30, 10, 35, 0, 0, time.UTC)},
-						{Name: "videos/WOD-2026-03-30-10-34_merged_20260330110000.mp4", Created: time.Date(2026, 3, 30, 11, 0, 0, 0, time.UTC)},
-						{Name: "videos/session-1_video.mp4", Created: time.Date(2026, 3, 30, 9, 0, 0, 0, time.UTC)},
-						{Name: "videos/session-1_hardsubbed_20260330100500.mp4", Created: time.Date(2026, 3, 30, 10, 5, 0, 0, time.UTC)},
+			transport := testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
+
+			transport.New("https://storage.googleapis.com").
+				Get(gcsListObjectsURL("test-bucket", "videos/")).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"kind": "storage#objects",
+					"items": []map[string]any{
+						{"name": "videos/WOD-2026-03-30-10-34_chunk_0001_front.mp4", "timeCreated": "2026-03-30T10:35:00Z"},
+						{"name": "videos/WOD-2026-03-30-10-34_merged_20260330110000.mp4", "timeCreated": "2026-03-30T11:00:00Z"},
+						{"name": "videos/session-1_video.mp4", "timeCreated": "2026-03-30T09:00:00Z"},
+						{"name": "videos/session-1_hardsubbed_20260330100500.mp4", "timeCreated": "2026-03-30T10:05:00Z"},
 					},
-					"highlights/": {
-						{Name: "highlights/WOD-2026-03-30-10-34_hl_best_20260330112000.mp4", Created: time.Date(2026, 3, 30, 11, 20, 0, 0, time.UTC)},
-						{Name: "highlights/WOD-2026-03-30-10-34_music_20260330112000.mp3", Created: time.Date(2026, 3, 30, 11, 20, 1, 0, time.UTC)},
+				})
+
+			transport.New("https://storage.googleapis.com").
+				Get(gcsListObjectsURL("test-bucket", "highlights/")).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"kind": "storage#objects",
+					"items": []map[string]any{
+						{"name": "highlights/WOD-2026-03-30-10-34_hl_best_20260330112000.mp4", "timeCreated": "2026-03-30T11:20:00Z"},
+						{"name": "highlights/WOD-2026-03-30-10-34_music_20260330112000.mp3", "timeCreated": "2026-03-30T11:20:01Z"},
 					},
-				},
-			}
+				})
+
 			router := newTestRouter(Config{StorageClient: storageClient, BucketName: "test-bucket"})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/dev/sessions", nil)
@@ -706,8 +685,19 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("returns internal error when storage listing fails", func() {
+			transport := testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
+
+			transport.New("https://storage.googleapis.com").
+				Get(gcsListObjectsURL("test-bucket", "videos/")).
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{
+					"error": map[string]any{"code": 500, "message": "Internal Server Error"},
+				})
+
 			router := newTestRouter(Config{
-				StorageClient: &stubObjectStorage{listErr: io.ErrUnexpectedEOF},
+				StorageClient: storageClient,
 				BucketName:    "test-bucket",
 			})
 
