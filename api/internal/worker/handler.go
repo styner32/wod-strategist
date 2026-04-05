@@ -125,7 +125,7 @@ const (
 var highlightBlockRegex = regexp.MustCompile("(?is)```highlights\\s*(\\[.*?\\])\\s*```")
 
 // injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ``` blocks in Gemini output.
-var injuryTimestampBlockRegex = regexp.MustCompile("(?is)```injury_timestamps\\s*(\\[.*?\\])\\s*```")
+var injuryTimestampBlockRegex = regexp.MustCompile("(?is)```(?:json|injury_timestamps)\\s*(\\[.*?\\])\\s*```")
 
 type VideoAnalysisPayload struct {
 	SessionID   string
@@ -273,13 +273,13 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 
 	// Determine file path (download from GCS if needed)
-	safeSessionID := filepath.Base(p.SessionID)
-
-	// check if safeSessionID contains path separator
-	if strings.ContainsRune(safeSessionID, filepath.Separator) {
-		logger.Log.Error("Invalid session ID: contains path separator after sanitization", zap.String("session_id", p.SessionID))
+	// check if SessionID contains path separator
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		logger.Log.Error("Invalid session ID: contains path separator before sanitization", zap.String("session_id", p.SessionID))
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
+
+	safeSessionID := filepath.Base(p.SessionID)
 
 	// make sure ../ is not in the path
 	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
@@ -403,10 +403,10 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	safeSessionID := filepath.Base(p.SessionID)
-	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
+	safeSessionID := filepath.Base(p.SessionID)
 
 	localFilePath := filepath.Join("/tmp", fmt.Sprintf("chunk_%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
 
@@ -625,10 +625,10 @@ func (w *Worker) HandleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) er
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	safeSessionID := filepath.Base(p.SessionID)
-	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
+	safeSessionID := filepath.Base(p.SessionID)
 
 	localFilePath := filepath.Join("/tmp", fmt.Sprintf("injury_%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
 
@@ -752,6 +752,10 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	sort.Strings(objects)
 
 	logger.Log.Info("Found chunk objects", zap.Int("count", len(objects)), zap.Strings("objects", objects))
+
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
 
 	// 2. Download all chunks to /tmp/
 	tmpDir := filepath.Join("/tmp", fmt.Sprintf("merge_%s_%d", strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_"), os.Getpid()))
@@ -1180,6 +1184,9 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 	}
 
 	// 5. Create temp directory
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
 	safeSessionID := strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_")
 	tmpDir := filepath.Join("/tmp", fmt.Sprintf("highlight_%s_%d", safeSessionID, os.Getpid()))
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
