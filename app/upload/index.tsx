@@ -7,6 +7,7 @@ import {
 import {
   buildWorkoutSessionId,
 } from "@/features/wod/workoutType";
+import { useProfileId } from "@/store/useProfileStore";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
@@ -25,6 +26,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function UploadScreen() {
   const workoutType = "wod";
+  const profileId = useProfileId();
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [videoMimeType, setVideoMimeType] = useState<string | null>(null);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
@@ -88,6 +90,15 @@ export default function UploadScreen() {
   const handleUpload = async () => {
     if (!videoUri) return;
 
+    if (!profileId) {
+      Alert.alert(
+        "Profile Required",
+        "Please select a profile before uploading.",
+        [{ text: "OK", onPress: () => router.push("/profiles" as any) }]
+      );
+      return;
+    }
+
     try {
       setIsUploading(true);
       setProgress(0);
@@ -99,6 +110,7 @@ export default function UploadScreen() {
         injuries: selectedInjuries,
         mimeType: videoMimeType || "video/mp4",
         workoutType,
+        profileId,
       });
 
       Alert.alert("Success", "Analysis started!", [

@@ -1,12 +1,27 @@
 // src/app/index.tsx
-import { useProfileSummary, useProfileId } from "@/store/useProfileStore";
+import { useActiveProfile, useProfileId } from "@/store/useProfileStore";
 import { Link } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function Dashboard() {
-  const profileSummary = useProfileSummary();
+  const activeProfile = useActiveProfile();
   const profileId = useProfileId();
+
+  const profileName = activeProfile?.name || (profileId ? `Profile #${profileId}` : null);
+
+  const summaryLine = activeProfile
+    ? [
+        activeProfile.gender === "male"
+          ? "M"
+          : activeProfile.gender === "female"
+            ? "F"
+            : "O",
+        String(activeProfile.birthYear),
+        `${activeProfile.heightCm}cm`,
+        `${activeProfile.weightKg}kg`,
+      ].join(" · ")
+    : null;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -15,33 +30,32 @@ export default function Dashboard() {
         showsVerticalScrollIndicator={false}
       >
       <View style={styles.header}>
-        <Text style={styles.title}>Welcome Coach,</Text>
+        <Text style={styles.title}>
+          {profileName ? `Hey, ${profileName}` : "Welcome Coach,"}
+        </Text>
         <Text style={styles.subtitle}>Ready to verify AI Engine?</Text>
       </View>
 
-      {/* Profile Card */}
-      <Link href="/profile" asChild>
-        <Pressable style={styles.profileCard}>
+      {/* Active Profile Card */}
+      <Link href={"/profiles" as any} asChild>
+        <Pressable style={StyleSheet.flatten([styles.profileCard, !activeProfile && styles.profileCardEmpty])}>
           <View style={styles.profileIconBox}>
-            <Text style={styles.profileIcon}>👤</Text>
+            <Text style={styles.profileIcon}>
+              {activeProfile?.name ? activeProfile.name[0].toUpperCase() : "👤"}
+            </Text>
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.profileTitle}>
-              {profileSummary ? "My Profile" : "Set Up Profile"}
+              {activeProfile ? profileName : "Select Profile"}
             </Text>
             <Text style={styles.profileDesc}>
-              {profileSummary ?? "Tap to enter your info"}
+              {summaryLine ?? "Tap to choose or create a profile"}
             </Text>
-            {profileSummary && (
+            {activeProfile && (
               <View style={styles.syncRow}>
-                <View
-                  style={[
-                    styles.syncDot,
-                    { backgroundColor: profileId ? "#34C759" : "#FF9500" },
-                  ]}
-                />
+                <View style={styles.syncDot} />
                 <Text style={styles.syncText}>
-                  {profileId ? `Synced · ID #${profileId}` : "Local only"}
+                  Active · ID #{profileId}
                 </Text>
               </View>
             )}
@@ -151,20 +165,24 @@ const styles = StyleSheet.create({
     borderColor: "#007AFF",
     marginBottom: 20,
   },
+  profileCardEmpty: {
+    borderColor: "#444",
+    borderStyle: "dashed",
+  },
   profileIconBox: {
     width: 44,
     height: 44,
     backgroundColor: "#0B1A2F",
-    borderRadius: 12,
+    borderRadius: 22,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
   },
-  profileIcon: { fontSize: 22 },
+  profileIcon: { fontSize: 18, fontWeight: "bold", color: "#fff" },
   profileTitle: { color: "#fff", fontSize: 16, fontWeight: "bold" },
   profileDesc: { color: "#8BC3FF", fontSize: 13, marginTop: 2 },
   profileChevron: { color: "#555", fontSize: 24, fontWeight: "300" },
   syncRow: { flexDirection: "row", alignItems: "center", marginTop: 4 },
-  syncDot: { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
+  syncDot: { width: 6, height: 6, borderRadius: 3, marginRight: 5, backgroundColor: "#34C759" },
   syncText: { color: "#888", fontSize: 11 },
 });

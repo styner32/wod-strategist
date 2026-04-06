@@ -138,7 +138,8 @@ describe("API Client Methods", () => {
         "gs://bucket/vid.mp4",
         ["Squat"],
         ["Knee"],
-        "wod"
+        "wod",
+        1
       );
 
       expect(capturedBody).toEqual({
@@ -147,6 +148,7 @@ describe("API Client Methods", () => {
         movements: ["Squat"],
         injuries: ["Knee"],
         workout_type: "wod",
+        profile_id: 1,
       });
       expect(res.task_id).toBe("task_123");
     });
@@ -181,6 +183,7 @@ describe("API Client Methods", () => {
         injuries: [],
         mimeType: "video/mp4",
         workoutType: "wod",
+        profileId: 1,
         onProgress,
       });
 

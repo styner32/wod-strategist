@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -10,17 +11,25 @@ import (
 	"strings"
 	"time"
 
-	"cloud.google.com/go/storage"
+	gcs "cloud.google.com/go/storage"
+	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
 
 type Client struct {
 	bucketName string
-	client     *storage.Client
+	client     *gcs.Client
+	signEmail  string
+	signKey    []byte
+}
+
+type ObjectInfo struct {
+	Name    string
+	Created time.Time
 }
 
 func NewClient(ctx context.Context, bucketName string, opts ...option.ClientOption) (*Client, error) {
-	client, err := storage.NewClient(ctx, opts...)
+	client, err := gcs.NewClient(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -30,11 +39,23 @@ func NewClient(ctx context.Context, bucketName string, opts ...option.ClientOpti
 	}, nil
 }
 
+// SetSigningCredentials injects signing credentials for GenerateSignedURL.
+// In production these remain empty and the GCS library uses ADC.
+// In tests, inject a test RSA key so signing works without real GCP auth.
+func (c *Client) SetSigningCredentials(email string, key []byte) {
+	c.signEmail = email
+	c.signKey = key
+}
+
 func (c *Client) GenerateSignedURL(objectName string, method string, expires time.Duration) (string, error) {
-	opts := &storage.SignedURLOptions{
-		Scheme:  storage.SigningSchemeV4,
+	opts := &gcs.SignedURLOptions{
+		Scheme:  gcs.SigningSchemeV4,
 		Method:  method,
 		Expires: time.Now().Add(expires),
+	}
+	if c.signEmail != "" && len(c.signKey) > 0 {
+		opts.GoogleAccessID = c.signEmail
+		opts.PrivateKey = c.signKey
 	}
 	u, err := c.client.Bucket(c.bucketName).SignedURL(objectName, opts)
 	if err != nil {
@@ -82,32 +103,41 @@ func (c *Client) DownloadFile(ctx context.Context, gcsURI, destPath string) erro
 	return nil
 }
 
+func (c *Client) ListObjectInfos(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	it := c.client.Bucket(c.bucketName).Objects(ctx, &gcs.Query{Prefix: prefix})
+	var objects []ObjectInfo
+	for {
+		attrs, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Bucket(%q).Objects(%q): %w", c.bucketName, prefix, err)
+		}
+		objects = append(objects, ObjectInfo{
+			Name:    attrs.Name,
+			Created: attrs.Created,
+		})
+	}
+
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Created.Before(objects[j].Created)
+	})
+
+	return objects, nil
+}
+
 // ListObjects returns the object names under the given prefix in the client's bucket,
 // sorted by creation time (oldest first) to guarantee chronological order.
 func (c *Client) ListObjects(ctx context.Context, prefix string) ([]string, error) {
-	type objectEntry struct {
-		name    string
-		created time.Time
+	infos, err := c.ListObjectInfos(ctx, prefix)
+	if err != nil {
+		return nil, err
 	}
 
-	it := c.client.Bucket(c.bucketName).Objects(ctx, &storage.Query{Prefix: prefix})
-	var entries []objectEntry
-	for {
-		attrs, err := it.Next()
-		if err != nil {
-			break
-		}
-		entries = append(entries, objectEntry{name: attrs.Name, created: attrs.Created})
-	}
-
-	// Sort by creation time to guarantee chronological order
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].created.Before(entries[j].created)
-	})
-
-	objects := make([]string, len(entries))
-	for i, e := range entries {
-		objects[i] = e.name
+	objects := make([]string, len(infos))
+	for i, info := range infos {
+		objects[i] = info.Name
 	}
 	return objects, nil
 }

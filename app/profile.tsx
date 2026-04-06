@@ -3,8 +3,8 @@ import {
   useProfileStore,
   type Gender,
 } from "@/store/useProfileStore";
-import { router } from "expo-router";
-import React, { useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
+import React, { useMemo, useState } from "react";
 import {
   Alert,
   KeyboardAvoidingView,
@@ -25,26 +25,40 @@ const GENDER_OPTIONS: { label: string; value: Gender }[] = [
 ];
 
 export default function ProfileScreen() {
+  const { id } = useLocalSearchParams<{ id?: string }>();
   const store = useProfileStore();
 
+  // Find existing profile if editing
+  const existingProfile = useMemo(() => {
+    if (!id) return null;
+    const profileId = parseInt(id, 10);
+    return store.profiles.find((p) => p.id === profileId) ?? null;
+  }, [id, store.profiles]);
+
+  const isEditing = existingProfile !== null;
+
+  const [name, setName] = useState(existingProfile?.name ?? "");
   const [birthYear, setBirthYear] = useState(
-    store.birthYear?.toString() ?? ""
+    existingProfile?.birthYear?.toString() ?? ""
   );
   const [birthMonth, setBirthMonth] = useState(
-    store.birthMonth?.toString() ?? ""
+    existingProfile?.birthMonth?.toString() ?? ""
   );
   const [birthDay, setBirthDay] = useState(
-    store.birthDay?.toString() ?? ""
+    existingProfile?.birthDay?.toString() ?? ""
   );
-  const [gender, setGender] = useState<Gender | null>(store.gender);
+  const [gender, setGender] = useState<Gender | null>(
+    existingProfile?.gender ?? null
+  );
   const [heightCm, setHeightCm] = useState(
-    store.heightCm?.toString() ?? ""
+    existingProfile?.heightCm?.toString() ?? ""
   );
   const [weightKg, setWeightKg] = useState(
-    store.weightKg?.toString() ?? ""
+    existingProfile?.weightKg?.toString() ?? ""
   );
+  const [saving, setSaving] = useState(false);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const y = parseInt(birthYear, 10);
     const m = parseInt(birthMonth, 10);
     const d = parseInt(birthDay, 10);
@@ -77,16 +91,37 @@ export default function ProfileScreen() {
       return;
     }
 
-    store.updateProfile({
-      birthYear: y,
-      birthMonth: m,
-      birthDay: d,
-      gender,
-      heightCm: h,
-      weightKg: Math.round(w * 10) / 10,
-    });
+    setSaving(true);
 
-    router.back();
+    try {
+      if (isEditing) {
+        await store.updateProfile(existingProfile.id, {
+          name: name.trim(),
+          birth_year: y,
+          birth_month: m,
+          birth_day: d,
+          gender,
+          height_cm: h,
+          weight_kg: Math.round(w * 10) / 10,
+        });
+      } else {
+        await store.createProfile({
+          name: name.trim(),
+          birth_year: y,
+          birth_month: m,
+          birth_day: d,
+          gender,
+          height_cm: h,
+          weight_kg: Math.round(w * 10) / 10,
+        });
+      }
+      router.back();
+    } catch (e) {
+      Alert.alert("Error", "Failed to save profile. Please try again.");
+      console.error("Profile save error:", e);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -95,7 +130,9 @@ export default function ProfileScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <IconSymbol name="chevron.left" size={28} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.title}>My Profile</Text>
+        <Text style={styles.title}>
+          {isEditing ? "Edit Profile" : "New Profile"}
+        </Text>
       </View>
 
       <KeyboardAvoidingView
@@ -103,6 +140,21 @@ export default function ProfileScreen() {
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <ScrollView contentContainerStyle={styles.content}>
+          {/* Name */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Name (optional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. Sun Jin"
+              placeholderTextColor="#555"
+              value={name}
+              onChangeText={setName}
+              maxLength={50}
+              returnKeyType="next"
+              autoCapitalize="words"
+            />
+          </View>
+
           {/* Birth Date */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Date of Birth</Text>
@@ -215,35 +267,19 @@ export default function ProfileScreen() {
           </View>
 
           {/* Save Button */}
-          <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-            <Text style={styles.saveBtnText}>Save Profile</Text>
+          <TouchableOpacity
+            style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
+            onPress={handleSave}
+            disabled={saving}
+          >
+            <Text style={styles.saveBtnText}>
+              {saving
+                ? "Saving…"
+                : isEditing
+                  ? "Update Profile"
+                  : "Create Profile"}
+            </Text>
           </TouchableOpacity>
-
-          {/* Clear Profile */}
-          {store.birthYear !== null && (
-            <TouchableOpacity
-              style={styles.clearBtn}
-              onPress={() => {
-                Alert.alert(
-                  "Clear Profile",
-                  "Are you sure you want to delete your profile data?",
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                      text: "Delete",
-                      style: "destructive",
-                      onPress: () => {
-                        store.clearProfile();
-                        router.back();
-                      },
-                    },
-                  ]
-                );
-              }}
-            >
-              <Text style={styles.clearBtnText}>Clear Profile Data</Text>
-            </TouchableOpacity>
-          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -335,20 +371,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 10,
   },
+  saveBtnDisabled: {
+    opacity: 0.5,
+  },
   saveBtnText: {
     color: "#000",
     fontSize: 18,
     fontWeight: "bold",
-  },
-
-  clearBtn: {
-    padding: 16,
-    alignItems: "center",
-    marginTop: 16,
-  },
-  clearBtnText: {
-    color: "#FF453A",
-    fontSize: 14,
-    textDecorationLine: "underline",
   },
 });

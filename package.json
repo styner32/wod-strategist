@@ -11,6 +11,7 @@
     "lint": "expo lint",
     "test": "NODE_PATH=__mocks__ jest",
     "typecheck": "tsc --noEmit",
+    "qa:video": "node ./scripts/serve-video-qa.js",
     "generate-types": "swagger2openapi ./api/docs/swagger.json -o ./api/docs/openapi.json && openapi-typescript ./api/docs/openapi.json -o ./features/wod/schema.d.ts",
     "sync-api": "cd api && swag init -g cmd/server/main.go && cd .. && npm run generate-types"
   },
@@ -44,7 +45,7 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.2",
-    "react-native-ble-plx": "^3.5.0",
+    "react-native-ble-plx": "^3.5.1",
     "react-native-compressor": "^1.16.0",
     "react-native-fast-tflite": "^2.0.0",
     "react-native-gesture-handler": "~2.30.0",

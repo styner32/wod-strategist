@@ -7,6 +7,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/storage"
 	"github.com/wod-strategist/api/internal/worker"
 )
 
@@ -20,6 +21,7 @@ type ObjectStorage interface {
 	GenerateSignedURL(objectName string, method string, expires time.Duration) (string, error)
 	UploadFile(ctx context.Context, file multipart.File, filename string) (string, error)
 	ListObjects(ctx context.Context, prefix string) ([]string, error)
+	ListObjectInfos(ctx context.Context, prefix string) ([]storage.ObjectInfo, error)
 }
 
 type AnalysisResultRepository interface {
@@ -31,6 +33,10 @@ type AnalysisResultRepository interface {
 type ProfileRepository interface {
 	Create(ctx context.Context, profile *db.Profile) error
 	FindByID(ctx context.Context, id uint) (*db.Profile, error)
+	ListAll(ctx context.Context, includeArchived bool) ([]db.Profile, error)
+	Update(ctx context.Context, profile *db.Profile) error
+	Archive(ctx context.Context, id uint) error
+	Unarchive(ctx context.Context, id uint) error
 }
 
 type HighlightResultRepository interface {
@@ -43,32 +49,36 @@ type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, move
 
 type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int) (*asynq.Task, error)
 
+type VerifyHighlightsTaskFactory func(sessionID string) (*asynq.Task, error)
+
 type Config struct {
-	QueueClient            QueueClient
-	AnalysisResults        AnalysisResultRepository
-	Profiles               ProfileRepository
-	HighlightResults       HighlightResultRepository
-	StorageClient          ObjectStorage
-	BucketName             string
-	GitCommit              string
-	NewVideoAnalysisTask   VideoAnalysisTaskFactory
-	NewChunkAnalysisTask   ChunkAnalysisTaskFactory
-	NewMergeChunksTask     VideoAnalysisTaskFactory
-	NewGenerateHighlight   HighlightTaskFactory
+	QueueClient             QueueClient
+	AnalysisResults         AnalysisResultRepository
+	Profiles                ProfileRepository
+	HighlightResults        HighlightResultRepository
+	StorageClient           ObjectStorage
+	BucketName              string
+	GitCommit               string
+	NewVideoAnalysisTask    VideoAnalysisTaskFactory
+	NewChunkAnalysisTask    ChunkAnalysisTaskFactory
+	NewMergeChunksTask      VideoAnalysisTaskFactory
+	NewGenerateHighlight    HighlightTaskFactory
+	NewVerifyHighlightsTask VerifyHighlightsTaskFactory
 }
 
 type Controller struct {
-	queueClient            QueueClient
-	analysisResults        AnalysisResultRepository
-	profiles               ProfileRepository
-	highlightResults       HighlightResultRepository
-	storageClient          ObjectStorage
-	bucketName             string
-	gitCommit              string
-	newVideoAnalysisTask   VideoAnalysisTaskFactory
-	newChunkAnalysisTask   ChunkAnalysisTaskFactory
-	newMergeChunksTask     VideoAnalysisTaskFactory
-	newGenerateHighlight   HighlightTaskFactory
+	queueClient             QueueClient
+	analysisResults         AnalysisResultRepository
+	profiles                ProfileRepository
+	highlightResults        HighlightResultRepository
+	storageClient           ObjectStorage
+	bucketName              string
+	gitCommit               string
+	newVideoAnalysisTask    VideoAnalysisTaskFactory
+	newChunkAnalysisTask    ChunkAnalysisTaskFactory
+	newMergeChunksTask      VideoAnalysisTaskFactory
+	newGenerateHighlight    HighlightTaskFactory
+	newVerifyHighlightsTask VerifyHighlightsTaskFactory
 }
 
 func New(config Config) *Controller {
@@ -97,17 +107,23 @@ func New(config Config) *Controller {
 		highlightTaskFactory = worker.NewGenerateHighlightTask
 	}
 
+	verifyTaskFactory := config.NewVerifyHighlightsTask
+	if verifyTaskFactory == nil {
+		verifyTaskFactory = worker.NewVerifyHighlightsTask
+	}
+
 	return &Controller{
-		queueClient:          config.QueueClient,
-		analysisResults:      config.AnalysisResults,
-		profiles:             config.Profiles,
-		highlightResults:     config.HighlightResults,
-		storageClient:        config.StorageClient,
-		bucketName:           config.BucketName,
-		gitCommit:            commit,
-		newVideoAnalysisTask: taskFactory,
-		newChunkAnalysisTask: chunkTaskFactory,
-		newMergeChunksTask:   mergeTaskFactory,
-		newGenerateHighlight: highlightTaskFactory,
+		queueClient:             config.QueueClient,
+		analysisResults:         config.AnalysisResults,
+		profiles:                config.Profiles,
+		highlightResults:        config.HighlightResults,
+		storageClient:           config.StorageClient,
+		bucketName:              config.BucketName,
+		gitCommit:               commit,
+		newVideoAnalysisTask:    taskFactory,
+		newChunkAnalysisTask:    chunkTaskFactory,
+		newMergeChunksTask:      mergeTaskFactory,
+		newGenerateHighlight:    highlightTaskFactory,
+		newVerifyHighlightsTask: verifyTaskFactory,
 	}
 }

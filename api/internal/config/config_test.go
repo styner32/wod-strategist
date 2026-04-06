@@ -39,6 +39,7 @@ var _ = Describe("InitServer", func() {
 		Expect(cfg.GCSBucketName).To(Equal("uploads-bucket"))
 		Expect(cfg.APISecret).To(Equal("secret-key"))
 		Expect(cfg.Port).To(Equal("8080"))
+		Expect(cfg.DevAllowedOrigins).To(ContainElements("http://localhost:3000", "http://127.0.0.1:3000"))
 	})
 
 	It("uses an explicit port", func() {
@@ -136,6 +137,14 @@ var _ = Describe("InitServer", func() {
 			cfg, err := config.InitServer()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.AppEnv).To(Equal("development"))
+		})
+
+		It("parses explicit development CORS origins", func() {
+			setEnv("DEV_ALLOWED_ORIGINS", "http://localhost:3000, https://qa.example.com ")
+
+			cfg, err := config.InitServer()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.DevAllowedOrigins).To(Equal([]string{"http://localhost:3000", "https://qa.example.com"}))
 		})
 	})
 })

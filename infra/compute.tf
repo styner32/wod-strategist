@@ -50,6 +50,14 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "GCS_BUCKET_NAME"
         value = google_storage_bucket.uploads.name
       }
+      env {
+        name = "GEMINI_USE_CACHE"
+        value = true
+      }
+      env {
+        name = "GEMINI_MODEL"
+        value = "gemini-3.1-pro-preview"
+      }
     }
   }
 
@@ -102,6 +110,14 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       env {
         name  = "GCS_BUCKET_NAME"
         value = google_storage_bucket.uploads.name
+      }
+      env {
+        name = "GEMINI_USE_CACHE"
+        value = true
+      }
+      env {
+        name = "GEMINI_MODEL"
+        value = "gemini-3.1-pro-preview"
       }
     }
   }

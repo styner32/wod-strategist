@@ -60,6 +60,7 @@ func main() {
 
 	geminiClient, err := gemini.NewClientWithOptions(context.Background(), logger.Log, gemini.Options{
 		APIKey: cfg.GeminiAPIKey,
+		Model:  cfg.GeminiModel,
 	})
 	if err != nil {
 		logger.Log.Fatal("Failed to create gemini client", zap.Error(err))
@@ -68,7 +69,8 @@ func main() {
 	// Create Asynq client for enqueueing tasks from workers (e.g. merge → analysis)
 	queueClient := asynq.NewClient(redisOpt)
 
-	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient)
+	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient, logger.Log)
+	w.UseCache = cfg.UseCache
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)
@@ -76,6 +78,7 @@ func main() {
 	mux.HandleFunc(worker.TypeMergeChunks, w.HandleMergeChunksTask)
 	mux.HandleFunc(worker.TypeInjuryAnalysis, w.HandleInjuryAnalysisTask)
 	mux.HandleFunc(worker.TypeGenerateHighlight, w.HandleGenerateHighlightTask)
+	mux.HandleFunc(worker.TypeVerifyHighlights, w.HandleVerifyHighlightsTask)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")

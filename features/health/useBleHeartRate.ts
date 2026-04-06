@@ -8,6 +8,7 @@ const manager = new BleManager();
 
 const HR_SERVICE_UUID = "180D";
 const HR_CHARACTERISTIC_UUID = "2A37";
+const CONNECTION_TIMEOUT_MS = 10000;
 const INACTIVITY_TIMEOUT_MS = 15000;
 const RECONNECT_MIN_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 10000;
@@ -206,12 +207,14 @@ export function useBleHeartRate() {
       // if (device?.name) console.log("Found:", device.name);
 
       // [필터링] HeartCast(앱) 또는 Polar(심박계) 찾기
-      // HeartCast는 보통 이름에 'Heart'가 들어가거나, 180D 서비스 UUID를 가짐
+      // "Polar mobile"은 폰 앱(브릿지)이므로 제외 — 실제 H10/OH1 스트랩만 연결
+      const isPolarApp = device?.name?.includes("Polar mobile");
       const isTargetDevice =
-        (device?.name &&
+        !isPolarApp &&
+        ((device?.name &&
           (device.name.includes("HeartCast") ||
             device.name.includes("Polar"))) ||
-        (device?.serviceUUIDs && device.serviceUUIDs.includes(HR_SERVICE_UUID));
+          (device?.serviceUUIDs && device.serviceUUIDs.includes(HR_SERVICE_UUID)));
 
       if (isTargetDevice && device) {
         console.log("✅ Target Found:", device.name);
@@ -231,7 +234,7 @@ export function useBleHeartRate() {
       setStatus("Connecting");
       console.log(`🔗 Connecting to ${device.name}...`);
 
-      const connectedDevice = await device.connect();
+      const connectedDevice = await device.connect({ timeout: CONNECTION_TIMEOUT_MS });
       console.log("🔗 Connected. Discovering services...");
 
       // [필수] 서비스 및 특성 검색

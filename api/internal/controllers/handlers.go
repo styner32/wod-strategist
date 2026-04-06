@@ -113,6 +113,11 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
 	if !isValidGCSURI(req.GCSURI) {
 		logger.Log.Error("invalid GCS URI: must be a valid gs:// URI with a bucket", zap.String("uri", req.GCSURI))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid GCS URI"})
@@ -288,13 +293,17 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		return
 	}
 
-	var profileID uint
-	if pidStr := c.Query("profile_id"); pidStr != "" {
-		pid, err := strconv.ParseUint(pidStr, 10, 32)
-		if err == nil {
-			profileID = uint(pid)
-		}
+	pidStr := c.Query("profile_id")
+	if pidStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
 	}
+	pid, err := strconv.ParseUint(pidStr, 10, 32)
+	if err != nil || pid == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile_id"})
+		return
+	}
+	profileID := uint(pid)
 
 	results, err := ctl.analysisResults.ListRecent(c.Request.Context(), 20, profileID)
 	if err != nil {
@@ -392,6 +401,11 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		return
 	}
 
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
 	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs)
@@ -433,6 +447,7 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 	}
 
 	profile := &db.Profile{
+		Name:       req.Name,
 		BirthYear:  req.BirthYear,
 		BirthMonth: req.BirthMonth,
 		BirthDay:   req.BirthDay,
@@ -447,15 +462,7 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, ProfileResponse{
-		ID:         profile.ID,
-		BirthYear:  profile.BirthYear,
-		BirthMonth: profile.BirthMonth,
-		BirthDay:   profile.BirthDay,
-		Gender:     profile.Gender,
-		HeightCm:   profile.HeightCm,
-		WeightKg:   profile.WeightKg,
-	})
+	c.JSON(http.StatusCreated, toProfileResponse(profile))
 }
 
 func (ctl *Controller) GetProfile(c *gin.Context) {
@@ -479,15 +486,153 @@ func (ctl *Controller) GetProfile(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, ProfileResponse{
-		ID:         profile.ID,
-		BirthYear:  profile.BirthYear,
-		BirthMonth: profile.BirthMonth,
-		BirthDay:   profile.BirthDay,
-		Gender:     profile.Gender,
-		HeightCm:   profile.HeightCm,
-		WeightKg:   profile.WeightKg,
-	})
+	c.JSON(http.StatusOK, toProfileResponse(profile))
+}
+
+func (ctl *Controller) ListProfiles(c *gin.Context) {
+	if ctl.profiles == nil {
+		logger.Log.Error("profile repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "profiles not configured"})
+		return
+	}
+
+	includeArchived := c.Query("include_archived") == "true"
+
+	profiles, err := ctl.profiles.ListAll(c.Request.Context(), includeArchived)
+	if err != nil {
+		logger.Log.Error("failed to list profiles", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list profiles"})
+		return
+	}
+
+	resp := make([]ProfileResponse, len(profiles))
+	for i := range profiles {
+		resp[i] = toProfileResponse(&profiles[i])
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
+func (ctl *Controller) UpdateProfile(c *gin.Context) {
+	if ctl.profiles == nil {
+		logger.Log.Error("profile repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "profiles not configured"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile id"})
+		return
+	}
+
+	profile, err := ctl.profiles.FindByID(c.Request.Context(), uint(id))
+	if err != nil {
+		logger.Log.Error("failed to find profile", zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
+		return
+	}
+
+	var req UpdateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
+		return
+	}
+
+	if req.Name != nil {
+		profile.Name = *req.Name
+	}
+	if req.BirthYear != nil {
+		profile.BirthYear = *req.BirthYear
+	}
+	if req.BirthMonth != nil {
+		profile.BirthMonth = *req.BirthMonth
+	}
+	if req.BirthDay != nil {
+		profile.BirthDay = *req.BirthDay
+	}
+	if req.Gender != nil {
+		profile.Gender = *req.Gender
+	}
+	if req.HeightCm != nil {
+		profile.HeightCm = *req.HeightCm
+	}
+	if req.WeightKg != nil {
+		profile.WeightKg = *req.WeightKg
+	}
+
+	if err := ctl.profiles.Update(c.Request.Context(), profile); err != nil {
+		logger.Log.Error("failed to update profile", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update profile"})
+		return
+	}
+
+	c.JSON(http.StatusOK, toProfileResponse(profile))
+}
+
+func (ctl *Controller) ArchiveProfile(c *gin.Context) {
+	if ctl.profiles == nil {
+		logger.Log.Error("profile repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "profiles not configured"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile id"})
+		return
+	}
+
+	if err := ctl.profiles.Archive(c.Request.Context(), uint(id)); err != nil {
+		logger.Log.Error("failed to archive profile", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to archive profile"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "profile archived"})
+}
+
+func (ctl *Controller) UnarchiveProfile(c *gin.Context) {
+	if ctl.profiles == nil {
+		logger.Log.Error("profile repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "profiles not configured"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile id"})
+		return
+	}
+
+	if err := ctl.profiles.Unarchive(c.Request.Context(), uint(id)); err != nil {
+		logger.Log.Error("failed to unarchive profile", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unarchive profile"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "profile unarchived"})
+}
+
+func toProfileResponse(p *db.Profile) ProfileResponse {
+	resp := ProfileResponse{
+		ID:         p.ID,
+		Name:       p.Name,
+		BirthYear:  p.BirthYear,
+		BirthMonth: p.BirthMonth,
+		BirthDay:   p.BirthDay,
+		Gender:     p.Gender,
+		HeightCm:   p.HeightCm,
+		WeightKg:   p.WeightKg,
+	}
+	if p.ArchivedAt != nil {
+		ts := p.ArchivedAt.Format(time.RFC3339)
+		resp.ArchivedAt = &ts
+	}
+	return resp
 }
 
 // @Summary      Merge Chunks
@@ -520,6 +665,11 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 
 	if req.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
 		return
 	}
 
@@ -612,6 +762,11 @@ func (ctl *Controller) GenerateHighlight(c *gin.Context) {
 		return
 	}
 
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
 	if req.MaxDuration <= 0 {
 		req.MaxDuration = 60
 	}
@@ -671,3 +826,58 @@ func (ctl *Controller) GetHighlight(c *gin.Context) {
 	c.JSON(http.StatusOK, results)
 }
 
+// @Summary      Verify Highlights
+// @Description  Triggers verification of highlight segments to detect hallucinated movements
+// @Tags         highlight
+// @Accept       json
+// @Produce      json
+// @Param        request body VerifyHighlightsRequest true "Session ID"
+// @Success      202 {object} map[string]string
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /verify-highlights [post]
+func (ctl *Controller) VerifyHighlights(c *gin.Context) {
+	if ctl.queueClient == nil {
+		logger.Log.Error("queue client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	var req VerifyHighlightsRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Log.Error("failed to bind JSON", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	logger.Log.Info("Submit a highlight verification request",
+		zap.String("session_id", req.SessionID))
+
+	task, err := ctl.newVerifyHighlightsTask(req.SessionID)
+	if err != nil {
+		logger.Log.Error("failed to create verify highlights task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue verify highlights task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"message":    "Highlight verification started",
+		"task_id":    info.ID,
+		"session_id": req.SessionID,
+	})
+}

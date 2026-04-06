@@ -362,4 +362,157 @@ var _ = Describe("Gemini client", func() {
 			Expect(transport.Verify()).To(Succeed())
 		})
 	})
+
+	Describe("IndexVideo", func() {
+		const (
+			baseURL = "https://example.test"
+			apiKey  = "test-api-key"
+		)
+
+		It("returns the raw model output from Flash", func() {
+			transport := testhelpers.NewMockTransport()
+
+			transport.New(baseURL).
+				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"parts": []map[string]any{{"text": `[{"start":"0:30","end":"1:00","type":"Snatch"}]`}},
+						},
+					}},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     apiKey,
+				BaseURL:    baseURL,
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := client.IndexVideo(context.Background(), "https://example.test/files/mock-file", "video/mp4", "Index this video")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(ContainSubstring("Snatch"))
+			Expect(transport.Verify()).To(Succeed())
+		})
+
+		It("returns an error on failure", func() {
+			transport := testhelpers.NewMockTransport()
+
+			transport.New(baseURL).
+				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{
+					"error": map[string]any{"message": "indexing failed"},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     apiKey,
+				BaseURL:    baseURL,
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := client.IndexVideo(context.Background(), "https://example.test/files/mock-file", "video/mp4", "Index this")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to index video"))
+			Expect(result).To(BeEmpty())
+			Expect(transport.Verify()).To(Succeed())
+		})
+	})
+
+	Describe("AnalyzeSegment", func() {
+		const (
+			baseURL = "https://example.test"
+			apiKey  = "test-api-key"
+		)
+
+		It("generates content with VideoMetadata for a specific segment", func() {
+			transport := testhelpers.NewMockTransport()
+
+			transport.New(baseURL).
+				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"parts": []map[string]any{{"text": "deep biomechanical analysis"}},
+						},
+					}},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     apiKey,
+				BaseURL:    baseURL,
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := client.AnalyzeSegment(
+				context.Background(),
+				"https://example.test/files/mock-file", "video/mp4",
+				30*time.Second, 60*time.Second,
+				"Analyze this segment",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("deep biomechanical analysis"))
+			Expect(transport.Verify()).To(Succeed())
+		})
+
+		It("returns an error on failure", func() {
+			transport := testhelpers.NewMockTransport()
+
+			transport.New(baseURL).
+				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{
+					"error": map[string]any{"message": "analysis failed"},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     apiKey,
+				BaseURL:    baseURL,
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err := client.AnalyzeSegment(
+				context.Background(),
+				"https://example.test/files/mock-file", "video/mp4",
+				30*time.Second, 60*time.Second,
+				"Analyze",
+			)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to analyze segment"))
+			Expect(result).To(BeEmpty())
+			Expect(transport.Verify()).To(Succeed())
+		})
+	})
+
+	Describe("Model option", func() {
+		It("defaults to gemini-3.1-pro-preview", func() {
+			transport := testhelpers.NewMockTransport()
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     "test-key",
+				BaseURL:    "https://example.test",
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(client.model).To(Equal("gemini-3.1-pro-preview"))
+		})
+
+		It("uses the configured model", func() {
+			transport := testhelpers.NewMockTransport()
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     "test-key",
+				BaseURL:    "https://example.test",
+				Model:      "gemini-3-flash-preview",
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(client.model).To(Equal("gemini-3-flash-preview"))
+		})
+	})
 })

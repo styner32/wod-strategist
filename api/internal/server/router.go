@@ -22,10 +22,18 @@ type Handlers interface {
 	ChunkComplete(*gin.Context)
 	CreateProfile(*gin.Context)
 	GetProfile(*gin.Context)
+	ListProfiles(*gin.Context)
+	UpdateProfile(*gin.Context)
+	ArchiveProfile(*gin.Context)
+	UnarchiveProfile(*gin.Context)
 	MergeChunks(*gin.Context)
 	GetSubtitles(*gin.Context)
 	GenerateHighlight(*gin.Context)
 	GetHighlight(*gin.Context)
+	VerifyHighlights(*gin.Context)
+	ListSessionCatalog(*gin.Context)
+	GetSessionAssets(*gin.Context)
+	GetPlayURL(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -169,12 +177,82 @@ var protectedRouteDefinitions = []routeDefinition{
 	},
 	{
 		spec: RouteSpec{
+			Name:   "list-profiles",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/profiles",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/profiles", handlers.ListProfiles)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "update-profile",
+			Method: http.MethodPut,
+			Path:   APIRoutePrefix + "/profiles/:id",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.PUT("/profiles/:id", handlers.UpdateProfile)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "archive-profile",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/profiles/:id/archive",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/profiles/:id/archive", handlers.ArchiveProfile)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "unarchive-profile",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/profiles/:id/unarchive",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/profiles/:id/unarchive", handlers.UnarchiveProfile)
+		},
+	},
+	{
+		spec: RouteSpec{
 			Name:   "merge-chunks",
 			Method: http.MethodPost,
 			Path:   APIRoutePrefix + "/merge-chunks",
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.POST("/merge-chunks", handlers.MergeChunks)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "dev-sessions",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/dev/sessions",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/dev/sessions", handlers.ListSessionCatalog)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "dev-session-assets",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/dev/sessions/:session_id/assets",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/dev/sessions/:session_id/assets", handlers.GetSessionAssets)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "dev-session-play-url",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/dev/sessions/:session_id/play-url",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/dev/sessions/:session_id/play-url", handlers.GetPlayURL)
 		},
 	},
 	{
@@ -207,6 +285,16 @@ var protectedRouteDefinitions = []routeDefinition{
 			routes.GET("/highlight/:session_id", handlers.GetHighlight)
 		},
 	},
+	{
+		spec: RouteSpec{
+			Name:   "verify-highlights",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/verify-highlights",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/verify-highlights", handlers.VerifyHighlights)
+		},
+	},
 }
 
 func PublicRouteSpecs() []RouteSpec {
@@ -233,7 +321,7 @@ func RegisterProtectedRoutes(routes gin.IRoutes, handlers Handlers) error {
 	return nil
 }
 
-func SetupRouter(appEnv string, apiKey string, handlers Handlers) (*gin.Engine, error) {
+func SetupRouter(appEnv string, apiKey string, allowedOrigins []string, handlers Handlers) (*gin.Engine, error) {
 	if err := validateHandlers(handlers); err != nil {
 		return nil, err
 	}
@@ -241,6 +329,7 @@ func SetupRouter(appEnv string, apiKey string, handlers Handlers) (*gin.Engine, 
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(RequestLogger())
+	r.Use(DevelopmentCORS(allowedOrigins))
 
 	if err := RegisterPublicRoutes(r, handlers); err != nil {
 		return nil, err

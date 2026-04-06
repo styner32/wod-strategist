@@ -71,3 +71,10 @@ test-chunk-upload: ## Replay chunk upload from a saved video. Usage: make test-c
 
 test: ## Run the tests
 	go test ./... -v
+
+migrate-test-redo:
+ifndef TEST_DATABASE_URL
+	$(error TEST_DATABASE_URL is not set)
+endif
+	migrate -path=$(MIGRATIONS_DIR) -database "$(TEST_DATABASE_URL)" -verbose down 1
+	migrate -path=$(MIGRATIONS_DIR) -database "$(TEST_DATABASE_URL)" -verbose up

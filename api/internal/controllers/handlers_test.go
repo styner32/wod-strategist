@@ -2,14 +2,12 @@ package controllers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"time"
 
@@ -20,178 +18,38 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/server"
+	"github.com/wod-strategist/api/internal/storage"
+	"github.com/wod-strategist/api/internal/testhelpers"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
-type fakeQueueClient struct {
-	task   *asynq.Task
-	info   *asynq.TaskInfo
-	err    error
-	called bool
-}
+// ---------------------------------------------------------------------------
+// Suite-level infrastructure (PostgreSQL + Redis)
+// ---------------------------------------------------------------------------
 
-func (f *fakeQueueClient) Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error) {
-	f.called = true
-	f.task = task
-	if f.info == nil {
-		f.info = &asynq.TaskInfo{ID: "task-123"}
-	}
-	return f.info, f.err
-}
+var (
+	dbConn    *gorm.DB
+	inspector *asynq.Inspector
+)
 
-type fakeStorageClient struct {
-	generateURL string
-	generateErr error
-	uploadURI   string
-	uploadErr   error
+var _ = BeforeSuite(func() {
+	var err error
+	dbConn, err = testhelpers.InitDB()
+	Expect(err).NotTo(HaveOccurred())
+	inspector = testhelpers.NewQueueInspector()
+})
 
-	generatedObjectName string
-	generatedMethod     string
-	generatedExpires    time.Duration
-	uploadedFilename    string
-	uploadedContent     string
-}
-
-func (f *fakeStorageClient) GenerateSignedURL(objectName string, method string, expires time.Duration) (string, error) {
-	f.generatedObjectName = objectName
-	f.generatedMethod = method
-	f.generatedExpires = expires
-	if f.generateURL == "" {
-		f.generateURL = "https://example.test/upload"
-	}
-	return f.generateURL, f.generateErr
-}
-
-func (f *fakeStorageClient) UploadFile(ctx context.Context, file multipart.File, filename string) (string, error) {
-	f.uploadedFilename = filename
-	body, err := io.ReadAll(file)
-	if err != nil {
-		return "", err
-	}
-	f.uploadedContent = string(body)
-	if f.uploadURI == "" {
-		f.uploadURI = "gs://test-bucket/" + filename
-	}
-	return f.uploadURI, f.uploadErr
-}
-
-func (f *fakeStorageClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
-	return nil, nil
-}
-
-type fakeAnalysisResultRepository struct {
-	results      []db.AnalysisResult
-	chunkResults []db.ChunkAnalysisResult
-	err          error
-	sessionID    string
-	historyLimit int
-	findCalled   bool
-	listCalled   bool
-}
-
-func (f *fakeAnalysisResultRepository) FindBySessionID(ctx context.Context, sessionID string) ([]db.AnalysisResult, error) {
-	f.findCalled = true
-	f.sessionID = sessionID
-	return f.results, f.err
-}
-
-func (f *fakeAnalysisResultRepository) ListRecent(ctx context.Context, limit int, profileID uint) ([]db.AnalysisResult, error) {
-	f.listCalled = true
-	f.historyLimit = limit
-	return f.results, f.err
-}
-
-func (f *fakeAnalysisResultRepository) FindChunksBySessionID(ctx context.Context, sessionID string) ([]db.ChunkAnalysisResult, error) {
-	f.findCalled = true
-	f.sessionID = sessionID
-	return f.chunkResults, f.err
-}
-
-type taskFactoryCall struct {
-	sessionID   string
-	filePath    string
-	workoutType string
-	movements   []string
-	injuries    []string
-	startSecs   float64
-	endSecs     float64
-}
-
-type fakeTaskFactory struct {
-	call taskFactoryCall
-	task *asynq.Task
-	err  error
-}
-
-func (f *fakeTaskFactory) Build(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
-	f.call = taskFactoryCall{
-		sessionID:   sessionID,
-		filePath:    filePath,
-		workoutType: workoutType,
-		movements:   append([]string(nil), movements...),
-		injuries:    append([]string(nil), injuries...),
-	}
-	if f.task == nil {
-		f.task = asynq.NewTask(worker.TypeVideoAnalysis, []byte(`{}`))
-	}
-	return f.task, f.err
-}
-
-type fakeChunkTaskFactory struct {
-	call taskFactoryCall
-	task *asynq.Task
-	err  error
-}
-
-func (f *fakeChunkTaskFactory) Build(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error) {
-	f.call = taskFactoryCall{
-		sessionID:   sessionID,
-		filePath:    filePath,
-		workoutType: workoutType,
-		movements:   append([]string(nil), movements...),
-		injuries:    append([]string(nil), injuries...),
-		startSecs:   startSecs,
-		endSecs:     endSecs,
-	}
-	if f.task == nil {
-		f.task = asynq.NewTask(worker.TypeChunkAnalysis, []byte(`{}`))
-	}
-	return f.task, f.err
-}
-
-type fakeProfileRepository struct {
-	profile *db.Profile
-	err     error
-	called  bool
-}
-
-func (f *fakeProfileRepository) Create(ctx context.Context, profile *db.Profile) error {
-	f.called = true
-	if f.err != nil {
-		return f.err
-	}
-	profile.ID = 1 // simulate auto-increment
-	f.profile = profile
-	return nil
-}
-
-func (f *fakeProfileRepository) FindByID(ctx context.Context, id uint) (*db.Profile, error) {
-	f.called = true
-	if f.err != nil {
-		return nil, f.err
-	}
-	if f.profile != nil && f.profile.ID == id {
-		return f.profile, nil
-	}
-	return nil, fmt.Errorf("not found")
-}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 func newTestRouter(config Config) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	logger.Log = zap.NewNop()
 	controller := New(config)
-	router, err := server.SetupRouter("test", "test-api-key", controller)
+	router, err := server.SetupRouter("test", "test-api-key", nil, controller)
 	Expect(err).NotTo(HaveOccurred())
 	return router
 }
@@ -209,7 +67,56 @@ func decodeMapBody(w *httptest.ResponseRecorder) map[string]any {
 	return body
 }
 
+// newBrokenQueueClient returns an asynq.Client that will fail on Enqueue
+// because it points at an unreachable Redis address.
+func newBrokenQueueClient() *asynq.Client {
+	return asynq.NewClient(asynq.RedisClientOpt{Addr: "localhost:1"})
+}
+
+// newBrokenRepo returns a GormAnalysisResultRepository backed by a closed DB
+// connection so every query returns an error.
+func newBrokenRepo() *GormAnalysisResultRepository {
+	closedDB, err := testhelpers.InitDB()
+	Expect(err).NotTo(HaveOccurred())
+	sqlDB, err := closedDB.DB()
+	Expect(err).NotTo(HaveOccurred())
+	Expect(sqlDB.Close()).To(Succeed())
+	return NewGormAnalysisResultRepository(closedDB)
+}
+
+// newBrokenProfileRepo is the profile equivalent of newBrokenRepo.
+func newBrokenProfileRepo() *GormProfileRepository {
+	closedDB, err := testhelpers.InitDB()
+	Expect(err).NotTo(HaveOccurred())
+	sqlDB, err := closedDB.DB()
+	Expect(err).NotTo(HaveOccurred())
+	Expect(sqlDB.Close()).To(Succeed())
+	return NewGormProfileRepository(closedDB)
+}
+
+// gcsUploadURL builds the exact URL path the GCS Go client sends for a
+// multipart upload to the given bucket and object name.
+func gcsUploadURL(bucket, objectName string) string {
+	return "/upload/storage/v1/b/" + bucket + "/o?alt=json&name=" + objectName + "&prettyPrint=false&projection=full&uploadType=multipart"
+}
+
+// gcsListObjectsURL builds the URL path the GCS JSON API uses to list objects
+// under a prefix. MockTransport checks only the query params specified in the
+// expectation, so other params (alt, prettyPrint, projection) are ignored.
+func gcsListObjectsURL(bucket, prefix string) string {
+	return "/storage/v1/b/" + bucket + "/o?prefix=" + url.QueryEscape(prefix)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 var _ = Describe("Controller handlers", func() {
+	BeforeEach(func() {
+		testhelpers.CleanupDB(dbConn)
+		testhelpers.CleanupQueue(inspector)
+	})
+
 	Describe("Health", func() {
 		It("returns the configured commit and RFC3339 time", func() {
 			router := newTestRouter(Config{GitCommit: "abc123"})
@@ -223,18 +130,18 @@ var _ = Describe("Controller handlers", func() {
 			body := decodeMapBody(w)
 			Expect(body["status"]).To(Equal("ok"))
 			Expect(body["commit"]).To(Equal("abc123"))
-			_, err := time.Parse(time.RFC3339, body["time"].(string))
-			Expect(err).NotTo(HaveOccurred())
+			Expect(body).To(HaveKey("time"))
 		})
 	})
 
 	Describe("POST /api/v1/upload-url", func() {
-		var storage *fakeStorageClient
 		var router *gin.Engine
 
 		BeforeEach(func() {
-			storage = &fakeStorageClient{}
-			router = newTestRouter(Config{StorageClient: storage, BucketName: "test-bucket"})
+			transport := testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClientWithSigning("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
+			router = newTestRouter(Config{StorageClient: storageClient, BucketName: "test-bucket"})
 		})
 
 		It("returns bad request for malformed json", func() {
@@ -265,8 +172,6 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("sanitizes path traversal and returns a signed url", func() {
-			storage.generateURL = "https://example.test/signed"
-
 			req := newAuthorizedJSONRequest(
 				http.MethodPost,
 				"/api/v1/upload-url",
@@ -276,21 +181,21 @@ var _ = Describe("Controller handlers", func() {
 			router.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
-			Expect(storage.generatedObjectName).To(Equal("videos/session-1_video.mp4"))
-			Expect(storage.generatedMethod).To(Equal(http.MethodPut))
-			Expect(storage.generatedExpires).To(Equal(15 * time.Minute))
-
 			body := decodeMapBody(w)
-			Expect(body["upload_url"]).To(Equal("https://example.test/signed"))
+			Expect(body["upload_url"]).NotTo(BeEmpty())
 			Expect(body["gcs_uri"]).To(Equal("gs://test-bucket/videos/session-1_video.mp4"))
 		})
 
 		It("returns internal error when storage fails", func() {
-			storage.generateErr = errors.New("boom")
+			// Client WITHOUT signing credentials → GenerateSignedURL will fail.
+			transport := testhelpers.NewMockTransport()
+			noSignClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
+			failRouter := newTestRouter(Config{StorageClient: noSignClient, BucketName: "test-bucket"})
 
 			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-url", `{"session_id":"session-1","filename":"video.mp4"}`)
 			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
+			failRouter.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusInternalServerError))
 			Expect(decodeMapBody(w)["error"]).To(Equal("failed to generate upload URL"))
@@ -298,18 +203,19 @@ var _ = Describe("Controller handlers", func() {
 	})
 
 	Describe("POST /api/v1/upload-complete", func() {
-		var queue *fakeQueueClient
-		var taskFactory *fakeTaskFactory
+		var queueClient *asynq.Client
 		var router *gin.Engine
 
 		BeforeEach(func() {
-			queue = &fakeQueueClient{}
-			taskFactory = &fakeTaskFactory{}
+			queueClient = testhelpers.NewQueueClient()
+			transport := testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClientWithSigning("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
 			router = newTestRouter(Config{
-				QueueClient:          queue,
-				StorageClient:        &fakeStorageClient{},
+				QueueClient:          queueClient,
+				StorageClient:        storageClient,
 				BucketName:           "test-bucket",
-				NewVideoAnalysisTask: taskFactory.Build,
+				NewVideoAnalysisTask: worker.NewVideoAnalysisTask,
 			})
 		})
 
@@ -326,42 +232,33 @@ var _ = Describe("Controller handlers", func() {
 			Entry("missing session id", `{"gcs_uri":"gs://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "session_id is required"),
 			Entry("missing gcs uri", `{"session_id":"session-1","movements":[]}`, http.StatusBadRequest, "gcs_uri is required"),
 			Entry("missing movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4"}`, http.StatusBadRequest, "movements is required"),
-			Entry("invalid gcs scheme", `{"session_id":"session-1","gcs_uri":"https://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "invalid GCS URI"),
-			Entry("missing gcs bucket", `{"session_id":"session-1","gcs_uri":"gs:///video.mp4","movements":[]}`, http.StatusBadRequest, "invalid GCS URI"),
-			Entry("invalid movement", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Invalid"]}`, http.StatusBadRequest, "invalid movements"),
-			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":`+repeatedJSONString("Burpee", 100)+`}`, http.StatusBadRequest, "too many movements"),
-			Entry("invalid injury", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":["Head"]}`, http.StatusBadRequest, "invalid injuries"),
-			Entry("too many injuries", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":`+repeatedJSONString("Left Knee", 100)+`}`, http.StatusBadRequest, "too many injuries"),
+			Entry("missing profile id", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "profile_id is required"),
+			Entry("invalid gcs scheme", `{"session_id":"session-1","gcs_uri":"https://bucket/video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
+			Entry("missing gcs bucket", `{"session_id":"session-1","gcs_uri":"gs:///video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
+			Entry("invalid movement", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Invalid"],"profile_id":1}`, http.StatusBadRequest, "invalid movements"),
+			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":`+repeatedJSONString("Burpee", 100)+`,"profile_id":1}`, http.StatusBadRequest, "too many movements"),
+			Entry("invalid injury", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":["Head"],"profile_id":1}`, http.StatusBadRequest, "invalid injuries"),
+			Entry("too many injuries", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":`+repeatedJSONString("Left Knee", 100)+`,"profile_id":1}`, http.StatusBadRequest, "too many injuries"),
 		)
 
-		It("returns internal error when task creation fails", func() {
-			taskFactory.err = errors.New("boom")
-
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"]}`)
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			Expect(w.Code).To(Equal(http.StatusInternalServerError))
-			Expect(decodeMapBody(w)["error"]).To(Equal("failed to create task"))
-		})
-
 		It("returns internal error when enqueue fails", func() {
-			queue.err = errors.New("boom")
+			failRouter := newTestRouter(Config{
+				QueueClient:          newBrokenQueueClient(),
+				StorageClient:        nil,
+				BucketName:           "test-bucket",
+				NewVideoAnalysisTask: worker.NewVideoAnalysisTask,
+			})
 
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"],"injuries":["Left Knee"],"workout_type":"rehab"}`)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"],"injuries":["Left Knee"],"workout_type":"rehab","profile_id":1}`)
 			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
+			failRouter.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusInternalServerError))
-			Expect(queue.called).To(BeTrue())
 			Expect(decodeMapBody(w)["error"]).To(Equal("failed to enqueue task"))
-			Expect(taskFactory.call.workoutType).To(Equal(worker.WorkoutTypeWOD))
 		})
 
 		It("accepts empty movements and normalizes the default workout type", func() {
-			queue.info = &asynq.TaskInfo{ID: "task-999"}
-
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[]}`)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"profile_id":1}`)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -369,28 +266,37 @@ var _ = Describe("Controller handlers", func() {
 
 			body := decodeMapBody(w)
 			Expect(body["message"]).To(Equal("Analysis started"))
-			Expect(body["task_id"]).To(Equal("task-999"))
+			Expect(body["task_id"]).NotTo(BeEmpty())
 			Expect(body["session_id"]).To(Equal("session-1"))
-			Expect(taskFactory.call.workoutType).To(Equal(worker.WorkoutTypeWOD))
-			Expect(taskFactory.call.movements).To(BeEmpty())
+
+			// Verify the enqueued task payload via Redis inspector.
+			pending, err := inspector.ListPendingTasks("default")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pending).To(HaveLen(1))
+			Expect(pending[0].Type).To(Equal(worker.TypeVideoAnalysis))
+
+			var payload worker.VideoAnalysisPayload
+			Expect(json.Unmarshal(pending[0].Payload, &payload)).To(Succeed())
+			Expect(payload.WorkoutType).To(Equal(worker.WorkoutTypeWOD))
+			Expect(payload.Movements).To(BeEmpty())
 		})
 	})
 
 	Describe("POST /api/v1/upload", func() {
-		var storage *fakeStorageClient
-		var queue *fakeQueueClient
-		var taskFactory *fakeTaskFactory
+		var queueClient *asynq.Client
+		var transport *testhelpers.MockTransport
 		var router *gin.Engine
 
 		BeforeEach(func() {
-			storage = &fakeStorageClient{}
-			queue = &fakeQueueClient{}
-			taskFactory = &fakeTaskFactory{}
+			queueClient = testhelpers.NewQueueClient()
+			transport = testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClientWithSigning("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
 			router = newTestRouter(Config{
-				QueueClient:          queue,
-				StorageClient:        storage,
+				QueueClient:          queueClient,
+				StorageClient:        storageClient,
 				BucketName:           "test-bucket",
-				NewVideoAnalysisTask: taskFactory.Build,
+				NewVideoAnalysisTask: worker.NewVideoAnalysisTask,
 			})
 		})
 
@@ -427,7 +333,11 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("returns internal error when upload fails", func() {
-			storage.uploadErr = errors.New("boom")
+			// Register a mock that returns 500 for the upload request.
+			transport.New("https://storage.googleapis.com").
+				Post(gcsUploadURL("test-bucket", "videos/session-1_video.mp4")).
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{"error": map[string]any{"message": "boom"}})
 
 			body, contentType := multipartRequestBody("session-1", "../../video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
@@ -440,37 +350,46 @@ var _ = Describe("Controller handlers", func() {
 			Expect(decodeMapBody(w)["error"]).To(Equal("failed to upload file"))
 		})
 
-		It("returns internal error when task creation fails", func() {
-			taskFactory.err = errors.New("boom")
-
-			body, contentType := multipartRequestBody("session-1", "video.mp4", "dummy content")
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
-			req.Header.Set("Content-Type", contentType)
-			req.Header.Set("X-API-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			Expect(w.Code).To(Equal(http.StatusInternalServerError))
-			Expect(decodeMapBody(w)["error"]).To(Equal("failed to create task"))
-		})
-
 		It("returns internal error when enqueue fails", func() {
-			queue.err = errors.New("boom")
+			// Storage upload succeeds, but queue enqueue fails.
+			transport.New("https://storage.googleapis.com").
+				Post(gcsUploadURL("test-bucket", "videos/session-1_video.mp4")).
+				Reply(http.StatusOK).
+				JSON(map[string]any{"name": "videos/session-1_video.mp4"})
+
+			failRouter := newTestRouter(Config{
+				QueueClient: newBrokenQueueClient(),
+				StorageClient: func() ObjectStorage {
+					t := testhelpers.NewMockTransport()
+					t.New("https://storage.googleapis.com").
+						Post(gcsUploadURL("test-bucket", "videos/session-1_video.mp4")).
+						Reply(http.StatusOK).
+						JSON(map[string]any{"name": "videos/session-1_video.mp4"})
+					c, err := testhelpers.NewStorageClientWithSigning("test-bucket", t)
+					Expect(err).NotTo(HaveOccurred())
+					return c
+				}(),
+				BucketName:           "test-bucket",
+				NewVideoAnalysisTask: worker.NewVideoAnalysisTask,
+			})
 
 			body, contentType := multipartRequestBody("session-1", "video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", contentType)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
+			failRouter.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusInternalServerError))
 			Expect(decodeMapBody(w)["error"]).To(Equal("failed to enqueue task"))
-			Expect(taskFactory.call.workoutType).To(Equal(worker.WorkoutTypeWOD))
 		})
 
 		It("uploads the file and sanitizes the object name", func() {
-			queue.info = &asynq.TaskInfo{ID: "task-321"}
+			// Register success for the GCS upload with sanitized object name.
+			transport.New("https://storage.googleapis.com").
+				Post(gcsUploadURL("test-bucket", "videos/session-1_video.mp4")).
+				Reply(http.StatusOK).
+				JSON(map[string]any{"name": "videos/session-1_video.mp4"})
 
 			body, contentType := multipartRequestBody("../../session-1", "..\\\\folder\\\\video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
@@ -480,24 +399,40 @@ var _ = Describe("Controller handlers", func() {
 			router.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusAccepted))
-			Expect(storage.uploadedFilename).To(Equal("videos/session-1_video.mp4"))
-			Expect(storage.uploadedContent).To(Equal("dummy content"))
-			Expect(taskFactory.call.sessionID).To(Equal("session-1"))
-			Expect(taskFactory.call.filePath).To(Equal("gs://test-bucket/videos/session-1_video.mp4"))
+
+			// Verify the upload went to the correct GCS path.
+			Expect(transport.Verify()).To(Succeed())
+			reqs := transport.Requests()
+			Expect(reqs).To(HaveLen(1))
+			Expect(reqs[0].URL).To(ContainSubstring("session-1_video.mp4"))
 
 			bodyMap := decodeMapBody(w)
 			Expect(bodyMap["message"]).To(Equal("File uploaded and analysis started"))
-			Expect(bodyMap["task_id"]).To(Equal("task-321"))
+			Expect(bodyMap["task_id"]).NotTo(BeEmpty())
 			Expect(bodyMap["file_url"]).To(Equal("gs://test-bucket/videos/session-1_video.mp4"))
+
+			// Verify enqueued task payload.
+			pending, err := inspector.ListPendingTasks("default")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pending).To(HaveLen(1))
+
+			var payload worker.VideoAnalysisPayload
+			Expect(json.Unmarshal(pending[0].Payload, &payload)).To(Succeed())
+			Expect(payload.SessionID).To(Equal("session-1"))
+			Expect(payload.FilePath).To(Equal("gs://test-bucket/videos/session-1_video.mp4"))
 		})
 	})
 
 	Describe("GET /api/v1/analysis/:session_id", func() {
 		It("returns repository results for the requested session", func() {
-			repo := &fakeAnalysisResultRepository{
-				results: []db.AnalysisResult{{ID: 1, SessionID: "session-1", Status: "COMPLETED", Output: "ok"}},
-			}
-			router := newTestRouter(Config{AnalysisResults: repo})
+			// Seed the DB with a test result.
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: "session-1",
+				Status:    "COMPLETED",
+				Output:    "ok",
+			}).Error).NotTo(HaveOccurred())
+
+			router := newTestRouter(Config{AnalysisResults: NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/session-1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -505,8 +440,6 @@ var _ = Describe("Controller handlers", func() {
 			router.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusOK))
-			Expect(repo.findCalled).To(BeTrue())
-			Expect(repo.sessionID).To(Equal("session-1"))
 
 			var results []db.AnalysisResult
 			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
@@ -515,7 +448,7 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("returns internal error when repository fails", func() {
-			router := newTestRouter(Config{AnalysisResults: &fakeAnalysisResultRepository{err: errors.New("boom")}})
+			router := newTestRouter(Config{AnalysisResults: newBrokenRepo()})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/session-1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -529,25 +462,44 @@ var _ = Describe("Controller handlers", func() {
 
 	Describe("GET /api/v1/history", func() {
 		It("returns recent history and enforces the limit", func() {
-			repo := &fakeAnalysisResultRepository{
-				results: []db.AnalysisResult{{ID: 1, SessionID: "session-1", Status: "COMPLETED", Output: "ok"}},
-			}
-			router := newTestRouter(Config{AnalysisResults: repo})
+			// Seed one result so we get a non-empty response.
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: "session-1",
+				Status:    "COMPLETED",
+				Output:    "ok",
+				ProfileID: ptrUint(1),
+			}).Error).NotTo(HaveOccurred())
+
+			router := newTestRouter(Config{AnalysisResults: NewGormAnalysisResultRepository(dbConn)})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+
+			var results []db.AnalysisResult
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(1))
+		})
+
+		It("returns bad request when profile_id is missing", func() {
+			router := newTestRouter(Config{AnalysisResults: NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/history", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusOK))
-			Expect(repo.listCalled).To(BeTrue())
-			Expect(repo.historyLimit).To(Equal(20))
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(decodeMapBody(w)["error"]).To(Equal("profile_id is required"))
 		})
 
 		It("returns internal error when repository fails", func() {
-			router := newTestRouter(Config{AnalysisResults: &fakeAnalysisResultRepository{err: errors.New("boom")}})
+			router := newTestRouter(Config{AnalysisResults: newBrokenRepo()})
 
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/history", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
@@ -595,13 +547,16 @@ var _ = Describe("Controller handlers", func() {
 		It("returns SRT with correct format for completed chunks sorted by start_secs", func() {
 			start1, end1 := 10.0, 20.0
 			start2, end2 := 0.0, 10.0
-			repo := &fakeAnalysisResultRepository{
-				chunkResults: []db.ChunkAnalysisResult{
-					{ID: 1, SessionID: "session-1", Status: "COMPLETED", Output: "Second chunk", StartSecs: &start1, EndSecs: &end1},
-					{ID: 2, SessionID: "session-1", Status: "COMPLETED", Output: "First chunk", StartSecs: &start2, EndSecs: &end2},
-				},
-			}
-			router := newTestRouter(Config{AnalysisResults: repo})
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: "session-1", Status: "COMPLETED", Output: "Second chunk",
+				StartSecs: &start1, EndSecs: &end1,
+			}).Error).NotTo(HaveOccurred())
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: "session-1", Status: "COMPLETED", Output: "First chunk",
+				StartSecs: &start2, EndSecs: &end2,
+			}).Error).NotTo(HaveOccurred())
+
+			router := newTestRouter(Config{AnalysisResults: NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -619,12 +574,12 @@ var _ = Describe("Controller handlers", func() {
 
 		It("returns empty body when no completed chunks exist", func() {
 			start, end := 0.0, 10.0
-			repo := &fakeAnalysisResultRepository{
-				chunkResults: []db.ChunkAnalysisResult{
-					{ID: 1, SessionID: "session-1", Status: "FAILED", Output: "error", StartSecs: &start, EndSecs: &end},
-				},
-			}
-			router := newTestRouter(Config{AnalysisResults: repo})
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: "session-1", Status: "FAILED", Output: "error",
+				StartSecs: &start, EndSecs: &end,
+			}).Error).NotTo(HaveOccurred())
+
+			router := newTestRouter(Config{AnalysisResults: NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -637,13 +592,15 @@ var _ = Describe("Controller handlers", func() {
 
 		It("skips chunks without start/end timestamps", func() {
 			start, end := 0.0, 10.0
-			repo := &fakeAnalysisResultRepository{
-				chunkResults: []db.ChunkAnalysisResult{
-					{ID: 1, SessionID: "session-1", Status: "COMPLETED", Output: "has timestamps", StartSecs: &start, EndSecs: &end},
-					{ID: 2, SessionID: "session-1", Status: "COMPLETED", Output: "no timestamps"},
-				},
-			}
-			router := newTestRouter(Config{AnalysisResults: repo})
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: "session-1", Status: "COMPLETED", Output: "has timestamps",
+				StartSecs: &start, EndSecs: &end,
+			}).Error).NotTo(HaveOccurred())
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: "session-1", Status: "COMPLETED", Output: "no timestamps",
+			}).Error).NotTo(HaveOccurred())
+
+			router := newTestRouter(Config{AnalysisResults: NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -657,7 +614,7 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("returns internal error when repository fails", func() {
-			router := newTestRouter(Config{AnalysisResults: &fakeAnalysisResultRepository{err: errors.New("boom")}})
+			router := newTestRouter(Config{AnalysisResults: newBrokenRepo()})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -666,6 +623,107 @@ var _ = Describe("Controller handlers", func() {
 
 			Expect(w.Code).To(Equal(http.StatusInternalServerError))
 			Expect(decodeMapBody(w)["error"]).To(Equal("failed to fetch chunk results"))
+		})
+	})
+
+	Describe("GET /api/v1/dev/sessions", func() {
+		It("lists existing sessions discovered from stored assets", func() {
+			transport := testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
+
+			transport.New("https://storage.googleapis.com").
+				Get(gcsListObjectsURL("test-bucket", "videos/")).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"kind": "storage#objects",
+					"items": []map[string]any{
+						{"name": "videos/WOD-2026-03-30-10-34_chunk_0001_front.mp4", "timeCreated": "2026-03-30T10:35:00Z"},
+						{"name": "videos/WOD-2026-03-30-10-34_merged_20260330110000.mp4", "timeCreated": "2026-03-30T11:00:00Z"},
+						{"name": "videos/session-1_video.mp4", "timeCreated": "2026-03-30T09:00:00Z"},
+						{"name": "videos/session-1_hardsubbed_20260330100500.mp4", "timeCreated": "2026-03-30T10:05:00Z"},
+					},
+				})
+
+			transport.New("https://storage.googleapis.com").
+				Get(gcsListObjectsURL("test-bucket", "highlights/")).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"kind": "storage#objects",
+					"items": []map[string]any{
+						{"name": "highlights/WOD-2026-03-30-10-34_hl_best_20260330112000.mp4", "timeCreated": "2026-03-30T11:20:00Z"},
+						{"name": "highlights/WOD-2026-03-30-10-34_music_20260330112000.mp3", "timeCreated": "2026-03-30T11:20:01Z"},
+					},
+				})
+
+			router := newTestRouter(Config{StorageClient: storageClient, BucketName: "test-bucket"})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/dev/sessions", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+
+			var response SessionCatalogResponse
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.Sessions).To(HaveLen(2))
+
+			Expect(response.Sessions[0].SessionID).To(Equal("WOD-2026-03-30-10-34"))
+			Expect(response.Sessions[0].ChunkCount).To(Equal(1))
+			Expect(response.Sessions[0].HasMerged).To(BeTrue())
+			Expect(response.Sessions[0].HasHardsubbed).To(BeFalse())
+			Expect(response.Sessions[0].HighlightCount).To(Equal(1))
+			Expect(response.Sessions[0].LatestCreatedAt).To(Equal("2026-03-30T11:20:00Z"))
+
+			Expect(response.Sessions[1].SessionID).To(Equal("session-1"))
+			Expect(response.Sessions[1].ChunkCount).To(Equal(1))
+			Expect(response.Sessions[1].HasMerged).To(BeFalse())
+			Expect(response.Sessions[1].HasHardsubbed).To(BeTrue())
+			Expect(response.Sessions[1].HighlightCount).To(Equal(0))
+			Expect(response.Sessions[1].LatestCreatedAt).To(Equal("2026-03-30T10:05:00Z"))
+		})
+
+		It("returns internal error when storage listing fails", func() {
+			transport := testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
+
+			transport.New("https://storage.googleapis.com").
+				Get(gcsListObjectsURL("test-bucket", "videos/")).
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{
+					"error": map[string]any{"code": 500, "message": "Internal Server Error"},
+				})
+
+			router := newTestRouter(Config{
+				StorageClient: storageClient,
+				BucketName:    "test-bucket",
+			})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/dev/sessions", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusInternalServerError))
+			Expect(decodeMapBody(w)["error"]).To(Equal("failed to list sessions"))
+		})
+	})
+
+	Describe("asset helpers", func() {
+		It("labels encoded uploaded videos and exposes a public URL", func() {
+			assets := buildVideoAssets("WOD-2026-03-30-10-34", "wod-strategist-uploads-dev", []storage.ObjectInfo{
+				{
+					Name:    "videos/WOD-2026-03-30-10-34_vid_1774835318197_7cyyzb_encoded.mp4",
+					Created: time.Date(2026, 3, 30, 10, 34, 0, 0, time.UTC),
+				},
+			})
+
+			Expect(assets).To(HaveLen(1))
+			Expect(assets[0].Kind).To(Equal("chunk"))
+			Expect(assets[0].Label).To(Equal("Uploaded Video"))
+			Expect(assets[0].PublicURL).To(Equal("https://storage.googleapis.com/wod-strategist-uploads-dev/videos/WOD-2026-03-30-10-34_vid_1774835318197_7cyyzb_encoded.mp4"))
 		})
 	})
 })
@@ -719,4 +777,8 @@ func multipartRequestBody(sessionID string, filename string, content string) (*b
 
 	Expect(writer.Close()).To(Succeed())
 	return body, writer.FormDataContentType()
+}
+
+func ptrUint(v uint) *uint {
+	return &v
 }

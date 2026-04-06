@@ -66,6 +66,7 @@ const defaultMetadata = {
   workoutType: "wod" as const,
   movements: ["Squat"],
   injuries: [],
+  profileId: 1,
 };
 
 function getStore() {
@@ -180,6 +181,7 @@ describe("useVideoQueue", () => {
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
+        profileId: 1,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -211,6 +213,7 @@ describe("useVideoQueue", () => {
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
+        profileId: 1,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -239,6 +242,7 @@ describe("useVideoQueue", () => {
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
+        profileId: 1,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -263,6 +267,7 @@ describe("useVideoQueue", () => {
         progress: 0.5,
         createdAt: Date.now(),
         gallerySaved: false,
+        profileId: 1,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -288,6 +293,7 @@ describe("useVideoQueue", () => {
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
+        profileId: 1,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -317,6 +323,7 @@ describe("useVideoQueue", () => {
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
+        profileId: 1,
       };
       useVideoQueue.setState({ items: [item] });
 
@@ -342,6 +349,7 @@ describe("useVideoQueue", () => {
         progress: 1,
         createdAt: Date.now(),
         gallerySaved: false,
+        profileId: 1,
       };
       useVideoQueue.setState({ items: [item] });
 

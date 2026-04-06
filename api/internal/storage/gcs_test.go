@@ -1,4 +1,4 @@
-package storage
+package storage_test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/storage"
 	"github.com/wod-strategist/api/internal/testhelpers"
 	"google.golang.org/api/option"
 )
@@ -31,7 +32,7 @@ var _ = Describe("GCS client", func() {
 				Reply(http.StatusOK).
 				JSON(map[string]any{"name": "videos/demo.mp4"})
 
-			client, err := NewClient(
+			client, err := storage.NewClient(
 				context.Background(),
 				"test-bucket",
 				option.WithHTTPClient(&http.Client{Transport: transport}),
@@ -58,7 +59,7 @@ var _ = Describe("GCS client", func() {
 					},
 				})
 
-			client, err := NewClient(
+			client, err := storage.NewClient(
 				context.Background(),
 				"test-bucket",
 				option.WithHTTPClient(&http.Client{Transport: transport}),
@@ -82,7 +83,7 @@ var _ = Describe("GCS client", func() {
 				Reply(http.StatusOK).
 				BodyString("downloaded data")
 
-			client, err := NewClient(
+			client, err := storage.NewClient(
 				context.Background(),
 				"test-bucket",
 				option.WithHTTPClient(&http.Client{Transport: transport}),
@@ -102,7 +103,7 @@ var _ = Describe("GCS client", func() {
 		})
 
 		It("returns an error for invalid GCS URIs before making a request", func() {
-			client, err := NewClient(
+			client, err := storage.NewClient(
 				context.Background(),
 				"test-bucket",
 				option.WithHTTPClient(&http.Client{Transport: testhelpers.NewMockTransport()}),
@@ -118,19 +119,19 @@ var _ = Describe("GCS client", func() {
 
 	Describe("ParseGCSURI", func() {
 		It("parses valid URIs", func() {
-			bucket, object, err := ParseGCSURI("gs://test-bucket/path/to/file.txt")
+			bucket, object, err := storage.ParseGCSURI("gs://test-bucket/path/to/file.txt")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(bucket).To(Equal("test-bucket"))
 			Expect(object).To(Equal("path/to/file.txt"))
 		})
 
 		It("rejects URIs without the gs scheme", func() {
-			_, _, err := ParseGCSURI("https://example.test/file.txt")
+			_, _, err := storage.ParseGCSURI("https://example.test/file.txt")
 			Expect(err).To(HaveOccurred())
 		})
 
 		It("rejects malformed URIs", func() {
-			_, _, err := ParseGCSURI("gs://test-bucket")
+			_, _, err := storage.ParseGCSURI("gs://test-bucket")
 			Expect(err).To(HaveOccurred())
 		})
 	})

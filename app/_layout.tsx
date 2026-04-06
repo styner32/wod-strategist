@@ -28,7 +28,10 @@ export default function RootLayout() {
         <Stack.Screen name="index" options={{ title: "WOD Strategist" }} />
 
         {/* 1.1 프로필 설정 */}
-        <Stack.Screen name="profile" options={{ title: "My Profile", presentation: "modal" }} />
+        <Stack.Screen name="profile" options={{ title: "Profile", presentation: "modal" }} />
+
+        {/* 1.2 프로필 목록 */}
+        <Stack.Screen name="profiles" options={{ title: "Profiles", presentation: "modal" }} />
 
         {/* 1.5. 워크아웃 설정 */}
         <Stack.Screen name="workout/setup" options={{ title: "Setup", presentation: "modal" }} />
