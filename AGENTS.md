@@ -295,3 +295,43 @@ const flag = flagParam !== undefined
 - The `usePoseDetection.ts` throttle uses `runAtTargetFps()` from `react-native-vision-camera` — this is the single most impactful fix for Android OOM. Do not remove it.
 - The recording dashboard shows **OPT FLAGS** during recording for debugging — keep this in sync when adding new flags.
 
+## BLE Heart Rate Monitor
+
+The app connects to BLE heart rate monitors during workouts via `features/health/useBleHeartRate.ts` using `react-native-ble-plx`.
+
+### Supported devices
+
+The scan filter matches devices by name or HR service UUID (`180D`):
+
+| Device Type | Name Pattern | Example |
+|---|---|---|
+| Polar straps (H10, OH1) | `"Polar H10 ..."`, `"Polar OH1 ..."` | `Polar H10 A1B2C3D4` |
+| HeartCast app | `"HeartCast"` | HeartCast virtual HR bridge |
+| Any HR device | advertises service UUID `180D` | Generic BLE HR monitors |
+
+### Known gotcha: "Polar mobile" phone-app bridge
+
+The Polar Beat/Flow app on a phone re-broadcasts heart rate data as a BLE peripheral named `"Polar mobile XXXXXXXX"`. This is **not** an actual HR strap — it's a phone acting as a bridge.
+
+**Problem:** If two phones are nearby (e.g. iPhone running Polar app + Android running WOD Strategist), the Android app's auto-scan would connect to the iPhone's Polar app instead of the actual H10 strap. This caused:
+- Failed/hanging connections (~60s timeout)
+- `BleDisconnectedException` with GATT status 147
+- App crash due to `react-native-ble-plx` passing `null` to `PromiseImpl.reject` (fixed in v3.5.1)
+
+**Fix:** The scan filter explicitly excludes `"Polar mobile"` devices. Only actual hardware straps are connected.
+
+### Connection behavior
+
+| Setting | Value | Purpose |
+|---|---|---|
+| Connection timeout | 10s (`CONNECTION_TIMEOUT_MS`) | Fail fast instead of hanging ~60s |
+| Inactivity timeout | 15s (`INACTIVITY_TIMEOUT_MS`) | Reconnect if no HR data received |
+| Reconnect backoff | 1s → 10s exponential | Prevents rapid reconnect storms |
+
+### Rules for AI assistants
+
+- **Never remove the `"Polar mobile"` exclusion** from the scan filter — it prevents cross-device connection issues during development and production.
+- The `BleManager` singleton is created **outside** the React component to prevent memory leaks. Do not move it inside a hook or component.
+- `react-native-ble-plx` v3.5.1+ is required — earlier versions crash on Android (RN 0.76+) when `Promise.reject` receives a `null` error code.
+- The HR scan starts automatically on mount. If this causes issues during development, consider gating it behind a user toggle.
+
