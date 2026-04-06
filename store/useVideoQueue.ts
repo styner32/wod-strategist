@@ -293,11 +293,17 @@ async function _runEncoding(
   try {
     console.log("🎬 Starting encoding for:", id, "rawUri:", rawUri);
 
-    let compressedUri = await Video.compress(rawUri, {
-      compressionMethod: "auto",
-      maxSize: 720,
-      progressDivider: 5,
-    });
+    let compressedUri = await Video.compress(
+      rawUri,
+      {
+        compressionMethod: "auto",
+        maxSize: 720,
+        progressDivider: 5,
+      },
+      (progress) => {
+        get()._updateItem(id, { progress });
+      }
+    );
 
     // Rename compressed file with _encoded suffix for easier debugging
     try {

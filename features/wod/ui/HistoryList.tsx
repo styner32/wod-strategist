@@ -10,6 +10,7 @@ import {
 } from "react-native";
 
 import { MarkdownText } from "@/components/ui/MarkdownText";
+import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useProfileId } from "@/store/useProfileStore";
 import { AnalysisResult, fetchAnalysisHistory } from "../history";
 
@@ -86,18 +87,28 @@ function formatDate(dateStr: string): string {
 
 function HistoryCard({ item }: { item: AnalysisResult }) {
   const [expanded, setExpanded] = useState(false);
+  const scheme = useColorScheme() ?? "light";
+  const isDark = scheme === "dark";
   const statusConfig = getStatusConfig(item.status);
   const typeBadge = getTypeBadge(item.analysis_type);
 
   const hasOutput = item.output && item.output.trim().length > 0;
   const hasInjuryOutput = item.injury_output && item.injury_output.trim().length > 0;
 
+  const cardBg = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.03)";
+  const cardBorder = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
+  const sessionColor = isDark ? "#FFFFFF" : "#1C1C1E";
+  const dateColor = isDark ? "#888" : "#6B6B6B";
+  const previewColor = isDark ? "#C0C0C0" : "#4A4A4A";
+  const expandColor = isDark ? "#64D2FF" : "#0A84FF";
+  const hrDividerColor = isDark ? "rgba(255,107,107,0.2)" : "rgba(255,107,107,0.3)";
+
   return (
-    <View style={styles.card}>
+    <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
       {/* Header Row */}
       <View style={styles.cardHeader}>
         <View style={styles.headerLeft}>
-          <Text style={styles.sessionLabel}>
+          <Text style={[styles.sessionLabel, { color: sessionColor }]}>
             {formatSessionLabel(item.session_id)}
           </Text>
           <View style={[styles.badge, { backgroundColor: typeBadge.bgColor }]}>
@@ -114,7 +125,7 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
       </View>
 
       {/* Date */}
-      <Text style={styles.date}>{formatDate(item.created_at)}</Text>
+      <Text style={[styles.date, { color: dateColor }]}>{formatDate(item.created_at)}</Text>
 
       {/* Content */}
       {hasOutput && (
@@ -128,7 +139,7 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
 
               {/* Injury supplement output */}
               {hasInjuryOutput && (
-                <View style={styles.injurySection}>
+               <View style={[styles.injurySection, { borderTopColor: hrDividerColor }]}>
                   <View style={styles.injurySectionHeader}>
                     <Text style={styles.injurySectionLabel}>
                       🩹 Injury Supplement Analysis
@@ -141,12 +152,12 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
               )}
             </View>
           ) : (
-            <Text style={styles.previewText} numberOfLines={4}>
+            <Text style={[styles.previewText, { color: previewColor }]} numberOfLines={4}>
               {stripMarkdown(item.output)}
             </Text>
           )}
 
-          <Text style={styles.expandHint}>
+          <Text style={[styles.expandHint, { color: expandColor }]}>
             {expanded ? "Show Less ▲" : "Show More ▼"}
           </Text>
         </TouchableOpacity>
@@ -268,11 +279,9 @@ const styles = StyleSheet.create({
 
   // Card
   card: {
-    backgroundColor: "rgba(255,255,255,0.06)",
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
   },
   cardHeader: {
     flexDirection: "row",
@@ -288,7 +297,6 @@ const styles = StyleSheet.create({
   sessionLabel: {
     fontSize: 17,
     fontWeight: "700",
-    color: "#FFFFFF",
   },
 
   // Badges
@@ -306,7 +314,6 @@ const styles = StyleSheet.create({
   // Date
   date: {
     fontSize: 12,
-    color: "#888",
     marginBottom: 12,
     marginTop: 2,
   },
@@ -315,7 +322,6 @@ const styles = StyleSheet.create({
   previewText: {
     fontSize: 14,
     lineHeight: 21,
-    color: "#C0C0C0",
   },
 
   // Content body (expanded)
@@ -326,7 +332,6 @@ const styles = StyleSheet.create({
   // Expand toggle
   expandHint: {
     fontSize: 12,
-    color: "#64D2FF",
     fontWeight: "600",
     marginTop: 10,
     textAlign: "center",
@@ -336,7 +341,6 @@ const styles = StyleSheet.create({
   injurySection: {
     marginTop: 16,
     borderTopWidth: 1,
-    borderTopColor: "rgba(255,107,107,0.2)",
     paddingTop: 12,
   },
   injurySectionHeader: {

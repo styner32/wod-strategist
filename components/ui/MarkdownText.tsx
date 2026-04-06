@@ -2,6 +2,7 @@ import React from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 
 import { Fonts } from "@/constants/theme";
+import { useColorScheme } from "@/hooks/use-color-scheme";
 
 /**
  * Lightweight markdown renderer for Gemini's Korean coaching output.
@@ -16,7 +17,7 @@ import { Fonts } from "@/constants/theme";
 
 interface MarkdownTextProps {
   children: string;
-  /** Base text color (defaults to #E0E0E0 for dark theme) */
+  /** Base text color — auto-detected from theme if not specified */
   color?: string;
 }
 
@@ -125,7 +126,12 @@ function renderInlineText(text: string, color: string): React.ReactNode[] {
   });
 }
 
-export function MarkdownText({ children, color = "#E0E0E0" }: MarkdownTextProps) {
+export function MarkdownText({ children, color: colorProp }: MarkdownTextProps) {
+  const scheme = useColorScheme() ?? "light";
+  const isDark = scheme === "dark";
+  const color = colorProp ?? (isDark ? "#D0D0D0" : "#2C2C2E");
+  const accentColor = isDark ? "#64D2FF" : "#0A84FF";
+
   if (!children) return null;
 
   const blocks = parseBlocks(children);
@@ -154,7 +160,7 @@ export function MarkdownText({ children, color = "#E0E0E0" }: MarkdownTextProps)
           case "numbered":
             return (
               <View key={i} style={styles.listItem}>
-                <Text style={[styles.listNumber, { color: "#64D2FF" }]}>
+                <Text style={[styles.listNumber, { color: accentColor }]}>
                   {block.number}.
                 </Text>
                 <Text style={[styles.listText, { color }]}>
@@ -166,7 +172,7 @@ export function MarkdownText({ children, color = "#E0E0E0" }: MarkdownTextProps)
           case "bullet":
             return (
               <View key={i} style={styles.listItem}>
-                <Text style={[styles.bullet, { color: "#64D2FF" }]}>•</Text>
+                <Text style={[styles.bullet, { color: accentColor }]}>•</Text>
                 <Text style={[styles.listText, { color }]}>
                   {renderInlineText(block.content, color)}
                 </Text>
@@ -255,7 +261,7 @@ const styles = StyleSheet.create({
     marginVertical: 12,
   },
   codeBlock: {
-    backgroundColor: "rgba(0,0,0,0.3)",
+    backgroundColor: "rgba(128,128,128,0.1)",
     borderRadius: 8,
     padding: 12,
     marginVertical: 4,
