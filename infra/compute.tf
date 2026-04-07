@@ -90,8 +90,8 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       
       resources {
         limits = {
-          memory = "4Gi"
-          cpu    = "1"
+          memory = "8Gi"
+          cpu    = "2"
         }
       }
 

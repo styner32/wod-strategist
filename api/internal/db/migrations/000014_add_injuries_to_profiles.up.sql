@@ -1,0 +1,1 @@
+ALTER TABLE profiles ADD COLUMN injuries TEXT NOT NULL DEFAULT '[]';

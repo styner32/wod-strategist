@@ -1,13 +1,12 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import {
-  fetchInjuries,
   fetchMovements,
   processWorkoutVideo,
 } from "@/features/wod/api";
 import {
   buildWorkoutSessionId,
 } from "@/features/wod/workoutType";
-import { useProfileId } from "@/store/useProfileStore";
+import { useActiveProfile, useProfileId } from "@/store/useProfileStore";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
@@ -27,6 +26,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 export default function UploadScreen() {
   const workoutType = "wod";
   const profileId = useProfileId();
+  const activeProfile = useActiveProfile();
   const [videoUri, setVideoUri] = useState<string | null>(null);
   const [videoMimeType, setVideoMimeType] = useState<string | null>(null);
   const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
@@ -35,18 +35,13 @@ export default function UploadScreen() {
 
   const [movementOptions, setMovementOptions] = useState<string[]>([]);
   const [selectedMovements, setSelectedMovements] = useState<string[]>([]);
-  const [injuryOptions, setInjuryOptions] = useState<string[]>([]);
-  const [selectedInjuries, setSelectedInjuries] = useState<string[]>([]);
   const [isLoadingMovements, setIsLoadingMovements] = useState(true);
 
   useEffect(() => {
-    Promise.all([fetchMovements(), fetchInjuries()])
-      .then(([movements, injuries]) => {
-        setMovementOptions(movements);
-        setInjuryOptions(injuries);
-      })
+    fetchMovements()
+      .then(setMovementOptions)
       .catch((error) => {
-        console.error("Failed to load workout metadata", error);
+        console.error("Failed to load movements", error);
       })
       .finally(() => setIsLoadingMovements(false));
   }, []);
@@ -54,12 +49,6 @@ export default function UploadScreen() {
   const toggleMovement = (m: string) => {
     setSelectedMovements((prev) =>
       prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]
-    );
-  };
-
-  const toggleInjury = (injury: string) => {
-    setSelectedInjuries((prev) =>
-      prev.includes(injury) ? prev.filter((x) => x !== injury) : [...prev, injury]
     );
   };
 
@@ -104,10 +93,13 @@ export default function UploadScreen() {
       setProgress(0);
       const sessionId = buildWorkoutSessionId(workoutType);
 
+      // Get injuries from active profile
+      const injuries = activeProfile?.injuries ?? [];
+
       await processWorkoutVideo(videoUri, sessionId, {
         onProgress: (p) => setProgress(p),
         movements: selectedMovements,
-        injuries: selectedInjuries,
+        injuries,
         mimeType: videoMimeType || "video/mp4",
         workoutType,
         profileId,
@@ -186,38 +178,6 @@ export default function UploadScreen() {
                           ]}
                         >
                           {m}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Known Injuries</Text>
-              <Text style={styles.helperText}>
-                Optional: share any current limitations before this workout.
-              </Text>
-              {isLoadingMovements ? (
-                <ActivityIndicator color="#007AFF" />
-              ) : (
-                <View style={styles.chipContainer}>
-                  {injuryOptions.map((injury) => {
-                    const isSelected = selectedInjuries.includes(injury);
-                    return (
-                      <TouchableOpacity
-                        key={injury}
-                        onPress={() => toggleInjury(injury)}
-                        style={[styles.chip, isSelected && styles.chipActive]}
-                      >
-                        <Text
-                          style={[
-                            styles.chipText,
-                            isSelected && styles.chipTextActive,
-                          ]}
-                        >
-                          {injury}
                         </Text>
                       </TouchableOpacity>
                     );

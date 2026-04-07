@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -8,16 +9,24 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
+import * as MediaLibrary from "expo-media-library";
 
 import { MarkdownText } from "@/components/ui/MarkdownText";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useProfileId } from "@/store/useProfileStore";
+import { fetchVideoDownloadURL } from "../api";
 import { AnalysisResult, fetchAnalysisHistory } from "../history";
 
-/** Extracts a human-readable label from session_id like "wod-20260401-143021" → "WOD" */
+/**
+ * Extracts a human-readable label from session_id.
+ * New format: "WOD-20260401-01JQXYZ..." → "WOD"
+ * Old format: "P1-WOD-2026-04-01-14-30" → "WOD"
+ */
 function formatSessionLabel(sessionId: string): string {
   const parts = sessionId.split("-");
   if (parts.length === 0) return "Workout";
+  // First segment is the workout type (WOD, STRENGTH, etc.)
   const type = parts[0].toUpperCase();
   switch (type) {
     case "WOD":
@@ -31,6 +40,10 @@ function formatSessionLabel(sessionId: string): string {
     case "HIIT":
       return "HIIT";
     default:
+      // Old format with P{id} prefix: skip to second part
+      if (type.startsWith("P") && parts.length > 1) {
+        return parts[1].toUpperCase();
+      }
       return type;
   }
 }
@@ -87,6 +100,7 @@ function formatDate(dateStr: string): string {
 
 function HistoryCard({ item }: { item: AnalysisResult }) {
   const [expanded, setExpanded] = useState(false);
+  const [downloading, setDownloading] = useState<string | null>(null); // 'merged' | 'hardsubbed'
   const scheme = useColorScheme() ?? "light";
   const isDark = scheme === "dark";
   const statusConfig = getStatusConfig(item.status);
@@ -94,6 +108,56 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
 
   const hasOutput = item.output && item.output.trim().length > 0;
   const hasInjuryOutput = item.injury_output && item.injury_output.trim().length > 0;
+  const isCompleted = item.status === "COMPLETED";
+
+  const handleDownload = async (kind: "merged" | "hardsubbed") => {
+    try {
+      setDownloading(kind);
+      const { download_url, filename } = await fetchVideoDownloadURL(item.session_id, item.profile_id ?? 0, kind);
+
+      const localUri = FileSystem.cacheDirectory + filename;
+      const { uri } = await FileSystem.downloadAsync(download_url, localUri);
+
+      Alert.alert(
+        "Download Complete",
+        `${kind === "hardsubbed" ? "Guided" : "Original"} video saved.`,
+        [
+          {
+            text: "Save to Gallery",
+            onPress: async () => {
+              try {
+                const { status } = await MediaLibrary.requestPermissionsAsync();
+                if (status !== "granted") {
+                  Alert.alert("Permission Required", "Gallery permission is needed to save videos.");
+                  return;
+                }
+                await MediaLibrary.saveToLibraryAsync(uri);
+                Alert.alert("Saved", "Video saved to your gallery.");
+              } catch (e) {
+                Alert.alert("Error", "Failed to save to gallery.");
+              } finally {
+                // Clean up temp file
+                try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+              }
+            },
+          },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: async () => {
+              try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+            },
+          },
+          { text: "Keep", style: "cancel" },
+        ]
+      );
+    } catch (e: any) {
+      const msg = e?.message?.includes("404") ? "Video not found on server." : String(e);
+      Alert.alert("Download Failed", msg);
+    } finally {
+      setDownloading(null);
+    }
+  };
 
   const cardBg = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.03)";
   const cardBorder = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
@@ -169,6 +233,34 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
           <Text style={styles.failedText}>
             Analysis failed. The video may have been too short or unclear.
           </Text>
+        </View>
+      )}
+
+      {/* Download buttons */}
+      {isCompleted && item.analysis_type !== "injury_supplement" && (
+        <View style={styles.downloadRow}>
+          <TouchableOpacity
+            style={styles.downloadBtn}
+            onPress={() => handleDownload("merged")}
+            disabled={downloading !== null}
+          >
+            {downloading === "merged" ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.downloadBtnText}>📹 Video</Text>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.downloadBtn, styles.downloadBtnGuided]}
+            onPress={() => handleDownload("hardsubbed")}
+            disabled={downloading !== null}
+          >
+            {downloading === "hardsubbed" ? (
+              <ActivityIndicator size="small" color="#000" />
+            ) : (
+              <Text style={[styles.downloadBtnText, styles.downloadBtnGuidedText]}>📝 Guided</Text>
+            )}
+          </TouchableOpacity>
         </View>
       )}
 
@@ -377,6 +469,32 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#FFD60A",
     lineHeight: 18,
+  },
+
+  // Download buttons
+  downloadRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 12,
+  },
+  downloadBtn: {
+    flex: 1,
+    backgroundColor: "rgba(100,210,255,0.15)",
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  downloadBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#64D2FF",
+  },
+  downloadBtnGuided: {
+    backgroundColor: "rgba(255,214,10,0.12)",
+  },
+  downloadBtnGuidedText: {
+    color: "#FFD60A",
   },
 
   // Loading

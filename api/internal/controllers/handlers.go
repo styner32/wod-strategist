@@ -1,9 +1,11 @@
 package controllers
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -57,7 +59,7 @@ func (ctl *Controller) CreateUploadURL(c *gin.Context) {
 		return
 	}
 
-	objectName := buildVideoObjectName(req.SessionID, req.Filename)
+	objectName := buildVideoObjectName(req.ProfileID, req.SessionID, req.Filename)
 	signedURL, err := ctl.storageClient.GenerateSignedURL(objectName, http.MethodPut, 15*time.Minute)
 	if err != nil {
 		logger.Log.Error("failed to generate signed URL", zap.Error(err))
@@ -216,7 +218,8 @@ func (ctl *Controller) Upload(c *gin.Context) {
 	}
 	defer file.Close()
 
-	objectName := buildVideoObjectName(sessionID, fileHeader.Filename)
+	// Legacy multipart upload path — no profile_id available, use 0
+	objectName := buildVideoObjectName(0, sessionID, fileHeader.Filename)
 	gcsURI, err := ctl.storageClient.UploadFile(c.Request.Context(), file, objectName)
 	if err != nil {
 		logger.Log.Error("failed to upload file to GCS", zap.Error(err))
@@ -335,9 +338,10 @@ func (ctl *Controller) ListInjuries(c *gin.Context) {
 	c.JSON(http.StatusOK, append([]string(nil), injuries...))
 }
 
-func buildVideoObjectName(sessionID string, filename string) string {
+func buildVideoObjectName(profileID uint, sessionID string, filename string) string {
 	return fmt.Sprintf(
-		"videos/%s_%s",
+		"videos/%d/%s/%s",
+		profileID,
 		sanitizeObjectPart(sessionID, "session"),
 		sanitizeObjectPart(filename, "upload.bin"),
 	)
@@ -446,6 +450,21 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 		return
 	}
 
+	// Validate injuries if provided
+	if req.Injuries == nil {
+		req.Injuries = []string{}
+	}
+	if !allowedInjuries.containsAll(req.Injuries) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid injuries"})
+		return
+	}
+
+	injuriesJSON, err := json.Marshal(req.Injuries)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode injuries"})
+		return
+	}
+
 	profile := &db.Profile{
 		Name:       req.Name,
 		BirthYear:  req.BirthYear,
@@ -454,6 +473,7 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 		Gender:     req.Gender,
 		HeightCm:   req.HeightCm,
 		WeightKg:   req.WeightKg,
+		Injuries:   string(injuriesJSON),
 	}
 
 	if err := ctl.profiles.Create(c.Request.Context(), profile); err != nil {
@@ -561,6 +581,18 @@ func (ctl *Controller) UpdateProfile(c *gin.Context) {
 	if req.WeightKg != nil {
 		profile.WeightKg = *req.WeightKg
 	}
+	if req.Injuries != nil {
+		if !allowedInjuries.containsAll(req.Injuries) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid injuries"})
+			return
+		}
+		injuriesJSON, err := json.Marshal(req.Injuries)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode injuries"})
+			return
+		}
+		profile.Injuries = string(injuriesJSON)
+	}
 
 	if err := ctl.profiles.Update(c.Request.Context(), profile); err != nil {
 		logger.Log.Error("failed to update profile", zap.Error(err))
@@ -618,6 +650,14 @@ func (ctl *Controller) UnarchiveProfile(c *gin.Context) {
 }
 
 func toProfileResponse(p *db.Profile) ProfileResponse {
+	var injuryList []string
+	if p.Injuries != "" {
+		_ = json.Unmarshal([]byte(p.Injuries), &injuryList)
+	}
+	if injuryList == nil {
+		injuryList = []string{}
+	}
+
 	resp := ProfileResponse{
 		ID:         p.ID,
 		Name:       p.Name,
@@ -627,6 +667,7 @@ func toProfileResponse(p *db.Profile) ProfileResponse {
 		Gender:     p.Gender,
 		HeightCm:   p.HeightCm,
 		WeightKg:   p.WeightKg,
+		Injuries:   injuryList,
 	}
 	if p.ArchivedAt != nil {
 		ts := p.ArchivedAt.Format(time.RFC3339)
@@ -675,9 +716,9 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
-	// The merge task uses the session ID to discover chunks in GCS (prefix = "videos/<sessionId>")
-	// We pass a placeholder GCS URI — the worker will list objects by prefix instead.
-	placeholderGCSURI := fmt.Sprintf("gs://%s/videos/%s", ctl.bucketName, req.SessionID)
+	// The merge task uses profileID + sessionID to discover chunks in GCS.
+	// prefix = "videos/{profileId}/{sessionId}/"
+	placeholderGCSURI := fmt.Sprintf("gs://%s/videos/%d/%s/", ctl.bucketName, req.ProfileID, req.SessionID)
 
 	task, err := ctl.newMergeChunksTask(req.SessionID, placeholderGCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID)
 	if err != nil {
@@ -879,5 +920,90 @@ func (ctl *Controller) VerifyHighlights(c *gin.Context) {
 		"message":    "Highlight verification started",
 		"task_id":    info.ID,
 		"session_id": req.SessionID,
+	})
+}
+
+// @Summary      Get Video Download URL
+// @Description  Returns a time-limited signed URL for downloading the merged or hardsubbed video
+// @Tags         video
+// @Produce      json
+// @Param        session_id path string true "Session ID"
+// @Param        kind query string false "Video kind: merged (default) or hardsubbed"
+// @Success      200 {object} VideoDownloadURLResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      404 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /video-download/:session_id [get]
+func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
+	if ctl.storageClient == nil {
+		logger.Log.Error("storage client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage not configured"})
+		return
+	}
+
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	profileIDStr := c.DefaultQuery("profile_id", "0")
+	var profileID uint
+	if _, err := fmt.Sscanf(profileIDStr, "%d", &profileID); err != nil || profileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id query param is required"})
+		return
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(c.DefaultQuery("kind", "merged")))
+	if kind != "merged" && kind != "hardsubbed" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "kind must be 'merged' or 'hardsubbed'"})
+		return
+	}
+
+	// List all objects under the session directory: videos/{profileId}/{sessionId}/
+	prefix := fmt.Sprintf("videos/%d/%s/", profileID, sessionID)
+	objectInfos, err := ctl.storageClient.ListObjectInfos(c.Request.Context(), prefix)
+	if err != nil {
+		logger.Log.Error("failed to list session objects", zap.String("session_id", sessionID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to look up video"})
+		return
+	}
+
+	// In the new layout, files are named simply: merged.mp4, hardsubbed.mp4
+	newTarget := kind + ".mp4"
+	oldMarker := fmt.Sprintf("_%s_", kind) // backward compat: *_merged_*.mp4
+	var bestObject string
+	var bestCreated time.Time
+	for _, info := range objectInfos {
+		base := filepath.Base(info.Name)
+		if base == newTarget || strings.Contains(base, oldMarker) {
+			if bestObject == "" || info.Created.After(bestCreated) {
+				bestObject = info.Name
+				bestCreated = info.Created
+			}
+		}
+	}
+
+	if bestObject == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no %s video found for session", kind)})
+		return
+	}
+
+	signedURL, err := ctl.storageClient.GenerateSignedURL(bestObject, http.MethodGet, 15*time.Minute)
+	if err != nil {
+		logger.Log.Error("failed to generate download signed URL",
+			zap.String("session_id", sessionID),
+			zap.String("kind", kind),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate download URL"})
+		return
+	}
+
+	c.JSON(http.StatusOK, VideoDownloadURLResponse{
+		SessionID:   sessionID,
+		Kind:        kind,
+		DownloadURL: signedURL,
+		Filename:    sessionID + "_" + kind + ".mp4",
+		ExpiresAt:   time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339),
 	})
 }

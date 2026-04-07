@@ -20,6 +20,7 @@ type Profile struct {
 	Gender     string     `json:"gender"` // male, female, other
 	HeightCm   int        `json:"height_cm"`
 	WeightKg   float64    `json:"weight_kg"`
+	Injuries   string     `gorm:"type:text;not null;default:'[]'" json:"injuries"` // JSON array of injury strings
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`

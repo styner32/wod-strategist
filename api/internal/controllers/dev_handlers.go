@@ -20,7 +20,11 @@ import (
 
 const playURLExpiry = 15 * time.Minute
 
-var workoutSessionPattern = regexp.MustCompile(`^[A-Z]+-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}`)
+var workoutSessionPattern = regexp.MustCompile(`^(?:P\d+-)?[A-Z]+-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}`)
+
+// newLayoutPattern matches the new GCS path: videos/{profileId}/{sessionId}/{file}
+// e.g. "videos/42/WOD-20260407-01JQXYZ.../chunk_001.mp4"
+var newLayoutPattern = regexp.MustCompile(`^videos/\d+/([^/]+)/`)
 
 var highlightVariantLabels = map[string]string{
 	"full":        "Highlight Reel",
@@ -188,9 +192,31 @@ func (ctl *Controller) collectSessionAssets(ctx context.Context, sessionID strin
 		return SessionAssetsResponse{}, err
 	}
 
+	// Try new nested layout first: videos/{profileId}/{sessionId}/
+	newPrefix := ""
+	if m := newLayoutPattern.FindStringSubmatch("videos/0/" + sessionID + "/"); len(m) > 1 {
+		// Session ID is valid for new layout — list all profile dirs
+		// For dev workbench we don't know the profileId, so we list ALL profiles
+		newPrefix = sessionID
+	}
+
+	// List old flat layout
 	objectInfos, err := ctl.storageClient.ListObjectInfos(ctx, fmt.Sprintf("videos/%s", sessionID))
 	if err != nil {
 		return SessionAssetsResponse{}, err
+	}
+
+	// Also scan all profiles for the new nested layout if we got nothing
+	if len(objectInfos) == 0 && newPrefix != "" {
+		// Fall back: list all objects under videos/ and filter by session ID in the path
+		allInfos, err2 := ctl.storageClient.ListObjectInfos(ctx, "videos/")
+		if err2 == nil {
+			for _, info := range allInfos {
+				if strings.Contains(info.Name, "/"+sessionID+"/") {
+					objectInfos = append(objectInfos, info)
+				}
+			}
+		}
 	}
 
 	assets := buildVideoAssets(sessionID, ctl.bucketName, objectInfos)
@@ -253,12 +279,17 @@ func (ctl *Controller) collectSessionCatalog(ctx context.Context) (SessionCatalo
 		}
 
 		base := filepath.Base(info.Name)
+		isNew := strings.Contains(info.Name, "/"+sessionID+"/")
 		recordAsset(sessionID, info.Created, func(item *sessionCatalogItem) {
 			switch {
-			case strings.Contains(base, "_merged_"):
+			case base == "merged.mp4" || strings.Contains(base, "_merged_"):
 				item.HasMerged = true
-			case strings.Contains(base, "_hardsubbed_"):
+			case base == "hardsubbed.mp4" || strings.Contains(base, "_hardsubbed_"):
 				item.HasHardsubbed = true
+			case strings.HasPrefix(base, "hl_"):
+				if isNew {
+					item.HighlightCount++
+				}
 			default:
 				item.ChunkCount++
 			}
@@ -363,17 +394,25 @@ func buildVideoAssets(sessionID string, bucketName string, infos []storage.Objec
 
 	for _, info := range infos {
 		base := filepath.Base(info.Name)
-		if !strings.HasPrefix(base, sessionID+"_") {
+
+		// Check new nested layout: videos/{pid}/{sid}/{file}
+		isNewLayout := strings.Contains(info.Name, "/"+sessionID+"/")
+		isOldLayout := strings.HasPrefix(base, sessionID+"_")
+
+		if !isNewLayout && !isOldLayout {
 			continue
 		}
 
 		switch {
-		case strings.Contains(base, "_merged_"):
+		case base == "merged.mp4" || strings.Contains(base, "_merged_"):
 			asset := makeSessionAssetFromObjectInfo(sessionID, bucketName, "merged", "latest", "Merged Video", info)
 			mergedAsset = chooseLatestAsset(mergedAsset, asset)
-		case strings.Contains(base, "_hardsubbed_"):
+		case base == "hardsubbed.mp4" || strings.Contains(base, "_hardsubbed_"):
 			asset := makeSessionAssetFromObjectInfo(sessionID, bucketName, "hardsubbed", "latest", "Hardsubbed Video", info)
 			hardsubbedAsset = chooseLatestAsset(hardsubbedAsset, asset)
+		case strings.HasPrefix(base, "hl_"):
+			// Skip highlights in video asset list — they're handled separately
+			continue
 		default:
 			variant := strconv.Itoa(len(chunkAssets))
 			label := chunkAssetLabel(base, len(chunkAssets)+1)
@@ -392,6 +431,12 @@ func buildVideoAssets(sessionID string, bucketName string, infos []storage.Objec
 }
 
 func sessionIDFromObjectName(objectName string) string {
+	// New layout: videos/{profileId}/{sessionId}/{file}
+	if m := newLayoutPattern.FindStringSubmatch(objectName); len(m) > 1 {
+		return m[1]
+	}
+
+	// Old layout: videos/{sessionId}_{suffix}
 	base := filepath.Base(objectName)
 	if match := workoutSessionPattern.FindString(base); match != "" {
 		return match

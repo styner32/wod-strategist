@@ -4,7 +4,7 @@ import ParallaxScrollView from "@/components/parallax-scroll-view";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { HistoryList } from "../features/wod/ui/HistoryList";
+import { HistoryList } from "@/features/wod/ui/HistoryList";
 
 export default function HistoryScreen() {
   return (

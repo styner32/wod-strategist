@@ -121,6 +121,7 @@ export interface ProfileResponse {
   gender: string;
   height_cm: number;
   weight_kg: number;
+  injuries: string[];
   archived_at?: string;
 }
 
@@ -132,6 +133,7 @@ export interface CreateProfileRequest {
   gender: string;
   height_cm: number;
   weight_kg: number;
+  injuries?: string[];
 }
 
 export interface UpdateProfileRequest {
@@ -142,6 +144,7 @@ export interface UpdateProfileRequest {
   gender?: string;
   height_cm?: number;
   weight_kg?: number;
+  injuries?: string[];
 }
 
 export async function createProfile(
@@ -189,11 +192,12 @@ export async function unarchiveProfile(id: number): Promise<void> {
 /** Step 1: Request a signed upload URL from our API */
 export async function getUploadUrl(
   sessionId: string,
-  filename: string
+  filename: string,
+  profileId: number
 ): Promise<UploadUrlResponse> {
   return apiClient<UploadUrlResponse>("/upload-url", {
     method: "POST",
-    bodyPayload: { session_id: sessionId, filename },
+    bodyPayload: { session_id: sessionId, filename, profile_id: profileId },
   });
 }
 
@@ -303,7 +307,7 @@ export async function processWorkoutVideo(
 
   console.log("🚀 Starting upload process for:", filename);
 
-  const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename);
+  const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename, profileId);
   console.log("✅ Got Signed URL");
 
   await uploadToGcs(upload_url, fileUri, mimeType, onProgress, onCancelReady);
@@ -349,7 +353,7 @@ export async function processWorkoutChunk(
     await new Promise(resolve => setTimeout(resolve, DEBUG_SLOW_UPLOAD_MS));
   }
 
-  const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename);
+  const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename, profileId);
   await uploadToGcs(upload_url, fileUri, mimeType);
 
   const result = await notifyChunkUploadComplete(
@@ -416,4 +420,32 @@ export async function mergeChunks(
     sessionId: result.session_id,
     message: result.message,
   };
+}
+
+// ==========================================
+// Video Download
+// ==========================================
+
+export interface VideoDownloadURLResponse {
+  session_id: string;
+  kind: string;
+  download_url: string;
+  filename: string;
+  expires_at: string;
+}
+
+/**
+ * Fetches a time-limited signed URL for downloading a session's video.
+ * @param sessionId - The session ID
+ * @param profileId - The profile ID (used for GCS path resolution)
+ * @param kind - "merged" (video only) or "hardsubbed" (with guidance overlay)
+ */
+export async function fetchVideoDownloadURL(
+  sessionId: string,
+  profileId: number,
+  kind: "merged" | "hardsubbed" = "merged"
+): Promise<VideoDownloadURLResponse> {
+  return apiClient<VideoDownloadURLResponse>(
+    `/video-download/${sessionId}?kind=${kind}&profile_id=${profileId}`
+  );
 }

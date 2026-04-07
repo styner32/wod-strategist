@@ -282,7 +282,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 	musicGCSURI := ""
 	if musicPath != "" {
 		randSuffix := randomHex(4)
-		musicObjName := fmt.Sprintf("highlights/%s_music_%s.mp3", p.SessionID, randSuffix)
+		musicObjName := fmt.Sprintf("videos/%d/%s/hl_music_%s.mp3", p.ProfileID, p.SessionID, randSuffix)
 		if uri, uploadErr := w.StorageClient.UploadFromFile(ctx, musicPath, musicObjName); uploadErr == nil {
 			musicGCSURI = uri
 			w.logger.Info("Music track uploaded", zap.String("gcs_uri", musicGCSURI))
@@ -330,7 +330,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		}
 
 		randSuffix := randomHex(4)
-		gcsObjectName := fmt.Sprintf("highlights/%s_hl_%s_%s.mp4", p.SessionID, group.Prefix, randSuffix)
+		gcsObjectName := fmt.Sprintf("videos/%d/%s/hl_%s_%s.mp4", p.ProfileID, p.SessionID, group.Prefix, randSuffix)
 		gcsURI, err := w.StorageClient.UploadFromFile(ctx, uploadPath, gcsObjectName)
 		if err != nil {
 			w.logger.Error("Failed to upload highlight", zap.String("group", group.Title), zap.Error(err))

@@ -47,6 +47,7 @@
     },
     "plugins": [
       "expo-router",
+      "./withFmtFix",
       [
         "expo-splash-screen",
         {
@@ -101,7 +102,14 @@
           "bluetoothAlwaysPermission": "심박계 연결을 위해 블루투스 권한이 필요합니다."
         }
       ],
-      "expo-build-properties",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "buildReactNativeFromSource": true
+          }
+        }
+      ],
       [
         "expo-image-picker",
         {

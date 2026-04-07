@@ -34,6 +34,7 @@ type Handlers interface {
 	ListSessionCatalog(*gin.Context)
 	GetSessionAssets(*gin.Context)
 	GetPlayURL(*gin.Context)
+	GetVideoDownloadURL(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -293,6 +294,16 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.POST("/verify-highlights", handlers.VerifyHighlights)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "video-download",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/video-download/:session_id",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/video-download/:session_id", handlers.GetVideoDownloadURL)
 		},
 	},
 }
