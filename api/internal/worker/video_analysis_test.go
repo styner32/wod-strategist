@@ -611,7 +611,6 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 	})
 })
 
-
 var _ = Describe("parseSegments", func() {
 	It("extracts segments from JSON in code fence", func() {
 		text := "Some text\n```json\n[{\"start\":\"0:30\",\"end\":\"1:00\",\"type\":\"Snatch\",\"description\":\"desc\"}]\n```\nMore text"

@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	TypeVideoAnalysis      = "video:analysis"
-	TypeChunkAnalysis      = "chunk:analysis"
-	TypeMergeChunks        = "merge:chunks"
-	TypeInjuryAnalysis     = "injury:analysis"
-	TypeGenerateHighlight  = "highlight:generate"
-	TypeVerifyHighlights   = "highlight:verify"
-	WorkoutTypeWOD         = "wod"
+	TypeVideoAnalysis     = "video:analysis"
+	TypeChunkAnalysis     = "chunk:analysis"
+	TypeMergeChunks       = "merge:chunks"
+	TypeInjuryAnalysis    = "injury:analysis"
+	TypeGenerateHighlight = "highlight:generate"
+	TypeVerifyHighlights  = "highlight:verify"
+	WorkoutTypeWOD        = "wod"
 )
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.

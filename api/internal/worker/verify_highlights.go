@@ -103,6 +103,9 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		zap.String("session_id", p.SessionID),
 		zap.String("video_uri", videoURI))
 
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
 	// 4. Download video and upload to Gemini Files API
 	safeSessionID := filepath.Base(p.SessionID)
 	localFilePath := filepath.Join("/tmp", fmt.Sprintf("verify_%s_%s",

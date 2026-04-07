@@ -108,10 +108,10 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	safeSessionID := filepath.Base(p.SessionID)
-	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
+	safeSessionID := filepath.Base(p.SessionID)
 
 	localFilePath := filepath.Join("/tmp", fmt.Sprintf("chunk_%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
 

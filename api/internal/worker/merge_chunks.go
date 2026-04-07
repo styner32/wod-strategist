@@ -97,6 +97,9 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 
 	w.logger.Info("Chunks to merge", zap.Int("count", len(objects)), zap.Strings("uris", objects))
 
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
 	// 2. Download all chunks to /tmp/
 	tmpDir := filepath.Join("/tmp", fmt.Sprintf("merge_%s_%d", strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_"), os.Getpid()))
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {

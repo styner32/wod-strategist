@@ -61,7 +61,7 @@ func MockGCSListObjects(transport *MockTransport, bucketName, prefix string, obj
 	query.Set("prefix", prefix)
 
 	transport.New(GCSBaseURL).
-		Get(path + "?" + query.Encode()).
+		Get(path+"?"+query.Encode()).
 		Reply(http.StatusOK).
 		Body(respBody).
 		Header("Content-Type", "application/json")

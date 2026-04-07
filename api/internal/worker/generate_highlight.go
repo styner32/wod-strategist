@@ -130,6 +130,9 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			zap.Float64("end_secs", end))
 	}
 
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
 	// 4. Create temp directory
 	safeSessionID := strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_")
 	tmpDir := filepath.Join("/tmp", fmt.Sprintf("highlight_%s_%d", safeSessionID, os.Getpid()))
