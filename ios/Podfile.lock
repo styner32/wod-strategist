@@ -2170,6 +2170,8 @@ PODS:
     - TensorFlowLiteC (= 2.17.0)
     - TensorFlowLiteC/CoreML (= 2.17.0)
     - Yoga
+  - react-native-get-random-values (1.11.0):
+    - React-Core
   - react-native-quick-base64 (2.2.2):
     - React-Core
   - react-native-safe-area-context (5.6.2):
@@ -3303,6 +3305,7 @@ DEPENDENCIES:
   - react-native-ble-plx (from `../node_modules/react-native-ble-plx`)
   - react-native-compressor (from `../node_modules/react-native-compressor`)
   - react-native-fast-tflite (from `../node_modules/react-native-fast-tflite`)
+  - react-native-get-random-values (from `../node_modules/react-native-get-random-values`)
   - react-native-quick-base64 (from `../node_modules/react-native-quick-base64`)
   - react-native-safe-area-context (from `../node_modules/react-native-safe-area-context`)
   - "react-native-skia (from `../node_modules/@shopify/react-native-skia`)"
@@ -3507,6 +3510,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-compressor"
   react-native-fast-tflite:
     :path: "../node_modules/react-native-fast-tflite"
+  react-native-get-random-values:
+    :path: "../node_modules/react-native-get-random-values"
   react-native-quick-base64:
     :path: "../node_modules/react-native-quick-base64"
   react-native-safe-area-context:
@@ -3674,6 +3679,7 @@ SPEC CHECKSUMS:
   react-native-ble-plx: 152b07bdf772c95e30c0251649d462b5154a0e13
   react-native-compressor: 08b383b5cb8511e1c02dd0736b733482d07663ac
   react-native-fast-tflite: 326941ad8034d7d19cc99c773f1b35e995820f4b
+  react-native-get-random-values: d16467cf726c618e9c7a8c3c39c31faa2244bbba
   react-native-quick-base64: 6568199bb2ac8e72ecdfdc73a230fbc5c1d3aac4
   react-native-safe-area-context: c00143b4823773bba23f2f19f85663ae89ceb460
   react-native-skia: 3e5bc88a38dce579afddfac0bef9840a61501db0

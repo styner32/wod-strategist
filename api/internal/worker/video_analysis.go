@@ -19,6 +19,11 @@ import (
 )
 
 const (
+	// maxAnalysisFileSizeBytes is the hard limit for video files sent to Gemini.
+	// Files larger than this are rejected immediately with a FAILED analysis result.
+	// The Gemini Files API struggles with very large uploads (timeouts, OOM).
+	maxAnalysisFileSizeBytes = 1 << 30 // 1 GB
+
 	PersonalProfilePrompt = `
 ## 개인 프로필
 분석의 정확도를 높이기 위해 개인 정보를 참고해주세요.`
@@ -206,7 +211,37 @@ func formatDuration(d time.Duration) string {
 //  1. Upload video to Gemini Files API
 //  2. Index video with Flash model → find exercise segments
 //  3. Analyze each segment with Pro model + VideoMetadata → deep analysis
-func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysisPayload) error {
+func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysisPayload) (retErr error) {
+	// Deferred error handler: write FAILED analysis result to DB on any error
+	// so the user always sees something in history instead of silent nothingness.
+	defer func() {
+		if retErr != nil {
+			w.logger.Error("Video analysis failed",
+				zap.String("session_id", p.SessionID),
+				zap.Error(retErr))
+
+			userMsg := "동영상 분석 중 오류가 발생했습니다. 다시 시도해주세요."
+			if strings.Contains(retErr.Error(), "file too large") {
+				userMsg = "동영상 파일이 너무 큽니다 (1GB 초과). 더 짧은 영상으로 시도해주세요."
+			}
+
+			failedResult := &db.AnalysisResult{
+				SessionID:    p.SessionID,
+				Status:       "FAILED",
+				Output:       userMsg,
+				AnalysisType: db.AnalysisTypeWOD,
+			}
+			if p.ProfileID > 0 {
+				failedResult.ProfileID = &p.ProfileID
+			}
+			if dbErr := w.DB.Create(failedResult).Error; dbErr != nil {
+				w.logger.Error("Failed to write FAILED analysis result",
+					zap.String("session_id", p.SessionID),
+					zap.Error(dbErr))
+			}
+		}
+	}()
+
 	safeSessionID := filepath.Base(p.SessionID)
 	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
 
@@ -221,6 +256,28 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			w.logger.Error("Failed to remove temp file", zap.Error(err))
 		}
 	}()
+
+	// ── File size guard ──
+	// Reject files larger than 1GB to prevent Gemini upload timeouts and OOM.
+	fi, err := os.Stat(localFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to stat downloaded file: %w", err)
+	}
+	fileSizeBytes := fi.Size()
+	w.logger.Info("Downloaded video file",
+		zap.String("session_id", p.SessionID),
+		zap.Int64("file_size_bytes", fileSizeBytes),
+		zap.String("file_size_human", formatFileSizeWorker(fileSizeBytes)))
+
+	if fileSizeBytes > maxAnalysisFileSizeBytes {
+		w.logger.Error("Video file too large for analysis",
+			zap.String("session_id", p.SessionID),
+			zap.Int64("file_size_bytes", fileSizeBytes),
+			zap.String("file_size_human", formatFileSizeWorker(fileSizeBytes)),
+			zap.Int64("max_bytes", maxAnalysisFileSizeBytes))
+		return fmt.Errorf("file too large for analysis (%s, max 1GB): %w",
+			formatFileSizeWorker(fileSizeBytes), asynq.SkipRetry)
+	}
 
 	// Upload to Gemini Files API
 	upload, err := w.GeminiClient.UploadVideo(ctx, localFilePath)

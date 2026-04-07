@@ -49,6 +49,7 @@
     "react-native-compressor": "^1.16.0",
     "react-native-fast-tflite": "^2.0.0",
     "react-native-gesture-handler": "~2.30.0",
+    "react-native-get-random-values": "~1.11.0",
     "react-native-nitro-modules": "^0.31.10",
     "react-native-nitro-screen-recorder": "^0.6.1",
     "react-native-quick-base64": "^2.2.2",

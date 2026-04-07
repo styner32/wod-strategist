@@ -175,9 +175,17 @@ export const useVideoQueue = create<VideoQueueState>()(persist((set, get) => ({
       found: !!item,
       status: item?.status,
       compressedUri: item?.compressedUri,
+      sessionId: item?.sessionId,
     });
     if (!item || (item.status !== "ENCODED" && item.status !== "UPLOADED")) {
       console.warn("☁️ [startUpload] Skipped — item not in ENCODED or UPLOADED state");
+      return;
+    }
+    if (!item.sessionId) {
+      console.error("☁️ [startUpload] Skipped — sessionId is empty");
+      get()._updateItem(id, {
+        error: "Session ID is missing. Please re-record.",
+      });
       return;
     }
     if (!item.compressedUri) {

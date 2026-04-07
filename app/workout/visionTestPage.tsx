@@ -574,7 +574,12 @@ export default function VisionTestPage() {
         }
 
         // Enqueue as RECORDED — user decides when to encode
-        const sessionId = sessionIdRef.current;
+        let sessionId = sessionIdRef.current;
+        if (!sessionId) {
+          console.warn("⚠️ sessionIdRef was empty at enqueue time — generating fallback");
+          sessionId = buildWorkoutSessionId(workoutType);
+          sessionIdRef.current = sessionId;
+        }
         const movementsArray = movements ? movements.split(", ") : [];
         const injuriesArray = injuries ? injuries.split(", ") : [];
 

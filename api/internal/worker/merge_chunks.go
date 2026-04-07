@@ -139,7 +139,17 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	w.logger.Info("Freed chunk files from tmpfs after merge",
 		zap.Int("count", len(localChunkPaths)))
 
-	// 4. Upload merged file to GCS
+	// Log merged file size — critical for diagnosing oversized videos
+	var mergedSizeBytes int64
+	if fi, err := os.Stat(mergedPath); err == nil {
+		mergedSizeBytes = fi.Size()
+	}
+	w.logger.Info("Merged video file ready",
+		zap.String("session_id", p.SessionID),
+		zap.Int64("merged_size_bytes", mergedSizeBytes),
+		zap.String("merged_size_human", formatFileSizeWorker(mergedSizeBytes)))
+
+	// 4. Upload merged file to GCS (user-facing, full quality)
 	mergedObjectName := fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID)
 	mergedGCSURI, err := w.StorageClient.UploadFromFile(ctx, mergedPath, mergedObjectName)
 	if err != nil {
@@ -147,6 +157,52 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	}
 
 	w.logger.Info("Merged video uploaded", zap.String("gcs_uri", mergedGCSURI))
+
+	// 4.5. Conditional analysis-grade re-encode
+	// If the merged video is too large for Gemini (>500MB), create a smaller
+	// analysis-grade copy with tighter compression (CRF 28).
+	// The user still gets the full-quality merged.mp4 for download/viewing.
+	analysisGCSURI := mergedGCSURI
+	if mergedSizeBytes > maxAnalysisVideoSizeBytes {
+		w.logger.Info("Merged video exceeds analysis threshold, creating analysis-grade copy",
+			zap.String("session_id", p.SessionID),
+			zap.Int64("merged_size_bytes", mergedSizeBytes),
+			zap.Int64("threshold_bytes", maxAnalysisVideoSizeBytes))
+
+		analysisPath := filepath.Join(tmpDir, fmt.Sprintf("analysis_%s.mp4", p.SessionID))
+		if err := runFFmpegAnalysisEncode(ctx, w.logger, mergedPath, analysisPath); err != nil {
+			w.logger.Warn("Analysis re-encode failed, using original merged file",
+				zap.String("session_id", p.SessionID),
+				zap.Error(err))
+		} else {
+			// Log analysis copy size
+			var analysisSizeBytes int64
+			if fi, err := os.Stat(analysisPath); err == nil {
+				analysisSizeBytes = fi.Size()
+			}
+			w.logger.Info("Analysis-grade copy created",
+				zap.String("session_id", p.SessionID),
+				zap.Int64("analysis_size_bytes", analysisSizeBytes),
+				zap.String("analysis_size_human", formatFileSizeWorker(analysisSizeBytes)),
+				zap.Float64("compression_ratio", float64(mergedSizeBytes)/float64(max(analysisSizeBytes, 1))))
+
+			// Upload analysis copy to GCS
+			analysisObjectName := fmt.Sprintf("videos/%d/%s/analysis.mp4", p.ProfileID, p.SessionID)
+			if analysisURI, err := w.StorageClient.UploadFromFile(ctx, analysisPath, analysisObjectName); err != nil {
+				w.logger.Warn("Failed to upload analysis copy, using original merged file",
+					zap.String("session_id", p.SessionID),
+					zap.Error(err))
+			} else {
+				analysisGCSURI = analysisURI
+				w.logger.Info("Analysis copy uploaded",
+					zap.String("session_id", p.SessionID),
+					zap.String("analysis_gcs_uri", analysisGCSURI))
+			}
+
+			// Free the analysis copy from tmpfs
+			_ = os.Remove(analysisPath)
+		}
+	}
 
 	// 5. Hard-sub: burn chunk analysis subtitles into the merged video.
 	//
@@ -160,8 +216,8 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	// TODO: Consider moving to a separate, resource-heavy worker queue.
 	hardSubGCSURI := w.tryHardSub(ctx, p, tmpDir, mergedPath)
 
-	// 6. Enqueue full video analysis on the merged file
-	analysisTask, err := NewVideoAnalysisTask(p.SessionID, mergedGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID)
+	// 6. Enqueue full video analysis on the analysis-grade file (or merged if no re-encode needed)
+	analysisTask, err := NewVideoAnalysisTask(p.SessionID, analysisGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID)
 	if err != nil {
 		return fmt.Errorf("failed to create analysis task for merged video: %w", err)
 	}
@@ -172,6 +228,7 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 
 	w.logger.Info("Analysis enqueued for merged video",
 		zap.String("session_id", p.SessionID),
+		zap.String("analysis_uri", analysisGCSURI),
 		zap.String("hardsub_uri", hardSubGCSURI))
 	return nil
 }

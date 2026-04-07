@@ -171,3 +171,55 @@ func probeVideoDuration(ctx context.Context, filePath string) float64 {
 	}
 	return duration
 }
+
+// maxAnalysisVideoSizeBytes is the threshold above which the merge worker
+// creates an analysis-grade re-encode before sending to Gemini.
+// Set lower than maxAnalysisFileSizeBytes to give the re-encode room to shrink.
+const maxAnalysisVideoSizeBytes = 500 << 20 // 500 MB
+
+// formatFileSizeWorker returns a human-readable file size string.
+func formatFileSizeWorker(bytes int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+	switch {
+	case bytes >= GB:
+		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(GB))
+	case bytes >= MB:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(MB))
+	case bytes >= KB:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
+// runFFmpegAnalysisEncode creates a smaller analysis-grade video from the input.
+// Uses CRF 28 (vs 23 for user-facing) and scales to 720p to reduce file size
+// while preserving enough visual quality for Gemini pose analysis.
+func runFFmpegAnalysisEncode(ctx context.Context, log *zap.Logger, inputPath, outputPath string) error {
+	args := []string{
+		"-i", inputPath,
+		"-vf", "scale=720:-2,fps=30",
+		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+		"-c:a", "aac", "-b:a", "64k",
+		"-movflags", "+faststart",
+		"-y",
+		outputPath,
+	}
+
+	log.Info("Running FFmpeg analysis re-encode", zap.Strings("args", args))
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Error("FFmpeg analysis re-encode failed", zap.Error(err), zap.String("output", string(output)))
+		return fmt.Errorf("ffmpeg analysis encode: %s: %w", string(output), err)
+	}
+
+	log.Info("FFmpeg analysis re-encode completed", zap.String("output_path", outputPath))
+	return nil
+}
+

@@ -305,7 +305,11 @@ export async function processWorkoutVideo(
   } = options;
   const filename = fileUri.split("/").pop() || "workout.mp4";
 
-  console.log("🚀 Starting upload process for:", filename);
+  if (!sessionId) {
+    throw new Error("session_id is required but was empty. The recording may not have started properly.");
+  }
+
+  console.log("🚀 Starting upload process for:", filename, "sessionId:", sessionId);
 
   const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename, profileId);
   console.log("✅ Got Signed URL");

@@ -1,4 +1,5 @@
 // src/app/_layout.tsx
+import 'react-native-get-random-values'; // Must be first — polyfills crypto.getRandomValues for ULID
 import 'react-native-worklets-core';
 
 import { VideoQueueOverlay } from "@/components/VideoQueueOverlay";

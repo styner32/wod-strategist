@@ -261,6 +261,91 @@ UploadVideo → [file ACTIVE] → IndexVideo / AnalyzeSegment (reuse fileURI) �
 4. **Post-filter** — `filterSegments()` removes any segments exceeding video duration (5s tolerance).
 5. **Profile context** — include height/weight/gender so the model can identify the correct person in a multi-person gym.
 
+## Session ID Format
+
+Session IDs use ULID for globally unique, collision-free identifiers that are generated client-side without a server round-trip.
+
+### Format
+
+```
+WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF
+{TYPE}-{YYYYMMDD}-{ULID}
+```
+
+- **TYPE**: Uppercase workout type (`WOD`)
+- **YYYYMMDD**: Date for human readability in GCS/logs
+- **ULID**: 26-character, chronologically sortable, 128-bit unique identifier
+
+### Generation
+
+Client-side in `features/wod/workoutType.ts`:
+
+```typescript
+import { ulid } from "ulid";
+buildWorkoutSessionId("wod"); // → "WOD-20260407-01JQXYZ..."
+```
+
+**Important:** Profile ID is NOT part of the session ID — it's used as a GCS directory prefix instead.
+
+### Old format (backward compat)
+
+Old sessions used `P{profileId}-WOD-YYYY-MM-DD-HH-MM`. These remain as-is in GCS and the DB. Both server and client code handle both formats (e.g. `formatSessionLabel()` in `HistoryList.tsx`, `sessionIDFromObjectName()` in `dev_handlers.go`).
+
+### Rules for AI assistants
+
+- **Never embed profile ID** in the session ID string — use it as a GCS path prefix only.
+- The `ulid` npm package is a project dependency. Do not remove it.
+- When parsing session IDs, always handle both old (`P{id}-WOD-YYYY-MM-DD-HH-MM`) and new (`WOD-YYYYMMDD-{ULID}`) formats.
+
+## GCS Storage Layout
+
+All session videos are stored in a **directory-per-session** structure under the profile ID.
+
+### Current layout
+
+```
+videos/
+  {profileId}/
+    {sessionId}/
+      chunk_001.mp4       # uploaded chunks from mobile
+      chunk_002.mp4
+      merged.mp4          # server-merged video
+      hardsubbed.mp4      # merged + burned-in subtitles
+      hl_full_a1b2.mp4    # highlight reel variants
+      hl_best_c3d4.mp4
+      hl_music_e5f6.mp3   # generated music track
+```
+
+### Path construction
+
+| Layer | Function | Pattern |
+|---|---|---|
+| Upload handler | `buildVideoObjectName(profileID, sessionID, filename)` | `videos/{pid}/{sid}/{filename}` |
+| Merge worker | hardcoded `fmt.Sprintf` | `videos/{pid}/{sid}/merged.mp4` |
+| Hardsub worker | hardcoded `fmt.Sprintf` | `videos/{pid}/{sid}/hardsubbed.mp4` |
+| Highlight worker | hardcoded `fmt.Sprintf` | `videos/{pid}/{sid}/hl_{variant}_{rand}.mp4` |
+
+### API `profile_id` requirements
+
+- **`POST /upload-url`**: `profile_id` is required in the JSON body (used to build the GCS path).
+- **`GET /video-download/:session_id`**: `profile_id` is required as a query parameter.
+- **`POST /chunk-complete`** and **`POST /merge-chunks`**: `profile_id` is required in the JSON body (already was before this change).
+- **Test script** `scripts/test-chunk-upload.js`: must include `profile_id` in the `/upload-url` POST body.
+
+### Old layout (backward compat)
+
+Old sessions used a flat layout: `videos/{sessionId}_{filename}` (e.g. `videos/P1-WOD-2026-04-01-14-30_chunk_001.mp4`). These files are **not migrated** — both formats are supported:
+
+- `dev_handlers.go` — `sessionIDFromObjectName()` tries `videos/{pid}/{sid}/{file}` regex first, falls back to filename-prefix parsing.
+- `GetVideoDownloadURL` — searches for both `merged.mp4` (new) and `*_merged_*` (old) file patterns.
+- `buildVideoAssets()` — matches objects by either directory containment or filename prefix.
+
+### Rules for AI assistants
+
+- **Always pass `profile_id`** when calling `buildVideoObjectName()` or any upload/download API.
+- When adding new file types to a session (e.g. thumbnails, clips), place them under `videos/{pid}/{sid}/` — never in a separate top-level prefix.
+- The legacy multipart upload handler (`POST /upload`) uses `profileID=0` as a fallback — this is intentional for backward compatibility with the dev tool.
+
 ## Android Recording Performance
 
 Android devices crash with OOM when camera recording, TFLite inference, and Skia rendering run concurrently at full FPS. Optimizations are controlled by **user-configurable toggles** in the setup page — do NOT hardcode `Platform.OS === 'android'` checks.
