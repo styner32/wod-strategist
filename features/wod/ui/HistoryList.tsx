@@ -100,7 +100,7 @@ function formatDate(dateStr: string): string {
 
 function HistoryCard({ item }: { item: AnalysisResult }) {
   const [expanded, setExpanded] = useState(false);
-  const [downloading, setDownloading] = useState<string | null>(null); // 'merged' | 'hardsubbed'
+  const [downloading, setDownloading] = useState<string | null>(null); // 'merged' | 'hardsubbed' | 'encoded'
   const scheme = useColorScheme() ?? "light";
   const isDark = scheme === "dark";
   const statusConfig = getStatusConfig(item.status);
@@ -109,8 +109,9 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
   const hasOutput = item.output && item.output.trim().length > 0;
   const hasInjuryOutput = item.injury_output && item.injury_output.trim().length > 0;
   const isCompleted = item.status === "COMPLETED";
+  const availableVideos = item.available_videos ?? [];
 
-  const handleDownload = async (kind: "merged" | "hardsubbed") => {
+  const handleDownload = async (kind: "merged" | "hardsubbed" | "encoded") => {
     try {
       setDownloading(kind);
       const { download_url, filename } = await fetchVideoDownloadURL(item.session_id, item.profile_id ?? 0, kind);
@@ -118,9 +119,10 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
       const localUri = FileSystem.cacheDirectory + filename;
       const { uri } = await FileSystem.downloadAsync(download_url, localUri);
 
+      const kindLabel = kind === "hardsubbed" ? "Guided" : kind === "encoded" ? "Encoded" : "Original";
       Alert.alert(
         "Download Complete",
-        `${kind === "hardsubbed" ? "Guided" : "Original"} video saved.`,
+        `${kindLabel} video saved.`,
         [
           {
             text: "Save to Gallery",
@@ -237,30 +239,47 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
       )}
 
       {/* Download buttons */}
-      {isCompleted && item.analysis_type !== "injury_supplement" && (
+      {isCompleted && item.analysis_type !== "injury_supplement" && availableVideos.length > 0 && (
         <View style={styles.downloadRow}>
-          <TouchableOpacity
-            style={styles.downloadBtn}
-            onPress={() => handleDownload("merged")}
-            disabled={downloading !== null}
-          >
-            {downloading === "merged" ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.downloadBtnText}>📹 Video</Text>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.downloadBtn, styles.downloadBtnGuided]}
-            onPress={() => handleDownload("hardsubbed")}
-            disabled={downloading !== null}
-          >
-            {downloading === "hardsubbed" ? (
-              <ActivityIndicator size="small" color="#000" />
-            ) : (
-              <Text style={[styles.downloadBtnText, styles.downloadBtnGuidedText]}>📝 Guided</Text>
-            )}
-          </TouchableOpacity>
+          {availableVideos.includes("merged") && (
+            <TouchableOpacity
+              style={styles.downloadBtn}
+              onPress={() => handleDownload("merged")}
+              disabled={downloading !== null}
+            >
+              {downloading === "merged" ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.downloadBtnText}>📹 Video</Text>
+              )}
+            </TouchableOpacity>
+          )}
+          {availableVideos.includes("hardsubbed") && (
+            <TouchableOpacity
+              style={[styles.downloadBtn, styles.downloadBtnGuided]}
+              onPress={() => handleDownload("hardsubbed")}
+              disabled={downloading !== null}
+            >
+              {downloading === "hardsubbed" ? (
+                <ActivityIndicator size="small" color="#000" />
+              ) : (
+                <Text style={[styles.downloadBtnText, styles.downloadBtnGuidedText]}>📝 Guided</Text>
+              )}
+            </TouchableOpacity>
+          )}
+          {availableVideos.includes("encoded") && (
+            <TouchableOpacity
+              style={[styles.downloadBtn, styles.downloadBtnEncoded]}
+              onPress={() => handleDownload("encoded")}
+              disabled={downloading !== null}
+            >
+              {downloading === "encoded" ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={[styles.downloadBtnText, styles.downloadBtnEncodedText]}>📦 Encoded</Text>
+              )}
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -495,6 +514,12 @@ const styles = StyleSheet.create({
   },
   downloadBtnGuidedText: {
     color: "#FFD60A",
+  },
+  downloadBtnEncoded: {
+    backgroundColor: "rgba(160,160,160,0.15)",
+  },
+  downloadBtnEncodedText: {
+    color: "#A0A0A0",
   },
 
   // Loading

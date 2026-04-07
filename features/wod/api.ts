@@ -447,7 +447,7 @@ export interface VideoDownloadURLResponse {
 export async function fetchVideoDownloadURL(
   sessionId: string,
   profileId: number,
-  kind: "merged" | "hardsubbed" = "merged"
+  kind: "merged" | "hardsubbed" | "encoded" = "merged"
 ): Promise<VideoDownloadURLResponse> {
   return apiClient<VideoDownloadURLResponse>(
     `/video-download/${sessionId}?kind=${kind}&profile_id=${profileId}`

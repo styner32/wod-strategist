@@ -315,7 +315,64 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, results)
+	// Enrich with available video kinds per session (best-effort)
+	// TODO(perf): This does one GCS ListObjects call per unique session — O(N) RPCs.
+	// Replace with a DB column (e.g. analysis_results.available_videos TEXT[] or a
+	// session_videos table) that workers update when they produce merged/hardsubbed/encoded
+	// files. Then this becomes a single SQL query instead of N GCS list calls.
+	videoKinds := map[string][]string{} // sessionID → ["merged", "encoded", ...]
+	if ctl.storageClient != nil {
+		// Collect unique session IDs
+		seen := map[string]bool{}
+		for _, r := range results {
+			if r.SessionID != "" && !seen[r.SessionID] {
+				seen[r.SessionID] = true
+			}
+		}
+		for sessionID := range seen {
+			prefix := fmt.Sprintf("videos/%d/%s/", profileID, sessionID)
+			objectInfos, listErr := ctl.storageClient.ListObjectInfos(c.Request.Context(), prefix)
+			if listErr != nil {
+				continue
+			}
+			var kinds []string
+			for _, info := range objectInfos {
+				base := filepath.Base(info.Name)
+				switch {
+				case base == "merged.mp4" || strings.Contains(base, "_merged_"):
+					if !sliceContains(kinds, "merged") {
+						kinds = append(kinds, "merged")
+					}
+				case base == "hardsubbed.mp4" || strings.Contains(base, "_hardsubbed_"):
+					if !sliceContains(kinds, "hardsubbed") {
+						kinds = append(kinds, "hardsubbed")
+					}
+				case strings.Contains(base, "_encoded"):
+					if !sliceContains(kinds, "encoded") {
+						kinds = append(kinds, "encoded")
+					}
+				}
+			}
+			if len(kinds) > 0 {
+				videoKinds[sessionID] = kinds
+			}
+		}
+	}
+
+	// Build enriched response
+	type historyItem struct {
+		db.AnalysisResult
+		AvailableVideos []string `json:"available_videos,omitempty"`
+	}
+	enriched := make([]historyItem, len(results))
+	for i, r := range results {
+		enriched[i] = historyItem{
+			AnalysisResult:  r,
+			AvailableVideos: videoKinds[r.SessionID],
+		}
+	}
+
+	c.JSON(http.StatusOK, enriched)
 }
 
 // @Summary      List supported movements
@@ -353,6 +410,15 @@ func sanitizeIdentifier(value string) string {
 
 func trimRequiredString(value string) string {
 	return strings.TrimSpace(value)
+}
+
+func sliceContains(s []string, v string) bool {
+	for _, item := range s {
+		if item == v {
+			return true
+		}
+	}
+	return false
 }
 
 func isValidGCSURI(raw string) bool {
@@ -955,8 +1021,8 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 	}
 
 	kind := strings.ToLower(strings.TrimSpace(c.DefaultQuery("kind", "merged")))
-	if kind != "merged" && kind != "hardsubbed" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "kind must be 'merged' or 'hardsubbed'"})
+	if kind != "merged" && kind != "hardsubbed" && kind != "encoded" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "kind must be 'merged', 'hardsubbed', or 'encoded'"})
 		return
 	}
 
@@ -970,17 +1036,23 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 	}
 
 	// In the new layout, files are named simply: merged.mp4, hardsubbed.mp4
-	newTarget := kind + ".mp4"
-	oldMarker := fmt.Sprintf("_%s_", kind) // backward compat: *_merged_*.mp4
+	// For "encoded", match any file containing "_encoded" (e.g. vid_xxx_encoded.mp4)
 	var bestObject string
 	var bestCreated time.Time
 	for _, info := range objectInfos {
 		base := filepath.Base(info.Name)
-		if base == newTarget || strings.Contains(base, oldMarker) {
-			if bestObject == "" || info.Created.After(bestCreated) {
-				bestObject = info.Name
-				bestCreated = info.Created
-			}
+		var match bool
+		switch kind {
+		case "encoded":
+			match = strings.Contains(base, "_encoded")
+		default:
+			newTarget := kind + ".mp4"
+			oldMarker := fmt.Sprintf("_%s_", kind) // backward compat: *_merged_*.mp4
+			match = base == newTarget || strings.Contains(base, oldMarker)
+		}
+		if match && (bestObject == "" || info.Created.After(bestCreated)) {
+			bestObject = info.Name
+			bestCreated = info.Created
 		}
 	}
 
