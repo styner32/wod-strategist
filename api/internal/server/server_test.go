@@ -118,6 +118,10 @@ func (h *recordingHandlers) GetPlayURL(c *gin.Context) {
 	h.record("dev-session-play-url", c)
 }
 
+func (h *recordingHandlers) GetVideoDownloadURL(c *gin.Context) {
+	h.record("video-download", c)
+}
+
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)

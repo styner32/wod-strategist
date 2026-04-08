@@ -62,5 +62,8 @@ target 'wodstrategist' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+
+    # Patch fmt headers for Xcode 16+ consteval fix
+    system("bash", "/Users/sunjinlee/workspace/wod-strategist/ios/patch-fmt.sh")
   end
 end

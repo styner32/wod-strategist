@@ -25,6 +25,7 @@ export interface Profile {
   gender: Gender;
   heightCm: number;
   weightKg: number;
+  injuries: string[];
 }
 
 interface ProfileState {
@@ -75,6 +76,7 @@ function toProfile(res: ProfileResponse): Profile {
     gender: res.gender as Gender,
     heightCm: res.height_cm,
     weightKg: res.weight_kg,
+    injuries: res.injuries ?? [],
   };
 }
 

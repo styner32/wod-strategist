@@ -11,6 +11,7 @@ export interface AnalysisResult {
   output: string;
   injury_output?: string;
   highlight_segments?: string;
+  available_videos?: string[]; // ["merged", "hardsubbed", "encoded"]
   created_at: string;
   updated_at: string;
 }

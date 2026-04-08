@@ -204,6 +204,7 @@ async function run() {
       const { upload_url, gcs_uri } = await postJSON("/upload-url", {
         session_id: SESSION_ID,
         filename,
+        profile_id: profileId,
       });
 
       await uploadChunkFile(upload_url, chunkPath);

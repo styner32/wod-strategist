@@ -129,15 +129,80 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		return fmt.Errorf("ffmpeg merge failed: %w", err)
 	}
 
-	// 4. Upload merged file to GCS
-	randSuffix := randomHex(4)
-	mergedObjectName := fmt.Sprintf("videos/%s_merged_%s.mp4", p.SessionID, randSuffix)
+	// Free tmpfs: delete chunk files now that FFmpeg concat is done.
+	// In Cloud Run, /tmp is backed by memory (tmpfs), so keeping chunks
+	// alongside the merged output doubles peak memory usage.
+	for _, lp := range localChunkPaths {
+		_ = os.Remove(lp)
+	}
+	_ = os.Remove(concatListPath)
+	w.logger.Info("Freed chunk files from tmpfs after merge",
+		zap.Int("count", len(localChunkPaths)))
+
+	// Log merged file size — critical for diagnosing oversized videos
+	var mergedSizeBytes int64
+	if fi, err := os.Stat(mergedPath); err == nil {
+		mergedSizeBytes = fi.Size()
+	}
+	w.logger.Info("Merged video file ready",
+		zap.String("session_id", p.SessionID),
+		zap.Int64("merged_size_bytes", mergedSizeBytes),
+		zap.String("merged_size_human", formatFileSizeWorker(mergedSizeBytes)))
+
+	// 4. Upload merged file to GCS (user-facing, full quality)
+	mergedObjectName := fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID)
 	mergedGCSURI, err := w.StorageClient.UploadFromFile(ctx, mergedPath, mergedObjectName)
 	if err != nil {
 		return fmt.Errorf("failed to upload merged video: %w", err)
 	}
 
 	w.logger.Info("Merged video uploaded", zap.String("gcs_uri", mergedGCSURI))
+
+	// 4.5. Conditional analysis-grade re-encode
+	// If the merged video is too large for Gemini (>500MB), create a smaller
+	// analysis-grade copy with tighter compression (CRF 28).
+	// The user still gets the full-quality merged.mp4 for download/viewing.
+	analysisGCSURI := mergedGCSURI
+	if mergedSizeBytes > maxAnalysisVideoSizeBytes {
+		w.logger.Info("Merged video exceeds analysis threshold, creating analysis-grade copy",
+			zap.String("session_id", p.SessionID),
+			zap.Int64("merged_size_bytes", mergedSizeBytes),
+			zap.Int64("threshold_bytes", maxAnalysisVideoSizeBytes))
+
+		analysisPath := filepath.Join(tmpDir, fmt.Sprintf("analysis_%s.mp4", p.SessionID))
+		if err := runFFmpegAnalysisEncode(ctx, w.logger, mergedPath, analysisPath); err != nil {
+			w.logger.Warn("Analysis re-encode failed, using original merged file",
+				zap.String("session_id", p.SessionID),
+				zap.Error(err))
+		} else {
+			// Log analysis copy size
+			var analysisSizeBytes int64
+			if fi, err := os.Stat(analysisPath); err == nil {
+				analysisSizeBytes = fi.Size()
+			}
+			w.logger.Info("Analysis-grade copy created",
+				zap.String("session_id", p.SessionID),
+				zap.Int64("analysis_size_bytes", analysisSizeBytes),
+				zap.String("analysis_size_human", formatFileSizeWorker(analysisSizeBytes)),
+				zap.Float64("compression_ratio", float64(mergedSizeBytes)/float64(max(analysisSizeBytes, 1))))
+
+			// Upload analysis copy to GCS
+			analysisObjectName := fmt.Sprintf("videos/%d/%s/analysis.mp4", p.ProfileID, p.SessionID)
+			if analysisURI, err := w.StorageClient.UploadFromFile(ctx, analysisPath, analysisObjectName); err != nil {
+				w.logger.Warn("Failed to upload analysis copy, using original merged file",
+					zap.String("session_id", p.SessionID),
+					zap.Error(err))
+			} else {
+				analysisGCSURI = analysisURI
+				w.logger.Info("Analysis copy uploaded",
+					zap.String("session_id", p.SessionID),
+					zap.String("analysis_gcs_uri", analysisGCSURI))
+			}
+
+			// Free the analysis copy from tmpfs
+			_ = os.Remove(analysisPath)
+		}
+	}
 
 	// 5. Hard-sub: burn chunk analysis subtitles into the merged video.
 	//
@@ -149,10 +214,10 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	// This step is best-effort: if it fails (e.g. missing libass, DB error,
 	// insufficient resources), we log the error and proceed without hard-subs.
 	// TODO: Consider moving to a separate, resource-heavy worker queue.
-	hardSubGCSURI := w.tryHardSub(ctx, p, tmpDir, mergedPath, randSuffix)
+	hardSubGCSURI := w.tryHardSub(ctx, p, tmpDir, mergedPath)
 
-	// 6. Enqueue full video analysis on the merged file
-	analysisTask, err := NewVideoAnalysisTask(p.SessionID, mergedGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID)
+	// 6. Enqueue full video analysis on the analysis-grade file (or merged if no re-encode needed)
+	analysisTask, err := NewVideoAnalysisTask(p.SessionID, analysisGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID)
 	if err != nil {
 		return fmt.Errorf("failed to create analysis task for merged video: %w", err)
 	}
@@ -163,6 +228,7 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 
 	w.logger.Info("Analysis enqueued for merged video",
 		zap.String("session_id", p.SessionID),
+		zap.String("analysis_uri", analysisGCSURI),
 		zap.String("hardsub_uri", hardSubGCSURI))
 	return nil
 }
@@ -170,12 +236,11 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 // tryHardSub attempts to burn chunk analysis subtitles into the merged video.
 // Returns the GCS URI of the hard-subbed video on success, or empty string on
 // failure. Errors are logged but never propagated — hard-sub is best-effort.
-func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir, mergedPath, randSuffix string) string {
+func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir, mergedPath string) string {
 	w.logger.Info("Hard-sub: starting",
 		zap.String("session_id", p.SessionID),
 		zap.String("tmp_dir", tmpDir),
-		zap.String("merged_path", mergedPath),
-		zap.String("rand_suffix", randSuffix))
+		zap.String("merged_path", mergedPath))
 
 	// Verify merged video exists and is non-empty
 	if fi, err := os.Stat(mergedPath); err != nil {
@@ -305,7 +370,7 @@ func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir,
 		zap.Uint64("mem_alloc_after_mb", memAfter.Alloc/1024/1024),
 		zap.Uint64("mem_sys_mb", memAfter.Sys/1024/1024))
 
-	hardSubObjectName := fmt.Sprintf("videos/%s_hardsubbed_%s.mp4", p.SessionID, randSuffix)
+	hardSubObjectName := fmt.Sprintf("videos/%d/%s/hardsubbed.mp4", p.ProfileID, p.SessionID)
 	w.logger.Info("Hard-sub: uploading to GCS",
 		zap.String("object_name", hardSubObjectName),
 		zap.Int64("file_size_bytes", hardSubSizeBytes))

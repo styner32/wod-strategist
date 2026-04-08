@@ -103,6 +103,25 @@ func mimeTypeFromExtension(filePath string) string {
 	}
 }
 
+// formatFileSize returns a human-readable file size string.
+func formatFileSize(bytes int64) string {
+	const (
+		KB = 1024
+		MB = 1024 * KB
+		GB = 1024 * MB
+	)
+	switch {
+	case bytes >= GB:
+		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(GB))
+	case bytes >= MB:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(MB))
+	case bytes >= KB:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
 // AnalyzeVideo returns the analysis result and the name of the uploaded file on Gemini
 func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt string) (string, string, error) {
 	// Upload file
@@ -262,20 +281,36 @@ func (c *Client) UploadVideo(ctx context.Context, filePath string) (*UploadResul
 		}
 	}
 
+	// Log file size for observability — critical for diagnosing upload timeouts
+	var fileSizeBytes int64
+	if fi, statErr := f.Stat(); statErr == nil {
+		fileSizeBytes = fi.Size()
+	}
+
 	c.logger.Info("Uploading video file",
 		zap.String("file_path", filePath),
-		zap.String("mime_type", mimeType))
+		zap.String("mime_type", mimeType),
+		zap.Int64("file_size_bytes", fileSizeBytes),
+		zap.String("file_size_human", formatFileSize(fileSizeBytes)))
 
+	uploadStart := time.Now()
 	uploadResult, err := c.client.Files.Upload(ctx, f, &genai.UploadFileConfig{
 		MIMEType: mimeType,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to upload file: %w", err)
+		c.logger.Error("Video file upload failed",
+			zap.String("file_path", filePath),
+			zap.Int64("file_size_bytes", fileSizeBytes),
+			zap.Duration("upload_duration", time.Since(uploadStart)),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to upload file (%s): %w", formatFileSize(fileSizeBytes), err)
 	}
 
 	c.logger.Info("File uploaded, polling for ACTIVE",
 		zap.String("file_name", uploadResult.Name),
-		zap.String("file_uri", uploadResult.URI))
+		zap.String("file_uri", uploadResult.URI),
+		zap.Duration("upload_duration", time.Since(uploadStart)),
+		zap.Int64("file_size_bytes", fileSizeBytes))
 
 	var videoDuration time.Duration
 	for {

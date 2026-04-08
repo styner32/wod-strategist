@@ -1,11 +1,13 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { fetchInjuries } from "@/features/wod/api";
 import {
   useProfileStore,
   type Gender,
 } from "@/store/useProfileStore";
 import { router, useLocalSearchParams } from "expo-router";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -58,6 +60,28 @@ export default function ProfileScreen() {
   );
   const [saving, setSaving] = useState(false);
 
+  // Injuries
+  const [injuryOptions, setInjuryOptions] = useState<string[]>([]);
+  const [selectedInjuries, setSelectedInjuries] = useState<string[]>(
+    existingProfile?.injuries ?? []
+  );
+  const [loadingInjuries, setLoadingInjuries] = useState(true);
+
+  useEffect(() => {
+    fetchInjuries()
+      .then(setInjuryOptions)
+      .catch((e) => console.error("Failed to load injuries", e))
+      .finally(() => setLoadingInjuries(false));
+  }, []);
+
+  const toggleInjury = (injury: string) => {
+    setSelectedInjuries((prev) =>
+      prev.includes(injury)
+        ? prev.filter((x) => x !== injury)
+        : [...prev, injury]
+    );
+  };
+
   const handleSave = async () => {
     const y = parseInt(birthYear, 10);
     const m = parseInt(birthMonth, 10);
@@ -103,6 +127,7 @@ export default function ProfileScreen() {
           gender,
           height_cm: h,
           weight_kg: Math.round(w * 10) / 10,
+          injuries: selectedInjuries,
         });
       } else {
         await store.createProfile({
@@ -113,6 +138,7 @@ export default function ProfileScreen() {
           gender,
           height_cm: h,
           weight_kg: Math.round(w * 10) / 10,
+          injuries: selectedInjuries,
         });
       }
       router.back();
@@ -266,6 +292,40 @@ export default function ProfileScreen() {
             </View>
           </View>
 
+          {/* Known Injuries */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Known Injuries</Text>
+            <Text style={styles.hint}>
+              Optional: add any current limitations the AI coach should
+              consider during analysis.
+            </Text>
+            {loadingInjuries ? (
+              <ActivityIndicator color="#007AFF" />
+            ) : (
+              <View style={styles.chipContainer}>
+                {injuryOptions.map((injury) => {
+                  const isSelected = selectedInjuries.includes(injury);
+                  return (
+                    <TouchableOpacity
+                      key={injury}
+                      onPress={() => toggleInjury(injury)}
+                      style={[styles.chip, isSelected && styles.chipActive]}
+                    >
+                      <Text
+                        style={[
+                          styles.chipText,
+                          isSelected && styles.chipTextActive,
+                        ]}
+                      >
+                        {injury}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
           {/* Save Button */}
           <TouchableOpacity
             style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
@@ -363,6 +423,23 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
   },
+
+  hint: { color: "#666", fontSize: 13, marginBottom: 14, lineHeight: 18 },
+  chipContainer: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  chip: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#333",
+    backgroundColor: "#111",
+  },
+  chipActive: {
+    backgroundColor: "#FF6B35",
+    borderColor: "#FF6B35",
+  },
+  chipText: { color: "#888", fontSize: 14 },
+  chipTextActive: { color: "#fff", fontWeight: "bold" },
 
   saveBtn: {
     backgroundColor: "#fff",

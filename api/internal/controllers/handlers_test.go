@@ -183,7 +183,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(w.Code).To(Equal(http.StatusOK))
 			body := decodeMapBody(w)
 			Expect(body["upload_url"]).NotTo(BeEmpty())
-			Expect(body["gcs_uri"]).To(Equal("gs://test-bucket/videos/session-1_video.mp4"))
+			Expect(body["gcs_uri"]).To(Equal("gs://test-bucket/videos/0/session-1/video.mp4"))
 		})
 
 		It("returns internal error when storage fails", func() {
@@ -335,7 +335,7 @@ var _ = Describe("Controller handlers", func() {
 		It("returns internal error when upload fails", func() {
 			// Register a mock that returns 500 for the upload request.
 			transport.New("https://storage.googleapis.com").
-				Post(gcsUploadURL("test-bucket", "videos/session-1_video.mp4")).
+				Post(gcsUploadURL("test-bucket", "videos/0/session-1/video.mp4")).
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{"error": map[string]any{"message": "boom"}})
 
@@ -353,18 +353,18 @@ var _ = Describe("Controller handlers", func() {
 		It("returns internal error when enqueue fails", func() {
 			// Storage upload succeeds, but queue enqueue fails.
 			transport.New("https://storage.googleapis.com").
-				Post(gcsUploadURL("test-bucket", "videos/session-1_video.mp4")).
+				Post(gcsUploadURL("test-bucket", "videos/0/session-1/video.mp4")).
 				Reply(http.StatusOK).
-				JSON(map[string]any{"name": "videos/session-1_video.mp4"})
+				JSON(map[string]any{"name": "videos/0/session-1/video.mp4"})
 
 			failRouter := newTestRouter(Config{
 				QueueClient: newBrokenQueueClient(),
 				StorageClient: func() ObjectStorage {
 					t := testhelpers.NewMockTransport()
 					t.New("https://storage.googleapis.com").
-						Post(gcsUploadURL("test-bucket", "videos/session-1_video.mp4")).
+						Post(gcsUploadURL("test-bucket", "videos/0/session-1/video.mp4")).
 						Reply(http.StatusOK).
-						JSON(map[string]any{"name": "videos/session-1_video.mp4"})
+						JSON(map[string]any{"name": "videos/0/session-1/video.mp4"})
 					c, err := testhelpers.NewStorageClientWithSigning("test-bucket", t)
 					Expect(err).NotTo(HaveOccurred())
 					return c
@@ -387,9 +387,9 @@ var _ = Describe("Controller handlers", func() {
 		It("uploads the file and sanitizes the object name", func() {
 			// Register success for the GCS upload with sanitized object name.
 			transport.New("https://storage.googleapis.com").
-				Post(gcsUploadURL("test-bucket", "videos/session-1_video.mp4")).
+				Post(gcsUploadURL("test-bucket", "videos/0/session-1/video.mp4")).
 				Reply(http.StatusOK).
-				JSON(map[string]any{"name": "videos/session-1_video.mp4"})
+				JSON(map[string]any{"name": "videos/0/session-1/video.mp4"})
 
 			body, contentType := multipartRequestBody("../../session-1", "..\\\\folder\\\\video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
@@ -404,12 +404,12 @@ var _ = Describe("Controller handlers", func() {
 			Expect(transport.Verify()).To(Succeed())
 			reqs := transport.Requests()
 			Expect(reqs).To(HaveLen(1))
-			Expect(reqs[0].URL).To(ContainSubstring("session-1_video.mp4"))
+			Expect(reqs[0].URL).To(ContainSubstring("session-1%2Fvideo.mp4"))
 
 			bodyMap := decodeMapBody(w)
 			Expect(bodyMap["message"]).To(Equal("File uploaded and analysis started"))
 			Expect(bodyMap["task_id"]).NotTo(BeEmpty())
-			Expect(bodyMap["file_url"]).To(Equal("gs://test-bucket/videos/session-1_video.mp4"))
+			Expect(bodyMap["file_url"]).To(Equal("gs://test-bucket/videos/0/session-1/video.mp4"))
 
 			// Verify enqueued task payload.
 			pending, err := inspector.ListPendingTasks("default")
@@ -419,7 +419,7 @@ var _ = Describe("Controller handlers", func() {
 			var payload worker.VideoAnalysisPayload
 			Expect(json.Unmarshal(pending[0].Payload, &payload)).To(Succeed())
 			Expect(payload.SessionID).To(Equal("session-1"))
-			Expect(payload.FilePath).To(Equal("gs://test-bucket/videos/session-1_video.mp4"))
+			Expect(payload.FilePath).To(Equal("gs://test-bucket/videos/0/session-1/video.mp4"))
 		})
 	})
 
@@ -751,7 +751,7 @@ var _ = Describe("validation helpers", func() {
 	)
 
 	It("builds a sanitized video object name", func() {
-		Expect(buildVideoObjectName("../../session-1", `..\\videos\\demo.mp4`)).To(Equal("videos/session-1_demo.mp4"))
+		Expect(buildVideoObjectName(0, "../../session-1", `..\\videos\\demo.mp4`)).To(Equal("videos/0/session-1/demo.mp4"))
 	})
 })
 

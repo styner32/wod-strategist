@@ -24,6 +24,8 @@ const MAPPING = {
   'arrow.up.circle.fill': 'cloud-upload',
   'arrow.clockwise': 'refresh',
   'trash': 'delete',
+  'flame.fill': 'whatshot',
+  'person.fill': 'person',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**
