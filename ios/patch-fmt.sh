@@ -3,7 +3,7 @@
 # Patches fmt/base.h to disable consteval for Xcode 16+ compatibility
 set -e
 
-PODS_DIR="/Users/sunjinlee/workspace/wod-strategist/ios/Pods"
+PODS_DIR="$(dirname "$0")/Pods"
 if [ ! -d "$PODS_DIR" ]; then
   echo "[withFmtFix] No Pods directory found, skipping."
   exit 0
