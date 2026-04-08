@@ -131,6 +131,10 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 	}
 
 	// 4. Create temp directory
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
 	safeSessionID := strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_")
 	tmpDir := filepath.Join("/tmp", fmt.Sprintf("highlight_%s_%d", safeSessionID, os.Getpid()))
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
