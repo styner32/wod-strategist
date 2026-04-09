@@ -27,3 +27,8 @@
 **Vulnerability:** In `api/internal/worker/handler.go`, when a video or chunk analysis failed (e.g., due to downstream Gemini API errors, GCS download errors, or local filesystem permission issues), the raw `err.Error()` was saved to the database in the `Output` field of the results table. These results are exposed to the user via the `/analysis` and `/history` endpoints.
 **Learning:** Returning or saving unhandled raw error strings from backend components (like file system errors containing `/tmp/` paths, or third-party service errors) directly to user-facing payloads leaks internal system details. This information exposure (CWE-209) violates the principle of failing securely.
 **Prevention:** Always catch raw internal errors, securely log them on the server side using the application's logging framework, and replace the user-facing output with safe, generic error messages (e.g., "An internal error occurred during analysis.").
+
+## 2025-04-09 - Path Traversal Validation Bypass via filepath.Base()
+**Vulnerability:** Path Traversal vulnerability check bypass in background workers.
+**Learning:** `filepath.Base()` strips path separators from strings. Calling `filepath.Base()` on user input and then checking the *result* for path separators using `strings.ContainsRune(val, filepath.Separator)` will always silently pass, bypassing the validation logic meant to reject malicious input. The validation must occur *before* sanitizing the input or checking the original input string.
+**Prevention:** Always validate and check for path separators on the *raw* user input before applying any path transformation or sanitization functions.
