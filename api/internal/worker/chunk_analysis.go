@@ -109,6 +109,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 
 	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
 	safeSessionID := filepath.Base(p.SessionID)
