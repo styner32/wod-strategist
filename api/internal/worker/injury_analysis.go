@@ -90,10 +90,11 @@ func (w *Worker) HandleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) er
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	safeSessionID := filepath.Base(p.SessionID)
-	if strings.ContainsRune(safeSessionID, filepath.Separator) {
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
+	safeSessionID := filepath.Base(p.SessionID)
 
 	// Use two-pass path when a Gemini file URI was passed from video analysis
 	if p.GeminiFileURI != "" {

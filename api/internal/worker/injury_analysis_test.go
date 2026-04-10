@@ -314,4 +314,3 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		Expect(err).To(MatchError(ContainSubstring("invalid file path")))
 	})
 })
-

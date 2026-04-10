@@ -76,10 +76,10 @@ var _ = Describe("NewChunkAnalysisTask", func() {
 
 var _ = Describe("HandleChunkAnalysisTask", func() {
 	const (
-		geminiBaseURL = "https://generativelanguage.googleapis.com"
-		geminiAPIKey  = "test-api-key"
-		chunkAnalysis    = "[EXERCISE: Deadlift]\n엉덩이를 더 내려주세요. 코어가 흔들리고 있습니다."
-	chunkNoExercise = "[NO_EXERCISE]"
+		geminiBaseURL   = "https://generativelanguage.googleapis.com"
+		geminiAPIKey    = "test-api-key"
+		chunkAnalysis   = "[EXERCISE: Deadlift]\n엉덩이를 더 내려주세요. 코어가 흔들리고 있습니다."
+		chunkNoExercise = "[NO_EXERCISE]"
 	)
 
 	var (
@@ -309,4 +309,3 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 		Expect(err).To(MatchError(ContainSubstring("invalid file path")))
 	})
 })
-

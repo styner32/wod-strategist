@@ -132,11 +132,11 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	safeSessionID := filepath.Base(p.SessionID)
-	if strings.ContainsRune(safeSessionID, filepath.Separator) {
-		w.logger.Error("Invalid session ID: contains path separator after sanitization", zap.String("session_id", p.SessionID))
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
+	safeSessionID := filepath.Base(p.SessionID)
 
 	if w.UseCache {
 		w.logger.Info("Using two-pass analysis for video", zap.String("session_id", p.SessionID))

@@ -44,6 +44,11 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
+
 	retryCount, ok := asynq.GetRetryCount(ctx)
 	if !ok {
 		retryCount = 0

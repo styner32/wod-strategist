@@ -42,6 +42,11 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
+	if strings.ContainsRune(p.SessionID, filepath.Separator) {
+		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
+
 	w.logger.Info("Processing merge chunks",
 		zap.String("session_id", p.SessionID),
 		zap.String("file_path", p.FilePath))
