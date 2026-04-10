@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -108,13 +107,15 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	if strings.ContainsRune(p.SessionID, filepath.Separator) {
-		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
-		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	if err := validateSessionID(p.SessionID); err != nil {
+		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID))
+		return err
 	}
-	safeSessionID := filepath.Base(p.SessionID)
 
-	localFilePath := filepath.Join("/tmp", fmt.Sprintf("chunk_%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+	localFilePath, err := createTempFile("chunk", ".mp4")
+	if err != nil {
+		return err
+	}
 
 	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)

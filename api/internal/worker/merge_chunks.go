@@ -42,9 +42,9 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	if strings.ContainsRune(p.SessionID, filepath.Separator) {
-		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
-		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	if err := validateSessionID(p.SessionID); err != nil {
+		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID))
+		return err
 	}
 
 	w.logger.Info("Processing merge chunks",
@@ -102,10 +102,10 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 
 	w.logger.Info("Chunks to merge", zap.Int("count", len(objects)), zap.Strings("uris", objects))
 
-	// 2. Download all chunks to /tmp/
-	tmpDir := filepath.Join("/tmp", fmt.Sprintf("merge_%s_%d", strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_"), os.Getpid()))
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create merge temp dir: %w", err)
+	// 2. Download all chunks to a temp directory
+	tmpDir, err := createTempDir("merge")
+	if err != nil {
+		return err
 	}
 	defer os.RemoveAll(tmpDir)
 

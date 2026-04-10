@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -15,8 +15,13 @@ import * as MediaLibrary from "expo-media-library";
 import { MarkdownText } from "@/components/ui/MarkdownText";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useProfileId } from "@/store/useProfileStore";
-import { fetchVideoDownloadURL } from "../api";
-import { AnalysisResult, fetchAnalysisHistory } from "../history";
+import {
+  fetchVideoDownloadURL,
+  generateHighlight,
+  fetchHighlightResults,
+  fetchHighlightDownloadURL,
+} from "../api";
+import { AnalysisResult, HighlightResult, fetchAnalysisHistory } from "../history";
 
 /**
  * Extracts a human-readable label from session_id.
@@ -98,6 +103,17 @@ function formatDate(dateStr: string): string {
   });
 }
 
+/** Emoji + label for each highlight variant title */
+const HIGHLIGHT_VARIANT_CONFIG: Record<string, { emoji: string; color: string }> = {
+  "Highlight Reel": { emoji: "🎬", color: "#BF5AF2" },
+  "Best Forms": { emoji: "🏆", color: "#30D158" },
+  "Areas for Improvement": { emoji: "📈", color: "#FF9F0A" },
+  "Key Moments": { emoji: "⭐", color: "#64D2FF" },
+};
+
+const HIGHLIGHT_POLL_INTERVAL_MS = 5_000;
+const HIGHLIGHT_POLL_TIMEOUT_MS = 5 * 60 * 1_000;
+
 function HistoryCard({ item }: { item: AnalysisResult }) {
   const [expanded, setExpanded] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null); // 'merged' | 'hardsubbed' | 'encoded'
@@ -110,6 +126,151 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
   const hasInjuryOutput = item.injury_output && item.injury_output.trim().length > 0;
   const isCompleted = item.status === "COMPLETED";
   const availableVideos = item.available_videos ?? [];
+  const hasHighlightSegments = !!(item.highlight_segments && item.highlight_segments.trim().length > 0);
+
+  // ---------------------
+  // Highlight state
+  // ---------------------
+  const [highlights, setHighlights] = useState<HighlightResult[]>([]);
+  const [highlightLoading, setHighlightLoading] = useState(false);
+  const [highlightPolling, setHighlightPolling] = useState(false);
+  const [highlightDownloading, setHighlightDownloading] = useState<number | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollStartRef = useRef<number>(0);
+
+  // On mount, fetch existing highlight results (if any)
+  useEffect(() => {
+    if (isCompleted && item.analysis_type === "wod") {
+      fetchHighlightResults(item.session_id)
+        .then((results) => setHighlights(results.filter((r) => r.status === "COMPLETED")))
+        .catch(() => {});
+    }
+  }, [item.session_id, isCompleted, item.analysis_type]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, []);
+
+  const startPolling = useCallback(() => {
+    setHighlightPolling(true);
+    pollStartRef.current = Date.now();
+
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const results = await fetchHighlightResults(item.session_id);
+        const completed = results.filter((r) => r.status === "COMPLETED");
+        const failed = results.filter((r) => r.status === "FAILED");
+
+        if (completed.length > 0) {
+          setHighlights(completed);
+        }
+
+        // Stop polling if all results are terminal or timeout
+        const allTerminal = results.length > 0 && results.every((r) => r.status === "COMPLETED" || r.status === "FAILED");
+        const timedOut = Date.now() - pollStartRef.current > HIGHLIGHT_POLL_TIMEOUT_MS;
+
+        if (allTerminal || timedOut) {
+          if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+          setHighlightPolling(false);
+          if (timedOut && completed.length === 0) {
+            Alert.alert("Timeout", "Highlight generation is taking longer than expected. Check back later.");
+          }
+          if (failed.length > 0 && completed.length === 0) {
+            Alert.alert("Generation Failed", "Highlight generation failed. Please try again.");
+          }
+        }
+      } catch {
+        // Keep polling on transient errors
+      }
+    }, HIGHLIGHT_POLL_INTERVAL_MS);
+  }, [item.session_id]);
+
+  const handleCreateHighlights = async () => {
+    try {
+      setHighlightLoading(true);
+      await generateHighlight(item.session_id, item.profile_id ?? 0);
+      startPolling();
+    } catch (e: any) {
+      Alert.alert("Error", e?.message || "Failed to start highlight generation.");
+    } finally {
+      setHighlightLoading(false);
+    }
+  };
+
+  const handleHighlightDownload = async (hl: HighlightResult) => {
+    try {
+      setHighlightDownloading(hl.id);
+      const { download_url, filename } = await fetchHighlightDownloadURL(hl.id);
+      const localUri = FileSystem.cacheDirectory + filename;
+      const { uri } = await FileSystem.downloadAsync(download_url, localUri);
+
+      Alert.alert(
+        "Highlight Downloaded",
+        `"${hl.title}" (${Math.round(hl.duration_sec)}s) is ready.`,
+        [
+          {
+            text: "Save to Gallery",
+            onPress: async () => {
+              try {
+                const { status } = await MediaLibrary.requestPermissionsAsync();
+                if (status !== "granted") {
+                  Alert.alert("Permission Required", "Gallery permission is needed to save videos.");
+                  return;
+                }
+                await MediaLibrary.saveToLibraryAsync(uri);
+                Alert.alert("Saved", `"${hl.title}" saved to your gallery.`);
+              } catch {
+                Alert.alert("Error", "Failed to save to gallery.");
+              } finally {
+                try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+              }
+            },
+          },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: async () => {
+              try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+            },
+          },
+          { text: "Keep", style: "cancel" },
+        ]
+      );
+    } catch (e: any) {
+      const msg = e?.message?.includes("404") ? "Highlight not found on server." : String(e);
+      Alert.alert("Download Failed", msg);
+    } finally {
+      setHighlightDownloading(null);
+    }
+  };
+
+  const handleSaveAllHighlights = async () => {
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission Required", "Gallery permission is needed to save videos.");
+      return;
+    }
+
+    setHighlightDownloading(-1); // -1 = saving all
+    let savedCount = 0;
+    for (const hl of highlights) {
+      try {
+        const { download_url, filename } = await fetchHighlightDownloadURL(hl.id);
+        const localUri = FileSystem.cacheDirectory + filename;
+        const { uri } = await FileSystem.downloadAsync(download_url, localUri);
+        await MediaLibrary.saveToLibraryAsync(uri);
+        try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+        savedCount++;
+      } catch {
+        // Continue saving remaining highlights
+      }
+    }
+    setHighlightDownloading(null);
+    Alert.alert("Saved", `${savedCount} of ${highlights.length} highlights saved to gallery.`);
+  };
 
   const handleDownload = async (kind: "merged" | "hardsubbed" | "encoded") => {
     try {
@@ -168,6 +329,7 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
   const previewColor = isDark ? "#C0C0C0" : "#4A4A4A";
   const expandColor = isDark ? "#64D2FF" : "#0A84FF";
   const hrDividerColor = isDark ? "rgba(255,107,107,0.2)" : "rgba(255,107,107,0.3)";
+  const highlightSectionBg = isDark ? "rgba(191,90,242,0.08)" : "rgba(191,90,242,0.05)";
 
   return (
     <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
@@ -277,6 +439,104 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
                 <Text style={[styles.downloadBtnText, styles.downloadBtnEncodedText]}>📦 Encoded</Text>
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* ==================== Highlights Section ==================== */}
+      {isCompleted && item.analysis_type === "wod" && hasHighlightSegments && (
+        <View style={[styles.highlightSection, { backgroundColor: highlightSectionBg }]}>
+          <Text style={styles.highlightSectionTitle}>✨ Highlights</Text>
+
+          {/* Show existing completed highlights */}
+          {highlights.length > 0 && (
+            <>
+              <View style={styles.highlightVariantList}>
+                {highlights.map((hl) => {
+                  const variantCfg = HIGHLIGHT_VARIANT_CONFIG[hl.title] ?? { emoji: "🎥", color: "#A0A0A0" };
+                  const isSavingThis = highlightDownloading === hl.id;
+                  return (
+                    <TouchableOpacity
+                      key={hl.id}
+                      style={[styles.highlightVariantBtn, { borderColor: variantCfg.color + "40" }]}
+                      onPress={() => handleHighlightDownload(hl)}
+                      disabled={highlightDownloading !== null}
+                    >
+                      {isSavingThis ? (
+                        <ActivityIndicator size="small" color={variantCfg.color} />
+                      ) : (
+                        <>
+                          <Text style={styles.highlightVariantEmoji}>{variantCfg.emoji}</Text>
+                          <Text style={[styles.highlightVariantLabel, { color: variantCfg.color }]}>
+                            {hl.title}
+                          </Text>
+                          <Text style={styles.highlightVariantDuration}>
+                            {Math.round(hl.duration_sec)}s
+                          </Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Save All button */}
+              {highlights.length > 1 && (
+                <TouchableOpacity
+                  style={styles.saveAllBtn}
+                  onPress={handleSaveAllHighlights}
+                  disabled={highlightDownloading !== null}
+                >
+                  {highlightDownloading === -1 ? (
+                    <ActivityIndicator size="small" color="#BF5AF2" />
+                  ) : (
+                    <Text style={styles.saveAllBtnText}>
+                      💾 Save All to Gallery ({highlights.length})
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
+            </>
+          )}
+
+          {/* Polling indicator */}
+          {highlightPolling && highlights.length === 0 && (
+            <View style={styles.highlightPollingBanner}>
+              <ActivityIndicator size="small" color="#BF5AF2" />
+              <Text style={styles.highlightPollingText}>
+                Generating highlights... This may take a few minutes.
+              </Text>
+            </View>
+          )}
+
+          {/* Create button (shown when no highlights and not polling) */}
+          {highlights.length === 0 && !highlightPolling && (
+            <TouchableOpacity
+              style={styles.createHighlightBtn}
+              onPress={handleCreateHighlights}
+              disabled={highlightLoading}
+            >
+              {highlightLoading ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : (
+                <Text style={styles.createHighlightBtnText}>✨ Create Highlights</Text>
+              )}
+            </TouchableOpacity>
+          )}
+
+          {/* Regenerate button (shown when highlights already exist) */}
+          {highlights.length > 0 && !highlightPolling && (
+            <TouchableOpacity
+              style={styles.regenerateBtn}
+              onPress={handleCreateHighlights}
+              disabled={highlightLoading}
+            >
+              {highlightLoading ? (
+                <ActivityIndicator size="small" color="#BF5AF2" />
+              ) : (
+                <Text style={styles.regenerateBtnText}>🔄 Regenerate</Text>
               )}
             </TouchableOpacity>
           )}
@@ -520,6 +780,90 @@ const styles = StyleSheet.create({
   },
   downloadBtnEncodedText: {
     color: "#A0A0A0",
+  },
+
+  // Highlights
+  highlightSection: {
+    marginTop: 14,
+    borderRadius: 12,
+    padding: 14,
+  },
+  highlightSectionTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#BF5AF2",
+    marginBottom: 10,
+  },
+  highlightVariantList: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  highlightVariantBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(191,90,242,0.1)",
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  highlightVariantEmoji: {
+    fontSize: 15,
+  },
+  highlightVariantLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  highlightVariantDuration: {
+    fontSize: 11,
+    color: "#888",
+    marginLeft: 2,
+  },
+  saveAllBtn: {
+    marginTop: 10,
+    backgroundColor: "rgba(191,90,242,0.15)",
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  saveAllBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#BF5AF2",
+  },
+  createHighlightBtn: {
+    backgroundColor: "#BF5AF2",
+    borderRadius: 10,
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  createHighlightBtnText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#FFF",
+  },
+  regenerateBtn: {
+    marginTop: 8,
+    alignItems: "center",
+    paddingVertical: 6,
+  },
+  regenerateBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#BF5AF2",
+  },
+  highlightPollingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8,
+  },
+  highlightPollingText: {
+    fontSize: 12,
+    color: "#BF5AF2",
+    flex: 1,
   },
 
   // Loading

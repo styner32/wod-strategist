@@ -30,3 +30,18 @@ export async function fetchAnalysisHistory(profileId: number): Promise<AnalysisR
 
   return res.json();
 }
+
+export interface HighlightResult {
+  id: number;
+  session_id: string;
+  profile_id?: number;
+  title: string;
+  status: string; // PENDING, PROCESSING, COMPLETED, FAILED
+  gcs_uri: string;
+  music_gcs_uri: string;
+  segments: string;
+  duration_sec: number;
+  output: string;
+  created_at: string;
+  updated_at: string;
+}

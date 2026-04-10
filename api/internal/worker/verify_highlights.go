@@ -46,9 +46,9 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	if strings.ContainsRune(p.SessionID, filepath.Separator) {
-		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
-		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	if err := validateSessionID(p.SessionID); err != nil {
+		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID))
+		return err
 	}
 
 	retryCount, ok := asynq.GetRetryCount(ctx)
@@ -109,9 +109,10 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		zap.String("video_uri", videoURI))
 
 	// 4. Download video and upload to Gemini Files API
-	safeSessionID := filepath.Base(p.SessionID)
-	localFilePath := filepath.Join("/tmp", fmt.Sprintf("verify_%s_%s",
-		strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(videoURI)))
+	localFilePath, err := createTempFile("verify", ".mp4")
+	if err != nil {
+		return err
+	}
 
 	if err := w.StorageClient.DownloadFile(ctx, videoURI, localFilePath); err != nil {
 		return fmt.Errorf("failed to download video: %w", err)

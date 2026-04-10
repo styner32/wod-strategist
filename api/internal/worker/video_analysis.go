@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -132,18 +131,17 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	if strings.ContainsRune(p.SessionID, filepath.Separator) {
-		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
-		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	if err := validateSessionID(p.SessionID); err != nil {
+		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID))
+		return err
 	}
-	safeSessionID := filepath.Base(p.SessionID)
 
 	if w.UseCache {
 		w.logger.Info("Using two-pass analysis for video", zap.String("session_id", p.SessionID))
 		return w.handleVideoAnalysisTwoPass(ctx, p)
 	}
 
-	return w.handleVideoAnalysisLegacy(ctx, p, safeSessionID)
+	return w.handleVideoAnalysisLegacy(ctx, p)
 }
 
 // Segment represents an identified exercise set within a larger video.
@@ -242,8 +240,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		}
 	}()
 
-	safeSessionID := filepath.Base(p.SessionID)
-	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+	localFilePath, err := createTempFile("analysis", ".mp4")
+	if err != nil {
+		return err
+	}
 
 	w.logger.Info("Downloading file from GCS for two-pass analysis",
 		zap.String("uri", p.FilePath),
@@ -723,8 +723,11 @@ func filterSegments(segments []Segment, videoDuration time.Duration) []Segment {
 }
 
 // handleVideoAnalysisLegacy is the original file-upload based path.
-func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisPayload, safeSessionID string) error {
-	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisPayload) error {
+	localFilePath, err := createTempFile("legacy-analysis", ".mp4")
+	if err != nil {
+		return err
+	}
 
 	w.logger.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
 	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
