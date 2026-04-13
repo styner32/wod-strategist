@@ -90,6 +90,7 @@ export interface ChunkAnalysisResult {
   session_id: string;
   status: string;
   output: string;
+  exercise_type?: string;
   start_secs?: number;
   end_secs?: number;
   created_at: string;

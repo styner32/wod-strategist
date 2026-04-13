@@ -39,6 +39,13 @@ export default function RootLayout() {
             presentation: "fullScreenModal",
           }}
         />
+        <Stack.Screen
+          name="workout/player"
+          options={{
+            headerShown: false,
+            presentation: "fullScreenModal",
+          }}
+        />
         <Stack.Screen name="upload/index" options={{ headerShown: false }} />
         <Stack.Screen name="queue" options={{ headerShown: false }} />
       </Stack>

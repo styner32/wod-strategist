@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { router } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
@@ -22,6 +23,7 @@ import {
   fetchHighlightDownloadURL,
 } from "../api";
 import { AnalysisResult, HighlightResult, fetchAnalysisHistory } from "../history";
+import { HighlightVideoPlayer } from "./HighlightVideoPlayer";
 
 /**
  * Extracts a human-readable label from session_id.
@@ -135,6 +137,8 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
   const [highlightLoading, setHighlightLoading] = useState(false);
   const [highlightPolling, setHighlightPolling] = useState(false);
   const [highlightDownloading, setHighlightDownloading] = useState<number | null>(null);
+  const [playingHighlight, setPlayingHighlight] = useState<{ hl: HighlightResult; url: string } | null>(null);
+  const [loadingPlayId, setLoadingPlayId] = useState<number | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
 
@@ -272,6 +276,24 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
     Alert.alert("Saved", `${savedCount} of ${highlights.length} highlights saved to gallery.`);
   };
 
+  const handlePlayHighlight = async (hl: HighlightResult) => {
+    // If already playing this one, close it
+    if (playingHighlight?.hl.id === hl.id) {
+      setPlayingHighlight(null);
+      return;
+    }
+    try {
+      setLoadingPlayId(hl.id);
+      const { download_url } = await fetchHighlightDownloadURL(hl.id);
+      setPlayingHighlight({ hl, url: download_url });
+    } catch (e: any) {
+      const msg = e?.message?.includes("404") ? "Highlight not found on server." : String(e);
+      Alert.alert("Playback Failed", msg);
+    } finally {
+      setLoadingPlayId(null);
+    }
+  };
+
   const handleDownload = async (kind: "merged" | "hardsubbed" | "encoded") => {
     try {
       setDownloading(kind);
@@ -400,6 +422,32 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
         </View>
       )}
 
+      {/* Watch button — opens full workout player */}
+      {isCompleted && item.analysis_type !== "injury_supplement" && (availableVideos.includes("merged") || availableVideos.includes("hardsubbed") || availableVideos.includes("encoded")) && (
+        <TouchableOpacity
+          style={styles.watchBtn}
+          onPress={() => {
+            // Prefer hardsubbed (has guidance overlay) > merged > encoded
+            const videoKind = availableVideos.includes("hardsubbed")
+              ? "hardsubbed"
+              : availableVideos.includes("merged")
+                ? "merged"
+                : "encoded";
+            router.push({
+              pathname: "/workout/player",
+              params: {
+                sessionId: item.session_id,
+                profileId: String(item.profile_id ?? 0),
+                videoKind,
+              },
+            });
+          }}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.watchBtnText}>▶  Watch Workout</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Download buttons */}
       {isCompleted && item.analysis_type !== "injury_supplement" && availableVideos.length > 0 && (
         <View style={styles.downloadRow}>
@@ -456,19 +504,27 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
               <View style={styles.highlightVariantList}>
                 {highlights.map((hl) => {
                   const variantCfg = HIGHLIGHT_VARIANT_CONFIG[hl.title] ?? { emoji: "🎥", color: "#A0A0A0" };
-                  const isSavingThis = highlightDownloading === hl.id;
+                  const isLoadingPlay = loadingPlayId === hl.id;
+                  const isPlaying = playingHighlight?.hl.id === hl.id;
                   return (
                     <TouchableOpacity
                       key={hl.id}
-                      style={[styles.highlightVariantBtn, { borderColor: variantCfg.color + "40" }]}
-                      onPress={() => handleHighlightDownload(hl)}
-                      disabled={highlightDownloading !== null}
+                      style={[
+                        styles.highlightVariantBtn,
+                        { borderColor: variantCfg.color + "40" },
+                        isPlaying && { borderColor: variantCfg.color, backgroundColor: variantCfg.color + "20" },
+                      ]}
+                      onPress={() => handlePlayHighlight(hl)}
+                      onLongPress={() => handleHighlightDownload(hl)}
+                      disabled={loadingPlayId !== null && loadingPlayId !== hl.id}
                     >
-                      {isSavingThis ? (
+                      {isLoadingPlay ? (
                         <ActivityIndicator size="small" color={variantCfg.color} />
                       ) : (
                         <>
-                          <Text style={styles.highlightVariantEmoji}>{variantCfg.emoji}</Text>
+                          <Text style={styles.highlightVariantEmoji}>
+                            {isPlaying ? "⏸" : "▶"}
+                          </Text>
                           <Text style={[styles.highlightVariantLabel, { color: variantCfg.color }]}>
                             {hl.title}
                           </Text>
@@ -481,6 +537,15 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
                   );
                 })}
               </View>
+
+              {/* Inline Video Player */}
+              {playingHighlight && (
+                <HighlightVideoPlayer
+                  highlight={playingHighlight.hl}
+                  videoUrl={playingHighlight.url}
+                  onClose={() => setPlayingHighlight(null)}
+                />
+              )}
 
               {/* Save All button */}
               {highlights.length > 1 && (
@@ -748,6 +813,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#FFD60A",
     lineHeight: 18,
+  },
+
+  // Watch button
+  watchBtn: {
+    marginTop: 14,
+    backgroundColor: "rgba(100,210,255,0.12)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(100,210,255,0.3)",
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  watchBtnText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#64D2FF",
+    letterSpacing: 0.3,
   },
 
   // Download buttons

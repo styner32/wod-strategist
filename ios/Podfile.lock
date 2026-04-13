@@ -111,6 +111,8 @@ PODS:
     - ExpoModulesCore
   - ExpoSystemUI (55.0.10):
     - ExpoModulesCore
+  - ExpoVideo (55.0.15):
+    - ExpoModulesCore
   - ExpoVideoThumbnails (55.0.11):
     - ExpoModulesCore
   - ExpoWebBrowser (55.0.10):
@@ -3256,6 +3258,7 @@ DEPENDENCIES:
   - ExpoSplashScreen (from `../node_modules/expo-splash-screen/ios`)
   - ExpoSymbols (from `../node_modules/expo-symbols/ios`)
   - ExpoSystemUI (from `../node_modules/expo-system-ui/ios`)
+  - ExpoVideo (from `../node_modules/expo-video/ios`)
   - ExpoVideoThumbnails (from `../node_modules/expo-video-thumbnails/ios`)
   - ExpoWebBrowser (from `../node_modules/expo-web-browser/ios`)
   - fast_float (from `../node_modules/react-native/third-party-podspecs/fast_float.podspec`)
@@ -3413,6 +3416,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/expo-symbols/ios"
   ExpoSystemUI:
     :path: "../node_modules/expo-system-ui/ios"
+  ExpoVideo:
+    :path: "../node_modules/expo-video/ios"
   ExpoVideoThumbnails:
     :path: "../node_modules/expo-video-thumbnails/ios"
   ExpoWebBrowser:
@@ -3627,6 +3632,7 @@ SPEC CHECKSUMS:
   ExpoSplashScreen: 755302759fbcf4af56b8ad5fb76e535dcf812f91
   ExpoSymbols: 3d67a96643245a5d933ce7fbf535f95eb541f617
   ExpoSystemUI: e3cffdb694bea7658c22f72659f9d6433f0a0e4d
+  ExpoVideo: 434d1e32486309359b8eff4880d636fd8c0c0ba1
   ExpoVideoThumbnails: c24dce1866bdc3ae6498658c635251a88103719c
   ExpoWebBrowser: 04fdc3b0619d6708f931a9d0f8850903cc38d896
   fast_float: b32c788ed9c6a8c584d114d0047beda9664e7cc6
