@@ -42,10 +42,11 @@ type VideoAnalysisPayload struct {
 
 // HighlightSegment is shared between video analysis (parsing) and highlight generation (processing).
 type HighlightSegment struct {
-	Start  string `json:"start"`  // e.g. "0:15" or "1:30"
-	End    string `json:"end"`    // e.g. "0:28" or "1:45"
-	Type   string `json:"type"`   // best_form, worst_form, fatigue_point, key_moment
-	Reason string `json:"reason"` // human-readable reason
+	Start    string `json:"start"`              // e.g. "0:15" or "1:30"
+	End      string `json:"end"`                // e.g. "0:28" or "1:45"
+	Type     string `json:"type"`               // best_form, worst_form, fatigue_point, key_moment
+	Movement string `json:"movement,omitempty"` // which exercise (e.g. "Snatch", "Pull-up")
+	Reason   string `json:"reason"`             // human-readable reason
 }
 
 // StorageClient is the minimal interface over storage.Client used by handlers.

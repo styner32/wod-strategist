@@ -64,12 +64,13 @@ const (
 	HighlightSelectionPrompt = `
 
 7. **하이라이트 구간 (Highlight Segments)**:
-   - 소셜 미디어 공유나 퍼포먼스 비교에 적합한 핵심 구간을 선별하세요.
+   - 이 하이라이트는 전체 운동을 요약하는 역할입니다. 영상에서 감지된 **모든 운동 종목에 대해** 핵심 구간을 추출하세요.
+   - 각 운동 종목별로 최소 1개 이상의 하이라이트를 반드시 포함하세요. 특정 운동만 편중하지 마세요.
    - 카테고리: best_form (가장 좋은 자세), worst_form (가장 나쁜 자세), fatigue_point (피로 시작 지점), key_moment (핵심 순간)
-   - 영상 길이를 고려하여 **각 카테고리당 가능한 한 2개 이상의 구간**을 찾아주세요.
+   - 각 카테고리당 가능한 한 2개 이상의 구간을 찾고, movement 필드에 해당 운동 종목명을 기입하세요.
    - 각 구간은 3~15초 권장, 전체 시간 합계 제한은 없습니다. 자유롭게 유의미한 구간을 모두 추출하세요.
    - 반드시 아래 형식의 **highlights** JSON 코드 블록으로 출력하세요 (json이 아닌 highlights 태그 사용):
-` + "```highlights\n" + `[{"start":"0:15","end":"0:28","type":"best_form","reason":"완벽한 스내치 풀 익스텐션"},{"start":"1:10","end":"1:20","type":"best_form","reason":"코어가 매우 안정적인 두번째 움직임"},{"start":"2:30","end":"2:45","type":"worst_form","reason":"무릎 내전과 등 굽음 관찰"}]` + "\n```"
+` + "```highlights\n" + `[{"start":"0:15","end":"0:28","type":"best_form","movement":"Snatch","reason":"완벽한 스내치 풀 익스텐션"},{"start":"1:10","end":"1:20","type":"key_moment","movement":"Pull-up","reason":"풀업 첫 세트에서 안정적인 킵핑"},{"start":"2:30","end":"2:45","type":"worst_form","movement":"Snatch","reason":"무릎 내전과 등 굽음 관찰"},{"start":"3:00","end":"3:12","type":"fatigue_point","movement":"Burpee","reason":"속도 현저히 감소, 호흡 불안정"}]` + "\n```"
 
 	InjuryTimestampPrompt = `
 
