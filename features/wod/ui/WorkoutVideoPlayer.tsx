@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { t } from "@/features/i18n";
 import {
   ActivityIndicator,
   Animated,
@@ -83,11 +84,11 @@ function findActiveCue(cues: GuidanceCue[], timeSecs: number): GuidanceCue | nul
   return null;
 }
 
-const HIGHLIGHT_TYPE_CONFIG: Record<string, { emoji: string; color: string; label: string }> = {
-  best_form: { emoji: "🏆", color: "#30D158", label: "Best Form" },
-  worst_form: { emoji: "⚠️", color: "#FF9F0A", label: "Needs Work" },
-  fatigue_point: { emoji: "🫁", color: "#FF453A", label: "Fatigue" },
-  key_moment: { emoji: "⭐", color: "#64D2FF", label: "Key Moment" },
+const HIGHLIGHT_TYPE_CONFIG: Record<string, { emoji: string; color: string; labelKey: string }> = {
+  best_form: { emoji: "🏆", color: "#30D158", labelKey: "player.bestForm" },
+  worst_form: { emoji: "⚠️", color: "#FF9F0A", labelKey: "player.needsWork" },
+  fatigue_point: { emoji: "🫁", color: "#FF453A", labelKey: "player.fatigue" },
+  key_moment: { emoji: "⭐", color: "#64D2FF", labelKey: "player.keyMoment" },
 };
 
 const PREROLL_SECS = 5;
@@ -182,7 +183,8 @@ export function WorkoutVideoPlayer({
 
   const renderHighlightChip = useCallback(
     ({ item: hl }: { item: HighlightSegment }) => {
-      const cfg = HIGHLIGHT_TYPE_CONFIG[hl.type] ?? { emoji: "🎯", color: "#A0A0A0", label: hl.type };
+      const rawCfg = HIGHLIGHT_TYPE_CONFIG[hl.type] ?? { emoji: "🎯", color: "#A0A0A0", labelKey: hl.type };
+      const cfg = { ...rawCfg, label: t(rawCfg.labelKey) };
       const isActive =
         currentTime >= parseTimestamp(hl.start) - 1 &&
         currentTime <= parseTimestamp(hl.end) + 1;
@@ -217,7 +219,7 @@ export function WorkoutVideoPlayer({
       {/* ── Header ── */}
       <View style={styles.header}>
         <TouchableOpacity onPress={onClose} hitSlop={12} style={styles.backBtn}>
-          <Text style={styles.backText}>← Back</Text>
+          <Text style={styles.backText}>{t("player.backBtn")}</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{sessionLabel}</Text>
         <View style={styles.headerSpacer} />
@@ -240,7 +242,7 @@ export function WorkoutVideoPlayer({
             </Text>
             <View style={styles.highlightOverlayTextCol}>
               <Text style={styles.highlightOverlayLabel}>
-                {HIGHLIGHT_TYPE_CONFIG[activeHighlight.type]?.label ?? activeHighlight.type}
+                {HIGHLIGHT_TYPE_CONFIG[activeHighlight.type] ? t(HIGHLIGHT_TYPE_CONFIG[activeHighlight.type].labelKey) : activeHighlight.type}
                 {activeHighlight.movement ? ` · ${activeHighlight.movement}` : ""}
               </Text>
               <Text style={styles.highlightOverlayReason} numberOfLines={2}>
@@ -258,7 +260,7 @@ export function WorkoutVideoPlayer({
       >
         {/* ── Guidance Strip ── */}
         <View style={styles.guidanceSection}>
-          <Text style={styles.sectionTitle}>🎙 Coaching Guidance</Text>
+          <Text style={styles.sectionTitle}>{t("player.coachingGuidance")}</Text>
           {activeCue ? (
             <View style={styles.guidanceBubble}>
               {activeCue.exerciseType && (
@@ -275,8 +277,8 @@ export function WorkoutVideoPlayer({
             <View style={styles.guidanceBubbleEmpty}>
               <Text style={styles.guidanceEmptyText}>
                 {cues.length > 0
-                  ? "No guidance for this moment"
-                  : "No coaching data available for this session"}
+                  ? t("player.noGuidanceNow")
+                  : t("player.noGuidanceSession")}
               </Text>
             </View>
           )}
@@ -285,9 +287,9 @@ export function WorkoutVideoPlayer({
         {/* ── Highlights Section ── */}
         {highlightSegments.length > 0 && (
           <View style={styles.highlightsSection}>
-            <Text style={styles.sectionTitle}>⚡ Highlights</Text>
+            <Text style={styles.sectionTitle}>{t("player.highlightsSection")}</Text>
             <Text style={styles.sectionSubtitle}>
-              Tap to jump · Starts 5s before the moment
+              {t("player.highlightsHint")}
             </Text>
             <FlatList
               data={highlightSegments}
@@ -304,7 +306,7 @@ export function WorkoutVideoPlayer({
         {/* ── All Guidance Cues Timeline ── */}
         {cues.length > 0 && (
           <View style={styles.timelineSection}>
-            <Text style={styles.sectionTitle}>📋 Full Guidance Timeline</Text>
+            <Text style={styles.sectionTitle}>{t("player.fullTimeline")}</Text>
             {cues.map((cue, i) => {
               const isActive = activeCue === cue;
               return (

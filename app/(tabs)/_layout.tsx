@@ -1,4 +1,5 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { t } from "@/features/i18n";
 import { Tabs } from "expo-router";
 import { StyleSheet } from "react-native";
 
@@ -18,7 +19,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Home",
+          title: t("tabs.home"),
           headerTitle: "WOD Strategist",
           tabBarIcon: ({ color, size }) => (
             <IconSymbol name="house.fill" size={size} color={color} />
@@ -28,8 +29,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="train"
         options={{
-          title: "Train",
-          headerTitle: "Train",
+          title: t("tabs.train"),
+          headerTitle: t("tabs.train"),
           tabBarIcon: ({ color, size }) => (
             <IconSymbol name="flame.fill" size={size} color={color} />
           ),
@@ -38,8 +39,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="history"
         options={{
-          title: "History",
-          headerTitle: "History",
+          title: t("tabs.history"),
+          headerTitle: t("tabs.history"),
           tabBarIcon: ({ color, size }) => (
             <IconSymbol name="clock.fill" size={size} color={color} />
           ),
@@ -48,7 +49,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="profile"
         options={{
-          title: "Profile",
+          title: t("tabs.profile"),
           headerShown: false,
           tabBarIcon: ({ color, size }) => (
             <IconSymbol name="person.fill" size={size} color={color} />

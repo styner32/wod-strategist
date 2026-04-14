@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 
+import { t } from "@/features/i18n";
 import { fetchVideoDownloadURL, fetchChunkAnalysis } from "@/features/wod/api";
 import type { ChunkAnalysisResult } from "@/features/wod/api";
 import {
@@ -36,7 +37,7 @@ export default function WorkoutPlayerPage() {
 
   const loadData = useCallback(async () => {
     if (!sessionId || !pid) {
-      setError("Missing session or profile ID");
+      setError(t("player.missingIds"));
       setLoading(false);
       return;
     }
@@ -55,7 +56,7 @@ export default function WorkoutPlayerPage() {
       if (videoRes.status === "fulfilled") {
         setVideoUrl(videoRes.value.download_url);
       } else {
-        setError("Failed to load video. It may not be available yet.");
+        setError(t("player.failedLoadVideo"));
         setLoading(false);
         return;
       }
@@ -80,7 +81,7 @@ export default function WorkoutPlayerPage() {
         }
       }
     } catch (e: any) {
-      setError(e?.message || "Failed to load data");
+      setError(e?.message || t("player.failedLoadVideo"));
     } finally {
       setLoading(false);
     }
@@ -100,14 +101,14 @@ export default function WorkoutPlayerPage() {
 
   // Build a human-readable label
   const sessionLabel = sessionId
-    ? sessionId.split("-")[0]?.toUpperCase() || "Workout"
-    : "Workout";
+    ? sessionId.split("-")[0]?.toUpperCase() || t("common.workout")
+    : t("common.workout");
 
   if (loading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#64D2FF" />
-        <Text style={styles.loadingText}>Loading workout video...</Text>
+        <Text style={styles.loadingText}>{t("player.loadingVideo")}</Text>
       </View>
     );
   }
@@ -116,12 +117,12 @@ export default function WorkoutPlayerPage() {
     return (
       <View style={styles.center}>
         <Text style={styles.errorIcon}>📹</Text>
-        <Text style={styles.errorTitle}>Video Unavailable</Text>
+        <Text style={styles.errorTitle}>{t("player.videoUnavailable")}</Text>
         <Text style={styles.errorMessage}>
-          {error || "The video could not be loaded."}
+          {error || t("player.videoLoadError")}
         </Text>
         <Text style={styles.backLink} onPress={handleClose}>
-          ← Go Back
+          {t("player.goBack")}
         </Text>
       </View>
     );

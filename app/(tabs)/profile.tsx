@@ -1,4 +1,5 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { t } from "@/features/i18n";
 import { useActiveProfile, useProfileId, useProfileStore } from "@/store/useProfileStore";
 import { Link, router } from "expo-router";
 import {
@@ -20,10 +21,10 @@ export default function ProfileTab() {
   const summaryLine = activeProfile
     ? [
         activeProfile.gender === "male"
-          ? "Male"
+          ? t("common.male")
           : activeProfile.gender === "female"
-            ? "Female"
-            : "Other",
+            ? t("common.female")
+            : t("common.other"),
         String(activeProfile.birthYear),
         `${activeProfile.heightCm} cm`,
         `${activeProfile.weightKg} kg`,
@@ -31,10 +32,10 @@ export default function ProfileTab() {
     : null;
 
   const handleLogout = () => {
-    Alert.alert("Sign Out", "Switch to a different profile?", [
-      { text: "Cancel", style: "cancel" },
+    Alert.alert(t("profileTab.signOut"), t("profileTab.signOutConfirm"), [
+      { text: t("common.cancel"), style: "cancel" },
       {
-        text: "Sign Out",
+        text: t("profileTab.signOut"),
         style: "destructive",
         onPress: () => {
           clearActiveProfile();
@@ -60,7 +61,7 @@ export default function ProfileTab() {
             </Text>
           </View>
           <Text style={styles.profileName}>
-            {activeProfile?.name || "No Profile Selected"}
+            {activeProfile?.name || t("profileTab.noProfile")}
           </Text>
           {summaryLine && (
             <Text style={styles.profileSummary}>{summaryLine}</Text>
@@ -83,7 +84,7 @@ export default function ProfileTab() {
 
         {/* Actions */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
+          <Text style={styles.sectionTitle}>{t("profileTab.account")}</Text>
 
           {activeProfile ? (
             <Link
@@ -94,7 +95,7 @@ export default function ProfileTab() {
                 <View style={styles.menuIconBox}>
                   <IconSymbol name="person.fill" size={18} color="#00E5FF" />
                 </View>
-                <Text style={styles.menuItemText}>Edit Profile</Text>
+                <Text style={styles.menuItemText}>{t("profileTab.editProfile")}</Text>
                 <Text style={styles.chevron}>›</Text>
               </Pressable>
             </Link>
@@ -104,7 +105,7 @@ export default function ProfileTab() {
                 <View style={styles.menuIconBox}>
                   <IconSymbol name="person.fill" size={18} color="#53E16F" />
                 </View>
-                <Text style={styles.menuItemText}>Create Profile</Text>
+                <Text style={styles.menuItemText}>{t("profileTab.createProfile")}</Text>
                 <Text style={styles.chevron}>›</Text>
               </Pressable>
             </Link>
@@ -115,7 +116,7 @@ export default function ProfileTab() {
               <View style={styles.menuIconBox}>
                 <IconSymbol name="person.fill" size={18} color="#FFD60A" />
               </View>
-              <Text style={styles.menuItemText}>Switch Profile</Text>
+              <Text style={styles.menuItemText}>{t("profileTab.switchProfile")}</Text>
               <Text style={styles.chevron}>›</Text>
             </Pressable>
           </Link>
@@ -128,7 +129,7 @@ export default function ProfileTab() {
               style={styles.logoutBtn}
               onPress={handleLogout}
             >
-              <Text style={styles.logoutText}>Sign Out</Text>
+              <Text style={styles.logoutText}>{t("profileTab.signOut")}</Text>
             </TouchableOpacity>
           </View>
         )}

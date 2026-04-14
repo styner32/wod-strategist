@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { t } from "@/features/i18n";
 import {
   ActivityIndicator,
   Alert,
@@ -41,15 +42,15 @@ export function HighlightVideoPlayer({ highlight, videoUrl, onClose }: Props) {
 
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Permission Required", "Gallery permission is needed to save videos.");
+        Alert.alert(t("common.permissionRequired"), t("common.galleryPermission"));
         return;
       }
       await MediaLibrary.saveToLibraryAsync(uri);
-      Alert.alert("Saved", `"${highlight.title}" saved to your gallery.`);
+      Alert.alert(t("common.saved"), t("player.saveToGallery") + ` "${highlight.title}"`);
 
       try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
     } catch {
-      Alert.alert("Error", "Failed to save to gallery.");
+      Alert.alert(t("common.error"), t("common.failedSaveGallery"));
     } finally {
       setSaving(false);
     }
@@ -83,7 +84,7 @@ export function HighlightVideoPlayer({ highlight, videoUrl, onClose }: Props) {
           {saving ? (
             <ActivityIndicator size="small" color="#FFF" />
           ) : (
-            <Text style={styles.saveBtnText}>💾 Save to Gallery</Text>
+            <Text style={styles.saveBtnText}>{t("player.saveToGallery")}</Text>
           )}
         </TouchableOpacity>
       </View>

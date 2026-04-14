@@ -123,7 +123,8 @@
       "expo-image",
       "expo-web-browser",
       "expo-secure-store",
-      "expo-video"
+      "expo-video",
+      "expo-localization"
     ],
     "experiments": {
       "typedRoutes": true,

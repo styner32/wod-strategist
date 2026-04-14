@@ -1,16 +1,9 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import {
-  fetchMovements,
-  processWorkoutVideo,
-} from "@/features/wod/api";
-import {
-  buildWorkoutSessionId,
-} from "@/features/wod/workoutType";
-import { useActiveProfile, useProfileId } from "@/store/useProfileStore";
-import { Image } from "expo-image";
+import { t } from "@/features/i18n";
+import { fetchMovements } from "@/features/wod/api";
+import { useProfileId } from "@/store/useProfileStore";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
-import * as VideoThumbnails from "expo-video-thumbnails";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -24,27 +17,34 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function UploadScreen() {
-  const workoutType = "wod";
   const profileId = useProfileId();
-  const activeProfile = useActiveProfile();
-  const [videoUri, setVideoUri] = useState<string | null>(null);
-  const [videoMimeType, setVideoMimeType] = useState<string | null>(null);
-  const [thumbnailUri, setThumbnailUri] = useState<string | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
-
+  const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [movementOptions, setMovementOptions] = useState<string[]>([]);
   const [selectedMovements, setSelectedMovements] = useState<string[]>([]);
-  const [isLoadingMovements, setIsLoadingMovements] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
 
   useEffect(() => {
     fetchMovements()
       .then(setMovementOptions)
-      .catch((error) => {
-        console.error("Failed to load movements", error);
-      })
-      .finally(() => setIsLoadingMovements(false));
+      .catch((e) => console.error("Failed to load movements", e));
   }, []);
+
+  const pickVideo = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["videos"],
+      quality: 1,
+    });
+    if (!result.canceled && result.assets[0]) {
+      setSelectedVideo(result.assets[0].uri);
+      setFileName(
+        result.assets[0].fileName ??
+          result.assets[0].uri.split("/").pop() ??
+          "video.mp4"
+      );
+    }
+  };
 
   const toggleMovement = (m: string) => {
     setSelectedMovements((prev) =>
@@ -52,74 +52,67 @@ export default function UploadScreen() {
     );
   };
 
-  const pickVideo = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
-      allowsEditing: false,
-      quality: 1,
-    });
-
-    if (!result.canceled) {
-      const { uri, mimeType } = result.assets[0];
-      setVideoUri(uri);
-      setVideoMimeType(mimeType || "video/mp4");
-
-      try {
-        const { uri: thumb } = await VideoThumbnails.getThumbnailAsync(uri, {
-          time: 1000,
-        });
-        setThumbnailUri(thumb);
-      } catch (e) {
-        console.warn("Failed to generate thumbnail", e);
-        setThumbnailUri(uri);
-      }
-    }
-  };
-
   const handleUpload = async () => {
-    if (!videoUri) return;
+    if (!selectedVideo) return;
 
     if (!profileId) {
-      Alert.alert(
-        "Profile Required",
-        "Please select a profile before uploading.",
-        [{ text: "OK", onPress: () => router.push("/profiles" as any) }]
-      );
+      Alert.alert(t("upload.profileRequired"), t("upload.profileRequiredDesc"));
       return;
     }
 
+    setUploading(true);
+    setProgress(0);
+
     try {
-      setIsUploading(true);
-      setProgress(0);
-      const sessionId = buildWorkoutSessionId(workoutType);
+      const formData = new FormData();
+      formData.append("video", {
+        uri: selectedVideo,
+        type: "video/mp4",
+        name: fileName ?? "video.mp4",
+      } as any);
+      formData.append("workout_type", "wod");
+      formData.append("profile_id", String(profileId));
+      if (selectedMovements.length > 0) {
+        formData.append("movements", selectedMovements.join(","));
+      }
 
-      // Get injuries from active profile
-      const injuries = activeProfile?.injuries ?? [];
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${apiUrl}/upload`);
 
-      await processWorkoutVideo(videoUri, sessionId, {
-        onProgress: (p) => setProgress(p),
-        movements: selectedMovements,
-        injuries,
-        mimeType: videoMimeType || "video/mp4",
-        workoutType,
-        profileId,
+      xhr.upload.addEventListener("progress", (e) => {
+        if (e.lengthComputable) {
+          setProgress(e.loaded / e.total);
+        }
       });
 
-      Alert.alert("Success", "Analysis started!", [
-        { text: "View History", onPress: () => router.replace("/history") },
+      await new Promise<void>((resolve, reject) => {
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve();
+          } else {
+            reject(new Error(`Upload failed: ${xhr.status}`));
+          }
+        };
+        xhr.onerror = () => reject(new Error("Network error"));
+        xhr.send(formData);
+      });
+
+      Alert.alert(t("upload.success"), t("upload.analysisStarted"), [
+        {
+          text: t("upload.viewHistory"),
+          onPress: () => router.push("/(tabs)/history"),
+        },
       ]);
+
+      setSelectedVideo(null);
+      setFileName(null);
     } catch (e) {
-      Alert.alert("Error", String(e));
+      Alert.alert(t("common.error"), String(e));
     } finally {
-      setIsUploading(false);
+      setUploading(false);
       setProgress(0);
     }
-  };
-
-  const clearSelection = () => {
-    setVideoUri(null);
-    setVideoMimeType(null);
-    setThumbnailUri(null);
   };
 
   return (
@@ -128,93 +121,81 @@ export default function UploadScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <IconSymbol name="chevron.left" size={28} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.title}>Upload Video</Text>
+        <Text style={styles.title}>{t("upload.title")}</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
-        {!videoUri ? (
-          <TouchableOpacity style={styles.pickBox} onPress={pickVideo}>
-            <IconSymbol name="paperplane.fill" size={48} color="#666" />
-            <Text style={styles.pickText}>Tap to select video</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.previewContainer}>
-            {thumbnailUri && (
-              <Image
-                source={{ uri: thumbnailUri }}
-                style={styles.thumbnail}
-                contentFit="cover"
-              />
-            )}
-            <TouchableOpacity style={styles.clearBtn} onPress={clearSelection}>
-              <IconSymbol name="xmark.circle.fill" size={24} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {videoUri && (
-          <View>
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Select Movements</Text>
-              <Text style={styles.helperText}>
-                Optional, but recommended to improve coaching accuracy.
+        {/* Video Picker */}
+        <TouchableOpacity
+          style={[styles.pickerBox, selectedVideo && styles.pickerBoxSelected]}
+          onPress={pickVideo}
+        >
+          {selectedVideo ? (
+            <View style={styles.selectedVideoInfo}>
+              <Text style={styles.selectedIcon}>✅</Text>
+              <Text style={styles.selectedFileName} numberOfLines={1}>
+                {fileName}
               </Text>
-              {isLoadingMovements ? (
-                <ActivityIndicator color="#007AFF" />
-              ) : (
-                <View style={styles.chipContainer}>
-                  {movementOptions.map((m) => {
-                    const isSelected = selectedMovements.includes(m);
-                    return (
-                      <TouchableOpacity
-                        key={m}
-                        onPress={() => toggleMovement(m)}
-                        style={[styles.chip, isSelected && styles.chipActive]}
-                      >
-                        <Text
-                          style={[
-                            styles.chipText,
-                            isSelected && styles.chipTextActive,
-                          ]}
-                        >
-                          {m}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              )}
             </View>
+          ) : (
+            <>
+              <Text style={styles.pickerIcon}>🎬</Text>
+              <Text style={styles.pickerText}>{t("upload.tapToSelect")}</Text>
+            </>
+          )}
+        </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.uploadBtn, isUploading && styles.disabledBtn]}
-              onPress={handleUpload}
-              disabled={isUploading}
-            >
-              {isUploading ? (
-                <Text style={styles.uploadText}>
-                  Uploading... {Math.round(progress * 100)}%
-                </Text>
-              ) : (
-                <Text style={styles.uploadText}>
-                  Analyze WOD
-                </Text>
-              )}
-            </TouchableOpacity>
-
-            {isUploading && (
-              <View style={styles.progressBarBg}>
-                <View
-                  style={[
-                    styles.progressBarFill,
-                    { width: `${progress * 100}%` },
-                  ]}
-                />
-              </View>
-            )}
+        {/* Movements */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>{t("upload.selectMovements")}</Text>
+          <Text style={styles.hint}>
+            {t("upload.movementsHint")}
+          </Text>
+          <View style={styles.chipContainer}>
+            {movementOptions.map((m) => {
+              const isSelected = selectedMovements.includes(m);
+              return (
+                <TouchableOpacity
+                  key={m}
+                  onPress={() => toggleMovement(m)}
+                  style={[styles.chip, isSelected && styles.chipActive]}
+                >
+                  <Text
+                    style={[
+                      styles.chipText,
+                      isSelected && styles.chipTextActive,
+                    ]}
+                  >
+                    {m}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
-        )}
+        </View>
       </ScrollView>
+
+      <View style={styles.bottomBar}>
+        <TouchableOpacity
+          style={[
+            styles.uploadBtn,
+            (!selectedVideo || uploading) && styles.uploadBtnDisabled,
+          ]}
+          onPress={handleUpload}
+          disabled={!selectedVideo || uploading}
+        >
+          {uploading ? (
+            <View style={styles.uploadingRow}>
+              <ActivityIndicator color="#000" size="small" />
+              <Text style={styles.uploadBtnText}>
+                {t("upload.uploading", { percent: Math.round(progress * 100) })}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.uploadBtnText}>{t("upload.analyzeWod")}</Text>
+          )}
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
@@ -230,78 +211,46 @@ const styles = StyleSheet.create({
   },
   backBtn: { marginRight: 15 },
   title: { fontSize: 20, fontWeight: "bold", color: "#fff" },
-  content: { padding: 20 },
-  pickBox: {
+  content: { padding: 20, paddingBottom: 100 },
+
+  pickerBox: {
     height: 200,
     backgroundColor: "#1A1A1A",
     borderRadius: 16,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: "#333",
     borderStyle: "dashed",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 30,
   },
-  pickText: { color: "#888", marginTop: 10, fontSize: 16 },
-  previewContainer: {
-    height: 300,
-    borderRadius: 16,
-    overflow: "hidden",
-    backgroundColor: "#111",
-    position: "relative",
-    marginBottom: 20,
+  pickerBoxSelected: {
+    borderColor: "#34C759",
+    borderStyle: "solid",
   },
-  thumbnail: { width: "100%", height: "100%" },
-  clearBtn: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    padding: 5,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    borderRadius: 20,
+  pickerIcon: { fontSize: 48, marginBottom: 12 },
+  pickerText: { color: "#888", fontSize: 16 },
+  selectedVideoInfo: {
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 20,
   },
-  section: { marginBottom: 20 },
-  typeGrid: { gap: 12 },
-  typeCard: {
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#333",
-    backgroundColor: "#111",
-  },
-  typeCardActive: {
-    borderColor: "#007AFF",
-    backgroundColor: "#0B1A2F",
-  },
-  typeCardTitle: {
+  selectedIcon: { fontSize: 32 },
+  selectedFileName: {
     color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
-    marginBottom: 6,
+    fontSize: 14,
+    fontFamily: "monospace",
   },
-  typeCardTitleActive: {
-    color: "#8BC3FF",
-  },
-  typeCardDescription: {
-    color: "#888",
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  typeCardDescriptionActive: {
-    color: "#D3E7FF",
-  },
+
+  section: { marginBottom: 30 },
   sectionTitle: {
-    color: "#888",
+    color: "#007AFF",
     fontSize: 14,
     fontWeight: "bold",
     textTransform: "uppercase",
-    marginBottom: 10,
+    marginBottom: 8,
   },
-  helperText: {
-    color: "#888",
-    fontSize: 13,
-    marginBottom: 12,
-    lineHeight: 18,
-  },
+  hint: { color: "#666", fontSize: 13, marginBottom: 14 },
   chipContainer: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   chip: {
     paddingVertical: 8,
@@ -317,23 +266,33 @@ const styles = StyleSheet.create({
   },
   chipText: { color: "#888", fontSize: 14 },
   chipTextActive: { color: "#fff", fontWeight: "bold" },
+
+  bottomBar: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 20,
+    paddingBottom: 34,
+    backgroundColor: "rgba(0,0,0,0.9)",
+    borderTopWidth: 1,
+    borderTopColor: "#222",
+  },
   uploadBtn: {
     backgroundColor: "#fff",
     padding: 18,
     borderRadius: 12,
     alignItems: "center",
   },
-  disabledBtn: { opacity: 0.7 },
-  uploadText: { color: "#000", fontSize: 16, fontWeight: "bold" },
-  progressBarBg: {
-    height: 6,
-    backgroundColor: "#333",
-    borderRadius: 3,
-    marginTop: 10,
-    overflow: "hidden",
+  uploadBtnDisabled: { opacity: 0.5 },
+  uploadBtnText: {
+    color: "#000",
+    fontSize: 18,
+    fontWeight: "bold",
   },
-  progressBarFill: {
-    height: "100%",
-    backgroundColor: "#007AFF",
+  uploadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
 });

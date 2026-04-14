@@ -1,4 +1,5 @@
 import { useIsProcessing, useQueueCount, useVideoQueue } from "@/store/useVideoQueue";
+import { t } from "@/features/i18n";
 import { router } from "expo-router";
 import React from "react";
 import {
@@ -36,23 +37,23 @@ export function VideoQueueOverlay() {
   if (activeItem) {
     const pct = Math.round(activeItem.progress * 100);
     if (activeItem.status === "ENCODING") {
-      statusText = `Encoding... ${pct}%`;
+      statusText = t("overlay.encoding", { percent: pct });
       statusColor = "#FFD60A";
     } else {
-      statusText = `Uploading... ${pct}%`;
+      statusText = t("overlay.uploading", { percent: pct });
       statusColor = "#64D2FF";
     }
   } else if (errorCount > 0) {
-    statusText = `${errorCount} need attention`;
+    statusText = t("overlay.needAttention", { count: errorCount });
     statusColor = "#FF453A";
   } else if (readyCount > 0) {
-    statusText = `${readyCount} ready to upload`;
+    statusText = t("overlay.readyToUpload", { count: readyCount });
     statusColor = "#30D158";
   } else if (recordedCount > 0) {
-    statusText = `${recordedCount} awaiting encode`;
+    statusText = t("overlay.awaitingEncode", { count: recordedCount });
     statusColor = "#A0A0A0";
   } else if (uploadedCount > 0) {
-    statusText = `${uploadedCount} uploaded`;
+    statusText = t("overlay.uploaded", { count: uploadedCount });
     statusColor = "#30D158";
   }
 

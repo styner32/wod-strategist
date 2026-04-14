@@ -4,9 +4,12 @@ import ParallaxScrollView from "@/components/parallax-scroll-view";
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { HistoryList } from "@/features/wod/ui/HistoryList";
+import { t } from "@/features/i18n";
+import { HistoryList, useHistoryData } from "@/features/wod/ui/HistoryList";
 
 export default function HistoryScreen() {
+  const { data, loading, refreshing, onRefresh } = useHistoryData();
+
   return (
     <ParallaxScrollView
       headerBackgroundColor={{ light: "#D0D0D0", dark: "#353636" }}
@@ -18,13 +21,15 @@ export default function HistoryScreen() {
           style={styles.headerImage}
         />
       }
+      refreshing={refreshing}
+      onRefresh={onRefresh}
     >
       <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Analysis History</ThemedText>
+        <ThemedText type="title">{t("history.title")}</ThemedText>
       </ThemedView>
-      <ThemedText>Recent AI coaching sessions.</ThemedText>
+      <ThemedText>{t("history.subtitle")}</ThemedText>
 
-      <HistoryList />
+      <HistoryList data={data} loading={loading} />
     </ParallaxScrollView>
   );
 }
