@@ -174,7 +174,9 @@
     "profileRequiredDesc": "업로드 전에 프로필을 선택해주세요.",
     "success": "성공",
     "analysisStarted": "분석이 시작되었습니다!",
-    "viewHistory": "기록 보기"
+    "viewHistory": "기록 보기",
+    "uploadFailed": "업로드에 실패했습니다. 연결을 확인하고 다시 시도해주세요.",
+    "networkError": "네트워크 오류입니다. 연결을 확인하고 다시 시도해주세요."
   },
   "historyList": {
     "statusComplete": "완료",

@@ -107,8 +107,11 @@ export default function UploadScreen() {
 
       setSelectedVideo(null);
       setFileName(null);
-    } catch (e) {
-      Alert.alert(t("common.error"), String(e));
+    } catch (e: any) {
+      const msg = String(e?.message ?? "").startsWith("Network")
+        ? t("upload.networkError")
+        : t("upload.uploadFailed");
+      Alert.alert(t("common.error"), msg);
     } finally {
       setUploading(false);
       setProgress(0);

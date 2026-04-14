@@ -75,8 +75,8 @@ export default function WorkoutPlayerPage() {
           try {
             const parsed = JSON.parse(match.highlight_segments) as HighlightSegment[];
             setHighlights(parsed);
-          } catch {
-            // Ignore invalid JSON
+          } catch (e) {
+            console.warn("[WorkoutPlayerPage] Failed to parse highlight_segments JSON:", e);
           }
         }
       }

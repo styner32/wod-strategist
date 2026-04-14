@@ -36,19 +36,23 @@ export function HighlightVideoPlayer({ highlight, videoUrl, onClose }: Props) {
   const handleSaveToGallery = useCallback(async () => {
     try {
       setSaving(true);
-      const { download_url, filename } = await fetchHighlightDownloadURL(highlight.id);
-      const localUri = FileSystem.cacheDirectory + filename;
-      const { uri } = await FileSystem.downloadAsync(download_url, localUri);
 
       const { status } = await MediaLibrary.requestPermissionsAsync();
       if (status !== "granted") {
         Alert.alert(t("common.permissionRequired"), t("common.galleryPermission"));
         return;
       }
-      await MediaLibrary.saveToLibraryAsync(uri);
-      Alert.alert(t("common.saved"), t("player.saveToGallery") + ` "${highlight.title}"`);
 
-      try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+      const { download_url, filename } = await fetchHighlightDownloadURL(highlight.id);
+      const localUri = FileSystem.cacheDirectory + filename;
+      const { uri } = await FileSystem.downloadAsync(download_url, localUri);
+
+      try {
+        await MediaLibrary.saveToLibraryAsync(uri);
+        Alert.alert(t("common.saved"), t("historyList.highlightSaved", { title: highlight.title }));
+      } finally {
+        try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+      }
     } catch {
       Alert.alert(t("common.error"), t("common.failedSaveGallery"));
     } finally {

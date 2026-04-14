@@ -174,7 +174,9 @@
     "profileRequiredDesc": "Please select a profile before uploading.",
     "success": "Success",
     "analysisStarted": "Analysis started!",
-    "viewHistory": "View History"
+    "viewHistory": "View History",
+    "uploadFailed": "Upload failed. Please check your connection and try again.",
+    "networkError": "Network error. Please check your connection and try again."
   },
   "historyList": {
     "statusComplete": "Complete",

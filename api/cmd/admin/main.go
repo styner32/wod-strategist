@@ -128,7 +128,7 @@ func cmdReparseHighlights(args []string) {
 
 	logger.Log.Info("Found analysis results", zap.Int("count", len(results)))
 
-	var updated, skipped, noChange int
+	var updated, wouldUpdate, skipped, noChange int
 
 	for _, r := range results {
 		oldHL := r.HighlightSegments
@@ -175,7 +175,7 @@ func cmdReparseHighlights(args []string) {
 			logger.Log.Info("Would update (dry-run)",
 				zap.Uint("id", r.ID),
 				zap.String("session_id", r.SessionID))
-			updated++
+			wouldUpdate++
 		}
 	}
 
@@ -183,6 +183,7 @@ func cmdReparseHighlights(args []string) {
 		zap.String("mode", mode),
 		zap.Int("total", len(results)),
 		zap.Int("updated", updated),
+		zap.Int("would_update", wouldUpdate),
 		zap.Int("no_change", noChange),
 		zap.Int("skipped_no_highlights", skipped))
 }
