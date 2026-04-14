@@ -95,6 +95,153 @@ var _ = Describe("parseInjuryTimestamps", func() {
 		result := parseInjuryTimestamps(input)
 		Expect(result).To(BeEmpty())
 	})
+
+	It("merges injury timestamps from multiple segments", func() {
+		input := "## Seg 1\n" +
+			"```injury_timestamps\n" +
+			`[{"start": "0:45", "end": "0:50", "reason": "발목 부상"}]` +
+			"\n```\n" +
+			"## Seg 2\n" +
+			"```injury_timestamps\n" +
+			`[{"start": "04:54.000", "end": "04:58.000", "reason": "우측 발목 충격"}]` +
+			"\n```"
+		result := parseInjuryTimestamps(input)
+		Expect(result).To(ContainSubstring("0:45"))
+		Expect(result).To(ContainSubstring("04:54.000"))
+
+		var parsed []json.RawMessage
+		Expect(json.Unmarshal([]byte(result), &parsed)).To(Succeed())
+		Expect(parsed).To(HaveLen(2))
+	})
+
+	It("handles XML-style <injury_timestamps> tags", func() {
+		input := "<injury_timestamps>\n" +
+			`[{"start": "12:55", "end": "12:57", "reason": "착지 충격"}]` +
+			"\n</injury_timestamps>"
+		result := parseInjuryTimestamps(input)
+		Expect(result).To(ContainSubstring("12:55"))
+	})
+})
+
+var _ = Describe("ParseHighlightSegments", func() {
+	It("extracts highlights from a single backtick code block", func() {
+		input := "Some text\n" +
+			"```highlights\n" +
+			`[{"start":"0:05","end":"0:15","type":"best_form","reason":"완벽한 자세"}]` +
+			"\n```\nMore text."
+		result := ParseHighlightSegments(input)
+		var segs []HighlightSegment
+		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
+		Expect(segs).To(HaveLen(1))
+		Expect(segs[0].Type).To(Equal("best_form"))
+	})
+
+	It("returns empty for no highlights block", func() {
+		result := ParseHighlightSegments("No highlights here")
+		Expect(result).To(BeEmpty())
+	})
+
+	It("returns empty for invalid JSON in block", func() {
+		input := "```highlights\nnot valid json\n```"
+		result := ParseHighlightSegments(input)
+		Expect(result).To(BeEmpty())
+	})
+
+	It("merges highlights from multiple backtick blocks across segments", func() {
+		input := "## Seg 1\n" +
+			"```highlights\n" +
+			`[{"start":"0:45","end":"0:47","type":"best_form","movement":"Triceps Extension","reason":"좋은 자세"}]` +
+			"\n```\n" +
+			"## Seg 2\n" +
+			"```highlights\n" +
+			`[{"start":"04:52.000","end":"04:54.000","type":"best_form","movement":"Box Step-up","reason":"안정적 템포"},{"start":"04:54.000","end":"04:58.000","type":"key_moment","movement":"Box Step-up","reason":"우측 다리 핵심 구간"}]` +
+			"\n```"
+		result := ParseHighlightSegments(input)
+		var segs []HighlightSegment
+		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
+		Expect(segs).To(HaveLen(3))
+		Expect(segs[0].Movement).To(Equal("Triceps Extension"))
+		Expect(segs[1].Movement).To(Equal("Box Step-up"))
+		Expect(segs[2].Movement).To(Equal("Box Step-up"))
+	})
+
+	It("handles XML-style <highlights> tags", func() {
+		input := "<highlights>\n" +
+			`[{"start":"12:46","end":"12:51","type":"best_form","movement":"Toes to Bar","reason":"키핑 리듬"}]` +
+			"\n</highlights>"
+		result := ParseHighlightSegments(input)
+		var segs []HighlightSegment
+		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
+		Expect(segs).To(HaveLen(1))
+		Expect(segs[0].Movement).To(Equal("Toes to Bar"))
+	})
+
+	It("merges highlights from mixed backtick and XML-style blocks", func() {
+		input := "## Seg 1\n" +
+			"```highlights\n" +
+			`[{"start":"0:45","end":"0:47","type":"best_form","movement":"Snatch","reason":"좋은 풀"}]` +
+			"\n```\n" +
+			"## Seg 2\n" +
+			"<highlights>\n" +
+			`[{"start":"12:46","end":"12:51","type":"key_moment","movement":"Toes to Bar","reason":"연속 수행"}]` +
+			"\n</highlights>"
+		result := ParseHighlightSegments(input)
+		var segs []HighlightSegment
+		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
+		Expect(segs).To(HaveLen(2))
+		Expect(segs[0].Movement).To(Equal("Snatch"))
+		Expect(segs[1].Movement).To(Equal("Toes to Bar"))
+	})
+
+	It("parses the full 13-segment real-world Gemini output", func() {
+		// This test uses the exact output format from a real 13-segment workout analysis.
+		// Segments use mostly ```highlights blocks but segment 6 uses <highlights> XML tags.
+		input := realWorldMultiSegmentOutput
+		result := ParseHighlightSegments(input)
+		Expect(result).NotTo(BeEmpty())
+
+		var segs []HighlightSegment
+		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
+
+		// Count expected highlights per segment from the real output:
+		// Seg 1: 4, Seg 2: 3, Seg 3: 4, Seg 4: 4, Seg 5: 5, Seg 6: 4 (XML)
+		// Seg 7: 4, Seg 8: 4, Seg 9: 5, Seg 10: 4, Seg 11: 4, Seg 12: 4, Seg 13: 4
+		Expect(segs).To(HaveLen(53))
+
+		// Verify highlights from different segments are represented
+		movements := map[string]bool{}
+		for _, seg := range segs {
+			movements[seg.Movement] = true
+		}
+		Expect(movements).To(HaveKey("Overhead Triceps Extension"))
+		Expect(movements).To(HaveKey("Box Step-up"))
+		Expect(movements).To(HaveKey("Dumbbell Snatch"))
+		Expect(movements).To(HaveKey("Toes-to-bar (Knee Raise)"))
+		Expect(movements).To(HaveKey("Toes to Bar"))
+		Expect(movements).To(HaveKey("Pull-up"))
+		Expect(movements).To(HaveKey("Box Jump"))
+		Expect(movements).To(HaveKey("Burpee"))
+
+		// Verify the XML-tagged segment 6 (Toes to Bar) is included
+		var toesToBarCount int
+		for _, seg := range segs {
+			if seg.Movement == "Toes to Bar" {
+				toesToBarCount++
+			}
+		}
+		Expect(toesToBarCount).To(Equal(4)) // segment 6 has 4 highlights
+	})
+
+	It("also merges injury timestamps from the same real-world output", func() {
+		input := realWorldMultiSegmentOutput
+		result := parseInjuryTimestamps(input)
+		Expect(result).NotTo(BeEmpty())
+
+		var timestamps []json.RawMessage
+		Expect(json.Unmarshal([]byte(result), &timestamps)).To(Succeed())
+		// Many segments have injury timestamps; verify we got more than just the first one
+		Expect(len(timestamps)).To(BeNumerically(">=", 10))
+	})
 })
 
 var _ = Describe("NewVideoAnalysisTask", func() {

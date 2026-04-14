@@ -80,11 +80,11 @@ const (
 ` + "```injury_timestamps\n" + `[{"start": "0:32", "end": "0:45", "reason": "무릎 내전 관찰"}]` + "\n```"
 )
 
-// highlightBlockRegex matches fenced ```highlights ... ``` blocks in Gemini output.
-var highlightBlockRegex = regexp.MustCompile("(?is)```highlights\\s*(\\[.*?\\])\\s*```")
+// highlightBlockRegex matches fenced ```highlights ... ``` or <highlights> ... </highlights> blocks in Gemini output.
+var highlightBlockRegex = regexp.MustCompile("(?is)(?:```highlights\\s*(\\[.*?\\])\\s*```|<highlights>\\s*(\\[.*?\\])\\s*</highlights>)")
 
-// injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ``` blocks in Gemini output.
-var injuryTimestampBlockRegex = regexp.MustCompile("(?is)```(?:injury_timestamps|json)\\s*(\\[.*?\\])\\s*```")
+// injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ```, ```json ... ```, or <injury_timestamps> ... </injury_timestamps> blocks in Gemini output.
+var injuryTimestampBlockRegex = regexp.MustCompile("(?is)(?:```(?:injury_timestamps|json)\\s*(\\[.*?\\])\\s*```|<injury_timestamps>\\s*(\\[.*?\\])\\s*</injury_timestamps>)")
 
 func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
@@ -347,7 +347,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("total_segments", len(segments)),
 			zap.Int("max_segments", maxSegs))
 
-		triagedSegments, triageErr := w.triageSegments(ctx, upload, p, segments, maxSegs)
+		triagedSegments, triageErr := w.triageSegments(ctx, upload, segments, maxSegs)
 		if triageErr != nil {
 			w.logger.Warn("Segment triage failed, using first N segments",
 				zap.Error(triageErr),
@@ -397,7 +397,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		return fmt.Errorf("all segment analyses failed")
 	}
 
-	highlightSegments := parseHighlightSegments(analysis)
+	highlightSegments := ParseHighlightSegments(analysis)
 
 	result := &db.AnalysisResult{
 		SessionID:         p.SessionID,
@@ -603,7 +603,7 @@ type TriagedSegment struct {
 //
 // Future optimization: use segment descriptions instead of video for cost saving,
 // once chunk analysis descriptions are rich enough.
-func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, p VideoAnalysisPayload, segments []Segment, maxSegs int) ([]Segment, error) {
+func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, segments []Segment, maxSegs int) ([]Segment, error) {
 	triagePrompt := buildTriagePrompt(segments, maxSegs, upload.VideoDuration)
 
 	triageOutput, err := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, triagePrompt)
@@ -786,7 +786,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	}
 
 	// Parse highlight segments from analysis output
-	highlightSegments := parseHighlightSegments(analysis)
+	highlightSegments := ParseHighlightSegments(analysis)
 
 	result := &db.AnalysisResult{
 		SessionID:         p.SessionID,
@@ -863,32 +863,82 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	return prompt
 }
 
-// parseHighlightSegments extracts the JSON array from the ```highlights``` code block
-// in the WOD analysis output. Returns the raw JSON string, or empty on failure.
-func parseHighlightSegments(analysisOutput string) string {
-	match := highlightBlockRegex.FindStringSubmatch(analysisOutput)
-	if match == nil {
+// ParseHighlightSegments extracts all JSON arrays from ```highlights``` code blocks
+// or <highlights> XML tags in the WOD analysis output. When multiple blocks exist
+// (one per segment), all highlights are merged into a single JSON array.
+// Returns the raw JSON string, or empty on failure.
+func ParseHighlightSegments(analysisOutput string) string {
+	matches := highlightBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
+	if len(matches) == 0 {
 		return ""
 	}
-	// Sanity-check: must be a non-empty array of valid HighlightSegments.
-	var parsed []HighlightSegment
-	if err := json.Unmarshal([]byte(match[1]), &parsed); err != nil || len(parsed) == 0 {
+
+	var allHighlights []HighlightSegment
+	for _, match := range matches {
+		// The regex has two capture groups (backtick vs XML); pick the non-empty one.
+		jsonStr := firstNonEmpty(match[1:])
+		if jsonStr == "" {
+			continue
+		}
+		var parsed []HighlightSegment
+		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil || len(parsed) == 0 {
+			continue
+		}
+		allHighlights = append(allHighlights, parsed...)
+	}
+
+	if len(allHighlights) == 0 {
 		return ""
 	}
-	return match[1]
+
+	result, err := json.Marshal(allHighlights)
+	if err != nil {
+		return ""
+	}
+	return string(result)
 }
 
-// parseInjuryTimestamps extracts the JSON array from the ```injury_timestamps``` code block
-// in the WOD analysis output. Returns the raw JSON string, or empty on failure.
+// parseInjuryTimestamps extracts all JSON arrays from ```injury_timestamps``` code blocks
+// or <injury_timestamps> XML tags in the WOD analysis output. When multiple blocks exist
+// (one per segment), all timestamps are merged into a single JSON array.
+// Returns the raw JSON string, or empty on failure.
 func parseInjuryTimestamps(analysisOutput string) string {
-	match := injuryTimestampBlockRegex.FindStringSubmatch(analysisOutput)
-	if match == nil {
+	matches := injuryTimestampBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
+	if len(matches) == 0 {
 		return ""
 	}
-	// Sanity-check: must be a non-empty JSON array.
-	var parsed []json.RawMessage
-	if err := json.Unmarshal([]byte(match[1]), &parsed); err != nil || len(parsed) == 0 {
+
+	var allTimestamps []json.RawMessage
+	for _, match := range matches {
+		// The regex has two capture groups (backtick vs XML); pick the non-empty one.
+		jsonStr := firstNonEmpty(match[1:])
+		if jsonStr == "" {
+			continue
+		}
+		var parsed []json.RawMessage
+		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil || len(parsed) == 0 {
+			continue
+		}
+		allTimestamps = append(allTimestamps, parsed...)
+	}
+
+	if len(allTimestamps) == 0 {
 		return ""
 	}
-	return match[1]
+
+	result, err := json.Marshal(allTimestamps)
+	if err != nil {
+		return ""
+	}
+	return string(result)
+}
+
+// firstNonEmpty returns the first non-empty string from the given slice.
+func firstNonEmpty(ss []string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
