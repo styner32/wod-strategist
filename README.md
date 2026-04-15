@@ -44,6 +44,26 @@ Open [http://localhost:3000/video.html](http://localhost:3000/video.html) and en
 
 The page can upload chunk files, trigger `merge-chunks`, trigger `generate-highlight`, inspect session assets, and cache playable videos in the browser for side-by-side comparison.
 
+## Cloud SQL (Dev)
+
+Connect to the dev PostgreSQL instance via [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/connect-auth-proxy):
+
+```bash
+cloud-sql-proxy gen-lang-client-0826771503:asia-northeast3:wod-strategist-db-dev --port=15432
+```
+
+Once the proxy is running, connect with any Postgres client:
+
+```bash
+psql "postgresql://<DB_USER>:<DB_PASS>@localhost:15432/wod-strategist_dev?sslmode=disable"
+```
+
+Or use the proxy for admin cli:
+
+```bash
+make run-admin DATABASE_URL="postgresql://<DB_USER>:<DB_PASS>@localhost:15432/wod-strategist_dev?sslmode=disable" CMD="reparse-highlights --apply --session-id=<SESSION_ID>"
+```
+
 ## API Typings & Schema
 
 The React Native app shares interface typings generated directly from the Go backend to ensure the API contracts remain strictly aligned. 

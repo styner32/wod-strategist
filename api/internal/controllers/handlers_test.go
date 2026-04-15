@@ -84,16 +84,6 @@ func newBrokenRepo() *GormAnalysisResultRepository {
 	return NewGormAnalysisResultRepository(closedDB)
 }
 
-// newBrokenProfileRepo is the profile equivalent of newBrokenRepo.
-func newBrokenProfileRepo() *GormProfileRepository {
-	closedDB, err := testhelpers.InitDB()
-	Expect(err).NotTo(HaveOccurred())
-	sqlDB, err := closedDB.DB()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(sqlDB.Close()).To(Succeed())
-	return NewGormProfileRepository(closedDB)
-}
-
 // gcsUploadURL builds the exact URL path the GCS Go client sends for a
 // multipart upload to the given bucket and object name.
 func gcsUploadURL(bucket, objectName string) string {
