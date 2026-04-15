@@ -1,4 +1,5 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { t } from "@/features/i18n";
 import { fetchInjuries } from "@/features/wod/api";
 import {
   useProfileStore,
@@ -21,9 +22,9 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 const GENDER_OPTIONS: { label: string; value: Gender }[] = [
-  { label: "Male", value: "male" },
-  { label: "Female", value: "female" },
-  { label: "Other", value: "other" },
+  { label: t("common.male"), value: "male" },
+  { label: t("common.female"), value: "female" },
+  { label: t("common.other"), value: "other" },
 ];
 
 export default function ProfileScreen() {
@@ -91,27 +92,27 @@ export default function ProfileScreen() {
 
     // Basic validation
     if (!birthYear || isNaN(y) || y < 1900 || y > new Date().getFullYear()) {
-      Alert.alert("Invalid Input", "Please enter a valid birth year.");
+      Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidYear"));
       return;
     }
     if (!birthMonth || isNaN(m) || m < 1 || m > 12) {
-      Alert.alert("Invalid Input", "Please enter a valid birth month (1–12).");
+      Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidMonth"));
       return;
     }
     if (!birthDay || isNaN(d) || d < 1 || d > 31) {
-      Alert.alert("Invalid Input", "Please enter a valid birth day (1–31).");
+      Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidDay"));
       return;
     }
     if (!gender) {
-      Alert.alert("Invalid Input", "Please select your gender.");
+      Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidGender"));
       return;
     }
     if (!heightCm || isNaN(h) || h < 50 || h > 300) {
-      Alert.alert("Invalid Input", "Please enter a valid height in cm.");
+      Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidHeight"));
       return;
     }
     if (!weightKg || isNaN(w) || w < 20 || w > 500) {
-      Alert.alert("Invalid Input", "Please enter a valid weight in kg.");
+      Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidWeight"));
       return;
     }
 
@@ -143,7 +144,7 @@ export default function ProfileScreen() {
       }
       router.back();
     } catch (e) {
-      Alert.alert("Error", "Failed to save profile. Please try again.");
+      Alert.alert(t("common.error"), t("profileEdit.saveFailed"));
       console.error("Profile save error:", e);
     } finally {
       setSaving(false);
@@ -157,7 +158,7 @@ export default function ProfileScreen() {
           <IconSymbol name="chevron.left" size={28} color="#fff" />
         </TouchableOpacity>
         <Text style={styles.title}>
-          {isEditing ? "Edit Profile" : "New Profile"}
+          {isEditing ? t("profileEdit.editProfile") : t("profileEdit.newProfile")}
         </Text>
       </View>
 
@@ -168,10 +169,10 @@ export default function ProfileScreen() {
         <ScrollView contentContainerStyle={styles.content}>
           {/* Name */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Name (optional)</Text>
+            <Text style={styles.sectionTitle}>{t("profileEdit.nameLabel")}</Text>
             <TextInput
               style={styles.input}
-              placeholder="e.g. Sun Jin"
+              placeholder={t("profileEdit.namePlaceholder")}
               placeholderTextColor="#555"
               value={name}
               onChangeText={setName}
@@ -183,10 +184,10 @@ export default function ProfileScreen() {
 
           {/* Birth Date */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Date of Birth</Text>
+            <Text style={styles.sectionTitle}>{t("profileEdit.dob")}</Text>
             <View style={styles.dateRow}>
               <View style={styles.dateField}>
-                <Text style={styles.fieldLabel}>Year</Text>
+                <Text style={styles.fieldLabel}>{t("profileEdit.year")}</Text>
                 <TextInput
                   style={styles.input}
                   keyboardType="number-pad"
@@ -199,7 +200,7 @@ export default function ProfileScreen() {
                 />
               </View>
               <View style={styles.dateFieldSmall}>
-                <Text style={styles.fieldLabel}>Month</Text>
+                <Text style={styles.fieldLabel}>{t("profileEdit.month")}</Text>
                 <TextInput
                   style={styles.input}
                   keyboardType="number-pad"
@@ -212,7 +213,7 @@ export default function ProfileScreen() {
                 />
               </View>
               <View style={styles.dateFieldSmall}>
-                <Text style={styles.fieldLabel}>Day</Text>
+                <Text style={styles.fieldLabel}>{t("profileEdit.day")}</Text>
                 <TextInput
                   style={styles.input}
                   keyboardType="number-pad"
@@ -229,7 +230,7 @@ export default function ProfileScreen() {
 
           {/* Gender */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Gender</Text>
+            <Text style={styles.sectionTitle}>{t("profileEdit.gender")}</Text>
             <View style={styles.genderRow}>
               {GENDER_OPTIONS.map((opt) => {
                 const isSelected = gender === opt.value;
@@ -258,7 +259,7 @@ export default function ProfileScreen() {
 
           {/* Height */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Height</Text>
+            <Text style={styles.sectionTitle}>{t("profileEdit.height")}</Text>
             <View style={styles.inputRow}>
               <TextInput
                 style={[styles.input, { flex: 1 }]}
@@ -276,7 +277,7 @@ export default function ProfileScreen() {
 
           {/* Weight */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Weight</Text>
+            <Text style={styles.sectionTitle}>{t("profileEdit.weight")}</Text>
             <View style={styles.inputRow}>
               <TextInput
                 style={[styles.input, { flex: 1 }]}
@@ -294,10 +295,9 @@ export default function ProfileScreen() {
 
           {/* Known Injuries */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Known Injuries</Text>
+            <Text style={styles.sectionTitle}>{t("profileEdit.injuries")}</Text>
             <Text style={styles.hint}>
-              Optional: add any current limitations the AI coach should
-              consider during analysis.
+              {t("profileEdit.injuriesHint")}
             </Text>
             {loadingInjuries ? (
               <ActivityIndicator color="#007AFF" />
@@ -334,10 +334,10 @@ export default function ProfileScreen() {
           >
             <Text style={styles.saveBtnText}>
               {saving
-                ? "Saving…"
+                ? t("profileEdit.saving")
                 : isEditing
-                  ? "Update Profile"
-                  : "Create Profile"}
+                  ? t("profileEdit.updateProfile")
+                  : t("profileEdit.createProfile")}
             </Text>
           </TouchableOpacity>
         </ScrollView>

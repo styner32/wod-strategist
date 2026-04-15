@@ -90,6 +90,7 @@ export interface ChunkAnalysisResult {
   session_id: string;
   status: string;
   output: string;
+  exercise_type?: string;
   start_secs?: number;
   end_secs?: number;
   created_at: string;
@@ -451,5 +452,55 @@ export async function fetchVideoDownloadURL(
 ): Promise<VideoDownloadURLResponse> {
   return apiClient<VideoDownloadURLResponse>(
     `/video-download/${sessionId}?kind=${kind}&profile_id=${profileId}`
+  );
+}
+
+// ==========================================
+// Highlights
+// ==========================================
+
+import type { HighlightResult } from "./history";
+
+export interface GenerateHighlightResult {
+  task_id: string;
+  session_id: string;
+  message: string;
+}
+
+/**
+ * Triggers server-side highlight video generation for a session.
+ */
+export async function generateHighlight(
+  sessionId: string,
+  profileId: number,
+  maxDuration: number = 60
+): Promise<GenerateHighlightResult> {
+  return apiClient<GenerateHighlightResult>("/generate-highlight", {
+    method: "POST",
+    bodyPayload: {
+      session_id: sessionId,
+      profile_id: profileId,
+      max_duration: maxDuration,
+    },
+  });
+}
+
+/**
+ * Fetches highlight results for a session. Returns all variants and their status.
+ */
+export async function fetchHighlightResults(
+  sessionId: string
+): Promise<HighlightResult[]> {
+  return apiClient<HighlightResult[]>(`/highlight/${sessionId}`);
+}
+
+/**
+ * Fetches a signed download URL for a specific highlight result.
+ */
+export async function fetchHighlightDownloadURL(
+  highlightId: number
+): Promise<VideoDownloadURLResponse> {
+  return apiClient<VideoDownloadURLResponse>(
+    `/highlight-download/${highlightId}`
   );
 }

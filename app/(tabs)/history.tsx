@@ -1,46 +1,38 @@
-import { StyleSheet } from "react-native";
+import { RefreshControl, ScrollView, StyleSheet } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
-import ParallaxScrollView from "@/components/parallax-scroll-view";
-import { ThemedText } from "@/components/themed-text";
-import { ThemedView } from "@/components/themed-view";
-import { IconSymbol } from "@/components/ui/icon-symbol";
-import { HistoryList } from "@/features/wod/ui/HistoryList";
+import { HistoryList, useHistoryData } from "@/features/wod/ui/HistoryList";
 
 export default function HistoryScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: "#D0D0D0", dark: "#353636" }}
-      headerImage={
-        <IconSymbol
-          size={310}
-          color="#808080"
-          name="figure.run"
-          style={styles.headerImage}
-        />
-      }
-    >
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Analysis History</ThemedText>
-      </ThemedView>
-      <ThemedText>Recent AI coaching sessions.</ThemedText>
+  const { data, loading, refreshing, onRefresh } = useHistoryData();
 
-      <HistoryList />
-    </ParallaxScrollView>
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#64D2FF"
+          />
+        }
+      >
+        <HistoryList data={data} loading={loading} />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  headerImage: {
-    color: "#808080",
-    bottom: -60,
-    left: 0,
-    position: "absolute",
+  container: {
+    flex: 1,
+    backgroundColor: "#3A3A3C",
   },
-  titleContainer: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  backgroundColor: {
-    backgroundColor: "#1A1A1A",
+  scrollContent: {
+    padding: 20,
+    paddingTop: 12,
+    paddingBottom: 40,
   },
 });

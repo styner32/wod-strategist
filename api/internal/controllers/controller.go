@@ -41,6 +41,7 @@ type ProfileRepository interface {
 
 type HighlightResultRepository interface {
 	FindBySessionID(ctx context.Context, sessionID string) ([]db.HighlightResult, error)
+	FindByID(ctx context.Context, id uint) (*db.HighlightResult, error)
 }
 
 type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error)

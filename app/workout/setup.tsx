@@ -1,4 +1,5 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { t } from '@/features/i18n';
 import { fetchMovements } from '@/features/wod/api';
 import { useActiveProfile } from '@/store/useProfileStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -126,7 +127,7 @@ export default function WorkoutSetup() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <IconSymbol name="chevron.left" size={28} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.title}>Workout Setup</Text>
+        <Text style={styles.title}>{t('setup.title')}</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -143,10 +144,10 @@ export default function WorkoutSetup() {
                 </Text>
               </View>
               <View>
-                <Text style={styles.profileBannerName}>{activeProfile.name || 'Profile'}</Text>
+                <Text style={styles.profileBannerName}>{activeProfile.name || t('tabs.profile')}</Text>
                 <Text style={styles.profileBannerMeta}>
                   {[
-                    injuryCount > 0 ? `${injuryCount} injuries` : 'No injuries',
+                    injuryCount > 0 ? t('setup.injuries', { count: injuryCount }) : t('setup.noInjuries'),
                     `${videoPrefs.force720p ? '720p' : videoPrefs.resolution}`,
                     videoPrefs.lowFps ? '24fps' : '30fps',
                   ].join(' · ')}
@@ -159,8 +160,8 @@ export default function WorkoutSetup() {
 
         {/* Movements Config */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Planned Movements</Text>
-          <Text style={styles.label}>Select what you will perform:</Text>
+          <Text style={styles.sectionTitle}>{t('setup.plannedMovements')}</Text>
+          <Text style={styles.label}>{t('setup.selectMovements')}</Text>
           
           {loading ? (
             <ActivityIndicator color="#007AFF" />
@@ -183,7 +184,7 @@ export default function WorkoutSetup() {
             </View>
           )}
           <Text style={styles.hint}>
-            Used to guide the AI analysis. Select at least one to start.
+            {t('setup.movementsHint')}
           </Text>
         </View>
 
@@ -192,14 +193,14 @@ export default function WorkoutSetup() {
           style={styles.advancedHeader}
           onPress={() => setAdvancedExpanded(!advancedExpanded)}
         >
-          <Text style={styles.advancedHeaderText}>Advanced Options</Text>
+          <Text style={styles.advancedHeaderText}>{t('setup.advancedOptions')}</Text>
           <Text style={styles.advancedChevron}>{advancedExpanded ? '▼' : '▶'}</Text>
         </TouchableOpacity>
 
         {advancedExpanded && (
           <View style={styles.advancedSection}>
             <View style={styles.optionRow}>
-              <Text style={styles.optionLabel}>Resolution</Text>
+              <Text style={styles.optionLabel}>{t('setup.resolution')}</Text>
               <View style={styles.toggleGroup}>
                 <TouchableOpacity 
                   style={[styles.toggleBtn, videoPrefs.resolution === '720p' && styles.toggleActive]}
@@ -215,13 +216,13 @@ export default function WorkoutSetup() {
                 </TouchableOpacity>
               </View>
             </View>
-            <Text style={styles.hint}>720p is recommended for faster AI processing.</Text>
+            <Text style={styles.hint}>{t('setup.resolutionHint')}</Text>
 
             <View style={[styles.optionRow, { marginTop: 16 }]}>
               <View>
-                <Text style={styles.optionLabel}>Skeleton Overlay</Text>
+                <Text style={styles.optionLabel}>{t('setup.skeletonOverlay')}</Text>
                 <Text style={[styles.hint, { marginTop: 2 }]}>
-                  {Platform.OS === 'android' ? 'May reduce stability on Android' : 'Real-time pose lines'}
+                  {Platform.OS === 'android' ? t('setup.skeletonAndroid') : t('setup.skeletonIos')}
                 </Text>
               </View>
               <Switch
@@ -233,8 +234,8 @@ export default function WorkoutSetup() {
             </View>
             <View style={[styles.optionRow, { marginTop: 16 }]}>
               <View>
-                <Text style={styles.optionLabel}>Low FPS (24fps)</Text>
-                <Text style={[styles.hint, { marginTop: 2 }]}>Reduces encoder + inference load</Text>
+                <Text style={styles.optionLabel}>{t('setup.lowFps')}</Text>
+                <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.lowFpsHint')}</Text>
               </View>
               <Switch
                 value={videoPrefs.lowFps}
@@ -245,8 +246,8 @@ export default function WorkoutSetup() {
             </View>
             <View style={[styles.optionRow, { marginTop: 16 }]}>
               <View>
-                <Text style={styles.optionLabel}>Force 720p</Text>
-                <Text style={[styles.hint, { marginTop: 2 }]}>Override resolution to 720p</Text>
+                <Text style={styles.optionLabel}>{t('setup.force720p')}</Text>
+                <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.force720pHint')}</Text>
               </View>
               <Switch
                 value={videoPrefs.force720p}
@@ -257,8 +258,8 @@ export default function WorkoutSetup() {
             </View>
             <View style={[styles.optionRow, { marginTop: 16 }]}>
               <View>
-                <Text style={styles.optionLabel}>Skip Chunk Compression</Text>
-                <Text style={[styles.hint, { marginTop: 2 }]}>Upload raw chunks (saves CPU)</Text>
+                <Text style={styles.optionLabel}>{t('setup.skipCompression')}</Text>
+                <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.skipCompressionHint')}</Text>
               </View>
               <Switch
                 value={videoPrefs.skipCompression}
@@ -269,8 +270,8 @@ export default function WorkoutSetup() {
             </View>
             <View style={[styles.optionRow, { marginTop: 16 }]}>
               <View>
-                <Text style={styles.optionLabel}>Serial Upload</Text>
-                <Text style={[styles.hint, { marginTop: 2 }]}>Queue uploads 1-at-a-time (prevents OOM)</Text>
+                <Text style={styles.optionLabel}>{t('setup.serialUpload')}</Text>
+                <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.serialUploadHint')}</Text>
               </View>
               <Switch
                 value={videoPrefs.serialUpload}
@@ -290,7 +291,7 @@ export default function WorkoutSetup() {
           onPress={handleStart}
           disabled={!canStart}
         >
-          <Text style={styles.startText}>Start Workout</Text>
+          <Text style={styles.startText}>{t('setup.startWorkout')}</Text>
           <IconSymbol name="figure.run" size={24} color="#000" />
         </TouchableOpacity>
       </View>

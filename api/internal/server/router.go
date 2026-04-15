@@ -30,6 +30,7 @@ type Handlers interface {
 	GetSubtitles(*gin.Context)
 	GenerateHighlight(*gin.Context)
 	GetHighlight(*gin.Context)
+	GetHighlightDownloadURL(*gin.Context)
 	VerifyHighlights(*gin.Context)
 	ListSessionCatalog(*gin.Context)
 	GetSessionAssets(*gin.Context)
@@ -284,6 +285,16 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/highlight/:session_id", handlers.GetHighlight)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "highlight-download",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/highlight-download/:id",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/highlight-download/:id", handlers.GetHighlightDownloadURL)
 		},
 	},
 	{

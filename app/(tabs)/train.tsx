@@ -1,4 +1,5 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { t } from "@/features/i18n";
 import { Link } from "expo-router";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -12,16 +13,15 @@ export default function TrainScreen() {
       >
         {/* Hero Section */}
         <View style={styles.hero}>
-          <Text style={styles.heroTitle}>Ready to Train?</Text>
+          <Text style={styles.heroTitle}>{t("train.heroTitle")}</Text>
           <Text style={styles.heroSubtitle}>
-            Execute your session with real-time biometric tracking and kinetic
-            analysis.
+            {t("train.heroSubtitle")}
           </Text>
         </View>
 
         {/* Primary Actions */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Start Session</Text>
+          <Text style={styles.sectionTitle}>{t("train.startSession")}</Text>
 
           <Link href="/workout/setup" asChild>
             <Pressable style={styles.primaryCard}>
@@ -29,9 +29,9 @@ export default function TrainScreen() {
                 <IconSymbol name="flame.fill" size={28} color="#00E5FF" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.primaryCardTitle}>Start Workout</Text>
+                <Text style={styles.primaryCardTitle}>{t("train.startWorkout")}</Text>
                 <Text style={styles.primaryCardDesc}>
-                  Real-time pose estimation, rep counting & form correction
+                  {t("train.startWorkoutDesc")}
                 </Text>
               </View>
               <Text style={styles.chevron}>›</Text>
@@ -48,9 +48,9 @@ export default function TrainScreen() {
                 />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>Analyse Form</Text>
+                <Text style={styles.cardTitle}>{t("train.analyseForm")}</Text>
                 <Text style={styles.cardDesc}>
-                  Upload footage for AI biomechanical breakdown
+                  {t("train.analyseFormDesc")}
                 </Text>
               </View>
               <Text style={styles.chevron}>›</Text>
@@ -60,7 +60,7 @@ export default function TrainScreen() {
 
         {/* Queue Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Processing</Text>
+          <Text style={styles.sectionTitle}>{t("train.processing")}</Text>
 
           <Link href={"/queue" as any} asChild>
             <Pressable style={styles.card}>
@@ -68,9 +68,9 @@ export default function TrainScreen() {
                 <IconSymbol name="arrow.clockwise" size={22} color="#FFD60A" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>Video Queue</Text>
+                <Text style={styles.cardTitle}>{t("train.videoQueue")}</Text>
                 <Text style={styles.cardDesc}>
-                  Encoding & upload status
+                  {t("train.videoQueueDesc")}
                 </Text>
               </View>
               <Text style={styles.chevron}>›</Text>

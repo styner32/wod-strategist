@@ -1,3 +1,4 @@
+import { t } from "@/features/i18n";
 import { useProfileStore, type Profile } from "@/store/useProfileStore";
 import { router } from "expo-router";
 import React, { useCallback } from "react";
@@ -30,12 +31,12 @@ export default function ProfilesScreen() {
   const handleArchive = useCallback(
     (profile: Profile) => {
       Alert.alert(
-        "Archive Profile",
-        `Are you sure you want to archive "${profile.name || `Profile #${profile.id}`}"?\n\nWorkout history will be preserved.`,
+        t("profiles.archiveProfile"),
+        t("profiles.archiveConfirm", { name: profile.name || t("common.profileNumber", { id: profile.id }) }),
         [
-          { text: "Cancel", style: "cancel" },
+          { text: t("common.cancel"), style: "cancel" },
           {
-            text: "Archive",
+            text: t("profiles.archive"),
             style: "destructive",
             onPress: () => archiveProfile(profile.id),
           },
@@ -50,7 +51,7 @@ export default function ProfilesScreen() {
   }, []);
 
   const genderLabel = (g: string) =>
-    g === "male" ? "M" : g === "female" ? "F" : "O";
+    g === "male" ? t("common.maleShort") : g === "female" ? t("common.femaleShort") : t("common.otherShort");
 
   const summaryLine = (p: Profile) => {
     const parts: string[] = [];
@@ -83,13 +84,13 @@ export default function ProfilesScreen() {
           {/* Profile Info */}
           <View style={styles.info}>
             <Text style={styles.name} numberOfLines={1}>
-              {item.name || `Profile #${item.id}`}
+              {item.name || t("common.profileNumber", { id: item.id })}
             </Text>
             <Text style={styles.summary}>{summaryLine(item)}</Text>
             {isActive && (
               <View style={styles.activeBadge}>
                 <View style={styles.activeDot} />
-                <Text style={styles.activeText}>Active</Text>
+                <Text style={styles.activeText}>{t("common.active")}</Text>
               </View>
             )}
           </View>
@@ -100,7 +101,7 @@ export default function ProfilesScreen() {
             onPress={() => handleEdit(item)}
             hitSlop={12}
           >
-            <Text style={styles.editBtnText}>Edit</Text>
+            <Text style={styles.editBtnText}>{t("common.edit")}</Text>
           </Pressable>
         </View>
       </Pressable>
@@ -111,9 +112,9 @@ export default function ProfilesScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <Text style={styles.backBtnText}>← Back</Text>
+          <Text style={styles.backBtnText}>{t("common.back")}</Text>
         </Pressable>
-        <Text style={styles.title}>Profiles</Text>
+        <Text style={styles.title}>{t("profiles.title")}</Text>
       </View>
 
       <FlatList
@@ -124,21 +125,21 @@ export default function ProfilesScreen() {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>👤</Text>
-            <Text style={styles.emptyTitle}>No Profiles Yet</Text>
+            <Text style={styles.emptyTitle}>{t("profiles.noProfiles")}</Text>
             <Text style={styles.emptyDesc}>
-              Create your first profile to start tracking workouts
+              {t("profiles.noProfilesDesc")}
             </Text>
           </View>
         }
         ListFooterComponent={
           <Pressable style={styles.addBtn} onPress={handleAddProfile}>
             <Text style={styles.addBtnIcon}>+</Text>
-            <Text style={styles.addBtnText}>Add New Profile</Text>
+            <Text style={styles.addBtnText}>{t("profiles.addNew")}</Text>
           </Pressable>
         }
       />
 
-      <Text style={styles.hint}>Long-press a profile to archive it</Text>
+      <Text style={styles.hint}>{t("profiles.hint")}</Text>
     </SafeAreaView>
   );
 }

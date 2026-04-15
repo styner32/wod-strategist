@@ -1,22 +1,24 @@
 // src/app/index.tsx
+import { t, useLocale, setLanguage } from "@/features/i18n";
 import { useActiveProfile, useProfileId } from "@/store/useProfileStore";
 import { Link } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function Dashboard() {
   const activeProfile = useActiveProfile();
   const profileId = useProfileId();
+  const locale = useLocale();
 
-  const profileName = activeProfile?.name || (profileId ? `Profile #${profileId}` : null);
+  const profileName = activeProfile?.name || (profileId ? t("common.profileNumber", { id: profileId }) : null);
 
   const summaryLine = activeProfile
     ? [
         activeProfile.gender === "male"
-          ? "M"
+          ? t("common.maleShort")
           : activeProfile.gender === "female"
-            ? "F"
-            : "O",
+            ? t("common.femaleShort")
+            : t("common.otherShort"),
         String(activeProfile.birthYear),
         `${activeProfile.heightCm}cm`,
         `${activeProfile.weightKg}kg`,
@@ -30,10 +32,23 @@ export default function Dashboard() {
         showsVerticalScrollIndicator={false}
       >
       <View style={styles.header}>
-        <Text style={styles.title}>
-          {profileName ? `Hey, ${profileName}` : "Welcome Coach,"}
-        </Text>
-        <Text style={styles.subtitle}>Ready to verify AI Engine?</Text>
+        <View style={styles.headerRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.title}>
+              {profileName ? t("home.greeting", { name: profileName }) : t("home.welcome")}
+            </Text>
+            <Text style={styles.subtitle}>{t("home.subtitle")}</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.langToggle}
+            onPress={() => setLanguage(locale === "ko" ? "en" : "ko")}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.langToggleText}>
+              {locale === "ko" ? "EN" : "한국어"}
+            </Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Active Profile Card */}
@@ -46,16 +61,16 @@ export default function Dashboard() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.profileTitle}>
-              {activeProfile ? profileName : "Select Profile"}
+              {activeProfile ? profileName : t("home.selectProfile")}
             </Text>
             <Text style={styles.profileDesc}>
-              {summaryLine ?? "Tap to choose or create a profile"}
+              {summaryLine ?? t("home.tapToChoose")}
             </Text>
             {activeProfile && (
               <View style={styles.syncRow}>
                 <View style={styles.syncDot} />
                 <Text style={styles.syncText}>
-                  Active · ID #{profileId}
+                  {t("home.activeId", { id: profileId })}
                 </Text>
               </View>
             )}
@@ -65,7 +80,7 @@ export default function Dashboard() {
       </Link>
 
       <View style={styles.menu}>
-        <Text style={styles.sectionTitle}>Development Zone</Text>
+        <Text style={styles.sectionTitle}>{t("home.devZone")}</Text>
 
         <Link href="/workout/setup" asChild>
           <Pressable style={styles.card}>
@@ -73,8 +88,8 @@ export default function Dashboard() {
               <Text style={styles.icon}>👁️</Text>
             </View>
             <View>
-              <Text style={styles.cardTitle}>Start Workout</Text>
-              <Text style={styles.cardDesc}>Choose type, configure, and record</Text>
+              <Text style={styles.cardTitle}>{t("home.startWorkout")}</Text>
+              <Text style={styles.cardDesc}>{t("home.startWorkoutDesc")}</Text>
             </View>
           </Pressable>
         </Link>
@@ -85,8 +100,8 @@ export default function Dashboard() {
               <Text style={styles.icon}>📤</Text>
             </View>
             <View>
-              <Text style={styles.cardTitle}>Upload Video</Text>
-              <Text style={styles.cardDesc}>Analyze from Gallery</Text>
+              <Text style={styles.cardTitle}>{t("home.uploadVideo")}</Text>
+              <Text style={styles.cardDesc}>{t("home.uploadVideoDesc")}</Text>
             </View>
           </Pressable>
         </Link>
@@ -97,8 +112,8 @@ export default function Dashboard() {
               <Text style={styles.icon}>📋</Text>
             </View>
             <View>
-              <Text style={styles.cardTitle}>Video Queue</Text>
-              <Text style={styles.cardDesc}>Encoding & upload status</Text>
+              <Text style={styles.cardTitle}>{t("home.videoQueue")}</Text>
+              <Text style={styles.cardDesc}>{t("home.videoQueueDesc")}</Text>
             </View>
           </Pressable>
         </Link>
@@ -109,8 +124,8 @@ export default function Dashboard() {
               <Text style={styles.icon}>📜</Text>
             </View>
             <View>
-              <Text style={styles.cardTitle}>Workout History</Text>
-              <Text style={styles.cardDesc}>View AI Analysis Results</Text>
+              <Text style={styles.cardTitle}>{t("home.workoutHistory")}</Text>
+              <Text style={styles.cardDesc}>{t("home.workoutHistoryDesc")}</Text>
             </View>
           </Pressable>
         </Link>
@@ -124,8 +139,28 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#000" },
   scrollContent: { padding: 20, paddingBottom: 40 },
   header: { marginBottom: 40, marginTop: 20 },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+  },
   title: { color: "#fff", fontSize: 28, fontWeight: "800" },
   subtitle: { color: "#666", fontSize: 16, marginTop: 5 },
+  langToggle: {
+    backgroundColor: "#1A1A1A",
+    borderWidth: 1,
+    borderColor: "#444",
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginLeft: 12,
+    marginTop: 4,
+  },
+  langToggleText: {
+    color: "#64D2FF",
+    fontSize: 13,
+    fontWeight: "700",
+  },
   sectionTitle: {
     color: "#888",
     fontSize: 14,

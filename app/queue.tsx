@@ -1,4 +1,5 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { t } from "@/features/i18n";
 import { useOrphanedVideos } from "@/store/useOrphanedVideos";
 import {
   useVideoQueue,
@@ -19,13 +20,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 const STATUS_CONFIG: Record<
   VideoStatus,
-  { label: string; color: string; bgColor: string }
+  { labelKey: string; color: string; bgColor: string }
 > = {
-  RECORDED: { label: "Recorded", color: "#A0A0A0", bgColor: "#2A2A2A" },
-  ENCODING: { label: "Encoding", color: "#FFD60A", bgColor: "#3D3200" },
-  ENCODED: { label: "Ready", color: "#30D158", bgColor: "#0A3D1A" },
-  UPLOADING: { label: "Uploading", color: "#64D2FF", bgColor: "#002B3D" },
-  UPLOADED: { label: "Uploaded", color: "#30D158", bgColor: "#0A3D1A" },
+  RECORDED: { labelKey: "queue.statusRecorded", color: "#A0A0A0", bgColor: "#2A2A2A" },
+  ENCODING: { labelKey: "queue.statusEncoding", color: "#FFD60A", bgColor: "#3D3200" },
+  ENCODED: { labelKey: "queue.statusReady", color: "#30D158", bgColor: "#0A3D1A" },
+  UPLOADING: { labelKey: "queue.statusUploading", color: "#64D2FF", bgColor: "#002B3D" },
+  UPLOADED: { labelKey: "queue.statusUploaded", color: "#30D158", bgColor: "#0A3D1A" },
 };
 
 function formatTime(ts: number): string {
@@ -48,7 +49,7 @@ function VideoItemRow({ item }: { item: VideoItem }) {
         </View>
         <View style={[styles.statusBadge, { backgroundColor: config.bgColor }]}>
           <Text style={[styles.statusText, { color: config.color }]}>
-            {config.label}
+            {t(config.labelKey)}
           </Text>
         </View>
       </View>
@@ -88,7 +89,7 @@ function VideoItemRow({ item }: { item: VideoItem }) {
               style={styles.actionBtnPrimary}
               onPress={() => startEncoding(item.id)}
             >
-              <Text style={styles.actionBtnPrimaryText}>Encode</Text>
+              <Text style={styles.actionBtnPrimaryText}>{t("queue.encode")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnDestructive}
@@ -107,14 +108,14 @@ function VideoItemRow({ item }: { item: VideoItem }) {
             >
               <IconSymbol name="arrow.up.circle.fill" size={16} color="#000" />
               <Text style={styles.actionBtnPrimaryText}>
-                Upload{item.compressedSize ? ` (${formatBytes(item.compressedSize)})` : ""}
+                {t("queue.upload")}{item.compressedSize ? ` (${formatBytes(item.compressedSize)})` : ""}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnSecondary}
               onPress={() => startEncoding(item.id)}
             >
-              <Text style={styles.actionBtnSecondaryText}>Re-encode</Text>
+              <Text style={styles.actionBtnSecondaryText}>{t("queue.reEncode")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnDestructive}
@@ -131,7 +132,7 @@ function VideoItemRow({ item }: { item: VideoItem }) {
             onPress={() => cancelUpload(item.id)}
           >
             <IconSymbol name="xmark.circle.fill" size={16} color="#FF453A" />
-            <Text style={styles.actionBtnDestructiveText}>Cancel Upload</Text>
+            <Text style={styles.actionBtnDestructiveText}>{t("queue.cancelUpload")}</Text>
           </TouchableOpacity>
         )}
 
@@ -141,19 +142,19 @@ function VideoItemRow({ item }: { item: VideoItem }) {
               style={styles.actionBtnSecondary}
               onPress={() => startUpload(item.id)}
             >
-              <Text style={styles.actionBtnSecondaryText}>Re-upload</Text>
+              <Text style={styles.actionBtnSecondaryText}>{t("queue.reUpload")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnSecondary}
               onPress={() => startEncoding(item.id)}
             >
-              <Text style={styles.actionBtnSecondaryText}>Re-encode</Text>
+              <Text style={styles.actionBtnSecondaryText}>{t("queue.reEncode")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnPrimary}
               onPress={() => dismiss(item.id)}
             >
-              <Text style={styles.actionBtnPrimaryText}>Dismiss</Text>
+              <Text style={styles.actionBtnPrimaryText}>{t("queue.dismiss")}</Text>
             </TouchableOpacity>
           </>
         )}
@@ -165,13 +166,13 @@ function VideoItemRow({ item }: { item: VideoItem }) {
             onPress={async () => {
               const ok = await saveToGallery(item.id);
               if (ok) {
-                Alert.alert("Saved", "Video saved to gallery.");
+                Alert.alert(t("common.saved"), t("queue.savedToGallery"));
               } else {
-                Alert.alert("Failed", "Could not save to gallery. Check device storage.");
+                Alert.alert(t("queue.failed"), t("queue.failedGallery"));
               }
             }}
           >
-            <Text style={styles.actionBtnSecondaryText}>📱 Save to Gallery</Text>
+            <Text style={styles.actionBtnSecondaryText}>{t("queue.saveToGallery")}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -201,7 +202,7 @@ export default function QueueScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <IconSymbol name="chevron.left" size={28} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.title}>Video Queue</Text>
+        <Text style={styles.title}>{t("queue.title")}</Text>
         <Text style={styles.badge}>{items.length}</Text>
       </View>
 
@@ -210,9 +211,9 @@ export default function QueueScreen() {
         {items.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>📭</Text>
-            <Text style={styles.emptyText}>No videos in queue</Text>
+            <Text style={styles.emptyText}>{t("queue.emptyTitle")}</Text>
             <Text style={styles.emptySubtext}>
-              Record a workout to get started
+              {t("queue.emptyDesc")}
             </Text>
           </View>
         ) : (
@@ -225,10 +226,10 @@ export default function QueueScreen() {
           onPress={() => setShowOrphans(!showOrphans)}
         >
           <Text style={styles.orphanTitle}>
-            {showOrphans ? "▼" : "▶"} Orphaned Files
+            {showOrphans ? "▼" : "▶"} {t("queue.orphanedFiles")}
           </Text>
           <Text style={styles.orphanCount}>
-            {scanning ? "Scanning..." : `${orphans.length} file${orphans.length !== 1 ? "s" : ""}`}
+            {scanning ? t("queue.scanning") : t(orphans.length === 1 ? "queue.fileCount" : "queue.filesCount", { count: orphans.length })}
           </Text>
         </TouchableOpacity>
 
@@ -236,7 +237,7 @@ export default function QueueScreen() {
           <>
             {orphans.length === 0 && !scanning ? (
               <View style={styles.orphanEmpty}>
-                <Text style={styles.orphanEmptyText}>No orphaned files found ✓</Text>
+                <Text style={styles.orphanEmptyText}>{t("queue.noOrphans")}</Text>
               </View>
             ) : (
               orphans.map((orphan) => (
@@ -255,24 +256,24 @@ export default function QueueScreen() {
                       onPress={async () => {
                         const ok = await saveToGallery(orphan.path);
                         if (ok) {
-                          Alert.alert("Saved", "Saved to gallery and deleted temp file.");
+                          Alert.alert(t("common.saved"), t("queue.savedGalleryDeleted"));
                         } else {
-                          Alert.alert("Failed", "Could not save to gallery. Check device storage.");
+                          Alert.alert(t("queue.failed"), t("queue.failedGallery"));
                         }
                       }}
                     >
-                      <Text style={styles.actionBtnSecondaryText}>📱 Gallery</Text>
+                      <Text style={styles.actionBtnSecondaryText}>{t("queue.gallery")}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.actionBtnDestructive}
                       onPress={() => {
                         Alert.alert(
-                          "Delete File",
-                          `Delete ${orphan.name}?`,
+                          t("queue.deleteFile"),
+                          t("queue.deleteFileConfirm", { name: orphan.name }),
                           [
-                            { text: "Cancel", style: "cancel" },
+                            { text: t("common.cancel"), style: "cancel" },
                             {
-                              text: "Delete",
+                              text: t("common.delete"),
                               style: "destructive",
                               onPress: () => deleteFile(orphan.path),
                             },
@@ -292,12 +293,12 @@ export default function QueueScreen() {
                 style={styles.deleteAllBtn}
                 onPress={() => {
                   Alert.alert(
-                    "Delete All Orphans",
-                    `Delete ${orphans.length} orphaned video files?`,
+                    t("queue.deleteAllOrphans"),
+                    t("queue.deleteAllConfirm", { count: orphans.length }),
                     [
-                      { text: "Cancel", style: "cancel" },
+                      { text: t("common.cancel"), style: "cancel" },
                       {
-                        text: "Delete All",
+                        text: t("queue.deleteAll"),
                         style: "destructive",
                         onPress: deleteAll,
                       },
@@ -305,7 +306,7 @@ export default function QueueScreen() {
                   );
                 }}
               >
-                <Text style={styles.deleteAllText}>🗑️ Delete All Orphans</Text>
+                <Text style={styles.deleteAllText}>{t("queue.deleteAllOrphans")}</Text>
               </TouchableOpacity>
             )}
 
@@ -315,7 +316,7 @@ export default function QueueScreen() {
               disabled={scanning}
             >
               <Text style={styles.rescanText}>
-                {scanning ? "Scanning..." : "🔄 Rescan"}
+                {scanning ? t("queue.scanning") : t("queue.rescan")}
               </Text>
             </TouchableOpacity>
           </>

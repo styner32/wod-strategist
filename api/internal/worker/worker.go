@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -40,10 +42,11 @@ type VideoAnalysisPayload struct {
 
 // HighlightSegment is shared between video analysis (parsing) and highlight generation (processing).
 type HighlightSegment struct {
-	Start  string `json:"start"`  // e.g. "0:15" or "1:30"
-	End    string `json:"end"`    // e.g. "0:28" or "1:45"
-	Type   string `json:"type"`   // best_form, worst_form, fatigue_point, key_moment
-	Reason string `json:"reason"` // human-readable reason
+	Start    string `json:"start"`              // e.g. "0:15" or "1:30"
+	End      string `json:"end"`                // e.g. "0:28" or "1:45"
+	Type     string `json:"type"`               // best_form, worst_form, fatigue_point, key_moment
+	Movement string `json:"movement,omitempty"` // which exercise (e.g. "Snatch", "Pull-up")
+	Reason   string `json:"reason"`             // human-readable reason
 }
 
 // StorageClient is the minimal interface over storage.Client used by handlers.
@@ -105,6 +108,40 @@ func NormalizeWorkoutType(_ string) string {
 
 func IsValidWorkoutType(_ string) bool {
 	return true // All values normalize to "wod"
+}
+
+// validateSessionID checks that a session ID is safe to use in file paths.
+// Returns a non-retryable error if the session ID contains path separators
+// or other dangerous characters.
+func validateSessionID(sessionID string) error {
+	if strings.ContainsRune(sessionID, filepath.Separator) {
+		return fmt.Errorf("invalid session ID: contains path separator: %w", asynq.SkipRetry)
+	}
+	return nil
+}
+
+// createTempFile creates a temporary file with a kernel-generated random name
+// in os.TempDir(). The prefix is used for human readability in debug logs.
+// The caller is responsible for removing the file when done.
+func createTempFile(prefix, ext string) (string, error) {
+	f, err := os.CreateTemp("", prefix+"-*"+ext)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	path := f.Name()
+	f.Close()
+	return path, nil
+}
+
+// createTempDir creates a temporary directory with a kernel-generated random name
+// in os.TempDir(). The prefix is used for human readability in debug logs.
+// The caller is responsible for removing the directory when done.
+func createTempDir(prefix string) (string, error) {
+	dir, err := os.MkdirTemp("", prefix+"-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	return dir, nil
 }
 
 // lookupProfileString returns a human-readable profile string for the given profile ID.

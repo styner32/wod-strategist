@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -65,12 +64,13 @@ const (
 	HighlightSelectionPrompt = `
 
 7. **하이라이트 구간 (Highlight Segments)**:
-   - 소셜 미디어 공유나 퍼포먼스 비교에 적합한 핵심 구간을 선별하세요.
+   - 이 하이라이트는 전체 운동을 요약하는 역할입니다. 영상에서 감지된 **모든 운동 종목에 대해** 핵심 구간을 추출하세요.
+   - 각 운동 종목별로 최소 1개 이상의 하이라이트를 반드시 포함하세요. 특정 운동만 편중하지 마세요.
    - 카테고리: best_form (가장 좋은 자세), worst_form (가장 나쁜 자세), fatigue_point (피로 시작 지점), key_moment (핵심 순간)
-   - 영상 길이를 고려하여 **각 카테고리당 가능한 한 2개 이상의 구간**을 찾아주세요.
+   - 각 카테고리당 가능한 한 2개 이상의 구간을 찾고, movement 필드에 해당 운동 종목명을 기입하세요.
    - 각 구간은 3~15초 권장, 전체 시간 합계 제한은 없습니다. 자유롭게 유의미한 구간을 모두 추출하세요.
    - 반드시 아래 형식의 **highlights** JSON 코드 블록으로 출력하세요 (json이 아닌 highlights 태그 사용):
-` + "```highlights\n" + `[{"start":"0:15","end":"0:28","type":"best_form","reason":"완벽한 스내치 풀 익스텐션"},{"start":"1:10","end":"1:20","type":"best_form","reason":"코어가 매우 안정적인 두번째 움직임"},{"start":"2:30","end":"2:45","type":"worst_form","reason":"무릎 내전과 등 굽음 관찰"}]` + "\n```"
+` + "```highlights\n" + `[{"start":"0:15","end":"0:28","type":"best_form","movement":"Snatch","reason":"완벽한 스내치 풀 익스텐션"},{"start":"1:10","end":"1:20","type":"key_moment","movement":"Pull-up","reason":"풀업 첫 세트에서 안정적인 킵핑"},{"start":"2:30","end":"2:45","type":"worst_form","movement":"Snatch","reason":"무릎 내전과 등 굽음 관찰"},{"start":"3:00","end":"3:12","type":"fatigue_point","movement":"Burpee","reason":"속도 현저히 감소, 호흡 불안정"}]` + "\n```"
 
 	InjuryTimestampPrompt = `
 
@@ -80,11 +80,11 @@ const (
 ` + "```injury_timestamps\n" + `[{"start": "0:32", "end": "0:45", "reason": "무릎 내전 관찰"}]` + "\n```"
 )
 
-// highlightBlockRegex matches fenced ```highlights ... ``` blocks in Gemini output.
-var highlightBlockRegex = regexp.MustCompile("(?is)```highlights\\s*(\\[.*?\\])\\s*```")
+// highlightBlockRegex matches fenced ```highlights ... ``` or <highlights> ... </highlights> blocks in Gemini output.
+var highlightBlockRegex = regexp.MustCompile("(?is)(?:```highlights\\s*(\\[.*?\\])\\s*```|<highlights>\\s*(\\[.*?\\])\\s*</highlights>)")
 
-// injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ``` blocks in Gemini output.
-var injuryTimestampBlockRegex = regexp.MustCompile("(?is)```(?:injury_timestamps|json)\\s*(\\[.*?\\])\\s*```")
+// injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ```, ```json ... ```, or <injury_timestamps> ... </injury_timestamps> blocks in Gemini output.
+var injuryTimestampBlockRegex = regexp.MustCompile("(?is)(?:```(?:injury_timestamps|json)\\s*(\\[.*?\\])\\s*```|<injury_timestamps>\\s*(\\[.*?\\])\\s*</injury_timestamps>)")
 
 func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
@@ -132,18 +132,17 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	if strings.ContainsRune(p.SessionID, filepath.Separator) {
-		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
-		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	if err := validateSessionID(p.SessionID); err != nil {
+		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID))
+		return err
 	}
-	safeSessionID := filepath.Base(p.SessionID)
 
 	if w.UseCache {
 		w.logger.Info("Using two-pass analysis for video", zap.String("session_id", p.SessionID))
 		return w.handleVideoAnalysisTwoPass(ctx, p)
 	}
 
-	return w.handleVideoAnalysisLegacy(ctx, p, safeSessionID)
+	return w.handleVideoAnalysisLegacy(ctx, p)
 }
 
 // Segment represents an identified exercise set within a larger video.
@@ -242,8 +241,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		}
 	}()
 
-	safeSessionID := filepath.Base(p.SessionID)
-	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+	localFilePath, err := createTempFile("analysis", ".mp4")
+	if err != nil {
+		return err
+	}
 
 	w.logger.Info("Downloading file from GCS for two-pass analysis",
 		zap.String("uri", p.FilePath),
@@ -284,15 +285,17 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	if err != nil {
 		return fmt.Errorf("failed to upload video: %w", err)
 	}
-	// Defer file cleanup: if injury analysis needs the file, it takes ownership
+	// Delete the Gemini file unless injury analysis successfully takes ownership.
+	// injuryTaskEnqueued is set to true only after a successful Enqueue call below.
 	hasInjuries := len(p.Injuries) > 0
-	if !hasInjuries {
-		defer func() {
+	injuryTaskEnqueued := false
+	defer func() {
+		if !injuryTaskEnqueued {
 			if err := w.GeminiClient.DeleteFile(ctx, upload.FileName); err != nil {
 				w.logger.Error("Failed to delete file from Gemini", zap.Error(err))
 			}
-		}()
-	}
+		}
+	}()
 
 	// ── Pass 1: Build segment index ──
 	// Prefer chunk analysis data from DB (app-recorded, accurate timestamps).
@@ -346,7 +349,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("total_segments", len(segments)),
 			zap.Int("max_segments", maxSegs))
 
-		triagedSegments, triageErr := w.triageSegments(ctx, upload, p, segments, maxSegs)
+		triagedSegments, triageErr := w.triageSegments(ctx, upload, segments, maxSegs)
 		if triageErr != nil {
 			w.logger.Warn("Segment triage failed, using first N segments",
 				zap.Error(triageErr),
@@ -396,7 +399,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		return fmt.Errorf("all segment analyses failed")
 	}
 
-	highlightSegments := parseHighlightSegments(analysis)
+	highlightSegments := ParseHighlightSegments(analysis)
 
 	result := &db.AnalysisResult{
 		SessionID:         p.SessionID,
@@ -433,6 +436,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			if _, enqErr := w.QueueClient.Enqueue(injuryTask); enqErr != nil {
 				w.logger.Error("Failed to enqueue injury analysis task", zap.Error(enqErr))
 			} else {
+				injuryTaskEnqueued = true
 				w.logger.Info("Injury analysis enqueued with file URI",
 					zap.String("session_id", p.SessionID),
 					zap.String("file_uri", upload.FileURI),
@@ -602,7 +606,7 @@ type TriagedSegment struct {
 //
 // Future optimization: use segment descriptions instead of video for cost saving,
 // once chunk analysis descriptions are rich enough.
-func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, p VideoAnalysisPayload, segments []Segment, maxSegs int) ([]Segment, error) {
+func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, segments []Segment, maxSegs int) ([]Segment, error) {
 	triagePrompt := buildTriagePrompt(segments, maxSegs, upload.VideoDuration)
 
 	triageOutput, err := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, triagePrompt)
@@ -723,8 +727,11 @@ func filterSegments(segments []Segment, videoDuration time.Duration) []Segment {
 }
 
 // handleVideoAnalysisLegacy is the original file-upload based path.
-func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisPayload, safeSessionID string) error {
-	localFilePath := filepath.Join("/tmp", fmt.Sprintf("%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisPayload) error {
+	localFilePath, err := createTempFile("legacy-analysis", ".mp4")
+	if err != nil {
+		return err
+	}
 
 	w.logger.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
 	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
@@ -782,7 +789,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	}
 
 	// Parse highlight segments from analysis output
-	highlightSegments := parseHighlightSegments(analysis)
+	highlightSegments := ParseHighlightSegments(analysis)
 
 	result := &db.AnalysisResult{
 		SessionID:         p.SessionID,
@@ -859,32 +866,82 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	return prompt
 }
 
-// parseHighlightSegments extracts the JSON array from the ```highlights``` code block
-// in the WOD analysis output. Returns the raw JSON string, or empty on failure.
-func parseHighlightSegments(analysisOutput string) string {
-	match := highlightBlockRegex.FindStringSubmatch(analysisOutput)
-	if match == nil {
+// ParseHighlightSegments extracts all JSON arrays from ```highlights``` code blocks
+// or <highlights> XML tags in the WOD analysis output. When multiple blocks exist
+// (one per segment), all highlights are merged into a single JSON array.
+// Returns the raw JSON string, or empty on failure.
+func ParseHighlightSegments(analysisOutput string) string {
+	matches := highlightBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
+	if len(matches) == 0 {
 		return ""
 	}
-	// Sanity-check: must be a non-empty array of valid HighlightSegments.
-	var parsed []HighlightSegment
-	if err := json.Unmarshal([]byte(match[1]), &parsed); err != nil || len(parsed) == 0 {
+
+	var allHighlights []HighlightSegment
+	for _, match := range matches {
+		// The regex has two capture groups (backtick vs XML); pick the non-empty one.
+		jsonStr := firstNonEmpty(match[1:])
+		if jsonStr == "" {
+			continue
+		}
+		var parsed []HighlightSegment
+		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil || len(parsed) == 0 {
+			continue
+		}
+		allHighlights = append(allHighlights, parsed...)
+	}
+
+	if len(allHighlights) == 0 {
 		return ""
 	}
-	return match[1]
+
+	result, err := json.Marshal(allHighlights)
+	if err != nil {
+		return ""
+	}
+	return string(result)
 }
 
-// parseInjuryTimestamps extracts the JSON array from the ```injury_timestamps``` code block
-// in the WOD analysis output. Returns the raw JSON string, or empty on failure.
+// parseInjuryTimestamps extracts all JSON arrays from ```injury_timestamps``` code blocks
+// or <injury_timestamps> XML tags in the WOD analysis output. When multiple blocks exist
+// (one per segment), all timestamps are merged into a single JSON array.
+// Returns the raw JSON string, or empty on failure.
 func parseInjuryTimestamps(analysisOutput string) string {
-	match := injuryTimestampBlockRegex.FindStringSubmatch(analysisOutput)
-	if match == nil {
+	matches := injuryTimestampBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
+	if len(matches) == 0 {
 		return ""
 	}
-	// Sanity-check: must be a non-empty JSON array.
-	var parsed []json.RawMessage
-	if err := json.Unmarshal([]byte(match[1]), &parsed); err != nil || len(parsed) == 0 {
+
+	var allTimestamps []json.RawMessage
+	for _, match := range matches {
+		// The regex has two capture groups (backtick vs XML); pick the non-empty one.
+		jsonStr := firstNonEmpty(match[1:])
+		if jsonStr == "" {
+			continue
+		}
+		var parsed []json.RawMessage
+		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil || len(parsed) == 0 {
+			continue
+		}
+		allTimestamps = append(allTimestamps, parsed...)
+	}
+
+	if len(allTimestamps) == 0 {
 		return ""
 	}
-	return match[1]
+
+	result, err := json.Marshal(allTimestamps)
+	if err != nil {
+		return ""
+	}
+	return string(result)
+}
+
+// firstNonEmpty returns the first non-empty string from the given slice.
+func firstNonEmpty(ss []string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }

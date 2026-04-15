@@ -23,6 +23,9 @@ run: ## Run API server locally
 run-worker: ## Run worker locally
 	go run ./cmd/worker/main.go
 
+run-admin: ## Run admin CLI. Usage: make run-admin CMD="reparse-highlights --dry-run"
+	go run ./cmd/admin/main.go $(CMD)
+
 migrate-create: ## Create new migration files. Usage: make migrate-create NAME=your_desc
 ifndef NAME
 	$(error NAME is not set)

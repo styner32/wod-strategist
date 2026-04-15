@@ -157,3 +157,16 @@ func (r *GormHighlightResultRepository) FindBySessionID(ctx context.Context, ses
 
 	return results, nil
 }
+
+func (r *GormHighlightResultRepository) FindByID(ctx context.Context, id uint) (*db.HighlightResult, error) {
+	if r.db == nil {
+		return nil, errHighlightRepositoryNotConfigured
+	}
+
+	var result db.HighlightResult
+	if err := r.db.WithContext(ctx).First(&result, id).Error; err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}

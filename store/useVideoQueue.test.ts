@@ -139,7 +139,8 @@ describe("useVideoQueue", () => {
 
       expect(mockCompress).toHaveBeenCalledWith(
         "file:///raw/video.mp4",
-        expect.objectContaining({ compressionMethod: "auto", maxSize: 720 })
+        expect.objectContaining({ compressionMethod: "auto", maxSize: 720 }),
+        expect.any(Function)
       );
     });
 

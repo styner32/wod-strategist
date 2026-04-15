@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/hibiken/asynq"
@@ -90,17 +89,16 @@ func (w *Worker) HandleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) er
 		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
 	}
 
-	if strings.ContainsRune(p.SessionID, filepath.Separator) {
-		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
-		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	if err := validateSessionID(p.SessionID); err != nil {
+		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID))
+		return err
 	}
-	safeSessionID := filepath.Base(p.SessionID)
 
 	// Use two-pass path when a Gemini file URI was passed from video analysis
 	if p.GeminiFileURI != "" {
 		return w.handleInjuryAnalysisWithFile(ctx, p)
 	}
-	return w.handleInjuryAnalysisLegacy(ctx, p, safeSessionID)
+	return w.handleInjuryAnalysisLegacy(ctx, p)
 }
 
 // handleInjuryAnalysisWithFile reuses the Gemini file from video analysis.
@@ -201,9 +199,11 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 }
 
 // handleInjuryAnalysisLegacy is the original file-upload based path.
-func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysisPayload, safeSessionID string) error {
-
-	localFilePath := filepath.Join("/tmp", fmt.Sprintf("injury_%s_%s", strings.ReplaceAll(safeSessionID, ".", "_"), filepath.Base(p.FilePath)))
+func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysisPayload) error {
+	localFilePath, err := createTempFile("injury", ".mp4")
+	if err != nil {
+		return err
+	}
 
 	w.logger.Info("Downloading file from GCS for injury analysis", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
 	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {

@@ -44,9 +44,9 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	if strings.ContainsRune(p.SessionID, filepath.Separator) {
-		w.logger.Error("Invalid session ID: contains path separator", zap.String("session_id", p.SessionID))
-		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	if err := validateSessionID(p.SessionID); err != nil {
+		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID))
+		return err
 	}
 
 	retryCount, ok := asynq.GetRetryCount(ctx)
@@ -136,10 +136,9 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 	}
 
 	// 4. Create temp directory
-	safeSessionID := strings.ReplaceAll(filepath.Base(p.SessionID), ".", "_")
-	tmpDir := filepath.Join("/tmp", fmt.Sprintf("highlight_%s_%d", safeSessionID, os.Getpid()))
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create highlight temp dir: %w", err)
+	tmpDir, err := createTempDir("highlight")
+	if err != nil {
+		return err
 	}
 	defer os.RemoveAll(tmpDir)
 

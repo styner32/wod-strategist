@@ -934,6 +934,78 @@ func (ctl *Controller) GetHighlight(c *gin.Context) {
 	c.JSON(http.StatusOK, results)
 }
 
+// @Summary      Get Highlight Download URL
+// @Description  Returns a time-limited signed URL for downloading a specific highlight video
+// @Tags         highlight
+// @Produce      json
+// @Param        id path string true "Highlight result ID"
+// @Success      200 {object} VideoDownloadURLResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      404 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /highlight-download/:id [get]
+func (ctl *Controller) GetHighlightDownloadURL(c *gin.Context) {
+	if ctl.highlightResults == nil || ctl.storageClient == nil {
+		logger.Log.Error("highlight results or storage client not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "service not configured"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil || id == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid highlight id"})
+		return
+	}
+
+	result, err := ctl.highlightResults.FindByID(c.Request.Context(), uint(id))
+	if err != nil {
+		logger.Log.Error("highlight result not found", zap.Uint64("id", id), zap.Error(err))
+		c.JSON(http.StatusNotFound, gin.H{"error": "highlight not found"})
+		return
+	}
+
+	if result.Status != "COMPLETED" || result.GCSURI == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "highlight video not available"})
+		return
+	}
+
+	// Extract object name from gs://bucket/object format
+	objectName := extractGCSObjectName(result.GCSURI)
+	if objectName == "" {
+		logger.Log.Error("invalid GCS URI in highlight result", zap.String("gcs_uri", result.GCSURI))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid highlight storage path"})
+		return
+	}
+
+	signedURL, err := ctl.storageClient.GenerateSignedURL(objectName, http.MethodGet, 15*time.Minute)
+	if err != nil {
+		logger.Log.Error("failed to generate highlight download URL",
+			zap.Uint("id", result.ID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate download URL"})
+		return
+	}
+
+	filename := fmt.Sprintf("%s_highlight_%d.mp4", result.SessionID, result.ID)
+	c.JSON(http.StatusOK, VideoDownloadURLResponse{
+		SessionID:   result.SessionID,
+		Kind:        "highlight",
+		DownloadURL: signedURL,
+		Filename:    filename,
+		ExpiresAt:   time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339),
+	})
+}
+
+// extractGCSObjectName extracts the object path from a gs://bucket/object URI.
+func extractGCSObjectName(gcsURI string) string {
+	u, err := url.Parse(gcsURI)
+	if err != nil || u.Scheme != "gs" || u.Host == "" {
+		return ""
+	}
+	// u.Path starts with "/" so trim it
+	return strings.TrimPrefix(u.Path, "/")
+}
+
 // @Summary      Verify Highlights
 // @Description  Triggers verification of highlight segments to detect hallucinated movements
 // @Tags         highlight
