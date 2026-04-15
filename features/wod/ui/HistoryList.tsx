@@ -17,6 +17,7 @@ import { MarkdownText } from "@/components/ui/MarkdownText";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useProfileId } from "@/store/useProfileStore";
 import { useVideoQueue } from "@/store/useVideoQueue";
+import { useShallow } from "zustand/shallow";
 import {
   fetchVideoDownloadURL,
   generateHighlight,
@@ -345,11 +346,11 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
     }
   };
 
-  const cardBg = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.03)";
-  const cardBorder = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)";
+  const cardBg = isDark ? "#2C2C2E" : "#F5F5F5";
+  const cardBorder = isDark ? "#48484A" : "rgba(0,0,0,0.08)";
   const sessionColor = isDark ? "#FFFFFF" : "#1C1C1E";
-  const dateColor = isDark ? "#888" : "#6B6B6B";
-  const previewColor = isDark ? "#C0C0C0" : "#4A4A4A";
+  const dateColor = isDark ? "#D4D4D4" : "#6B6B6B";
+  const previewColor = isDark ? "#FFFFFF" : "#333333";
   const expandColor = isDark ? "#64D2FF" : "#0A84FF";
   const hrDividerColor = isDark ? "rgba(255,107,107,0.2)" : "rgba(255,107,107,0.3)";
   const highlightSectionBg = isDark ? "rgba(191,90,242,0.08)" : "rgba(191,90,242,0.05)";
@@ -711,8 +712,11 @@ function ProcessingSection({ items }: { items: AnalysisResult[] }) {
   const isDark = scheme === "dark";
 
   // Also pull in-flight uploads from video queue
-  const uploadingItems = useVideoQueue((s) =>
-    s.items.filter((i) => i.status === "UPLOADING" || i.status === "ENCODING")
+  // useShallow prevents infinite re-renders from .filter() creating new array refs
+  const uploadingItems = useVideoQueue(
+    useShallow((s) =>
+      s.items.filter((i) => i.status === "UPLOADING" || i.status === "ENCODING")
+    )
   );
 
   if (items.length === 0 && uploadingItems.length === 0) return null;
@@ -965,8 +969,9 @@ const styles = StyleSheet.create({
 
   // Preview text (collapsed)
   previewText: {
-    fontSize: 14,
-    lineHeight: 21,
+    fontSize: 15,
+    lineHeight: 23,
+    fontWeight: "500",
   },
 
   // Content body (expanded)
