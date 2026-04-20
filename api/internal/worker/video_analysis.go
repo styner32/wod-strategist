@@ -258,8 +258,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		}
 	}()
 
-	// ── File size guard ──
-	// Reject files larger than 1GB to prevent Gemini upload timeouts and OOM.
+	// ── File size guard + conditional re-encode ──
+	// If the uploaded video exceeds 500MB, create an analysis-grade re-encode
+	// (CRF 28, 720p) before sending to Gemini. This mirrors the merge-chunks
+	// path behavior. Only reject if the re-encoded file still exceeds 1GB.
 	fi, err := os.Stat(localFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to stat downloaded file: %w", err)
@@ -270,8 +272,48 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.Int64("file_size_bytes", fileSizeBytes),
 		zap.String("file_size_human", formatFileSizeWorker(fileSizeBytes)))
 
+	// Path used for Gemini upload — may be replaced by re-encoded copy below
+	geminiInputPath := localFilePath
+
+	if fileSizeBytes > maxAnalysisVideoSizeBytes {
+		w.logger.Info("Video exceeds analysis threshold, creating analysis-grade re-encode",
+			zap.String("session_id", p.SessionID),
+			zap.Int64("file_size_bytes", fileSizeBytes),
+			zap.String("file_size_human", formatFileSizeWorker(fileSizeBytes)),
+			zap.Int64("threshold_bytes", maxAnalysisVideoSizeBytes))
+
+		analysisPath, encErr := createTempFile("analysis-reencode", ".mp4")
+		if encErr != nil {
+			return fmt.Errorf("failed to create temp file for re-encode: %w", encErr)
+		}
+		defer os.Remove(analysisPath)
+
+		if err := runFFmpegAnalysisEncode(ctx, w.logger, localFilePath, analysisPath); err != nil {
+			w.logger.Warn("Analysis re-encode failed, checking if original is within hard limit",
+				zap.String("session_id", p.SessionID),
+				zap.Error(err))
+
+			// Fall through — original file will be checked against the 1GB hard limit below
+		} else {
+			// Re-encode succeeded — check the new file size
+			if reencFI, statErr := os.Stat(analysisPath); statErr == nil {
+				analysisSizeBytes := reencFI.Size()
+				w.logger.Info("Analysis re-encode completed",
+					zap.String("session_id", p.SessionID),
+					zap.Int64("original_size_bytes", fileSizeBytes),
+					zap.String("original_size_human", formatFileSizeWorker(fileSizeBytes)),
+					zap.Int64("analysis_size_bytes", analysisSizeBytes),
+					zap.String("analysis_size_human", formatFileSizeWorker(analysisSizeBytes)),
+					zap.Float64("compression_ratio", float64(fileSizeBytes)/float64(max(analysisSizeBytes, 1))))
+
+				geminiInputPath = analysisPath
+				fileSizeBytes = analysisSizeBytes
+			}
+		}
+	}
+
 	if fileSizeBytes > maxAnalysisFileSizeBytes {
-		w.logger.Error("Video file too large for analysis",
+		w.logger.Error("Video file too large for analysis (even after re-encode attempt)",
 			zap.String("session_id", p.SessionID),
 			zap.Int64("file_size_bytes", fileSizeBytes),
 			zap.String("file_size_human", formatFileSizeWorker(fileSizeBytes)),
@@ -280,8 +322,8 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			formatFileSizeWorker(fileSizeBytes), asynq.SkipRetry)
 	}
 
-	// Upload to Gemini Files API
-	upload, err := w.GeminiClient.UploadVideo(ctx, localFilePath)
+	// Upload to Gemini Files API (uses re-encoded path if available)
+	upload, err := w.GeminiClient.UploadVideo(ctx, geminiInputPath)
 	if err != nil {
 		return fmt.Errorf("failed to upload video: %w", err)
 	}

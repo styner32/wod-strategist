@@ -301,11 +301,22 @@ async function _runEncoding(
   try {
     console.log("🎬 Starting encoding for:", id, "rawUri:", rawUri);
 
+    // Read raw file size for comparison after encoding
+    let rawSize: number | undefined;
+    try {
+      const rawFile = new File(rawUri);
+      rawSize = rawFile.size ?? undefined;
+      console.log("🎬 Raw file size:", rawSize, "bytes", rawSize ? `(${(rawSize / (1024 * 1024)).toFixed(1)} MB)` : "");
+    } catch (e) {
+      console.warn("⚠️ Could not read raw file size:", e);
+    }
+
     let compressedUri = await Video.compress(
       rawUri,
       {
         compressionMethod: "auto",
         maxSize: 720,
+        minimumFileSizeForCompress: 0,
         progressDivider: 5,
       },
       (progress) => {
@@ -313,18 +324,40 @@ async function _runEncoding(
       }
     );
 
-    // Rename compressed file with _encoded suffix for easier debugging
+    // BUG FIX: react-native-compressor may return the SAME path as the input
+    // when it decides no compression is needed. If we move (rename) that file,
+    // we'd just rename the raw file and report the raw size as "encoded".
+    const isSamePath =
+      compressedUri === rawUri ||
+      compressedUri.replace("file://", "") === rawUri.replace("file://", "");
+
+    if (isSamePath) {
+      console.warn(
+        "⚠️ Video.compress returned same path as input — compression was a no-op!",
+        { rawUri, compressedUri }
+      );
+    }
+
+    // Rename/copy compressed file with _encoded suffix for easier debugging
     try {
       const srcFile = new File(compressedUri);
       const dir = compressedUri.substring(0, compressedUri.lastIndexOf("/"));
       const ext = compressedUri.substring(compressedUri.lastIndexOf("."));
       const encodedName = `${id}_encoded${ext}`;
       const destPath = `${dir}/${encodedName}`;
-      srcFile.move(new File(destPath));
+
+      if (isSamePath) {
+        // Same path: COPY instead of move to preserve the raw file
+        srcFile.copy(new File(destPath));
+        console.log("📝 Copied raw file to encoded path (no-op compression):", destPath);
+      } else {
+        // Different path: safe to move the compressed file
+        srcFile.move(new File(destPath));
+        console.log("📝 Renamed encoded file to:", destPath);
+      }
       compressedUri = destPath;
-      console.log("📝 Renamed encoded file to:", compressedUri);
     } catch (renameErr) {
-      console.warn("⚠️ Could not rename encoded file, using original path", renameErr);
+      console.warn("⚠️ Could not rename/copy encoded file, using original path", renameErr);
     }
 
     console.log("✅ Encoding complete:", id, "compressedUri:", compressedUri);
@@ -336,6 +369,21 @@ async function _runEncoding(
       compressedSize = compressedFile.size ?? undefined;
     } catch (e) {
       console.warn("⚠️ Could not read compressed file size:", e);
+    }
+
+    // Log compression ratio for debugging
+    if (rawSize && compressedSize) {
+      const ratio = ((1 - compressedSize / rawSize) * 100).toFixed(1);
+      console.log(
+        `📊 Compression: ${(rawSize / (1024 * 1024)).toFixed(1)} MB → ${(compressedSize / (1024 * 1024)).toFixed(1)} MB (${ratio}% reduction)`
+      );
+
+      if (compressedSize >= rawSize * 0.95) {
+        console.warn(
+          "⚠️ Compression barely reduced file size — encoded file is ≥95% of raw. " +
+          "The compressor may not have performed effective encoding."
+        );
+      }
     }
 
     get()._updateItem(id, {
