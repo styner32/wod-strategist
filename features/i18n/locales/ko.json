@@ -141,7 +141,7 @@
     "savedGalleryDeleted": "갤러리에 저장하고 임시 파일을 삭제했습니다."
   },
   "setup": {
-    "title": "동작 선택",
+    "title": "운동 설정",
     "plannedMovements": "계획된 동작",
     "selectMovements": "수행할 동작을 선택하세요:",
     "searchMovements": "동작 검색...",
@@ -164,7 +164,7 @@
     "skipCompressionHint": "원본 청크 업로드 (CPU 절약)",
     "serialUpload": "순차 업로드",
     "serialUploadHint": "업로드를 하나씩 대기열에 추가 (OOM 방지)",
-    "startWorkout": "WOD에 추가",
+    "startWorkout": "운동 시작",
     "injuries": "%{count}개 부상",
     "noInjuries": "부상 없음"
   },

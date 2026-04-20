@@ -50,6 +50,10 @@ func (h *recordingHandlers) ListMovements(c *gin.Context) {
 	h.record("movements", c)
 }
 
+func (h *recordingHandlers) ListMovementGroups(c *gin.Context) {
+	h.record("movement-groups", c)
+}
+
 func (h *recordingHandlers) ListInjuries(c *gin.Context) {
 	h.record("injuries", c)
 }

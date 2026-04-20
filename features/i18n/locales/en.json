@@ -141,7 +141,7 @@
     "savedGalleryDeleted": "Saved to gallery and deleted temp file."
   },
   "setup": {
-    "title": "Select Movement",
+    "title": "Workout Setup",
     "plannedMovements": "Planned Movements",
     "selectMovements": "Select what you will perform:",
     "searchMovements": "Search movements...",
@@ -164,7 +164,7 @@
     "skipCompressionHint": "Upload raw chunks (saves CPU)",
     "serialUpload": "Serial Upload",
     "serialUploadHint": "Queue uploads 1-at-a-time (prevents OOM)",
-    "startWorkout": "Add to WOD",
+    "startWorkout": "Start Workout",
     "injuries": "%{count} injuries",
     "noInjuries": "No injuries"
   },

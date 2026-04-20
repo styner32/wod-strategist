@@ -7,6 +7,7 @@ import { router } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  GestureResponderEvent,
   Platform,
   ScrollView,
   StyleSheet,
@@ -101,11 +102,14 @@ export default function WorkoutSetup() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Derive category filter tabs
+  // Derive category filter tabs (include "Custom" when custom movements exist)
   const categoryTabs = useMemo(() => {
     const cats = movementGroups.map(g => g.category);
+    if (customMovements.length > 0 && !cats.includes('Custom')) {
+      cats.push('Custom');
+    }
     return [ALL_FILTER, ...cats];
-  }, [movementGroups]);
+  }, [movementGroups, customMovements]);
 
   // Build the flat list of all known movements (for search matching)
   const allKnownMovements = useMemo(() => {
@@ -183,6 +187,7 @@ export default function WorkoutSetup() {
   };
 
   const handleStart = async () => {
+
     // Persist video preferences for next session
     try {
       await AsyncStorage.setItem(VIDEO_PREFS_KEY, JSON.stringify(videoPrefs));
@@ -240,7 +245,7 @@ export default function WorkoutSetup() {
           placeholderTextColor="#555"
           value={searchText}
           onChangeText={setSearchText}
-          autoCapitalize="words"
+          autoCapitalize="none"
           autoCorrect={false}
         />
         {searchText.length > 0 && (
@@ -349,7 +354,10 @@ export default function WorkoutSetup() {
                       </View>
                       {isCustom ? (
                         <TouchableOpacity
-                          onPress={() => removeCustomMovement(movement)}
+                          onPress={(e: GestureResponderEvent) => {
+                            e.stopPropagation();
+                            removeCustomMovement(movement);
+                          }}
                           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                         >
                           <IconSymbol name="xmark.circle" size={22} color="#666" />
@@ -474,12 +482,24 @@ export default function WorkoutSetup() {
       {/* Bottom staging bar */}
       <View style={styles.bottomBar}>
         {selectedMovements.length > 0 && (
-          <View style={styles.stagedRow}>
-            <View style={styles.stagedBadge}>
-              <Text style={styles.stagedBadgeText}>{selectedMovements.length}</Text>
-            </View>
-            <Text style={styles.stagedLabel}>{t('setup.staged')}</Text>
-          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.stagedChipsContent}
+            style={styles.stagedChipsScroll}
+          >
+            {selectedMovements.map(m => (
+              <View key={m} style={styles.stagedChip}>
+                <Text style={styles.stagedChipText}>{m}</Text>
+                <TouchableOpacity
+                  onPress={() => toggleMovement(m)}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                >
+                  <IconSymbol name="xmark.circle.fill" size={14} color="#00E5FF" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
         )}
         <TouchableOpacity
           style={styles.startBtn}
@@ -763,32 +783,30 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#1A1F28',
   },
-  stagedRow: {
+  stagedChipsScroll: {
+    maxHeight: 36,
+    marginBottom: 10,
+  },
+  stagedChipsContent: {
+    gap: 6,
+    paddingHorizontal: 2,
+  },
+  stagedChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-    gap: 8,
+    gap: 6,
+    backgroundColor: '#00303D',
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingLeft: 12,
+    paddingRight: 8,
+    borderWidth: 1,
+    borderColor: '#00E5FF30',
   },
-  stagedBadge: {
-    backgroundColor: '#00E5FF',
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  stagedBadgeText: {
-    color: '#000',
+  stagedChipText: {
+    color: '#00E5FF',
     fontSize: 12,
-    fontWeight: '800',
-  },
-  stagedLabel: {
-    color: '#667',
-    fontSize: 13,
     fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
   },
   startBtn: {
     backgroundColor: '#00E5FF',

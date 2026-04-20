@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -130,6 +131,12 @@ func (s allowedSet) containsAll(values []string) bool {
 	return true
 }
 
+// movementNameRE restricts movement names to characters safe to splice
+// into an LLM prompt. Blocks newlines, control chars, backticks, angle
+// brackets, and other delimiters used in prompt-injection payloads, while
+// permitting every character used in the predefined movement list.
+var movementNameRE = regexp.MustCompile(`^[A-Za-z0-9 &\-'/()+.]+$`)
+
 // validateMovements checks movement list constraints without requiring
 // movements to be in the predefined list (supports custom movements).
 func validateMovements(values []string) (bool, string) {
@@ -143,6 +150,9 @@ func validateMovements(values []string) (bool, string) {
 		}
 		if len(trimmed) > 100 {
 			return false, "movement name too long"
+		}
+		if !movementNameRE.MatchString(trimmed) {
+			return false, "movement name contains invalid characters"
 		}
 	}
 	return true, ""
