@@ -18,6 +18,7 @@ type Handlers interface {
 	GetChunkAnalysis(*gin.Context)
 	GetHistory(*gin.Context)
 	ListMovements(*gin.Context)
+	ListMovementGroups(*gin.Context)
 	ListInjuries(*gin.Context)
 	ChunkComplete(*gin.Context)
 	CreateProfile(*gin.Context)
@@ -125,6 +126,16 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/movements", handlers.ListMovements)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "movement-groups",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/movement-groups",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/movement-groups", handlers.ListMovementGroups)
 		},
 	},
 	{

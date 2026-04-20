@@ -141,9 +141,14 @@
     "savedGalleryDeleted": "갤러리에 저장하고 임시 파일을 삭제했습니다."
   },
   "setup": {
-    "title": "운동 설정",
+    "title": "동작 선택",
     "plannedMovements": "계획된 동작",
     "selectMovements": "수행할 동작을 선택하세요:",
+    "searchMovements": "동작 검색...",
+    "addCustomMovement": "+ \"%{name}\" 추가",
+    "categoryAll": "전체",
+    "noResults": "동작을 찾을 수 없습니다",
+    "staged": "선택됨",
     "movementsHint": "AI 분석을 안내하는 데 사용됩니다. 시작하려면 최소 하나를 선택하세요.",
     "advancedOptions": "고급 옵션",
     "resolution": "해상도",
@@ -159,7 +164,7 @@
     "skipCompressionHint": "원본 청크 업로드 (CPU 절약)",
     "serialUpload": "순차 업로드",
     "serialUploadHint": "업로드를 하나씩 대기열에 추가 (OOM 방지)",
-    "startWorkout": "운동 시작",
+    "startWorkout": "WOD에 추가",
     "injuries": "%{count}개 부상",
     "noInjuries": "부상 없음"
   },

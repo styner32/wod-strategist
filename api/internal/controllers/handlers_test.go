@@ -225,8 +225,8 @@ var _ = Describe("Controller handlers", func() {
 			Entry("missing profile id", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "profile_id is required"),
 			Entry("invalid gcs scheme", `{"session_id":"session-1","gcs_uri":"https://bucket/video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
 			Entry("missing gcs bucket", `{"session_id":"session-1","gcs_uri":"gs:///video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
-			Entry("invalid movement", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Invalid"],"profile_id":1}`, http.StatusBadRequest, "invalid movements"),
 			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":`+repeatedJSONString("Burpee", 100)+`,"profile_id":1}`, http.StatusBadRequest, "too many movements"),
+			Entry("empty movement name", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[""],"profile_id":1}`, http.StatusBadRequest, "movement name cannot be empty"),
 			Entry("invalid injury", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":["Head"],"profile_id":1}`, http.StatusBadRequest, "invalid injuries"),
 			Entry("too many injuries", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":`+repeatedJSONString("Left Knee", 100)+`,"profile_id":1}`, http.StatusBadRequest, "too many injuries"),
 		)
@@ -519,6 +519,20 @@ var _ = Describe("Controller handlers", func() {
 			Expect(got[0]).To(Equal(movements[0]))
 		})
 
+		It("returns movement groups", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/movement-groups", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var got []MovementGroup
+			Expect(json.Unmarshal(w.Body.Bytes(), &got)).To(Succeed())
+			Expect(got).To(HaveLen(len(movementGroups)))
+			Expect(got[0].Category).To(Equal("Barbell"))
+			Expect(got[0].Movements).NotTo(BeEmpty())
+		})
+
 		It("returns injuries", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/injuries", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -719,15 +733,15 @@ var _ = Describe("Controller handlers", func() {
 })
 
 var _ = Describe("validation helpers", func() {
-	DescribeTable("allowedMovements.containsAll",
+	DescribeTable("allowedInjuries.containsAll",
 		func(values []string, want bool) {
-			Expect(allowedMovements.containsAll(values)).To(Equal(want))
+			Expect(allowedInjuries.containsAll(values)).To(Equal(want))
 		},
 		Entry("empty", nil, true),
-		Entry("valid single", []string{"Burpee"}, true),
-		Entry("valid duplicates", []string{"Burpee", "Burpee"}, true),
-		Entry("invalid single", []string{"Invalid"}, false),
-		Entry("mixed", []string{"Burpee", "Invalid"}, false),
+		Entry("valid single", []string{"Left Knee"}, true),
+		Entry("valid duplicates", []string{"Left Knee", "Left Knee"}, true),
+		Entry("invalid single", []string{"Head"}, false),
+		Entry("mixed", []string{"Left Knee", "Head"}, false),
 	)
 
 	DescribeTable("sanitizeObjectPart",
@@ -743,6 +757,22 @@ var _ = Describe("validation helpers", func() {
 	It("builds a sanitized video object name", func() {
 		Expect(buildVideoObjectName(0, "../../session-1", `..\\videos\\demo.mp4`)).To(Equal("videos/0/session-1/demo.mp4"))
 	})
+
+	DescribeTable("validateMovements",
+		func(values []string, wantOK bool, wantReason string) {
+			ok, reason := validateMovements(values)
+			Expect(ok).To(Equal(wantOK))
+			if !wantOK {
+				Expect(reason).To(Equal(wantReason))
+			}
+		},
+		Entry("nil", nil, true, ""),
+		Entry("empty", []string{}, true, ""),
+		Entry("known movement", []string{"Burpee"}, true, ""),
+		Entry("custom movement", []string{"Rope Climb"}, true, ""),
+		Entry("empty string", []string{""}, false, "movement name cannot be empty"),
+		Entry("whitespace only", []string{"  "}, false, "movement name cannot be empty"),
+	)
 })
 
 func repeatedJSONString(value string, count int) string {

@@ -126,14 +126,9 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	if len(req.Movements) >= 100 {
-		logger.Log.Error("too many movements", zap.Int("count", len(req.Movements)))
-		c.JSON(http.StatusBadRequest, gin.H{"error": "too many movements"})
-		return
-	}
-	if !allowedMovements.containsAll(req.Movements) {
-		logger.Log.Error("invalid movements", zap.Strings("movements", req.Movements))
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movements"})
+	if ok, reason := validateMovements(req.Movements); !ok {
+		logger.Log.Error("invalid movements", zap.String("reason", reason), zap.Strings("movements", req.Movements))
+		c.JSON(http.StatusBadRequest, gin.H{"error": reason})
 		return
 	}
 
@@ -383,6 +378,16 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 // @Router       /movements [get]
 func (ctl *Controller) ListMovements(c *gin.Context) {
 	c.JSON(http.StatusOK, append([]string(nil), movements...))
+}
+
+// @Summary      List movement groups
+// @Description  Returns all supported workout movements organized by category
+// @Tags         metadata
+// @Produce      json
+// @Success      200 {array} MovementGroup
+// @Router       /movement-groups [get]
+func (ctl *Controller) ListMovementGroups(c *gin.Context) {
+	c.JSON(http.StatusOK, movementGroups)
 }
 
 // @Summary      List supported injuries

@@ -105,6 +105,15 @@ export async function fetchMovements(): Promise<string[]> {
   return apiClient<string[]>("/movements");
 }
 
+export interface MovementGroup {
+  category: string;
+  movements: string[];
+}
+
+export async function fetchMovementGroups(): Promise<MovementGroup[]> {
+  return apiClient<MovementGroup[]>("/movement-groups");
+}
+
 export async function fetchInjuries(): Promise<string[]> {
   return apiClient<string[]>("/injuries");
 }
