@@ -294,6 +294,13 @@ export default function WorkoutSetup() {
           <Text style={styles.startText}>{t('setup.startWorkout')}</Text>
           <IconSymbol name="figure.run" size={24} color="#000" />
         </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.testPoseBtn}
+          onPress={() => router.push('/workout/poseTestPage' as any)}
+        >
+          <IconSymbol name="eye" size={18} color="#888" />
+          <Text style={styles.testPoseText}>Test Pose Detection</Text>
+        </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
@@ -430,4 +437,17 @@ const styles = StyleSheet.create({
   },
   disabledBtn: { opacity: 0.5 },
   startText: { color: '#000', fontSize: 18, fontWeight: 'bold' },
+  testPoseBtn: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingVertical: 8,
+  },
+  testPoseText: {
+    color: '#888',
+    fontSize: 13,
+    fontWeight: '600',
+  },
 });

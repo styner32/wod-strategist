@@ -35,6 +35,7 @@ import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePo
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutChunk, fetchChunkAnalysis, mergeChunks } from "../../features/wod/api";
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
 import { useVideoQueue } from "@/store/useVideoQueue";
 import { useProfileStore } from "@/store/useProfileStore";
 
@@ -715,6 +716,13 @@ export default function VisionTestPage() {
         </View>
       )}
 
+      {/* Energy impact monitor — compare with poseTestPage (heavy model at 15fps) */}
+      {isRecording && (
+        <View style={styles.energyMonitorContainer}>
+          <EnergyMonitor label="Default Model (7MB) · 2fps" />
+        </View>
+      )}
+
       {/* 닫기 버튼 */}
       {!isRecording && (
         <TouchableOpacity 
@@ -1058,6 +1066,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: "monospace",
     fontWeight: "bold",
+  },
+  energyMonitorContainer: {
+    position: 'absolute',
+    bottom: 160,
+    left: 0,
+    right: 0,
+    zIndex: 10,
   },
   hrPanel: {
     position: "absolute",

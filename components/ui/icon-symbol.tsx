@@ -26,6 +26,8 @@ const MAPPING = {
   'trash': 'delete',
   'flame.fill': 'whatshot',
   'person.fill': 'person',
+  'eye': 'visibility',
+  'camera.rotate': 'flip-camera-ios',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**
