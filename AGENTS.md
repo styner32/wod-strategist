@@ -40,14 +40,15 @@ Never do these unless explicitly requested:
 - **NEVER** place new session file types in a separate top-level prefix — always under `videos/{pid}/{sid}/`.
 
 ## Scoped rules
-- `api/AGENTS.md` — Backend Go rules (testing, migrations, error handling, video analysis)
-- `app/AGENTS.md` — Frontend React Native rules (Android perf, BLE, pose detection)
+- [api/AGENTS.md](api/AGENTS.md) — Backend Go rules (testing, migrations, error handling, video analysis)
+- [app/AGENTS.md](app/AGENTS.md) — Frontend React Native rules (Android perf, BLE, pose detection, i18n)
 
 ## Project memory docs
-When introducing a new integration, architectural pattern, non-obvious gotcha, or platform-specific workaround, create or update a memory doc in `docs/agent-memory/`. Each doc should be concise and rule-oriented — include exact param names, default values, schema columns, and constraints that a future agent would need to make correct edits.
+When introducing a new integration, architectural pattern, non-obvious gotcha, or platform-specific workaround, create or update a memory doc in [docs/agent-memory/](docs/agent-memory/). Each doc should be concise and rule-oriented — include exact param names, default values, schema columns, and constraints that a future agent would need to make correct edits.
 
 Consult these when working on the relevant domain:
-- `docs/agent-memory/backend-testing.md` — Worker integration test patterns and helpers
-- `docs/agent-memory/video-analysis.md` — Two-pass architecture, anti-hallucination rules
-- `docs/agent-memory/storage-and-session-format.md` — GCS layout details, backward compatibility
-- `docs/agent-memory/mobile-runtime.md` — Android performance flags, BLE heart rate
+- [docs/agent-memory/backend-testing.md](docs/agent-memory/backend-testing.md) — Worker integration test patterns and helpers
+- [docs/agent-memory/migrations.md](docs/agent-memory/migrations.md) — `golang-migrate` workflow, authoring rules
+- [docs/agent-memory/video-analysis.md](docs/agent-memory/video-analysis.md) — Two-pass architecture, anti-hallucination rules
+- [docs/agent-memory/storage-and-session-format.md](docs/agent-memory/storage-and-session-format.md) — GCS layout details, backward compatibility
+- [docs/agent-memory/mobile-runtime.md](docs/agent-memory/mobile-runtime.md) — Android performance flags, BLE heart rate, i18n

@@ -41,3 +41,12 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - Never remove the `"Polar mobile"` exclusion from scan filtering.
 - Keep `BleManager` as a singleton outside React components to prevent memory leaks.
 - `react-native-ble-plx` v3.5.1+ is required — earlier versions crash on Android (RN 0.76+) when `Promise.reject` receives a `null` error code.
+
+## Internationalization (i18n)
+Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/locales/{en,ko}.json`.
+
+- Locale is resolved from device (`expo-localization`) at startup; only `en` and `ko` are supported. Unknown codes fall back to `en`.
+- A Zustand store (`useLocaleStore`) drives re-renders when the user switches language. Components reading the active locale should call `useLocale()`.
+- Use `t("key", { ...vars })` for every user-facing string — do not hardcode English.
+- `setLanguage(code)` switches the locale at runtime.
+- When adding a new string, add the key to **both** `en.json` and `ko.json` in the same change.
