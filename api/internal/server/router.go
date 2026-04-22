@@ -33,6 +33,8 @@ type Handlers interface {
 	GetHighlight(*gin.Context)
 	GetHighlightDownloadURL(*gin.Context)
 	VerifyHighlights(*gin.Context)
+	RetryAnalysis(*gin.Context)
+	GenerateHardSub(*gin.Context)
 	ListSessionCatalog(*gin.Context)
 	GetSessionAssets(*gin.Context)
 	GetPlayURL(*gin.Context)
@@ -326,6 +328,26 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/video-download/:session_id", handlers.GetVideoDownloadURL)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "retry-analysis",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/retry-analysis",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/retry-analysis", handlers.RetryAnalysis)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "generate-hardsub",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/generate-hardsub",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/generate-hardsub", handlers.GenerateHardSub)
 		},
 	},
 }

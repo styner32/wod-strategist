@@ -100,6 +100,28 @@ type VerifyHighlightsRequest struct {
 	SessionID string `json:"session_id"`
 }
 
+type RetryAnalysisRequest struct {
+	SessionID string `json:"session_id"`
+	ProfileID uint   `json:"profile_id"`
+}
+
+type RetryAnalysisResponse struct {
+	Message   string `json:"message"`
+	TaskID    string `json:"task_id"`
+	SessionID string `json:"session_id"`
+}
+
+type GenerateHardSubRequest struct {
+	SessionID string `json:"session_id"`
+	ProfileID uint   `json:"profile_id"`
+}
+
+type GenerateHardSubResponse struct {
+	Message   string `json:"message"`
+	TaskID    string `json:"task_id"`
+	SessionID string `json:"session_id"`
+}
+
 type ChunkAnalysisSummaryResponse struct {
 	Total     int `json:"total"`
 	Completed int `json:"completed"`

@@ -130,6 +130,14 @@ func (h *recordingHandlers) GetVideoDownloadURL(c *gin.Context) {
 	h.record("video-download", c)
 }
 
+func (h *recordingHandlers) RetryAnalysis(c *gin.Context) {
+	h.record("retry-analysis", c)
+}
+
+func (h *recordingHandlers) GenerateHardSub(c *gin.Context) {
+	h.record("generate-hardsub", c)
+}
+
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)

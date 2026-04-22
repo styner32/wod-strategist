@@ -52,6 +52,8 @@ type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int
 
 type VerifyHighlightsTaskFactory func(sessionID string) (*asynq.Task, error)
 
+type HardSubTaskFactory func(sessionID string, profileID uint) (*asynq.Task, error)
+
 type Config struct {
 	QueueClient             QueueClient
 	AnalysisResults         AnalysisResultRepository
@@ -65,6 +67,7 @@ type Config struct {
 	NewMergeChunksTask      VideoAnalysisTaskFactory
 	NewGenerateHighlight    HighlightTaskFactory
 	NewVerifyHighlightsTask VerifyHighlightsTaskFactory
+	NewGenerateHardSub      HardSubTaskFactory
 }
 
 type Controller struct {
@@ -80,6 +83,7 @@ type Controller struct {
 	newMergeChunksTask      VideoAnalysisTaskFactory
 	newGenerateHighlight    HighlightTaskFactory
 	newVerifyHighlightsTask VerifyHighlightsTaskFactory
+	newGenerateHardSub      HardSubTaskFactory
 }
 
 func New(config Config) *Controller {
@@ -113,6 +117,11 @@ func New(config Config) *Controller {
 		verifyTaskFactory = worker.NewVerifyHighlightsTask
 	}
 
+	hardSubFactory := config.NewGenerateHardSub
+	if hardSubFactory == nil {
+		hardSubFactory = worker.NewGenerateHardSubTask
+	}
+
 	return &Controller{
 		queueClient:             config.QueueClient,
 		analysisResults:         config.AnalysisResults,
@@ -126,5 +135,6 @@ func New(config Config) *Controller {
 		newMergeChunksTask:      mergeTaskFactory,
 		newGenerateHighlight:    highlightTaskFactory,
 		newVerifyHighlightsTask: verifyTaskFactory,
+		newGenerateHardSub:      hardSubFactory,
 	}
 }

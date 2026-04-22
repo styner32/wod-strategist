@@ -431,9 +431,24 @@ func runFFmpegConcat(ctx context.Context, log *zap.Logger, concatListPath, outpu
 // Memory: ~200–400 MB for 720p.
 // Uses -preset ultrafast to reduce CPU time at cost of ~40% larger output.
 func runFFmpegHardSub(ctx context.Context, log *zap.Logger, inputPath, srtPath, outputPath string) error {
+	// Subtitle style: modern semi-transparent look
+	// - FontName=Arial: clean sans-serif
+	// - FontSize=12: compact, non-intrusive
+	// - PrimaryColour=&H00FFFFFF: white text
+	// - OutlineColour=&H80000000: semi-transparent black outline
+	// - BackColour=&HB0000000: dark semi-transparent shadow/background
+	// - BorderStyle=4: opaque box behind text
+	// - Outline=1: thin outline for readability
+	// - Shadow=0: no offset shadow (box handles it)
+	// - MarginV=30: lift from absolute bottom edge
+	// - Alignment=2: bottom-center
+	forceStyle := "FontName=Arial,FontSize=12,PrimaryColour=&H00FFFFFF," +
+		"OutlineColour=&H80000000,BackColour=&HB0000000," +
+		"BorderStyle=4,Outline=1,Shadow=0,MarginV=30,Alignment=2"
+
 	args := []string{
 		"-i", inputPath,
-		"-vf", fmt.Sprintf("subtitles=%s", srtPath),
+		"-vf", fmt.Sprintf("subtitles=%s:force_style='%s'", srtPath, forceStyle),
 		"-preset", "ultrafast",
 		"-c:a", "copy",
 		"-y",

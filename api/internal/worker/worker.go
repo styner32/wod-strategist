@@ -25,6 +25,7 @@ const (
 	TypeInjuryAnalysis    = "injury:analysis"
 	TypeGenerateHighlight = "highlight:generate"
 	TypeVerifyHighlights  = "highlight:verify"
+	TypeGenerateHardSub   = "hardsub:generate"
 	WorkoutTypeWOD        = "wod"
 )
 
@@ -212,7 +213,7 @@ func probeVideoDuration(ctx context.Context, filePath string) float64 {
 // maxAnalysisVideoSizeBytes is the threshold above which the merge worker
 // creates an analysis-grade re-encode before sending to Gemini.
 // Set lower than maxAnalysisFileSizeBytes to give the re-encode room to shrink.
-const maxAnalysisVideoSizeBytes = 500 << 20 // 500 MB
+const maxAnalysisVideoSizeBytes = 1000 << 20 // 500 MB
 
 // formatFileSizeWorker returns a human-readable file size string.
 func formatFileSizeWorker(bytes int64) string {

@@ -1158,3 +1158,160 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 		ExpiresAt:   time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339),
 	})
 }
+
+// @Summary      Retry Analysis
+// @Description  Re-enqueues a video analysis task for a failed session using existing GCS files
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Param        request body RetryAnalysisRequest true "Session and profile"
+// @Success      202 {object} RetryAnalysisResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      404 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /retry-analysis [post]
+func (ctl *Controller) RetryAnalysis(c *gin.Context) {
+	if ctl.queueClient == nil || ctl.storageClient == nil {
+		logger.Log.Error("queue or storage client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "service not configured"})
+		return
+	}
+
+	var req RetryAnalysisRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
+	// Find a video file in GCS for this session. Prefer merged.mp4.
+	prefix := fmt.Sprintf("videos/%d/%s/", req.ProfileID, req.SessionID)
+	objects, err := ctl.storageClient.ListObjects(c.Request.Context(), prefix)
+	if err != nil {
+		logger.Log.Error("failed to list GCS objects for retry",
+			zap.String("session_id", req.SessionID),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to find video files"})
+		return
+	}
+
+	if len(objects) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no video files found for this session"})
+		return
+	}
+
+	// Pick the best candidate: merged.mp4 > any .mp4 file
+	var gcsURI string
+	for _, obj := range objects {
+		base := filepath.Base(obj)
+		if base == "merged.mp4" {
+			gcsURI = fmt.Sprintf("gs://%s/%s", ctl.bucketName, obj)
+			break
+		}
+	}
+	if gcsURI == "" {
+		// Fall back to first .mp4 file
+		for _, obj := range objects {
+			if strings.HasSuffix(obj, ".mp4") {
+				gcsURI = fmt.Sprintf("gs://%s/%s", ctl.bucketName, obj)
+				break
+			}
+		}
+	}
+	if gcsURI == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no playable video found for this session"})
+		return
+	}
+
+	logger.Log.Info("Retrying video analysis",
+		zap.String("session_id", req.SessionID),
+		zap.Uint("profile_id", req.ProfileID),
+		zap.String("gcs_uri", gcsURI))
+
+	task, err := ctl.newVideoAnalysisTask(req.SessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, req.ProfileID)
+	if err != nil {
+		logger.Log.Error("failed to create retry task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue retry task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, RetryAnalysisResponse{
+		Message:   "Analysis retry started",
+		TaskID:    info.ID,
+		SessionID: req.SessionID,
+	})
+}
+
+// @Summary      Generate Hardsubbed Video
+// @Description  Creates a hardsubbed version of the video with burned-in subtitles
+// @Tags         video
+// @Accept       json
+// @Produce      json
+// @Param        request body GenerateHardSubRequest true "Session and profile"
+// @Success      202 {object} GenerateHardSubResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /generate-hardsub [post]
+func (ctl *Controller) GenerateHardSub(c *gin.Context) {
+	if ctl.queueClient == nil {
+		logger.Log.Error("queue client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "service not configured"})
+		return
+	}
+
+	var req GenerateHardSubRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
+	logger.Log.Info("Enqueuing hardsub generation",
+		zap.String("session_id", req.SessionID),
+		zap.Uint("profile_id", req.ProfileID))
+
+	task, err := ctl.newGenerateHardSub(req.SessionID, req.ProfileID)
+	if err != nil {
+		logger.Log.Error("failed to create hardsub task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue hardsub task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, GenerateHardSubResponse{
+		Message:   "Hardsub generation started",
+		TaskID:    info.ID,
+		SessionID: req.SessionID,
+	})
+}
