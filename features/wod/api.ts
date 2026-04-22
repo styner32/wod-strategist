@@ -513,3 +513,55 @@ export async function fetchHighlightDownloadURL(
     `/highlight-download/${highlightId}`
   );
 }
+
+// ==========================================
+// Retry Analysis
+// ==========================================
+
+export interface RetryAnalysisResponse {
+  message: string;
+  task_id: string;
+  session_id: string;
+}
+
+/**
+ * Re-triggers video analysis for a failed session using existing GCS files.
+ */
+export async function retryAnalysis(
+  sessionId: string,
+  profileId: number
+): Promise<RetryAnalysisResponse> {
+  return apiClient<RetryAnalysisResponse>("/retry-analysis", {
+    method: "POST",
+    bodyPayload: {
+      session_id: sessionId,
+      profile_id: profileId,
+    },
+  });
+}
+
+// ==========================================
+// Generate Hardsubbed Video
+// ==========================================
+
+export interface GenerateHardSubResponse {
+  message: string;
+  task_id: string;
+  session_id: string;
+}
+
+/**
+ * Triggers generation of a hardsubbed video with burned-in subtitles.
+ */
+export async function generateHardSub(
+  sessionId: string,
+  profileId: number
+): Promise<GenerateHardSubResponse> {
+  return apiClient<GenerateHardSubResponse>("/generate-hardsub", {
+    method: "POST",
+    bodyPayload: {
+      session_id: sessionId,
+      profile_id: profileId,
+    },
+  });
+}

@@ -90,11 +90,12 @@ describe("API Client Methods", () => {
         })
       );
 
-      const res = await getUploadUrl("session_123", "test.mp4");
+      const res = await getUploadUrl("session_123", "test.mp4", 1);
       
       expect(capturedBody).toEqual({
         session_id: "session_123",
         filename: "test.mp4",
+        profile_id: 1,
       });
       expect(res.upload_url).toBe("https://gcs.fake/upload");
       expect(res.gcs_uri).toBe("gs://bucket/vid.mp4");

@@ -7,6 +7,7 @@ import { VideoQueueOverlay } from "@/components/VideoQueueOverlay";
 import { t, useLocale } from "@/features/i18n";
 import { useProfileStore } from "@/store/useProfileStore";
 import { Stack } from "expo-router";
+import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -16,6 +17,9 @@ export default function RootLayout() {
 
   useEffect(() => {
     useProfileStore.getState().hydrate();
+    // Lock the entire app to portrait by default.
+    // Individual screens (e.g. visionTestPage) can override this.
+    ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
   }, []);
 
   return (

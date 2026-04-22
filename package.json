@@ -3,6 +3,7 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
+    "postinstall": "patch-package",
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo run:android",
@@ -37,6 +38,7 @@
     "expo-localization": "~55.0.13",
     "expo-media-library": "~55.0.10",
     "expo-router": "~55.0.7",
+    "expo-screen-orientation": "~55.0.13",
     "expo-secure-store": "~55.0.9",
     "expo-splash-screen": "~55.0.12",
     "expo-status-bar": "~55.0.4",
@@ -80,6 +82,7 @@
     "jest-expo": "^55.0.11",
     "msw": "^2.12.14",
     "openapi-typescript": "^7.13.0",
+    "patch-package": "^8.0.1",
     "react-test-renderer": "^19.2.0",
     "swagger2openapi": "^7.0.8",
     "typescript": "~5.9.2"

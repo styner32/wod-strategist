@@ -25,10 +25,13 @@ const ALL_FILTER = 'All';
 interface VideoPreferences {
   showSkeleton: boolean;
   lowFps: boolean;
-  force720p: boolean;
   skipCompression: boolean;
   serialUpload: boolean;
-  resolution: '720p' | '1080p';
+  resolution: '480p' | '720p' | '1080p' | '2160p';
+  landscapeMode: boolean;
+  autoRecord: boolean;
+  zoomMode: boolean;
+  aspectRatio: '4:3' | '16:9';
 }
 
 function getDefaultVideoPrefs(): VideoPreferences {
@@ -36,10 +39,13 @@ function getDefaultVideoPrefs(): VideoPreferences {
   return {
     showSkeleton: !isAndroid,
     lowFps: isAndroid,
-    force720p: isAndroid,
     skipCompression: isAndroid,
     serialUpload: isAndroid,
     resolution: '720p',
+    landscapeMode: false,
+    autoRecord: true,
+    zoomMode: false,
+    aspectRatio: '16:9',
   };
 }
 
@@ -201,16 +207,33 @@ export default function WorkoutSetup() {
     router.push({
       pathname: '/workout/visionTestPage',
       params: {
-        resolution: videoPrefs.force720p ? '720p' : videoPrefs.resolution,
+        resolution: videoPrefs.resolution,
         workoutType,
         movements: selectedMovements.join(', '),
         injuries: injuries.join(', '),
-        autoRecord: 'true',
+        autoRecord: videoPrefs.autoRecord ? 'true' : 'false',
         showSkeleton: videoPrefs.showSkeleton ? 'true' : 'false',
         lowFps: videoPrefs.lowFps ? 'true' : 'false',
-        force720p: videoPrefs.force720p ? 'true' : 'false',
         skipCompression: videoPrefs.skipCompression ? 'true' : 'false',
         serialUpload: videoPrefs.serialUpload ? 'true' : 'false',
+        landscapeMode: videoPrefs.landscapeMode ? 'true' : 'false',
+        zoomMode: videoPrefs.zoomMode ? 'true' : 'false',
+        aspectRatio: videoPrefs.aspectRatio,
+      },
+    });
+  };
+
+  const handlePreview = () => {
+    router.push({
+      pathname: '/workout/visionTestPage',
+      params: {
+        resolution: videoPrefs.resolution,
+        showSkeleton: videoPrefs.showSkeleton ? 'true' : 'false',
+        lowFps: videoPrefs.lowFps ? 'true' : 'false',
+        landscapeMode: videoPrefs.landscapeMode ? 'true' : 'false',
+        zoomMode: videoPrefs.zoomMode ? 'true' : 'false',
+        aspectRatio: videoPrefs.aspectRatio,
+        previewOnly: 'true',
       },
     });
   };
@@ -304,7 +327,7 @@ export default function WorkoutSetup() {
                     <Text style={styles.profileBannerMeta}>
                       {[
                         injuryCount > 0 ? t('setup.injuries', { count: injuryCount }) : t('setup.noInjuries'),
-                        `${videoPrefs.force720p ? '720p' : videoPrefs.resolution}`,
+                        `${videoPrefs.resolution}`,
                         videoPrefs.lowFps ? '24fps' : '30fps',
                       ].join(' · ')}
                     </Text>
@@ -439,15 +462,18 @@ export default function WorkoutSetup() {
                 </View>
                 <View style={[styles.optionRow, { marginTop: 16 }]}>
                   <View>
-                    <Text style={styles.optionLabel}>{t('setup.force720p')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.force720pHint')}</Text>
+                    <Text style={styles.optionLabel}>{t('setup.resolution')}</Text>
+                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.resolutionHint')}</Text>
                   </View>
-                  <Switch
-                    value={videoPrefs.force720p}
-                    onValueChange={(v) => updatePref('force720p', v)}
-                    trackColor={{ false: '#767577', true: '#81b0ff' }}
-                    thumbColor={videoPrefs.force720p ? '#f5dd4b' : '#f4f3f4'}
-                  />
+                  <TouchableOpacity
+                    onPress={() => {
+                      const cycle: Record<string, '480p' | '720p' | '1080p' | '2160p'> = { '480p': '720p', '720p': '1080p', '1080p': '2160p', '2160p': '480p' };
+                      updatePref('resolution', cycle[videoPrefs.resolution] || '720p');
+                    }}
+                    style={{ backgroundColor: '#333', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8 }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>{videoPrefs.resolution}</Text>
+                  </TouchableOpacity>
                 </View>
                 <View style={[styles.optionRow, { marginTop: 16 }]}>
                   <View>
@@ -472,6 +498,54 @@ export default function WorkoutSetup() {
                     trackColor={{ false: '#767577', true: '#81b0ff' }}
                     thumbColor={videoPrefs.serialUpload ? '#f5dd4b' : '#f4f3f4'}
                   />
+                </View>
+                <View style={[styles.optionRow, { marginTop: 16 }]}>
+                  <View>
+                    <Text style={styles.optionLabel}>{t('setup.landscapeMode')}</Text>
+                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.landscapeModeHint')}</Text>
+                  </View>
+                  <Switch
+                    value={videoPrefs.landscapeMode}
+                    onValueChange={(v) => updatePref('landscapeMode', v)}
+                    trackColor={{ false: '#767577', true: '#81b0ff' }}
+                    thumbColor={videoPrefs.landscapeMode ? '#f5dd4b' : '#f4f3f4'}
+                  />
+                </View>
+                <View style={[styles.optionRow, { marginTop: 16 }]}>
+                  <View>
+                    <Text style={styles.optionLabel}>{t('setup.autoRecord')}</Text>
+                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.autoRecordHint')}</Text>
+                  </View>
+                  <Switch
+                    value={videoPrefs.autoRecord}
+                    onValueChange={(v) => updatePref('autoRecord', v)}
+                    trackColor={{ false: '#767577', true: '#81b0ff' }}
+                    thumbColor={videoPrefs.autoRecord ? '#f5dd4b' : '#f4f3f4'}
+                  />
+                </View>
+                <View style={[styles.optionRow, { marginTop: 16 }]}>
+                  <View>
+                    <Text style={styles.optionLabel}>{t('setup.zoomMode')}</Text>
+                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.zoomModeHint')}</Text>
+                  </View>
+                  <Switch
+                    value={videoPrefs.zoomMode}
+                    onValueChange={(v) => updatePref('zoomMode', v)}
+                    trackColor={{ false: '#767577', true: '#81b0ff' }}
+                    thumbColor={videoPrefs.zoomMode ? '#f5dd4b' : '#f4f3f4'}
+                  />
+                </View>
+                <View style={[styles.optionRow, { marginTop: 16 }]}>
+                  <View>
+                    <Text style={styles.optionLabel}>{t('setup.aspectRatio')}</Text>
+                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.aspectRatioHint')}</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => updatePref('aspectRatio', videoPrefs.aspectRatio === '16:9' ? '4:3' : '16:9')}
+                    style={{ backgroundColor: '#333', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8 }}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>{videoPrefs.aspectRatio}</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
             )}
@@ -506,6 +580,13 @@ export default function WorkoutSetup() {
           onPress={handleStart}
         >
           <Text style={styles.startText}>{t('setup.startWorkout')}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.previewBtn}
+          onPress={handlePreview}
+        >
+          <IconSymbol name="eye" size={18} color="#00E5FF" />
+          <Text style={styles.previewBtnText}>{t('setup.previewCamera')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.testPoseBtn}
@@ -818,6 +899,24 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   startText: { color: '#000', fontSize: 16, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
+  previewBtn: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#00E5FF40',
+    backgroundColor: '#00E5FF10',
+  },
+  previewBtnText: {
+    color: '#00E5FF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
   testPoseBtn: {
     flexDirection: 'row',
     justifyContent: 'center',
