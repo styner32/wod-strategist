@@ -46,6 +46,14 @@ func (h *recordingHandlers) GetHistory(c *gin.Context) {
 	h.record("history", c)
 }
 
+func (h *recordingHandlers) ArchiveHistory(c *gin.Context) {
+	h.record("archive-history", c)
+}
+
+func (h *recordingHandlers) UnarchiveHistory(c *gin.Context) {
+	h.record("unarchive-history", c)
+}
+
 func (h *recordingHandlers) ListMovements(c *gin.Context) {
 	h.record("movements", c)
 }

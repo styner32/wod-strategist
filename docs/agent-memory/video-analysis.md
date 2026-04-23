@@ -69,3 +69,25 @@ Cleanup rule:
 3. Require visual evidence in prompts.
 4. Post-filter invalid timestamps.
 5. Include profile context to reduce person confusion.
+
+## Uploaded video split analysis
+
+Uploaded videos are split into ~10s chunks and analyzed via Gemini API.
+Chunks are processed in parallel with bounded concurrency.
+
+### Key constants (`split_video.go`)
+| Constant | Value | Purpose |
+|---|---|---|
+| `splitChunkDurationSecs` | 10 | Target chunk length (matches real-time recording interval) |
+| `splitAnalysisConcurrency` | 10 | Max parallel Gemini API calls during split analysis |
+
+### Timeout risk
+- Each chunk takes ~18s (GCS upload + Gemini analysis).
+- Default asynq task timeout is **30 minutes**.
+- At concurrency 10: max ~160 chunks ≈ **27 min** of video per task attempt.
+- Videos longer than ~27 min may time out. The coverage check in `handleVideoAnalysisTwoPass` detects incomplete splits (compares `MAX(end_secs)` from `chunk_analysis_results` against probed video duration) and re-triggers `splitAndAnalyzeChunks` on retry.
+
+### Idempotent skip
+- `chunkAlreadyAnalyzed(sessionID, startSecs)` checks for existing `COMPLETED` records.
+- On retry after a partial run, already-analyzed chunks are skipped, so only the remaining chunks are processed.
+- This makes the entire split flow resumable across task retries/worker restarts.

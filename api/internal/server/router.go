@@ -17,6 +17,8 @@ type Handlers interface {
 	GetAnalysis(*gin.Context)
 	GetChunkAnalysis(*gin.Context)
 	GetHistory(*gin.Context)
+	ArchiveHistory(*gin.Context)
+	UnarchiveHistory(*gin.Context)
 	ListMovements(*gin.Context)
 	ListMovementGroups(*gin.Context)
 	ListInjuries(*gin.Context)
@@ -118,6 +120,26 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/history", handlers.GetHistory)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "archive-history",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/history/:id/archive",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/history/:id/archive", handlers.ArchiveHistory)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "unarchive-history",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/history/:id/unarchive",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/history/:id/unarchive", handlers.UnarchiveHistory)
 		},
 	},
 	{

@@ -541,6 +541,19 @@ export async function retryAnalysis(
 }
 
 // ==========================================
+// Archive History
+// ==========================================
+
+/**
+ * Archives a history record (soft-delete). The record won't appear in the history list.
+ */
+export async function archiveHistory(id: number): Promise<void> {
+  return apiClient(`/history/${id}/archive`, {
+    method: "POST",
+  });
+}
+
+// ==========================================
 // Generate Hardsubbed Video
 // ==========================================
 

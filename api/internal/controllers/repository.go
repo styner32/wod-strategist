@@ -38,7 +38,7 @@ func (r *GormAnalysisResultRepository) ListRecent(ctx context.Context, limit int
 	}
 
 	var results []db.AnalysisResult
-	q := r.db.WithContext(ctx).Order("created_at desc").Limit(limit)
+	q := r.db.WithContext(ctx).Where("archived_at IS NULL").Order("created_at desc").Limit(limit)
 	if profileID > 0 {
 		q = q.Where("profile_id = ?", profileID)
 	}
@@ -60,6 +60,21 @@ func (r *GormAnalysisResultRepository) FindChunksBySessionID(ctx context.Context
 	}
 
 	return results, nil
+}
+
+func (r *GormAnalysisResultRepository) Archive(ctx context.Context, id uint) error {
+	if r.db == nil {
+		return errRepositoryNotConfigured
+	}
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&db.AnalysisResult{}).Where("id = ?", id).Update("archived_at", now).Error
+}
+
+func (r *GormAnalysisResultRepository) Unarchive(ctx context.Context, id uint) error {
+	if r.db == nil {
+		return errRepositoryNotConfigured
+	}
+	return r.db.WithContext(ctx).Model(&db.AnalysisResult{}).Where("id = ?", id).Update("archived_at", nil).Error
 }
 
 // ==========================================

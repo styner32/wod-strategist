@@ -370,6 +370,52 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, enriched)
 }
 
+func (ctl *Controller) ArchiveHistory(c *gin.Context) {
+	if ctl.analysisResults == nil {
+		logger.Log.Error("analysis result repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to archive history"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	if err := ctl.analysisResults.Archive(c.Request.Context(), uint(id)); err != nil {
+		logger.Log.Error("failed to archive history", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to archive history"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "history archived"})
+}
+
+func (ctl *Controller) UnarchiveHistory(c *gin.Context) {
+	if ctl.analysisResults == nil {
+		logger.Log.Error("analysis result repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unarchive history"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	if err := ctl.analysisResults.Unarchive(c.Request.Context(), uint(id)); err != nil {
+		logger.Log.Error("failed to unarchive history", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unarchive history"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "history unarchived"})
+}
+
 // @Summary      List supported movements
 // @Description  Returns a list of all supported workout movements
 // @Tags         metadata

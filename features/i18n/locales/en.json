@@ -245,7 +245,11 @@
     "hardsubStarted": "Guided video generation started! Check back in a few minutes.",
     "hardsubFailed": "Failed to start guided video generation.",
     "waitingToEncode": "Waiting to encode...",
-    "readyToUpload": "Ready to upload"
+    "readyToUpload": "Ready to upload",
+    "archiveTitle": "Archive Record",
+    "archiveConfirm": "This will hide the record from your history. You can still find it later.",
+    "archive": "Archive",
+    "archiveFailed": "Failed to archive. Please try again."
   },
   "player": {
     "loadingVideo": "Loading workout video...",

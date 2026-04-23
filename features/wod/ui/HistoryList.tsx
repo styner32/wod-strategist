@@ -25,6 +25,7 @@ import {
   fetchHighlightDownloadURL,
   retryAnalysis,
   generateHardSub,
+  archiveHistory,
 } from "../api";
 import { AnalysisResult, HighlightResult, fetchAnalysisHistory } from "../history";
 import { HighlightVideoPlayer } from "./HighlightVideoPlayer";
@@ -120,7 +121,7 @@ const HIGHLIGHT_VARIANT_CONFIG: Record<string, { emoji: string; color: string }>
 const HIGHLIGHT_POLL_INTERVAL_MS = 5_000;
 const HIGHLIGHT_POLL_TIMEOUT_MS = 5 * 60 * 1_000;
 
-function HistoryCard({ item }: { item: AnalysisResult }) {
+function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (id: number) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null); // 'merged' | 'hardsubbed' | 'encoded'
   const [retrying, setRetrying] = useState(false);
@@ -359,8 +360,35 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
   const hrDividerColor = isDark ? "rgba(255,107,107,0.2)" : "rgba(255,107,107,0.3)";
   const highlightSectionBg = isDark ? "rgba(191,90,242,0.08)" : "rgba(191,90,242,0.05)";
 
+  const handleArchive = () => {
+    Alert.alert(
+      t("historyList.archiveTitle"),
+      t("historyList.archiveConfirm"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("historyList.archive"),
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await archiveHistory(item.id);
+              onArchive?.(item.id);
+            } catch {
+              Alert.alert(t("common.error"), t("historyList.archiveFailed"));
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
-    <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onLongPress={handleArchive}
+      delayLongPress={600}
+      style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}
+    >
       {/* Header Row */}
       <View style={styles.cardHeader}>
         <View style={styles.headerLeft}>
@@ -672,7 +700,7 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
           <Text style={styles.pendingText}>{t("historyList.analysisInProgress")}</Text>
         </View>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -756,7 +784,11 @@ export function useHistoryData() {
     loadData();
   }, [loadData]);
 
-  return { data, loading, refreshing, onRefresh };
+  const onArchive = useCallback((id: number) => {
+    setData((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
+  return { data, loading, refreshing, onRefresh, onArchive };
 }
 
 // ---------------------
@@ -955,16 +987,17 @@ const processingStyles = StyleSheet.create({
 interface HistoryListProps {
   data: AnalysisResult[];
   loading: boolean;
+  onArchive?: (id: number) => void;
 }
 
-export function HistoryList({ data, loading }: HistoryListProps) {
+export function HistoryList({ data, loading, onArchive }: HistoryListProps) {
   // Split pending items into processing section vs completed list
   const pendingItems = data.filter((item) => item.status === "PENDING");
   const nonPendingItems = data.filter((item) => item.status !== "PENDING");
 
   const renderItem = useCallback(
-    ({ item }: { item: AnalysisResult }) => <HistoryCard item={item} />,
-    []
+    ({ item }: { item: AnalysisResult }) => <HistoryCard item={item} onArchive={onArchive} />,
+    [onArchive]
   );
 
   if (loading) {

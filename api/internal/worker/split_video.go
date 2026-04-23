@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/wod-strategist/api/internal/db"
 	"go.uber.org/zap"
@@ -17,6 +19,12 @@ const (
 	// splitChunkDurationSecs is the target duration for each chunk when splitting
 	// uploaded videos. Matches the real-time recording chunk interval.
 	splitChunkDurationSecs = 10
+
+	// splitAnalysisConcurrency is the number of chunks analyzed in parallel.
+	// Bounded to avoid overwhelming the Gemini API rate limits and memory.
+	// With ~18s per chunk and 10 workers, a 23-min video (143 chunks) completes
+	// in ~4.3 minutes instead of ~43 minutes serially.
+	splitAnalysisConcurrency = 10
 )
 
 // splitAndAnalyzeChunks splits a downloaded video into ~10-second segments,
@@ -65,12 +73,22 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 		zap.String("session_id", p.SessionID),
 		zap.Int("chunk_count", len(chunkFiles)))
 
-	// 5. Process each chunk: upload to GCS → analyze → save DB record
+	// 5. Process each chunk in parallel: upload to GCS → analyze → save DB record
+	// Uses a semaphore to bound concurrency and avoid overwhelming Gemini API.
+	// NOTE: With the default asynq task timeout of 30 minutes and 10 concurrent
+	// workers (~18s per chunk), this supports videos up to ~160 chunks (~27 min).
+	// Videos significantly longer than 27 min may still time out and will be
+	// resumed on the next retry via the coverage check + idempotent skip logic.
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, splitAnalysisConcurrency)
+	var errCount atomic.Int32
+	var skipCount atomic.Int32
+
 	for i, chunkFile := range chunkFiles {
+		// Calculate time offsets before spawning goroutine
+		startSecs := float64(i * splitChunkDurationSecs)
 		chunkPath := filepath.Join(tmpDir, chunkFile)
 
-		// Calculate time offsets
-		startSecs := float64(i * splitChunkDurationSecs)
 		// Probe actual chunk duration for accurate end_secs
 		chunkDuration := probeVideoDuration(ctx, chunkPath)
 		endSecs := startSecs + chunkDuration
@@ -82,35 +100,69 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 			}
 		}
 
-		w.logger.Info("Processing split chunk",
-			zap.String("session_id", p.SessionID),
-			zap.Int("chunk_index", i),
-			zap.Int("total_chunks", len(chunkFiles)),
-			zap.Float64("start_secs", startSecs),
-			zap.Float64("end_secs", endSecs))
-
-		// Upload chunk to GCS
-		objectName := fmt.Sprintf("videos/%d/%s/split_chunk_%03d.mp4", p.ProfileID, p.SessionID, i)
-		gcsURI, uploadErr := w.StorageClient.UploadFromFile(ctx, chunkPath, objectName)
-		if uploadErr != nil {
-			w.logger.Error("Failed to upload split chunk to GCS, skipping",
-				zap.Int("chunk_index", i),
-				zap.Error(uploadErr))
+		// Skip chunks that were already analyzed in a previous (partial) run
+		if w.chunkAlreadyAnalyzed(p.SessionID, startSecs) {
+			skipCount.Add(1)
+			os.Remove(chunkPath)
 			continue
 		}
 
-		// Run chunk analysis synchronously (reuse the same logic as HandleChunkAnalysisTask)
-		analysisErr := w.analyzeChunkInline(ctx, chunkPath, gcsURI, p, startSecs, endSecs)
-		if analysisErr != nil {
-			w.logger.Warn("Chunk analysis failed for split chunk, recording as FAILED",
-				zap.Int("chunk_index", i),
-				zap.Error(analysisErr))
-			// Still record a FAILED entry so the chunk is tracked
-			w.saveChunkResult(p, gcsURI, startSecs, endSecs, "FAILED", "", "Analysis failed: "+analysisErr.Error())
-		}
+		wg.Add(1)
+		sem <- struct{}{} // acquire semaphore slot
 
-		// Free the local chunk file immediately to minimize tmpfs usage
-		os.Remove(chunkPath)
+		go func(idx int, path string, start, end float64) {
+			defer wg.Done()
+			defer func() { <-sem }() // release semaphore slot
+
+			w.logger.Info("Processing split chunk",
+				zap.String("session_id", p.SessionID),
+				zap.Int("chunk_index", idx),
+				zap.Int("total_chunks", len(chunkFiles)),
+				zap.Float64("start_secs", start),
+				zap.Float64("end_secs", end))
+
+			// Upload chunk to GCS
+			objectName := fmt.Sprintf("videos/%d/%s/split_chunk_%03d.mp4", p.ProfileID, p.SessionID, idx)
+			gcsURI, uploadErr := w.StorageClient.UploadFromFile(ctx, path, objectName)
+			if uploadErr != nil {
+				w.logger.Error("Failed to upload split chunk to GCS, skipping",
+					zap.Int("chunk_index", idx),
+					zap.Error(uploadErr))
+				errCount.Add(1)
+				os.Remove(path)
+				return
+			}
+
+			// Run chunk analysis (reuse the same logic as HandleChunkAnalysisTask)
+			analysisErr := w.analyzeChunkInline(ctx, path, gcsURI, p, start, end)
+			if analysisErr != nil {
+				w.logger.Warn("Chunk analysis failed for split chunk, recording as FAILED",
+					zap.Int("chunk_index", idx),
+					zap.Error(analysisErr))
+				// Still record a FAILED entry so the chunk is tracked
+				w.saveChunkResult(p, gcsURI, start, end, "FAILED", "", "Analysis failed: "+analysisErr.Error())
+				errCount.Add(1)
+			}
+
+			// Free the local chunk file immediately to minimize tmpfs usage
+			os.Remove(path)
+		}(i, chunkPath, startSecs, endSecs)
+	}
+
+	wg.Wait()
+
+	if skipped := skipCount.Load(); skipped > 0 {
+		w.logger.Info("Skipped already-analyzed chunks",
+			zap.String("session_id", p.SessionID),
+			zap.Int32("skipped", skipped),
+			zap.Int("total_chunks", len(chunkFiles)))
+	}
+
+	if failed := errCount.Load(); failed > 0 {
+		w.logger.Warn("Some chunks failed during parallel analysis",
+			zap.String("session_id", p.SessionID),
+			zap.Int32("failed", failed),
+			zap.Int("total_chunks", len(chunkFiles)))
 	}
 
 	return nil
@@ -180,6 +232,20 @@ func (w *Worker) saveChunkResult(p VideoAnalysisPayload, gcsURI string, startSec
 		result.ProfileID = &p.ProfileID
 	}
 	w.DB.Create(result)
+}
+
+// chunkAlreadyAnalyzed checks if a COMPLETED chunk record already exists
+// for the given session and start time. Used to skip re-analysis of chunks
+// that were successfully processed in a previous (partial) run.
+func (w *Worker) chunkAlreadyAnalyzed(sessionID string, startSecs float64) bool {
+	if w.DB == nil {
+		return false
+	}
+	var count int64
+	w.DB.Model(&db.ChunkAnalysisResult{}).
+		Where("session_id = ? AND start_secs = ? AND status = ?", sessionID, startSecs, "COMPLETED").
+		Count(&count)
+	return count > 0
 }
 
 // runFFmpegSplit uses FFmpeg's segment muxer to split a video into chunks
