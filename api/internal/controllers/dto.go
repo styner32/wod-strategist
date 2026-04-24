@@ -83,14 +83,15 @@ type MergeChunksResponse struct {
 }
 
 type ChunkCompleteRequest struct {
-	SessionID   string   `json:"session_id"`
-	GCSURI      string   `json:"gcs_uri"`
-	Movements   []string `json:"movements"`
-	Injuries    []string `json:"injuries"`
-	WorkoutType string   `json:"workout_type"`
-	ProfileID   uint     `json:"profile_id"`
-	StartSecs   float64  `json:"start_secs"`
-	EndSecs     float64  `json:"end_secs"`
+	SessionID    string   `json:"session_id"`
+	GCSURI       string   `json:"gcs_uri"`
+	Movements    []string `json:"movements"`
+	Injuries     []string `json:"injuries"`
+	WorkoutType  string   `json:"workout_type"`
+	ProfileID    uint     `json:"profile_id"`
+	StartSecs    float64  `json:"start_secs"`
+	EndSecs      float64  `json:"end_secs"`
+	HeartRateBPM int      `json:"heart_rate_bpm"`
 }
 
 type GenerateHighlightRequest struct {

@@ -73,7 +73,7 @@ test-chunk-upload: ## Replay chunk upload from a saved video. Usage: make test-c
 		../scripts/test-chunk-upload.js
 
 test: ## Run the tests
-	go test ./... -v
+	go test ./... -p 1 -v
 
 migrate-test-redo:
 ifndef TEST_DATABASE_URL

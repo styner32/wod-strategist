@@ -7,7 +7,6 @@ import {
   Linking,
   Platform,
   StyleSheet,
-  Switch,
   Text,
   TouchableOpacity,
   useWindowDimensions,
@@ -37,7 +36,7 @@ import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutChunk, fetchChunkAnalysis, mergeChunks } from "../../features/wod/api";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
-import { useVideoQueue } from "@/store/useVideoQueue";
+
 import { useProfileStore } from "@/store/useProfileStore";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
@@ -205,26 +204,15 @@ export default function VisionTestPage() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [enableChunks, setEnableChunks] = useState(true);
   const [chunkFeedback, setChunkFeedback] = useState<string | null>(null);
-  const [currentItemId, setCurrentItemId] = useState<string | null>(null);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [chunkCount, setChunkCount] = useState(0);
-  const [isMerging, setIsMerging] = useState(false);
-  const [mergeComplete, setMergeComplete] = useState(false);
-  // Android: track auto-merge-and-navigate state after stopping
-  const [androidAutoMerging, setAndroidAutoMerging] = useState(false);
+  // Track auto-merge-and-navigate state after stopping (both platforms)
+  const [autoMerging, setAutoMerging] = useState(false);
   // Elapsed timer for recording
   const [elapsedMs, setElapsedMs] = useState(0);
 
-  const enqueue = useVideoQueue((s) => s.enqueue);
-  const startEncoding = useVideoQueue((s) => s.startEncoding);
-  const startUpload = useVideoQueue((s) => s.startUpload);
-  const cancelUpload = useVideoQueue((s) => s.cancelUpload);
   const profileId = useProfileStore((s) => s.activeProfileId);
-  const currentItem = useVideoQueue((s) =>
-    currentItemId ? s.items.find((i) => i.id === currentItemId) ?? null : null
-  );
 
   // Poll for chunk feedback while recording
   useEffect(() => {
@@ -379,6 +367,7 @@ export default function VisionTestPage() {
                     profileId: profileId!,
                     startSecs,
                     endSecs,
+                    heartRateBpm: bpm > 0 ? bpm : undefined,
                   });
                   console.log("✅ Chunk uploaded to backend");
                 } catch (err) {
@@ -569,10 +558,8 @@ export default function VisionTestPage() {
         sessionIdRef.current = buildWorkoutSessionId(workoutType);
         recordingStartTime.current = Date.now();
 
-        // Optionally start chunk recording for real-time backend analysis
-        if (enableChunks) {
-          startChunkRecording();
-        }
+        // Start chunk recording for real-time backend analysis
+        startChunkRecording();
       } else {
         // Android: chunk-only streaming mode.
         // Android camera only supports one recording at a time, so we can't
@@ -604,156 +591,101 @@ export default function VisionTestPage() {
     try {
       setIsSaving(true);
 
-      let file: { path: string } | undefined;
+      let screenRecorderFile: { path: string } | undefined;
 
       if (Platform.OS === 'ios') {
         // 1. Stop Chunk Recording (safe to call even if not running)
         await stopChunkRecording();
 
         // 2. Stop Screen Recorder
-        file = await stopInAppRecording();
+        screenRecorderFile = await stopInAppRecording();
       } else {
-        // Android: stop chunk streaming and auto-merge on server
+        // Android: stop chunk streaming
         await stopChunkRecording();
-        setIsRecording(false);
-
-        if (chunkCount > 0) {
-          // Auto-trigger server-side merge + analysis
-          setAndroidAutoMerging(true);
-          try {
-            const sessionId = sessionIdRef.current;
-            const movementsArray = movements ? movements.split(", ") : [];
-            const injuriesArray = injuries ? injuries.split(", ") : [];
-
-            // Small delay to let the last chunk upload reach the server
-            await new Promise(resolve => setTimeout(resolve, 2000));
-
-            await mergeChunks(sessionId, {
-              workoutType,
-              movements: movementsArray,
-              injuries: injuriesArray,
-              profileId: profileId!,
-            });
-
-            console.log("✅ Auto-merge triggered for Android session");
-          } catch (e) {
-            console.error("❌ Auto-merge failed:", e);
-            Alert.alert(
-              "Merge Failed",
-              "Could not start merge. You can try again from history.",
-              [{ text: "OK" }]
-            );
-          } finally {
-            setAndroidAutoMerging(false);
-          }
-        }
-
-        // Clean up local chunk files and navigate to history
-        cleanupChunkFiles();
-        setChunkCount(0);
-        setIsSaving(false);
-        router.replace("/history" as any);
-        return;
       }
 
       setIsRecording(false);
-      console.log("📼 Video Path:", file?.path);
 
-      if (file?.path) {
-        // Save to gallery (best-effort — retry available from queue)
-        let gallerySaved = false;
+      if (chunkCount > 0) {
+        // Auto-trigger server-side merge + analysis (both platforms)
+        setAutoMerging(true);
         try {
-          await MediaLibrary.saveToLibraryAsync(file.path);
-          gallerySaved = true;
-        } catch (gallerySaveErr) {
-          console.warn("⚠️ Gallery save failed (low storage?):", gallerySaveErr);
+          const sessionId = sessionIdRef.current;
+          const movementsArray = movements ? movements.split(", ") : [];
+          const injuriesArray = injuries ? injuries.split(", ") : [];
+
+          // Small delay to let the last chunk upload reach the server
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          await mergeChunks(sessionId, {
+            workoutType,
+            movements: movementsArray,
+            injuries: injuriesArray,
+            profileId: profileId!,
+          });
+
+          console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
+        } catch (e) {
+          console.error("❌ Auto-merge failed:", e);
           Alert.alert(
-            "Gallery Save Failed",
-            "Could not save to gallery (device storage may be full). " +
-            "Your video is still queued — you can save to gallery later from the queue.",
+            "Merge Failed",
+            "Could not start merge. You can try again from history.",
             [{ text: "OK" }]
           );
+        } finally {
+          setAutoMerging(false);
         }
-
-        // Rename raw file with _raw suffix for debugging
-        let rawPath = file.path;
-        try {
-          const { File: FSFile } = require("expo-file-system");
-          const dir = rawPath.substring(0, rawPath.lastIndexOf("/"));
-          const ext = rawPath.substring(rawPath.lastIndexOf("."));
-          const rawName = `recording_raw_${Date.now()}${ext}`;
-          const destPath = `${dir}/${rawName}`;
-          new FSFile(rawPath).move(new FSFile(destPath));
-          rawPath = destPath;
-          console.log("📝 Renamed raw file to:", rawPath);
-        } catch (renameErr) {
-          console.warn("⚠️ Could not rename raw file:", renameErr);
-        }
-
-        // Enqueue as RECORDED — user decides when to encode
-        let sessionId = sessionIdRef.current;
-        if (!sessionId) {
-          console.warn("⚠️ sessionIdRef was empty at enqueue time — generating fallback");
-          sessionId = buildWorkoutSessionId(workoutType);
-          sessionIdRef.current = sessionId;
-        }
-        const movementsArray = movements ? movements.split(", ") : [];
-        const injuriesArray = injuries ? injuries.split(", ") : [];
-
-        const itemId = enqueue(rawPath, {
-          sessionId,
-          workoutType,
-          movements: movementsArray,
-          injuries: injuriesArray,
-          profileId: profileId!,
-        });
-
-        // Update gallerySaved status on the enqueued item
-        if (gallerySaved) {
-          useVideoQueue.getState()._updateItem(itemId, { gallerySaved: true });
-        }
-
-        // Navigate to queue — user can encode/upload from there
-        router.replace("/queue" as any);
       }
 
-      // Clean up chunk files for next session
+      // Clean up local chunk files and navigate to history
       cleanupChunkFiles();
+      setChunkCount(0);
+      setIsSaving(false);
+      router.replace("/history" as any);
+
+      // iOS only: prompt to save screen recording to gallery (non-blocking)
+      if (Platform.OS === 'ios' && screenRecorderFile?.path) {
+        const filePath = screenRecorderFile.path;
+        Alert.alert(
+          "갤러리에 저장하시겠습니까?",
+          "운동 영상이 이미 업로드되었습니다. 기기 갤러리에도 저장하시겠습니까?",
+          [
+            {
+              text: "아니오",
+              style: "cancel",
+              onPress: () => {
+                try {
+                  const { File: FSFile } = require("expo-file-system");
+                  const f = new FSFile(filePath);
+                  if (f.exists) f.delete();
+                  console.log("🗑️ Deleted screen recorder temp file");
+                } catch (_) {}
+              },
+            },
+            {
+              text: "저장",
+              onPress: () => {
+                MediaLibrary.saveToLibraryAsync(filePath)
+                  .then(() => console.log("📱 Saved screen recording to gallery"))
+                  .catch((e) => console.warn("⚠️ Gallery save failed:", e))
+                  .finally(() => {
+                    try {
+                      const { File: FSFile } = require("expo-file-system");
+                      const f = new FSFile(filePath);
+                      if (f.exists) f.delete();
+                      console.log("🗑️ Cleaned up screen recorder temp file");
+                    } catch (_) {}
+                  });
+              },
+            },
+          ]
+        );
+      }
     } catch (error) {
       console.error("Recording Stop Error:", error);
       Alert.alert("Error", "Failed to save recording.");
     } finally {
       setIsSaving(false);
-    }
-  };
-
-  const handleMergeChunks = async () => {
-    if (chunkCount === 0) return;
-
-    try {
-      setIsMerging(true);
-      const sessionId = sessionIdRef.current;
-      const movementsArray = movements ? movements.split(", ") : [];
-      const injuriesArray = injuries ? injuries.split(", ") : [];
-
-      await mergeChunks(sessionId, {
-        workoutType,
-        movements: movementsArray,
-        injuries: injuriesArray,
-        profileId: profileId!,
-      });
-
-      setMergeComplete(true);
-      Alert.alert(
-        "Merge Started",
-        "Your chunks are being merged and analyzed on the server. Check history for results.",
-        [{ text: "OK" }]
-      );
-    } catch (e) {
-      console.error("❌ Merge failed:", e);
-      Alert.alert("Merge Failed", "Could not start chunk merge. Please try again.");
-    } finally {
-      setIsMerging(false);
     }
   };
 
@@ -930,18 +862,7 @@ export default function VisionTestPage() {
             </>
           )}
 
-          {!isRecording && !IS_ANDROID && (
-            <View style={[styles.row, { marginTop: 10, alignItems: "center" }]}>
-              <Text style={styles.label}>RAW VIDEO:</Text>
-              <Switch
-                value={enableChunks}
-                onValueChange={setEnableChunks}
-                trackColor={{ false: "#767577", true: "#81b0ff" }}
-                thumbColor={enableChunks ? "#f5dd4b" : "#f4f3f4"}
-                style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }}
-              />
-            </View>
-          )}
+
 
         </View>
 
@@ -955,7 +876,7 @@ export default function VisionTestPage() {
       {/* Recording controls — compact pill bar */}
       {!previewOnly && (
         <View style={[styles.recordControl, applyLandscapeStyles && styles.recordControlLandscape]}>
-        {androidAutoMerging ? (
+        {autoMerging ? (
           <View style={styles.postRecordingFooter}>
             <Text style={styles.footerStatus}>🔗 Merging & Analyzing...</Text>
             <Text style={[styles.footerStatus, { color: '#888', fontSize: 13 }]}>
@@ -975,161 +896,6 @@ export default function VisionTestPage() {
                 style={[styles.footerProgressFill, { width: "100%", backgroundColor: "#30D158" }]}
               />
             </View>
-          </View>
-        ) : currentItem ? (
-          <View style={styles.postRecordingFooter}>
-            {currentItem.status === "RECORDED" && (
-              <>
-                <Text style={styles.footerStatus}>Recording saved</Text>
-                <TouchableOpacity
-                  style={styles.encodeBtn}
-                  onPress={() => startEncoding(currentItem.id)}
-                >
-                  <Text style={styles.encodeBtnText}>Encode Video</Text>
-                </TouchableOpacity>
-                {chunkCount > 0 && !mergeComplete && (
-                  <TouchableOpacity
-                    style={[styles.encodeBtn, { backgroundColor: "#64D2FF" }]}
-                    onPress={handleMergeChunks}
-                    disabled={isMerging}
-                  >
-                    <Text style={[styles.encodeBtnText, { color: "#000" }]}>
-                      {isMerging ? "Merging..." : `🔗 Merge & Analyze ${chunkCount} Chunks`}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                {mergeComplete && (
-                  <Text style={[styles.footerStatus, { color: "#64D2FF", fontSize: 13 }]}>
-                    ✅ Merge queued on server
-                  </Text>
-                )}
-                <TouchableOpacity
-                  style={styles.footerLinkBtn}
-                  onPress={() => router.back()}
-                >
-                  <Text style={styles.footerLinkText}>Skip for now</Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {currentItem.status === "ENCODING" && (
-              <>
-                <Text style={styles.footerStatus}>Encoding...</Text>
-                <View style={styles.footerProgressBg}>
-                  <View
-                    style={[
-                      styles.footerProgressFill,
-                      { width: `${Math.round(currentItem.progress * 100)}%` },
-                    ]}
-                  />
-                </View>
-                <Text style={styles.footerPercent}>
-                  {Math.round(currentItem.progress * 100)}%
-                </Text>
-                <TouchableOpacity
-                  style={styles.footerLinkBtn}
-                  onPress={() => router.back()}
-                >
-                  <Text style={styles.footerLinkText}>Continue in background</Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {currentItem.status === "ENCODED" && (
-              <>
-                <Text style={[styles.footerStatus, { color: "#30D158" }]}>
-                  ✅ Ready to upload{currentItem.compressedSize ? ` (${formatBytes(currentItem.compressedSize)})` : ""}
-                </Text>
-                {currentItem.error && (
-                  <Text style={[styles.footerStatus, { color: "#FF453A", fontSize: 12 }]}>
-                    ⚠️ {currentItem.error}
-                  </Text>
-                )}
-                <TouchableOpacity
-                  style={styles.encodeBtn}
-                  onPress={() => startUpload(currentItem.id)}
-                >
-                  <Text style={styles.encodeBtnText}>
-                    Upload now{currentItem.compressedSize ? ` (${formatBytes(currentItem.compressedSize)})` : ""}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.footerLinkBtn}
-                  onPress={() => router.push("/queue" as any)}
-                >
-                  <Text style={styles.footerLinkText}>Go to Queue</Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {currentItem.status === "UPLOADING" && (
-              <>
-                <Text style={styles.footerStatus}>Uploading...</Text>
-                <View style={styles.footerProgressBg}>
-                  <View
-                    style={[
-                      styles.footerProgressFill,
-                      {
-                        width: `${Math.round(currentItem.progress * 100)}%`,
-                        backgroundColor: "#64D2FF",
-                      },
-                    ]}
-                  />
-                </View>
-                <Text style={styles.footerPercent}>
-                  {Math.round(currentItem.progress * 100)}%
-                </Text>
-                <TouchableOpacity
-                  style={styles.footerLinkBtn}
-                  onPress={() => cancelUpload(currentItem.id)}
-                >
-                  <Text style={[styles.footerLinkText, { color: "#FF453A" }]}>Cancel Upload</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.footerLinkBtn}
-                  onPress={() => router.back()}
-                >
-                  <Text style={styles.footerLinkText}>Continue in background</Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {currentItem.status === "UPLOADED" && (
-              <>
-                <Text style={[styles.footerStatus, { color: "#30D158" }]}>
-                  ✅ Upload complete!
-                </Text>
-                {chunkCount > 0 && !mergeComplete && (
-                  <TouchableOpacity
-                    style={styles.encodeBtn}
-                    onPress={handleMergeChunks}
-                    disabled={isMerging}
-                  >
-                    <Text style={styles.encodeBtnText}>
-                      {isMerging ? "Merging..." : `🔗 Merge & Analyze ${chunkCount} Chunks`}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-                {mergeComplete && (
-                  <Text style={[styles.footerStatus, { color: "#64D2FF", fontSize: 13 }]}>
-                    ✅ Merge queued on server
-                  </Text>
-                )}
-                <TouchableOpacity
-                  style={styles.footerLinkBtn}
-                  onPress={() => router.back()}
-                >
-                  <Text style={styles.footerLinkText}>Done</Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {/* Inline error display for RECORDED state (e.g. encoding failed) */}
-            {currentItem.status === "RECORDED" && currentItem.error && (
-              <Text style={[styles.footerStatus, { color: "#FF453A", fontSize: 12 }]}>
-                ⚠️ {currentItem.error}
-              </Text>
-            )}
           </View>
         ) : (
           /* Compact pill recording bar */

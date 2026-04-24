@@ -163,16 +163,17 @@ func levelPolicyForFitnessLevel(level string) string {
 	}
 }
 
-func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error) {
+func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
-		SessionID:   sessionID,
-		FilePath:    filePath,
-		WorkoutType: NormalizeWorkoutType(workoutType),
-		Movements:   movements,
-		Injuries:    injuries,
-		ProfileID:   profileID,
-		StartSecs:   startSecs,
-		EndSecs:     endSecs,
+		SessionID:    sessionID,
+		FilePath:     filePath,
+		WorkoutType:  NormalizeWorkoutType(workoutType),
+		Movements:    movements,
+		Injuries:     injuries,
+		ProfileID:    profileID,
+		StartSecs:    startSecs,
+		EndSecs:      endSecs,
+		HeartRateBPM: heartRateBPM,
 	}
 
 	data, err := json.Marshal(payload)
@@ -273,6 +274,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		Status:          "COMPLETED",
 		Output:          cleanOutput,
 		ObservedSignals: observedSignals,
+		HeartRateBPM:    p.HeartRateBPM,
 	}
 	if p.ProfileID > 0 {
 		chunkResult.ProfileID = &p.ProfileID
@@ -307,6 +309,11 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 
 	personalProfile := w.lookupProfileString(p.ProfileID)
 	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
+
+	// Add real-time heart rate context if available
+	if p.HeartRateBPM > 0 {
+		prompt += fmt.Sprintf("\n\n## 실시간 심박수 데이터\n현재 심박수: %d bpm\n(심박수가 높으면 피로도와 연관지어 코칭하세요. 단, 심박수 자체를 피드백 문장에 포함하지 마세요.)", p.HeartRateBPM)
+	}
 
 	// Add observed signals requirement
 	prompt += ObservedSignalsPrompt

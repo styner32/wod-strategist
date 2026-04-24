@@ -48,7 +48,7 @@ type HighlightResultRepository interface {
 
 type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error)
 
-type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error)
+type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int) (*asynq.Task, error)
 
 type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int) (*asynq.Task, error)
 

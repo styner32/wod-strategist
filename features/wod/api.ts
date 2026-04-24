@@ -80,6 +80,7 @@ export interface ProcessWorkoutVideoOptions {
   profileId: number;
   startSecs?: number;
   endSecs?: number;
+  heartRateBpm?: number;
 }
 
 export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
@@ -282,7 +283,8 @@ export async function notifyChunkUploadComplete(
   workoutType: string,
   profileId: number,
   startSecs?: number,
-  endSecs?: number
+  endSecs?: number,
+  heartRateBpm?: number
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
@@ -295,6 +297,7 @@ export async function notifyChunkUploadComplete(
       profile_id: profileId,
       ...(startSecs !== undefined ? { start_secs: startSecs } : {}),
       ...(endSecs !== undefined ? { end_secs: endSecs } : {}),
+      ...(heartRateBpm !== undefined && heartRateBpm > 0 ? { heart_rate_bpm: heartRateBpm } : {}),
     },
   });
 }
@@ -359,6 +362,7 @@ export async function processWorkoutChunk(
     profileId,
     startSecs,
     endSecs,
+    heartRateBpm,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
 
@@ -381,7 +385,8 @@ export async function processWorkoutChunk(
     workoutType,
     profileId,
     startSecs,
-    endSecs
+    endSecs,
+    heartRateBpm
   );
 
   return {

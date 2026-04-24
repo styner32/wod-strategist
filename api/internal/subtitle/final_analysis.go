@@ -167,6 +167,11 @@ func buildChunkEntries(chunks []db.ChunkAnalysisResult) []srtEntry {
 			continue
 		}
 
+		// Prepend BPM badge for hardsub overlay when heart rate data is available
+		if ch.HeartRateBPM > 0 {
+			output = fmt.Sprintf("[%d bpm] %s", ch.HeartRateBPM, output)
+		}
+
 		start := *ch.StartSecs
 		end := *ch.EndSecs
 		if end <= start {

@@ -31,14 +31,15 @@ const (
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.
 type VideoAnalysisPayload struct {
-	SessionID   string
-	FilePath    string
-	WorkoutType string
-	Movements   []string
-	Injuries    []string
-	ProfileID   uint
-	StartSecs   float64
-	EndSecs     float64
+	SessionID    string
+	FilePath     string
+	WorkoutType  string
+	Movements    []string
+	Injuries     []string
+	ProfileID    uint
+	StartSecs    float64
+	EndSecs      float64
+	HeartRateBPM int `json:"heart_rate_bpm,omitempty"` // BLE heart rate at chunk capture time
 }
 
 // HighlightSegment is shared between video analysis (parsing) and highlight generation (processing).

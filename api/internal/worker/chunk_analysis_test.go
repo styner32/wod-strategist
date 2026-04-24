@@ -112,6 +112,7 @@ var _ = Describe("NewChunkAnalysisTask", func() {
 			7,
 			10.5,
 			20.5,
+			0,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -232,6 +233,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			nil,
 			0,
 			0.0, 10.0,
+			0,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -270,6 +272,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			nil, nil,
 			profile.ID,
 			5.0, 15.0,
+			0,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -335,6 +338,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			"gs://test-bucket/chunks/sess-chunk-empty-001/chunk.mp4",
 			WorkoutTypeWOD,
 			nil, nil, 0, 0, 10,
+			0,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -353,6 +357,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			"/local/path/chunk.mp4",
 			WorkoutTypeWOD,
 			nil, nil, 0, 0, 10,
+			0,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
