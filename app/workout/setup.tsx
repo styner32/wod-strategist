@@ -326,6 +326,7 @@ export default function WorkoutSetup() {
                     <Text style={styles.profileBannerName}>{activeProfile.name || t('tabs.profile')}</Text>
                     <Text style={styles.profileBannerMeta}>
                       {[
+                        t(`profileEdit.${activeProfile.fitnessLevel ?? 'intermediate'}`),
                         injuryCount > 0 ? t('setup.injuries', { count: injuryCount }) : t('setup.noInjuries'),
                         `${videoPrefs.resolution}`,
                         videoPrefs.lowFps ? '24fps' : '30fps',

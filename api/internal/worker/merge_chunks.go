@@ -7,15 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/storage"
-	"github.com/wod-strategist/api/internal/subtitle"
 	"go.uber.org/zap"
 )
 
@@ -209,19 +206,10 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		}
 	}
 
-	// 5. Hard-sub: burn chunk analysis subtitles into the merged video.
-	//
-	// WARNING: Hard-subbing requires full decode → re-encode of every frame.
-	// For a 5-min 720p video, expect ~200–400 MB RAM and ~2–5 min CPU time.
-	// Uses -preset ultrafast to minimise CPU time at the cost of ~40% larger files.
-	// Requires FFmpeg compiled with --enable-libass (subtitles filter).
-	//
-	// This step is best-effort: if it fails (e.g. missing libass, DB error,
-	// insufficient resources), we log the error and proceed without hard-subs.
-	// TODO: Consider moving to a separate, resource-heavy worker queue.
-	hardSubGCSURI := w.tryHardSub(ctx, p, tmpDir, mergedPath)
-
-	// 6. Enqueue full video analysis on the analysis-grade file (or merged if no re-encode needed)
+	// 5. Enqueue full video analysis on the analysis-grade file (or merged if no re-encode needed).
+	// Hardsub generation is deferred: it will be auto-enqueued after the full
+	// analysis completes, so it can burn the more accurate final analysis
+	// feedback (strengths + weaknesses) instead of real-time chunk cues.
 	analysisTask, err := NewVideoAnalysisTask(p.SessionID, analysisGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID)
 	if err != nil {
 		return fmt.Errorf("failed to create analysis task for merged video: %w", err)
@@ -233,165 +221,10 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 
 	w.logger.Info("Analysis enqueued for merged video",
 		zap.String("session_id", p.SessionID),
-		zap.String("analysis_uri", analysisGCSURI),
-		zap.String("hardsub_uri", hardSubGCSURI))
+		zap.String("analysis_uri", analysisGCSURI))
 	return nil
 }
 
-// tryHardSub attempts to burn chunk analysis subtitles into the merged video.
-// Returns the GCS URI of the hard-subbed video on success, or empty string on
-// failure. Errors are logged but never propagated — hard-sub is best-effort.
-func (w *Worker) tryHardSub(ctx context.Context, p VideoAnalysisPayload, tmpDir, mergedPath string) string {
-	w.logger.Info("Hard-sub: starting",
-		zap.String("session_id", p.SessionID),
-		zap.String("tmp_dir", tmpDir),
-		zap.String("merged_path", mergedPath))
-
-	// Verify merged video exists and is non-empty
-	if fi, err := os.Stat(mergedPath); err != nil {
-		w.logger.Warn("Hard-sub: merged video file not found, skipping",
-			zap.String("merged_path", mergedPath), zap.Error(err))
-		return ""
-	} else {
-		w.logger.Info("Hard-sub: merged video file OK",
-			zap.String("merged_path", mergedPath),
-			zap.Int64("size_bytes", fi.Size()))
-	}
-
-	var chunks []db.ChunkAnalysisResult
-	if err := w.DB.Where("session_id = ? AND status = ?", p.SessionID, "COMPLETED").
-		Order("start_secs ASC").
-		Find(&chunks).Error; err != nil {
-		w.logger.Warn("Hard-sub: failed to query chunk analysis, skipping",
-			zap.String("session_id", p.SessionID), zap.Error(err))
-		return ""
-	}
-
-	w.logger.Info("Hard-sub: queried chunk analysis",
-		zap.String("session_id", p.SessionID),
-		zap.Int("total_chunks", len(chunks)))
-
-	// Log each chunk's details for debugging
-	for i, ch := range chunks {
-		var startSecs, endSecs float64
-		if ch.StartSecs != nil {
-			startSecs = *ch.StartSecs
-		}
-		if ch.EndSecs != nil {
-			endSecs = *ch.EndSecs
-		}
-		outputPreview := ch.Output
-		if len(outputPreview) > 80 {
-			outputPreview = outputPreview[:80] + "..."
-		}
-		w.logger.Info("Hard-sub: chunk detail",
-			zap.Int("index", i),
-			zap.String("status", ch.Status),
-			zap.Float64("start_secs", startSecs),
-			zap.Float64("end_secs", endSecs),
-			zap.Bool("has_start", ch.StartSecs != nil),
-			zap.Bool("has_end", ch.EndSecs != nil),
-			zap.Int("output_len", len(ch.Output)),
-			zap.String("output_preview", outputPreview))
-	}
-
-	srt := subtitle.FormatSRT(chunks)
-	if srt == "" {
-		w.logger.Info("Hard-sub: no subtitle content, skipping",
-			zap.String("session_id", p.SessionID),
-			zap.Int("total_chunks", len(chunks)))
-		return ""
-	}
-
-	// Log SRT preview for debugging (first 200 chars)
-	srtPreview := srt
-	if len(srtPreview) > 200 {
-		srtPreview = srtPreview[:200] + "..."
-	}
-	w.logger.Info("Hard-sub: generated SRT",
-		zap.String("session_id", p.SessionID),
-		zap.Int("srt_length", len(srt)),
-		zap.String("srt_preview", srtPreview))
-
-	srtPath := filepath.Join(tmpDir, "feedback.srt")
-	if err := os.WriteFile(srtPath, []byte(srt), 0o644); err != nil {
-		w.logger.Warn("Hard-sub: failed to write SRT file, skipping", zap.Error(err))
-		return ""
-	}
-
-	// Verify SRT file was written correctly
-	if fi, err := os.Stat(srtPath); err != nil {
-		w.logger.Warn("Hard-sub: SRT file stat failed after write",
-			zap.String("srt_path", srtPath), zap.Error(err))
-		return ""
-	} else {
-		w.logger.Info("Hard-sub: SRT file written OK",
-			zap.String("srt_path", srtPath),
-			zap.Int64("size_bytes", fi.Size()))
-	}
-
-	hardSubPath := filepath.Join(tmpDir, fmt.Sprintf("hardsubbed_%s.mp4", p.SessionID))
-
-	w.logger.Info("Hard-sub: starting FFmpeg",
-		zap.String("input", mergedPath),
-		zap.String("srt", srtPath),
-		zap.String("output", hardSubPath))
-
-	// Log resource usage before and after for observability
-	var memBefore runtime.MemStats
-	runtime.ReadMemStats(&memBefore)
-	start := time.Now()
-
-	if err := runFFmpegHardSub(ctx, w.logger, mergedPath, srtPath, hardSubPath); err != nil {
-		w.logger.Warn("Hard-sub: FFmpeg failed, skipping",
-			zap.String("session_id", p.SessionID), zap.Error(err))
-		return ""
-	}
-
-	var memAfter runtime.MemStats
-	runtime.ReadMemStats(&memAfter)
-	elapsed := time.Since(start)
-
-	// Verify output file exists and is non-empty
-	var hardSubSizeBytes int64
-	if fi, err := os.Stat(hardSubPath); err != nil {
-		w.logger.Warn("Hard-sub: output file not found after FFmpeg",
-			zap.String("output_path", hardSubPath), zap.Error(err))
-		return ""
-	} else {
-		hardSubSizeBytes = fi.Size()
-		if hardSubSizeBytes == 0 {
-			w.logger.Warn("Hard-sub: output file is empty",
-				zap.String("output_path", hardSubPath))
-			return ""
-		}
-	}
-
-	w.logger.Info("Hard-sub: FFmpeg completed",
-		zap.String("session_id", p.SessionID),
-		zap.Duration("duration", elapsed),
-		zap.Int64("output_size_bytes", hardSubSizeBytes),
-		zap.Uint64("mem_alloc_before_mb", memBefore.Alloc/1024/1024),
-		zap.Uint64("mem_alloc_after_mb", memAfter.Alloc/1024/1024),
-		zap.Uint64("mem_sys_mb", memAfter.Sys/1024/1024))
-
-	hardSubObjectName := fmt.Sprintf("videos/%d/%s/hardsubbed.mp4", p.ProfileID, p.SessionID)
-	w.logger.Info("Hard-sub: uploading to GCS",
-		zap.String("object_name", hardSubObjectName),
-		zap.Int64("file_size_bytes", hardSubSizeBytes))
-
-	hardSubGCSURI, err := w.StorageClient.UploadFromFile(ctx, hardSubPath, hardSubObjectName)
-	if err != nil {
-		w.logger.Warn("Hard-sub: failed to upload hard-subbed video, skipping",
-			zap.String("session_id", p.SessionID), zap.Error(err))
-		return ""
-	}
-
-	w.logger.Info("Hard-sub: uploaded",
-		zap.String("session_id", p.SessionID),
-		zap.String("gcs_uri", hardSubGCSURI))
-	return hardSubGCSURI
-}
 
 // runFFmpegConcat concatenates video files listed in concatListPath into outputPath.
 // Re-encodes to 30 fps / AAC to normalise frame-rate and PTS timestamps across

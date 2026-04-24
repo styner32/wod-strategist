@@ -131,6 +131,7 @@ export interface ProfileResponse {
   gender: string;
   height_cm: number;
   weight_kg: number;
+  fitness_level: string;
   injuries: string[];
   archived_at?: string;
 }
@@ -143,6 +144,7 @@ export interface CreateProfileRequest {
   gender: string;
   height_cm: number;
   weight_kg: number;
+  fitness_level?: string;
   injuries?: string[];
 }
 
@@ -154,6 +156,7 @@ export interface UpdateProfileRequest {
   gender?: string;
   height_cm?: number;
   weight_kg?: number;
+  fitness_level?: string;
   injuries?: string[];
 }
 

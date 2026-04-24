@@ -529,6 +529,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.String("session_id", p.SessionID),
 		zap.Int("segments_analyzed", len(segments)))
 
+	// Auto-enqueue hardsub generation now that the final analysis is available.
+	// The hardsub worker will fetch this analysis and burn it as subtitles.
+	w.enqueueHardSub(p.SessionID, p.ProfileID)
+
 	// Agentic follow-up: pass fileURI/fileName so injury analysis can reuse the uploaded video
 	if hasInjuries {
 		focusTimestamps := parseInjuryTimestamps(analysis)
@@ -934,6 +938,9 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	w.DB.Create(result)
 
 	w.logger.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))
+
+	// Auto-enqueue hardsub generation now that the final analysis is available.
+	w.enqueueHardSub(p.SessionID, p.ProfileID)
 
 	// Agentic follow-up: if injuries are present, enqueue injury-focused re-analysis
 	if len(p.Injuries) > 0 {

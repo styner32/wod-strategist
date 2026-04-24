@@ -4,6 +4,7 @@ import { fetchInjuries } from "@/features/wod/api";
 import {
   useProfileStore,
   type Gender,
+  type FitnessLevel,
 } from "@/store/useProfileStore";
 import { router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
@@ -25,6 +26,12 @@ const GENDER_OPTIONS: { label: string; value: Gender }[] = [
   { label: t("common.male"), value: "male" },
   { label: t("common.female"), value: "female" },
   { label: t("common.other"), value: "other" },
+];
+
+const FITNESS_LEVEL_OPTIONS: { label: string; value: FitnessLevel }[] = [
+  { label: t("profileEdit.beginner"), value: "beginner" },
+  { label: t("profileEdit.intermediate"), value: "intermediate" },
+  { label: t("profileEdit.advanced"), value: "advanced" },
 ];
 
 export default function ProfileScreen() {
@@ -58,6 +65,9 @@ export default function ProfileScreen() {
   );
   const [weightKg, setWeightKg] = useState(
     existingProfile?.weightKg?.toString() ?? ""
+  );
+  const [fitnessLevel, setFitnessLevel] = useState<FitnessLevel>(
+    existingProfile?.fitnessLevel ?? "intermediate"
   );
   const [saving, setSaving] = useState(false);
 
@@ -128,6 +138,7 @@ export default function ProfileScreen() {
           gender,
           height_cm: h,
           weight_kg: Math.round(w * 10) / 10,
+          fitness_level: fitnessLevel,
           injuries: selectedInjuries,
         });
       } else {
@@ -139,6 +150,7 @@ export default function ProfileScreen() {
           gender,
           height_cm: h,
           weight_kg: Math.round(w * 10) / 10,
+          fitness_level: fitnessLevel,
           injuries: selectedInjuries,
         });
       }
@@ -324,6 +336,38 @@ export default function ProfileScreen() {
                 })}
               </View>
             )}
+          </View>
+
+          {/* Fitness Level */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{t("profileEdit.fitnessLevel")}</Text>
+            <Text style={styles.hint}>
+              {t("profileEdit.fitnessLevelHint")}
+            </Text>
+            <View style={styles.genderRow}>
+              {FITNESS_LEVEL_OPTIONS.map((opt) => {
+                const isSelected = fitnessLevel === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[
+                      styles.genderBtn,
+                      isSelected && styles.genderBtnActive,
+                    ]}
+                    onPress={() => setFitnessLevel(opt.value)}
+                  >
+                    <Text
+                      style={[
+                        styles.genderBtnText,
+                        isSelected && styles.genderBtnTextActive,
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
 
           {/* Save Button */}

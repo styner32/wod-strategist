@@ -355,7 +355,14 @@ export default function VisionTestPage() {
 
           // Skip upload if recording has already been stopped
           if (!isRecordingChunks.current) {
-            console.log("⏹️ Recording stopped — skipping chunk upload");
+            console.log("⏹️ Recording stopped — cleaning up orphan chunk");
+            // Clean up the raw chunk file since we won't upload it
+            try {
+              const { File: FSFile } = require("expo-file-system");
+              const f = new FSFile(video.path);
+              if (f.exists) f.delete();
+              console.log("🗑️ Deleted orphan chunk:", video.path);
+            } catch (_) {}
           } else {
             // Compress (iOS only) and Upload chunk to backend
             try {
@@ -389,7 +396,8 @@ export default function VisionTestPage() {
 
               if (skipCompression) {
                 // Skip re-compression — upload raw chunk directly.
-                const uploadTask = () => doUpload(video.path, false);
+                // shouldCleanup=true: delete the raw file after upload completes
+                const uploadTask = () => doUpload(video.path, true);
                 if (serialUpload) {
                   enqueueUpload(uploadTask);
                 } else {
@@ -401,6 +409,19 @@ export default function VisionTestPage() {
                   compressionMethod: "auto",
                   maxSize: 720,
                 }).then((compressedUri) => {
+                  // Delete the raw chunk now that compression produced a new file
+                  const isSamePath =
+                    compressedUri === video.path ||
+                    compressedUri.replace("file://", "") === video.path.replace("file://", "");
+                  if (!isSamePath) {
+                    try {
+                      const { File: FSFile } = require("expo-file-system");
+                      const f = new FSFile(video.path);
+                      if (f.exists) f.delete();
+                      console.log("🗑️ Deleted raw chunk after compression:", video.path);
+                    } catch (_) {}
+                  }
+
                   const uploadTask = () => doUpload(compressedUri, true);
                   if (serialUpload) {
                     enqueueUpload(uploadTask);
@@ -409,6 +430,12 @@ export default function VisionTestPage() {
                   }
                 }).catch((err) => {
                   console.error("Failed to compress chunk:", err);
+                  // Compression failed — clean up raw chunk to prevent leak
+                  try {
+                    const { File: FSFile } = require("expo-file-system");
+                    const f = new FSFile(video.path);
+                    if (f.exists) f.delete();
+                  } catch (_) {}
                 });
               }
             } catch (e) {
@@ -479,6 +506,35 @@ export default function VisionTestPage() {
         console.error("Failed to stop chunk recording:", e);
       }
     }
+  };
+
+  /**
+   * Delete all local chunk files and clear the paths array.
+   * Called on recording stop to prevent tmp/ from growing unbounded.
+   */
+  const cleanupChunkFiles = () => {
+    const paths = chunkPaths.current;
+    if (paths.length === 0) {
+      chunkPaths.current = [];
+      return;
+    }
+
+    console.log(`🗑️ Cleaning up ${paths.length} chunk files from tmp/`);
+    try {
+      const { File: FSFile } = require("expo-file-system");
+      for (const p of paths) {
+        try {
+          const f = new FSFile(p);
+          if (f.exists) {
+            f.delete();
+            console.log("🗑️ Deleted chunk:", p);
+          }
+        } catch (_) {}
+      }
+    } catch (e) {
+      console.warn("⚠️ Chunk cleanup error:", e);
+    }
+    chunkPaths.current = [];
   };
 
   // --- Main Recording Logic ---
@@ -592,8 +648,8 @@ export default function VisionTestPage() {
           }
         }
 
-        // Clean up and navigate to history
-        chunkPaths.current = [];
+        // Clean up local chunk files and navigate to history
+        cleanupChunkFiles();
         setChunkCount(0);
         setIsSaving(false);
         router.replace("/history" as any);
@@ -661,8 +717,8 @@ export default function VisionTestPage() {
         router.replace("/queue" as any);
       }
 
-      // Clean up chunk paths for next session
-      chunkPaths.current = [];
+      // Clean up chunk files for next session
+      cleanupChunkFiles();
     } catch (error) {
       console.error("Recording Stop Error:", error);
       Alert.alert("Error", "Failed to save recording.");

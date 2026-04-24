@@ -49,6 +49,57 @@ var _ = Describe("buildChunkAnalysisPrompt", func() {
 	})
 })
 
+var _ = Describe("parseObservedSignals", func() {
+	It("extracts JSON from ```observed_signals block", func() {
+		input := "코칭 피드백\n```observed_signals\n{\"movement\": \"Deadlift\", \"rep_count\": 5}\n```"
+		result := parseObservedSignals(input)
+		Expect(result).To(ContainSubstring(`"movement"`))
+		Expect(result).To(ContainSubstring(`"Deadlift"`))
+	})
+
+	It("extracts JSON from ```json block containing movement key", func() {
+		input := "코칭 피드백\n```json\n{\"movement\": \"Snatch\", \"rep_count\": 3, \"exertion_estimate\": \"high\", \"form_issues_seen\": []}\n```"
+		result := parseObservedSignals(input)
+		Expect(result).To(ContainSubstring(`"Snatch"`))
+	})
+
+	It("extracts JSON from bare ``` block containing movement key", func() {
+		input := "코칭 피드백\n```\n{\"movement\": \"Squat\", \"rep_count\": 8, \"avg_cadence_s\": 2.5, \"exertion_estimate\": \"moderate\", \"form_issues_seen\": [\"knee_valgus\"]}\n```"
+		result := parseObservedSignals(input)
+		Expect(result).To(ContainSubstring(`"Squat"`))
+	})
+
+	It("returns {} when no block is present", func() {
+		result := parseObservedSignals("just coaching text, nothing else")
+		Expect(result).To(Equal("{}"))
+	})
+
+	It("returns {} when JSON is invalid", func() {
+		input := "```observed_signals\n{invalid json\n```"
+		result := parseObservedSignals(input)
+		Expect(result).To(Equal("{}"))
+	})
+})
+
+var _ = Describe("stripObservedSignals", func() {
+	It("removes ```observed_signals block and leaves coaching text", func() {
+		input := "엉덩이를 더 내려주세요.\n```observed_signals\n{\"movement\": \"Deadlift\", \"rep_count\": 5}\n```"
+		result := stripObservedSignals(input)
+		Expect(result).To(Equal("엉덩이를 더 내려주세요."))
+	})
+
+	It("removes ```json block containing movement key", func() {
+		input := "좋은 자세입니다.\n```json\n{\"movement\": \"Snatch\", \"rep_count\": 3, \"exertion_estimate\": \"high\", \"form_issues_seen\": []}\n```"
+		result := stripObservedSignals(input)
+		Expect(result).To(Equal("좋은 자세입니다."))
+	})
+
+	It("leaves text unchanged when no block is present", func() {
+		result := stripObservedSignals("just coaching text")
+		Expect(result).To(Equal("just coaching text"))
+	})
+})
+
 var _ = Describe("NewChunkAnalysisTask", func() {
 
 	It("includes timing fields in the payload", func() {

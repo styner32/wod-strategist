@@ -147,7 +147,7 @@ func createTempDir(prefix string) (string, error) {
 
 // lookupProfileString returns a human-readable profile string for the given profile ID.
 func (w *Worker) lookupProfileString(profileID uint) string {
-	personalProfile := "생년월일: 1984년 10월 17일, 성별: 남, 키: 164cm, 몸무게: 72kg"
+	personalProfile := "생년월일: 1984년 10월 17일, 성별: 남, 키: 164cm, 몸무게: 72kg, 피트니스 레벨: 중급"
 	if profileID > 0 && w.DB != nil {
 		var profile db.Profile
 		if err := w.DB.First(&profile, profileID).Error; err == nil {
@@ -158,14 +158,33 @@ func (w *Worker) lookupProfileString(profileID uint) string {
 			case "female":
 				genderKo = "여"
 			}
-			personalProfile = fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg",
+			levelKo := "중급"
+			switch profile.FitnessLevel {
+			case "beginner":
+				levelKo = "초급"
+			case "advanced":
+				levelKo = "고급"
+			}
+			personalProfile = fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg, 피트니스 레벨: %s",
 				profile.BirthYear, profile.BirthMonth, profile.BirthDay,
-				genderKo, profile.HeightCm, profile.WeightKg)
+				genderKo, profile.HeightCm, profile.WeightKg, levelKo)
 		} else {
 			w.logger.Warn("Profile not found, using default", zap.Uint("profile_id", profileID), zap.Error(err))
 		}
 	}
 	return personalProfile
+}
+
+// lookupFitnessLevel returns the fitness level for the given profile ID.
+// Defaults to "intermediate" if profile is not found or DB is unavailable.
+func (w *Worker) lookupFitnessLevel(profileID uint) string {
+	if profileID > 0 && w.DB != nil {
+		var profile db.Profile
+		if err := w.DB.First(&profile, profileID).Error; err == nil && profile.FitnessLevel != "" {
+			return profile.FitnessLevel
+		}
+	}
+	return "intermediate"
 }
 
 // parseTimestampToSeconds converts a "M:SS" or "MM:SS" timestamp string to seconds.

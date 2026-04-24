@@ -583,15 +583,21 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 		return
 	}
 
+	fitnessLevel := req.FitnessLevel
+	if fitnessLevel == "" {
+		fitnessLevel = "intermediate"
+	}
+
 	profile := &db.Profile{
-		Name:       req.Name,
-		BirthYear:  req.BirthYear,
-		BirthMonth: req.BirthMonth,
-		BirthDay:   req.BirthDay,
-		Gender:     req.Gender,
-		HeightCm:   req.HeightCm,
-		WeightKg:   req.WeightKg,
-		Injuries:   string(injuriesJSON),
+		Name:         req.Name,
+		BirthYear:    req.BirthYear,
+		BirthMonth:   req.BirthMonth,
+		BirthDay:     req.BirthDay,
+		Gender:       req.Gender,
+		HeightCm:     req.HeightCm,
+		WeightKg:     req.WeightKg,
+		FitnessLevel: fitnessLevel,
+		Injuries:     string(injuriesJSON),
 	}
 
 	if err := ctl.profiles.Create(c.Request.Context(), profile); err != nil {
@@ -700,6 +706,9 @@ func (ctl *Controller) UpdateProfile(c *gin.Context) {
 	if req.WeightKg != nil {
 		profile.WeightKg = *req.WeightKg
 	}
+	if req.FitnessLevel != nil {
+		profile.FitnessLevel = *req.FitnessLevel
+	}
 	if req.Injuries != nil {
 		if !allowedInjuries.containsAll(req.Injuries) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid injuries"})
@@ -778,15 +787,16 @@ func toProfileResponse(p *db.Profile) ProfileResponse {
 	}
 
 	resp := ProfileResponse{
-		ID:         p.ID,
-		Name:       p.Name,
-		BirthYear:  p.BirthYear,
-		BirthMonth: p.BirthMonth,
-		BirthDay:   p.BirthDay,
-		Gender:     p.Gender,
-		HeightCm:   p.HeightCm,
-		WeightKg:   p.WeightKg,
-		Injuries:   injuryList,
+		ID:           p.ID,
+		Name:         p.Name,
+		BirthYear:    p.BirthYear,
+		BirthMonth:   p.BirthMonth,
+		BirthDay:     p.BirthDay,
+		Gender:       p.Gender,
+		HeightCm:     p.HeightCm,
+		WeightKg:     p.WeightKg,
+		FitnessLevel: p.FitnessLevel,
+		Injuries:     injuryList,
 	}
 	if p.ArchivedAt != nil {
 		ts := p.ArchivedAt.Format(time.RFC3339)

@@ -12,18 +12,19 @@ import (
 )
 
 type Profile struct {
-	ID         uint       `gorm:"primaryKey" json:"id"`
-	Name       string     `json:"name"`
-	BirthYear  int        `json:"birth_year"`
-	BirthMonth int        `json:"birth_month"`
-	BirthDay   int        `json:"birth_day"`
-	Gender     string     `json:"gender"` // male, female, other
-	HeightCm   int        `json:"height_cm"`
-	WeightKg   float64    `json:"weight_kg"`
-	Injuries   string     `gorm:"type:text;not null;default:'[]'" json:"injuries"` // JSON array of injury strings
-	ArchivedAt *time.Time `json:"archived_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	Name         string     `json:"name"`
+	BirthYear    int        `json:"birth_year"`
+	BirthMonth   int        `json:"birth_month"`
+	BirthDay     int        `json:"birth_day"`
+	Gender       string     `json:"gender"` // male, female, other
+	HeightCm     int        `json:"height_cm"`
+	WeightKg     float64    `json:"weight_kg"`
+	FitnessLevel string     `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
+	Injuries     string     `gorm:"type:text;not null;default:'[]'" json:"injuries"`               // JSON array of injury strings
+	ArchivedAt   *time.Time `json:"archived_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 const (
@@ -62,17 +63,18 @@ type HighlightResult struct {
 }
 
 type ChunkAnalysisResult struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	SessionID    string    `gorm:"index;not null" json:"session_id"`
-	ProfileID    *uint     `gorm:"index" json:"profile_id,omitempty"`
-	FilePath     string    `json:"file_path"`
-	ExerciseType string    `json:"exercise_type,omitempty"` // detected movement (e.g. "Snatch", "Pull-up")
-	Status       string    `json:"status"`                  // PENDING, COMPLETED, FAILED
-	Output       string    `json:"output"`
-	StartSecs    *float64  `json:"start_secs,omitempty"`
-	EndSecs      *float64  `json:"end_secs,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	SessionID       string    `gorm:"index;not null" json:"session_id"`
+	ProfileID       *uint     `gorm:"index" json:"profile_id,omitempty"`
+	FilePath        string    `json:"file_path"`
+	ExerciseType    string    `json:"exercise_type,omitempty"`                           // detected movement (e.g. "Snatch", "Pull-up")
+	Status          string    `json:"status"`                                            // PENDING, COMPLETED, FAILED
+	Output          string    `json:"output"`
+	ObservedSignals string    `gorm:"type:text;not null;default:'{}'" json:"observed_signals"` // JSON: estimated workout metrics for benchmarking
+	StartSecs       *float64  `json:"start_secs,omitempty"`
+	EndSecs         *float64  `json:"end_secs,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func Connect(databaseURL string) (*gorm.DB, error) {
