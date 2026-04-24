@@ -22,6 +22,9 @@ var boldRegex = regexp.MustCompile(`\*\*(.+?)\*\*`)
 // sectionHeaderRegex matches markdown section headers (###, ####).
 var sectionHeaderRegex = regexp.MustCompile(`(?m)^#{3,4}\s+(.+)$`)
 
+// codeBlockRegex matches fenced code blocks (```...```) for stripping.
+var codeBlockRegex = regexp.MustCompile("(?s)```.*?```")
+
 // srtEntry is a generic subtitle entry with a time window and text.
 type srtEntry struct {
 	start float64
@@ -155,6 +158,11 @@ func buildChunkEntries(chunks []db.ChunkAnalysisResult) []srtEntry {
 			continue
 		}
 		output := strings.TrimSpace(ch.Output)
+		// Defense-in-depth: strip any residual code blocks (```...```)
+		// in case the chunk was saved before observed_signals stripping
+		// was deployed, or the model emits unexpected fenced blocks.
+		output = codeBlockRegex.ReplaceAllString(output, "")
+		output = strings.TrimSpace(output)
 		if output == "" {
 			continue
 		}
@@ -330,7 +338,6 @@ var boldLabelRegex = regexp.MustCompile(`^\s*(?:[-*•]\s*)?\*\*(.+?)[:]\*\*\s*$
 // highlight blocks, etc.). Returns a list of concise feedback strings.
 func extractFeedbackPoints(body string) []string {
 	// Strip code blocks (```...```) — these contain JSON highlights/injury_timestamps
-	codeBlockRegex := regexp.MustCompile("(?s)```.*?```")
 	cleaned := codeBlockRegex.ReplaceAllString(body, "")
 
 	var points []string

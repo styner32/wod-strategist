@@ -62,6 +62,11 @@ function formatTime(secs: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/** Strip fenced code blocks (```...```) that may leak from AI output */
+function stripCodeBlocks(text: string): string {
+  return text.replace(/```[\s\S]*?```/g, "").trim();
+}
+
 function buildCues(chunks: ChunkAnalysisResult[]): GuidanceCue[] {
   return chunks
     .filter((c) => c.status === "COMPLETED" && c.start_secs != null && c.end_secs != null && c.output)
@@ -69,9 +74,10 @@ function buildCues(chunks: ChunkAnalysisResult[]): GuidanceCue[] {
     .map((c) => ({
       startSecs: c.start_secs!,
       endSecs: c.end_secs!,
-      text: c.output,
+      text: stripCodeBlocks(c.output),
       exerciseType: c.exercise_type,
-    }));
+    }))
+    .filter((c) => c.text.length > 0);
 }
 
 /** Find the active cue for a given playback position */
