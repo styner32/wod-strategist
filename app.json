@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "wod-strategist",
+    "name": "WOD Strategist",
     "slug": "wod-strategist",
     "version": "1.0.0",
     "orientation": "default",
@@ -24,6 +24,7 @@
         "NSPhotoLibraryAddUsageDescription": "사용자가 사진을 저장할 수 있도록 갤러리 쓰기 권한이 필요합니다.",
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
+        "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": [
           "fetch"
         ]
