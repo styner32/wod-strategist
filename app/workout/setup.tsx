@@ -56,6 +56,8 @@ const CATEGORY_ICONS: Record<string, string> = {
   'Gymnastics': 'figure.run',
   'Bodyweight & Plyo': 'flame.fill',
   'Cardio': 'figure.run',
+  'Surfing': 'figure.run',
+  'Yoga': 'figure.run',
   'Custom': 'plus.circle.fill',
 };
 
