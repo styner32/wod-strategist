@@ -182,5 +182,82 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			Expect(enqueued.Movements).To(Equal([]string{"Deadlift"}))
 			Expect(enqueued.FilePath).To(ContainSubstring("sess-merge-001"))
 		})
+
+		It("excludes split_chunk records from merge to prevent doubled content", func() {
+			tmpFile := createTinyMP4(GinkgoT())
+			mp4Bytes, readErr := os.ReadFile(tmpFile)
+			Expect(readErr).NotTo(HaveOccurred())
+
+			sessionID := "sess-merge-split-excl"
+
+			// Seed: 2 original recording chunks (should be included)
+			start0 := 0.0
+			end0 := 10.0
+			start1 := 10.0
+			end1 := 20.0
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: sessionID,
+				FilePath:  "gs://test-bucket/videos/" + sessionID + "/camera_chunk_001.mp4",
+				Status:    "COMPLETED",
+				Output:    "chunk 1",
+				StartSecs: &start0,
+				EndSecs:   &end0,
+			}).Error).NotTo(HaveOccurred())
+
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: sessionID,
+				FilePath:  "gs://test-bucket/videos/" + sessionID + "/camera_chunk_002.mp4",
+				Status:    "COMPLETED",
+				Output:    "chunk 2",
+				StartSecs: &start1,
+				EndSecs:   &end1,
+			}).Error).NotTo(HaveOccurred())
+
+			// Seed: 2 split_chunk records from splitAndAnalyzeChunks (should be EXCLUDED)
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: sessionID,
+				FilePath:  "gs://test-bucket/videos/" + sessionID + "/split_chunk_000.mp4",
+				Status:    "COMPLETED",
+				Output:    "split chunk 0",
+				StartSecs: &start0,
+				EndSecs:   &end0,
+			}).Error).NotTo(HaveOccurred())
+
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: sessionID,
+				FilePath:  "gs://test-bucket/videos/" + sessionID + "/split_chunk_001.mp4",
+				Status:    "COMPLETED",
+				Output:    "split chunk 1",
+				StartSecs: &start1,
+				EndSecs:   &end1,
+			}).Error).NotTo(HaveOccurred())
+
+			// Set up GCS mocks — only 2 downloads should happen (not 4)
+			ffmpegTransport := testhelpers.NewMockTransport()
+			ffmpegStorageClient, sErr := testhelpers.NewStorageClient("test-bucket", ffmpegTransport)
+			Expect(sErr).NotTo(HaveOccurred())
+			w.StorageClient = ffmpegStorageClient
+
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/"+sessionID+"/camera_chunk_001.mp4", mp4Bytes)
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/"+sessionID+"/camera_chunk_002.mp4", mp4Bytes)
+			testhelpers.MockGCSUpload(ffmpegTransport, "test-bucket", "merged")
+
+			task, err := NewMergeChunksTask(
+				sessionID,
+				"gs://test-bucket/videos/"+sessionID,
+				WorkoutTypeWOD,
+				[]string{"Snatch"},
+				nil, 1,
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(w.HandleMergeChunksTask(context.Background(), task)).To(Succeed())
+
+			// Verify a video:analysis task was enqueued
+			pending, err := inspector.ListPendingTasks("default")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pending).To(HaveLen(1))
+			Expect(pending[0].Type).To(Equal(TypeVideoAnalysis))
+		})
 	})
 })

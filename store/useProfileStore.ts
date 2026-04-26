@@ -15,6 +15,7 @@ import {
 // ==========================================
 
 export type Gender = "male" | "female" | "other";
+export type FitnessLevel = "beginner" | "intermediate" | "advanced";
 
 export interface Profile {
   id: number;
@@ -25,6 +26,7 @@ export interface Profile {
   gender: Gender;
   heightCm: number;
   weightKg: number;
+  fitnessLevel: FitnessLevel;
   injuries: string[];
 }
 
@@ -76,6 +78,7 @@ function toProfile(res: ProfileResponse): Profile {
     gender: res.gender as Gender,
     heightCm: res.height_cm,
     weightKg: res.weight_kg,
+    fitnessLevel: (res.fitness_level as FitnessLevel) || 'intermediate',
     injuries: res.injuries ?? [],
   };
 }

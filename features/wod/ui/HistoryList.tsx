@@ -23,6 +23,9 @@ import {
   generateHighlight,
   fetchHighlightResults,
   fetchHighlightDownloadURL,
+  retryAnalysis,
+  generateHardSub,
+  archiveHistory,
 } from "../api";
 import { AnalysisResult, HighlightResult, fetchAnalysisHistory } from "../history";
 import { HighlightVideoPlayer } from "./HighlightVideoPlayer";
@@ -118,9 +121,11 @@ const HIGHLIGHT_VARIANT_CONFIG: Record<string, { emoji: string; color: string }>
 const HIGHLIGHT_POLL_INTERVAL_MS = 5_000;
 const HIGHLIGHT_POLL_TIMEOUT_MS = 5 * 60 * 1_000;
 
-function HistoryCard({ item }: { item: AnalysisResult }) {
+function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (id: number) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [downloading, setDownloading] = useState<string | null>(null); // 'merged' | 'hardsubbed' | 'encoded'
+  const [retrying, setRetrying] = useState(false);
+  const [generatingHardsub, setGeneratingHardsub] = useState(false);
   const scheme = useColorScheme() ?? "light";
   const isDark = scheme === "dark";
   const statusConfig = getStatusConfig(item.status);
@@ -355,8 +360,35 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
   const hrDividerColor = isDark ? "rgba(255,107,107,0.2)" : "rgba(255,107,107,0.3)";
   const highlightSectionBg = isDark ? "rgba(191,90,242,0.08)" : "rgba(191,90,242,0.05)";
 
+  const handleArchive = () => {
+    Alert.alert(
+      t("historyList.archiveTitle"),
+      t("historyList.archiveConfirm"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("historyList.archive"),
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await archiveHistory(item.id);
+              onArchive?.(item.id);
+            } catch {
+              Alert.alert(t("common.error"), t("historyList.archiveFailed"));
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
-    <View style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}>
+    <TouchableOpacity
+      activeOpacity={1}
+      onLongPress={handleArchive}
+      delayLongPress={600}
+      style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}
+    >
       {/* Header Row */}
       <View style={styles.cardHeader}>
         <View style={styles.headerLeft}>
@@ -422,6 +454,32 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
             {t("historyList.analysisFailed")}
           </Text>
         </View>
+      )}
+
+      {/* Retry button for failed analysis */}
+      {item.status === "FAILED" && item.profile_id && (
+        <TouchableOpacity
+          style={[styles.retryBtn, retrying && { opacity: 0.5 }]}
+          disabled={retrying}
+          onPress={async () => {
+            try {
+              setRetrying(true);
+              await retryAnalysis(item.session_id, item.profile_id!);
+              Alert.alert(t("upload.success"), t("historyList.retryStarted"));
+            } catch (err) {
+              Alert.alert(t("common.error"), t("historyList.retryFailed"));
+            } finally {
+              setRetrying(false);
+            }
+          }}
+          activeOpacity={0.8}
+        >
+          {retrying ? (
+            <ActivityIndicator size="small" color="#FF9F0A" />
+          ) : (
+            <Text style={styles.retryBtnText}>{t("historyList.retryAnalysis")}</Text>
+          )}
+        </TouchableOpacity>
       )}
 
       {/* Watch button — opens full workout player */}
@@ -493,6 +551,32 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
             </TouchableOpacity>
           )}
         </View>
+      )}
+
+      {/* Create Guided Video button — when completed but no hardsubbed version */}
+      {isCompleted && item.profile_id && !availableVideos.includes("hardsubbed") && availableVideos.includes("merged") && (
+        <TouchableOpacity
+          style={[styles.hardsubBtn, generatingHardsub && { opacity: 0.5 }]}
+          disabled={generatingHardsub}
+          onPress={async () => {
+            try {
+              setGeneratingHardsub(true);
+              await generateHardSub(item.session_id, item.profile_id!);
+              Alert.alert(t("upload.success"), t("historyList.hardsubStarted"));
+            } catch (err) {
+              Alert.alert(t("common.error"), t("historyList.hardsubFailed"));
+            } finally {
+              setGeneratingHardsub(false);
+            }
+          }}
+          activeOpacity={0.8}
+        >
+          {generatingHardsub ? (
+            <ActivityIndicator size="small" color="#FFD60A" />
+          ) : (
+            <Text style={styles.hardsubBtnText}>{t("historyList.createHardsub")}</Text>
+          )}
+        </TouchableOpacity>
       )}
 
       {/* ==================== Highlights Section ==================== */}
@@ -616,7 +700,7 @@ function HistoryCard({ item }: { item: AnalysisResult }) {
           <Text style={styles.pendingText}>{t("historyList.analysisInProgress")}</Text>
         </View>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -700,7 +784,11 @@ export function useHistoryData() {
     loadData();
   }, [loadData]);
 
-  return { data, loading, refreshing, onRefresh };
+  const onArchive = useCallback((id: number) => {
+    setData((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
+  return { data, loading, refreshing, onRefresh, onArchive };
 }
 
 // ---------------------
@@ -711,15 +799,15 @@ function ProcessingSection({ items }: { items: AnalysisResult[] }) {
   const scheme = useColorScheme() ?? "light";
   const isDark = scheme === "dark";
 
-  // Also pull in-flight uploads from video queue
+  // Pull ALL non-completed items from the local video queue
   // useShallow prevents infinite re-renders from .filter() creating new array refs
-  const uploadingItems = useVideoQueue(
+  const queueItems = useVideoQueue(
     useShallow((s) =>
-      s.items.filter((i) => i.status === "UPLOADING" || i.status === "ENCODING")
+      s.items.filter((i) => i.status !== "UPLOADED")
     )
   );
 
-  if (items.length === 0 && uploadingItems.length === 0) return null;
+  if (items.length === 0 && queueItems.length === 0) return null;
 
   const processingBg = isDark ? "rgba(255,214,10,0.06)" : "rgba(255,214,10,0.08)";
   const processingBorder = isDark ? "rgba(255,214,10,0.15)" : "rgba(255,214,10,0.2)";
@@ -759,43 +847,69 @@ function ProcessingSection({ items }: { items: AnalysisResult[] }) {
         </View>
       ))}
 
-      {/* Local in-flight uploads */}
-      {uploadingItems.map((item) => {
+      {/* Local video queue items (all stages) */}
+      {queueItems.map((item) => {
         const pct = Math.round(item.progress * 100);
-        const isEncoding = item.status === "ENCODING";
+        const hasProgress = item.status === "ENCODING" || item.status === "UPLOADING";
+
+        // Icon and label per status
+        let icon = "📹";
+        let subtitle = "";
+        let dotColor = "#A0A0A0";
+        switch (item.status) {
+          case "RECORDED":
+            icon = "🎬";
+            subtitle = t("historyList.waitingToEncode");
+            dotColor = "#A0A0A0";
+            break;
+          case "ENCODING":
+            icon = "⚙️";
+            subtitle = t("historyList.encodingProgress", { percent: pct });
+            dotColor = "#FF9F0A";
+            break;
+          case "ENCODED":
+            icon = "✅";
+            subtitle = t("historyList.readyToUpload");
+            dotColor = "#30D158";
+            break;
+          case "UPLOADING":
+            icon = "☁️";
+            subtitle = t("historyList.uploadingProgress", { percent: pct });
+            dotColor = "#64D2FF";
+            break;
+        }
+
         return (
           <View
             key={item.id}
             style={[processingStyles.card, { backgroundColor: processingBg, borderColor: processingBorder }]}
           >
             <View style={processingStyles.cardRow}>
-              <Text style={processingStyles.icon}>
-                {isEncoding ? "⚙️" : "☁️"}
-              </Text>
+              <Text style={processingStyles.icon}>{icon}</Text>
               <View style={processingStyles.cardContent}>
                 <Text style={[processingStyles.cardTitle, { color: isDark ? "#FFF" : "#1C1C1E" }]}>
                   {formatSessionLabel(item.sessionId)}
                 </Text>
                 <Text style={[processingStyles.cardSubtitle, { color: subtextColor }]}>
-                  {isEncoding
-                    ? t("historyList.encodingProgress", { percent: pct })
-                    : t("historyList.uploadingProgress", { percent: pct })}
+                  {subtitle}
                 </Text>
               </View>
-              <View style={[processingStyles.statusDot, { backgroundColor: isEncoding ? "#FF9F0A" : "#64D2FF" }]} />
+              <View style={[processingStyles.statusDot, { backgroundColor: dotColor }]} />
             </View>
-            {/* Progress bar */}
-            <View style={processingStyles.progressBarBg}>
-              <View
-                style={[
-                  processingStyles.progressBarFill,
-                  {
-                    width: `${pct}%`,
-                    backgroundColor: isEncoding ? "#FF9F0A" : "#64D2FF",
-                  },
-                ]}
-              />
-            </View>
+            {/* Progress bar — only for encoding/uploading */}
+            {hasProgress && (
+              <View style={processingStyles.progressBarBg}>
+                <View
+                  style={[
+                    processingStyles.progressBarFill,
+                    {
+                      width: `${pct}%`,
+                      backgroundColor: dotColor,
+                    },
+                  ]}
+                />
+              </View>
+            )}
           </View>
         );
       })}
@@ -873,16 +987,17 @@ const processingStyles = StyleSheet.create({
 interface HistoryListProps {
   data: AnalysisResult[];
   loading: boolean;
+  onArchive?: (id: number) => void;
 }
 
-export function HistoryList({ data, loading }: HistoryListProps) {
+export function HistoryList({ data, loading, onArchive }: HistoryListProps) {
   // Split pending items into processing section vs completed list
   const pendingItems = data.filter((item) => item.status === "PENDING");
   const nonPendingItems = data.filter((item) => item.status !== "PENDING");
 
   const renderItem = useCallback(
-    ({ item }: { item: AnalysisResult }) => <HistoryCard item={item} />,
-    []
+    ({ item }: { item: AnalysisResult }) => <HistoryCard item={item} onArchive={onArchive} />,
+    [onArchive]
   );
 
   if (loading) {
@@ -1013,6 +1128,42 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#FF453A",
     lineHeight: 18,
+  },
+
+  // Retry button
+  retryBtn: {
+    marginTop: 10,
+    backgroundColor: "rgba(255,159,10,0.12)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,159,10,0.3)",
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  retryBtnText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#FF9F0A",
+    letterSpacing: 0.3,
+  },
+
+  // Create Guided Video button
+  hardsubBtn: {
+    marginTop: 10,
+    backgroundColor: "rgba(255,214,10,0.12)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,214,10,0.3)",
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  hardsubBtnText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#FFD60A",
+    letterSpacing: 0.3,
   },
   pendingBanner: {
     flexDirection: "row",

@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "wod-strategist",
+    "name": "WOD Strategist",
     "slug": "wod-strategist",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "wodstrategist",
     "userInterfaceStyle": "automatic",
@@ -22,6 +22,9 @@
         "NSHealthUpdateUsageDescription": "운동 데이터를 건강 앱에 저장합니다.",
         "NSPhotoLibraryUsageDescription": "사용자가 사진을 선택할 수 있도록 갤러리 접근이 필요합니다.",
         "NSPhotoLibraryAddUsageDescription": "사용자가 사진을 저장할 수 있도록 갤러리 쓰기 권한이 필요합니다.",
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": [
           "fetch"
         ]

@@ -46,8 +46,20 @@ func (h *recordingHandlers) GetHistory(c *gin.Context) {
 	h.record("history", c)
 }
 
+func (h *recordingHandlers) ArchiveHistory(c *gin.Context) {
+	h.record("archive-history", c)
+}
+
+func (h *recordingHandlers) UnarchiveHistory(c *gin.Context) {
+	h.record("unarchive-history", c)
+}
+
 func (h *recordingHandlers) ListMovements(c *gin.Context) {
 	h.record("movements", c)
+}
+
+func (h *recordingHandlers) ListMovementGroups(c *gin.Context) {
+	h.record("movement-groups", c)
 }
 
 func (h *recordingHandlers) ListInjuries(c *gin.Context) {
@@ -124,6 +136,14 @@ func (h *recordingHandlers) GetPlayURL(c *gin.Context) {
 
 func (h *recordingHandlers) GetVideoDownloadURL(c *gin.Context) {
 	h.record("video-download", c)
+}
+
+func (h *recordingHandlers) RetryAnalysis(c *gin.Context) {
+	h.record("retry-analysis", c)
+}
+
+func (h *recordingHandlers) GenerateHardSub(c *gin.Context) {
+	h.record("generate-hardsub", c)
 }
 
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {

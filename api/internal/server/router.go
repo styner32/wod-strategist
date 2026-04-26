@@ -17,7 +17,10 @@ type Handlers interface {
 	GetAnalysis(*gin.Context)
 	GetChunkAnalysis(*gin.Context)
 	GetHistory(*gin.Context)
+	ArchiveHistory(*gin.Context)
+	UnarchiveHistory(*gin.Context)
 	ListMovements(*gin.Context)
+	ListMovementGroups(*gin.Context)
 	ListInjuries(*gin.Context)
 	ChunkComplete(*gin.Context)
 	CreateProfile(*gin.Context)
@@ -32,6 +35,8 @@ type Handlers interface {
 	GetHighlight(*gin.Context)
 	GetHighlightDownloadURL(*gin.Context)
 	VerifyHighlights(*gin.Context)
+	RetryAnalysis(*gin.Context)
+	GenerateHardSub(*gin.Context)
 	ListSessionCatalog(*gin.Context)
 	GetSessionAssets(*gin.Context)
 	GetPlayURL(*gin.Context)
@@ -119,12 +124,42 @@ var protectedRouteDefinitions = []routeDefinition{
 	},
 	{
 		spec: RouteSpec{
+			Name:   "archive-history",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/history/:id/archive",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/history/:id/archive", handlers.ArchiveHistory)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "unarchive-history",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/history/:id/unarchive",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/history/:id/unarchive", handlers.UnarchiveHistory)
+		},
+	},
+	{
+		spec: RouteSpec{
 			Name:   "movements",
 			Method: http.MethodGet,
 			Path:   APIRoutePrefix + "/movements",
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/movements", handlers.ListMovements)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "movement-groups",
+			Method: http.MethodGet,
+			Path:   APIRoutePrefix + "/movement-groups",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.GET("/movement-groups", handlers.ListMovementGroups)
 		},
 	},
 	{
@@ -315,6 +350,26 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.GET("/video-download/:session_id", handlers.GetVideoDownloadURL)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "retry-analysis",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/retry-analysis",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/retry-analysis", handlers.RetryAnalysis)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "generate-hardsub",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/generate-hardsub",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/generate-hardsub", handlers.GenerateHardSub)
 		},
 	},
 }

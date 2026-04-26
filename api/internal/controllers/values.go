@@ -2,41 +2,140 @@ package controllers
 
 import (
 	"path"
+	"regexp"
 	"strings"
 )
 
-var movements = []string{
-	"Burpee",
-	"Power Snatch",
-	"Hang Power Snatch",
-	"Squat Snatch",
-	"Hang Squat Snatch",
-	"DB Snatch",
-	"Hang DB Snatch",
-	"Clean & Jerk",
-	"Hang Clean & Jerk",
-	"Power Clean & Jerk",
-	"Hang Power Clean & Jerk",
-	"Squat Clean & Jerk",
-	"Hang Squat Clean & Jerk",
-	"DB Clean & Jerk",
-	"Hang DB Clean & Jerk",
-	"Thruster",
-	"Wallball Shot",
-	"Double-under",
-	"Deadlift",
-	"Back Squat",
-	"Overhead Squat",
-	"Box Jump",
-	"Burpee Box Jump Over",
-	"Handstand Push-up",
-	"Pull-up",
-	"Chest to Bar",
-	"Muscle-up",
-	"Row",
-	"Echo Bike",
-	"Skierg",
-	"Toes to Bar",
+// MovementGroup represents a category of workout movements.
+type MovementGroup struct {
+	Category  string   `json:"category"`
+	Movements []string `json:"movements"`
+}
+
+var movementGroups = []MovementGroup{
+	{Category: "Barbell", Movements: []string{
+		"Power Snatch",
+		"Hang Power Snatch",
+		"Squat Snatch",
+		"Hang Squat Snatch",
+		"Clean",
+		"Power Clean",
+		"Hang Clean",
+		"Squat Clean",
+		"Clean & Jerk",
+		"Hang Clean & Jerk",
+		"Power Clean & Jerk",
+		"Hang Power Clean & Jerk",
+		"Squat Clean & Jerk",
+		"Hang Squat Clean & Jerk",
+		"Cluster",
+		"Hang Cluster",
+		"Deadlift",
+		"Back Squat",
+		"Front Squat",
+		"Overhead Squat",
+		"Thruster",
+		"Strict Press",
+		"Push Press",
+		"Push Jerk",
+		"Bench Press",
+	}},
+	{Category: "Dumbbell & Kettlebell", Movements: []string{
+		"DB Press",
+		"DB Snatch",
+		"DB Clean",
+		"DB Hang Clean",
+		"DB Squat Clean",
+		"DB Hang Cluster",
+		"Hang DB Snatch",
+		"DB Clean & Jerk",
+		"Hang DB Clean & Jerk",
+		"DB Thruster",
+		"KB Swing",
+		"Devil Press",
+		"Manmaker",
+		"Farmer's Carry",
+	}},
+	{Category: "Gymnastics", Movements: []string{
+		"Pull-up",
+		"Chest to Bar",
+		"Bar Muscle-up",
+		"Ring Muscle-up",
+		"Toes to Bar",
+		"Handstand Push-up",
+		"Handstand Walk",
+		"Rope Climb",
+		"Ring Dip",
+		"Pistol",
+		"Wall Walk",
+		"GHD Sit-up",
+	}},
+	{Category: "Bodyweight & Plyo", Movements: []string{
+		"Burpee",
+		"Push-up",
+		"Air Squat",
+		"Sit-up",
+		"Lunge",
+		"Box Jump",
+		"Box Jump Over",
+		"Burpee Box Jump Over",
+		"Broad Jump",
+		"Wallball Shot",
+	}},
+	{Category: "Cardio", Movements: []string{
+		"Row",
+		"Echo Bike",
+		"Bike Erg",
+		"Skierg",
+		"Run",
+		"Double-under",
+		"Single-under",
+	}},
+	{Category: "Surfing", Movements: []string{
+		"Surfing",
+		"Pop-up",
+		"Duck Dive",
+		"Paddle",
+		"Bottom Turn",
+		"Cutback",
+		"Top Turn",
+		"Snap",
+		"Floater",
+		"Tube Ride",
+		"Aerial",
+		"Turtle Roll",
+		"Take-off",
+	}},
+	{Category: "Yoga", Movements: []string{
+		"Yoga",
+		"Downward Dog",
+		"Warrior I",
+		"Warrior II",
+		"Warrior III",
+		"Tree Pose",
+		"Chair Pose",
+		"Triangle Pose",
+		"Plank Pose",
+		"Cobra Pose",
+		"Child's Pose",
+		"Bridge Pose",
+		"Crow Pose",
+		"Headstand",
+		"Shoulder Stand",
+		"Pigeon Pose",
+		"Camel Pose",
+		"Boat Pose",
+		"Sun Salutation",
+	}},
+}
+
+// movements is the flat list derived from movementGroups (for GET /movements backward compat).
+var movements []string
+
+func init() {
+	for _, g := range movementGroups {
+		movements = append(movements, g.Movements...)
+	}
 }
 
 var injuries = []string{
@@ -60,8 +159,7 @@ var injuries = []string{
 type allowedSet map[string]struct{}
 
 var (
-	allowedMovements = newAllowedSet(movements)
-	allowedInjuries  = newAllowedSet(injuries)
+	allowedInjuries = newAllowedSet(injuries)
 )
 
 func newAllowedSet(values []string) allowedSet {
@@ -79,6 +177,33 @@ func (s allowedSet) containsAll(values []string) bool {
 		}
 	}
 	return true
+}
+
+// movementNameRE restricts movement names to characters safe to splice
+// into an LLM prompt. Blocks newlines, control chars, backticks, angle
+// brackets, and other delimiters used in prompt-injection payloads, while
+// permitting every character used in the predefined movement list.
+var movementNameRE = regexp.MustCompile(`^[A-Za-z0-9 &\-'/()+.]+$`)
+
+// validateMovements checks movement list constraints without requiring
+// movements to be in the predefined list (supports custom movements).
+func validateMovements(values []string) (bool, string) {
+	if len(values) >= 100 {
+		return false, "too many movements"
+	}
+	for _, v := range values {
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return false, "movement name cannot be empty"
+		}
+		if len(trimmed) > 100 {
+			return false, "movement name too long"
+		}
+		if !movementNameRE.MatchString(trimmed) {
+			return false, "movement name contains invalid characters"
+		}
+	}
+	return true, ""
 }
 
 func sanitizeObjectPart(value string, fallback string) string {

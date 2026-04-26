@@ -28,6 +28,8 @@ type AnalysisResultRepository interface {
 	FindBySessionID(ctx context.Context, sessionID string) ([]db.AnalysisResult, error)
 	ListRecent(ctx context.Context, limit int, profileID uint) ([]db.AnalysisResult, error)
 	FindChunksBySessionID(ctx context.Context, sessionID string) ([]db.ChunkAnalysisResult, error)
+	Archive(ctx context.Context, id uint) error
+	Unarchive(ctx context.Context, id uint) error
 }
 
 type ProfileRepository interface {
@@ -46,11 +48,13 @@ type HighlightResultRepository interface {
 
 type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error)
 
-type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64) (*asynq.Task, error)
+type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int) (*asynq.Task, error)
 
 type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int) (*asynq.Task, error)
 
 type VerifyHighlightsTaskFactory func(sessionID string) (*asynq.Task, error)
+
+type HardSubTaskFactory func(sessionID string, profileID uint) (*asynq.Task, error)
 
 type Config struct {
 	QueueClient             QueueClient
@@ -65,6 +69,7 @@ type Config struct {
 	NewMergeChunksTask      VideoAnalysisTaskFactory
 	NewGenerateHighlight    HighlightTaskFactory
 	NewVerifyHighlightsTask VerifyHighlightsTaskFactory
+	NewGenerateHardSub      HardSubTaskFactory
 }
 
 type Controller struct {
@@ -80,6 +85,7 @@ type Controller struct {
 	newMergeChunksTask      VideoAnalysisTaskFactory
 	newGenerateHighlight    HighlightTaskFactory
 	newVerifyHighlightsTask VerifyHighlightsTaskFactory
+	newGenerateHardSub      HardSubTaskFactory
 }
 
 func New(config Config) *Controller {
@@ -113,6 +119,11 @@ func New(config Config) *Controller {
 		verifyTaskFactory = worker.NewVerifyHighlightsTask
 	}
 
+	hardSubFactory := config.NewGenerateHardSub
+	if hardSubFactory == nil {
+		hardSubFactory = worker.NewGenerateHardSubTask
+	}
+
 	return &Controller{
 		queueClient:             config.QueueClient,
 		analysisResults:         config.AnalysisResults,
@@ -126,5 +137,6 @@ func New(config Config) *Controller {
 		newMergeChunksTask:      mergeTaskFactory,
 		newGenerateHighlight:    highlightTaskFactory,
 		newVerifyHighlightsTask: verifyTaskFactory,
+		newGenerateHardSub:      hardSubFactory,
 	}
 }

@@ -80,6 +80,7 @@ export interface ProcessWorkoutVideoOptions {
   profileId: number;
   startSecs?: number;
   endSecs?: number;
+  heartRateBpm?: number;
 }
 
 export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
@@ -105,6 +106,15 @@ export async function fetchMovements(): Promise<string[]> {
   return apiClient<string[]>("/movements");
 }
 
+export interface MovementGroup {
+  category: string;
+  movements: string[];
+}
+
+export async function fetchMovementGroups(): Promise<MovementGroup[]> {
+  return apiClient<MovementGroup[]>("/movement-groups");
+}
+
 export async function fetchInjuries(): Promise<string[]> {
   return apiClient<string[]>("/injuries");
 }
@@ -122,6 +132,7 @@ export interface ProfileResponse {
   gender: string;
   height_cm: number;
   weight_kg: number;
+  fitness_level: string;
   injuries: string[];
   archived_at?: string;
 }
@@ -134,6 +145,7 @@ export interface CreateProfileRequest {
   gender: string;
   height_cm: number;
   weight_kg: number;
+  fitness_level?: string;
   injuries?: string[];
 }
 
@@ -145,6 +157,7 @@ export interface UpdateProfileRequest {
   gender?: string;
   height_cm?: number;
   weight_kg?: number;
+  fitness_level?: string;
   injuries?: string[];
 }
 
@@ -270,7 +283,8 @@ export async function notifyChunkUploadComplete(
   workoutType: string,
   profileId: number,
   startSecs?: number,
-  endSecs?: number
+  endSecs?: number,
+  heartRateBpm?: number
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
@@ -283,6 +297,7 @@ export async function notifyChunkUploadComplete(
       profile_id: profileId,
       ...(startSecs !== undefined ? { start_secs: startSecs } : {}),
       ...(endSecs !== undefined ? { end_secs: endSecs } : {}),
+      ...(heartRateBpm !== undefined && heartRateBpm > 0 ? { heart_rate_bpm: heartRateBpm } : {}),
     },
   });
 }
@@ -347,6 +362,7 @@ export async function processWorkoutChunk(
     profileId,
     startSecs,
     endSecs,
+    heartRateBpm,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
 
@@ -369,7 +385,8 @@ export async function processWorkoutChunk(
     workoutType,
     profileId,
     startSecs,
-    endSecs
+    endSecs,
+    heartRateBpm
   );
 
   return {
@@ -503,4 +520,69 @@ export async function fetchHighlightDownloadURL(
   return apiClient<VideoDownloadURLResponse>(
     `/highlight-download/${highlightId}`
   );
+}
+
+// ==========================================
+// Retry Analysis
+// ==========================================
+
+export interface RetryAnalysisResponse {
+  message: string;
+  task_id: string;
+  session_id: string;
+}
+
+/**
+ * Re-triggers video analysis for a failed session using existing GCS files.
+ */
+export async function retryAnalysis(
+  sessionId: string,
+  profileId: number
+): Promise<RetryAnalysisResponse> {
+  return apiClient<RetryAnalysisResponse>("/retry-analysis", {
+    method: "POST",
+    bodyPayload: {
+      session_id: sessionId,
+      profile_id: profileId,
+    },
+  });
+}
+
+// ==========================================
+// Archive History
+// ==========================================
+
+/**
+ * Archives a history record (soft-delete). The record won't appear in the history list.
+ */
+export async function archiveHistory(id: number): Promise<void> {
+  return apiClient(`/history/${id}/archive`, {
+    method: "POST",
+  });
+}
+
+// ==========================================
+// Generate Hardsubbed Video
+// ==========================================
+
+export interface GenerateHardSubResponse {
+  message: string;
+  task_id: string;
+  session_id: string;
+}
+
+/**
+ * Triggers generation of a hardsubbed video with burned-in subtitles.
+ */
+export async function generateHardSub(
+  sessionId: string,
+  profileId: number
+): Promise<GenerateHardSubResponse> {
+  return apiClient<GenerateHardSubResponse>("/generate-hardsub", {
+    method: "POST",
+    bodyPayload: {
+      session_id: sessionId,
+      profile_id: profileId,
+    },
+  });
 }

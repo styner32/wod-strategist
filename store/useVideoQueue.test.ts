@@ -33,12 +33,14 @@ jest.mock("react-native-compressor", () => ({
 const mockFileDelete = jest.fn();
 const mockFileExists = true;
 const mockFileMove = jest.fn();
+const mockFileCopy = jest.fn();
 const mockFileSize = 1024;
 jest.mock("expo-file-system", () => ({
   File: jest.fn().mockImplementation(() => ({
     exists: mockFileExists,
     delete: mockFileDelete,
     move: mockFileMove,
+    copy: mockFileCopy,
     size: mockFileSize,
   })),
 }));
@@ -139,7 +141,7 @@ describe("useVideoQueue", () => {
 
       expect(mockCompress).toHaveBeenCalledWith(
         "file:///raw/video.mp4",
-        expect.objectContaining({ compressionMethod: "auto", maxSize: 720 }),
+        expect.objectContaining({ compressionMethod: "auto", maxSize: 720, minimumFileSizeForCompress: 0 }),
         expect.any(Function)
       );
     });
@@ -306,6 +308,41 @@ describe("useVideoQueue", () => {
       expect(mockCompress).toHaveBeenCalled();
 
       await new Promise((r) => setTimeout(r, 50));
+      expect(getItems()[0].status).toBe("ENCODED");
+    });
+  });
+
+  describe("same-path compression bug", () => {
+    it("should COPY instead of MOVE when compress returns same path as input", async () => {
+      // Simulate Video.compress returning the same URI (no-op compression)
+      mockCompress.mockResolvedValue("file:///raw/video.mp4");
+
+      const id = getStore().enqueue("file:///raw/video.mp4", defaultMetadata);
+      getStore().startEncoding(id);
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Should use copy (not move) to preserve the raw file
+      expect(mockFileCopy).toHaveBeenCalled();
+      expect(mockFileMove).not.toHaveBeenCalled();
+
+      // Status should still be ENCODED
+      expect(getItems()[0].status).toBe("ENCODED");
+      expect(getItems()[0].compressedUri).toMatch(/_encoded\.mp4$/);
+    });
+
+    it("should MOVE when compress returns a different path", async () => {
+      mockCompress.mockResolvedValue("file:///compressed/output.mp4");
+
+      const id = getStore().enqueue("file:///raw/video.mp4", defaultMetadata);
+      getStore().startEncoding(id);
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Should use move (not copy) since the paths differ
+      expect(mockFileMove).toHaveBeenCalled();
+      expect(mockFileCopy).not.toHaveBeenCalled();
+
       expect(getItems()[0].status).toBe("ENCODED");
     });
   });

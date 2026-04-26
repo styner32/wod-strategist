@@ -7,39 +7,39 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		05368BA7A82F4A67A32DAA7C /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0FAADE44412D4B829DFAAE54 /* CoreML.framework */; };
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
-		1B18DFA21EA135699E22A7E3 /* BroadcastExtension-PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 8E978A2D92954F5E8CFA9C40 /* BroadcastExtension-PrivacyInfo.xcprivacy */; };
-		21A20CC31D0241ABBD24A89B /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B148BBB3302B41A5933BE398 /* SampleHandler.swift */; };
-		2403C3C9CC08B0CD25EB5BC6 /* libPods-wodstrategist.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 633DB80F611125B08AB3E2D9 /* libPods-wodstrategist.a */; };
-		2D92B78DABD382C50938C9BD /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC2ADF0740EC69CF477F3C4 /* ExpoModulesProvider.swift */; };
-		2F8E48A8107A4D75A105E8EB /* BroadcastWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 291395EE567A46B39ED1D8BE /* BroadcastWriter.swift */; };
-		3BED8B2C274C491EB9A7B240 /* BroadcastHelper.m in Sources */ = {isa = PBXBuildFile; fileRef = C61C546772024E1CB50DC0B8 /* BroadcastHelper.m */; };
+		2DF223E40411FE7AE0527FA2 /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E761F14CCE07AE4184592C /* ExpoModulesProvider.swift */; };
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
-		5E96F53E21EC4444AA734701 /* ReplayKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B9231EFB4BAD4400ABC33B6C /* ReplayKit.framework */; };
-		6B4F76F3AC5642E7BC7107D5 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1B5FF993225E46B0BB935218 /* CoreML.framework */; };
-		A06961ED5814494DAC3D7E01 /* BroadcastExtension.appex in Copy Files */ = {isa = PBXBuildFile; fileRef = F3BE7BE269C644B98EDF1093 /* BroadcastExtension.appex */; };
+		6EFAE93A45705F968D2FBAD0 /* BroadcastExtension-PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = E6DC84A37E304E3E9184B37B /* BroadcastExtension-PrivacyInfo.xcprivacy */; };
+		8589B8A6CA12416F9C11B33D /* BroadcastWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB8DA7C265824CCBBC7EF868 /* BroadcastWriter.swift */; };
+		8701B616E04A40CBB54E534B /* ReplayKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DC4299768C694C2AAE012D97 /* ReplayKit.framework */; };
+		97B55B30304C4067817DE9C1 /* BroadcastExtension.appex in Copy Files */ = {isa = PBXBuildFile; fileRef = E5E0DEDAB2614ECCBFF8D25A /* BroadcastExtension.appex */; };
+		AC3494447EB549C3BDBA845D /* SampleHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E01B36BF11984137AB78F49B /* SampleHandler.swift */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
+		C6C5585A687A465F857096FE /* BroadcastHelper.m in Sources */ = {isa = PBXBuildFile; fileRef = 0EC048DA31FA4502BB2A493E /* BroadcastHelper.m */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
+		F6A82F649D38ADE5ADE298C3 /* libPods-wodstrategist.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B54CF0F49E0C9C8120A3C6B2 /* libPods-wodstrategist.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		DAB66F08D859428386C86C6A /* PBXContainerItemProxy */ = {
+		5EDD1FDE3A2745C4B7675EE3 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = C7552A19ECB742DE980854AD;
+			remoteGlobalIDString = C198C89DB54A4F1F99023599;
 			remoteInfo = BroadcastExtension;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		278EF9E7301648DE976B47CB /* Copy Files */ = {
+		A78408D4705E452D8953E8E5 /* Copy Files */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				A06961ED5814494DAC3D7E01 /* BroadcastExtension.appex in Copy Files */,
+				97B55B30304C4067817DE9C1 /* BroadcastExtension.appex in Copy Files */,
 			);
 			name = "Copy Files";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -47,29 +47,30 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		0DD2072BB2EED09B28FE9CE6 /* Pods-wodstrategist.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-wodstrategist.debug.xcconfig"; path = "Target Support Files/Pods-wodstrategist/Pods-wodstrategist.debug.xcconfig"; sourceTree = "<group>"; };
-		0E27CE80FDD8EEFC8264E070 /* Pods-wodstrategist.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-wodstrategist.release.xcconfig"; path = "Target Support Files/Pods-wodstrategist/Pods-wodstrategist.release.xcconfig"; sourceTree = "<group>"; };
+		0EC048DA31FA4502BB2A493E /* BroadcastHelper.m */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.objc; name = BroadcastHelper.m; path = BroadcastHelper.m; sourceTree = "<group>"; };
+		0FAADE44412D4B829DFAAE54 /* CoreML.framework */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
+		0FE4139D0669438B9B361DE2 /* BroadcastHelper.h */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.h; name = BroadcastHelper.h; path = BroadcastHelper.h; sourceTree = "<group>"; };
 		13B07F961A680F5B00A75B9A /* wodstrategist.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = wodstrategist.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		13B07FB51A68108700A75B9A /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Images.xcassets; path = wodstrategist/Images.xcassets; sourceTree = "<group>"; };
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = wodstrategist/Info.plist; sourceTree = "<group>"; };
-		16D3135BDE204EF2951D2A4E /* BroadcastExtension-Bridging-Header.h */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.h; name = "BroadcastExtension-Bridging-Header.h"; path = "BroadcastExtension-Bridging-Header.h"; sourceTree = "<group>"; };
-		1B5FF993225E46B0BB935218 /* CoreML.framework */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
-		291395EE567A46B39ED1D8BE /* BroadcastWriter.swift */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = BroadcastWriter.swift; path = BroadcastWriter.swift; sourceTree = "<group>"; };
-		47966518B0E44C0BA71A1310 /* BroadcastExtension-Info.plist */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = text.plist.xml; name = "BroadcastExtension-Info.plist"; path = "BroadcastExtension-Info.plist"; sourceTree = "<group>"; };
-		633DB80F611125B08AB3E2D9 /* libPods-wodstrategist.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-wodstrategist.a"; sourceTree = BUILT_PRODUCTS_DIR; };
-		86AD59EE7D664A7EACE9F2D6 /* BroadcastExtension.entitlements */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = BroadcastExtension.entitlements; path = BroadcastExtension.entitlements; sourceTree = "<group>"; };
-		8E978A2D92954F5E8CFA9C40 /* BroadcastExtension-PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "BroadcastExtension-PrivacyInfo.xcprivacy"; path = "BroadcastExtension-PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
+		27B927B087674130A44D73FE /* BroadcastExtension-Info.plist */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = text.plist.xml; name = "BroadcastExtension-Info.plist"; path = "BroadcastExtension-Info.plist"; sourceTree = "<group>"; };
+		973C4745D26008C0E9D491EA /* Pods-wodstrategist.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-wodstrategist.debug.xcconfig"; path = "Target Support Files/Pods-wodstrategist/Pods-wodstrategist.debug.xcconfig"; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = wodstrategist/SplashScreen.storyboard; sourceTree = "<group>"; };
-		B148BBB3302B41A5933BE398 /* SampleHandler.swift */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = SampleHandler.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
-		B9231EFB4BAD4400ABC33B6C /* ReplayKit.framework */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = System/Library/Frameworks/ReplayKit.framework; sourceTree = SDKROOT; };
+		AEC73D577CB546C7B85970CA /* BroadcastExtension.entitlements */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = BroadcastExtension.entitlements; path = BroadcastExtension.entitlements; sourceTree = "<group>"; };
+		B54CF0F49E0C9C8120A3C6B2 /* libPods-wodstrategist.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-wodstrategist.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
-		C61C546772024E1CB50DC0B8 /* BroadcastHelper.m */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.objc; name = BroadcastHelper.m; path = BroadcastHelper.m; sourceTree = "<group>"; };
-		C67C63C5383A4631B81A7306 /* BroadcastHelper.h */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.h; name = BroadcastHelper.h; path = BroadcastHelper.h; sourceTree = "<group>"; };
-		CDC2ADF0740EC69CF477F3C4 /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-wodstrategist/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
+		CB38114722EF2F011AB86698 /* Pods-wodstrategist.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-wodstrategist.release.xcconfig"; path = "Target Support Files/Pods-wodstrategist/Pods-wodstrategist.release.xcconfig"; sourceTree = "<group>"; };
+		CF2CBAFA0B3346B6B74EAA4F /* BroadcastExtension-Bridging-Header.h */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.h; name = "BroadcastExtension-Bridging-Header.h"; path = "BroadcastExtension-Bridging-Header.h"; sourceTree = "<group>"; };
+		DC4299768C694C2AAE012D97 /* ReplayKit.framework */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = System/Library/Frameworks/ReplayKit.framework; sourceTree = SDKROOT; };
+		E01B36BF11984137AB78F49B /* SampleHandler.swift */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = SampleHandler.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		E4E761F14CCE07AE4184592C /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-wodstrategist/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
+		E5E0DEDAB2614ECCBFF8D25A /* BroadcastExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = undefined; name = BroadcastExtension.appex; path = BroadcastExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		E6DC84A37E304E3E9184B37B /* BroadcastExtension-PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "BroadcastExtension-PrivacyInfo.xcprivacy"; path = "BroadcastExtension-PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
+		E84190B7981848669096AB4C /* wod-strategist.entitlements */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = text.plist.entitlements; name = "wod-strategist.entitlements"; path = "wod-strategist/wod-strategist.entitlements"; sourceTree = "<group>"; };
+		EB8DA7C265824CCBBC7EF868 /* BroadcastWriter.swift */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = BroadcastWriter.swift; path = BroadcastWriter.swift; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = wodstrategist/AppDelegate.swift; sourceTree = "<group>"; };
 		F11748442D0722820044C1D9 /* wodstrategist-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "wodstrategist-Bridging-Header.h"; path = "wodstrategist/wodstrategist-Bridging-Header.h"; sourceTree = "<group>"; };
-		F3BE7BE269C644B98EDF1093 /* BroadcastExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = undefined; name = BroadcastExtension.appex; path = BroadcastExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,16 +78,16 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				6B4F76F3AC5642E7BC7107D5 /* CoreML.framework in Frameworks */,
-				2403C3C9CC08B0CD25EB5BC6 /* libPods-wodstrategist.a in Frameworks */,
+				05368BA7A82F4A67A32DAA7C /* CoreML.framework in Frameworks */,
+				F6A82F649D38ADE5ADE298C3 /* libPods-wodstrategist.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		2E464FE7261347738D39843B /* Frameworks */ = {
+		914687749D1B4681AEA3DCE1 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				5E96F53E21EC4444AA734701 /* ReplayKit.framework in Frameworks */,
+				8701B616E04A40CBB54E534B /* ReplayKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -102,6 +103,7 @@
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */,
+				E84190B7981848669096AB4C /* wod-strategist.entitlements */,
 			);
 			name = wodstrategist;
 			sourceTree = "<group>";
@@ -110,11 +112,27 @@
 			isa = PBXGroup;
 			children = (
 				ED297162215061F000B7C4FE /* JavaScriptCore.framework */,
-				B9231EFB4BAD4400ABC33B6C /* ReplayKit.framework */,
-				1B5FF993225E46B0BB935218 /* CoreML.framework */,
-				633DB80F611125B08AB3E2D9 /* libPods-wodstrategist.a */,
+				DC4299768C694C2AAE012D97 /* ReplayKit.framework */,
+				0FAADE44412D4B829DFAAE54 /* CoreML.framework */,
+				B54CF0F49E0C9C8120A3C6B2 /* libPods-wodstrategist.a */,
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		646128575BE546A9BA20A6A3 /* BroadcastExtension */ = {
+			isa = PBXGroup;
+			children = (
+				E01B36BF11984137AB78F49B /* SampleHandler.swift */,
+				EB8DA7C265824CCBBC7EF868 /* BroadcastWriter.swift */,
+				0EC048DA31FA4502BB2A493E /* BroadcastHelper.m */,
+				27B927B087674130A44D73FE /* BroadcastExtension-Info.plist */,
+				AEC73D577CB546C7B85970CA /* BroadcastExtension.entitlements */,
+				E6DC84A37E304E3E9184B37B /* BroadcastExtension-PrivacyInfo.xcprivacy */,
+				0FE4139D0669438B9B361DE2 /* BroadcastHelper.h */,
+				CF2CBAFA0B3346B6B74EAA4F /* BroadcastExtension-Bridging-Header.h */,
+			);
+			name = BroadcastExtension;
+			path = BroadcastExtension;
 			sourceTree = "<group>";
 		};
 		832341AE1AAA6A7D00B99B32 /* Libraries */ = {
@@ -131,9 +149,9 @@
 				832341AE1AAA6A7D00B99B32 /* Libraries */,
 				83CBBA001A601CBA00E9B192 /* Products */,
 				2D16E6871FA4F8E400B85C8A /* Frameworks */,
-				D7782EC7E734486EBC345D48 /* BroadcastExtension */,
-				898E8745C5DA430015BE98A9 /* Pods */,
-				8D18D6ACEE17E641970989A5 /* ExpoModulesProviders */,
+				646128575BE546A9BA20A6A3 /* BroadcastExtension */,
+				C2F11D29A5A3C79F5A5449BB /* Pods */,
+				F82C7DB6BD709436648847ED /* ExpoModulesProviders */,
 			);
 			indentWidth = 2;
 			sourceTree = "<group>";
@@ -144,33 +162,15 @@
 			isa = PBXGroup;
 			children = (
 				13B07F961A680F5B00A75B9A /* wodstrategist.app */,
-				F3BE7BE269C644B98EDF1093 /* BroadcastExtension.appex */,
+				E5E0DEDAB2614ECCBFF8D25A /* BroadcastExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		898E8745C5DA430015BE98A9 /* Pods */ = {
+		9EE4EF1B1D496F1072C0DA46 /* wodstrategist */ = {
 			isa = PBXGroup;
 			children = (
-				0DD2072BB2EED09B28FE9CE6 /* Pods-wodstrategist.debug.xcconfig */,
-				0E27CE80FDD8EEFC8264E070 /* Pods-wodstrategist.release.xcconfig */,
-			);
-			name = Pods;
-			path = Pods;
-			sourceTree = "<group>";
-		};
-		8D18D6ACEE17E641970989A5 /* ExpoModulesProviders */ = {
-			isa = PBXGroup;
-			children = (
-				A98246E5C1D593DDCEF8BF62 /* wodstrategist */,
-			);
-			name = ExpoModulesProviders;
-			sourceTree = "<group>";
-		};
-		A98246E5C1D593DDCEF8BF62 /* wodstrategist */ = {
-			isa = PBXGroup;
-			children = (
-				CDC2ADF0740EC69CF477F3C4 /* ExpoModulesProvider.swift */,
+				E4E761F14CCE07AE4184592C /* ExpoModulesProvider.swift */,
 			);
 			name = wodstrategist;
 			sourceTree = "<group>";
@@ -184,20 +184,22 @@
 			path = wodstrategist/Supporting;
 			sourceTree = "<group>";
 		};
-		D7782EC7E734486EBC345D48 /* BroadcastExtension */ = {
+		C2F11D29A5A3C79F5A5449BB /* Pods */ = {
 			isa = PBXGroup;
 			children = (
-				B148BBB3302B41A5933BE398 /* SampleHandler.swift */,
-				291395EE567A46B39ED1D8BE /* BroadcastWriter.swift */,
-				C61C546772024E1CB50DC0B8 /* BroadcastHelper.m */,
-				47966518B0E44C0BA71A1310 /* BroadcastExtension-Info.plist */,
-				86AD59EE7D664A7EACE9F2D6 /* BroadcastExtension.entitlements */,
-				8E978A2D92954F5E8CFA9C40 /* BroadcastExtension-PrivacyInfo.xcprivacy */,
-				C67C63C5383A4631B81A7306 /* BroadcastHelper.h */,
-				16D3135BDE204EF2951D2A4E /* BroadcastExtension-Bridging-Header.h */,
+				973C4745D26008C0E9D491EA /* Pods-wodstrategist.debug.xcconfig */,
+				CB38114722EF2F011AB86698 /* Pods-wodstrategist.release.xcconfig */,
 			);
-			name = BroadcastExtension;
-			path = BroadcastExtension;
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
+		};
+		F82C7DB6BD709436648847ED /* ExpoModulesProviders */ = {
+			isa = PBXGroup;
+			children = (
+				9EE4EF1B1D496F1072C0DA46 /* wodstrategist */,
+			);
+			name = ExpoModulesProviders;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -208,32 +210,32 @@
 			buildConfigurationList = 13B07F931A680F5B00A75B9A /* Build configuration list for PBXNativeTarget "wodstrategist" */;
 			buildPhases = (
 				08A4A3CD28434E44B6B9DE2E /* [CP] Check Pods Manifest.lock */,
-				45193F246FA48DD79A42B691 /* [Expo] Configure project */,
+				082FDAFA72C00FB6EC01DB19 /* [Expo] Configure project */,
 				13B07F871A680F5B00A75B9A /* Sources */,
 				13B07F8C1A680F5B00A75B9A /* Frameworks */,
 				13B07F8E1A680F5B00A75B9A /* Resources */,
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
 				800E24972A6A228C8D4807E9 /* [CP] Copy Pods Resources */,
-				278EF9E7301648DE976B47CB /* Copy Files */,
-				9A9F658AE913083D2E76D26D /* [CP] Embed Pods Frameworks */,
+				A78408D4705E452D8953E8E5 /* Copy Files */,
+				452B15CC44DE35ED6F8746CC /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				42D950E141484AB4A6386484 /* PBXTargetDependency */,
+				2FB627F84FEE4CADB72E5BF0 /* PBXTargetDependency */,
 			);
 			name = wodstrategist;
 			productName = wodstrategist;
 			productReference = 13B07F961A680F5B00A75B9A /* wodstrategist.app */;
 			productType = "com.apple.product-type.application";
 		};
-		C7552A19ECB742DE980854AD /* BroadcastExtension */ = {
+		C198C89DB54A4F1F99023599 /* BroadcastExtension */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 8E92EBFAE442493BA9AA051F /* Build configuration list for PBXNativeTarget "BroadcastExtension" */;
+			buildConfigurationList = 3FB291A9DCA24BECAC59AFEB /* Build configuration list for PBXNativeTarget "BroadcastExtension" */;
 			buildPhases = (
-				B048BC8D54A24D71B447A40F /* Sources */,
-				42C0F2A37B314039B1A1F744 /* Resources */,
-				2E464FE7261347738D39843B /* Frameworks */,
+				E29A084547D540E1ABADAEAA /* Sources */,
+				4A69E702B4BA44AF988270A8 /* Resources */,
+				914687749D1B4681AEA3DCE1 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -241,7 +243,7 @@
 			);
 			name = BroadcastExtension;
 			productName = BroadcastExtension;
-			productReference = F3BE7BE269C644B98EDF1093 /* BroadcastExtension.appex */;
+			productReference = E5E0DEDAB2614ECCBFF8D25A /* BroadcastExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
@@ -253,12 +255,12 @@
 				LastUpgradeCheck = 1130;
 				TargetAttributes = {
 					13B07F861A680F5B00A75B9A = {
-						DevelopmentTeam = FV89L56N85;
 						LastSwiftMigration = 1250;
+						DevelopmentTeam = "FV89L56N85";
 						ProvisioningStyle = Automatic;
 					};
-					C7552A19ECB742DE980854AD = {
-						DevelopmentTeam = FV89L56N85;
+					C198C89DB54A4F1F99023599 = {
+						DevelopmentTeam = "FV89L56N85";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -277,7 +279,7 @@
 			projectRoot = "";
 			targets = (
 				13B07F861A680F5B00A75B9A /* wodstrategist */,
-				C7552A19ECB742DE980854AD /* BroadcastExtension */,
+				C198C89DB54A4F1F99023599 /* BroadcastExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -290,11 +292,11 @@
 				BB2F792D24A3F905000567C9 /* Expo.plist in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */,
-				1B18DFA21EA135699E22A7E3 /* BroadcastExtension-PrivacyInfo.xcprivacy in Resources */,
+				6EFAE93A45705F968D2FBAD0 /* BroadcastExtension-PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		42C0F2A37B314039B1A1F744 /* Resources */ = {
+		4A69E702B4BA44AF988270A8 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -321,29 +323,7 @@
 			shellPath = /bin/sh;
 			shellScript = "if [[ -f \"$PODS_ROOT/../.xcode.env\" ]]; then\n  source \"$PODS_ROOT/../.xcode.env\"\nfi\nif [[ -f \"$PODS_ROOT/../.xcode.env.local\" ]]; then\n  source \"$PODS_ROOT/../.xcode.env.local\"\nfi\n\n# The project root by default is one level up from the ios directory\nexport PROJECT_ROOT=\"$PROJECT_DIR\"/..\n\nif [[ \"$CONFIGURATION\" = *Debug* ]]; then\n  export SKIP_BUNDLING=1\nfi\nif [[ -z \"$ENTRY_FILE\" ]]; then\n  # Set the entry JS file using the bundler's entry resolution.\n  export ENTRY_FILE=\"$(\"$NODE_BINARY\" -e \"require('expo/scripts/resolveAppEntry')\" \"$PROJECT_ROOT\" ios absolute | tail -n 1)\"\nfi\n\nif [[ -z \"$CLI_PATH\" ]]; then\n  # Use Expo CLI\n  export CLI_PATH=\"$(\"$NODE_BINARY\" --print \"require.resolve('@expo/cli', { paths: [require.resolve('expo/package.json')] })\")\"\nfi\nif [[ -z \"$BUNDLE_COMMAND\" ]]; then\n  # Default Expo CLI command for bundling\n  export BUNDLE_COMMAND=\"export:embed\"\nfi\n\n# Source .xcode.env.updates if it exists to allow\n# SKIP_BUNDLING to be unset if needed\nif [[ -f \"$PODS_ROOT/../.xcode.env.updates\" ]]; then\n  source \"$PODS_ROOT/../.xcode.env.updates\"\nfi\n# Source local changes to allow overrides\n# if needed\nif [[ -f \"$PODS_ROOT/../.xcode.env.local\" ]]; then\n  source \"$PODS_ROOT/../.xcode.env.local\"\nfi\n\n`\"$NODE_BINARY\" --print \"require('path').dirname(require.resolve('react-native/package.json')) + '/scripts/react-native-xcode.sh'\"`\n\n";
 		};
-		08A4A3CD28434E44B6B9DE2E /* [CP] Check Pods Manifest.lock */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
-				"${PODS_ROOT}/Manifest.lock",
-			);
-			name = "[CP] Check Pods Manifest.lock";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"$(DERIVED_FILE_DIR)/Pods-wodstrategist-checkManifestLockResult.txt",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
-			showEnvVarsInLog = 0;
-		};
-		45193F246FA48DD79A42B691 /* [Expo] Configure project */ = {
+		082FDAFA72C00FB6EC01DB19 /* [Expo] Configure project */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -366,6 +346,46 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "# This script configures Expo modules and generates the modules provider file.\nbash -l -c \"./Pods/Target\\ Support\\ Files/Pods-wodstrategist/expo-configure-project.sh\"\n";
+		};
+		08A4A3CD28434E44B6B9DE2E /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-wodstrategist-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+		452B15CC44DE35ED6F8746CC /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-wodstrategist/Pods-wodstrategist-frameworks.sh",
+				"${PODS_XCFRAMEWORKS_BUILD_DIR}/hermes-engine/Pre-built/hermesvm.framework/hermesvm",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputPaths = (
+				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/hermesvm.framework",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-wodstrategist/Pods-wodstrategist-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
 		};
 		800E24972A6A228C8D4807E9 /* [CP] Copy Pods Resources */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -413,24 +433,6 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-wodstrategist/Pods-wodstrategist-resources.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
-		9A9F658AE913083D2E76D26D /* [CP] Embed Pods Frameworks */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-				"${PODS_ROOT}/Target Support Files/Pods-wodstrategist/Pods-wodstrategist-frameworks.sh",
-				"${PODS_XCFRAMEWORKS_BUILD_DIR}/hermes-engine/Pre-built/hermesvm.framework/hermesvm",
-			);
-			name = "[CP] Embed Pods Frameworks";
-			outputPaths = (
-				"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/hermesvm.framework",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-wodstrategist/Pods-wodstrategist-frameworks.sh\"\n";
-			showEnvVarsInLog = 0;
-		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -439,42 +441,39 @@
 			buildActionMask = 2147483647;
 			files = (
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
-				2D92B78DABD382C50938C9BD /* ExpoModulesProvider.swift in Sources */,
+				2DF223E40411FE7AE0527FA2 /* ExpoModulesProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		B048BC8D54A24D71B447A40F /* Sources */ = {
+		E29A084547D540E1ABADAEAA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				21A20CC31D0241ABBD24A89B /* SampleHandler.swift in Sources */,
-				2F8E48A8107A4D75A105E8EB /* BroadcastWriter.swift in Sources */,
-				3BED8B2C274C491EB9A7B240 /* BroadcastHelper.m in Sources */,
+				AC3494447EB549C3BDBA845D /* SampleHandler.swift in Sources */,
+				8589B8A6CA12416F9C11B33D /* BroadcastWriter.swift in Sources */,
+				C6C5585A687A465F857096FE /* BroadcastHelper.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		42D950E141484AB4A6386484 /* PBXTargetDependency */ = {
+		2FB627F84FEE4CADB72E5BF0 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = C7552A19ECB742DE980854AD /* BroadcastExtension */;
-			targetProxy = DAB66F08D859428386C86C6A /* PBXContainerItemProxy */;
+			target = C198C89DB54A4F1F99023599 /* BroadcastExtension */;
+			targetProxy = 5EDD1FDE3A2745C4B7675EE3 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		13B07F941A680F5B00A75B9A /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 0DD2072BB2EED09B28FE9CE6 /* Pods-wodstrategist.debug.xcconfig */;
+			baseConfigurationReference = 973C4745D26008C0E9D491EA /* Pods-wodstrategist.debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = wodstrategist/wodstrategist.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = FV89L56N85;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"$(inherited)",
@@ -500,20 +499,20 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
+				DEVELOPMENT_TEAM = "FV89L56N85";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 			};
 			name = Debug;
 		};
 		13B07F951A680F5B00A75B9A /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 0E27CE80FDD8EEFC8264E070 /* Pods-wodstrategist.release.xcconfig */;
+			baseConfigurationReference = CB38114722EF2F011AB86698 /* Pods-wodstrategist.release.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_ENTITLEMENTS = wodstrategist/wodstrategist.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = FV89L56N85;
 				INFOPLIST_FILE = wodstrategist/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -533,66 +532,9 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VERSIONING_SYSTEM = "apple-generic";
-			};
-			name = Release;
-		};
-		18EBFD1F96D24F8CB35F7307 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = BroadcastExtension/BroadcastExtension.entitlements;
+				DEVELOPMENT_TEAM = "FV89L56N85";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = FV89L56N85;
-				GCC_PREPROCESSOR_DEFINITIONS = (
-					"DEBUG=1",
-					"$(inherited)",
-				);
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/BroadcastExtension";
-				INFOPLIST_FILE = "BroadcastExtension/BroadcastExtension-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
-				PRODUCT_BUNDLE_IDENTIFIER = com.sunjinlee.wodstrategist.BroadcastExtension;
-				PRODUCT_NAME = BroadcastExtension;
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "BroadcastExtension/BroadcastExtension-Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Debug;
-		};
-		41F07B53671E4B719463E36C /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CLANG_ENABLE_MODULES = YES;
-				CODE_SIGN_ENTITLEMENTS = BroadcastExtension/BroadcastExtension.entitlements;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = FV89L56N85;
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/BroadcastExtension";
-				INFOPLIST_FILE = "BroadcastExtension/BroadcastExtension-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.0.0;
-				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
-				PRODUCT_BUNDLE_IDENTIFIER = com.sunjinlee.wodstrategist.BroadcastExtension;
-				PRODUCT_NAME = BroadcastExtension;
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "BroadcastExtension/BroadcastExtension-Bridging-Header.h";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -716,6 +658,66 @@
 			};
 			name = Release;
 		};
+		B19559EE99AF4953B989DB06 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = BroadcastExtension/BroadcastExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/BroadcastExtension";
+				INFOPLIST_FILE = "BroadcastExtension/BroadcastExtension-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
+				PRODUCT_BUNDLE_IDENTIFIER = com.sunjinlee.wodstrategist.BroadcastExtension;
+				PRODUCT_NAME = BroadcastExtension;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "BroadcastExtension/BroadcastExtension-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				DEVELOPMENT_TEAM = "FV89L56N85";
+				CODE_SIGN_IDENTITY = "Apple Development";
+			};
+			name = Release;
+		};
+		E61C8EA8616D40D5B7AA9C04 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = BroadcastExtension/BroadcastExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/BroadcastExtension";
+				INFOPLIST_FILE = "BroadcastExtension/BroadcastExtension-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
+				PRODUCT_BUNDLE_IDENTIFIER = com.sunjinlee.wodstrategist.BroadcastExtension;
+				PRODUCT_NAME = BroadcastExtension;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "BroadcastExtension/BroadcastExtension-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				DEVELOPMENT_TEAM = "FV89L56N85";
+				CODE_SIGN_IDENTITY = "Apple Development";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -728,20 +730,20 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		3FB291A9DCA24BECAC59AFEB /* Build configuration list for PBXNativeTarget "BroadcastExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E61C8EA8616D40D5B7AA9C04 /* Debug */,
+				B19559EE99AF4953B989DB06 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		83CBB9FA1A601CBA00E9B192 /* Build configuration list for PBXProject "wodstrategist" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				83CBBA201A601CBA00E9B192 /* Debug */,
 				83CBBA211A601CBA00E9B192 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		8E92EBFAE442493BA9AA051F /* Build configuration list for PBXNativeTarget "BroadcastExtension" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				18EBFD1F96D24F8CB35F7307 /* Debug */,
-				41F07B53671E4B719463E36C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

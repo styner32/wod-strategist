@@ -126,14 +126,9 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	if len(req.Movements) >= 100 {
-		logger.Log.Error("too many movements", zap.Int("count", len(req.Movements)))
-		c.JSON(http.StatusBadRequest, gin.H{"error": "too many movements"})
-		return
-	}
-	if !allowedMovements.containsAll(req.Movements) {
-		logger.Log.Error("invalid movements", zap.Strings("movements", req.Movements))
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid movements"})
+	if ok, reason := validateMovements(req.Movements); !ok {
+		logger.Log.Error("invalid movements", zap.String("reason", reason), zap.Strings("movements", req.Movements))
+		c.JSON(http.StatusBadRequest, gin.H{"error": reason})
 		return
 	}
 
@@ -375,6 +370,52 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, enriched)
 }
 
+func (ctl *Controller) ArchiveHistory(c *gin.Context) {
+	if ctl.analysisResults == nil {
+		logger.Log.Error("analysis result repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to archive history"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	if err := ctl.analysisResults.Archive(c.Request.Context(), uint(id)); err != nil {
+		logger.Log.Error("failed to archive history", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to archive history"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "history archived"})
+}
+
+func (ctl *Controller) UnarchiveHistory(c *gin.Context) {
+	if ctl.analysisResults == nil {
+		logger.Log.Error("analysis result repository is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unarchive history"})
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	if err := ctl.analysisResults.Unarchive(c.Request.Context(), uint(id)); err != nil {
+		logger.Log.Error("failed to unarchive history", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unarchive history"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "history unarchived"})
+}
+
 // @Summary      List supported movements
 // @Description  Returns a list of all supported workout movements
 // @Tags         metadata
@@ -383,6 +424,16 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 // @Router       /movements [get]
 func (ctl *Controller) ListMovements(c *gin.Context) {
 	c.JSON(http.StatusOK, append([]string(nil), movements...))
+}
+
+// @Summary      List movement groups
+// @Description  Returns all supported workout movements organized by category
+// @Tags         metadata
+// @Produce      json
+// @Success      200 {array} MovementGroup
+// @Router       /movement-groups [get]
+func (ctl *Controller) ListMovementGroups(c *gin.Context) {
+	c.JSON(http.StatusOK, movementGroups)
 }
 
 // @Summary      List supported injuries
@@ -478,7 +529,7 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
-	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs)
+	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM)
 	if err != nil {
 		logger.Log.Error("failed to create chunk task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -532,15 +583,21 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 		return
 	}
 
+	fitnessLevel := req.FitnessLevel
+	if fitnessLevel == "" {
+		fitnessLevel = "intermediate"
+	}
+
 	profile := &db.Profile{
-		Name:       req.Name,
-		BirthYear:  req.BirthYear,
-		BirthMonth: req.BirthMonth,
-		BirthDay:   req.BirthDay,
-		Gender:     req.Gender,
-		HeightCm:   req.HeightCm,
-		WeightKg:   req.WeightKg,
-		Injuries:   string(injuriesJSON),
+		Name:         req.Name,
+		BirthYear:    req.BirthYear,
+		BirthMonth:   req.BirthMonth,
+		BirthDay:     req.BirthDay,
+		Gender:       req.Gender,
+		HeightCm:     req.HeightCm,
+		WeightKg:     req.WeightKg,
+		FitnessLevel: fitnessLevel,
+		Injuries:     string(injuriesJSON),
 	}
 
 	if err := ctl.profiles.Create(c.Request.Context(), profile); err != nil {
@@ -649,6 +706,9 @@ func (ctl *Controller) UpdateProfile(c *gin.Context) {
 	if req.WeightKg != nil {
 		profile.WeightKg = *req.WeightKg
 	}
+	if req.FitnessLevel != nil {
+		profile.FitnessLevel = *req.FitnessLevel
+	}
 	if req.Injuries != nil {
 		if !allowedInjuries.containsAll(req.Injuries) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid injuries"})
@@ -727,15 +787,16 @@ func toProfileResponse(p *db.Profile) ProfileResponse {
 	}
 
 	resp := ProfileResponse{
-		ID:         p.ID,
-		Name:       p.Name,
-		BirthYear:  p.BirthYear,
-		BirthMonth: p.BirthMonth,
-		BirthDay:   p.BirthDay,
-		Gender:     p.Gender,
-		HeightCm:   p.HeightCm,
-		WeightKg:   p.WeightKg,
-		Injuries:   injuryList,
+		ID:           p.ID,
+		Name:         p.Name,
+		BirthYear:    p.BirthYear,
+		BirthMonth:   p.BirthMonth,
+		BirthDay:     p.BirthDay,
+		Gender:       p.Gender,
+		HeightCm:     p.HeightCm,
+		WeightKg:     p.WeightKg,
+		FitnessLevel: p.FitnessLevel,
+		Injuries:     injuryList,
 	}
 	if p.ArchivedAt != nil {
 		ts := p.ArchivedAt.Format(time.RFC3339)
@@ -1151,5 +1212,162 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 		DownloadURL: signedURL,
 		Filename:    sessionID + "_" + kind + ".mp4",
 		ExpiresAt:   time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339),
+	})
+}
+
+// @Summary      Retry Analysis
+// @Description  Re-enqueues a video analysis task for a failed session using existing GCS files
+// @Tags         analysis
+// @Accept       json
+// @Produce      json
+// @Param        request body RetryAnalysisRequest true "Session and profile"
+// @Success      202 {object} RetryAnalysisResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      404 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /retry-analysis [post]
+func (ctl *Controller) RetryAnalysis(c *gin.Context) {
+	if ctl.queueClient == nil || ctl.storageClient == nil {
+		logger.Log.Error("queue or storage client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "service not configured"})
+		return
+	}
+
+	var req RetryAnalysisRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
+	// Find a video file in GCS for this session. Prefer merged.mp4.
+	prefix := fmt.Sprintf("videos/%d/%s/", req.ProfileID, req.SessionID)
+	objects, err := ctl.storageClient.ListObjects(c.Request.Context(), prefix)
+	if err != nil {
+		logger.Log.Error("failed to list GCS objects for retry",
+			zap.String("session_id", req.SessionID),
+			zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to find video files"})
+		return
+	}
+
+	if len(objects) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no video files found for this session"})
+		return
+	}
+
+	// Pick the best candidate: merged.mp4 > any .mp4 file
+	var gcsURI string
+	for _, obj := range objects {
+		base := filepath.Base(obj)
+		if base == "merged.mp4" {
+			gcsURI = fmt.Sprintf("gs://%s/%s", ctl.bucketName, obj)
+			break
+		}
+	}
+	if gcsURI == "" {
+		// Fall back to first .mp4 file
+		for _, obj := range objects {
+			if strings.HasSuffix(obj, ".mp4") {
+				gcsURI = fmt.Sprintf("gs://%s/%s", ctl.bucketName, obj)
+				break
+			}
+		}
+	}
+	if gcsURI == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no playable video found for this session"})
+		return
+	}
+
+	logger.Log.Info("Retrying video analysis",
+		zap.String("session_id", req.SessionID),
+		zap.Uint("profile_id", req.ProfileID),
+		zap.String("gcs_uri", gcsURI))
+
+	task, err := ctl.newVideoAnalysisTask(req.SessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, req.ProfileID)
+	if err != nil {
+		logger.Log.Error("failed to create retry task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue retry task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, RetryAnalysisResponse{
+		Message:   "Analysis retry started",
+		TaskID:    info.ID,
+		SessionID: req.SessionID,
+	})
+}
+
+// @Summary      Generate Hardsubbed Video
+// @Description  Creates a hardsubbed version of the video with burned-in subtitles
+// @Tags         video
+// @Accept       json
+// @Produce      json
+// @Param        request body GenerateHardSubRequest true "Session and profile"
+// @Success      202 {object} GenerateHardSubResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /generate-hardsub [post]
+func (ctl *Controller) GenerateHardSub(c *gin.Context) {
+	if ctl.queueClient == nil {
+		logger.Log.Error("queue client is not configured")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "service not configured"})
+		return
+	}
+
+	var req GenerateHardSubRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	req.SessionID = sanitizeIdentifier(req.SessionID)
+	if req.SessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
+	logger.Log.Info("Enqueuing hardsub generation",
+		zap.String("session_id", req.SessionID),
+		zap.Uint("profile_id", req.ProfileID))
+
+	task, err := ctl.newGenerateHardSub(req.SessionID, req.ProfileID)
+	if err != nil {
+		logger.Log.Error("failed to create hardsub task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+		return
+	}
+
+	info, err := ctl.queueClient.Enqueue(task)
+	if err != nil {
+		logger.Log.Error("failed to enqueue hardsub task", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, GenerateHardSubResponse{
+		Message:   "Hardsub generation started",
+		TaskID:    info.ID,
+		SessionID: req.SessionID,
 	})
 }

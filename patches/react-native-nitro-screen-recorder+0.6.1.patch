@@ -1,14 +1,15 @@
 diff --git a/node_modules/react-native-nitro-screen-recorder/lib/commonjs/expo-plugin/ios/withMainAppEntitlementsFile.js b/node_modules/react-native-nitro-screen-recorder/lib/commonjs/expo-plugin/ios/withMainAppEntitlementsFile.js
-index e6da01b..a8f923a 100644
+index 1234567..abcdefg 100644
 --- a/node_modules/react-native-nitro-screen-recorder/lib/commonjs/expo-plugin/ios/withMainAppEntitlementsFile.js
 +++ b/node_modules/react-native-nitro-screen-recorder/lib/commonjs/expo-plugin/ios/withMainAppEntitlementsFile.js
-@@ -59,6 +59,9 @@ const withMainAppEntitlementsFile = (config) => {
+@@ -57,8 +57,9 @@
+                 const group = groups[key];
+                 if (group && group.children) {
                      // Check if this group contains typical main app files
-                     const hasMainAppFiles = group.children.some((childKey) => {
+-                    const hasMainAppFiles = group.children.some((childKey) => {
++                    const hasMainAppFiles = group.children.some((child) => {
                          var _a, _b, _c;
-+                      if (typeof childKey !== 'string') {
-+                        return false;
-+                      }
++                        const childKey = typeof child === 'object' ? child.value : child;
                          const file = files[childKey];
                          return (file &&
                              (((_a = file.path) === null || _a === void 0 ? void 0 : _a.includes('AppDelegate')) ||

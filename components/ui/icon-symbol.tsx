@@ -21,11 +21,18 @@ const MAPPING = {
   'figure.run': 'directions-run',
   'chevron.left': 'chevron-left',
   'xmark.circle.fill': 'close',
+  'xmark.circle': 'cancel',
   'arrow.up.circle.fill': 'cloud-upload',
   'arrow.clockwise': 'refresh',
   'trash': 'delete',
   'flame.fill': 'whatshot',
   'person.fill': 'person',
+  'eye': 'visibility',
+  'camera.rotate': 'flip-camera-ios',
+  'magnifyingglass': 'search',
+  'plus.circle.fill': 'add-circle',
+  'checkmark': 'check',
+  'dumbbell.fill': 'fitness-center',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**

@@ -4,7 +4,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { HistoryList, useHistoryData } from "@/features/wod/ui/HistoryList";
 
 export default function HistoryScreen() {
-  const { data, loading, refreshing, onRefresh } = useHistoryData();
+  const { data, loading, refreshing, onRefresh, onArchive } = useHistoryData();
 
   return (
     <SafeAreaView style={styles.container}>
@@ -19,7 +19,7 @@ export default function HistoryScreen() {
           />
         }
       >
-        <HistoryList data={data} loading={loading} />
+        <HistoryList data={data} loading={loading} onArchive={onArchive} />
       </ScrollView>
     </SafeAreaView>
   );

@@ -258,8 +258,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		}
 	}()
 
-	// ── File size guard ──
-	// Reject files larger than 1GB to prevent Gemini upload timeouts and OOM.
+	// ── File size guard + conditional re-encode ──
+	// If the uploaded video exceeds 500MB, create an analysis-grade re-encode
+	// (CRF 28, 720p) before sending to Gemini. This mirrors the merge-chunks
+	// path behavior. Only reject if the re-encoded file still exceeds 1GB.
 	fi, err := os.Stat(localFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to stat downloaded file: %w", err)
@@ -270,8 +272,79 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.Int64("file_size_bytes", fileSizeBytes),
 		zap.String("file_size_human", formatFileSizeWorker(fileSizeBytes)))
 
+	// ── Ensure merged.mp4 exists for playback ──
+	// When a video is uploaded directly (via upload-complete, not merge-chunks),
+	// no merged.mp4 is created. The frontend requires merged.mp4 to show the
+	// "Watch" button and enable video downloads. Upload the original file as
+	// merged.mp4 if it doesn't already exist.
+	if p.ProfileID > 0 {
+		mergedObjectName := fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID)
+		existing, listErr := w.StorageClient.ListObjects(ctx, mergedObjectName)
+		if listErr != nil {
+			w.logger.Warn("Failed to check for existing merged.mp4, skipping copy",
+				zap.String("session_id", p.SessionID),
+				zap.Error(listErr))
+		} else if len(existing) == 0 {
+			w.logger.Info("No merged.mp4 found, uploading original as merged.mp4 for playback",
+				zap.String("session_id", p.SessionID),
+				zap.String("object_name", mergedObjectName))
+			if mergedURI, uploadErr := w.StorageClient.UploadFromFile(ctx, localFilePath, mergedObjectName); uploadErr != nil {
+				w.logger.Warn("Failed to upload merged.mp4 for playback, continuing with analysis",
+					zap.String("session_id", p.SessionID),
+					zap.Error(uploadErr))
+			} else {
+				w.logger.Info("Uploaded merged.mp4 for playback",
+					zap.String("session_id", p.SessionID),
+					zap.String("gcs_uri", mergedURI))
+			}
+		} else {
+			w.logger.Info("merged.mp4 already exists, skipping upload",
+				zap.String("session_id", p.SessionID))
+		}
+	}
+
+	// Path used for Gemini upload — may be replaced by re-encoded copy below
+	geminiInputPath := localFilePath
+
+	if fileSizeBytes > maxAnalysisVideoSizeBytes {
+		w.logger.Info("Video exceeds analysis threshold, creating analysis-grade re-encode",
+			zap.String("session_id", p.SessionID),
+			zap.Int64("file_size_bytes", fileSizeBytes),
+			zap.String("file_size_human", formatFileSizeWorker(fileSizeBytes)),
+			zap.Int64("threshold_bytes", maxAnalysisVideoSizeBytes))
+
+		analysisPath, encErr := createTempFile("analysis-reencode", ".mp4")
+		if encErr != nil {
+			return fmt.Errorf("failed to create temp file for re-encode: %w", encErr)
+		}
+		defer os.Remove(analysisPath)
+
+		if err := runFFmpegAnalysisEncode(ctx, w.logger, localFilePath, analysisPath); err != nil {
+			w.logger.Warn("Analysis re-encode failed, checking if original is within hard limit",
+				zap.String("session_id", p.SessionID),
+				zap.Error(err))
+
+			// Fall through — original file will be checked against the 1GB hard limit below
+		} else {
+			// Re-encode succeeded — check the new file size
+			if reencFI, statErr := os.Stat(analysisPath); statErr == nil {
+				analysisSizeBytes := reencFI.Size()
+				w.logger.Info("Analysis re-encode completed",
+					zap.String("session_id", p.SessionID),
+					zap.Int64("original_size_bytes", fileSizeBytes),
+					zap.String("original_size_human", formatFileSizeWorker(fileSizeBytes)),
+					zap.Int64("analysis_size_bytes", analysisSizeBytes),
+					zap.String("analysis_size_human", formatFileSizeWorker(analysisSizeBytes)),
+					zap.Float64("compression_ratio", float64(fileSizeBytes)/float64(max(analysisSizeBytes, 1))))
+
+				geminiInputPath = analysisPath
+				fileSizeBytes = analysisSizeBytes
+			}
+		}
+	}
+
 	if fileSizeBytes > maxAnalysisFileSizeBytes {
-		w.logger.Error("Video file too large for analysis",
+		w.logger.Error("Video file too large for analysis (even after re-encode attempt)",
 			zap.String("session_id", p.SessionID),
 			zap.Int64("file_size_bytes", fileSizeBytes),
 			zap.String("file_size_human", formatFileSizeWorker(fileSizeBytes)),
@@ -280,8 +353,8 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			formatFileSizeWorker(fileSizeBytes), asynq.SkipRetry)
 	}
 
-	// Upload to Gemini Files API
-	upload, err := w.GeminiClient.UploadVideo(ctx, localFilePath)
+	// Upload to Gemini Files API (uses re-encoded path if available)
+	upload, err := w.GeminiClient.UploadVideo(ctx, geminiInputPath)
 	if err != nil {
 		return fmt.Errorf("failed to upload video: %w", err)
 	}
@@ -299,8 +372,47 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 
 	// ── Pass 1: Build segment index ──
 	// Prefer chunk analysis data from DB (app-recorded, accurate timestamps).
-	// Fall back to Flash model indexing only when no chunks exist.
+	// For uploaded videos (no chunks), split into ~10s segments first to simulate
+	// the real-time recording flow and provide accurate segment data.
+	// Fall back to Flash model indexing only when splitting also fails.
 	segments := w.buildSegmentsFromChunks(p.SessionID)
+
+	// Determine if we need to (re-)split the video.
+	// If existing chunks don't cover the full video duration (e.g. worker restarted
+	// mid-split), we re-run the split so the remaining segments get analyzed.
+	needsSplit := len(segments) == 0
+	if len(segments) > 0 {
+		videoDuration := probeVideoDuration(ctx, geminiInputPath)
+		if videoDuration > 0 {
+			maxEndSecs := w.queryMaxChunkEndSecs(p.SessionID)
+			gap := videoDuration - maxEndSecs
+			if gap > float64(splitChunkDurationSecs) {
+				needsSplit = true
+				w.logger.Warn("Pass 1: Existing chunks appear incomplete, will re-split",
+					zap.String("session_id", p.SessionID),
+					zap.Float64("max_chunk_end_secs", maxEndSecs),
+					zap.Float64("video_duration_secs", videoDuration),
+					zap.Float64("gap_secs", gap),
+					zap.Int("existing_segments", len(segments)))
+			}
+		}
+	}
+
+	if needsSplit {
+		// No chunks from recording or incomplete — try splitting the uploaded video into chunks
+		w.logger.Info("Pass 1: Splitting uploaded video into 10s chunks",
+			zap.String("session_id", p.SessionID),
+			zap.Bool("had_partial_chunks", len(segments) > 0))
+
+		if splitErr := w.splitAndAnalyzeChunks(ctx, geminiInputPath, p); splitErr != nil {
+			w.logger.Warn("Chunk splitting failed, will fall back to model indexing",
+				zap.String("session_id", p.SessionID),
+				zap.Error(splitErr))
+		} else {
+			// Re-query chunks after splitting
+			segments = w.buildSegmentsFromChunks(p.SessionID)
+		}
+	}
 
 	if len(segments) > 0 {
 		w.logger.Info("Pass 1: Segments built from chunk analysis data",
@@ -308,7 +420,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("count", len(segments)))
 	} else {
 		// Fallback: use Flash model to index the video
-		w.logger.Info("Pass 1: No chunks found, indexing video with model",
+		w.logger.Info("Pass 1: No chunks found after split attempt, indexing video with model",
 			zap.String("session_id", p.SessionID),
 			zap.String("file_uri", upload.FileURI))
 
@@ -417,6 +529,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.String("session_id", p.SessionID),
 		zap.Int("segments_analyzed", len(segments)))
 
+	// Auto-enqueue hardsub generation now that the final analysis is available.
+	// The hardsub worker will fetch this analysis and burn it as subtitles.
+	w.enqueueHardSub(p.SessionID, p.ProfileID)
+
 	// Agentic follow-up: pass fileURI/fileName so injury analysis can reuse the uploaded video
 	if hasInjuries {
 		focusTimestamps := parseInjuryTimestamps(analysis)
@@ -497,6 +613,24 @@ func parseSegments(text string) []Segment {
 	var segments []Segment
 	_ = json.Unmarshal([]byte(jsonStr), &segments)
 	return segments
+}
+
+// queryMaxChunkEndSecs returns the maximum end_secs value from chunk analysis
+// records for the given session. Returns 0 if no chunks exist or on error.
+// Used to detect incomplete splits (partial chunk coverage vs full video duration).
+func (w *Worker) queryMaxChunkEndSecs(sessionID string) float64 {
+	if w.DB == nil {
+		return 0
+	}
+	var maxEnd *float64
+	err := w.DB.Model(&db.ChunkAnalysisResult{}).
+		Where("session_id = ?", sessionID).
+		Select("MAX(end_secs)").
+		Row().Scan(&maxEnd)
+	if err != nil || maxEnd == nil {
+		return 0
+	}
+	return *maxEnd
 }
 
 // buildSegmentsFromChunks queries completed chunk analysis records from the DB
@@ -804,6 +938,9 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	w.DB.Create(result)
 
 	w.logger.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))
+
+	// Auto-enqueue hardsub generation now that the final analysis is available.
+	w.enqueueHardSub(p.SessionID, p.ProfileID)
 
 	// Agentic follow-up: if injuries are present, enqueue injury-focused re-analysis
 	if len(p.Injuries) > 0 {

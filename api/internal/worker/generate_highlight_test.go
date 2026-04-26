@@ -42,7 +42,7 @@ var _ = Describe("NewGenerateHighlightTask", func() {
 })
 
 var _ = Describe("HandleGenerateHighlightTask", func() {
-	const highlightSegs = `[{"start":"0:05","end":"0:15","type":"best_form","reason":"완벽한 자세"},{"start":"0:30","end":"0:40","type":"key_moment","reason":"최고 페이스"}]`
+	const highlightSegs = `[{"start":"0:00","end":"0:01","type":"best_form","reason":"완벽한 자세"},{"start":"0:01","end":"0:02","type":"key_moment","reason":"최고 페이스"}]`
 
 	var (
 		dbConn *gorm.DB
@@ -160,8 +160,8 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 				HighlightSegments: highlightSegs,
 			}).Error).NotTo(HaveOccurred())
 
-			start1, end1 := 0.0, 20.0
-			start2, end2 := 20.0, 50.0
+			start1, end1 := 0.0, 1.0
+			start2, end2 := 1.0, 2.0
 
 			tiny := createTinyMP4(GinkgoT())
 			mp4Bytes, readErr := os.ReadFile(tiny)
