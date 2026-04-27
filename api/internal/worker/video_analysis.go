@@ -427,10 +427,12 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.String("session_id", p.SessionID),
 			zap.String("file_uri", upload.FileURI))
 
-		indexOutput, indexErr := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, w.buildIndexPrompt(p, upload.VideoDuration))
+		indexOutput, indexUsage, indexErr := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, w.buildIndexPrompt(p, upload.VideoDuration))
 		if indexErr != nil {
 			return fmt.Errorf("failed to index video: %w", indexErr)
 		}
+
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:index", indexUsage)
 
 		segments = parseSegments(indexOutput)
 
@@ -464,13 +466,14 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("total_segments", len(segments)),
 			zap.Int("max_segments", maxSegs))
 
-		triagedSegments, triageErr := w.triageSegments(ctx, upload, segments, maxSegs)
+		triagedSegments, triageUsage, triageErr := w.triageSegments(ctx, upload, segments, maxSegs)
 		if triageErr != nil {
 			w.logger.Warn("Segment triage failed, using first N segments",
 				zap.Error(triageErr),
 				zap.Int("fallback_count", maxSegs))
 			segments = segments[:maxSegs]
 		} else {
+			w.saveTokenUsage(p.SessionID, p.ProfileID, "video:triage", triageUsage)
 			segments = triagedSegments
 		}
 
@@ -494,7 +497,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Duration("start", start),
 			zap.Duration("end", end))
 
-		segAnalysis, err := w.GeminiClient.AnalyzeSegment(
+		segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
 			ctx, upload.FileURI, upload.MIMEType, start, end, segPrompt,
 		)
 		if err != nil {
@@ -504,6 +507,8 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				zap.Error(err))
 			continue
 		}
+
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", segUsage)
 
 		allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n", i+1, seg.Type, seg.Start, seg.End))
 		allAnalysis.WriteString(segAnalysis)
@@ -743,20 +748,20 @@ type TriagedSegment struct {
 //
 // Future optimization: use segment descriptions instead of video for cost saving,
 // once chunk analysis descriptions are rich enough.
-func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, segments []Segment, maxSegs int) ([]Segment, error) {
+func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, segments []Segment, maxSegs int) ([]Segment, *gemini.TokenUsage, error) {
 	triagePrompt := buildTriagePrompt(segments, maxSegs, upload.VideoDuration)
 
-	triageOutput, err := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, triagePrompt)
+	triageOutput, triageUsage, err := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, triagePrompt)
 	if err != nil {
-		return nil, fmt.Errorf("triage model call failed: %w", err)
+		return nil, nil, fmt.Errorf("triage model call failed: %w", err)
 	}
 
 	selected := parseTriagedSegments(triageOutput, segments, maxSegs)
 	if len(selected) == 0 {
-		return nil, fmt.Errorf("triage returned no valid segments")
+		return nil, triageUsage, fmt.Errorf("triage returned no valid segments")
 	}
 
-	return selected, nil
+	return selected, triageUsage, nil
 }
 
 // buildTriagePrompt creates the Flash model prompt for segment prioritization.
@@ -880,7 +885,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 
 	prompt := w.buildAnalysisPrompt(p, videoDuration)
 
-	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
 	// Clean up local file
 	defer func() {
@@ -897,6 +902,9 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 			}
 		}()
 	}
+
+	// Save token usage regardless of analysis outcome
+	w.saveTokenUsage(p.SessionID, p.ProfileID, "video:legacy", usage)
 
 	// retry if analysis is empty
 	if analysis == "" {

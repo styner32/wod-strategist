@@ -141,7 +141,7 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 				zap.String("end", entry.End),
 				zap.String("reason", entry.Reason))
 
-			segAnalysis, err := w.GeminiClient.AnalyzeSegment(
+			segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
 				ctx, p.GeminiFileURI, p.GeminiMIMEType, start, end, segPrompt,
 			)
 			if err != nil {
@@ -149,17 +149,20 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 				continue
 			}
 
+			w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment", segUsage)
+
 			allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 부상 분석 구간 %d: %s ~ %s (%s)\n\n", i+1, entry.Start, entry.End, entry.Reason))
 			allAnalysis.WriteString(segAnalysis)
 		}
 	} else {
 		// No specific timestamps — analyze full video with the injury prompt
-		analysis, err := w.GeminiClient.AnalyzeSegment(
+		analysis, fullUsage, err := w.GeminiClient.AnalyzeSegment(
 			ctx, p.GeminiFileURI, p.GeminiMIMEType, 0, 0, prompt,
 		)
 		if err != nil {
 			w.logger.Error("Full injury analysis failed", zap.Error(err))
 		} else {
+			w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment", fullUsage)
 			allAnalysis.WriteString(analysis)
 		}
 	}
@@ -218,7 +221,7 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 
 	prompt := w.buildInjuryAnalysisPrompt(p)
 
-	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
 	if geminiFile != "" {
 		defer func() {
@@ -227,6 +230,9 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 			}
 		}()
 	}
+
+	// Save token usage regardless of analysis outcome
+	w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:legacy", usage)
 
 	if analysis == "" {
 		w.logger.Warn("Injury analysis returned empty. Retrying...", zap.Error(err))

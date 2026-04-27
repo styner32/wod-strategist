@@ -137,10 +137,12 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		zap.Int("segment_count", len(segments)))
 
 	// 6. Query with Flash model (single call for all segments)
-	output, err := w.GeminiClient.QueryVideoFlash(ctx, upload.FileURI, upload.MIMEType, prompt)
+	output, verifyUsage, err := w.GeminiClient.QueryVideoFlash(ctx, upload.FileURI, upload.MIMEType, prompt)
 	if err != nil {
 		return fmt.Errorf("flash verification query failed: %w", err)
 	}
+
+	w.saveTokenUsage(p.SessionID, 0, "highlight:verify", verifyUsage)
 
 	// 7. Parse verification results
 	results := parseVerificationResults(output, len(segments))

@@ -61,17 +61,17 @@ type StorageClient interface {
 // GeminiClient is the minimal interface over gemini.Client used by handlers.
 type GeminiClient interface {
 	// File-upload based analysis (used by chunk analysis, legacy path)
-	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, error)
+	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, *gemini.TokenUsage, error)
 	DeleteFile(ctx context.Context, name string) error
 	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error
 
 	// Two-pass analysis: upload → index (Flash) → per-segment analysis (Pro)
 	UploadVideo(ctx context.Context, filePath string) (*gemini.UploadResult, error)
-	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, error)
-	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, error)
+	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
+	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *gemini.TokenUsage, error)
 
 	// Lightweight Flash model query (e.g. verification)
-	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, error)
+	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 }
 
 // QueueClient is the minimal interface over asynq.Client used by handlers.
@@ -101,6 +101,31 @@ func NewWorker(db *gorm.DB, storageClient StorageClient, bucketName string, gemi
 		GeminiClient:  geminiClient,
 		QueueClient:   queueClient,
 		logger:        log,
+	}
+}
+
+// saveTokenUsage persists a Gemini API token usage record to the DB.
+// Silently logs errors — token tracking should never block the main workflow.
+func (w *Worker) saveTokenUsage(sessionID string, profileID uint, taskType string, usage *gemini.TokenUsage) {
+	if usage == nil || w.DB == nil {
+		return
+	}
+	record := &db.TokenUsage{
+		SessionID:       sessionID,
+		TaskType:        taskType,
+		Model:           usage.Model,
+		PromptTokens:    usage.PromptTokens,
+		CandidateTokens: usage.CandidateTokens,
+		TotalTokens:     usage.TotalTokens,
+	}
+	if profileID > 0 {
+		record.ProfileID = &profileID
+	}
+	if err := w.DB.Create(record).Error; err != nil {
+		w.logger.Error("Failed to save token usage",
+			zap.String("session_id", sessionID),
+			zap.String("task_type", taskType),
+			zap.Error(err))
 	}
 }
 

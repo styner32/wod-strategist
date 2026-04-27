@@ -225,7 +225,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	prompt := w.buildChunkAnalysisPrompt(p)
 
-	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
 	defer func() {
 		os.Remove(localFilePath)
@@ -236,6 +236,9 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 			w.GeminiClient.DeleteFile(ctx, geminiFile)
 		}()
 	}
+
+	// Save token usage regardless of analysis outcome
+	w.saveTokenUsage(p.SessionID, p.ProfileID, "chunk:analysis", usage)
 
 	if analysis == "" {
 		return fmt.Errorf("chunk analysis is empty")

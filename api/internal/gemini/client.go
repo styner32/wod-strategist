@@ -13,6 +13,27 @@ import (
 	"google.golang.org/genai"
 )
 
+// TokenUsage holds the token consumption metrics returned by GenerateContent.
+type TokenUsage struct {
+	PromptTokens    int32
+	CandidateTokens int32
+	TotalTokens     int32
+	Model           string
+}
+
+// extractTokenUsage converts the SDK's UsageMetadata into our TokenUsage struct.
+func extractTokenUsage(resp *genai.GenerateContentResponse, model string) *TokenUsage {
+	if resp == nil || resp.UsageMetadata == nil {
+		return nil
+	}
+	return &TokenUsage{
+		PromptTokens:    resp.UsageMetadata.PromptTokenCount,
+		CandidateTokens: resp.UsageMetadata.CandidatesTokenCount,
+		TotalTokens:     resp.UsageMetadata.TotalTokenCount,
+		Model:           model,
+	}
+}
+
 const defaultModel = "gemini-3.1-pro-preview"
 
 type Client struct {
@@ -122,12 +143,12 @@ func formatFileSize(bytes int64) string {
 	}
 }
 
-// AnalyzeVideo returns the analysis result and the name of the uploaded file on Gemini
-func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt string) (string, string, error) {
+// AnalyzeVideo returns the analysis result, the name of the uploaded file on Gemini, and token usage.
+func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt string) (string, string, *TokenUsage, error) {
 	// Upload file
 	f, err := os.Open(filePath)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	defer f.Close()
 
@@ -137,11 +158,11 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 		buffer := make([]byte, 512)
 		n, err := f.Read(buffer)
 		if err != nil {
-			return "", "", fmt.Errorf("failed to read file header: %w", err)
+			return "", "", nil, fmt.Errorf("failed to read file header: %w", err)
 		}
 		mimeType = http.DetectContentType(buffer[:n])
 		if _, err := f.Seek(0, 0); err != nil {
-			return "", "", fmt.Errorf("failed to reset file pointer: %w", err)
+			return "", "", nil, fmt.Errorf("failed to reset file pointer: %w", err)
 		}
 	}
 
@@ -149,21 +170,21 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 		MIMEType: mimeType,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("failed to upload file: %w", err)
+		return "", "", nil, fmt.Errorf("failed to upload file: %w", err)
 	}
 
 	// Poll for file state to be ACTIVE
 	for {
 		file, err := c.client.Files.Get(ctx, uploadResult.Name, nil)
 		if err != nil {
-			return "", uploadResult.Name, fmt.Errorf("failed to get file info: %w", err)
+			return "", uploadResult.Name, nil, fmt.Errorf("failed to get file info: %w", err)
 		}
 
 		if file.State == genai.FileStateActive {
 			break
 		}
 		if file.State == genai.FileStateFailed {
-			return "", uploadResult.Name, fmt.Errorf("file processing failed")
+			return "", uploadResult.Name, nil, fmt.Errorf("file processing failed")
 		}
 
 		c.sleep(c.pollInterval)
@@ -180,14 +201,16 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 		},
 	}}, nil)
 	if err != nil {
-		return "", uploadResult.Name, fmt.Errorf("failed to generate content: %w", err)
+		return "", uploadResult.Name, nil, fmt.Errorf("failed to generate content: %w", err)
 	}
 
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", uploadResult.Name, fmt.Errorf("no content generated")
+		return "", uploadResult.Name, nil, fmt.Errorf("no content generated")
 	}
 
 	c.logger.Info("Gemini response", zap.Any("response", resp))
+
+	usage := extractTokenUsage(resp, c.model)
 
 	// Extract text from response
 	var result string
@@ -195,7 +218,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 		result += part.Text
 	}
 
-	return result, uploadResult.Name, nil
+	return result, uploadResult.Name, usage, nil
 }
 
 func (c *Client) DeleteFile(ctx context.Context, name string) error {
@@ -354,7 +377,7 @@ func (c *Client) UploadVideo(ctx context.Context, filePath string) (*UploadResul
 // IndexVideo uses the fast Flash model to scan the full video and identify
 // exercise segments. Returns the raw model output as text (caller parses the
 // JSON segment array).
-func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, error) {
+func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *TokenUsage, error) {
 	c.logger.Info("Indexing video with Flash",
 		zap.String("file_uri", fileURI),
 		zap.String("model", flashModel))
@@ -369,12 +392,14 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 		MediaResolution: genai.MediaResolutionHigh,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to index video: %w", err)
+		return "", nil, fmt.Errorf("failed to index video: %w", err)
 	}
 
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("no content from video indexing")
+		return "", nil, fmt.Errorf("no content from video indexing")
 	}
+
+	usage := extractTokenUsage(resp, c.model)
 
 	var result string
 	for _, part := range resp.Candidates[0].Content.Parts {
@@ -382,12 +407,12 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 	}
 
 	c.logger.Info("Video indexed", zap.Int("response_length", len(result)))
-	return result, nil
+	return result, usage, nil
 }
 
 // AnalyzeSegment performs deep biomechanical analysis on a specific time range
 // of the video using the Pro model with VideoMetadata to constrain attention.
-func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, error) {
+func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *TokenUsage, error) {
 	fps := float64(5)
 
 	c.logger.Info("Analyzing segment",
@@ -419,12 +444,14 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 		MediaResolution: genai.MediaResolution(genai.MediaResolutionMedium),
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to analyze segment: %w", err)
+		return "", nil, fmt.Errorf("failed to analyze segment: %w", err)
 	}
 
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("no content from segment analysis")
+		return "", nil, fmt.Errorf("no content from segment analysis")
 	}
+
+	usage := extractTokenUsage(resp, c.model)
 
 	var result string
 	for _, part := range resp.Candidates[0].Content.Parts {
@@ -436,14 +463,14 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 		zap.Duration("end", end),
 		zap.Int("response_length", len(result)))
 
-	return result, nil
+	return result, usage, nil
 }
 
 // QueryVideoFlash sends a prompt against an already-uploaded video using the
 // lightweight Flash model. Ideal for simple verification tasks (e.g. confirming
 // whether a movement is visible at a given timestamp) where Pro-level depth
 // is unnecessary.
-func (c *Client) QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, error) {
+func (c *Client) QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, *TokenUsage, error) {
 	c.logger.Info("Querying video with Flash",
 		zap.String("file_uri", fileURI),
 		zap.String("model", flashModel))
@@ -458,12 +485,14 @@ func (c *Client) QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt 
 		MediaResolution: genai.MediaResolutionHigh,
 	})
 	if err != nil {
-		return "", fmt.Errorf("flash query failed: %w", err)
+		return "", nil, fmt.Errorf("flash query failed: %w", err)
 	}
 
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
-		return "", fmt.Errorf("no content from flash query")
+		return "", nil, fmt.Errorf("no content from flash query")
 	}
+
+	usage := extractTokenUsage(resp, flashModel)
 
 	var result string
 	for _, part := range resp.Candidates[0].Content.Parts {
@@ -471,5 +500,5 @@ func (c *Client) QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt 
 	}
 
 	c.logger.Info("Flash query completed", zap.Int("response_length", len(result)))
-	return result, nil
+	return result, usage, nil
 }

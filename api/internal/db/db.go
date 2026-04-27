@@ -78,6 +78,18 @@ type ChunkAnalysisResult struct {
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
+type TokenUsage struct {
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	SessionID       string    `gorm:"index;not null" json:"session_id"`
+	ProfileID       *uint     `gorm:"index" json:"profile_id,omitempty"`
+	TaskType        string    `gorm:"not null" json:"task_type"`        // chunk:analysis, video:index, video:segment, etc.
+	Model           string    `gorm:"not null" json:"model"`            // gemini-3.1-pro-preview, gemini-3-flash-preview
+	PromptTokens    int32     `gorm:"not null;default:0" json:"prompt_tokens"`
+	CandidateTokens int32     `gorm:"not null;default:0" json:"candidate_tokens"`
+	TotalTokens     int32     `gorm:"not null;default:0" json:"total_tokens"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
 func Connect(databaseURL string) (*gorm.DB, error) {
 	dsn, err := normalizeDatabaseURL(databaseURL)
 	if err != nil {
