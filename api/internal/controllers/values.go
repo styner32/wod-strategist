@@ -188,7 +188,7 @@ var movementNameRE = regexp.MustCompile(`^[A-Za-z0-9 &\-'/()+.]+$`)
 // validateMovements checks movement list constraints without requiring
 // movements to be in the predefined list (supports custom movements).
 func validateMovements(values []string) (bool, string) {
-	if len(values) >= 100 {
+	if len(values) > 100 {
 		return false, "too many movements"
 	}
 	for _, v := range values {
