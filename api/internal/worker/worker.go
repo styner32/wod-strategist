@@ -72,6 +72,10 @@ type GeminiClient interface {
 
 	// Lightweight Flash model query (e.g. verification)
 	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
+
+	// TTS: generate speech audio from text using gemini-3.1-flash-tts-preview.
+	// Writes a WAV file (24kHz, 16-bit mono) to outputPath.
+	GenerateSpeech(ctx context.Context, text, voiceName, outputPath string) (*gemini.TokenUsage, error)
 }
 
 // QueueClient is the minimal interface over asynq.Client used by handlers.

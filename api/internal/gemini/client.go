@@ -502,3 +502,116 @@ func (c *Client) QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt 
 	c.logger.Info("Flash query completed", zap.Int("response_length", len(result)))
 	return result, usage, nil
 }
+
+const ttsModel = "gemini-3.1-flash-tts-preview"
+
+// GenerateSpeech converts text to speech using the Gemini TTS model and writes
+// the output as a WAV file (24kHz, 16-bit, mono PCM) to outputPath.
+//
+// voiceName selects one of the 30 prebuilt voices (e.g. "Kore", "Aoede", "Charon").
+// The model auto-detects the input language, so Korean text will produce Korean speech.
+//
+// NOTE (cost): Each call consumes TTS quota. Chunk feedback is typically 1-2 sentences
+// (~100 chars), so per-video cost should be modest. Monitor usage if scaling up.
+func (c *Client) GenerateSpeech(ctx context.Context, text, voiceName, outputPath string) (*TokenUsage, error) {
+	c.logger.Info("Generating speech via TTS",
+		zap.String("model", ttsModel),
+		zap.String("voice", voiceName),
+		zap.Int("text_length", len(text)))
+
+	resp, err := c.client.Models.GenerateContent(ctx, ttsModel, genai.Text(text), &genai.GenerateContentConfig{
+		ResponseModalities: []string{"AUDIO"},
+		SpeechConfig: &genai.SpeechConfig{
+			LanguageCode: "ko-KR",
+			VoiceConfig: &genai.VoiceConfig{
+				PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{
+					VoiceName: voiceName,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("TTS generate_content failed: %w", err)
+	}
+
+	usage := extractTokenUsage(resp, ttsModel)
+
+	if len(resp.Candidates) == 0 || resp.Candidates[0].Content == nil {
+		return usage, fmt.Errorf("TTS returned no candidates")
+	}
+
+	// Extract raw PCM audio data from inline response
+	var pcmData []byte
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+			pcmData = part.InlineData.Data
+			break
+		}
+	}
+
+	if len(pcmData) == 0 {
+		return usage, fmt.Errorf("TTS returned no audio data")
+	}
+
+	// Write as WAV (PCM 16-bit LE, 24kHz, mono) for FFmpeg compatibility
+	if err := writePCMAsWAV(outputPath, pcmData, 24000, 1, 16); err != nil {
+		return usage, fmt.Errorf("failed to write TTS WAV: %w", err)
+	}
+
+	c.logger.Info("TTS audio written",
+		zap.String("path", outputPath),
+		zap.Int("pcm_bytes", len(pcmData)))
+	return usage, nil
+}
+
+// writePCMAsWAV wraps raw PCM data in a standard RIFF WAV header.
+func writePCMAsWAV(path string, pcm []byte, sampleRate, channels, bitsPerSample int) error {
+	dataLen := len(pcm)
+	byteRate := sampleRate * channels * bitsPerSample / 8
+	blockAlign := channels * bitsPerSample / 8
+
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// RIFF header
+	f.Write([]byte("RIFF"))
+	writeLE32(f, uint32(36+dataLen)) // file size - 8
+	f.Write([]byte("WAVE"))
+
+	// fmt sub-chunk
+	f.Write([]byte("fmt "))
+	writeLE32(f, 16)                    // sub-chunk size
+	writeLE16(f, 1)                     // PCM format
+	writeLE16(f, uint16(channels))      // channels
+	writeLE32(f, uint32(sampleRate))    // sample rate
+	writeLE32(f, uint32(byteRate))      // byte rate
+	writeLE16(f, uint16(blockAlign))    // block align
+	writeLE16(f, uint16(bitsPerSample)) // bits per sample
+
+	// data sub-chunk
+	f.Write([]byte("data"))
+	writeLE32(f, uint32(dataLen))
+	_, err = f.Write(pcm)
+	return err
+}
+
+// writeLE32 writes a uint32 in little-endian byte order.
+func writeLE32(f *os.File, v uint32) {
+	b := make([]byte, 4)
+	b[0] = byte(v)
+	b[1] = byte(v >> 8)
+	b[2] = byte(v >> 16)
+	b[3] = byte(v >> 24)
+	f.Write(b)
+}
+
+// writeLE16 writes a uint16 in little-endian byte order.
+func writeLE16(f *os.File, v uint16) {
+	b := make([]byte, 2)
+	b[0] = byte(v)
+	b[1] = byte(v >> 8)
+	f.Write(b)
+}
