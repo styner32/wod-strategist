@@ -545,24 +545,27 @@ func findBreakPoint(runes []rune, targetIdx, searchRange int) int {
 // extended freely. If the next entry starts before the desired end time, the
 // current entry is capped at the next entry's start to prevent overlap.
 func extendShortEntries(entries []srtEntry) []srtEntry {
-	for i := range entries {
-		duration := entries[i].end - entries[i].start
+	result := make([]srtEntry, len(entries))
+	copy(result, entries)
+
+	for i := range result {
+		duration := result[i].end - result[i].start
 		if duration >= minSubtitleDisplaySecs {
 			continue
 		}
 
-		desiredEnd := entries[i].start + minSubtitleDisplaySecs
+		desiredEnd := result[i].start + minSubtitleDisplaySecs
 
-		if i+1 < len(entries) {
+		if i+1 < len(result) {
 			// Don't overlap with the next entry
-			if desiredEnd > entries[i+1].start {
-				desiredEnd = entries[i+1].start
+			if desiredEnd > result[i+1].start {
+				desiredEnd = result[i+1].start
 			}
 		}
 
-		if desiredEnd > entries[i].end {
-			entries[i].end = desiredEnd
+		if desiredEnd > result[i].end {
+			result[i].end = desiredEnd
 		}
 	}
-	return entries
+	return result
 }

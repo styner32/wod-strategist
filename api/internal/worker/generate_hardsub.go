@@ -40,15 +40,11 @@ type HardSubPayload struct {
 }
 
 // NewGenerateHardSubTask creates a new hardsub generation task.
-func NewGenerateHardSubTask(sessionID string, profileID uint, enableTTS ...bool) (*asynq.Task, error) {
-	tts := false
-	if len(enableTTS) > 0 {
-		tts = enableTTS[0]
-	}
+func NewGenerateHardSubTask(sessionID string, profileID uint, enableTTS bool) (*asynq.Task, error) {
 	payload := HardSubPayload{
 		SessionID: sessionID,
 		ProfileID: profileID,
-		EnableTTS: tts,
+		EnableTTS: enableTTS,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -186,7 +182,7 @@ func (w *Worker) HandleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 		// 7.5. Mix narration audio track into the hardsubbed video.
 		//      Uses -c:v copy to avoid re-encoding video — only audio is processed.
 		mixedPath := filepath.Join(tmpDir, fmt.Sprintf("mixed_%s.mp4", p.SessionID))
-		if err := runFFmpegMixAudio(ctx, w.logger, hardSubPath, narrationPath, mixedPath); err != nil {
+		if err := w.runFFmpegMixAudio(ctx, hardSubPath, narrationPath, mixedPath); err != nil {
 			w.logger.Warn("Audio mixing failed, uploading subtitle-only video",
 				zap.String("session_id", p.SessionID),
 				zap.Error(err))
@@ -287,7 +283,7 @@ func (w *Worker) generateChunkNarration(ctx context.Context, sessionID string, p
 
 	// Build narration track: overlay all clips at their respective time offsets
 	// using FFmpeg's adelay filter to position each clip correctly.
-	if err := buildNarrationTrack(ctx, w.logger, clips, outputPath); err != nil {
+	if err := w.buildNarrationTrack(ctx, clips, outputPath); err != nil {
 		w.logger.Warn("Failed to build narration track",
 			zap.Error(err))
 		return false
@@ -303,7 +299,7 @@ func (w *Worker) generateChunkNarration(ctx context.Context, sessionID string, p
 // 1. Each clip gets an adelay filter to shift it to the right time offset
 // 2. All delayed clips are mixed together with amix
 // 3. Output is a single WAV file aligned to video time
-func buildNarrationTrack(ctx context.Context, log *zap.Logger, clips []ttsClip, outputPath string) error {
+func (w *Worker) buildNarrationTrack(ctx context.Context, clips []ttsClip, outputPath string) error {
 	if len(clips) == 0 {
 		return fmt.Errorf("no clips to build narration from")
 	}
@@ -316,7 +312,7 @@ func buildNarrationTrack(ctx context.Context, log *zap.Logger, clips []ttsClip, 
 			"-af", fmt.Sprintf("adelay=%d|%d,apad=pad_dur=0", delayMs, delayMs),
 			"-y", outputPath,
 		}
-		return runFFmpegCmd(ctx, log, "narration-single", args)
+		return w.runFFmpegCmd(ctx, "narration-single", args)
 	}
 
 	// Multiple clips: build a complex filter graph
@@ -344,7 +340,7 @@ func buildNarrationTrack(ctx context.Context, log *zap.Logger, clips []ttsClip, 
 		"-y", outputPath,
 	)
 
-	return runFFmpegCmd(ctx, log, "narration-mix", args)
+	return w.runFFmpegCmd(ctx, "narration-mix", args)
 }
 
 // runFFmpegMixAudio mixes a narration audio track into a video's existing audio.
@@ -353,7 +349,7 @@ func buildNarrationTrack(ctx context.Context, log *zap.Logger, clips []ttsClip, 
 //
 // If the video has no audio stream (e.g. the hardsub step dropped it, or the
 // original recording was silent), the narration is added as the sole audio track.
-func runFFmpegMixAudio(ctx context.Context, log *zap.Logger, videoPath, audioPath, outputPath string) error {
+func (w *Worker) runFFmpegMixAudio(ctx context.Context, videoPath, audioPath, outputPath string) error {
 	// Probe whether the video already has an audio stream.
 	hasAudio := videoHasAudioStream(ctx, videoPath)
 
@@ -373,7 +369,7 @@ func runFFmpegMixAudio(ctx context.Context, log *zap.Logger, videoPath, audioPat
 		}
 	} else {
 		// No existing audio — add narration as the sole audio track
-		log.Info("Video has no audio stream, adding narration as sole audio track")
+		w.logger.Info("Video has no audio stream, adding narration as sole audio track")
 		args = []string{
 			"-i", videoPath,
 			"-i", audioPath,
@@ -387,7 +383,7 @@ func runFFmpegMixAudio(ctx context.Context, log *zap.Logger, videoPath, audioPat
 		}
 	}
 
-	return runFFmpegCmd(ctx, log, "mix-audio", args)
+	return w.runFFmpegCmd(ctx, "mix-audio", args)
 }
 
 // videoHasAudioStream probes a video file to check if it contains an audio stream.
@@ -407,17 +403,21 @@ func videoHasAudioStream(ctx context.Context, videoPath string) bool {
 }
 
 // runFFmpegCmd is a generic FFmpeg runner with logging.
-func runFFmpegCmd(ctx context.Context, log *zap.Logger, label string, args []string) error {
-	log.Info("Running FFmpeg "+label, zap.Strings("args", args))
+func (w *Worker) runFFmpegCmd(ctx context.Context, label string, args []string) error {
+	w.logger.Info("Running FFmpeg "+label, zap.Strings("args", args))
 
+	// TODO: CombinedOutput buffers all of stderr+stdout in memory. For long
+	// workouts (60+ min) FFmpeg can produce substantial output that risks OOM.
+	// Replace with streaming stderr (cmd.StderrPipe) and tail the last N lines
+	// for error reporting.
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Error("FFmpeg "+label+" failed", zap.Error(err), zap.String("output", string(output)))
+		w.logger.Error("FFmpeg "+label+" failed", zap.Error(err), zap.String("output", string(output)))
 		return fmt.Errorf("ffmpeg %s: %s: %w", label, string(output), err)
 	}
 
-	log.Info("FFmpeg " + label + " completed")
+	w.logger.Info("FFmpeg " + label + " completed")
 	return nil
 }
 
