@@ -36,6 +36,8 @@ import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutChunk, fetchChunkAnalysis, mergeChunks } from "../../features/wod/api";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
+import { TelemetryRecorder } from '../../features/debug/telemetryRecorder';
+import { enqueueUpload as enqueueDebugUpload, flushPendingUploads } from '../../features/debug/telemetryUpload';
 
 import { useProfileStore } from "@/store/useProfileStore";
 import { useMergeStatus } from "@/store/useMergeStatus";
@@ -282,6 +284,13 @@ export default function VisionTestPage() {
   const { frameProcessor, poseResult, monitorData } = usePoseDetection(isRecording);
   const { bpm, status: hrStatus } = useBleHeartRate();
   // const { bpm, status: hrStatus } = useHeartRate();
+
+  // Refs that mirror render-state for sampling outside the render cycle.
+  // TelemetryRecorder polls these at 1Hz via registered providers.
+  const bpmRef = useRef(0);
+  const chunkCountRef = useRef(0);
+  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+  useEffect(() => { chunkCountRef.current = chunkCount; }, [chunkCount]);
 
   useEffect(() => {
     if (!hasPermission) requestPermission();
@@ -558,6 +567,11 @@ export default function VisionTestPage() {
         sessionIdRef.current = buildWorkoutSessionId(workoutType);
         recordingStartTime.current = Date.now();
 
+        // Start debug telemetry recording (1Hz sampling)
+        TelemetryRecorder.start(sessionIdRef.current, profileId!);
+        TelemetryRecorder.registerProvider('hr', () => ({ hr: bpmRef.current }));
+        TelemetryRecorder.registerProvider('chunk', () => ({ chunkIdx: chunkCountRef.current }));
+
         // Start chunk recording for real-time backend analysis
         startChunkRecording();
       } else {
@@ -575,6 +589,11 @@ export default function VisionTestPage() {
         // Compute session ID once for the entire recording session
         sessionIdRef.current = buildWorkoutSessionId(workoutType);
         recordingStartTime.current = Date.now();
+
+        // Start debug telemetry recording (1Hz sampling)
+        TelemetryRecorder.start(sessionIdRef.current, profileId!);
+        TelemetryRecorder.registerProvider('hr', () => ({ hr: bpmRef.current }));
+        TelemetryRecorder.registerProvider('chunk', () => ({ chunkIdx: chunkCountRef.current }));
 
         // Start chunk recording loop (same mechanism as iOS chunks)
         startChunkRecording();
@@ -605,6 +624,17 @@ export default function VisionTestPage() {
       }
 
       setIsRecording(false);
+
+      // Stop debug telemetry and enqueue upload
+      try {
+        const telemetryResult = await TelemetryRecorder.stop();
+        if (telemetryResult) {
+          await enqueueDebugUpload(telemetryResult.sessionId, telemetryResult.filePath);
+          flushPendingUploads().catch(() => {}); // fire and forget
+        }
+      } catch (e) {
+        console.warn('telemetry stop failed', e);
+      }
 
       // Fire-and-forget: trigger server-side merge in the background.
       // The merge API just enqueues a task — no reason to block the user

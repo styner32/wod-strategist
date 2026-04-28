@@ -591,3 +591,22 @@ export async function generateHardSub(
     },
   });
 }
+
+// ==========================================
+// Debug Telemetry
+// ==========================================
+
+import type { TelemetrySession } from "../debug/types";
+
+/**
+ * Uploads a debug telemetry session JSON to the backend for GCS storage.
+ * The backend writes it to gs://{bucket}/debug/telemetry/{profileId}/{sessionId}.json.
+ */
+export async function uploadDebugTelemetry(
+  session: TelemetrySession
+): Promise<void> {
+  await apiClient<{ ok: boolean }>("/debug/telemetry", {
+    method: "POST",
+    bodyPayload: session,
+  });
+}

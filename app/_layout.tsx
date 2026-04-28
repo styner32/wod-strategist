@@ -6,6 +6,7 @@ import '@/features/i18n'; // Initialize i18n (side-effect: sets locale)
 import { VideoQueueOverlay } from "@/components/VideoQueueOverlay";
 import { t, useLocale } from "@/features/i18n";
 import { useProfileStore } from "@/store/useProfileStore";
+import { flushPendingUploads } from "@/features/debug/telemetryUpload";
 import { Stack } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
@@ -20,6 +21,8 @@ export default function RootLayout() {
     // Lock the entire app to portrait by default.
     // Individual screens (e.g. visionTestPage) can override this.
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    // Retry orphaned debug telemetry uploads from previous sessions
+    flushPendingUploads().catch(() => {});
   }, []);
 
   return (

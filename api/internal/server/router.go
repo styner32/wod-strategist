@@ -41,6 +41,7 @@ type Handlers interface {
 	GetSessionAssets(*gin.Context)
 	GetPlayURL(*gin.Context)
 	GetVideoDownloadURL(*gin.Context)
+	UploadDebugTelemetry(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -370,6 +371,16 @@ var protectedRouteDefinitions = []routeDefinition{
 		},
 		register: func(routes gin.IRoutes, handlers Handlers) {
 			routes.POST("/generate-hardsub", handlers.GenerateHardSub)
+		},
+	},
+	{
+		spec: RouteSpec{
+			Name:   "debug-telemetry",
+			Method: http.MethodPost,
+			Path:   APIRoutePrefix + "/debug/telemetry",
+		},
+		register: func(routes gin.IRoutes, handlers Handlers) {
+			routes.POST("/debug/telemetry", handlers.UploadDebugTelemetry)
 		},
 	},
 }
