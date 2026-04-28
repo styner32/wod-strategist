@@ -22,6 +22,7 @@ type CompleteUploadRequest struct {
 	Injuries    []string `json:"injuries"`
 	WorkoutType string   `json:"workout_type"`
 	ProfileID   uint     `json:"profile_id"`
+	EnableTTS   bool     `json:"enable_tts,omitempty"`
 }
 
 type CompleteUploadResponse struct {
@@ -74,6 +75,7 @@ type MergeChunksRequest struct {
 	Movements   []string `json:"movements"`
 	Injuries    []string `json:"injuries"`
 	ProfileID   uint     `json:"profile_id"`
+	EnableTTS   bool     `json:"enable_tts,omitempty"`
 }
 
 type MergeChunksResponse struct {
@@ -118,6 +120,7 @@ type RetryAnalysisResponse struct {
 type GenerateHardSubRequest struct {
 	SessionID string `json:"session_id"`
 	ProfileID uint   `json:"profile_id"`
+	EnableTTS bool   `json:"enable_tts,omitempty"`
 }
 
 type GenerateHardSubResponse struct {

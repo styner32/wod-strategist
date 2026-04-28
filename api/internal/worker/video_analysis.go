@@ -89,7 +89,7 @@ var highlightBlockRegex = regexp.MustCompile("(?is)(?:```highlights\\s*(\\[.*?\\
 // injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ```, ```json ... ```, or <injury_timestamps> ... </injury_timestamps> blocks in Gemini output.
 var injuryTimestampBlockRegex = regexp.MustCompile("(?is)(?:```(?:injury_timestamps|json)\\s*(\\[.*?\\])\\s*```|<injury_timestamps>\\s*(\\[.*?\\])\\s*</injury_timestamps>)")
 
-func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
+func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
 		SessionID:   sessionID,
 		FilePath:    filePath,
@@ -97,6 +97,7 @@ func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []s
 		Movements:   movements,
 		Injuries:    injuries,
 		ProfileID:   profileID,
+		EnableTTS:   enableTTS,
 	}
 
 	data, err := json.Marshal(payload)
@@ -539,7 +540,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 
 	// Auto-enqueue hardsub generation now that the final analysis is available.
 	// The hardsub worker will fetch this analysis and burn it as subtitles.
-	w.enqueueHardSub(p.SessionID, p.ProfileID)
+	w.enqueueHardSub(p.SessionID, p.ProfileID, p.EnableTTS)
 
 	// Agentic follow-up: pass fileURI/fileName so injury analysis can reuse the uploaded video
 	if hasInjuries {
@@ -951,7 +952,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	w.logger.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))
 
 	// Auto-enqueue hardsub generation now that the final analysis is available.
-	w.enqueueHardSub(p.SessionID, p.ProfileID)
+	w.enqueueHardSub(p.SessionID, p.ProfileID, p.EnableTTS)
 
 	// Agentic follow-up: if injuries are present, enqueue injury-focused re-analysis
 	if len(p.Injuries) > 0 {

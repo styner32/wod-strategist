@@ -253,6 +253,7 @@ var _ = Describe("NewVideoAnalysisTask", func() {
 			[]string{"Burpee"},
 			[]string{"Knee"},
 			42,
+			false,
 		)
 		Expect(err).NotTo(HaveOccurred())
 

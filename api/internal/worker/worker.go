@@ -39,7 +39,8 @@ type VideoAnalysisPayload struct {
 	ProfileID    uint
 	StartSecs    float64
 	EndSecs      float64
-	HeartRateBPM int `json:"heart_rate_bpm,omitempty"` // BLE heart rate at chunk capture time
+	HeartRateBPM int  `json:"heart_rate_bpm,omitempty"` // BLE heart rate at chunk capture time
+	EnableTTS    bool `json:"enable_tts,omitempty"`     // generate TTS narration in hardsub
 }
 
 // HighlightSegment is shared between video analysis (parsing) and highlight generation (processing).

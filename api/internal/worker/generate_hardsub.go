@@ -36,13 +36,19 @@ var ttsToneDirectives = map[string]string{
 type HardSubPayload struct {
 	SessionID string `json:"session_id"`
 	ProfileID uint   `json:"profile_id"`
+	EnableTTS bool   `json:"enable_tts,omitempty"` // generate TTS narration audio
 }
 
 // NewGenerateHardSubTask creates a new hardsub generation task.
-func NewGenerateHardSubTask(sessionID string, profileID uint) (*asynq.Task, error) {
+func NewGenerateHardSubTask(sessionID string, profileID uint, enableTTS ...bool) (*asynq.Task, error) {
+	tts := false
+	if len(enableTTS) > 0 {
+		tts = enableTTS[0]
+	}
 	payload := HardSubPayload{
 		SessionID: sessionID,
 		ProfileID: profileID,
+		EnableTTS: tts,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -160,13 +166,20 @@ func (w *Worker) HandleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 
 	// 7. Generate TTS narration for chunk (realtime) feedback entries.
 	//    This is best-effort: if TTS fails, we still upload the subtitle-only video.
+	//    Skipped entirely when enable_tts is false (frontend opt-in).
 	//
 	//    NOTE (cost): Each chunk triggers a separate TTS API call.
 	//    A 5-min workout ≈ 30 chunks ≈ 30 calls. gemini-3.1-flash-tts-preview
 	//    is priced per character; chunk feedback is typically ~100 chars each.
-	fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
+	hasNarration := false
 	narrationPath := filepath.Join(tmpDir, "narration.wav")
-	hasNarration := w.generateChunkNarration(ctx, p.SessionID, p.ProfileID, chunks, fitnessLevel, tmpDir, narrationPath)
+	if p.EnableTTS {
+		fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
+		hasNarration = w.generateChunkNarration(ctx, p.SessionID, p.ProfileID, chunks, fitnessLevel, tmpDir, narrationPath)
+	} else {
+		w.logger.Info("TTS narration disabled by frontend param",
+			zap.String("session_id", p.SessionID))
+	}
 
 	uploadPath := hardSubPath
 	if hasNarration {
@@ -410,12 +423,12 @@ func runFFmpegCmd(ctx context.Context, log *zap.Logger, label string, args []str
 
 // enqueueHardSub is a best-effort helper that enqueues a hardsub generation task.
 // Errors are logged but never propagated — hardsub is a nice-to-have, not critical.
-func (w *Worker) enqueueHardSub(sessionID string, profileID uint) {
+func (w *Worker) enqueueHardSub(sessionID string, profileID uint, enableTTS bool) {
 	if profileID == 0 {
 		return
 	}
 
-	task, err := NewGenerateHardSubTask(sessionID, profileID)
+	task, err := NewGenerateHardSubTask(sessionID, profileID, enableTTS)
 	if err != nil {
 		w.logger.Warn("Failed to create hardsub task",
 			zap.String("session_id", sessionID),
@@ -432,5 +445,6 @@ func (w *Worker) enqueueHardSub(sessionID string, profileID uint) {
 
 	w.logger.Info("Hardsub generation auto-enqueued after analysis",
 		zap.String("session_id", sessionID),
-		zap.Uint("profile_id", profileID))
+		zap.Uint("profile_id", profileID),
+		zap.Bool("enable_tts", enableTTS))
 }

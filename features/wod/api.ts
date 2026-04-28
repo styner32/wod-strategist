@@ -413,6 +413,7 @@ export async function mergeChunks(
     movements?: string[];
     injuries?: string[];
     profileId: number;
+    enableTts?: boolean;
   }
 ): Promise<MergeChunksResult> {
   const {
@@ -420,6 +421,7 @@ export async function mergeChunks(
     movements = [],
     injuries = [],
     profileId,
+    enableTts = false,
   } = options;
 
   const result = await apiClient<{
@@ -434,6 +436,7 @@ export async function mergeChunks(
       movements,
       injuries,
       profile_id: profileId,
+      enable_tts: enableTts,
     },
   });
 
@@ -576,13 +579,15 @@ export interface GenerateHardSubResponse {
  */
 export async function generateHardSub(
   sessionId: string,
-  profileId: number
+  profileId: number,
+  enableTts: boolean = false
 ): Promise<GenerateHardSubResponse> {
   return apiClient<GenerateHardSubResponse>("/generate-hardsub", {
     method: "POST",
     bodyPayload: {
       session_id: sessionId,
       profile_id: profileId,
+      enable_tts: enableTts,
     },
   });
 }

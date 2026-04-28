@@ -25,6 +25,7 @@ var _ = Describe("NewMergeChunksTask", func() {
 			[]string{"Deadlift", "Pull-up"},
 			[]string{"Knee"},
 			42,
+			false,
 		)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(task.Type()).To(Equal(TypeMergeChunks))
@@ -77,6 +78,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			"sess-merge-baduri",
 			"/not/a/gcs/uri",
 			WorkoutTypeWOD, nil, nil, 0,
+			false,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -94,6 +96,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			"sess-merge-nochunks",
 			"gs://test-bucket/videos/sess-merge-nochunks",
 			WorkoutTypeWOD, nil, nil, 0,
+			false,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -114,6 +117,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			"sess-filter-001",
 			"gs://test-bucket/videos/sess-filter-001",
 			WorkoutTypeWOD, nil, nil, 0,
+			false,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -164,6 +168,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 				WorkoutTypeWOD,
 				[]string{"Deadlift"},
 				nil, 0,
+				false,
 			)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -248,6 +253,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 				WorkoutTypeWOD,
 				[]string{"Snatch"},
 				nil, 1,
+				false,
 			)
 			Expect(err).NotTo(HaveOccurred())
 

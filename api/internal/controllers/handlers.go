@@ -158,7 +158,7 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		zap.String("workout_type", workoutType),
 	)
 
-	task, err := ctl.newVideoAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID)
+	task, err := ctl.newVideoAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.EnableTTS)
 	if err != nil {
 		logger.Log.Error("failed to create task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -222,7 +222,7 @@ func (ctl *Controller) Upload(c *gin.Context) {
 		return
 	}
 
-	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, 0)
+	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, 0, false)
 	if err != nil {
 		logger.Log.Error("failed to create task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -849,7 +849,7 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 	// prefix = "videos/{profileId}/{sessionId}/"
 	placeholderGCSURI := fmt.Sprintf("gs://%s/videos/%d/%s/", ctl.bucketName, req.ProfileID, req.SessionID)
 
-	task, err := ctl.newMergeChunksTask(req.SessionID, placeholderGCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID)
+	task, err := ctl.newMergeChunksTask(req.SessionID, placeholderGCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.EnableTTS)
 	if err != nil {
 		logger.Log.Error("failed to create merge task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -1293,7 +1293,7 @@ func (ctl *Controller) RetryAnalysis(c *gin.Context) {
 		zap.Uint("profile_id", req.ProfileID),
 		zap.String("gcs_uri", gcsURI))
 
-	task, err := ctl.newVideoAnalysisTask(req.SessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, req.ProfileID)
+	task, err := ctl.newVideoAnalysisTask(req.SessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, req.ProfileID, false)
 	if err != nil {
 		logger.Log.Error("failed to create retry task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -1351,7 +1351,7 @@ func (ctl *Controller) GenerateHardSub(c *gin.Context) {
 		zap.String("session_id", req.SessionID),
 		zap.Uint("profile_id", req.ProfileID))
 
-	task, err := ctl.newGenerateHardSub(req.SessionID, req.ProfileID)
+	task, err := ctl.newGenerateHardSub(req.SessionID, req.ProfileID, req.EnableTTS)
 	if err != nil {
 		logger.Log.Error("failed to create hardsub task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})

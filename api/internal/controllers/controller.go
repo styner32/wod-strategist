@@ -46,7 +46,7 @@ type HighlightResultRepository interface {
 	FindByID(ctx context.Context, id uint) (*db.HighlightResult, error)
 }
 
-type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error)
+type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool) (*asynq.Task, error)
 
 type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int) (*asynq.Task, error)
 
@@ -54,7 +54,7 @@ type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int
 
 type VerifyHighlightsTaskFactory func(sessionID string) (*asynq.Task, error)
 
-type HardSubTaskFactory func(sessionID string, profileID uint) (*asynq.Task, error)
+type HardSubTaskFactory func(sessionID string, profileID uint, enableTTS bool) (*asynq.Task, error)
 
 type Config struct {
 	QueueClient             QueueClient
@@ -121,7 +121,9 @@ func New(config Config) *Controller {
 
 	hardSubFactory := config.NewGenerateHardSub
 	if hardSubFactory == nil {
-		hardSubFactory = worker.NewGenerateHardSubTask
+		hardSubFactory = func(sessionID string, profileID uint, enableTTS bool) (*asynq.Task, error) {
+			return worker.NewGenerateHardSubTask(sessionID, profileID, enableTTS)
+		}
 	}
 
 	return &Controller{
