@@ -254,7 +254,8 @@
     "archiveTitle": "기록 보관",
     "archiveConfirm": "기록이 목록에서 숨겨집니다. 나중에 다시 찾을 수 있습니다.",
     "archive": "보관",
-    "archiveFailed": "보관에 실패했습니다. 다시 시도해주세요."
+    "archiveFailed": "보관에 실패했습니다. 다시 시도해주세요.",
+    "mergePreparing": "병합 준비 중... 곧 세션이 표시됩니다."
   },
   "player": {
     "loadingVideo": "운동 영상 불러오는 중...",

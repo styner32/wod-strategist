@@ -254,7 +254,8 @@
     "archiveTitle": "Archive Record",
     "archiveConfirm": "This will hide the record from your history. You can still find it later.",
     "archive": "Archive",
-    "archiveFailed": "Failed to archive. Please try again."
+    "archiveFailed": "Failed to archive. Please try again.",
+    "mergePreparing": "Preparing merge... Your session will appear shortly."
   },
   "player": {
     "loadingVideo": "Loading workout video...",

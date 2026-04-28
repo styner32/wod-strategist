@@ -38,6 +38,7 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
 
 import { useProfileStore } from "@/store/useProfileStore";
+import { useMergeStatus } from "@/store/useMergeStatus";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 const IS_ANDROID = Platform.OS === 'android';
@@ -207,8 +208,7 @@ export default function VisionTestPage() {
   const [chunkFeedback, setChunkFeedback] = useState<string | null>(null);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [chunkCount, setChunkCount] = useState(0);
-  // Track auto-merge-and-navigate state after stopping (both platforms)
-  const [autoMerging, setAutoMerging] = useState(false);
+
   // Elapsed timer for recording
   const [elapsedMs, setElapsedMs] = useState(0);
 
@@ -606,44 +606,47 @@ export default function VisionTestPage() {
 
       setIsRecording(false);
 
+      // Fire-and-forget: trigger server-side merge in the background.
+      // The merge API just enqueues a task — no reason to block the user
+      // on the recording view while it completes.
+      // We call it inline (not in setTimeout) so the network request starts
+      // before the user can background the app.
       if (chunkCount > 0) {
-        // Auto-trigger server-side merge + analysis (both platforms)
-        setAutoMerging(true);
-        try {
-          const sessionId = sessionIdRef.current;
-          const movementsArray = movements ? movements.split(", ") : [];
-          const injuriesArray = injuries ? injuries.split(", ") : [];
+        const sessionId = sessionIdRef.current;
+        const movementsArray = movements ? movements.split(", ") : [];
+        const injuriesArray = injuries ? injuries.split(", ") : [];
 
+        // Track the merge globally so History page can show a banner
+        useMergeStatus.getState().addPending(sessionId);
+
+        // Fire the merge — the 2s delay lets the last chunk upload reach GCS
+        (async () => {
           // Small delay to let the last chunk upload reach the server
           await new Promise(resolve => setTimeout(resolve, 2000));
-
-          await mergeChunks(sessionId, {
-            workoutType,
-            movements: movementsArray,
-            injuries: injuriesArray,
-            profileId: profileId!,
-          });
-
-          console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
-        } catch (e) {
-          console.error("❌ Auto-merge failed:", e);
-          Alert.alert(
-            "Merge Failed",
-            "Could not start merge. You can try again from history.",
-            [{ text: "OK" }]
-          );
-        } finally {
-          setAutoMerging(false);
-        }
+          try {
+            await mergeChunks(sessionId, {
+              workoutType,
+              movements: movementsArray,
+              injuries: injuriesArray,
+              profileId: profileId!,
+            });
+            console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
+          } catch (e) {
+            console.error("❌ Auto-merge failed:", e);
+          } finally {
+            useMergeStatus.getState().removePending(sessionId);
+          }
+        })();  // IIFE — fires immediately, does not block
       }
 
-      // Clean up local chunk files and navigate to history
+      // Clean up local chunk files and navigate away immediately
       cleanupChunkFiles();
       setChunkCount(0);
       setIsSaving(false);
-      router.replace("/history" as any);
 
-      // iOS only: prompt to save screen recording to gallery (non-blocking)
+      // iOS only: prompt to save screen recording to gallery BEFORE navigating.
+      // Alert must fire while this component is still mounted — navigating first
+      // unmounts the component, which can silently swallow the Alert on long sessions.
       if (Platform.OS === 'ios' && screenRecorderFile?.path) {
         const filePath = screenRecorderFile.path;
         Alert.alert(
@@ -660,6 +663,7 @@ export default function VisionTestPage() {
                   if (f.exists) f.delete();
                   console.log("🗑️ Deleted screen recorder temp file");
                 } catch (_) {}
+                router.replace("/history" as any);
               },
             },
             {
@@ -675,11 +679,15 @@ export default function VisionTestPage() {
                       if (f.exists) f.delete();
                       console.log("🗑️ Cleaned up screen recorder temp file");
                     } catch (_) {}
+                    router.replace("/history" as any);
                   });
               },
             },
           ]
         );
+      } else {
+        // Android or no screen recorder file — navigate immediately
+        router.replace("/history" as any);
       }
     } catch (error) {
       console.error("Recording Stop Error:", error);
@@ -876,19 +884,7 @@ export default function VisionTestPage() {
       {/* Recording controls — compact pill bar */}
       {!previewOnly && (
         <View style={[styles.recordControl, applyLandscapeStyles && styles.recordControlLandscape]}>
-        {autoMerging ? (
-          <View style={styles.postRecordingFooter}>
-            <Text style={styles.footerStatus}>🔗 Merging & Analyzing...</Text>
-            <Text style={[styles.footerStatus, { color: '#888', fontSize: 13 }]}>
-              {chunkCount} chunks uploaded. Redirecting to history...
-            </Text>
-            <View style={styles.footerProgressBg}>
-              <View
-                style={[styles.footerProgressFill, { width: "100%", backgroundColor: "#64D2FF" }]}
-              />
-            </View>
-          </View>
-        ) : isSaving ? (
+        {isSaving ? (
           <View style={styles.postRecordingFooter}>
             <Text style={styles.footerStatus}>Saving...</Text>
             <View style={styles.footerProgressBg}>
