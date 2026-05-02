@@ -34,6 +34,7 @@ import {
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutChunk, fetchChunkAnalysis, mergeChunks } from "../../features/wod/api";
+import { mergeChunksLocal, mergedOutputPath } from "../../features/wod/mergeChunksLocal";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
 import { TelemetryRecorder } from '../../features/debug/telemetryRecorder';
@@ -535,6 +536,42 @@ export default function VisionTestPage() {
     chunkPaths.current = [];
   };
 
+  /**
+   * Delete a snapshot of chunk files (does NOT touch chunkPaths ref).
+   * Used by the local merge flow which snapshots paths before clearing state.
+   */
+  const cleanupLocalChunkFiles = (paths: string[]) => {
+    try {
+      const { File: FSFile } = require("expo-file-system");
+      for (const p of paths) {
+        try {
+          const f = new FSFile(p);
+          if (f.exists) f.delete();
+        } catch (_) {}
+      }
+      console.log(`🗑️ Cleaned up ${paths.length} chunk files`);
+    } catch (e) {
+      console.warn("⚠️ Chunk cleanup error:", e);
+    }
+  };
+
+  /**
+   * Delete the merged output file + all source chunk files.
+   * Called after gallery save decision (save or discard).
+   */
+  const cleanupMergedAndChunks = (mergedPath: string, chunks: string[]) => {
+    try {
+      const { File: FSFile } = require("expo-file-system");
+      try {
+        const f = new FSFile(mergedPath);
+        if (f.exists) f.delete();
+        console.log("🗑️ Deleted merged file:", mergedPath);
+      } catch (_) {}
+    } catch (_) {}
+    cleanupLocalChunkFiles(chunks);
+    chunkPaths.current = [];
+  };
+
   // --- Main Recording Logic ---
 
   const handleStartRecording = async () => {
@@ -636,13 +673,15 @@ export default function VisionTestPage() {
         console.warn('telemetry stop failed', e);
       }
 
+      // Snapshot session ID for both server merge and local merge
+      const sessionId = sessionIdRef.current;
+
       // Fire-and-forget: trigger server-side merge in the background.
       // The merge API just enqueues a task — no reason to block the user
       // on the recording view while it completes.
       // We call it inline (not in setTimeout) so the network request starts
       // before the user can background the app.
       if (chunkCount > 0) {
-        const sessionId = sessionIdRef.current;
         const movementsArray = movements ? movements.split(", ") : [];
         const injuriesArray = injuries ? injuries.split(", ") : [];
 
@@ -669,54 +708,61 @@ export default function VisionTestPage() {
         })();  // IIFE — fires immediately, does not block
       }
 
-      // Clean up local chunk files and navigate away immediately
-      cleanupChunkFiles();
+      // --- Local merge for gallery save (both platforms) ---
+      // Snapshot chunk paths before clearing — we need them for the merge.
+      const localChunks = [...chunkPaths.current];
+
+      // Clean up state immediately so the UI reflects "stopped"
       setChunkCount(0);
       setIsSaving(false);
 
-      // iOS only: prompt to save screen recording to gallery BEFORE navigating.
-      // Alert must fire while this component is still mounted — navigating first
-      // unmounts the component, which can silently swallow the Alert on long sessions.
-      if (Platform.OS === 'ios' && screenRecorderFile?.path) {
-        const filePath = screenRecorderFile.path;
-        Alert.alert(
-          "갤러리에 저장하시겠습니까?",
-          "운동 영상이 이미 업로드되었습니다. 기기 갤러리에도 저장하시겠습니까?",
-          [
-            {
-              text: "아니오",
-              style: "cancel",
-              onPress: () => {
-                try {
-                  const { File: FSFile } = require("expo-file-system");
-                  const f = new FSFile(filePath);
-                  if (f.exists) f.delete();
-                  console.log("🗑️ Deleted screen recorder temp file");
-                } catch (_) {}
-                router.replace("/history" as any);
-              },
-            },
-            {
-              text: "저장",
-              onPress: () => {
-                MediaLibrary.saveToLibraryAsync(filePath)
-                  .then(() => console.log("📱 Saved screen recording to gallery"))
-                  .catch((e) => console.warn("⚠️ Gallery save failed:", e))
-                  .finally(() => {
-                    try {
-                      const { File: FSFile } = require("expo-file-system");
-                      const f = new FSFile(filePath);
-                      if (f.exists) f.delete();
-                      console.log("🗑️ Cleaned up screen recorder temp file");
-                    } catch (_) {}
+      if (localChunks.length > 0) {
+        // Merge chunks locally → prompt gallery save → then cleanup
+        const outPath = mergedOutputPath(sessionId);
+
+        // Show the gallery save alert while merge runs in background.
+        // The alert is shown BEFORE navigating so it stays visible.
+        const performMergeAndPrompt = async () => {
+          try {
+            await mergeChunksLocal(localChunks, outPath);
+
+            Alert.alert(
+              "갤러리에 저장하시겠습니까?",
+              "운동 영상이 이미 업로드되었습니다. 기기 갤러리에도 저장하시겠습니까?",
+              [
+                {
+                  text: "아니오",
+                  style: "cancel",
+                  onPress: () => {
+                    cleanupMergedAndChunks(outPath, localChunks);
                     router.replace("/history" as any);
-                  });
-              },
-            },
-          ]
-        );
+                  },
+                },
+                {
+                  text: "저장",
+                  onPress: () => {
+                    MediaLibrary.saveToLibraryAsync(outPath)
+                      .then(() => console.log("📱 Saved merged video to gallery"))
+                      .catch((e) => console.warn("⚠️ Gallery save failed:", e))
+                      .finally(() => {
+                        cleanupMergedAndChunks(outPath, localChunks);
+                        router.replace("/history" as any);
+                      });
+                  },
+                },
+              ]
+            );
+          } catch (mergeErr) {
+            console.warn("⚠️ Local merge failed, skipping gallery save:", mergeErr);
+            cleanupLocalChunkFiles(localChunks);
+            router.replace("/history" as any);
+          }
+        };
+
+        // Fire merge+prompt immediately (don't await — alert handles navigation)
+        performMergeAndPrompt();
       } else {
-        // Android or no screen recorder file — navigate immediately
+        // No chunks to merge — just navigate
         router.replace("/history" as any);
       }
     } catch (error) {

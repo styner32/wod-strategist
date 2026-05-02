@@ -5,7 +5,14 @@
  * Max 5 attempts per entry. No exponential backoff in v1 — retry cadence is
  * naturally spread out (once per recording session or app launch).
  */
-import * as FileSystem from 'expo-file-system';
+import {
+  documentDirectory,
+  readAsStringAsync,
+  writeAsStringAsync,
+  deleteAsync,
+  getInfoAsync,
+  makeDirectoryAsync,
+} from 'expo-file-system/legacy';
 
 import { uploadDebugTelemetry } from '../wod/api';
 import type { PendingUpload, TelemetrySession } from './types';
@@ -17,12 +24,12 @@ import type { PendingUpload, TelemetrySession } from './types';
 const MAX_ATTEMPTS = 5;
 
 function queuePath(): string {
-  return `${FileSystem.documentDirectory}debug/_pending.json`;
+  return `${documentDirectory}debug/_pending.json`;
 }
 
 async function loadQueue(): Promise<PendingUpload[]> {
   try {
-    const raw = await FileSystem.readAsStringAsync(queuePath());
+    const raw = await readAsStringAsync(queuePath());
     return JSON.parse(raw) as PendingUpload[];
   } catch {
     // File missing, corrupt, or unparseable — start fresh
@@ -33,12 +40,12 @@ async function loadQueue(): Promise<PendingUpload[]> {
 async function saveQueue(queue: PendingUpload[]): Promise<void> {
   try {
     // Ensure debug dir exists
-    const dir = `${FileSystem.documentDirectory}debug/`;
-    const info = await FileSystem.getInfoAsync(dir);
+    const dir = `${documentDirectory}debug/`;
+    const info = await getInfoAsync(dir);
     if (!info.exists) {
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+      await makeDirectoryAsync(dir, { intermediates: true });
     }
-    await FileSystem.writeAsStringAsync(queuePath(), JSON.stringify(queue));
+    await writeAsStringAsync(queuePath(), JSON.stringify(queue));
   } catch (e) {
     console.warn('📊 Failed to persist telemetry queue:', e);
   }
@@ -67,14 +74,14 @@ export async function enqueueUpload(
  */
 async function uploadOne(pending: PendingUpload): Promise<boolean> {
   try {
-    const raw = await FileSystem.readAsStringAsync(pending.filePath);
+    const raw = await readAsStringAsync(pending.filePath);
     const session: TelemetrySession = JSON.parse(raw);
 
     await uploadDebugTelemetry(session);
 
     // Success — delete the local file
     try {
-      await FileSystem.deleteAsync(pending.filePath, { idempotent: true });
+      await deleteAsync(pending.filePath, { idempotent: true });
     } catch {
       // Non-fatal — file already gone or inaccessible
     }

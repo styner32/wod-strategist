@@ -14,7 +14,7 @@ const mockWriteAsStringAsync = jest.fn().mockResolvedValue(undefined);
 const mockGetInfoAsync = jest.fn().mockResolvedValue({ exists: true });
 const mockMakeDirectoryAsync = jest.fn().mockResolvedValue(undefined);
 
-jest.mock('expo-file-system', () => ({
+jest.mock('expo-file-system/legacy', () => ({
   documentDirectory: '/mock/docs/',
   writeAsStringAsync: (...args: unknown[]) => mockWriteAsStringAsync(...args),
   getInfoAsync: (...args: unknown[]) => mockGetInfoAsync(...args),

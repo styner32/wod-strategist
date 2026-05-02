@@ -6,7 +6,12 @@
  * External code registers "providers" that return partial sample data each tick.
  */
 import * as Battery from 'expo-battery';
-import * as FileSystem from 'expo-file-system';
+import {
+  documentDirectory,
+  writeAsStringAsync,
+  getInfoAsync,
+  makeDirectoryAsync,
+} from 'expo-file-system/legacy';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
@@ -33,13 +38,13 @@ const SAMPLE_RATE_MS = 1000;
 const BATTERY_REFRESH_MS = 10_000;
 
 function debugDir(): string {
-  return `${FileSystem.documentDirectory}debug/`;
+  return `${documentDirectory}debug/`;
 }
 
 async function ensureDebugDir(): Promise<void> {
-  const info = await FileSystem.getInfoAsync(debugDir());
+  const info = await getInfoAsync(debugDir());
   if (!info.exists) {
-    await FileSystem.makeDirectoryAsync(debugDir(), { intermediates: true });
+    await makeDirectoryAsync(debugDir(), { intermediates: true });
   }
 }
 
@@ -165,7 +170,7 @@ export const TelemetryRecorder = {
     try {
       await ensureDebugDir();
       const filePath = `${debugDir()}${sid}.json`;
-      await FileSystem.writeAsStringAsync(filePath, JSON.stringify(session));
+      await writeAsStringAsync(filePath, JSON.stringify(session));
       console.log(`📊 Telemetry written to ${filePath} (${session.samples.length} samples)`);
       return { filePath, sessionId: sid };
     } catch (e) {
