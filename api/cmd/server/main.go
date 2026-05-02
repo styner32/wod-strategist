@@ -18,6 +18,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	_ "github.com/wod-strategist/api/docs"
+	"github.com/wod-strategist/api/internal/auth"
 	"github.com/wod-strategist/api/internal/config"
 	"github.com/wod-strategist/api/internal/controllers"
 	"github.com/wod-strategist/api/internal/db"
@@ -72,8 +73,12 @@ func main() {
 		GitCommit:        GitCommit,
 	})
 
+	// Initialize Auth Service
+	authSvc := auth.NewService(dbConn, []byte(cfg.JWTSigningSecret))
+	authHandlers := controllers.NewAuthController(authSvc)
+
 	// Setup Router
-	r, err := server.SetupRouter(cfg.AppEnv, cfg.APISecret, cfg.DevAllowedOrigins, handlers)
+	r, err := server.SetupRouter(cfg.AppEnv, cfg.APISecret, cfg.DevAllowedOrigins, handlers, authHandlers, authSvc)
 	if err != nil {
 		logger.Log.Fatal("Failed to setup router", zap.Error(err))
 	}

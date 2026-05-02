@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/wod-strategist/api/internal/auth"
 	"github.com/wod-strategist/api/internal/logger"
 	"go.uber.org/zap"
 )
@@ -38,7 +39,7 @@ func DevelopmentCORS(allowedOrigins []string) gin.HandlerFunc {
 	}
 
 	allowMethods := "GET, POST, OPTIONS"
-	allowHeaders := "Content-Type, X-API-Key"
+	allowHeaders := "Content-Type, X-API-Key, Authorization"
 
 	return func(c *gin.Context) {
 		origin := strings.TrimSpace(c.GetHeader("Origin"))
@@ -83,6 +84,27 @@ func APIKeyMiddleware(configuredKey string) gin.HandlerFunc {
 			return
 		}
 
+		c.Next()
+	}
+}
+
+// AuthMiddleware validates a Bearer JWT token and sets "user_id" in the context.
+func AuthMiddleware(svc *auth.Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing or invalid authorization header"})
+			return
+		}
+
+		rawToken := strings.TrimPrefix(authHeader, "Bearer ")
+		userID, err := svc.ValidateToken(c.Request.Context(), rawToken)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+
+		c.Set("user_id", userID)
 		c.Next()
 	}
 }

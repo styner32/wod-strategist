@@ -49,7 +49,7 @@ func newTestRouter(config Config) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	logger.Log = zap.NewNop()
 	controller := New(config)
-	router, err := server.SetupRouter("test", "test-api-key", nil, controller)
+	router, err := server.SetupRouter("test", "test-api-key", nil, controller, nil, nil)
 	Expect(err).NotTo(HaveOccurred())
 	return router
 }
@@ -469,7 +469,7 @@ var _ = Describe("Controller handlers", func() {
 				SessionID: "session-1",
 				Status:    "COMPLETED",
 				Output:    "ok",
-				ProfileID: ptrUint(1),
+				ProfileID: 1,
 			}).Error).NotTo(HaveOccurred())
 
 			router := newTestRouter(Config{AnalysisResults: NewGormAnalysisResultRepository(dbConn)})

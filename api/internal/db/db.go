@@ -11,8 +11,19 @@ import (
 	"gorm.io/gorm"
 )
 
+type User struct {
+	ID           string     `gorm:"primaryKey;type:text" json:"id"`
+	Username     string     `gorm:"not null" json:"username"`
+	PasswordHash string     `gorm:"not null" json:"-"`
+	TokenVersion int        `gorm:"not null;default:1" json:"-"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	DeletedAt    *time.Time `json:"deleted_at,omitempty"`
+}
+
 type Profile struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
+	UserID       string     `gorm:"type:text;index;not null" json:"user_id"`
 	Name         string     `json:"name"`
 	BirthYear    int        `json:"birth_year"`
 	BirthMonth   int        `json:"birth_month"`
@@ -35,7 +46,7 @@ const (
 type AnalysisResult struct {
 	ID                uint      `gorm:"primaryKey" json:"id"`
 	SessionID         string    `gorm:"index;not null" json:"session_id"`
-	ProfileID         *uint     `gorm:"index" json:"profile_id,omitempty"`
+	ProfileID         uint      `gorm:"index;not null" json:"profile_id"`
 	AnalysisType      string    `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
 	Status            string    `json:"status"`                           // PENDING, COMPLETED, FAILED
 	Output            string    `json:"output"`
@@ -50,7 +61,7 @@ type AnalysisResult struct {
 type HighlightResult struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	SessionID   string    `gorm:"index;not null" json:"session_id"`
-	ProfileID   *uint     `gorm:"index" json:"profile_id,omitempty"`
+	ProfileID   uint      `gorm:"index;not null" json:"profile_id"`
 	Title       string    `json:"title"`         // e.g. "Full Reel", "Best Forms"
 	Status      string    `json:"status"`        // PENDING, PROCESSING, COMPLETED, FAILED
 	GCSURI      string    `json:"gcs_uri"`       // gs:// URI of the polished highlight video
@@ -65,7 +76,7 @@ type HighlightResult struct {
 type ChunkAnalysisResult struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
 	SessionID       string    `gorm:"index;not null" json:"session_id"`
-	ProfileID       *uint     `gorm:"index" json:"profile_id,omitempty"`
+	ProfileID       uint      `gorm:"index;not null" json:"profile_id"`
 	FilePath        string    `json:"file_path"`
 	ExerciseType    string    `json:"exercise_type,omitempty"`                           // detected movement (e.g. "Snatch", "Pull-up")
 	Status          string    `json:"status"`                                            // PENDING, COMPLETED, FAILED
@@ -81,7 +92,7 @@ type ChunkAnalysisResult struct {
 type TokenUsage struct {
 	ID              uint      `gorm:"primaryKey" json:"id"`
 	SessionID       string    `gorm:"index;not null" json:"session_id"`
-	ProfileID       *uint     `gorm:"index" json:"profile_id,omitempty"`
+	ProfileID       uint      `gorm:"index;not null" json:"profile_id"`
 	TaskType        string    `gorm:"not null" json:"task_type"`        // chunk:analysis, video:index, video:segment, etc.
 	Model           string    `gorm:"not null" json:"model"`            // gemini-3.1-pro-preview, gemini-3-flash-preview
 	PromptTokens    int32     `gorm:"not null;default:0" json:"prompt_tokens"`

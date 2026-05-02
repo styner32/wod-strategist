@@ -234,9 +234,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				Output:       userMsg,
 				AnalysisType: db.AnalysisTypeWOD,
 			}
-			if p.ProfileID > 0 {
-				failedResult.ProfileID = &p.ProfileID
-			}
+			failedResult.ProfileID = p.ProfileID
 			if dbErr := w.DB.Create(failedResult).Error; dbErr != nil {
 				w.logger.Error("Failed to write FAILED analysis result",
 					zap.String("session_id", p.SessionID),
@@ -529,9 +527,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		AnalysisType:      db.AnalysisTypeWOD,
 		HighlightSegments: highlightSegments,
 	}
-	if p.ProfileID > 0 {
-		result.ProfileID = &p.ProfileID
-	}
+	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
 
 	w.logger.Info("Two-pass analysis completed",
@@ -926,9 +922,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 			Status:    "FAILED",
 			Output:    "An internal error occurred during analysis.",
 		}
-		if p.ProfileID > 0 {
-			failedResult.ProfileID = &p.ProfileID
-		}
+		failedResult.ProfileID = p.ProfileID
 		w.DB.Create(failedResult)
 
 		return err
@@ -944,9 +938,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		AnalysisType:      db.AnalysisTypeWOD,
 		HighlightSegments: highlightSegments,
 	}
-	if p.ProfileID > 0 {
-		result.ProfileID = &p.ProfileID
-	}
+	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
 
 	w.logger.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))

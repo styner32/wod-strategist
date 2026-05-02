@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	"github.com/wod-strategist/api/internal/auth"
 )
 
 type Handlers interface {
@@ -42,6 +43,14 @@ type Handlers interface {
 	GetPlayURL(*gin.Context)
 	GetVideoDownloadURL(*gin.Context)
 	UploadDebugTelemetry(*gin.Context)
+}
+
+// AuthHandlers defines the handler methods for auth endpoints.
+type AuthHandlers interface {
+	Signup(*gin.Context)
+	Login(*gin.Context)
+	Logout(*gin.Context)
+	DeleteAccount(*gin.Context)
 }
 
 const APIRoutePrefix = "/api/v1"
@@ -409,7 +418,8 @@ func RegisterProtectedRoutes(routes gin.IRoutes, handlers Handlers) error {
 	return nil
 }
 
-func SetupRouter(appEnv string, apiKey string, allowedOrigins []string, handlers Handlers) (*gin.Engine, error) {
+func SetupRouter(appEnv string, apiKey string, allowedOrigins []string,
+	handlers Handlers, authHandlers AuthHandlers, authSvc *auth.Service) (*gin.Engine, error) {
 	if err := validateHandlers(handlers); err != nil {
 		return nil, err
 	}
@@ -430,6 +440,24 @@ func SetupRouter(appEnv string, apiKey string, allowedOrigins []string, handlers
 
 	api := r.Group(APIRoutePrefix)
 	api.Use(APIKeyMiddleware(apiKey))
+
+	// Public auth routes (signup, login) — inside API group but before Bearer check
+	if authHandlers != nil {
+		api.POST("/auth/signup", authHandlers.Signup)
+		api.POST("/auth/login", authHandlers.Login)
+	}
+
+	// Apply auth middleware for all subsequent routes
+	if authSvc != nil {
+		api.Use(AuthMiddleware(authSvc))
+	}
+
+	// Protected auth routes (logout, delete account)
+	if authHandlers != nil {
+		api.POST("/auth/logout", authHandlers.Logout)
+		api.DELETE("/auth/account", authHandlers.DeleteAccount)
+	}
+
 	if err := RegisterProtectedRoutes(api, handlers); err != nil {
 		return nil, err
 	}

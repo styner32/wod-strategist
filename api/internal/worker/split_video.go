@@ -231,9 +231,7 @@ func (w *Worker) saveChunkResult(p VideoAnalysisPayload, gcsURI string, startSec
 		StartSecs:    &startSecs,
 		EndSecs:      &endSecs,
 	}
-	if p.ProfileID > 0 {
-		result.ProfileID = &p.ProfileID
-	}
+	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
 }
 

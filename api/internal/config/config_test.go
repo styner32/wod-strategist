@@ -27,6 +27,7 @@ var _ = Describe("InitServer", func() {
 		setEnv("REDIS_URL", "localhost:6379")
 		setEnv("GCS_BUCKET_NAME", "uploads-bucket")
 		setEnv("API_SECRET", "secret-key")
+		setEnv("JWT_SIGNING_SECRET", "test-jwt-siging-secret")
 	})
 
 	It("returns config with the default port when PORT is unset", func() {

@@ -29,6 +29,7 @@ type Common struct {
 type Server struct {
 	Common
 	APISecret         string
+	JWTSigningSecret  string
 	Port              string
 	DevAllowedOrigins []string
 }
@@ -58,6 +59,7 @@ func InitServer() (Server, error) {
 			AppEnv:        appEnv,
 		},
 		APISecret:         strings.TrimSpace(os.Getenv("API_SECRET")),
+		JWTSigningSecret:  strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
 		Port:              strings.TrimSpace(os.Getenv("PORT")),
 		DevAllowedOrigins: parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
 	}
@@ -70,6 +72,7 @@ func InitServer() (Server, error) {
 		requiredEnv("REDIS_URL", cfg.RedisURL),
 		requiredEnv("GCS_BUCKET_NAME", cfg.GCSBucketName),
 		requiredEnv("API_SECRET", cfg.APISecret),
+		requiredEnv("JWT_SIGNING_SECRET", cfg.JWTSigningSecret),
 	); err != nil {
 		return Server{}, err
 	}

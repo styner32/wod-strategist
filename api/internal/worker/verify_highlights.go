@@ -142,10 +142,7 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		return fmt.Errorf("flash verification query failed: %w", err)
 	}
 
-	profileID := uint(0)
-	if analysisResult.ProfileID != nil {
-		profileID = *analysisResult.ProfileID
-	}
+	profileID := analysisResult.ProfileID
 	w.saveTokenUsage(p.SessionID, profileID, "highlight:verify", verifyUsage)
 
 	// 7. Parse verification results

@@ -252,9 +252,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 			Status:    "FAILED",
 			Output:    "An internal error occurred during chunk analysis.",
 		}
-		if p.ProfileID > 0 {
-			chunkFailed.ProfileID = &p.ProfileID
-		}
+		chunkFailed.ProfileID = p.ProfileID
 		if p.StartSecs > 0 || p.EndSecs > 0 {
 			chunkFailed.StartSecs = &p.StartSecs
 			chunkFailed.EndSecs = &p.EndSecs
@@ -280,9 +278,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		ObservedSignals: observedSignals,
 		HeartRateBPM:    p.HeartRateBPM,
 	}
-	if p.ProfileID > 0 {
-		chunkResult.ProfileID = &p.ProfileID
-	}
+	chunkResult.ProfileID = p.ProfileID
 	if p.StartSecs > 0 || p.EndSecs > 0 {
 		chunkResult.StartSecs = &p.StartSecs
 		chunkResult.EndSecs = &p.EndSecs

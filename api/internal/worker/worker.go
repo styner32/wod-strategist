@@ -123,9 +123,7 @@ func (w *Worker) saveTokenUsage(sessionID string, profileID uint, taskType strin
 		CandidateTokens: usage.CandidateTokens,
 		TotalTokens:     usage.TotalTokens,
 	}
-	if profileID > 0 {
-		record.ProfileID = &profileID
-	}
+	record.ProfileID = profileID
 	if err := w.DB.Create(record).Error; err != nil {
 		w.logger.Error("Failed to save token usage",
 			zap.String("session_id", sessionID),

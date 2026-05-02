@@ -408,6 +408,12 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	})
 
 	It("sets ProfileID on the result when ProfileID > 0", func() {
+		user := db.User{
+			Username:     "test-username",
+			PasswordHash: "test-password",
+		}
+		Expect(dbConn.Create(&user).Error).NotTo(HaveOccurred())
+
 		profile := db.Profile{
 			BirthYear: 1990, BirthMonth: 6, BirthDay: 15,
 			Gender: "male", HeightCm: 175, WeightKg: 75.0,
@@ -429,8 +435,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		var result db.AnalysisResult
 		Expect(dbConn.Where("session_id = ?", "sess-profile-001").First(&result).Error).
 			NotTo(HaveOccurred())
-		Expect(result.ProfileID).NotTo(BeNil())
-		Expect(*result.ProfileID).To(Equal(profile.ID))
+		Expect(result.ProfileID).To(Equal(profile.ID))
 	})
 
 	It("enqueues an injury:analysis follow-up task with parsed focus timestamps", func() {

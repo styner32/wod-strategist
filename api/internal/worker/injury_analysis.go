@@ -189,9 +189,7 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 			Status:       "COMPLETED",
 			Output:       analysis,
 		}
-		if p.ProfileID > 0 {
-			result.ProfileID = &p.ProfileID
-		}
+		result.ProfileID = p.ProfileID
 		w.DB.Create(result)
 	}
 
@@ -256,9 +254,7 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 				Status:       "FAILED",
 				Output:       "An internal error occurred during injury analysis.",
 			}
-			if p.ProfileID > 0 {
-				failedResult.ProfileID = &p.ProfileID
-			}
+			failedResult.ProfileID = p.ProfileID
 			w.DB.Create(failedResult)
 		}
 		return err
@@ -279,9 +275,7 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 			Status:       "COMPLETED",
 			Output:       analysis,
 		}
-		if p.ProfileID > 0 {
-			result.ProfileID = &p.ProfileID
-		}
+		result.ProfileID = p.ProfileID
 		w.DB.Create(result)
 	}
 

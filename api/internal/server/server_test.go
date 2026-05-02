@@ -146,6 +146,10 @@ func (h *recordingHandlers) GenerateHardSub(c *gin.Context) {
 	h.record("generate-hardsub", c)
 }
 
+func (h *recordingHandlers) UploadDebugTelemetry(c *gin.Context) {
+	h.record("debug-telemetry", c)
+}
+
 func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
 	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
 	req := httptest.NewRequest(spec.Method, path, nil)
@@ -169,12 +173,12 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("returns an error when handlers are nil", func() {
-		_, err := server.SetupRouter("test", "secret", nil, nil)
+		_, err := server.SetupRouter("test", "secret", nil, nil, nil, nil)
 		Expect(err).To(MatchError(server.ErrHandlersRequired))
 	})
 
 	It("allows /health without an API key", func() {
-		router, err := server.SetupRouter("test", "secret", nil, handlers)
+		router, err := server.SetupRouter("test", "secret", nil, handlers, nil, nil)
 		Expect(err).NotTo(HaveOccurred())
 		req := requestForRoute(server.PublicRouteSpecs()[0], "")
 		w := httptest.NewRecorder()
@@ -185,7 +189,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("rejects invalid API keys", func() {
-		router, err := server.SetupRouter("test", "secret", nil, handlers)
+		router, err := server.SetupRouter("test", "secret", nil, handlers, nil, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		req := requestForRoute(server.ProtectedRouteSpecs()[0], "wrong")
@@ -197,7 +201,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("registers every declared route", func() {
-		router, err := server.SetupRouter("test", "secret", nil, handlers)
+		router, err := server.SetupRouter("test", "secret", nil, handlers, nil, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		actualRoutes := make(map[string]struct{}, len(router.Routes()))
@@ -211,7 +215,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("dispatches every protected route to the matching handler when authorized", func() {
-		router, err := server.SetupRouter("test", "secret", nil, handlers)
+		router, err := server.SetupRouter("test", "secret", nil, handlers, nil, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		for _, spec := range server.ProtectedRouteSpecs() {
@@ -227,7 +231,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("handles development CORS preflight before API key auth", func() {
-		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:3000"}, handlers)
+		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:3000"}, handlers, nil, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodOptions, "/api/v1/history", nil)
