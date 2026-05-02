@@ -10,6 +10,7 @@ import {
   listItemsByRelPath,
   runStorageScanAndShare,
 } from "@/features/debug/storageScanner";
+import { useAuthStore } from "@/features/auth/useAuthStore";
 import { useActiveProfile, useProfileId, useProfileStore } from "@/store/useProfileStore";
 import { Link, router } from "expo-router";
 import React, { useState } from "react";
@@ -179,11 +180,15 @@ export default function ProfileTab() {
           ? t("common.male")
           : activeProfile.gender === "female"
             ? t("common.female")
-            : t("common.other"),
-        String(activeProfile.birthYear),
-        `${activeProfile.heightCm} cm`,
-        `${activeProfile.weightKg} kg`,
-      ].join("  ·  ")
+            : activeProfile.gender
+              ? t("common.other")
+              : null,
+        activeProfile.birthYear ? String(activeProfile.birthYear) : null,
+        activeProfile.heightCm ? `${activeProfile.heightCm} cm` : null,
+        activeProfile.weightKg ? `${activeProfile.weightKg} kg` : null,
+      ]
+        .filter(Boolean)
+        .join("  ·  ") || null
     : null;
 
   const handleLogout = () => {
@@ -192,9 +197,9 @@ export default function ProfileTab() {
       {
         text: t("profileTab.signOut"),
         style: "destructive",
-        onPress: () => {
+        onPress: async () => {
           clearActiveProfile();
-          router.replace("/");
+          await useAuthStore.getState().logout();
         },
       },
     ]);
@@ -526,17 +531,22 @@ export default function ProfileTab() {
           </Text>
         </View>
 
-        {/* Danger Zone */}
-        {activeProfile && (
-          <View style={styles.section}>
-            <TouchableOpacity
-              style={styles.logoutBtn}
-              onPress={handleLogout}
-            >
-              <Text style={styles.logoutText}>{t("profileTab.signOut")}</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        {/* Account Actions */}
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            onPress={handleLogout}
+          >
+            <Text style={styles.logoutText}>{t("profileTab.signOut")}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.logoutBtn, { marginTop: 8 }]}
+            onPress={() => router.push("/settings/deleteAccount" as any)}
+          >
+            <Text style={[styles.logoutText, { color: "#888" }]}>{t("auth.deleteAccount")}</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );

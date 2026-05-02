@@ -94,34 +94,30 @@ export default function ProfileScreen() {
   };
 
   const handleSave = async () => {
-    const y = parseInt(birthYear, 10);
-    const m = parseInt(birthMonth, 10);
-    const d = parseInt(birthDay, 10);
-    const h = parseInt(heightCm, 10);
-    const w = parseFloat(weightKg);
+    const y = birthYear ? parseInt(birthYear, 10) : 0;
+    const m = birthMonth ? parseInt(birthMonth, 10) : 0;
+    const d = birthDay ? parseInt(birthDay, 10) : 0;
+    const h = heightCm ? parseInt(heightCm, 10) : 0;
+    const w = weightKg ? parseFloat(weightKg) : 0;
 
-    // Basic validation
-    if (!birthYear || isNaN(y) || y < 1900 || y > new Date().getFullYear()) {
+    // Only validate fields that have values (all are optional now)
+    if (birthYear && (isNaN(y) || y < 1900 || y > new Date().getFullYear())) {
       Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidYear"));
       return;
     }
-    if (!birthMonth || isNaN(m) || m < 1 || m > 12) {
+    if (birthMonth && (isNaN(m) || m < 1 || m > 12)) {
       Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidMonth"));
       return;
     }
-    if (!birthDay || isNaN(d) || d < 1 || d > 31) {
+    if (birthDay && (isNaN(d) || d < 1 || d > 31)) {
       Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidDay"));
       return;
     }
-    if (!gender) {
-      Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidGender"));
-      return;
-    }
-    if (!heightCm || isNaN(h) || h < 50 || h > 300) {
+    if (heightCm && (isNaN(h) || h < 50 || h > 300)) {
       Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidHeight"));
       return;
     }
-    if (!weightKg || isNaN(w) || w < 20 || w > 500) {
+    if (weightKg && (isNaN(w) || w < 20 || w > 500)) {
       Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidWeight"));
       return;
     }
@@ -129,30 +125,22 @@ export default function ProfileScreen() {
     setSaving(true);
 
     try {
+      const payload = {
+        name: name.trim(),
+        ...(y ? { birth_year: y } : {}),
+        ...(m ? { birth_month: m } : {}),
+        ...(d ? { birth_day: d } : {}),
+        ...(gender ? { gender } : {}),
+        ...(h ? { height_cm: h } : {}),
+        ...(w ? { weight_kg: Math.round(w * 10) / 10 } : {}),
+        fitness_level: fitnessLevel,
+        injuries: selectedInjuries,
+      };
+
       if (isEditing) {
-        await store.updateProfile(existingProfile.id, {
-          name: name.trim(),
-          birth_year: y,
-          birth_month: m,
-          birth_day: d,
-          gender,
-          height_cm: h,
-          weight_kg: Math.round(w * 10) / 10,
-          fitness_level: fitnessLevel,
-          injuries: selectedInjuries,
-        });
+        await store.updateProfile(existingProfile.id, payload);
       } else {
-        await store.createProfile({
-          name: name.trim(),
-          birth_year: y,
-          birth_month: m,
-          birth_day: d,
-          gender,
-          height_cm: h,
-          weight_kg: Math.round(w * 10) / 10,
-          fitness_level: fitnessLevel,
-          injuries: selectedInjuries,
-        });
+        await store.createProfile(payload);
       }
       router.back();
     } catch (e) {

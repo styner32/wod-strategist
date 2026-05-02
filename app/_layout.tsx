@@ -5,26 +5,68 @@ import '@/features/i18n'; // Initialize i18n (side-effect: sets locale)
 
 import { VideoQueueOverlay } from "@/components/VideoQueueOverlay";
 import { t, useLocale } from "@/features/i18n";
+import { useAuthStore } from "@/features/auth/useAuthStore";
 import { useProfileStore } from "@/store/useProfileStore";
 import { flushPendingUploads } from "@/features/debug/telemetryUpload";
 import { Stack } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 export default function RootLayout() {
   const locale = useLocale(); // triggers re-render on language switch
+  const { isReady, isLoggedIn } = useAuthStore();
 
   useEffect(() => {
-    useProfileStore.getState().hydrate();
+    // Hydrate auth first — profile hydration happens after auth is confirmed
+    useAuthStore.getState().hydrate();
     // Lock the entire app to portrait by default.
     // Individual screens (e.g. visionTestPage) can override this.
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
-    // Retry orphaned debug telemetry uploads from previous sessions
-    flushPendingUploads().catch(() => {});
   }, []);
 
+  // Once logged in, hydrate profiles + flush telemetry
+  useEffect(() => {
+    if (isLoggedIn) {
+      useProfileStore.getState().hydrate();
+      flushPendingUploads().catch(() => {});
+    }
+  }, [isLoggedIn]);
+
+  // Show loading spinner while checking SecureStore
+  if (!isReady) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar style="light" />
+        <View style={styles.splash}>
+          <ActivityIndicator size="large" color="#007AFF" />
+        </View>
+      </SafeAreaProvider>
+    );
+  }
+
+  // Not logged in → show auth screens
+  if (!isLoggedIn) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar style="light" />
+        <Stack
+          key={`auth-${locale}`}
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: "#000" },
+          }}
+        >
+          <Stack.Screen name="auth/login" />
+          <Stack.Screen name="auth/signup" />
+        </Stack>
+      </SafeAreaProvider>
+    );
+  }
+
+  // Logged in → full app
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />
@@ -60,6 +102,10 @@ export default function RootLayout() {
         />
         <Stack.Screen name="upload/index" options={{ headerShown: false }} />
         <Stack.Screen name="queue" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="settings/deleteAccount"
+          options={{ title: t("auth.deleteAccount"), presentation: "modal" }}
+        />
       </Stack>
 
       {/* Global overlay — visible on all screens */}
@@ -67,3 +113,12 @@ export default function RootLayout() {
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  splash: {
+    flex: 1,
+    backgroundColor: "#000",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+});

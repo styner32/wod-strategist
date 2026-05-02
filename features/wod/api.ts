@@ -4,6 +4,7 @@ import {
   UploadProgressData,
 } from "expo-file-system/legacy";
 
+import { getToken } from "@/features/auth/storage";
 import type { components } from "./schema";
 import type { WorkoutType } from "./workoutType";
 
@@ -34,6 +35,12 @@ export async function apiClient<T = any>(
   const headers = new Headers(customHeaders);
   headers.set("X-API-Key", API_SECRET_KEY);
 
+  // Inject auth token if available
+  const token = await getToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
   if (bodyPayload && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -43,6 +50,13 @@ export async function apiClient<T = any>(
     headers,
     body: bodyPayload ? JSON.stringify(bodyPayload) : fetchOptions.body,
   });
+
+  if (res.status === 401) {
+    // Lazy import to avoid circular dependency
+    const { useAuthStore } = await import("@/features/auth/useAuthStore");
+    useAuthStore.getState().handleUnauthorized();
+    throw new Error("Unauthorized");
+  }
 
   if (!res.ok) {
     let errorText = res.statusText;
@@ -139,12 +153,12 @@ export interface ProfileResponse {
 
 export interface CreateProfileRequest {
   name?: string;
-  birth_year: number;
-  birth_month: number;
-  birth_day: number;
-  gender: string;
-  height_cm: number;
-  weight_kg: number;
+  birth_year?: number;
+  birth_month?: number;
+  birth_day?: number;
+  gender?: string;
+  height_cm?: number;
+  weight_kg?: number;
   fitness_level?: string;
   injuries?: string[];
 }
