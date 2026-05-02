@@ -64,6 +64,7 @@ func main() {
 	}
 
 	handlers := controllers.New(controllers.Config{
+		DB:               dbConn,
 		QueueClient:      client,
 		AnalysisResults:  controllers.NewGormAnalysisResultRepository(dbConn),
 		Profiles:         controllers.NewGormProfileRepository(dbConn),

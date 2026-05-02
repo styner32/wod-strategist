@@ -9,6 +9,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/storage"
 	"github.com/wod-strategist/api/internal/worker"
+	"gorm.io/gorm"
 )
 
 const defaultGitCommit = "dev"
@@ -35,7 +36,7 @@ type AnalysisResultRepository interface {
 type ProfileRepository interface {
 	Create(ctx context.Context, profile *db.Profile) error
 	FindByID(ctx context.Context, id uint) (*db.Profile, error)
-	ListAll(ctx context.Context, includeArchived bool) ([]db.Profile, error)
+	ListByUser(ctx context.Context, userID string, includeArchived bool) ([]db.Profile, error)
 	Update(ctx context.Context, profile *db.Profile) error
 	Archive(ctx context.Context, id uint) error
 	Unarchive(ctx context.Context, id uint) error
@@ -57,6 +58,7 @@ type VerifyHighlightsTaskFactory func(sessionID string) (*asynq.Task, error)
 type HardSubTaskFactory func(sessionID string, profileID uint, enableTTS bool) (*asynq.Task, error)
 
 type Config struct {
+	DB                      *gorm.DB
 	QueueClient             QueueClient
 	AnalysisResults         AnalysisResultRepository
 	Profiles                ProfileRepository
@@ -73,6 +75,7 @@ type Config struct {
 }
 
 type Controller struct {
+	db                      *gorm.DB
 	queueClient             QueueClient
 	analysisResults         AnalysisResultRepository
 	profiles                ProfileRepository
@@ -127,6 +130,7 @@ func New(config Config) *Controller {
 	}
 
 	return &Controller{
+		db:                      config.DB,
 		queueClient:             config.QueueClient,
 		analysisResults:         config.AnalysisResults,
 		profiles:                config.Profiles,

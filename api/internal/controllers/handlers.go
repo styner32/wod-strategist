@@ -59,6 +59,10 @@ func (ctl *Controller) CreateUploadURL(c *gin.Context) {
 		return
 	}
 
+	if req.ProfileID > 0 && !ctl.assertOwnsProfile(c, req.ProfileID) {
+		return
+	}
+
 	objectName := buildVideoObjectName(req.ProfileID, req.SessionID, req.Filename)
 	signedURL, err := ctl.storageClient.GenerateSignedURL(objectName, http.MethodPut, 15*time.Minute)
 	if err != nil {
@@ -117,6 +121,10 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 
 	if req.ProfileID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
+	if !ctl.assertOwnsProfile(c, req.ProfileID) {
 		return
 	}
 
@@ -251,7 +259,12 @@ func (ctl *Controller) GetAnalysis(c *gin.Context) {
 		return
 	}
 
-	results, err := ctl.analysisResults.FindBySessionID(c.Request.Context(), c.Param("session_id"))
+	sessionID := c.Param("session_id")
+	if !ctl.assertOwnsSession(c, sessionID) {
+		return
+	}
+
+	results, err := ctl.analysisResults.FindBySessionID(c.Request.Context(), sessionID)
 	if err != nil {
 		logger.Log.Error("failed to fetch results", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch results"})
@@ -274,7 +287,12 @@ func (ctl *Controller) GetChunkAnalysis(c *gin.Context) {
 		return
 	}
 
-	results, err := ctl.analysisResults.FindChunksBySessionID(c.Request.Context(), c.Param("session_id"))
+	sessionID := c.Param("session_id")
+	if !ctl.assertOwnsSession(c, sessionID) {
+		return
+	}
+
+	results, err := ctl.analysisResults.FindChunksBySessionID(c.Request.Context(), sessionID)
 	if err != nil {
 		logger.Log.Error("failed to fetch chunk results", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch chunk results"})
@@ -302,6 +320,10 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		return
 	}
 	profileID := uint(pid)
+
+	if !ctl.assertOwnsProfile(c, profileID) {
+		return
+	}
 
 	results, err := ctl.analysisResults.ListRecent(c.Request.Context(), 20, profileID)
 	if err != nil {
@@ -384,6 +406,10 @@ func (ctl *Controller) ArchiveHistory(c *gin.Context) {
 		return
 	}
 
+	if !ctl.assertOwnsAnalysis(c, uint(id)) {
+		return
+	}
+
 	if err := ctl.analysisResults.Archive(c.Request.Context(), uint(id)); err != nil {
 		logger.Log.Error("failed to archive history", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to archive history"})
@@ -404,6 +430,10 @@ func (ctl *Controller) UnarchiveHistory(c *gin.Context) {
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	if !ctl.assertOwnsAnalysis(c, uint(id)) {
 		return
 	}
 
@@ -527,6 +557,10 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		return
 	}
 
+	if !ctl.assertOwnsProfile(c, req.ProfileID) {
+		return
+	}
+
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
 	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM)
@@ -589,6 +623,7 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 	}
 
 	profile := &db.Profile{
+		UserID:       UserIDFromContext(c),
 		Name:         req.Name,
 		BirthYear:    req.BirthYear,
 		BirthMonth:   req.BirthMonth,
@@ -630,6 +665,10 @@ func (ctl *Controller) GetProfile(c *gin.Context) {
 		return
 	}
 
+	if !ctl.assertOwnsProfile(c, profile.ID) {
+		return
+	}
+
 	c.JSON(http.StatusOK, toProfileResponse(profile))
 }
 
@@ -640,9 +679,10 @@ func (ctl *Controller) ListProfiles(c *gin.Context) {
 		return
 	}
 
+	userID := UserIDFromContext(c)
 	includeArchived := c.Query("include_archived") == "true"
 
-	profiles, err := ctl.profiles.ListAll(c.Request.Context(), includeArchived)
+	profiles, err := ctl.profiles.ListByUser(c.Request.Context(), userID, includeArchived)
 	if err != nil {
 		logger.Log.Error("failed to list profiles", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list profiles"})
@@ -675,6 +715,10 @@ func (ctl *Controller) UpdateProfile(c *gin.Context) {
 	if err != nil {
 		logger.Log.Error("failed to find profile", zap.Error(err))
 		c.JSON(http.StatusNotFound, gin.H{"error": "profile not found"})
+		return
+	}
+
+	if !ctl.assertOwnsProfile(c, profile.ID) {
 		return
 	}
 
@@ -745,6 +789,10 @@ func (ctl *Controller) ArchiveProfile(c *gin.Context) {
 		return
 	}
 
+	if !ctl.assertOwnsProfile(c, uint(id)) {
+		return
+	}
+
 	if err := ctl.profiles.Archive(c.Request.Context(), uint(id)); err != nil {
 		logger.Log.Error("failed to archive profile", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to archive profile"})
@@ -765,6 +813,10 @@ func (ctl *Controller) UnarchiveProfile(c *gin.Context) {
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile id"})
+		return
+	}
+
+	if !ctl.assertOwnsProfile(c, uint(id)) {
 		return
 	}
 
@@ -843,6 +895,10 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 		return
 	}
 
+	if !ctl.assertOwnsProfile(c, req.ProfileID) {
+		return
+	}
+
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
 	// The merge task uses profileID + sessionID to discover chunks in GCS.
@@ -886,6 +942,10 @@ func (ctl *Controller) GetSubtitles(c *gin.Context) {
 	}
 
 	sessionID := c.Param("session_id")
+
+	if !ctl.assertOwnsSession(c, sessionID) {
+		return
+	}
 
 	chunks, err := ctl.analysisResults.FindChunksBySessionID(c.Request.Context(), sessionID)
 	if err != nil {
@@ -934,6 +994,10 @@ func (ctl *Controller) GenerateHighlight(c *gin.Context) {
 
 	if req.ProfileID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
+	if !ctl.assertOwnsProfile(c, req.ProfileID) {
 		return
 	}
 
@@ -990,6 +1054,11 @@ func (ctl *Controller) GetHighlight(c *gin.Context) {
 	if err != nil {
 		logger.Log.Error("failed to fetch highlight results", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch highlights"})
+		return
+	}
+
+	// Verify ownership through the first result's profile_id
+	if len(results) > 0 && !ctl.assertOwnsProfile(c, results[0].ProfileID) {
 		return
 	}
 
@@ -1155,6 +1224,10 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 		return
 	}
 
+	if !ctl.assertOwnsProfile(c, profileID) {
+		return
+	}
+
 	kind := strings.ToLower(strings.TrimSpace(c.DefaultQuery("kind", "merged")))
 	if kind != "merged" && kind != "hardsubbed" && kind != "encoded" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "kind must be 'merged', 'hardsubbed', or 'encoded'"})
@@ -1246,6 +1319,10 @@ func (ctl *Controller) RetryAnalysis(c *gin.Context) {
 	}
 	if req.ProfileID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
+	if !ctl.assertOwnsProfile(c, req.ProfileID) {
 		return
 	}
 
@@ -1344,6 +1421,10 @@ func (ctl *Controller) GenerateHardSub(c *gin.Context) {
 	}
 	if req.ProfileID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
+	if !ctl.assertOwnsProfile(c, req.ProfileID) {
 		return
 	}
 
