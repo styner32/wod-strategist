@@ -32,13 +32,13 @@ type CompleteUploadResponse struct {
 }
 
 type CreateProfileRequest struct {
-	Name         string   `json:"name"`
-	BirthYear    int      `json:"birth_year" binding:"omitempty,min=1900"`
-	BirthMonth   int      `json:"birth_month" binding:"omitempty,min=1,max=12"`
-	BirthDay     int      `json:"birth_day" binding:"omitempty,min=1,max=31"`
-	Gender       string   `json:"gender" binding:"omitempty,oneof=male female other"`
-	HeightCm     int      `json:"height_cm" binding:"omitempty,min=50,max=300"`
-	WeightKg     float64  `json:"weight_kg" binding:"omitempty,min=20,max=500"`
+	Name         string   `json:"name" binding:"required"`
+	BirthYear    *int     `json:"birth_year" binding:"omitempty,min=1900"`
+	BirthMonth   *int     `json:"birth_month" binding:"omitempty,min=1,max=12"`
+	BirthDay     *int     `json:"birth_day" binding:"omitempty,min=1,max=31"`
+	Gender       *string  `json:"gender" binding:"omitempty,oneof=male female other"`
+	HeightCm     *int     `json:"height_cm" binding:"omitempty,min=50,max=300"`
+	WeightKg     *float64 `json:"weight_kg" binding:"omitempty,min=20,max=500"`
 	FitnessLevel string   `json:"fitness_level" binding:"omitempty,oneof=beginner intermediate advanced"`
 	Injuries     []string `json:"injuries"`
 }
@@ -58,12 +58,12 @@ type UpdateProfileRequest struct {
 type ProfileResponse struct {
 	ID           uint     `json:"id"`
 	Name         string   `json:"name"`
-	BirthYear    int      `json:"birth_year"`
-	BirthMonth   int      `json:"birth_month"`
-	BirthDay     int      `json:"birth_day"`
-	Gender       string   `json:"gender"`
-	HeightCm     int      `json:"height_cm"`
-	WeightKg     float64  `json:"weight_kg"`
+	BirthYear    *int     `json:"birth_year,omitempty"`
+	BirthMonth   *int     `json:"birth_month,omitempty"`
+	BirthDay     *int     `json:"birth_day,omitempty"`
+	Gender       *string  `json:"gender,omitempty"`
+	HeightCm     *int     `json:"height_cm,omitempty"`
+	WeightKg     *float64 `json:"weight_kg,omitempty"`
 	FitnessLevel string   `json:"fitness_level"`
 	Injuries     []string `json:"injuries"`
 	ArchivedAt   *string  `json:"archived_at,omitempty"`

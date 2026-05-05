@@ -27,6 +27,7 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       await login(username.trim().toLowerCase(), password);
+      router.replace("/" as any);
     } catch (e: any) {
       const msg = e?.message || "";
       if (msg.includes("401")) {

@@ -27,7 +27,7 @@ var (
 
 var usernameRegex = regexp.MustCompile(`^[a-z0-9_]{3,20}$`)
 
-const maxUserIDRetries = 5
+
 
 // cachedUser holds a validated user lookup with a TTL.
 type cachedUser struct {
@@ -42,7 +42,7 @@ const userCacheTTL = 30 * time.Second
 type Service struct {
 	db        *gorm.DB
 	jwtSecret []byte
-	cache     sync.Map // map[string]cachedUser
+	cache     sync.Map // map[uint]cachedUser
 }
 
 // NewService creates a new auth Service.
@@ -54,49 +54,31 @@ func NewService(database *gorm.DB, jwtSecret []byte) *Service {
 }
 
 // Signup creates a new user account, auto-creates a default profile, and returns a JWT.
-func (s *Service) Signup(ctx context.Context, username, password string) (token string, userID string, err error) {
+func (s *Service) Signup(ctx context.Context, username, password string) (token string, userID uint, err error) {
 	if !usernameRegex.MatchString(username) {
-		return "", "", ErrInvalidUsername
+		return "", 0, ErrInvalidUsername
 	}
 	if len(password) < 8 {
-		return "", "", ErrPasswordTooShort
+		return "", 0, ErrPasswordTooShort
 	}
 
 	hash, err := HashPassword(password)
 	if err != nil {
-		return "", "", fmt.Errorf("hash password: %w", err)
+		return "", 0, fmt.Errorf("hash password: %w", err)
 	}
 
-	// Generate a unique user ID with retries
-	var user db.User
-	for i := 0; i < maxUserIDRetries; i++ {
-		user = db.User{
-			ID:           GenerateUserID(),
-			Username:     username,
-			PasswordHash: hash,
-			TokenVersion: 1,
-		}
+	user := db.User{
+		Username:     username,
+		PasswordHash: hash,
+		TokenVersion: 1,
+	}
 
-		result := s.db.WithContext(ctx).Create(&user)
-		if result.Error == nil {
-			break
-		}
-
-		// Check if it's a unique constraint violation (username or ID collision)
+	result := s.db.WithContext(ctx).Create(&user)
+	if result.Error != nil {
 		if isUniqueViolation(result.Error) {
-			// Check if it's username vs ID collision
-			var existing db.User
-			if s.db.WithContext(ctx).Where("LOWER(username) = LOWER(?) AND deleted_at IS NULL", username).First(&existing).Error == nil {
-				return "", "", ErrUsernameTaken
-			}
-			// ID collision — retry with new ID
-			continue
+			return "", 0, ErrUsernameTaken
 		}
-		return "", "", fmt.Errorf("create user: %w", result.Error)
-	}
-
-	if user.ID == "" {
-		return "", "", fmt.Errorf("failed to generate unique user ID after %d retries", maxUserIDRetries)
+		return "", 0, fmt.Errorf("create user: %w", result.Error)
 	}
 
 	// Auto-create a default profile for the user
@@ -104,36 +86,35 @@ func (s *Service) Signup(ctx context.Context, username, password string) (token 
 		UserID:       user.ID,
 		Name:         username,
 		FitnessLevel: "intermediate",
-		Injuries:     "[]",
 	}
 	if err := s.db.WithContext(ctx).Create(&defaultProfile).Error; err != nil {
-		return "", "", fmt.Errorf("create default profile: %w", err)
+		return "", 0, fmt.Errorf("create default profile: %w", err)
 	}
 
-	token, err = IssueToken(s.jwtSecret, user.ID, user.TokenVersion)
+	token, err = IssueToken(s.jwtSecret, user.ID, user.Username, user.TokenVersion)
 	if err != nil {
-		return "", "", err
+		return "", 0, err
 	}
 
 	return token, user.ID, nil
 }
 
 // Login authenticates a user and returns a JWT.
-func (s *Service) Login(ctx context.Context, username, password string) (token string, userID string, err error) {
+func (s *Service) Login(ctx context.Context, username, password string) (token string, userID uint, err error) {
 	var user db.User
 	if err := s.db.WithContext(ctx).
 		Where("LOWER(username) = LOWER(?) AND deleted_at IS NULL", username).
 		First(&user).Error; err != nil {
-		return "", "", ErrInvalidCredentials
+		return "", 0, ErrInvalidCredentials
 	}
 
 	if !VerifyPassword(password, user.PasswordHash) {
-		return "", "", ErrInvalidCredentials
+		return "", 0, ErrInvalidCredentials
 	}
 
-	token, err = IssueToken(s.jwtSecret, user.ID, user.TokenVersion)
+	token, err = IssueToken(s.jwtSecret, user.ID, user.Username, user.TokenVersion)
 	if err != nil {
-		return "", "", err
+		return "", 0, err
 	}
 
 	return token, user.ID, nil
@@ -141,10 +122,10 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 
 // ValidateToken parses a raw JWT and verifies the user is still active with a matching token version.
 // Uses an in-memory cache with a 30s TTL to avoid DB queries on every request.
-func (s *Service) ValidateToken(ctx context.Context, rawToken string) (string, error) {
+func (s *Service) ValidateToken(ctx context.Context, rawToken string) (uint, error) {
 	claims, err := ParseToken(s.jwtSecret, rawToken)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	// Check cache first
@@ -160,11 +141,11 @@ func (s *Service) ValidateToken(ctx context.Context, rawToken string) (string, e
 	if err := s.db.WithContext(ctx).
 		Where("id = ? AND deleted_at IS NULL", claims.UserID).
 		First(&user).Error; err != nil {
-		return "", ErrAccountDeleted
+		return 0, ErrAccountDeleted
 	}
 
 	if user.TokenVersion != claims.TokenVersion {
-		return "", ErrInvalidCredentials
+		return 0, ErrInvalidCredentials
 	}
 
 	// Update cache
@@ -177,7 +158,7 @@ func (s *Service) ValidateToken(ctx context.Context, rawToken string) (string, e
 }
 
 // Logout bumps the token version for the user, invalidating all existing tokens.
-func (s *Service) Logout(ctx context.Context, userID string) error {
+func (s *Service) Logout(ctx context.Context, userID uint) error {
 	result := s.db.WithContext(ctx).
 		Model(&db.User{}).
 		Where("id = ?", userID).
@@ -193,7 +174,7 @@ func (s *Service) Logout(ctx context.Context, userID string) error {
 
 // DeleteAccount soft-deletes the user and all their data.
 // Returns the list of GCS prefixes that should be cleaned up asynchronously.
-func (s *Service) DeleteAccount(ctx context.Context, userID, password string) (gcsPrefixes []string, err error) {
+func (s *Service) DeleteAccount(ctx context.Context, userID uint, password string) (gcsPrefixes []string, err error) {
 	var user db.User
 	if err := s.db.WithContext(ctx).
 		Where("id = ? AND deleted_at IS NULL", userID).

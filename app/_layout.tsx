@@ -8,7 +8,7 @@ import { t, useLocale } from "@/features/i18n";
 import { useAuthStore } from "@/features/auth/useAuthStore";
 import { useProfileStore } from "@/store/useProfileStore";
 import { flushPendingUploads } from "@/features/debug/telemetryUpload";
-import { Stack } from "expo-router";
+import { Redirect, Stack } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
@@ -17,7 +17,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 export default function RootLayout() {
   const locale = useLocale(); // triggers re-render on language switch
-  const { isReady, isLoggedIn } = useAuthStore();
+  const isReady = useAuthStore((s) => s.isReady);
+  const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
 
   useEffect(() => {
     // Hydrate auth first — profile hydration happens after auth is confirmed
@@ -47,26 +48,6 @@ export default function RootLayout() {
     );
   }
 
-  // Not logged in → show auth screens
-  if (!isLoggedIn) {
-    return (
-      <SafeAreaProvider>
-        <StatusBar style="light" />
-        <Stack
-          key={`auth-${locale}`}
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: "#000" },
-          }}
-        >
-          <Stack.Screen name="auth/login" />
-          <Stack.Screen name="auth/signup" />
-        </Stack>
-      </SafeAreaProvider>
-    );
-  }
-
-  // Logged in → full app
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />
@@ -79,6 +60,10 @@ export default function RootLayout() {
           contentStyle: { backgroundColor: "#000" },
         }}
       >
+        {/* Auth screens */}
+        <Stack.Screen name="auth/login" options={{ headerShown: false }} />
+        <Stack.Screen name="auth/signup" options={{ headerShown: false }} />
+
         {/* 1. Tab Navigator (Home, Train, History, Profile) */}
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 
@@ -108,8 +93,11 @@ export default function RootLayout() {
         />
       </Stack>
 
+      {/* Redirect to login when not authenticated */}
+      {!isLoggedIn && <Redirect href="/auth/login" />}
+
       {/* Global overlay — visible on all screens */}
-      <VideoQueueOverlay />
+      {isLoggedIn && <VideoQueueOverlay />}
     </SafeAreaProvider>
   );
 }

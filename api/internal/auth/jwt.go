@@ -12,18 +12,19 @@ const TokenTTL = 30 * 24 * time.Hour
 
 // Claims are the custom JWT claims used by the auth system.
 type Claims struct {
-	UserID       string `json:"uid"`
+	UserID       uint   `json:"uid"`
 	TokenVersion int    `json:"ver"`
 	jwt.RegisteredClaims
 }
 
 // IssueToken creates a signed HS256 JWT for the given user.
-func IssueToken(secret []byte, userID string, tokenVersion int) (string, error) {
+func IssueToken(secret []byte, userID uint, username string, tokenVersion int) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		UserID:       userID,
 		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   username,
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(TokenTTL)),
 			Issuer:    "wod-strategist",

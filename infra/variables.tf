@@ -44,3 +44,9 @@ variable "local_static_origins" {
   type        = list(string)
   default     = ["http://localhost:3000", "http://127.0.0.1:3000"]
 }
+
+variable "jwt_secret" {
+  description = "Secret key for signing JWT tokens"
+  type        = string
+  sensitive   = true
+}

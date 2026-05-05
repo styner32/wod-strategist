@@ -181,11 +181,13 @@ func (w *Worker) lookupProfileString(profileID uint) string {
 		var profile db.Profile
 		if err := w.DB.First(&profile, profileID).Error; err == nil {
 			genderKo := "기타"
-			switch profile.Gender {
-			case "male":
-				genderKo = "남"
-			case "female":
-				genderKo = "여"
+			if profile.Gender != nil {
+				switch *profile.Gender {
+				case "male":
+					genderKo = "남"
+				case "female":
+					genderKo = "여"
+				}
 			}
 			levelKo := "중급"
 			switch profile.FitnessLevel {

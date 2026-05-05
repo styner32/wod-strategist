@@ -109,7 +109,7 @@ func (r *GormProfileRepository) FindByID(ctx context.Context, id uint) (*db.Prof
 	return &profile, nil
 }
 
-func (r *GormProfileRepository) ListByUser(ctx context.Context, userID string, includeArchived bool) ([]db.Profile, error) {
+func (r *GormProfileRepository) ListByUser(ctx context.Context, userID uint, includeArchived bool) ([]db.Profile, error) {
 	if r.db == nil {
 		return nil, errProfileRepositoryNotConfigured
 	}

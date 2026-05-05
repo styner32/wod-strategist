@@ -92,7 +92,17 @@ func APIKeyMiddleware(configuredKey string) gin.HandlerFunc {
 func AuthMiddleware(svc *auth.Service) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		if authHeader == "" {
+			logger.Log.Warn("auth: no Authorization header",
+				zap.String("path", c.Request.URL.Path),
+				zap.String("method", c.Request.Method))
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing or invalid authorization header"})
+			return
+		}
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			logger.Log.Warn("auth: Authorization header not Bearer",
+				zap.String("path", c.Request.URL.Path),
+				zap.Int("header_len", len(authHeader)))
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing or invalid authorization header"})
 			return
 		}
@@ -100,10 +110,22 @@ func AuthMiddleware(svc *auth.Service) gin.HandlerFunc {
 		rawToken := strings.TrimPrefix(authHeader, "Bearer ")
 		userID, err := svc.ValidateToken(c.Request.Context(), rawToken)
 		if err != nil {
+			// Log first 8 chars of token for correlation (safe — not enough to reconstruct)
+			tokenPreview := rawToken
+			if len(tokenPreview) > 8 {
+				tokenPreview = tokenPreview[:8] + "..."
+			}
+			logger.Log.Warn("auth: token validation failed",
+				zap.String("path", c.Request.URL.Path),
+				zap.String("token_preview", tokenPreview),
+				zap.Error(err))
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
 
+		logger.Log.Debug("auth: token validated",
+			zap.Uint("user_id", userID),
+			zap.String("path", c.Request.URL.Path))
 		c.Set("user_id", userID)
 		c.Next()
 	}

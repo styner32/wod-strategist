@@ -33,7 +33,7 @@ type deleteAccountRequest struct {
 
 type authResponse struct {
 	Token  string `json:"token"`
-	UserID string `json:"user_id"`
+	UserID uint   `json:"user_id"`
 }
 
 // Signup handles POST /auth/signup.
@@ -83,7 +83,7 @@ func (ac *AuthController) Login(c *gin.Context) {
 // Logout handles POST /auth/logout. Requires AuthMiddleware.
 func (ac *AuthController) Logout(c *gin.Context) {
 	userID := UserIDFromContext(c)
-	if userID == "" {
+	if userID == 0 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -99,7 +99,7 @@ func (ac *AuthController) Logout(c *gin.Context) {
 // DeleteAccount handles DELETE /auth/account. Requires AuthMiddleware.
 func (ac *AuthController) DeleteAccount(c *gin.Context) {
 	userID := UserIDFromContext(c)
-	if userID == "" {
+	if userID == 0 {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -126,11 +126,11 @@ func (ac *AuthController) DeleteAccount(c *gin.Context) {
 }
 
 // UserIDFromContext extracts the user ID set by AuthMiddleware.
-func UserIDFromContext(c *gin.Context) string {
+func UserIDFromContext(c *gin.Context) uint {
 	v, exists := c.Get("user_id")
 	if !exists {
-		return ""
+		return 0
 	}
-	s, _ := v.(string)
-	return s
+	u, _ := v.(uint)
+	return u
 }

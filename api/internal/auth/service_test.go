@@ -39,7 +39,7 @@ var _ = Describe("Auth Service", func() {
 			token, userID, err := svc.Signup(ctx, "testuser", "password123")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(token).NotTo(BeEmpty())
-			Expect(userID).NotTo(BeEmpty())
+			Expect(userID).NotTo(BeZero())
 
 			// Verify user in DB
 			var user db.User
@@ -109,7 +109,7 @@ var _ = Describe("Auth Service", func() {
 			token, userID, err := svc.Login(ctx, "loginuser", "password123")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(token).NotTo(BeEmpty())
-			Expect(userID).NotTo(BeEmpty())
+			Expect(userID).NotTo(BeZero())
 		})
 
 		It("rejects wrong password", func() {
@@ -185,7 +185,7 @@ var _ = Describe("Auth Service", func() {
 	// DeleteAccount
 	// -------------------------------------------------------------------
 	Describe("DeleteAccount", func() {
-		var userID string
+		var userID uint
 
 		BeforeEach(func() {
 			var err error
@@ -284,17 +284,18 @@ var _ = Describe("Auth Service", func() {
 	// -------------------------------------------------------------------
 	Describe("JWT helpers", func() {
 		It("issues and parses a valid token", func() {
-			token, err := auth.IssueToken(testSecret, "user-123", 1)
+			token, err := auth.IssueToken(testSecret, 123, "testuser", 1)
 			Expect(err).NotTo(HaveOccurred())
 
 			claims, err := auth.ParseToken(testSecret, token)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(claims.UserID).To(Equal("user-123"))
+			Expect(claims.UserID).To(Equal(uint(123)))
 			Expect(claims.TokenVersion).To(Equal(1))
+			Expect(claims.Subject).To(Equal("testuser"))
 		})
 
 		It("rejects a token with a wrong secret", func() {
-			token, err := auth.IssueToken(testSecret, "user-123", 1)
+			token, err := auth.IssueToken(testSecret, 123, "testuser", 1)
 			Expect(err).NotTo(HaveOccurred())
 
 			_, err = auth.ParseToken([]byte("different-secret"), token)
@@ -302,19 +303,5 @@ var _ = Describe("Auth Service", func() {
 		})
 	})
 
-	// -------------------------------------------------------------------
-	// UserID generator
-	// -------------------------------------------------------------------
-	Describe("GenerateUserID", func() {
-		It("generates unique IDs in petname format", func() {
-			ids := make(map[string]bool)
-			for i := 0; i < 100; i++ {
-				id := auth.GenerateUserID()
-				Expect(id).To(MatchRegexp(`^[a-z]+-[a-z]+-\d{2}$`))
-				ids[id] = true
-			}
-			// With 100 generations, we should have at least 10 unique ones
-			Expect(len(ids)).To(BeNumerically(">=", 10))
-		})
-	})
 })
+

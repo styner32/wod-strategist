@@ -44,6 +44,7 @@ export default function SignupScreen() {
     setLoading(true);
     try {
       await signup(trimmedUsername, password);
+      router.replace("/" as any);
     } catch (e: any) {
       const msg = e?.message || "";
       if (msg.includes("409")) {

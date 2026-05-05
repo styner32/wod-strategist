@@ -23,7 +23,7 @@ interface AuthState {
   /** True when a valid token exists */
   isLoggedIn: boolean;
   /** The authenticated user's ID */
-  userId: string | null;
+  userId: number | null;
 
   /** Check SecureStore on app launch */
   hydrate: () => Promise<void>;

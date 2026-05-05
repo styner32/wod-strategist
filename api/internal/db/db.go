@@ -12,7 +12,7 @@ import (
 )
 
 type User struct {
-	ID           string     `gorm:"primaryKey;type:text" json:"id"`
+	ID           uint       `gorm:"primaryKey" json:"id"`
 	Username     string     `gorm:"not null" json:"username"`
 	PasswordHash string     `gorm:"not null" json:"-"`
 	TokenVersion int        `gorm:"not null;default:1" json:"-"`
@@ -23,16 +23,16 @@ type User struct {
 
 type Profile struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
-	UserID       string     `gorm:"type:text;index;not null" json:"user_id"`
-	Name         string     `json:"name"`
-	BirthYear    int        `json:"birth_year"`
-	BirthMonth   int        `json:"birth_month"`
-	BirthDay     int        `json:"birth_day"`
-	Gender       string     `json:"gender"` // male, female, other
-	HeightCm     int        `json:"height_cm"`
-	WeightKg     float64    `json:"weight_kg"`
+	UserID       uint       `gorm:"index;not null" json:"user_id"`
+	Name         string     `gorm:"not null" json:"name"`
+	BirthYear    *int       `json:"birth_year,omitempty"`
+	BirthMonth   *int       `json:"birth_month,omitempty"`
+	BirthDay     *int       `json:"birth_day,omitempty"`
+	Gender       *string    `json:"gender,omitempty"`       // male, female, other
+	HeightCm     *int       `json:"height_cm,omitempty"`
+	WeightKg     *float64   `json:"weight_kg,omitempty"`
 	FitnessLevel string     `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
-	Injuries     string     `gorm:"type:text;not null;default:'[]'" json:"injuries"`               // JSON array of injury strings
+	Injuries     *string    `gorm:"type:text" json:"injuries,omitempty"`                            // JSON array of injury strings
 	ArchivedAt   *time.Time `json:"archived_at,omitempty"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
@@ -45,7 +45,7 @@ const (
 
 type AnalysisResult struct {
 	ID                uint      `gorm:"primaryKey" json:"id"`
-	SessionID         string    `gorm:"index;not null" json:"session_id"`
+	SessionID         string    `gorm:"uniqueIndex;not null" json:"session_id"`
 	ProfileID         uint      `gorm:"index;not null" json:"profile_id"`
 	AnalysisType      string    `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
 	Status            string    `json:"status"`                           // PENDING, COMPLETED, FAILED

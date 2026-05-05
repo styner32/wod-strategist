@@ -12,7 +12,7 @@ import {
 
 interface AuthResponse {
   token: string;
-  user_id: string;
+  user_id: number;
 }
 
 // ==========================================

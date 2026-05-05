@@ -603,18 +603,19 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 	}
 
 	// Validate injuries if provided
-	if req.Injuries == nil {
-		req.Injuries = []string{}
-	}
-	if !allowedInjuries.containsAll(req.Injuries) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid injuries"})
-		return
-	}
-
-	injuriesJSON, err := json.Marshal(req.Injuries)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode injuries"})
-		return
+	var injuriesPtr *string
+	if len(req.Injuries) > 0 {
+		if !allowedInjuries.containsAll(req.Injuries) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid injuries"})
+			return
+		}
+		injuriesJSON, err := json.Marshal(req.Injuries)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode injuries"})
+			return
+		}
+		s := string(injuriesJSON)
+		injuriesPtr = &s
 	}
 
 	fitnessLevel := req.FitnessLevel
@@ -632,7 +633,7 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 		HeightCm:     req.HeightCm,
 		WeightKg:     req.WeightKg,
 		FitnessLevel: fitnessLevel,
-		Injuries:     string(injuriesJSON),
+		Injuries:     injuriesPtr,
 	}
 
 	if err := ctl.profiles.Create(c.Request.Context(), profile); err != nil {
@@ -733,22 +734,22 @@ func (ctl *Controller) UpdateProfile(c *gin.Context) {
 		profile.Name = *req.Name
 	}
 	if req.BirthYear != nil {
-		profile.BirthYear = *req.BirthYear
+		profile.BirthYear = req.BirthYear
 	}
 	if req.BirthMonth != nil {
-		profile.BirthMonth = *req.BirthMonth
+		profile.BirthMonth = req.BirthMonth
 	}
 	if req.BirthDay != nil {
-		profile.BirthDay = *req.BirthDay
+		profile.BirthDay = req.BirthDay
 	}
 	if req.Gender != nil {
-		profile.Gender = *req.Gender
+		profile.Gender = req.Gender
 	}
 	if req.HeightCm != nil {
-		profile.HeightCm = *req.HeightCm
+		profile.HeightCm = req.HeightCm
 	}
 	if req.WeightKg != nil {
-		profile.WeightKg = *req.WeightKg
+		profile.WeightKg = req.WeightKg
 	}
 	if req.FitnessLevel != nil {
 		profile.FitnessLevel = *req.FitnessLevel
@@ -763,7 +764,8 @@ func (ctl *Controller) UpdateProfile(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to encode injuries"})
 			return
 		}
-		profile.Injuries = string(injuriesJSON)
+		s := string(injuriesJSON)
+		profile.Injuries = &s
 	}
 
 	if err := ctl.profiles.Update(c.Request.Context(), profile); err != nil {
@@ -831,8 +833,8 @@ func (ctl *Controller) UnarchiveProfile(c *gin.Context) {
 
 func toProfileResponse(p *db.Profile) ProfileResponse {
 	var injuryList []string
-	if p.Injuries != "" {
-		_ = json.Unmarshal([]byte(p.Injuries), &injuryList)
+	if p.Injuries != nil && *p.Injuries != "" {
+		_ = json.Unmarshal([]byte(*p.Injuries), &injuryList)
 	}
 	if injuryList == nil {
 		injuryList = []string{}

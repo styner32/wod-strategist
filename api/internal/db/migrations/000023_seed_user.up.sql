@@ -5,7 +5,7 @@ INSERT INTO users (id, username, password_hash, token_version)
 VALUES (
     'seed-user-01',
     'admin',
-    '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy',
+    '$2a$10$mDhSU9B7Gi46SB8HTC5lFeyUdVVXH57Q4sS5kuwQAQ0j9YJ9gXqqy',
     1
 ) ON CONFLICT DO NOTHING;
 

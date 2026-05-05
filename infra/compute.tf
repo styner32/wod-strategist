@@ -58,6 +58,10 @@ resource "google_cloud_run_v2_service" "api" {
         name = "GEMINI_MODEL"
         value = "gemini-3.1-pro-preview"
       }
+      env {
+        name = "JWT_SIGNING_SECRET"
+        value = var.jwt_secret
+      }
     }
   }
 
