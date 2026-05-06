@@ -83,11 +83,6 @@ func (ac *AuthController) Login(c *gin.Context) {
 // Logout handles POST /auth/logout. Requires AuthMiddleware.
 func (ac *AuthController) Logout(c *gin.Context) {
 	userID := UserIDFromContext(c)
-	if userID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return
-	}
-
 	if err := ac.authSvc.Logout(c.Request.Context(), userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
@@ -99,11 +94,6 @@ func (ac *AuthController) Logout(c *gin.Context) {
 // DeleteAccount handles DELETE /auth/account. Requires AuthMiddleware.
 func (ac *AuthController) DeleteAccount(c *gin.Context) {
 	userID := UserIDFromContext(c)
-	if userID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-		return
-	}
-
 	var req deleteAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "password is required"})

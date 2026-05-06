@@ -213,9 +213,9 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		Expect(dbConn.Create(&user).Error).NotTo(HaveOccurred())
 
 		profile := db.Profile{
-			BirthYear: 1992, BirthMonth: 9, BirthDay: 20,
-			Gender: "male", HeightCm: 180, WeightKg: 82.0,
-			UserID: user.ID,
+			UserID:    user.ID,
+			BirthYear: ptr(1992), BirthMonth: ptr(9), BirthDay: ptr(20),
+			Gender: ptr("male"), HeightCm: ptr(180), WeightKg: ptr(82.0),
 		}
 		Expect(dbConn.Create(&profile).Error).NotTo(HaveOccurred())
 

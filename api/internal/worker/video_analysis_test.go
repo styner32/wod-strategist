@@ -415,8 +415,9 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		Expect(dbConn.Create(&user).Error).NotTo(HaveOccurred())
 
 		profile := db.Profile{
-			BirthYear: 1990, BirthMonth: 6, BirthDay: 15,
-			Gender: "male", HeightCm: 175, WeightKg: 75.0,
+			UserID:    user.ID,
+			BirthYear: ptr(1990), BirthMonth: ptr(6), BirthDay: ptr(15),
+			Gender: ptr("male"), HeightCm: ptr(175), WeightKg: ptr(75.0),
 		}
 		Expect(dbConn.Create(&profile).Error).NotTo(HaveOccurred())
 

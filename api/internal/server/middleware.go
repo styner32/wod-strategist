@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
@@ -110,14 +111,12 @@ func AuthMiddleware(svc *auth.Service) gin.HandlerFunc {
 		rawToken := strings.TrimPrefix(authHeader, "Bearer ")
 		userID, err := svc.ValidateToken(c.Request.Context(), rawToken)
 		if err != nil {
-			// Log first 8 chars of token for correlation (safe — not enough to reconstruct)
-			tokenPreview := rawToken
-			if len(tokenPreview) > 8 {
-				tokenPreview = tokenPreview[:8] + "..."
-			}
+			// Log a short hash digest of the token for correlation across requests
+			// without exposing the token itself.
+			digest := sha256.Sum256([]byte(rawToken))
 			logger.Log.Warn("auth: token validation failed",
 				zap.String("path", c.Request.URL.Path),
-				zap.String("token_preview", tokenPreview),
+				zap.String("token_digest", hex.EncodeToString(digest[:4])),
 				zap.Error(err))
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return

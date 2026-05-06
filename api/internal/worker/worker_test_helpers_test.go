@@ -27,6 +27,8 @@ func makeVideoAnalysisTask(p VideoAnalysisPayload) *asynq.Task {
 	return asynq.NewTask(TypeVideoAnalysis, data)
 }
 
+func ptr[T any](v T) *T { return &v }
+
 // ---------------------------------------------------------------------------
 // FFmpeg utilities (gated tests)
 // ---------------------------------------------------------------------------

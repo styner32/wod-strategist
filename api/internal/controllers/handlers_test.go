@@ -818,6 +818,3 @@ func multipartRequestBody(sessionID string, filename string, content string) (*b
 	return body, writer.FormDataContentType()
 }
 
-func ptrUint(v uint) *uint {
-	return &v
-}

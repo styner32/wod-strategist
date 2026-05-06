@@ -196,9 +196,12 @@ func (w *Worker) lookupProfileString(profileID uint) string {
 			case "advanced":
 				levelKo = "고급"
 			}
-			personalProfile = fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg, 피트니스 레벨: %s",
-				profile.BirthYear, profile.BirthMonth, profile.BirthDay,
-				genderKo, profile.HeightCm, profile.WeightKg, levelKo)
+			if profile.BirthYear != nil && profile.BirthMonth != nil && profile.BirthDay != nil &&
+				profile.HeightCm != nil && profile.WeightKg != nil {
+				personalProfile = fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg, 피트니스 레벨: %s",
+					*profile.BirthYear, *profile.BirthMonth, *profile.BirthDay,
+					genderKo, *profile.HeightCm, *profile.WeightKg, levelKo)
+			}
 		} else {
 			w.logger.Warn("Profile not found, using default", zap.Uint("profile_id", profileID), zap.Error(err))
 		}

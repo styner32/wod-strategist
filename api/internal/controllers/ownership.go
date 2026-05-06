@@ -55,14 +55,23 @@ func (ctl *Controller) assertOwnsSession(c *gin.Context, sessionID string) bool 
 		return false
 	}
 
-	// 1. Check analysis_results
-	var analysisCount int64
-	if err := ctl.db.Model(&db.AnalysisResult{}).
-		Joins("JOIN profiles ON profiles.id = analysis_results.profile_id").
-		Where("analysis_results.session_id = ?", sessionID).
-		Limit(1).
-		Count(&analysisCount).Error; err != nil {
-		logger.Log.Error("session ownership query failed",
+	// One query per table: total rows for the session, and how many of those
+	// belong to a profile owned by this user. Errors propagate as 500.
+	type counts struct {
+		Total int64
+		Owned int64
+	}
+
+	var analysis counts
+	if err := ctl.db.Raw(`
+		SELECT
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE p.user_id = ?) AS owned
+		FROM analysis_results ar
+		LEFT JOIN profiles p ON p.id = ar.profile_id
+		WHERE ar.session_id = ?
+	`, userID, sessionID).Scan(&analysis).Error; err != nil {
+		logger.Log.Error("session ownership query (analysis) failed",
 			zap.String("session_id", sessionID),
 			zap.Uint("user_id", userID),
 			zap.Error(err))
@@ -70,12 +79,15 @@ func (ctl *Controller) assertOwnsSession(c *gin.Context, sessionID string) bool 
 		return false
 	}
 
-	// 2. Check chunk_analysis_results
-	var chunkCount int64
-	if err := ctl.db.Model(&db.ChunkAnalysisResult{}).
-		Where("session_id = ?", sessionID).
-		Limit(1).
-		Count(&chunkCount).Error; err != nil {
+	var chunks counts
+	if err := ctl.db.Raw(`
+		SELECT
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE p.user_id = ?) AS owned
+		FROM chunk_analysis_results car
+		LEFT JOIN profiles p ON p.id = car.profile_id
+		WHERE car.session_id = ?
+	`, userID, sessionID).Scan(&chunks).Error; err != nil {
 		logger.Log.Error("session ownership query (chunks) failed",
 			zap.String("session_id", sessionID),
 			zap.Uint("user_id", userID),
@@ -84,30 +96,13 @@ func (ctl *Controller) assertOwnsSession(c *gin.Context, sessionID string) bool 
 		return false
 	}
 
-	// 3. No data exists for this session yet — brand new, still processing.
-	//    Allow through; the caller will return empty results.
-	if analysisCount == 0 && chunkCount == 0 {
+	// No data anywhere — brand-new session, still uploading/processing. Allow through.
+	if analysis.Total == 0 && chunks.Total == 0 {
 		return true
 	}
 
-	// 4. Data exists — verify it belongs to a profile owned by this user.
-	var ownedCount int64
-	if analysisCount > 0 {
-		ctl.db.Model(&db.AnalysisResult{}).
-			Joins("JOIN profiles ON profiles.id = analysis_results.profile_id").
-			Where("profiles.user_id = ? AND analysis_results.session_id = ?", userID, sessionID).
-			Limit(1).
-			Count(&ownedCount)
-	}
-	if ownedCount == 0 && chunkCount > 0 {
-		ctl.db.Model(&db.ChunkAnalysisResult{}).
-			Joins("JOIN profiles ON profiles.id = chunk_analysis_results.profile_id").
-			Where("profiles.user_id = ? AND chunk_analysis_results.session_id = ?", userID, sessionID).
-			Limit(1).
-			Count(&ownedCount)
-	}
-
-	if ownedCount == 0 {
+	// Data exists for this session — user must own at least one row.
+	if analysis.Owned == 0 && chunks.Owned == 0 {
 		logger.Log.Warn("session ownership check failed",
 			zap.String("session_id", sessionID),
 			zap.Uint("user_id", userID))
