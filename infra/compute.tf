@@ -4,8 +4,27 @@ resource "google_service_account" "run_sa" {
   display_name = "Cloud Run Service Account"
 }
 
-# Grant secrets access if we use Secret Manager (optional but recommended)
-# For now, we inject via env vars directly, but SA is good practice.
+# JWT signing secret in Secret Manager. Cloud Run reads it at startup via
+# value_source, so the secret is not exposed in the service's env-var config
+# (which is visible to anyone with roles/run.viewer). Same TF-state caveat as
+# other secrets — to rotate without re-applying, add a new version manually.
+resource "google_secret_manager_secret" "jwt_signing_secret" {
+  secret_id = "${var.app_name}-jwt-signing-secret-${var.environment}"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "jwt_signing_secret" {
+  secret      = google_secret_manager_secret.jwt_signing_secret.id
+  secret_data = var.jwt_secret
+}
+
+resource "google_secret_manager_secret_iam_member" "jwt_signing_secret_accessor" {
+  secret_id = google_secret_manager_secret.jwt_signing_secret.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.run_sa.email}"
+}
 
 # API Service
 resource "google_cloud_run_v2_service" "api" {
@@ -60,14 +79,21 @@ resource "google_cloud_run_v2_service" "api" {
       }
       env {
         name = "JWT_SIGNING_SECRET"
-        value = var.jwt_secret
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.jwt_signing_secret.secret_id
+            version = "latest"
+          }
+        }
       }
     }
   }
 
   depends_on = [
     google_sql_database_instance.postgres,
-    google_redis_instance.cache
+    google_redis_instance.cache,
+    google_secret_manager_secret_version.jwt_signing_secret,
+    google_secret_manager_secret_iam_member.jwt_signing_secret_accessor,
   ]
 }
 
