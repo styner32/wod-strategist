@@ -13,7 +13,7 @@ const mockGetInfoAsync = jest.fn();
 const mockDeleteAsync = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('expo-file-system/legacy', () => ({
-  cacheDirectory: '/mock/cache/',
+  documentDirectory: '/mock/documents/',
   getInfoAsync: (...args: unknown[]) => mockGetInfoAsync(...args),
   deleteAsync: (...args: unknown[]) => mockDeleteAsync(...args),
 }));
@@ -106,8 +106,8 @@ describe('mergeChunksLocal', () => {
 });
 
 describe('mergedOutputPath', () => {
-  it('generates a path in cacheDirectory with session ID', () => {
+  it('generates a path in documentDirectory with session ID', () => {
     const path = mergedOutputPath('WOD-20260428-ABC123');
-    expect(path).toBe('/mock/cache/merged_WOD-20260428-ABC123.mp4');
+    expect(path).toBe('/mock/documents/merged_WOD-20260428-ABC123.mp4');
   });
 });

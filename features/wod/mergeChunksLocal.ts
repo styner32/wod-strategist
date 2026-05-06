@@ -1,14 +1,5 @@
-/**
- * Local video merge utility — concatenates camera chunk files into a single
- * MP4 using the native VideoMerger module (stream-copy, no re-encode).
- *
- * iOS:     AVMutableComposition + AVAssetExportPresetPassthrough
- * Android: MediaExtractor + MediaMuxer
- *
- * Typical merge of 30 chunks completes in ~1-2 seconds.
- */
 import {
-  cacheDirectory,
+  documentDirectory,
   getInfoAsync,
   deleteAsync,
 } from 'expo-file-system/legacy';
@@ -57,9 +48,11 @@ export async function mergeChunksLocal(
 }
 
 /**
- * Generate a temp output path for the merged video.
- * Uses the session ID to make it identifiable in logs.
+ * Generate a persistent output path for the merged video.
+ * Uses documentDirectory so the file survives cache purges and remains
+ * accessible from the app container until the user explicitly deletes it.
  */
 export function mergedOutputPath(sessionId: string): string {
-  return `${cacheDirectory}merged_${sessionId}.mp4`;
+  return `${documentDirectory}merged_${sessionId}.mp4`;
 }
+

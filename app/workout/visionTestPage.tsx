@@ -13,10 +13,6 @@ import {
   View,
 } from "react-native";
 import {
-  startInAppRecording,
-  stopInAppRecording,
-} from "react-native-nitro-screen-recorder";
-import {
   Camera,
   useCameraDevice,
   useCameraFormat,
@@ -328,7 +324,7 @@ export default function VisionTestPage() {
       chunkStartTime.current = Date.now();
       camera.current.startRecording({
         // Android: force mp4 + HEVC to reduce chunk size (12MB → ~2-4MB).
-        // iOS: use VisionCamera defaults (chunks are already small via screen recorder).
+        // iOS: use VisionCamera defaults.
         ...(IS_ANDROID ? { fileType: 'mp4' as const, videoCodec: 'h265' as const } : {}),
         onRecordingFinished: async (video) => {
           console.log("📷 Chunk Finished:", video.path);
@@ -339,29 +335,22 @@ export default function VisionTestPage() {
           const startSecs = (chunkStartTime.current - recordingStartTime.current) / 1000;
           const endSecs = (chunkEndTime - recordingStartTime.current) / 1000;
 
-          // Keep local copy for Android final video assembly
-          chunkPaths.current.push(video.path);
-          setChunkCount(prev => prev + 1);
-
           // Resolve the last-chunk promise if we're waiting for it
           if (lastChunkResolve.current) {
             lastChunkResolve.current(video.path);
             lastChunkResolve.current = null;
           }
 
-
+          // Always track chunk path for local merge (gallery save),
+          // even if recording has stopped (orphan chunk).
+          chunkPaths.current.push(video.path);
 
           // Skip upload if recording has already been stopped
           if (!isRecordingChunks.current) {
-            console.log("⏹️ Recording stopped — cleaning up orphan chunk");
-            // Clean up the raw chunk file since we won't upload it
-            try {
-              const { File: FSFile } = require("expo-file-system");
-              const f = new FSFile(video.path);
-              if (f.exists) f.delete();
-              console.log("🗑️ Deleted orphan chunk:", video.path);
-            } catch (_) {}
+            console.log("⏹️ Recording stopped — skipping upload for final chunk");
           } else {
+            setChunkCount(prev => prev + 1);
+
             // Compress (iOS only) and Upload chunk to backend
             try {
               const sessionId = sessionIdRef.current;
@@ -395,32 +384,23 @@ export default function VisionTestPage() {
 
               if (skipCompression) {
                 // Skip re-compression — upload raw chunk directly.
-                // shouldCleanup=true: delete the raw file after upload completes
-                const uploadTask = () => doUpload(video.path, true);
+                // shouldCleanup=false: raw chunks are kept for local merge (gallery save).
+                // cleanupMergedAndChunks handles deletion after the gallery decision.
+                const uploadTask = () => doUpload(video.path, false);
                 if (serialUpload) {
                   enqueueUpload(uploadTask);
                 } else {
                   trackUpload(uploadTask);
                 }
               } else {
-                // Compress before upload, then dispatch
+                // Compress before upload, then dispatch.
+                // Raw chunk is kept for local merge — only the compressed copy
+                // is cleaned up after upload.
                 Video.compress(video.path, {
                   compressionMethod: "auto",
                   maxSize: 720,
                 }).then((compressedUri) => {
-                  // Delete the raw chunk now that compression produced a new file
-                  const isSamePath =
-                    compressedUri === video.path ||
-                    compressedUri.replace("file://", "") === video.path.replace("file://", "");
-                  if (!isSamePath) {
-                    try {
-                      const { File: FSFile } = require("expo-file-system");
-                      const f = new FSFile(video.path);
-                      if (f.exists) f.delete();
-                      console.log("🗑️ Deleted raw chunk after compression:", video.path);
-                    } catch (_) {}
-                  }
-
+                  // Upload the compressed file; delete it after upload completes.
                   const uploadTask = () => doUpload(compressedUri, true);
                   if (serialUpload) {
                     enqueueUpload(uploadTask);
@@ -429,12 +409,6 @@ export default function VisionTestPage() {
                   }
                 }).catch((err) => {
                   console.error("Failed to compress chunk:", err);
-                  // Compression failed — clean up raw chunk to prevent leak
-                  try {
-                    const { File: FSFile } = require("expo-file-system");
-                    const f = new FSFile(video.path);
-                    if (f.exists) f.delete();
-                  } catch (_) {}
                 });
               }
             } catch (e) {
@@ -488,7 +462,7 @@ export default function VisionTestPage() {
     startChunkLoop();
   };
 
-  const stopChunkRecording = async () => {
+  const stopChunkRecording = async (): Promise<string | null> => {
     isRecordingChunks.current = false;
     if (chunkTimer.current) {
       clearTimeout(chunkTimer.current);
@@ -496,15 +470,31 @@ export default function VisionTestPage() {
     }
 
     // Stop the current recording if active.
-    // This will trigger onRecordingFinished, which checks isRecordingChunks.current (false), so loop stops.
+    // Set up a promise so the caller can wait for the last chunk's
+    // onRecordingFinished callback (which pushes its path to chunkPaths).
     if (camera.current && isChunkRecordingActive.current) {
+      const lastChunkPromise = new Promise<string | null>((resolve) => {
+        lastChunkResolve.current = resolve;
+        // Safety timeout — if onRecordingFinished never fires, unblock after 5s
+        setTimeout(() => {
+          if (lastChunkResolve.current === resolve) {
+            lastChunkResolve.current = null;
+            resolve(null);
+          }
+        }, 5000);
+      });
+
       try {
         isChunkRecordingActive.current = false;
         await camera.current.stopRecording();
       } catch (e) {
         console.error("Failed to stop chunk recording:", e);
       }
+
+      return lastChunkPromise;
     }
+
+    return null;
   };
 
   /**
@@ -585,56 +575,23 @@ export default function VisionTestPage() {
     }
 
     try {
-      if (Platform.OS === 'ios') {
-        // iOS: use screen recorder for full video with overlays
-        await startInAppRecording({
-          options: {
-            enableMic: false,
-            enableCamera: false,
-          },
-          onRecordingFinished: (file) => {
-            console.log("📼 Screen Recording Finished:", file.path);
-          },
-        });
+      if (!camera.current) return;
 
-        setIsRecording(true);
-        console.log("✅ Recording Started (iOS Screen Recorder)");
+      setIsRecording(true);
+      console.log("✅ Recording Started (Chunk Streaming)");
 
-        // Compute session ID once for the entire recording session
-        sessionIdRef.current = buildWorkoutSessionId(workoutType);
-        recordingStartTime.current = Date.now();
+      // Compute session ID once for the entire recording session
+      sessionIdRef.current = buildWorkoutSessionId(workoutType);
+      recordingStartTime.current = Date.now();
 
-        // Start debug telemetry recording (1Hz sampling)
-        TelemetryRecorder.start(sessionIdRef.current, profileId!);
-        TelemetryRecorder.registerProvider('hr', () => ({ hr: bpmRef.current }));
-        TelemetryRecorder.registerProvider('chunk', () => ({ chunkIdx: chunkCountRef.current }));
+      // Start debug telemetry recording (1Hz sampling)
+      TelemetryRecorder.start(sessionIdRef.current, profileId!);
+      TelemetryRecorder.registerProvider('hr', () => ({ hr: bpmRef.current }));
+      TelemetryRecorder.registerProvider('chunk', () => ({ chunkIdx: chunkCountRef.current }));
 
-        // Start chunk recording for real-time backend analysis
-        startChunkRecording();
-      } else {
-        // Android: chunk-only streaming mode.
-        // Android camera only supports one recording at a time, so we can't
-        // run a continuous recording alongside chunk recording.
-        // Instead, we record sequential 10s chunks, upload each for real-time
-        // analysis, and auto-merge on the server when the user stops.
-        // Trade-off: no local gallery save of the final video.
-        if (!camera.current) return;
-
-        setIsRecording(true);
-        console.log("✅ Recording Started (Android Chunk Streaming)");
-
-        // Compute session ID once for the entire recording session
-        sessionIdRef.current = buildWorkoutSessionId(workoutType);
-        recordingStartTime.current = Date.now();
-
-        // Start debug telemetry recording (1Hz sampling)
-        TelemetryRecorder.start(sessionIdRef.current, profileId!);
-        TelemetryRecorder.registerProvider('hr', () => ({ hr: bpmRef.current }));
-        TelemetryRecorder.registerProvider('chunk', () => ({ chunkIdx: chunkCountRef.current }));
-
-        // Start chunk recording loop (same mechanism as iOS chunks)
-        startChunkRecording();
-      }
+      // Record sequential chunks: each is uploaded for real-time analysis,
+      // and raw chunk files are kept locally for gallery-save merge.
+      startChunkRecording();
     } catch (error) {
       console.error("Recording Start Error:", error);
       Alert.alert("녹화 시작 실패", "녹화를 시작할 수 없습니다.");
@@ -647,18 +604,8 @@ export default function VisionTestPage() {
     try {
       setIsSaving(true);
 
-      let screenRecorderFile: { path: string } | undefined;
-
-      if (Platform.OS === 'ios') {
-        // 1. Stop Chunk Recording (safe to call even if not running)
-        await stopChunkRecording();
-
-        // 2. Stop Screen Recorder
-        screenRecorderFile = await stopInAppRecording();
-      } else {
-        // Android: stop chunk streaming
-        await stopChunkRecording();
-      }
+      // Stop chunk recording and wait for last chunk to arrive
+      await stopChunkRecording();
 
       setIsRecording(false);
 
@@ -734,7 +681,10 @@ export default function VisionTestPage() {
                   text: "아니오",
                   style: "cancel",
                   onPress: () => {
-                    cleanupMergedAndChunks(outPath, localChunks);
+                    // Keep merged file in app container (documentDirectory)
+                    // for later access — only clean up raw chunk files.
+                    cleanupLocalChunkFiles(localChunks);
+                    chunkPaths.current = [];
                     router.replace("/history" as any);
                   },
                 },
@@ -745,6 +695,7 @@ export default function VisionTestPage() {
                       .then(() => console.log("📱 Saved merged video to gallery"))
                       .catch((e) => console.warn("⚠️ Gallery save failed:", e))
                       .finally(() => {
+                        // Saved to gallery — safe to delete app-container copy + chunks
                         cleanupMergedAndChunks(outPath, localChunks);
                         router.replace("/history" as any);
                       });
