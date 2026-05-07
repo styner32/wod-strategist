@@ -659,6 +659,8 @@ export default function VisionTestPage() {
       // Snapshot chunk paths before clearing — we need them for the merge.
       const localChunks = [...chunkPaths.current];
 
+      console.log(`📦 Gallery save: ${localChunks.length} chunks, paths:`, localChunks);
+
       // Clean up state immediately so the UI reflects "stopped"
       setChunkCount(0);
       setIsSaving(false);
@@ -666,12 +668,15 @@ export default function VisionTestPage() {
       if (localChunks.length > 0) {
         // Merge chunks locally → prompt gallery save → then cleanup
         const outPath = mergedOutputPath(sessionId);
+        console.log(`📦 Merge output path: ${outPath}`);
 
         // Show the gallery save alert while merge runs in background.
         // The alert is shown BEFORE navigating so it stays visible.
         const performMergeAndPrompt = async () => {
           try {
+            console.log(`🎬 Starting local merge of ${localChunks.length} chunks...`);
             await mergeChunksLocal(localChunks, outPath);
+            console.log(`🎬 Local merge succeeded, showing gallery save alert`);
 
             Alert.alert(
               "갤러리에 저장하시겠습니까?",
@@ -713,6 +718,7 @@ export default function VisionTestPage() {
         // Fire merge+prompt immediately (don't await — alert handles navigation)
         performMergeAndPrompt();
       } else {
+        console.log("📦 No local chunks — skipping gallery save");
         // No chunks to merge — just navigate
         router.replace("/history" as any);
       }

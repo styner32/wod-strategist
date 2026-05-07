@@ -79,8 +79,8 @@ public class VideoMergerModule: Module {
     }
 
     // Remove existing output file if present
-    let outputURL = URL(fileURLWithPath: outputPath)
-    if FileManager.default.fileExists(atPath: outputPath) {
+    let outputURL = Self.fileURL(from: outputPath)
+    if FileManager.default.fileExists(atPath: outputURL.path) {
       try FileManager.default.removeItem(at: outputURL)
     }
 
