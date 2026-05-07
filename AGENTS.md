@@ -52,3 +52,4 @@ Consult these when working on the relevant domain:
 - [docs/agent-memory/video-analysis.md](docs/agent-memory/video-analysis.md) — Two-pass architecture, anti-hallucination rules
 - [docs/agent-memory/storage-and-session-format.md](docs/agent-memory/storage-and-session-format.md) — GCS layout details, backward compatibility
 - [docs/agent-memory/mobile-runtime.md](docs/agent-memory/mobile-runtime.md) — Android performance flags, BLE heart rate, i18n
+- [docs/agent-memory/auth.md](docs/agent-memory/auth.md) — JWT auth, ownership model, account deletion, hardening TODO

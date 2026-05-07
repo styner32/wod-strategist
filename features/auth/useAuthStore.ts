@@ -11,7 +11,6 @@ import {
   clearToken,
   clearUserID,
 } from "./storage";
-import { createProfile as apiCreateProfile } from "@/features/wod/api";
 
 // ==========================================
 // Types
@@ -64,13 +63,6 @@ export const useAuthStore = create<AuthState>((set) => ({
   signup: async (username, password) => {
     const res = await apiSignup(username, password);
     set({ isLoggedIn: true, userId: res.user_id });
-
-    // Auto-create a default profile with the username as the name
-    try {
-      await apiCreateProfile({ name: username });
-    } catch (e) {
-      console.warn("Auto-create profile after signup failed:", e);
-    }
   },
 
   login: async (username, password) => {
