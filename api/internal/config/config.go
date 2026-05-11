@@ -32,6 +32,9 @@ type Server struct {
 	JWTSigningSecret  string
 	Port              string
 	DevAllowedOrigins []string
+	WebOrigin         string // WEB_ORIGIN — production web app origin (e.g. https://app.wod-strategist.com)
+	CookieDomain      string // COOKIE_DOMAIN — domain for auth cookie (e.g. .wod-strategist.com); empty = origin-only
+	CookieSecure       bool   // COOKIE_SECURE — set Secure flag on cookie; default true in prod, false for local dev
 }
 
 type Worker struct {
@@ -62,6 +65,13 @@ func InitServer() (Server, error) {
 		JWTSigningSecret:  strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
 		Port:              strings.TrimSpace(os.Getenv("PORT")),
 		DevAllowedOrigins: parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
+		WebOrigin:         strings.TrimSpace(os.Getenv("WEB_ORIGIN")),
+		CookieDomain:      strings.TrimSpace(os.Getenv("COOKIE_DOMAIN")),
+		CookieSecure:       !strings.EqualFold(strings.TrimSpace(os.Getenv("COOKIE_SECURE")), "false"),
+	}
+	// Merge web origin into the CORS allowlist so the web SPA is always permitted.
+	if cfg.WebOrigin != "" {
+		cfg.DevAllowedOrigins = append(cfg.DevAllowedOrigins, cfg.WebOrigin)
 	}
 	if cfg.Port == "" {
 		cfg.Port = defaultPort

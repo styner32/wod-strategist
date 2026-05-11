@@ -1,4 +1,4 @@
-package controllers
+package controllers_test
 
 import (
 	"net/http"
@@ -7,6 +7,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/controllers"
 	"github.com/wod-strategist/api/internal/testhelpers"
 )
 
@@ -22,7 +23,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 			Reply(http.StatusOK).
 			JSON(map[string]any{"name": "debug/telemetry/42/session-tel-1.json"})
 
-		router := newTestRouter(Config{
+		router := newTestRouter(controllers.Config{
 			StorageClient: storageClient,
 			BucketName:    "test-bucket",
 		})
@@ -52,7 +53,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 	})
 
 	It("returns bad request for missing sessionId", func() {
-		router := newTestRouter(Config{})
+		router := newTestRouter(controllers.Config{})
 
 		body := `{"profileId": 42, "samples": []}`
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body)
@@ -64,7 +65,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 	})
 
 	It("returns bad request for missing profileId", func() {
-		router := newTestRouter(Config{})
+		router := newTestRouter(controllers.Config{})
 
 		body := `{"sessionId": "s1", "samples": []}`
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body)
@@ -76,11 +77,11 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 	})
 
 	It("returns bad request for oversized samples", func() {
-		router := newTestRouter(Config{})
+		router := newTestRouter(controllers.Config{})
 
 		// Build a body with 7201 samples (exceeds max of 7200)
 		var sampleEntries []string
-		for i := 0; i <= maxTelemetrySamples; i++ {
+		for i := 0; i <= 7200; i++ {
 			sampleEntries = append(sampleEntries, `{"ts": 0}`)
 		}
 		body := `{"sessionId": "s1", "profileId": 1, "samples": [` + strings.Join(sampleEntries, ",") + `]}`
@@ -94,7 +95,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 	})
 
 	It("returns bad request for malformed JSON", func() {
-		router := newTestRouter(Config{})
+		router := newTestRouter(controllers.Config{})
 
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", `{broken`)
 		w := httptest.NewRecorder()
@@ -105,7 +106,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 	})
 
 	It("returns internal error when storage client is not configured", func() {
-		router := newTestRouter(Config{}) // no storage client
+		router := newTestRouter(controllers.Config{}) // no storage client
 
 		body := `{"sessionId": "s1", "profileId": 1, "samples": [{"ts": 0}]}`
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body)
@@ -127,7 +128,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 			Reply(http.StatusInternalServerError).
 			JSON(map[string]any{"error": map[string]any{"message": "boom"}})
 
-		router := newTestRouter(Config{
+		router := newTestRouter(controllers.Config{
 			StorageClient: storageClient,
 			BucketName:    "test-bucket",
 		})

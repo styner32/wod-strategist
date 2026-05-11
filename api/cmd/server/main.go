@@ -76,7 +76,11 @@ func main() {
 
 	// Initialize Auth Service
 	authSvc := auth.NewService(dbConn, []byte(cfg.JWTSigningSecret))
-	authHandlers := controllers.NewAuthController(authSvc)
+	authHandlers := controllers.NewAuthController(authSvc, dbConn, controllers.CookieConfig{
+		Domain: cfg.CookieDomain,
+		Secure: cfg.CookieSecure,
+		MaxAge: 30 * 24 * 60 * 60, // 30 days, matching auth.TokenTTL
+	})
 
 	// Setup Router
 	r, err := server.SetupRouter(cfg.AppEnv, cfg.APISecret, cfg.DevAllowedOrigins, handlers, authHandlers, authSvc)
