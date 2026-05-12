@@ -50,3 +50,20 @@ variable "jwt_secret" {
   type        = string
   sensitive   = true
 }
+
+variable "domain_name" {
+  description = "Apex domain served via Cloudflare"
+  type        = string
+  default     = "formbuddy.fit"
+}
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token with Zone:DNS:Edit scoped to the domain"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone ID for the domain"
+  type        = string
+}

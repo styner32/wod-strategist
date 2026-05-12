@@ -60,35 +60,11 @@ type meResponse struct {
 }
 
 // Signup handles POST /auth/signup (mobile — returns token in body).
+// NOTE: Signup is intentionally disabled for the friends-only preview.
+// Users are created manually via the create-user CLI.
 func (ac *AuthController) Signup(c *gin.Context) {
-	logger.Log.Debug("Signup request received")
-	var req signupRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		logger.Log.Debug("Signup: failed to bind JSON", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": "username and password are required"})
-		return
-	}
-
-	logger.Log.Debug("Signup: calling authSvc.Signup", zap.String("username", req.Username))
-	token, userID, err := ac.authSvc.Signup(c.Request.Context(), req.Username, req.Password)
-	if err != nil {
-		logger.Log.Debug("Signup: authSvc.Signup failed", zap.String("username", req.Username), zap.Error(err))
-		switch err {
-		case auth.ErrUsernameTaken:
-			c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
-		case auth.ErrInvalidUsername:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		case auth.ErrPasswordTooShort:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		default:
-			logger.Log.Error("Signup: unexpected error", zap.String("username", req.Username), zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-		}
-		return
-	}
-
-	logger.Log.Info("Signup: success", zap.Uint("user_id", userID), zap.String("username", req.Username))
-	c.JSON(http.StatusCreated, authResponse{Token: token, UserID: userID})
+	logger.Log.Warn("Signup: rejected (signup disabled)")
+	c.JSON(http.StatusForbidden, gin.H{"error": "signup is disabled"})
 }
 
 // Login handles POST /auth/login (mobile — returns token in body).
@@ -157,37 +133,12 @@ func (ac *AuthController) DeleteAccount(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// WebSignup handles POST /auth/web/signup — sets httpOnly cookie, returns { user_id } only.
+// WebSignup handles POST /auth/web/signup.
+// NOTE: Signup is intentionally disabled for the friends-only preview.
+// Users are created manually via the create-user CLI.
 func (ac *AuthController) WebSignup(c *gin.Context) {
-	logger.Log.Debug("WebSignup request received")
-	var req signupRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		logger.Log.Debug("WebSignup: failed to bind JSON", zap.Error(err))
-		c.JSON(http.StatusBadRequest, gin.H{"error": "username and password are required"})
-		return
-	}
-
-	logger.Log.Debug("WebSignup: calling authSvc.Signup", zap.String("username", req.Username))
-	token, userID, err := ac.authSvc.Signup(c.Request.Context(), req.Username, req.Password)
-	if err != nil {
-		logger.Log.Debug("WebSignup: authSvc.Signup failed", zap.String("username", req.Username), zap.Error(err))
-		switch err {
-		case auth.ErrUsernameTaken:
-			c.JSON(http.StatusConflict, gin.H{"error": "username already taken"})
-		case auth.ErrInvalidUsername:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		case auth.ErrPasswordTooShort:
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		default:
-			logger.Log.Error("WebSignup: unexpected error", zap.String("username", req.Username), zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
-		}
-		return
-	}
-
-	logger.Log.Info("WebSignup: success", zap.Uint("user_id", userID), zap.String("username", req.Username))
-	ac.setAuthCookie(c, token)
-	c.JSON(http.StatusCreated, webAuthResponse{UserID: userID})
+	logger.Log.Warn("WebSignup: rejected (signup disabled)")
+	c.JSON(http.StatusForbidden, gin.H{"error": "signup is disabled"})
 }
 
 // WebLogin handles POST /auth/web/login — sets httpOnly cookie, returns { user_id } only.

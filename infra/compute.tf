@@ -86,6 +86,18 @@ resource "google_cloud_run_v2_service" "api" {
           }
         }
       }
+      env {
+        name  = "WEB_ORIGIN"
+        value = "https://${var.domain_name}"
+      }
+      env {
+        name  = "COOKIE_DOMAIN"
+        value = var.domain_name
+      }
+      env {
+        name  = "APP_ENV"
+        value = "production"
+      }
     }
   }
 

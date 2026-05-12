@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { authApi } from '../api/auth';
 import { ApiError } from '../api/client';
@@ -37,9 +37,9 @@ export function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold bg-gradient-to-r from-accent to-purple-400 bg-clip-text text-transparent">
-            WOD Strategist
+            FormBuddy
           </h1>
-          <p className="text-text-secondary mt-2">Sign in to your account</p>
+          <p className="text-text-secondary mt-2">Friends-only preview</p>
         </div>
 
         <form
@@ -98,13 +98,6 @@ export function LoginPage() {
               'Sign in'
             )}
           </button>
-
-          <p className="text-center text-sm text-text-secondary">
-            Don't have an account?{' '}
-            <Link to="/signup" className="text-accent hover:text-accent-hover transition-colors">
-              Sign up
-            </Link>
-          </p>
         </form>
       </div>
     </div>

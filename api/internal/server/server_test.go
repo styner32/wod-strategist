@@ -183,11 +183,11 @@ var _ = Describe("SetupRouter", func() {
 		router.ServeHTTP(w, req)
 		Expect(w.Code).To(Equal(http.StatusBadRequest), "web login should not require API key")
 
-		// Web signup — same
+		// Web signup — disabled, returns 403 (not 401 which would mean API key rejection)
 		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/web/signup", nil)
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusBadRequest), "web signup should not require API key")
+		Expect(w.Code).To(Equal(http.StatusForbidden), "web signup should not require API key")
 	})
 
 	It("requires API key for mobile auth login/signup", func() {
