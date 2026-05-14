@@ -10,6 +10,7 @@ export interface AnalysisResult {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  available_videos?: string[];
 }
 
 export interface ChunkAnalysisResult {
@@ -33,6 +34,8 @@ export interface VideoDownloadResponse {
   expires_at: string;
 }
 
+export type VideoKind = 'merged' | 'hardsubbed' | 'encoded';
+
 export const historyApi = {
   list: (profileId: number) =>
     api.get<AnalysisResult[]>(`/history?profile_id=${profileId}`),
@@ -43,8 +46,12 @@ export const historyApi = {
   getChunkAnalysis: (sessionId: string) =>
     api.get<ChunkAnalysisResult[]>(`/chunk-analysis/${sessionId}`),
 
-  getVideoDownloadUrl: (sessionId: string, profileId: number) =>
+  getVideoDownloadUrl: (
+    sessionId: string,
+    profileId: number,
+    kind: VideoKind = 'merged',
+  ) =>
     api.get<VideoDownloadResponse>(
-      `/video-download/${sessionId}?profile_id=${profileId}`,
+      `/video-download/${sessionId}?profile_id=${profileId}&kind=${kind}`,
     ),
 };

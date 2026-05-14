@@ -2,14 +2,17 @@ import type { ChunkAnalysisResult } from '../../api/history';
 
 interface Props {
   chunks: ChunkAnalysisResult[];
+  currentTime?: number;
+  onSeek?: (time: number) => void;
 }
 
-export function ChunkMetricsChart({ chunks }: Props) {
+export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
   const sorted = [...chunks].sort((a, b) => a.start_secs - b.start_secs);
   const maxHR = Math.max(...sorted.map((c) => c.heart_rate_bpm || 0), 200);
   const maxTime = sorted.length > 0 ? sorted[sorted.length - 1].end_secs : 0;
 
   const hasHeartRate = sorted.some((c) => c.heart_rate_bpm > 0);
+  const isInteractive = onSeek != null;
 
   function formatTime(secs: number) {
     const m = Math.floor(secs / 60);
@@ -34,28 +37,59 @@ export function ChunkMetricsChart({ chunks }: Props) {
             : 100 / sorted.length;
           const hrPercent = maxHR > 0 ? (chunk.heart_rate_bpm / maxHR) * 100 : 0;
 
+          const isActive =
+            currentTime != null &&
+            currentTime >= chunk.start_secs &&
+            currentTime < chunk.end_secs;
+
           let parsedOutput: { exercise_type?: string } = {};
           try {
             parsedOutput = JSON.parse(chunk.output || '{}');
           } catch { /* skip */ }
 
           return (
-            <div key={chunk.id} className="group">
+            <div
+              key={chunk.id}
+              className={`group ${isInteractive ? 'cursor-pointer' : ''}`}
+              onClick={() => onSeek?.(chunk.start_secs)}
+            >
               <div className="flex items-center gap-3">
-                <span className="text-xs text-text-muted w-14 text-right font-mono shrink-0">
+                <span
+                  className={`text-xs w-14 text-right font-mono shrink-0 ${
+                    isActive ? 'text-accent font-semibold' : 'text-text-muted'
+                  }`}
+                >
                   {formatTime(chunk.start_secs)}
                 </span>
 
                 <div className="flex-1 relative">
                   <div className="h-8 bg-bg-secondary rounded-md overflow-hidden relative">
                     <div
-                      className="h-full bg-accent/20 group-hover:bg-accent/30 transition-colors rounded-md flex items-center px-2"
+                      className={`h-full rounded-md flex items-center px-2 transition-colors ${
+                        isActive
+                          ? 'bg-accent/30'
+                          : 'bg-accent/20 group-hover:bg-accent/30'
+                      }`}
                       style={{ width: `${Math.max(widthPercent, 10)}%` }}
                     >
                       <span className="text-xs text-text-secondary truncate">
                         {parsedOutput.exercise_type || `Chunk ${i + 1}`}
                       </span>
                     </div>
+
+                    {/* Active playback indicator */}
+                    {isActive && currentTime != null && (
+                      <div
+                        className="absolute top-0 bottom-0 w-0.5 bg-accent z-10"
+                        style={{
+                          left: `${
+                            ((currentTime - chunk.start_secs) /
+                              (chunk.end_secs - chunk.start_secs)) *
+                            Math.max(widthPercent, 10)
+                          }%`,
+                        }}
+                      />
+                    )}
 
                     {/* Heart rate indicator */}
                     {hasHeartRate && chunk.heart_rate_bpm > 0 && (

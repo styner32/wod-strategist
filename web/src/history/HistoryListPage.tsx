@@ -43,6 +43,7 @@ function parseAnalysisOutput(output: string): { summary?: string; workoutType?: 
 
 function HistoryCard({ result }: { result: AnalysisResult }) {
   const parsed = parseAnalysisOutput(result.output || '{}');
+  const videos = result.available_videos ?? [];
   return (
     <Link
       to={`/sessions/${result.session_id}`}
@@ -65,11 +66,23 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
         <StatusBadge status={result.status} />
       </div>
 
-      {parsed.workoutType && (
-        <span className="inline-block text-xs bg-bg-secondary text-text-secondary px-2 py-0.5 rounded-md mb-2">
-          {parsed.workoutType}
-        </span>
-      )}
+      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+        {parsed.workoutType && (
+          <span className="inline-block text-xs bg-bg-secondary text-text-secondary px-2 py-0.5 rounded-md">
+            {parsed.workoutType}
+          </span>
+        )}
+        {videos.includes('hardsubbed') && (
+          <span className="inline-flex items-center gap-1 text-xs bg-success/10 text-success px-2 py-0.5 rounded-md">
+            📝 Guided
+          </span>
+        )}
+        {videos.includes('merged') && !videos.includes('hardsubbed') && (
+          <span className="inline-flex items-center gap-1 text-xs bg-info/10 text-info px-2 py-0.5 rounded-md">
+            📹 Video
+          </span>
+        )}
+      </div>
 
       {parsed.summary && (
         <p className="text-sm text-text-secondary line-clamp-2">{parsed.summary}</p>

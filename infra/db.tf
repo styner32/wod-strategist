@@ -8,8 +8,13 @@ resource "google_sql_database_instance" "postgres" {
   settings {
     tier = "db-f1-micro" # Use minimal tier for dev/cost savings
     ip_configuration {
-      ipv4_enabled    = false # Private IP only
+      ipv4_enabled    = true
       private_network = google_compute_network.vpc.id
+
+      authorized_networks {
+        name  = "admin-home"
+        value = var.admin_cidr
+      }
     }
   }
 
