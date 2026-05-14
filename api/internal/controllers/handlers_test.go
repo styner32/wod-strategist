@@ -35,6 +35,35 @@ var _ = Describe("validation helpers", func() {
 		Entry("dotdot", "..", "fallback", "fallback"),
 	)
 
+	DescribeTable("sanitizeIdentifier strips path traversal",
+		func(input string, want string) {
+			Expect(sanitizeIdentifier(input)).To(Equal(want))
+		},
+		Entry("clean session id", "WOD-20260407-01JQXYZ", "WOD-20260407-01JQXYZ"),
+		Entry("unix traversal prefix", "../../safe-session", "safe-session"),
+		Entry("deep unix traversal", "../../../etc/passwd", "passwd"),
+		Entry("windows traversal prefix", `..\..\safe-session`, "safe-session"),
+		Entry("single dot-dot", "..", ""),
+		Entry("dot", ".", ""),
+		Entry("slash only", "/", ""),
+		Entry("empty string", "", ""),
+		Entry("whitespace only", "   ", ""),
+		Entry("embedded slashes", "foo/bar/session-1", "session-1"),
+		Entry("trailing slash", "session-1/", "session-1"),
+	)
+
+	DescribeTable("sanitizeFilename strips header-unsafe characters",
+		func(input string, want string) {
+			Expect(sanitizeFilename(input)).To(Equal(want))
+		},
+		Entry("clean id", "WOD-20260407-01JQXYZ", "WOD-20260407-01JQXYZ"),
+		Entry("double-quote breakout", `foo"; filename=malicious.exe`, "foo; filename=malicious.exe"),
+		Entry("CRLF injection", "foo\r\nInjected-Header: value", "fooInjected-Header: value"),
+		Entry("backslash", `foo\bar`, "foobar"),
+		Entry("NUL byte", "foo\x00bar", "foobar"),
+		Entry("all safe chars preserved", "WOD-2026-03-30_session.10", "WOD-2026-03-30_session.10"),
+	)
+
 	It("builds a sanitized video object name", func() {
 		Expect(buildVideoObjectName(0, "../../session-1", `..\\videos\\demo.mp4`)).To(Equal("videos/0/session-1/demo.mp4"))
 	})

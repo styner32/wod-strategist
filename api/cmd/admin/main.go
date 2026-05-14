@@ -55,8 +55,6 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  --apply              Actually write changes to the database")
 }
 
-
-
 func cmdReparseHighlights(args []string) {
 	var sessionID string
 	var apply bool

@@ -259,7 +259,7 @@ func (ctl *Controller) GetAnalysis(c *gin.Context) {
 		return
 	}
 
-	sessionID := c.Param("session_id")
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
 	if !ctl.assertOwnsSession(c, sessionID) {
 		return
 	}
@@ -287,7 +287,7 @@ func (ctl *Controller) GetChunkAnalysis(c *gin.Context) {
 		return
 	}
 
-	sessionID := c.Param("session_id")
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
 	if !ctl.assertOwnsSession(c, sessionID) {
 		return
 	}
@@ -943,7 +943,7 @@ func (ctl *Controller) GetSubtitles(c *gin.Context) {
 		return
 	}
 
-	sessionID := c.Param("session_id")
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
 
 	if !ctl.assertOwnsSession(c, sessionID) {
 		return
@@ -958,7 +958,7 @@ func (ctl *Controller) GetSubtitles(c *gin.Context) {
 
 	srt := subtitle.FormatSRT(chunks)
 
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.srt"`, sessionID))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.srt"`, sanitizeFilename(sessionID)))
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(srt))
 }
 
@@ -1052,7 +1052,8 @@ func (ctl *Controller) GetHighlight(c *gin.Context) {
 		return
 	}
 
-	results, err := ctl.highlightResults.FindBySessionID(c.Request.Context(), c.Param("session_id"))
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	results, err := ctl.highlightResults.FindBySessionID(c.Request.Context(), sessionID)
 	if err != nil {
 		logger.Log.Error("failed to fetch highlight results", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch highlights"})

@@ -239,7 +239,6 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	return nil
 }
 
-
 // runFFmpegConcat concatenates video files listed in concatListPath into outputPath.
 // Re-encodes to 30 fps / AAC to normalise frame-rate and PTS timestamps across
 // chunks, preventing playback-speed artifacts that occur when source chunks are
