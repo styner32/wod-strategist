@@ -32,3 +32,7 @@
 **Vulnerability:** Path Traversal vulnerability check bypass in background workers.
 **Learning:** `filepath.Base()` strips path separators from strings. Calling `filepath.Base()` on user input and then checking the *result* for path separators using `strings.ContainsRune(val, filepath.Separator)` will always silently pass, bypassing the validation logic meant to reject malicious input. The validation must occur *before* sanitizing the input or checking the original input string.
 **Prevention:** Always validate and check for path separators on the *raw* user input before applying any path transformation or sanitization functions.
+## 2025-05-13 - [Path Traversal in Session ID Handlers]
+**Vulnerability:** Path parameters such as `session_id` in API handlers (e.g. `GetAnalysis`, `GetHighlight`) were being read directly via `c.Param("session_id")` and used in database lookups or file path constructions without sanitization.
+**Learning:** Even though ORMs like GORM provide some injection protection, unvalidated strings read directly from HTTP paths can lead to path traversal if they are subsequently used to fetch or construct storage URIs (e.g., interacting with local disk or GCS).
+**Prevention:** Always wrap path or query parameters that function as identifiers with a dedicated sanitization function (like `sanitizeIdentifier`) before using them in further logic.

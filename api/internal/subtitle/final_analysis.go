@@ -9,6 +9,12 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 )
 
+const (
+	// minSubtitleDisplaySecs is the minimum display time for any subtitle entry.
+	// Entries shorter than this are extended into the gap before the next entry.
+	minSubtitleDisplaySecs = 2.0
+)
+
 // segmentHeaderRegex matches the segment header format from two-pass analysis:
 // "## 세그먼트 N: ExerciseName (start ~ end)"
 var segmentHeaderRegex = regexp.MustCompile(`(?m)^##\s*세그먼트\s+\d+:\s*(.+?)\s*\((\d+:\d{2})\s*~\s*(\d+:\d{2})\)`)
@@ -41,6 +47,7 @@ type srtEntry struct {
 // of feedback, the segment's time window is divided into 5 equal sub-windows.
 func FormatFinalAnalysisSRT(analysisOutput string) string {
 	entries := buildFinalAnalysisEntries(analysisOutput)
+	entries = extendShortEntries(entries)
 	return renderSRT(entries)
 }
 
@@ -59,6 +66,7 @@ func FormatMixedSRT(analysisOutput string, chunks []db.ChunkAnalysisResult) stri
 
 	// If no final analysis entries, fall back to chunk-only SRT.
 	if len(finalEntries) == 0 {
+		chunkEntries = extendShortEntries(chunkEntries)
 		return renderSRT(chunkEntries)
 	}
 
@@ -75,6 +83,7 @@ func FormatMixedSRT(analysisOutput string, chunks []db.ChunkAnalysisResult) stri
 		return merged[i].start < merged[j].start
 	})
 
+	merged = extendShortEntries(merged)
 	return renderSRT(merged)
 }
 
@@ -531,3 +540,32 @@ func findBreakPoint(runes []rune, targetIdx, searchRange int) int {
 	return -1
 }
 
+// extendShortEntries extends subtitle entries shorter than minSubtitleDisplaySecs
+// into the gap before the next entry. If there is no next entry, the subtitle is
+// extended freely. If the next entry starts before the desired end time, the
+// current entry is capped at the next entry's start to prevent overlap.
+func extendShortEntries(entries []srtEntry) []srtEntry {
+	result := make([]srtEntry, len(entries))
+	copy(result, entries)
+
+	for i := range result {
+		duration := result[i].end - result[i].start
+		if duration >= minSubtitleDisplaySecs {
+			continue
+		}
+
+		desiredEnd := result[i].start + minSubtitleDisplaySecs
+
+		if i+1 < len(result) {
+			// Don't overlap with the next entry
+			if desiredEnd > result[i+1].start {
+				desiredEnd = result[i+1].start
+			}
+		}
+
+		if desiredEnd > result[i].end {
+			result[i].end = desiredEnd
+		}
+	}
+	return result
+}

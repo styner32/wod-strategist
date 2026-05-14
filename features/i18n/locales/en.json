@@ -69,7 +69,7 @@
     "createProfile": "Create Profile",
     "switchProfile": "Switch Profile",
     "signOut": "Sign Out",
-    "signOutConfirm": "Switch to a different profile?"
+    "signOutConfirm": "Are you sure you want to sign out?"
   },
   "profileEdit": {
     "editProfile": "Edit Profile",
@@ -254,7 +254,8 @@
     "archiveTitle": "Archive Record",
     "archiveConfirm": "This will hide the record from your history. You can still find it later.",
     "archive": "Archive",
-    "archiveFailed": "Failed to archive. Please try again."
+    "archiveFailed": "Failed to archive. Please try again.",
+    "mergePreparing": "Preparing merge... Your session will appear shortly."
   },
   "player": {
     "loadingVideo": "Loading workout video...",
@@ -283,5 +284,26 @@
     "readyToUpload": "%{count} ready to upload",
     "awaitingEncode": "%{count} awaiting encode",
     "uploaded": "%{count} uploaded"
+  },
+  "auth": {
+    "login": "Log In",
+    "signup": "Sign Up",
+    "username": "Username",
+    "password": "Password",
+    "confirmPassword": "Confirm Password",
+    "loginFailed": "Invalid username or password.",
+    "signupFailed": "Could not create account. Try a different username.",
+    "usernameTaken": "Username is already taken.",
+    "passwordMismatch": "Passwords do not match.",
+    "passwordTooShort": "Password must be at least 8 characters.",
+    "usernameInvalid": "Username must be 3–20 characters (letters, numbers, underscores).",
+    "deleteAccount": "Delete Account",
+    "deleteConfirm": "This will permanently delete your account and all data. This action cannot be undone.",
+    "deletePassword": "Enter your password to confirm",
+    "deleteFailed": "Failed to delete account. Check your password and try again.",
+    "accountDeleted": "Account deleted.",
+    "loggingOut": "Logging out...",
+    "noAccount": "Don't have an account?",
+    "haveAccount": "Already have an account?"
   }
 }

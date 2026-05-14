@@ -4,6 +4,7 @@ import {
   UploadProgressData,
 } from "expo-file-system/legacy";
 
+import { getToken } from "@/features/auth/storage";
 import type { components } from "./schema";
 import type { WorkoutType } from "./workoutType";
 
@@ -34,6 +35,12 @@ export async function apiClient<T = any>(
   const headers = new Headers(customHeaders);
   headers.set("X-API-Key", API_SECRET_KEY);
 
+  // Inject auth token if available
+  const token = await getToken();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
   if (bodyPayload && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
@@ -43,6 +50,13 @@ export async function apiClient<T = any>(
     headers,
     body: bodyPayload ? JSON.stringify(bodyPayload) : fetchOptions.body,
   });
+
+  if (res.status === 401) {
+    // Lazy import to avoid circular dependency
+    const { useAuthStore } = await import("@/features/auth/useAuthStore");
+    useAuthStore.getState().handleUnauthorized();
+    throw new Error("Unauthorized");
+  }
 
   if (!res.ok) {
     let errorText = res.statusText;
@@ -139,12 +153,12 @@ export interface ProfileResponse {
 
 export interface CreateProfileRequest {
   name?: string;
-  birth_year: number;
-  birth_month: number;
-  birth_day: number;
-  gender: string;
-  height_cm: number;
-  weight_kg: number;
+  birth_year?: number;
+  birth_month?: number;
+  birth_day?: number;
+  gender?: string;
+  height_cm?: number;
+  weight_kg?: number;
   fitness_level?: string;
   injuries?: string[];
 }
@@ -413,6 +427,7 @@ export async function mergeChunks(
     movements?: string[];
     injuries?: string[];
     profileId: number;
+    enableTts?: boolean;
   }
 ): Promise<MergeChunksResult> {
   const {
@@ -420,6 +435,7 @@ export async function mergeChunks(
     movements = [],
     injuries = [],
     profileId,
+    enableTts = false,
   } = options;
 
   const result = await apiClient<{
@@ -434,6 +450,7 @@ export async function mergeChunks(
       movements,
       injuries,
       profile_id: profileId,
+      enable_tts: enableTts,
     },
   });
 
@@ -576,13 +593,34 @@ export interface GenerateHardSubResponse {
  */
 export async function generateHardSub(
   sessionId: string,
-  profileId: number
+  profileId: number,
+  enableTts: boolean = false
 ): Promise<GenerateHardSubResponse> {
   return apiClient<GenerateHardSubResponse>("/generate-hardsub", {
     method: "POST",
     bodyPayload: {
       session_id: sessionId,
       profile_id: profileId,
+      enable_tts: enableTts,
     },
+  });
+}
+
+// ==========================================
+// Debug Telemetry
+// ==========================================
+
+import type { TelemetrySession } from "../debug/types";
+
+/**
+ * Uploads a debug telemetry session JSON to the backend for GCS storage.
+ * The backend writes it to gs://{bucket}/debug/telemetry/{profileId}/{sessionId}.json.
+ */
+export async function uploadDebugTelemetry(
+  session: TelemetrySession
+): Promise<void> {
+  await apiClient<{ ok: boolean }>("/debug/telemetry", {
+    method: "POST",
+    bodyPayload: session,
   });
 }

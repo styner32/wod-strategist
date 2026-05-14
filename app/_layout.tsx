@@ -5,22 +5,48 @@ import '@/features/i18n'; // Initialize i18n (side-effect: sets locale)
 
 import { VideoQueueOverlay } from "@/components/VideoQueueOverlay";
 import { t, useLocale } from "@/features/i18n";
+import { useAuthStore } from "@/features/auth/useAuthStore";
 import { useProfileStore } from "@/store/useProfileStore";
-import { Stack } from "expo-router";
+import { flushPendingUploads } from "@/features/debug/telemetryUpload";
+import { Redirect, Stack } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 export default function RootLayout() {
   const locale = useLocale(); // triggers re-render on language switch
+  const isReady = useAuthStore((s) => s.isReady);
+  const isLoggedIn = useAuthStore((s) => s.isLoggedIn);
 
   useEffect(() => {
-    useProfileStore.getState().hydrate();
+    // Hydrate auth first — profile hydration happens after auth is confirmed
+    useAuthStore.getState().hydrate();
     // Lock the entire app to portrait by default.
     // Individual screens (e.g. visionTestPage) can override this.
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
   }, []);
+
+  // Once logged in, hydrate profiles + flush telemetry
+  useEffect(() => {
+    if (isLoggedIn) {
+      useProfileStore.getState().hydrate();
+      flushPendingUploads().catch(() => {});
+    }
+  }, [isLoggedIn]);
+
+  // Show loading spinner while checking SecureStore
+  if (!isReady) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar style="light" />
+        <View style={styles.splash}>
+          <ActivityIndicator size="large" color="#007AFF" />
+        </View>
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <SafeAreaProvider>
@@ -34,6 +60,10 @@ export default function RootLayout() {
           contentStyle: { backgroundColor: "#000" },
         }}
       >
+        {/* Auth screens */}
+        <Stack.Screen name="auth/login" options={{ headerShown: false }} />
+        <Stack.Screen name="auth/signup" options={{ headerShown: false }} />
+
         {/* 1. Tab Navigator (Home, Train, History, Profile) */}
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 
@@ -57,10 +87,26 @@ export default function RootLayout() {
         />
         <Stack.Screen name="upload/index" options={{ headerShown: false }} />
         <Stack.Screen name="queue" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="settings/deleteAccount"
+          options={{ title: t("auth.deleteAccount"), presentation: "modal" }}
+        />
       </Stack>
 
+      {/* Redirect to login when not authenticated */}
+      {!isLoggedIn && <Redirect href="/auth/login" />}
+
       {/* Global overlay — visible on all screens */}
-      <VideoQueueOverlay />
+      {isLoggedIn && <VideoQueueOverlay />}
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  splash: {
+    flex: 1,
+    backgroundColor: "#000",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+});

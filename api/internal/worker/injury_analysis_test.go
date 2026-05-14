@@ -206,9 +206,16 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 	})
 
 	It("falls back to standalone row with ProfileID when no WOD row exists", func() {
+		user := db.User{
+			Username:     "test-username",
+			PasswordHash: "test-password-hash",
+		}
+		Expect(dbConn.Create(&user).Error).NotTo(HaveOccurred())
+
 		profile := db.Profile{
-			BirthYear: 1992, BirthMonth: 9, BirthDay: 20,
-			Gender: "male", HeightCm: 180, WeightKg: 82.0,
+			UserID:    user.ID,
+			BirthYear: ptr(1992), BirthMonth: ptr(9), BirthDay: ptr(20),
+			Gender: ptr("male"), HeightCm: ptr(180), WeightKg: ptr(82.0),
 		}
 		Expect(dbConn.Create(&profile).Error).NotTo(HaveOccurred())
 
@@ -232,8 +239,7 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		Expect(dbConn.Where("session_id = ?", "sess-injury-profile-001").First(&result).Error).
 			NotTo(HaveOccurred())
 		Expect(result.AnalysisType).To(Equal(db.AnalysisTypeInjurySupplement))
-		Expect(result.ProfileID).NotTo(BeNil())
-		Expect(*result.ProfileID).To(Equal(profile.ID))
+		Expect(result.ProfileID).To(Equal(profile.ID))
 		Expect(result.Output).To(Equal(injuryAnalysis))
 	})
 

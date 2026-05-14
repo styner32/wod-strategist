@@ -13,10 +13,6 @@ import {
   View,
 } from "react-native";
 import {
-  startInAppRecording,
-  stopInAppRecording,
-} from "react-native-nitro-screen-recorder";
-import {
   Camera,
   useCameraDevice,
   useCameraFormat,
@@ -34,10 +30,14 @@ import {
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
 import { processWorkoutChunk, fetchChunkAnalysis, mergeChunks } from "../../features/wod/api";
+import { mergeChunksLocal, mergedOutputPath } from "../../features/wod/mergeChunksLocal";
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
+import { TelemetryRecorder } from '../../features/debug/telemetryRecorder';
+import { enqueueUpload as enqueueDebugUpload, flushPendingUploads } from '../../features/debug/telemetryUpload';
 
 import { useProfileStore } from "@/store/useProfileStore";
+import { useMergeStatus } from "@/store/useMergeStatus";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 const IS_ANDROID = Platform.OS === 'android';
@@ -207,8 +207,7 @@ export default function VisionTestPage() {
   const [chunkFeedback, setChunkFeedback] = useState<string | null>(null);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [chunkCount, setChunkCount] = useState(0);
-  // Track auto-merge-and-navigate state after stopping (both platforms)
-  const [autoMerging, setAutoMerging] = useState(false);
+
   // Elapsed timer for recording
   const [elapsedMs, setElapsedMs] = useState(0);
 
@@ -283,6 +282,13 @@ export default function VisionTestPage() {
   const { bpm, status: hrStatus } = useBleHeartRate();
   // const { bpm, status: hrStatus } = useHeartRate();
 
+  // Refs that mirror render-state for sampling outside the render cycle.
+  // TelemetryRecorder polls these at 1Hz via registered providers.
+  const bpmRef = useRef(0);
+  const chunkCountRef = useRef(0);
+  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+  useEffect(() => { chunkCountRef.current = chunkCount; }, [chunkCount]);
+
   useEffect(() => {
     if (!hasPermission) requestPermission();
     if (!mediaPermission?.granted) requestMediaPermission();
@@ -318,7 +324,7 @@ export default function VisionTestPage() {
       chunkStartTime.current = Date.now();
       camera.current.startRecording({
         // Android: force mp4 + HEVC to reduce chunk size (12MB → ~2-4MB).
-        // iOS: use VisionCamera defaults (chunks are already small via screen recorder).
+        // iOS: use VisionCamera defaults.
         ...(IS_ANDROID ? { fileType: 'mp4' as const, videoCodec: 'h265' as const } : {}),
         onRecordingFinished: async (video) => {
           console.log("📷 Chunk Finished:", video.path);
@@ -329,29 +335,22 @@ export default function VisionTestPage() {
           const startSecs = (chunkStartTime.current - recordingStartTime.current) / 1000;
           const endSecs = (chunkEndTime - recordingStartTime.current) / 1000;
 
-          // Keep local copy for Android final video assembly
-          chunkPaths.current.push(video.path);
-          setChunkCount(prev => prev + 1);
-
           // Resolve the last-chunk promise if we're waiting for it
           if (lastChunkResolve.current) {
             lastChunkResolve.current(video.path);
             lastChunkResolve.current = null;
           }
 
-
+          // Always track chunk path for local merge (gallery save),
+          // even if recording has stopped (orphan chunk).
+          chunkPaths.current.push(video.path);
 
           // Skip upload if recording has already been stopped
           if (!isRecordingChunks.current) {
-            console.log("⏹️ Recording stopped — cleaning up orphan chunk");
-            // Clean up the raw chunk file since we won't upload it
-            try {
-              const { File: FSFile } = require("expo-file-system");
-              const f = new FSFile(video.path);
-              if (f.exists) f.delete();
-              console.log("🗑️ Deleted orphan chunk:", video.path);
-            } catch (_) {}
+            console.log("⏹️ Recording stopped — skipping upload for final chunk");
           } else {
+            setChunkCount(prev => prev + 1);
+
             // Compress (iOS only) and Upload chunk to backend
             try {
               const sessionId = sessionIdRef.current;
@@ -385,32 +384,23 @@ export default function VisionTestPage() {
 
               if (skipCompression) {
                 // Skip re-compression — upload raw chunk directly.
-                // shouldCleanup=true: delete the raw file after upload completes
-                const uploadTask = () => doUpload(video.path, true);
+                // shouldCleanup=false: raw chunks are kept for local merge (gallery save).
+                // cleanupMergedAndChunks handles deletion after the gallery decision.
+                const uploadTask = () => doUpload(video.path, false);
                 if (serialUpload) {
                   enqueueUpload(uploadTask);
                 } else {
                   trackUpload(uploadTask);
                 }
               } else {
-                // Compress before upload, then dispatch
+                // Compress before upload, then dispatch.
+                // Raw chunk is kept for local merge — only the compressed copy
+                // is cleaned up after upload.
                 Video.compress(video.path, {
                   compressionMethod: "auto",
                   maxSize: 720,
                 }).then((compressedUri) => {
-                  // Delete the raw chunk now that compression produced a new file
-                  const isSamePath =
-                    compressedUri === video.path ||
-                    compressedUri.replace("file://", "") === video.path.replace("file://", "");
-                  if (!isSamePath) {
-                    try {
-                      const { File: FSFile } = require("expo-file-system");
-                      const f = new FSFile(video.path);
-                      if (f.exists) f.delete();
-                      console.log("🗑️ Deleted raw chunk after compression:", video.path);
-                    } catch (_) {}
-                  }
-
+                  // Upload the compressed file; delete it after upload completes.
                   const uploadTask = () => doUpload(compressedUri, true);
                   if (serialUpload) {
                     enqueueUpload(uploadTask);
@@ -419,12 +409,6 @@ export default function VisionTestPage() {
                   }
                 }).catch((err) => {
                   console.error("Failed to compress chunk:", err);
-                  // Compression failed — clean up raw chunk to prevent leak
-                  try {
-                    const { File: FSFile } = require("expo-file-system");
-                    const f = new FSFile(video.path);
-                    if (f.exists) f.delete();
-                  } catch (_) {}
                 });
               }
             } catch (e) {
@@ -478,7 +462,7 @@ export default function VisionTestPage() {
     startChunkLoop();
   };
 
-  const stopChunkRecording = async () => {
+  const stopChunkRecording = async (): Promise<string | null> => {
     isRecordingChunks.current = false;
     if (chunkTimer.current) {
       clearTimeout(chunkTimer.current);
@@ -486,15 +470,31 @@ export default function VisionTestPage() {
     }
 
     // Stop the current recording if active.
-    // This will trigger onRecordingFinished, which checks isRecordingChunks.current (false), so loop stops.
+    // Set up a promise so the caller can wait for the last chunk's
+    // onRecordingFinished callback (which pushes its path to chunkPaths).
     if (camera.current && isChunkRecordingActive.current) {
+      const lastChunkPromise = new Promise<string | null>((resolve) => {
+        lastChunkResolve.current = resolve;
+        // Safety timeout — if onRecordingFinished never fires, unblock after 5s
+        setTimeout(() => {
+          if (lastChunkResolve.current === resolve) {
+            lastChunkResolve.current = null;
+            resolve(null);
+          }
+        }, 5000);
+      });
+
       try {
         isChunkRecordingActive.current = false;
         await camera.current.stopRecording();
       } catch (e) {
         console.error("Failed to stop chunk recording:", e);
       }
+
+      return lastChunkPromise;
     }
+
+    return null;
   };
 
   /**
@@ -526,6 +526,42 @@ export default function VisionTestPage() {
     chunkPaths.current = [];
   };
 
+  /**
+   * Delete a snapshot of chunk files (does NOT touch chunkPaths ref).
+   * Used by the local merge flow which snapshots paths before clearing state.
+   */
+  const cleanupLocalChunkFiles = (paths: string[]) => {
+    try {
+      const { File: FSFile } = require("expo-file-system");
+      for (const p of paths) {
+        try {
+          const f = new FSFile(p);
+          if (f.exists) f.delete();
+        } catch (_) {}
+      }
+      console.log(`🗑️ Cleaned up ${paths.length} chunk files`);
+    } catch (e) {
+      console.warn("⚠️ Chunk cleanup error:", e);
+    }
+  };
+
+  /**
+   * Delete the merged output file + all source chunk files.
+   * Called after gallery save decision (save or discard).
+   */
+  const cleanupMergedAndChunks = (mergedPath: string, chunks: string[]) => {
+    try {
+      const { File: FSFile } = require("expo-file-system");
+      try {
+        const f = new FSFile(mergedPath);
+        if (f.exists) f.delete();
+        console.log("🗑️ Deleted merged file:", mergedPath);
+      } catch (_) {}
+    } catch (_) {}
+    cleanupLocalChunkFiles(chunks);
+    chunkPaths.current = [];
+  };
+
   // --- Main Recording Logic ---
 
   const handleStartRecording = async () => {
@@ -539,46 +575,23 @@ export default function VisionTestPage() {
     }
 
     try {
-      if (Platform.OS === 'ios') {
-        // iOS: use screen recorder for full video with overlays
-        await startInAppRecording({
-          options: {
-            enableMic: false,
-            enableCamera: false,
-          },
-          onRecordingFinished: (file) => {
-            console.log("📼 Screen Recording Finished:", file.path);
-          },
-        });
+      if (!camera.current) return;
 
-        setIsRecording(true);
-        console.log("✅ Recording Started (iOS Screen Recorder)");
+      setIsRecording(true);
+      console.log("✅ Recording Started (Chunk Streaming)");
 
-        // Compute session ID once for the entire recording session
-        sessionIdRef.current = buildWorkoutSessionId(workoutType);
-        recordingStartTime.current = Date.now();
+      // Compute session ID once for the entire recording session
+      sessionIdRef.current = buildWorkoutSessionId(workoutType);
+      recordingStartTime.current = Date.now();
 
-        // Start chunk recording for real-time backend analysis
-        startChunkRecording();
-      } else {
-        // Android: chunk-only streaming mode.
-        // Android camera only supports one recording at a time, so we can't
-        // run a continuous recording alongside chunk recording.
-        // Instead, we record sequential 10s chunks, upload each for real-time
-        // analysis, and auto-merge on the server when the user stops.
-        // Trade-off: no local gallery save of the final video.
-        if (!camera.current) return;
+      // Start debug telemetry recording (1Hz sampling)
+      TelemetryRecorder.start(sessionIdRef.current, profileId!);
+      TelemetryRecorder.registerProvider('hr', () => ({ hr: bpmRef.current }));
+      TelemetryRecorder.registerProvider('chunk', () => ({ chunkIdx: chunkCountRef.current }));
 
-        setIsRecording(true);
-        console.log("✅ Recording Started (Android Chunk Streaming)");
-
-        // Compute session ID once for the entire recording session
-        sessionIdRef.current = buildWorkoutSessionId(workoutType);
-        recordingStartTime.current = Date.now();
-
-        // Start chunk recording loop (same mechanism as iOS chunks)
-        startChunkRecording();
-      }
+      // Record sequential chunks: each is uploaded for real-time analysis,
+      // and raw chunk files are kept locally for gallery-save merge.
+      startChunkRecording();
     } catch (error) {
       console.error("Recording Start Error:", error);
       Alert.alert("녹화 시작 실패", "녹화를 시작할 수 없습니다.");
@@ -591,95 +604,123 @@ export default function VisionTestPage() {
     try {
       setIsSaving(true);
 
-      let screenRecorderFile: { path: string } | undefined;
-
-      if (Platform.OS === 'ios') {
-        // 1. Stop Chunk Recording (safe to call even if not running)
-        await stopChunkRecording();
-
-        // 2. Stop Screen Recorder
-        screenRecorderFile = await stopInAppRecording();
-      } else {
-        // Android: stop chunk streaming
-        await stopChunkRecording();
-      }
+      // Stop chunk recording and wait for last chunk to arrive
+      await stopChunkRecording();
 
       setIsRecording(false);
 
-      if (chunkCount > 0) {
-        // Auto-trigger server-side merge + analysis (both platforms)
-        setAutoMerging(true);
-        try {
-          const sessionId = sessionIdRef.current;
-          const movementsArray = movements ? movements.split(", ") : [];
-          const injuriesArray = injuries ? injuries.split(", ") : [];
-
-          // Small delay to let the last chunk upload reach the server
-          await new Promise(resolve => setTimeout(resolve, 2000));
-
-          await mergeChunks(sessionId, {
-            workoutType,
-            movements: movementsArray,
-            injuries: injuriesArray,
-            profileId: profileId!,
-          });
-
-          console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
-        } catch (e) {
-          console.error("❌ Auto-merge failed:", e);
-          Alert.alert(
-            "Merge Failed",
-            "Could not start merge. You can try again from history.",
-            [{ text: "OK" }]
-          );
-        } finally {
-          setAutoMerging(false);
+      // Stop debug telemetry and enqueue upload
+      try {
+        const telemetryResult = await TelemetryRecorder.stop();
+        if (telemetryResult) {
+          await enqueueDebugUpload(telemetryResult.sessionId, telemetryResult.filePath);
+          flushPendingUploads().catch(() => {}); // fire and forget
         }
+      } catch (e) {
+        console.warn('telemetry stop failed', e);
       }
 
-      // Clean up local chunk files and navigate to history
-      cleanupChunkFiles();
+      // Snapshot session ID for both server merge and local merge
+      const sessionId = sessionIdRef.current;
+
+      // Fire-and-forget: trigger server-side merge in the background.
+      // The merge API just enqueues a task — no reason to block the user
+      // on the recording view while it completes.
+      // We call it inline (not in setTimeout) so the network request starts
+      // before the user can background the app.
+      if (chunkCount > 0) {
+        const movementsArray = movements ? movements.split(", ") : [];
+        const injuriesArray = injuries ? injuries.split(", ") : [];
+
+        // Track the merge globally so History page can show a banner
+        useMergeStatus.getState().addPending(sessionId);
+
+        // Fire the merge — the 2s delay lets the last chunk upload reach GCS
+        (async () => {
+          // Small delay to let the last chunk upload reach the server
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          try {
+            await mergeChunks(sessionId, {
+              workoutType,
+              movements: movementsArray,
+              injuries: injuriesArray,
+              profileId: profileId!,
+            });
+            console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
+          } catch (e) {
+            console.error("❌ Auto-merge failed:", e);
+          } finally {
+            useMergeStatus.getState().removePending(sessionId);
+          }
+        })();  // IIFE — fires immediately, does not block
+      }
+
+      // --- Local merge for gallery save (both platforms) ---
+      // Snapshot chunk paths before clearing — we need them for the merge.
+      const localChunks = [...chunkPaths.current];
+
+      console.log(`📦 Gallery save: ${localChunks.length} chunks, paths:`, localChunks);
+
+      // Clean up state immediately so the UI reflects "stopped"
       setChunkCount(0);
       setIsSaving(false);
-      router.replace("/history" as any);
 
-      // iOS only: prompt to save screen recording to gallery (non-blocking)
-      if (Platform.OS === 'ios' && screenRecorderFile?.path) {
-        const filePath = screenRecorderFile.path;
-        Alert.alert(
-          "갤러리에 저장하시겠습니까?",
-          "운동 영상이 이미 업로드되었습니다. 기기 갤러리에도 저장하시겠습니까?",
-          [
-            {
-              text: "아니오",
-              style: "cancel",
-              onPress: () => {
-                try {
-                  const { File: FSFile } = require("expo-file-system");
-                  const f = new FSFile(filePath);
-                  if (f.exists) f.delete();
-                  console.log("🗑️ Deleted screen recorder temp file");
-                } catch (_) {}
-              },
-            },
-            {
-              text: "저장",
-              onPress: () => {
-                MediaLibrary.saveToLibraryAsync(filePath)
-                  .then(() => console.log("📱 Saved screen recording to gallery"))
-                  .catch((e) => console.warn("⚠️ Gallery save failed:", e))
-                  .finally(() => {
-                    try {
-                      const { File: FSFile } = require("expo-file-system");
-                      const f = new FSFile(filePath);
-                      if (f.exists) f.delete();
-                      console.log("🗑️ Cleaned up screen recorder temp file");
-                    } catch (_) {}
-                  });
-              },
-            },
-          ]
-        );
+      if (localChunks.length > 0) {
+        // Merge chunks locally → prompt gallery save → then cleanup
+        const outPath = mergedOutputPath(sessionId);
+        console.log(`📦 Merge output path: ${outPath}`);
+
+        // Show the gallery save alert while merge runs in background.
+        // The alert is shown BEFORE navigating so it stays visible.
+        const performMergeAndPrompt = async () => {
+          try {
+            console.log(`🎬 Starting local merge of ${localChunks.length} chunks...`);
+            await mergeChunksLocal(localChunks, outPath);
+            console.log(`🎬 Local merge succeeded, showing gallery save alert`);
+
+            Alert.alert(
+              "갤러리에 저장하시겠습니까?",
+              "운동 영상이 이미 업로드되었습니다. 기기 갤러리에도 저장하시겠습니까?",
+              [
+                {
+                  text: "아니오",
+                  style: "cancel",
+                  onPress: () => {
+                    // Keep merged file in app container (documentDirectory)
+                    // for later access — only clean up raw chunk files.
+                    cleanupLocalChunkFiles(localChunks);
+                    chunkPaths.current = [];
+                    router.replace("/history" as any);
+                  },
+                },
+                {
+                  text: "저장",
+                  onPress: () => {
+                    MediaLibrary.saveToLibraryAsync(outPath)
+                      .then(() => console.log("📱 Saved merged video to gallery"))
+                      .catch((e) => console.warn("⚠️ Gallery save failed:", e))
+                      .finally(() => {
+                        // Saved to gallery — safe to delete app-container copy + chunks
+                        cleanupMergedAndChunks(outPath, localChunks);
+                        router.replace("/history" as any);
+                      });
+                  },
+                },
+              ]
+            );
+          } catch (mergeErr) {
+            console.warn("⚠️ Local merge failed, skipping gallery save:", mergeErr);
+            cleanupLocalChunkFiles(localChunks);
+            router.replace("/history" as any);
+          }
+        };
+
+        // Fire merge+prompt immediately (don't await — alert handles navigation)
+        performMergeAndPrompt();
+      } else {
+        console.log("📦 No local chunks — skipping gallery save");
+        // No chunks to merge — just navigate
+        router.replace("/history" as any);
       }
     } catch (error) {
       console.error("Recording Stop Error:", error);
@@ -876,19 +917,7 @@ export default function VisionTestPage() {
       {/* Recording controls — compact pill bar */}
       {!previewOnly && (
         <View style={[styles.recordControl, applyLandscapeStyles && styles.recordControlLandscape]}>
-        {autoMerging ? (
-          <View style={styles.postRecordingFooter}>
-            <Text style={styles.footerStatus}>🔗 Merging & Analyzing...</Text>
-            <Text style={[styles.footerStatus, { color: '#888', fontSize: 13 }]}>
-              {chunkCount} chunks uploaded. Redirecting to history...
-            </Text>
-            <View style={styles.footerProgressBg}>
-              <View
-                style={[styles.footerProgressFill, { width: "100%", backgroundColor: "#64D2FF" }]}
-              />
-            </View>
-          </View>
-        ) : isSaving ? (
+        {isSaving ? (
           <View style={styles.postRecordingFooter}>
             <Text style={styles.footerStatus}>Saving...</Text>
             <View style={styles.footerProgressBg}>

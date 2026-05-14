@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["VideoMergerModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.videomerger.VideoMergerModule"]
+  }
+}

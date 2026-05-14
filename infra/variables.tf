@@ -44,3 +44,32 @@ variable "local_static_origins" {
   type        = list(string)
   default     = ["http://localhost:3000", "http://127.0.0.1:3000"]
 }
+
+variable "jwt_secret" {
+  description = "Secret key for signing JWT tokens"
+  type        = string
+  sensitive   = true
+}
+
+variable "domain_name" {
+  description = "Apex domain served via Cloudflare"
+  type        = string
+  default     = "formbuddy.fit"
+}
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token with Zone:DNS:Edit scoped to the domain"
+  type        = string
+  sensitive   = true
+}
+
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone ID for the domain"
+  type        = string
+}
+
+variable "admin_cidr" {
+  description = "CIDR for Cloud SQL authorized network (admin home IP)"
+  type        = string
+  default     = "49.172.61.41/32"
+}

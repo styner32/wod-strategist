@@ -38,6 +38,9 @@ const (
 	AnalysisPrompt = `
 # 운동 영상 분석 요청
 
+## 언어 규칙
+- 모든 분석 결과는 **존댓말** (~요, ~세요, ~습니다)로 작성하세요. 반말(~해, ~다, ~함)을 절대 사용하지 마세요.
+
 ## 분석 요청 사항
 당신은 전문 스포츠 생체역학 전문가이자 코치입니다. 위 컨텍스트와 첨부된 영상을 바탕으로 다음 항목을 분석해 주세요.
 
@@ -86,7 +89,7 @@ var highlightBlockRegex = regexp.MustCompile("(?is)(?:```highlights\\s*(\\[.*?\\
 // injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ```, ```json ... ```, or <injury_timestamps> ... </injury_timestamps> blocks in Gemini output.
 var injuryTimestampBlockRegex = regexp.MustCompile("(?is)(?:```(?:injury_timestamps|json)\\s*(\\[.*?\\])\\s*```|<injury_timestamps>\\s*(\\[.*?\\])\\s*</injury_timestamps>)")
 
-func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error) {
+func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
 		SessionID:   sessionID,
 		FilePath:    filePath,
@@ -94,6 +97,7 @@ func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []s
 		Movements:   movements,
 		Injuries:    injuries,
 		ProfileID:   profileID,
+		EnableTTS:   enableTTS,
 	}
 
 	data, err := json.Marshal(payload)
@@ -230,9 +234,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				Output:       userMsg,
 				AnalysisType: db.AnalysisTypeWOD,
 			}
-			if p.ProfileID > 0 {
-				failedResult.ProfileID = &p.ProfileID
-			}
+			failedResult.ProfileID = p.ProfileID
 			if dbErr := w.DB.Create(failedResult).Error; dbErr != nil {
 				w.logger.Error("Failed to write FAILED analysis result",
 					zap.String("session_id", p.SessionID),
@@ -424,10 +426,12 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.String("session_id", p.SessionID),
 			zap.String("file_uri", upload.FileURI))
 
-		indexOutput, indexErr := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, w.buildIndexPrompt(p, upload.VideoDuration))
+		indexOutput, indexUsage, indexErr := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, w.buildIndexPrompt(p, upload.VideoDuration))
 		if indexErr != nil {
 			return fmt.Errorf("failed to index video: %w", indexErr)
 		}
+
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:index", indexUsage)
 
 		segments = parseSegments(indexOutput)
 
@@ -461,13 +465,14 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("total_segments", len(segments)),
 			zap.Int("max_segments", maxSegs))
 
-		triagedSegments, triageErr := w.triageSegments(ctx, upload, segments, maxSegs)
+		triagedSegments, triageUsage, triageErr := w.triageSegments(ctx, upload, segments, maxSegs)
 		if triageErr != nil {
 			w.logger.Warn("Segment triage failed, using first N segments",
 				zap.Error(triageErr),
 				zap.Int("fallback_count", maxSegs))
 			segments = segments[:maxSegs]
 		} else {
+			w.saveTokenUsage(p.SessionID, p.ProfileID, "video:triage", triageUsage)
 			segments = triagedSegments
 		}
 
@@ -491,7 +496,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Duration("start", start),
 			zap.Duration("end", end))
 
-		segAnalysis, err := w.GeminiClient.AnalyzeSegment(
+		segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
 			ctx, upload.FileURI, upload.MIMEType, start, end, segPrompt,
 		)
 		if err != nil {
@@ -501,6 +506,8 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				zap.Error(err))
 			continue
 		}
+
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", segUsage)
 
 		allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n", i+1, seg.Type, seg.Start, seg.End))
 		allAnalysis.WriteString(segAnalysis)
@@ -520,9 +527,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		AnalysisType:      db.AnalysisTypeWOD,
 		HighlightSegments: highlightSegments,
 	}
-	if p.ProfileID > 0 {
-		result.ProfileID = &p.ProfileID
-	}
+	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
 
 	w.logger.Info("Two-pass analysis completed",
@@ -531,7 +536,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 
 	// Auto-enqueue hardsub generation now that the final analysis is available.
 	// The hardsub worker will fetch this analysis and burn it as subtitles.
-	w.enqueueHardSub(p.SessionID, p.ProfileID)
+	w.enqueueHardSub(p.SessionID, p.ProfileID, p.EnableTTS)
 
 	// Agentic follow-up: pass fileURI/fileName so injury analysis can reuse the uploaded video
 	if hasInjuries {
@@ -740,20 +745,20 @@ type TriagedSegment struct {
 //
 // Future optimization: use segment descriptions instead of video for cost saving,
 // once chunk analysis descriptions are rich enough.
-func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, segments []Segment, maxSegs int) ([]Segment, error) {
+func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, segments []Segment, maxSegs int) ([]Segment, *gemini.TokenUsage, error) {
 	triagePrompt := buildTriagePrompt(segments, maxSegs, upload.VideoDuration)
 
-	triageOutput, err := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, triagePrompt)
+	triageOutput, triageUsage, err := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, triagePrompt)
 	if err != nil {
-		return nil, fmt.Errorf("triage model call failed: %w", err)
+		return nil, nil, fmt.Errorf("triage model call failed: %w", err)
 	}
 
 	selected := parseTriagedSegments(triageOutput, segments, maxSegs)
 	if len(selected) == 0 {
-		return nil, fmt.Errorf("triage returned no valid segments")
+		return nil, triageUsage, fmt.Errorf("triage returned no valid segments")
 	}
 
-	return selected, nil
+	return selected, triageUsage, nil
 }
 
 // buildTriagePrompt creates the Flash model prompt for segment prioritization.
@@ -877,7 +882,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 
 	prompt := w.buildAnalysisPrompt(p, videoDuration)
 
-	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
 	// Clean up local file
 	defer func() {
@@ -894,6 +899,9 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 			}
 		}()
 	}
+
+	// Save token usage regardless of analysis outcome
+	w.saveTokenUsage(p.SessionID, p.ProfileID, "video:legacy", usage)
 
 	// retry if analysis is empty
 	if analysis == "" {
@@ -914,9 +922,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 			Status:    "FAILED",
 			Output:    "An internal error occurred during analysis.",
 		}
-		if p.ProfileID > 0 {
-			failedResult.ProfileID = &p.ProfileID
-		}
+		failedResult.ProfileID = p.ProfileID
 		w.DB.Create(failedResult)
 
 		return err
@@ -932,15 +938,13 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		AnalysisType:      db.AnalysisTypeWOD,
 		HighlightSegments: highlightSegments,
 	}
-	if p.ProfileID > 0 {
-		result.ProfileID = &p.ProfileID
-	}
+	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
 
 	w.logger.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))
 
 	// Auto-enqueue hardsub generation now that the final analysis is available.
-	w.enqueueHardSub(p.SessionID, p.ProfileID)
+	w.enqueueHardSub(p.SessionID, p.ProfileID, p.EnableTTS)
 
 	// Agentic follow-up: if injuries are present, enqueue injury-focused re-analysis
 	if len(p.Injuries) > 0 {

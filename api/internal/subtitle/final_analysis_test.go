@@ -288,3 +288,103 @@ func TestFormatMixedSRT_LongChunkSplits(t *testing.T) {
 
 	t.Logf("Split long chunk into %d entries:\n%s", len(entries), srt)
 }
+
+func TestFormatMixedSRT_ShortSubtitleExtended(t *testing.T) {
+	// Chunk with a very short time window (0.5s) followed by a gap.
+	// The subtitle should extend to at least 2 seconds.
+	chunks := []db.ChunkAnalysisResult{
+		{
+			SessionID: "test",
+			Status:    "COMPLETED",
+			Output:    "Quick fix cue",
+			StartSecs: pf(0.0),
+			EndSecs:   pf(0.5),
+		},
+		{
+			SessionID: "test",
+			Status:    "COMPLETED",
+			Output:    "Next cue after gap",
+			StartSecs: pf(5.0),
+			EndSecs:   pf(15.0),
+		},
+	}
+
+	srt := subtitle.FormatMixedSRT("", chunks)
+
+	if srt == "" {
+		t.Fatal("Expected non-empty SRT")
+	}
+
+	// The first subtitle should be extended past 0.5s — verify via SRT timecode
+	// 0.5s = 00:00:00,500; 2.0s = 00:00:02,000
+	if !strings.Contains(srt, "00:00:02,000") {
+		t.Errorf("Expected first subtitle to be extended to 2.0s, got:\n%s", srt)
+	}
+
+	t.Logf("Extended short subtitle SRT:\n%s", srt)
+}
+
+func TestFormatMixedSRT_ShortSubtitleNoOverlap(t *testing.T) {
+	// Chunk with short time window (0.5s) followed immediately by another chunk at 1.0s.
+	// Extension should be capped at 1.0s to avoid overlapping.
+	chunks := []db.ChunkAnalysisResult{
+		{
+			SessionID: "test",
+			Status:    "COMPLETED",
+			Output:    "Short cue",
+			StartSecs: pf(0.0),
+			EndSecs:   pf(0.5),
+		},
+		{
+			SessionID: "test",
+			Status:    "COMPLETED",
+			Output:    "Following cue",
+			StartSecs: pf(1.0),
+			EndSecs:   pf(10.0),
+		},
+	}
+
+	srt := subtitle.FormatMixedSRT("", chunks)
+
+	if srt == "" {
+		t.Fatal("Expected non-empty SRT")
+	}
+
+	// The first subtitle should be capped at 1.0s (next entry start)
+	if !strings.Contains(srt, "00:00:01,000") {
+		t.Errorf("Expected first subtitle to be capped at 1.0s, got:\n%s", srt)
+	}
+
+	// Should NOT extend to 2.0s because that would overlap
+	if strings.Contains(srt, "00:00:02,000") {
+		t.Errorf("First subtitle should not extend past next entry start:\n%s", srt)
+	}
+
+	t.Logf("No-overlap SRT:\n%s", srt)
+}
+
+func TestFormatMixedSRT_ShortSubtitleLastEntry(t *testing.T) {
+	// Single chunk with short time window — no next entry, should extend freely.
+	chunks := []db.ChunkAnalysisResult{
+		{
+			SessionID: "test",
+			Status:    "COMPLETED",
+			Output:    "Only cue",
+			StartSecs: pf(10.0),
+			EndSecs:   pf(10.3),
+		},
+	}
+
+	srt := subtitle.FormatMixedSRT("", chunks)
+
+	if srt == "" {
+		t.Fatal("Expected non-empty SRT")
+	}
+
+	// Should be extended to 12.0s (10.0 + 2.0)
+	if !strings.Contains(srt, "00:00:12,000") {
+		t.Errorf("Expected last subtitle to extend to 12.0s, got:\n%s", srt)
+	}
+
+	t.Logf("Last entry extension SRT:\n%s", srt)
+}
