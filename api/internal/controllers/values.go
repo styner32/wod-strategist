@@ -132,6 +132,9 @@ var movementGroups = []MovementGroup{
 // movements is the flat list derived from movementGroups (for GET /movements backward compat).
 var movements []string
 
+const MaxMovementCount = 100
+const MaxMovementNameLength = 100
+
 func init() {
 	for _, g := range movementGroups {
 		movements = append(movements, g.Movements...)
@@ -188,7 +191,7 @@ var movementNameRE = regexp.MustCompile(`^[A-Za-z0-9 &\-'/()+.]+$`)
 // validateMovements checks movement list constraints without requiring
 // movements to be in the predefined list (supports custom movements).
 func validateMovements(values []string) (bool, string) {
-	if len(values) >= 100 {
+	if len(values) > MaxMovementCount {
 		return false, "too many movements"
 	}
 	for _, v := range values {
@@ -196,7 +199,7 @@ func validateMovements(values []string) (bool, string) {
 		if trimmed == "" {
 			return false, "movement name cannot be empty"
 		}
-		if len(trimmed) > 100 {
+		if len(trimmed) > MaxMovementNameLength {
 			return false, "movement name too long"
 		}
 		if !movementNameRE.MatchString(trimmed) {

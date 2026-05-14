@@ -3,201 +3,77 @@ package server_test
 import (
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/auth"
+	"github.com/wod-strategist/api/internal/controllers"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/server"
 	"go.uber.org/zap"
 )
 
-type recordingHandlers struct {
-	calls []string
+// newTestController creates a Controller with nil deps — handlers guard
+// against nil before use, so this is safe for route-level tests.
+func newTestController() *controllers.Controller {
+	return controllers.New(controllers.Config{})
 }
 
-func (h *recordingHandlers) record(route string, c *gin.Context) {
-	h.calls = append(h.calls, route)
-	c.JSON(http.StatusOK, gin.H{"route": route})
-}
-
-func (h *recordingHandlers) Health(c *gin.Context) {
-	h.record("health", c)
-}
-
-func (h *recordingHandlers) CreateUploadURL(c *gin.Context) {
-	h.record("upload-url", c)
-}
-
-func (h *recordingHandlers) CompleteUpload(c *gin.Context) {
-	h.record("upload-complete", c)
-}
-
-func (h *recordingHandlers) Upload(c *gin.Context) {
-	h.record("upload", c)
-}
-
-func (h *recordingHandlers) GetAnalysis(c *gin.Context) {
-	h.record("analysis", c)
-}
-
-func (h *recordingHandlers) GetHistory(c *gin.Context) {
-	h.record("history", c)
-}
-
-func (h *recordingHandlers) ArchiveHistory(c *gin.Context) {
-	h.record("archive-history", c)
-}
-
-func (h *recordingHandlers) UnarchiveHistory(c *gin.Context) {
-	h.record("unarchive-history", c)
-}
-
-func (h *recordingHandlers) ListMovements(c *gin.Context) {
-	h.record("movements", c)
-}
-
-func (h *recordingHandlers) ListMovementGroups(c *gin.Context) {
-	h.record("movement-groups", c)
-}
-
-func (h *recordingHandlers) ListInjuries(c *gin.Context) {
-	h.record("injuries", c)
-}
-
-func (h *recordingHandlers) ChunkComplete(c *gin.Context) {
-	h.record("chunk-complete", c)
-}
-
-func (h *recordingHandlers) GetChunkAnalysis(c *gin.Context) {
-	h.record("chunk-analysis", c)
-}
-
-func (h *recordingHandlers) CreateProfile(c *gin.Context) {
-	h.record("create-profile", c)
-}
-
-func (h *recordingHandlers) GetProfile(c *gin.Context) {
-	h.record("get-profile", c)
-}
-
-func (h *recordingHandlers) ListProfiles(c *gin.Context) {
-	h.record("list-profiles", c)
-}
-
-func (h *recordingHandlers) UpdateProfile(c *gin.Context) {
-	h.record("update-profile", c)
-}
-
-func (h *recordingHandlers) ArchiveProfile(c *gin.Context) {
-	h.record("archive-profile", c)
-}
-
-func (h *recordingHandlers) UnarchiveProfile(c *gin.Context) {
-	h.record("unarchive-profile", c)
-}
-
-func (h *recordingHandlers) MergeChunks(c *gin.Context) {
-	h.record("merge-chunks", c)
-}
-
-func (h *recordingHandlers) GetSubtitles(c *gin.Context) {
-	h.record("subtitles", c)
-}
-
-func (h *recordingHandlers) GenerateHighlight(c *gin.Context) {
-	h.record("generate-highlight", c)
-}
-
-func (h *recordingHandlers) GetHighlight(c *gin.Context) {
-	h.record("highlight", c)
-}
-
-func (h *recordingHandlers) GetHighlightDownloadURL(c *gin.Context) {
-	h.record("highlight-download", c)
-}
-
-func (h *recordingHandlers) VerifyHighlights(c *gin.Context) {
-	h.record("verify-highlights", c)
-}
-
-func (h *recordingHandlers) ListSessionCatalog(c *gin.Context) {
-	h.record("dev-sessions", c)
-}
-
-func (h *recordingHandlers) GetSessionAssets(c *gin.Context) {
-	h.record("dev-session-assets", c)
-}
-
-func (h *recordingHandlers) GetPlayURL(c *gin.Context) {
-	h.record("dev-session-play-url", c)
-}
-
-func (h *recordingHandlers) GetVideoDownloadURL(c *gin.Context) {
-	h.record("video-download", c)
-}
-
-func (h *recordingHandlers) RetryAnalysis(c *gin.Context) {
-	h.record("retry-analysis", c)
-}
-
-func (h *recordingHandlers) GenerateHardSub(c *gin.Context) {
-	h.record("generate-hardsub", c)
-}
-
-func requestForRoute(spec server.RouteSpec, apiKey string) *http.Request {
-	path := regexp.MustCompile(`:[^/]+`).ReplaceAllString(spec.Path, "value")
-	req := httptest.NewRequest(spec.Method, path, nil)
-	if apiKey != "" {
-		req.Header.Set("X-API-Key", apiKey)
-	}
-	return req
-}
-
-func allRouteSpecs() []server.RouteSpec {
-	return append(server.PublicRouteSpecs(), server.ProtectedRouteSpecs()...)
+// newTestAuthController creates an AuthController with nil deps.
+func newTestAuthController() *controllers.AuthController {
+	return controllers.NewAuthController(nil, nil, controllers.CookieConfig{})
 }
 
 var _ = Describe("SetupRouter", func() {
-	var handlers *recordingHandlers
-
 	BeforeEach(func() {
 		gin.SetMode(gin.TestMode)
 		logger.Log = zap.NewNop()
-		handlers = &recordingHandlers{}
 	})
 
-	It("returns an error when handlers are nil", func() {
-		_, err := server.SetupRouter("test", "secret", nil, nil)
+	It("returns an error when controller is nil", func() {
+		_, err := server.SetupRouter("test", "secret", nil, nil, nil, nil)
 		Expect(err).To(MatchError(server.ErrHandlersRequired))
 	})
 
 	It("allows /health without an API key", func() {
-		router, err := server.SetupRouter("test", "secret", nil, handlers)
+		router, err := server.SetupRouter("test", "secret", nil, newTestController(), nil, nil)
 		Expect(err).NotTo(HaveOccurred())
-		req := requestForRoute(server.PublicRouteSpecs()[0], "")
+
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		Expect(w.Code).To(Equal(http.StatusOK))
-		Expect(handlers.calls).To(Equal([]string{"health"}))
 	})
 
-	It("rejects invalid API keys", func() {
-		router, err := server.SetupRouter("test", "secret", nil, handlers)
+	It("rejects protected routes without API key", func() {
+		router, err := server.SetupRouter("test", "secret", nil, newTestController(), nil, nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		req := requestForRoute(server.ProtectedRouteSpecs()[0], "wrong")
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		Expect(w.Code).To(Equal(http.StatusUnauthorized))
-		Expect(handlers.calls).To(BeEmpty())
 	})
 
-	It("registers every declared route", func() {
-		router, err := server.SetupRouter("test", "secret", nil, handlers)
+	It("accepts protected routes with valid API key (no auth middleware)", func() {
+		// No authSvc → AuthMiddleware is skipped, so API key alone is enough
+		router, err := server.SetupRouter("test", "secret", nil, newTestController(), nil, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
+		req.Header.Set("X-API-Key", "secret")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusOK))
+	})
+
+	It("registers all expected routes", func() {
+		authSvc := auth.NewService(nil, nil)
+		router, err := server.SetupRouter("test", "secret", nil, newTestController(), newTestAuthController(), authSvc)
 		Expect(err).NotTo(HaveOccurred())
 
 		actualRoutes := make(map[string]struct{}, len(router.Routes()))
@@ -205,29 +81,55 @@ var _ = Describe("SetupRouter", func() {
 			actualRoutes[route.Method+" "+route.Path] = struct{}{}
 		}
 
-		for _, spec := range allRouteSpecs() {
-			Expect(actualRoutes).To(HaveKey(spec.Method + " " + spec.Path))
+		expectedRoutes := []string{
+			"GET /health",
+			// Web auth (no API key)
+			"POST /api/v1/auth/web/signup",
+			"POST /api/v1/auth/web/login",
+			"POST /api/v1/auth/web/logout",
+			"GET /api/v1/auth/me",
+			// Mobile auth (API key required)
+			"POST /api/v1/auth/signup",
+			"POST /api/v1/auth/login",
+			"POST /api/v1/auth/logout",
+			"DELETE /api/v1/auth/account",
+			// Data routes
+			"POST /api/v1/upload-url",
+			"POST /api/v1/upload-complete",
+			"POST /api/v1/upload",
+			"GET /api/v1/analysis/:session_id",
+			"GET /api/v1/history",
+			"POST /api/v1/history/:id/archive",
+			"POST /api/v1/history/:id/unarchive",
+			"GET /api/v1/movements",
+			"GET /api/v1/movement-groups",
+			"GET /api/v1/injuries",
+			"POST /api/v1/chunk-complete",
+			"GET /api/v1/chunk-analysis/:session_id",
+			"POST /api/v1/profiles",
+			"GET /api/v1/profiles/:id",
+			"GET /api/v1/profiles",
+			"PUT /api/v1/profiles/:id",
+			"POST /api/v1/profiles/:id/archive",
+			"POST /api/v1/profiles/:id/unarchive",
+			"POST /api/v1/merge-chunks",
+			"GET /api/v1/subtitles/:session_id",
+			"POST /api/v1/generate-highlight",
+			"GET /api/v1/highlight/:session_id",
+			"GET /api/v1/highlight-download/:id",
+			"POST /api/v1/verify-highlights",
+			"GET /api/v1/video-download/:session_id",
+			"POST /api/v1/retry-analysis",
+			"POST /api/v1/generate-hardsub",
+			"POST /api/v1/debug/telemetry",
 		}
-	})
-
-	It("dispatches every protected route to the matching handler when authorized", func() {
-		router, err := server.SetupRouter("test", "secret", nil, handlers)
-		Expect(err).NotTo(HaveOccurred())
-
-		for _, spec := range server.ProtectedRouteSpecs() {
-			handlers.calls = nil
-
-			req := requestForRoute(spec, "secret")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			Expect(w.Code).To(Equal(http.StatusOK), spec.Path)
-			Expect(handlers.calls).To(Equal([]string{spec.Name}), spec.Path)
+		for _, route := range expectedRoutes {
+			Expect(actualRoutes).To(HaveKey(route))
 		}
 	})
 
 	It("handles development CORS preflight before API key auth", func() {
-		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:3000"}, handlers)
+		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:3000"}, newTestController(), nil, nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodOptions, "/api/v1/history", nil)
@@ -241,6 +143,103 @@ var _ = Describe("SetupRouter", func() {
 		Expect(w.Header().Get("Access-Control-Allow-Origin")).To(Equal("http://localhost:3000"))
 		Expect(w.Header().Get("Access-Control-Allow-Methods")).To(ContainSubstring(http.MethodGet))
 		Expect(w.Header().Get("Access-Control-Allow-Headers")).To(ContainSubstring("X-API-Key"))
-		Expect(handlers.calls).To(BeEmpty())
+	})
+
+	It("includes Access-Control-Allow-Credentials in CORS responses", func() {
+		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:5173"}, newTestController(), nil, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		req := httptest.NewRequest(http.MethodOptions, "/api/v1/history", nil)
+		req.Header.Set("Origin", "http://localhost:5173")
+		req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusNoContent))
+		Expect(w.Header().Get("Access-Control-Allow-Credentials")).To(Equal("true"))
+	})
+
+	It("includes DELETE in allowed CORS methods", func() {
+		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:5173"}, newTestController(), nil, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		req := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/account", nil)
+		req.Header.Set("Origin", "http://localhost:5173")
+		req.Header.Set("Access-Control-Request-Method", http.MethodDelete)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusNoContent))
+		Expect(w.Header().Get("Access-Control-Allow-Methods")).To(ContainSubstring("DELETE"))
+	})
+
+	It("allows web auth login/signup WITHOUT API key", func() {
+		router, err := server.SetupRouter("test", "secret", nil, newTestController(), newTestAuthController(), nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Web login — no X-API-Key header, expect 400 (no JSON body) not 401
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/web/login", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusBadRequest), "web login should not require API key")
+
+		// Web signup — disabled, returns 403 (not 401 which would mean API key rejection)
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/web/signup", nil)
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusForbidden), "web signup should not require API key")
+	})
+
+	It("requires API key for mobile auth login/signup", func() {
+		router, err := server.SetupRouter("test", "secret", nil, newTestController(), newTestAuthController(), nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Mobile login without API key → 401
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusUnauthorized))
+
+		// Mobile login with API key → 400 (no JSON body, but past middleware)
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+		req.Header.Set("X-API-Key", "secret")
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusBadRequest))
+	})
+
+	It("allows localhost CORS on any port", func() {
+		router, err := server.SetupRouter("development", "secret", nil, newTestController(), nil, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		req := httptest.NewRequest(http.MethodOptions, "/api/v1/history", nil)
+		req.Header.Set("Origin", "http://localhost:9999")
+		req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusNoContent))
+		Expect(w.Header().Get("Access-Control-Allow-Origin")).To(Equal("http://localhost:9999"))
+	})
+
+	It("skips API key check when jwt cookie is present", func() {
+		// No authSvc → AuthMiddleware is not applied, so the jwt cookie
+		// only needs to bypass APIKeyMiddleware (not actually validate).
+		router, err := server.SetupRouter("test", "secret", nil, newTestController(), nil, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Without cookie or API key → 401
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusUnauthorized))
+
+		// With jwt cookie (no API key) → passes through to handler
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
+		req.AddCookie(&http.Cookie{Name: "jwt", Value: "some-token"})
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusOK))
 	})
 })
+

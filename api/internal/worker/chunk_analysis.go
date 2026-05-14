@@ -24,6 +24,7 @@ const ChunkAnalysisPrompt = `
 - 현재 영상에서 관찰되는 것만 기반으로 판단하세요.
 - 안전이 최우선: 부상 위험이 보이면 레벨과 관계없이 즉시 경고하세요.
 - 한 번에 하나의 큐만 제시하세요.
+- 모든 피드백은 **존댓말** (~요, ~세요, ~습니다)로 작성하세요. 반말(~해, ~다, ~함)을 절대 사용하지 마세요.
 
 ## 필수: 운동 종목 식별
 먼저, 영상에서 수행 중인 운동 종목을 식별하세요.
@@ -56,7 +57,7 @@ const (
   · 동작이 느려지는데 힘들어 보이지 않으면 → 페이스 유지를 독려하세요.
   · 전반적으로 여유로워 보이면 → 더 빠른 케이던스 또는 다음 세션 무게 증가를 권하세요.
   · 속도가 일정하고 힘들어 보이면 → 잘하고 있다고 격려하세요.
-- 어조: 직접적이고 간결한 명령형. 코칭 스타일.`
+- 어조: 직접적이고 간결한 존댓말 명령형. "~하세요" 스타일. 반말 금지.`
 
 	LevelPolicyAdvanced = `
 
@@ -68,7 +69,7 @@ const (
   · 자세가 무너지면 → 피로 신호로 인정하고, 밀고 갈지 멈출지 판단하세요.
 - 현재 WOD 중에는 무게 증가를 지시하지 마세요. "다음 WOD에서 무게를 올려보세요"처럼 다음 세션 권고만 가능.
 - 권고는 제안이 아닌 지시형으로.
-- 어조: 단호하고, 요구하는, 최소한의 단어. 칭찬은 확실히 잘했을 때만.`
+- 어조: 단호하고, 요구하는, 최소한의 단어. 존댓말 유지 ("~하세요", "~입니다"). 칭찬은 확실히 잘했을 때만.`
 
 	// ObservedSignalsPrompt instructs Gemini to emit structured workout metrics
 	// for benchmarking. Appended to the chunk analysis prompt when exercise is expected.
@@ -224,7 +225,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	prompt := w.buildChunkAnalysisPrompt(p)
 
-	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
 
 	defer func() {
 		os.Remove(localFilePath)
@@ -235,6 +236,9 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 			w.GeminiClient.DeleteFile(ctx, geminiFile)
 		}()
 	}
+
+	// Save token usage regardless of analysis outcome
+	w.saveTokenUsage(p.SessionID, p.ProfileID, "chunk:analysis", usage)
 
 	if analysis == "" {
 		return fmt.Errorf("chunk analysis is empty")
@@ -248,9 +252,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 			Status:    "FAILED",
 			Output:    "An internal error occurred during chunk analysis.",
 		}
-		if p.ProfileID > 0 {
-			chunkFailed.ProfileID = &p.ProfileID
-		}
+		chunkFailed.ProfileID = p.ProfileID
 		if p.StartSecs > 0 || p.EndSecs > 0 {
 			chunkFailed.StartSecs = &p.StartSecs
 			chunkFailed.EndSecs = &p.EndSecs
@@ -276,9 +278,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		ObservedSignals: observedSignals,
 		HeartRateBPM:    p.HeartRateBPM,
 	}
-	if p.ProfileID > 0 {
-		chunkResult.ProfileID = &p.ProfileID
-	}
+	chunkResult.ProfileID = p.ProfileID
 	if p.StartSecs > 0 || p.EndSecs > 0 {
 		chunkResult.StartSecs = &p.StartSecs
 		chunkResult.EndSecs = &p.EndSecs

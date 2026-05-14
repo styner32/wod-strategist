@@ -3224,6 +3224,8 @@ PODS:
   - TensorFlowLiteC/Core (2.17.0)
   - TensorFlowLiteC/CoreML (2.17.0):
     - TensorFlowLiteC/Core
+  - video-merger (1.0.0):
+    - ExpoModulesCore
   - vision-camera-resize-plugin (3.2.0):
     - boost
     - DoubleConversion
@@ -3388,6 +3390,7 @@ DEPENDENCIES:
   - RNScreens (from `../node_modules/react-native-screens`)
   - RNWorklets (from `../node_modules/react-native-worklets`)
   - SocketRocket (~> 0.7.1)
+  - video-merger (from `../modules/video-merger/ios`)
   - vision-camera-resize-plugin (from `../node_modules/vision-camera-resize-plugin`)
   - VisionCamera (from `../node_modules/react-native-vision-camera`)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
@@ -3643,6 +3646,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native-screens"
   RNWorklets:
     :path: "../node_modules/react-native-worklets"
+  video-merger:
+    :path: "../modules/video-merger/ios"
   vision-camera-resize-plugin:
     :path: "../node_modules/vision-camera-resize-plugin"
   VisionCamera:
@@ -3779,10 +3784,11 @@ SPEC CHECKSUMS:
   SDWebImageWebPCoder: e38c0a70396191361d60c092933e22c20d5b1380
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   TensorFlowLiteC: eac6d689a8d391d1b202dc59e3d9165ba64aaf73
+  video-merger: 2c9d8caa76cb5048309d10f3820f268f5530fb5b
   vision-camera-resize-plugin: a7d6a0cc9e728a425f609f64d7f87a7217bb53c9
   VisionCamera: 0044a94f7489f19e19d5938e97dfc36f4784af3c
   Yoga: 3d56e80930898685da43cbf53b5843932df8e765
 
-PODFILE CHECKSUM: 5aa75ff78281d01a2fcd959b8492dae5bf0caf5c
+PODFILE CHECKSUM: 5e6c449e98b12d6f900866a5492b259c37aa87e1
 
 COCOAPODS: 1.16.2

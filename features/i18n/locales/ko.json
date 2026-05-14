@@ -69,7 +69,7 @@
     "createProfile": "프로필 생성",
     "switchProfile": "프로필 전환",
     "signOut": "로그아웃",
-    "signOutConfirm": "다른 프로필로 전환하시겠습니까?"
+    "signOutConfirm": "로그아웃 하시겠습니까?"
   },
   "profileEdit": {
     "editProfile": "프로필 수정",
@@ -254,7 +254,8 @@
     "archiveTitle": "기록 보관",
     "archiveConfirm": "기록이 목록에서 숨겨집니다. 나중에 다시 찾을 수 있습니다.",
     "archive": "보관",
-    "archiveFailed": "보관에 실패했습니다. 다시 시도해주세요."
+    "archiveFailed": "보관에 실패했습니다. 다시 시도해주세요.",
+    "mergePreparing": "병합 준비 중... 곧 세션이 표시됩니다."
   },
   "player": {
     "loadingVideo": "운동 영상 불러오는 중...",
@@ -283,5 +284,26 @@
     "readyToUpload": "%{count}개 업로드 준비 완료",
     "awaitingEncode": "%{count}개 인코딩 대기 중",
     "uploaded": "%{count}개 업로드 완료"
+  },
+  "auth": {
+    "login": "로그인",
+    "signup": "회원가입",
+    "username": "사용자 이름",
+    "password": "비밀번호",
+    "confirmPassword": "비밀번호 확인",
+    "loginFailed": "사용자 이름 또는 비밀번호가 올바르지 않습니다.",
+    "signupFailed": "계정을 생성할 수 없습니다. 다른 사용자 이름을 시도해주세요.",
+    "usernameTaken": "이미 사용 중인 사용자 이름입니다.",
+    "passwordMismatch": "비밀번호가 일치하지 않습니다.",
+    "passwordTooShort": "비밀번호는 8자 이상이어야 합니다.",
+    "usernameInvalid": "사용자 이름은 3-20자의 영문 소문자, 숫자, 밑줄만 사용할 수 있습니다.",
+    "deleteAccount": "계정 삭제",
+    "deleteConfirm": "계정과 모든 데이터가 영구적으로 삭제됩니다. 이 작업은 되돌릴 수 없습니다.",
+    "deletePassword": "확인을 위해 비밀번호를 입력하세요",
+    "deleteFailed": "계정 삭제에 실패했습니다. 비밀번호를 확인하고 다시 시도해주세요.",
+    "accountDeleted": "계정이 삭제되었습니다.",
+    "loggingOut": "로그아웃 중...",
+    "noAccount": "계정이 없으신가요?",
+    "haveAccount": "이미 계정이 있으신가요?"
   }
 }

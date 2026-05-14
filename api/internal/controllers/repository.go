@@ -109,12 +109,12 @@ func (r *GormProfileRepository) FindByID(ctx context.Context, id uint) (*db.Prof
 	return &profile, nil
 }
 
-func (r *GormProfileRepository) ListAll(ctx context.Context, includeArchived bool) ([]db.Profile, error) {
+func (r *GormProfileRepository) ListByUser(ctx context.Context, userID uint, includeArchived bool) ([]db.Profile, error) {
 	if r.db == nil {
 		return nil, errProfileRepositoryNotConfigured
 	}
 	var profiles []db.Profile
-	q := r.db.WithContext(ctx).Order("created_at asc")
+	q := r.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at asc")
 	if !includeArchived {
 		q = q.Where("archived_at IS NULL")
 	}

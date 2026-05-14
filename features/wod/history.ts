@@ -1,6 +1,4 @@
-const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
-const API_KEY = process.env.EXPO_PUBLIC_API_KEY || "";
+import { apiClient } from "./api";
 
 export interface AnalysisResult {
   id: number;
@@ -17,18 +15,7 @@ export interface AnalysisResult {
 }
 
 export async function fetchAnalysisHistory(profileId: number): Promise<AnalysisResult[]> {
-  const fullUrl = `${API_BASE_URL}/history?profile_id=${profileId}`;
-  const res = await fetch(fullUrl, {
-    headers: {
-      "X-API-Key": API_KEY,
-    },
-  });
-
-  if (!res.ok) {
-    throw new Error(`Failed to fetch history: ${fullUrl} ${res.statusText}`);
-  }
-
-  return res.json();
+  return apiClient<AnalysisResult[]>(`/history?profile_id=${profileId}`);
 }
 
 export interface HighlightResult {

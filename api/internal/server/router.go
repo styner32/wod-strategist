@@ -2,405 +2,23 @@ package server
 
 import (
 	"errors"
-	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
+	"github.com/wod-strategist/api/internal/auth"
+	"github.com/wod-strategist/api/internal/controllers"
 )
-
-type Handlers interface {
-	Health(*gin.Context)
-	CreateUploadURL(*gin.Context)
-	CompleteUpload(*gin.Context)
-	Upload(*gin.Context)
-	GetAnalysis(*gin.Context)
-	GetChunkAnalysis(*gin.Context)
-	GetHistory(*gin.Context)
-	ArchiveHistory(*gin.Context)
-	UnarchiveHistory(*gin.Context)
-	ListMovements(*gin.Context)
-	ListMovementGroups(*gin.Context)
-	ListInjuries(*gin.Context)
-	ChunkComplete(*gin.Context)
-	CreateProfile(*gin.Context)
-	GetProfile(*gin.Context)
-	ListProfiles(*gin.Context)
-	UpdateProfile(*gin.Context)
-	ArchiveProfile(*gin.Context)
-	UnarchiveProfile(*gin.Context)
-	MergeChunks(*gin.Context)
-	GetSubtitles(*gin.Context)
-	GenerateHighlight(*gin.Context)
-	GetHighlight(*gin.Context)
-	GetHighlightDownloadURL(*gin.Context)
-	VerifyHighlights(*gin.Context)
-	RetryAnalysis(*gin.Context)
-	GenerateHardSub(*gin.Context)
-	ListSessionCatalog(*gin.Context)
-	GetSessionAssets(*gin.Context)
-	GetPlayURL(*gin.Context)
-	GetVideoDownloadURL(*gin.Context)
-}
 
 const APIRoutePrefix = "/api/v1"
 
 var ErrHandlersRequired = errors.New("handlers are required")
 
-type RouteSpec struct {
-	Name   string
-	Method string
-	Path   string
-}
-
-type routeDefinition struct {
-	spec     RouteSpec
-	register func(gin.IRoutes, Handlers)
-}
-
-var publicRouteDefinitions = []routeDefinition{
-	{
-		spec: RouteSpec{
-			Name:   "health",
-			Method: http.MethodGet,
-			Path:   "/health",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/health", handlers.Health)
-		},
-	},
-}
-
-var protectedRouteDefinitions = []routeDefinition{
-	{
-		spec: RouteSpec{
-			Name:   "upload-url",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/upload-url",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/upload-url", handlers.CreateUploadURL)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "upload-complete",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/upload-complete",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/upload-complete", handlers.CompleteUpload)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "upload",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/upload",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/upload", handlers.Upload)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "analysis",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/analysis/:session_id",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/analysis/:session_id", handlers.GetAnalysis)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "history",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/history",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/history", handlers.GetHistory)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "archive-history",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/history/:id/archive",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/history/:id/archive", handlers.ArchiveHistory)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "unarchive-history",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/history/:id/unarchive",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/history/:id/unarchive", handlers.UnarchiveHistory)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "movements",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/movements",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/movements", handlers.ListMovements)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "movement-groups",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/movement-groups",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/movement-groups", handlers.ListMovementGroups)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "injuries",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/injuries",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/injuries", handlers.ListInjuries)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "chunk-complete",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/chunk-complete",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/chunk-complete", handlers.ChunkComplete)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "chunk-analysis",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/chunk-analysis/:session_id",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/chunk-analysis/:session_id", handlers.GetChunkAnalysis)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "create-profile",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/profiles",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/profiles", handlers.CreateProfile)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "get-profile",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/profiles/:id",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/profiles/:id", handlers.GetProfile)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "list-profiles",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/profiles",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/profiles", handlers.ListProfiles)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "update-profile",
-			Method: http.MethodPut,
-			Path:   APIRoutePrefix + "/profiles/:id",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.PUT("/profiles/:id", handlers.UpdateProfile)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "archive-profile",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/profiles/:id/archive",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/profiles/:id/archive", handlers.ArchiveProfile)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "unarchive-profile",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/profiles/:id/unarchive",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/profiles/:id/unarchive", handlers.UnarchiveProfile)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "merge-chunks",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/merge-chunks",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/merge-chunks", handlers.MergeChunks)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "dev-sessions",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/dev/sessions",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/dev/sessions", handlers.ListSessionCatalog)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "dev-session-assets",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/dev/sessions/:session_id/assets",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/dev/sessions/:session_id/assets", handlers.GetSessionAssets)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "dev-session-play-url",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/dev/sessions/:session_id/play-url",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/dev/sessions/:session_id/play-url", handlers.GetPlayURL)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "subtitles",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/subtitles/:session_id",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/subtitles/:session_id", handlers.GetSubtitles)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "generate-highlight",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/generate-highlight",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/generate-highlight", handlers.GenerateHighlight)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "highlight",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/highlight/:session_id",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/highlight/:session_id", handlers.GetHighlight)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "highlight-download",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/highlight-download/:id",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/highlight-download/:id", handlers.GetHighlightDownloadURL)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "verify-highlights",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/verify-highlights",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/verify-highlights", handlers.VerifyHighlights)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "video-download",
-			Method: http.MethodGet,
-			Path:   APIRoutePrefix + "/video-download/:session_id",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.GET("/video-download/:session_id", handlers.GetVideoDownloadURL)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "retry-analysis",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/retry-analysis",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/retry-analysis", handlers.RetryAnalysis)
-		},
-	},
-	{
-		spec: RouteSpec{
-			Name:   "generate-hardsub",
-			Method: http.MethodPost,
-			Path:   APIRoutePrefix + "/generate-hardsub",
-		},
-		register: func(routes gin.IRoutes, handlers Handlers) {
-			routes.POST("/generate-hardsub", handlers.GenerateHardSub)
-		},
-	},
-}
-
-func PublicRouteSpecs() []RouteSpec {
-	return cloneRouteSpecs(publicRouteDefinitions)
-}
-
-func ProtectedRouteSpecs() []RouteSpec {
-	return cloneRouteSpecs(protectedRouteDefinitions)
-}
-
-func RegisterPublicRoutes(routes gin.IRoutes, handlers Handlers) error {
-	if err := validateHandlers(handlers); err != nil {
-		return err
-	}
-	registerRoutes(routes, handlers, publicRouteDefinitions)
-	return nil
-}
-
-func RegisterProtectedRoutes(routes gin.IRoutes, handlers Handlers) error {
-	if err := validateHandlers(handlers); err != nil {
-		return err
-	}
-	registerRoutes(routes, handlers, protectedRouteDefinitions)
-	return nil
-}
-
-func SetupRouter(appEnv string, apiKey string, allowedOrigins []string, handlers Handlers) (*gin.Engine, error) {
-	if err := validateHandlers(handlers); err != nil {
-		return nil, err
+func SetupRouter(appEnv string, apiKey string, allowedOrigins []string,
+	ctl *controllers.Controller, authCtl *controllers.AuthController, authSvc *auth.Service) (*gin.Engine, error) {
+	if ctl == nil {
+		return nil, ErrHandlersRequired
 	}
 
 	r := gin.New()
@@ -408,9 +26,8 @@ func SetupRouter(appEnv string, apiKey string, allowedOrigins []string, handlers
 	r.Use(RequestLogger())
 	r.Use(DevelopmentCORS(allowedOrigins))
 
-	if err := RegisterPublicRoutes(r, handlers); err != nil {
-		return nil, err
-	}
+	// Public routes (no API key, no auth)
+	r.GET("/health", ctl.Health)
 
 	// Mount Swagger UI only in non-production environments
 	if appEnv != "production" {
@@ -418,31 +35,76 @@ func SetupRouter(appEnv string, apiKey string, allowedOrigins []string, handlers
 	}
 
 	api := r.Group(APIRoutePrefix)
-	api.Use(APIKeyMiddleware(apiKey))
-	if err := RegisterProtectedRoutes(api, handlers); err != nil {
-		return nil, err
+
+	// Web auth routes — no API key required.
+	// Web SPAs cannot securely embed an API key in client-side JS.
+	// These are protected by rate limiting + CORS + password auth instead.
+	if authCtl != nil {
+		authRL := RateLimitMiddleware(NewRateLimiter(10, 15*time.Minute))
+		api.POST("/auth/web/signup", authRL, authCtl.WebSignup)
+		api.POST("/auth/web/login", authRL, authCtl.WebLogin)
 	}
+
+	// All routes registered after this point require X-API-Key header.
+	api.Use(APIKeyMiddleware(apiKey))
+
+	// Mobile auth routes (signup, login) — API key required, rate-limited.
+	if authCtl != nil {
+		authRL := RateLimitMiddleware(NewRateLimiter(10, 15*time.Minute))
+		api.POST("/auth/signup", authRL, authCtl.Signup)
+		api.POST("/auth/login", authRL, authCtl.Login)
+	}
+
+	// Web-authenticated routes — JWT required, no API key.
+	if authCtl != nil && authSvc != nil {
+		webAuth := r.Group(APIRoutePrefix, AuthMiddleware(authSvc))
+		webAuth.POST("/auth/web/logout", authCtl.WebLogout)
+		webAuth.GET("/auth/me", authCtl.GetMe)
+	}
+
+	// Apply auth middleware for all subsequent routes (API key + JWT)
+	if authSvc != nil {
+		api.Use(AuthMiddleware(authSvc))
+	}
+
+	// Protected auth routes (mobile — API key + JWT required)
+	if authCtl != nil {
+		api.POST("/auth/logout", authCtl.Logout)
+		api.DELETE("/auth/account", authCtl.DeleteAccount)
+	}
+
+	// Protected data routes (API key + JWT required)
+	api.POST("/upload-url", ctl.CreateUploadURL)
+	api.POST("/upload-complete", ctl.CompleteUpload)
+	api.POST("/upload", ctl.Upload)
+	api.GET("/analysis/:session_id", ctl.GetAnalysis)
+	api.GET("/history", ctl.GetHistory)
+	api.POST("/history/:id/archive", ctl.ArchiveHistory)
+	api.POST("/history/:id/unarchive", ctl.UnarchiveHistory)
+	api.GET("/movements", ctl.ListMovements)
+	api.GET("/movement-groups", ctl.ListMovementGroups)
+	api.GET("/injuries", ctl.ListInjuries)
+	api.POST("/chunk-complete", ctl.ChunkComplete)
+	api.GET("/chunk-analysis/:session_id", ctl.GetChunkAnalysis)
+	api.POST("/profiles", ctl.CreateProfile)
+	api.GET("/profiles/:id", ctl.GetProfile)
+	api.GET("/profiles", ctl.ListProfiles)
+	api.PUT("/profiles/:id", ctl.UpdateProfile)
+	api.POST("/profiles/:id/archive", ctl.ArchiveProfile)
+	api.POST("/profiles/:id/unarchive", ctl.UnarchiveProfile)
+	api.POST("/merge-chunks", ctl.MergeChunks)
+	api.GET("/dev/sessions", ctl.ListSessionCatalog)
+	api.GET("/dev/sessions/:session_id/assets", ctl.GetSessionAssets)
+	api.GET("/dev/sessions/:session_id/play-url", ctl.GetPlayURL)
+	api.GET("/subtitles/:session_id", ctl.GetSubtitles)
+	api.POST("/generate-highlight", ctl.GenerateHighlight)
+	api.GET("/highlight/:session_id", ctl.GetHighlight)
+	api.GET("/highlight-download/:id", ctl.GetHighlightDownloadURL)
+	api.POST("/verify-highlights", ctl.VerifyHighlights)
+	api.GET("/video-download/:session_id", ctl.GetVideoDownloadURL)
+	api.POST("/retry-analysis", ctl.RetryAnalysis)
+	api.POST("/generate-hardsub", ctl.GenerateHardSub)
+	api.POST("/debug/telemetry", ctl.UploadDebugTelemetry)
 
 	return r, nil
-}
-
-func validateHandlers(handlers Handlers) error {
-	if handlers == nil {
-		return ErrHandlersRequired
-	}
-	return nil
-}
-
-func registerRoutes(routes gin.IRoutes, handlers Handlers, definitions []routeDefinition) {
-	for _, definition := range definitions {
-		definition.register(routes, handlers)
-	}
-}
-
-func cloneRouteSpecs(definitions []routeDefinition) []RouteSpec {
-	specs := make([]RouteSpec, len(definitions))
-	for i, definition := range definitions {
-		specs[i] = definition.spec
-	}
-	return specs
 }

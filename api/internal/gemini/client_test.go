@@ -125,7 +125,7 @@ var _ = Describe("Gemini client", func() {
 					},
 				})
 
-			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "analyze this")
+			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), videoPath, "analyze this")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("first second"))
 			Expect(geminiFile).To(Equal("files/mock-file"))
@@ -133,7 +133,7 @@ var _ = Describe("Gemini client", func() {
 		})
 
 		It("returns an error when the local file does not exist", func() {
-			result, geminiFile, err := client.AnalyzeVideo(context.Background(), filepath.Join(GinkgoT().TempDir(), "missing.mp4"), "prompt")
+			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), filepath.Join(GinkgoT().TempDir(), "missing.mp4"), "prompt")
 			Expect(err).To(HaveOccurred())
 			Expect(result).To(BeEmpty())
 			Expect(geminiFile).To(BeEmpty())
@@ -156,7 +156,7 @@ var _ = Describe("Gemini client", func() {
 					},
 				})
 
-			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to upload file"))
 			Expect(result).To(BeEmpty())
@@ -190,7 +190,7 @@ var _ = Describe("Gemini client", func() {
 					},
 				})
 
-			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to get file info"))
 			Expect(result).To(BeEmpty())
@@ -223,7 +223,7 @@ var _ = Describe("Gemini client", func() {
 					"state": "FAILED",
 				})
 
-			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("file processing failed"))
 			Expect(result).To(BeEmpty())
@@ -265,7 +265,7 @@ var _ = Describe("Gemini client", func() {
 					},
 				})
 
-			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to generate content"))
 			Expect(result).To(BeEmpty())
@@ -305,7 +305,7 @@ var _ = Describe("Gemini client", func() {
 					"candidates": []map[string]any{},
 				})
 
-			result, geminiFile, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("no content generated"))
 			Expect(result).To(BeEmpty())
@@ -391,7 +391,7 @@ var _ = Describe("Gemini client", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			result, err := client.IndexVideo(context.Background(), "https://example.test/files/mock-file", "video/mp4", "Index this video")
+			result, _, err := client.IndexVideo(context.Background(), "https://example.test/files/mock-file", "video/mp4", "Index this video")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(ContainSubstring("Snatch"))
 			Expect(transport.Verify()).To(Succeed())
@@ -414,7 +414,7 @@ var _ = Describe("Gemini client", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			result, err := client.IndexVideo(context.Background(), "https://example.test/files/mock-file", "video/mp4", "Index this")
+			result, _, err := client.IndexVideo(context.Background(), "https://example.test/files/mock-file", "video/mp4", "Index this")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to index video"))
 			Expect(result).To(BeEmpty())
@@ -450,7 +450,7 @@ var _ = Describe("Gemini client", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			result, err := client.AnalyzeSegment(
+			result, _, err := client.AnalyzeSegment(
 				context.Background(),
 				"https://example.test/files/mock-file", "video/mp4",
 				30*time.Second, 60*time.Second,
@@ -478,7 +478,7 @@ var _ = Describe("Gemini client", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			result, err := client.AnalyzeSegment(
+			result, _, err := client.AnalyzeSegment(
 				context.Background(),
 				"https://example.test/files/mock-file", "video/mp4",
 				30*time.Second, 60*time.Second,

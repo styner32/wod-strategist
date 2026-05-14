@@ -9,6 +9,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/storage"
 	"github.com/wod-strategist/api/internal/worker"
+	"gorm.io/gorm"
 )
 
 const defaultGitCommit = "dev"
@@ -35,7 +36,7 @@ type AnalysisResultRepository interface {
 type ProfileRepository interface {
 	Create(ctx context.Context, profile *db.Profile) error
 	FindByID(ctx context.Context, id uint) (*db.Profile, error)
-	ListAll(ctx context.Context, includeArchived bool) ([]db.Profile, error)
+	ListByUser(ctx context.Context, userID uint, includeArchived bool) ([]db.Profile, error)
 	Update(ctx context.Context, profile *db.Profile) error
 	Archive(ctx context.Context, id uint) error
 	Unarchive(ctx context.Context, id uint) error
@@ -46,7 +47,7 @@ type HighlightResultRepository interface {
 	FindByID(ctx context.Context, id uint) (*db.HighlightResult, error)
 }
 
-type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint) (*asynq.Task, error)
+type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool) (*asynq.Task, error)
 
 type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int) (*asynq.Task, error)
 
@@ -54,9 +55,10 @@ type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int
 
 type VerifyHighlightsTaskFactory func(sessionID string) (*asynq.Task, error)
 
-type HardSubTaskFactory func(sessionID string, profileID uint) (*asynq.Task, error)
+type HardSubTaskFactory func(sessionID string, profileID uint, enableTTS bool) (*asynq.Task, error)
 
 type Config struct {
+	DB                      *gorm.DB
 	QueueClient             QueueClient
 	AnalysisResults         AnalysisResultRepository
 	Profiles                ProfileRepository
@@ -73,6 +75,7 @@ type Config struct {
 }
 
 type Controller struct {
+	db                      *gorm.DB
 	queueClient             QueueClient
 	analysisResults         AnalysisResultRepository
 	profiles                ProfileRepository
@@ -121,10 +124,13 @@ func New(config Config) *Controller {
 
 	hardSubFactory := config.NewGenerateHardSub
 	if hardSubFactory == nil {
-		hardSubFactory = worker.NewGenerateHardSubTask
+		hardSubFactory = func(sessionID string, profileID uint, enableTTS bool) (*asynq.Task, error) {
+			return worker.NewGenerateHardSubTask(sessionID, profileID, enableTTS)
+		}
 	}
 
 	return &Controller{
+		db:                      config.DB,
 		queueClient:             config.QueueClient,
 		analysisResults:         config.AnalysisResults,
 		profiles:                config.Profiles,

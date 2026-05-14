@@ -17,6 +17,7 @@ import { MarkdownText } from "@/components/ui/MarkdownText";
 import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useProfileId } from "@/store/useProfileStore";
 import { useVideoQueue } from "@/store/useVideoQueue";
+import { useHasPendingMerge } from "@/store/useMergeStatus";
 import { useShallow } from "zustand/shallow";
 import {
   fetchVideoDownloadURL,
@@ -981,6 +982,44 @@ const processingStyles = StyleSheet.create({
 });
 
 // ---------------------
+// Merge Banner
+// ---------------------
+
+function MergeBanner() {
+  const hasPending = useHasPendingMerge();
+  if (!hasPending) return null;
+
+  return (
+    <View style={mergeBannerStyles.container}>
+      <ActivityIndicator size="small" color="#64D2FF" />
+      <Text style={mergeBannerStyles.text}>
+        {t("historyList.mergePreparing")}
+      </Text>
+    </View>
+  );
+}
+
+const mergeBannerStyles = StyleSheet.create({
+  container: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "rgba(100,210,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(100,210,255,0.2)",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+  },
+  text: {
+    color: "#64D2FF",
+    fontSize: 13,
+    fontWeight: "600",
+    flex: 1,
+  },
+});
+
+// ---------------------
 // HistoryList (presentation)
 // ---------------------
 
@@ -1011,6 +1050,7 @@ export function HistoryList({ data, loading, onArchive }: HistoryListProps) {
 
   return (
     <>
+      <MergeBanner />
       <ProcessingSection items={pendingItems} />
       <FlatList
         data={nonPendingItems}

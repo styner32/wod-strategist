@@ -248,9 +248,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			Segments:  analysisResult.HighlightSegments,
 			Output:    "No highlight segments could be extracted from chunk videos",
 		}
-		if p.ProfileID > 0 {
-			failedResult.ProfileID = &p.ProfileID
-		}
+		failedResult.ProfileID = p.ProfileID
 		w.DB.Create(failedResult)
 		return fmt.Errorf("no segments extracted: %w", asynq.SkipRetry)
 	}
@@ -352,9 +350,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			Segments:    string(segsJSON),
 			DurationSec: groupDuration,
 			Output:      fmt.Sprintf("Generated %d highlight segments (%.1fs total) for %s", len(group.Indices), groupDuration, group.Title),
-		}
-		if p.ProfileID > 0 {
-			result.ProfileID = &p.ProfileID
+			ProfileID:   p.ProfileID,
 		}
 		w.DB.Create(result)
 		generatedCount++

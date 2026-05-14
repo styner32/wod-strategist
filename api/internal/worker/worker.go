@@ -39,7 +39,8 @@ type VideoAnalysisPayload struct {
 	ProfileID    uint
 	StartSecs    float64
 	EndSecs      float64
-	HeartRateBPM int `json:"heart_rate_bpm,omitempty"` // BLE heart rate at chunk capture time
+	HeartRateBPM int  `json:"heart_rate_bpm,omitempty"` // BLE heart rate at chunk capture time
+	EnableTTS    bool `json:"enable_tts,omitempty"`     // generate TTS narration in hardsub
 }
 
 // HighlightSegment is shared between video analysis (parsing) and highlight generation (processing).
@@ -61,17 +62,21 @@ type StorageClient interface {
 // GeminiClient is the minimal interface over gemini.Client used by handlers.
 type GeminiClient interface {
 	// File-upload based analysis (used by chunk analysis, legacy path)
-	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, error)
+	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, *gemini.TokenUsage, error)
 	DeleteFile(ctx context.Context, name string) error
 	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error
 
 	// Two-pass analysis: upload → index (Flash) → per-segment analysis (Pro)
 	UploadVideo(ctx context.Context, filePath string) (*gemini.UploadResult, error)
-	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, error)
-	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, error)
+	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
+	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *gemini.TokenUsage, error)
 
 	// Lightweight Flash model query (e.g. verification)
-	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, error)
+	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
+
+	// TTS: generate speech audio from text using gemini-3.1-flash-tts-preview.
+	// Writes a WAV file (24kHz, 16-bit mono) to outputPath.
+	GenerateSpeech(ctx context.Context, text, voiceName, outputPath string) (*gemini.TokenUsage, error)
 }
 
 // QueueClient is the minimal interface over asynq.Client used by handlers.
@@ -101,6 +106,29 @@ func NewWorker(db *gorm.DB, storageClient StorageClient, bucketName string, gemi
 		GeminiClient:  geminiClient,
 		QueueClient:   queueClient,
 		logger:        log,
+	}
+}
+
+// saveTokenUsage persists a Gemini API token usage record to the DB.
+// Silently logs errors — token tracking should never block the main workflow.
+func (w *Worker) saveTokenUsage(sessionID string, profileID uint, taskType string, usage *gemini.TokenUsage) {
+	if usage == nil || w.DB == nil {
+		return
+	}
+	record := &db.TokenUsage{
+		SessionID:       sessionID,
+		TaskType:        taskType,
+		Model:           usage.Model,
+		PromptTokens:    usage.PromptTokens,
+		CandidateTokens: usage.CandidateTokens,
+		TotalTokens:     usage.TotalTokens,
+	}
+	record.ProfileID = profileID
+	if err := w.DB.Create(record).Error; err != nil {
+		w.logger.Error("Failed to save token usage",
+			zap.String("session_id", sessionID),
+			zap.String("task_type", taskType),
+			zap.Error(err))
 	}
 }
 
@@ -153,11 +181,13 @@ func (w *Worker) lookupProfileString(profileID uint) string {
 		var profile db.Profile
 		if err := w.DB.First(&profile, profileID).Error; err == nil {
 			genderKo := "기타"
-			switch profile.Gender {
-			case "male":
-				genderKo = "남"
-			case "female":
-				genderKo = "여"
+			if profile.Gender != nil {
+				switch *profile.Gender {
+				case "male":
+					genderKo = "남"
+				case "female":
+					genderKo = "여"
+				}
 			}
 			levelKo := "중급"
 			switch profile.FitnessLevel {
@@ -166,9 +196,12 @@ func (w *Worker) lookupProfileString(profileID uint) string {
 			case "advanced":
 				levelKo = "고급"
 			}
-			personalProfile = fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg, 피트니스 레벨: %s",
-				profile.BirthYear, profile.BirthMonth, profile.BirthDay,
-				genderKo, profile.HeightCm, profile.WeightKg, levelKo)
+			if profile.BirthYear != nil && profile.BirthMonth != nil && profile.BirthDay != nil &&
+				profile.HeightCm != nil && profile.WeightKg != nil {
+				personalProfile = fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg, 피트니스 레벨: %s",
+					*profile.BirthYear, *profile.BirthMonth, *profile.BirthDay,
+					genderKo, *profile.HeightCm, *profile.WeightKg, levelKo)
+			}
 		} else {
 			w.logger.Warn("Profile not found, using default", zap.Uint("profile_id", profileID), zap.Error(err))
 		}

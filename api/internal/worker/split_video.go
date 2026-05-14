@@ -183,7 +183,7 @@ func (w *Worker) analyzeChunkInline(ctx context.Context, localPath, gcsURI strin
 		EndSecs:     endSecs,
 	})
 
-	analysis, geminiFile, err := w.GeminiClient.AnalyzeVideo(ctx, localPath, prompt)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localPath, prompt)
 
 	// Clean up Gemini file if uploaded
 	if geminiFile != "" {
@@ -193,6 +193,9 @@ func (w *Worker) analyzeChunkInline(ctx context.Context, localPath, gcsURI strin
 			}
 		}()
 	}
+
+	// Save token usage regardless of analysis outcome
+	w.saveTokenUsage(p.SessionID, p.ProfileID, "chunk:analysis", usage)
 
 	if err != nil {
 		return fmt.Errorf("gemini analysis failed: %w", err)
@@ -228,9 +231,7 @@ func (w *Worker) saveChunkResult(p VideoAnalysisPayload, gcsURI string, startSec
 		StartSecs:    &startSecs,
 		EndSecs:      &endSecs,
 	}
-	if p.ProfileID > 0 {
-		result.ProfileID = &p.ProfileID
-	}
+	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
 }
 

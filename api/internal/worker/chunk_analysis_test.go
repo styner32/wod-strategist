@@ -256,9 +256,16 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 	})
 
 	It("sets ProfileID on the result when ProfileID > 0", func() {
+		user := db.User{
+			Username:     "test-username",
+			PasswordHash: "test-password",
+		}
+		Expect(dbConn.Create(&user).Error).NotTo(HaveOccurred())
+
 		profile := db.Profile{
-			BirthYear: 1988, BirthMonth: 3, BirthDay: 10,
-			Gender: "female", HeightCm: 165, WeightKg: 60.0,
+			UserID:    user.ID,
+			BirthYear: ptr(1988), BirthMonth: ptr(3), BirthDay: ptr(10),
+			Gender: ptr("female"), HeightCm: ptr(165), WeightKg: ptr(60.0),
 		}
 		Expect(dbConn.Create(&profile).Error).NotTo(HaveOccurred())
 
@@ -282,8 +289,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 		var result db.ChunkAnalysisResult
 		Expect(dbConn.Where("session_id = ?", "sess-chunk-profile-001").First(&result).Error).
 			NotTo(HaveOccurred())
-		Expect(result.ProfileID).NotTo(BeNil())
-		Expect(*result.ProfileID).To(Equal(profile.ID))
+		Expect(result.ProfileID).To(Equal(profile.ID))
 	})
 
 	It("returns an error and saves no record when Gemini returns empty candidates", func() {
