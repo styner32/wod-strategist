@@ -217,3 +217,18 @@ func sanitizeObjectPart(value string, fallback string) string {
 	}
 	return base
 }
+
+// sanitizeFilename strips characters that are unsafe in HTTP
+// Content-Disposition filename parameters (", \, CR, LF, NUL).
+// Go's net/http already strips CR/LF from response headers since 1.20,
+// but this provides defense-in-depth against double-quote breakout.
+func sanitizeFilename(value string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '"', '\\', '\r', '\n', '\x00':
+			return -1 // drop
+		default:
+			return r
+		}
+	}, value)
+}

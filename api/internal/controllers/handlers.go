@@ -958,7 +958,7 @@ func (ctl *Controller) GetSubtitles(c *gin.Context) {
 
 	srt := subtitle.FormatSRT(chunks)
 
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.srt"`, sessionID))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.srt"`, sanitizeFilename(sessionID)))
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(srt))
 }
 

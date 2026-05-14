@@ -721,6 +721,98 @@ var _ = Describe("Controller handlers", func() {
 			Expect(decodeMapBody(w)["error"]).To(Equal("failed to list sessions"))
 		})
 	})
+
+	// -----------------------------------------------------------------------
+	// Path-traversal sanitization — positive integration (sentinel fix)
+	// -----------------------------------------------------------------------
+	// Gin's httprouter normalises literal "../" in URL paths before routing,
+	// so path-traversal via URL params is stopped at the HTTP layer.  The
+	// defense-in-depth sanitizeIdentifier() call is covered by unit tests in
+	// handlers_test.go.  These integration tests verify the 4 fixed handlers
+	// (GetAnalysis, GetChunkAnalysis, GetSubtitles, GetHighlight) correctly
+	// lookup seeded data and don't leak results from other sessions.
+	Describe("session_id handlers return correct data", func() {
+		const sessionA = "session-sanitize-a"
+		const sessionB = "session-sanitize-b"
+
+		var router *gin.Engine
+
+		BeforeEach(func() {
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Output: "output-a",
+			}).Error).NotTo(HaveOccurred())
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: sessionB, ProfileID: 1, Status: "COMPLETED", Output: "output-b",
+			}).Error).NotTo(HaveOccurred())
+
+			start, end := 0.0, 10.0
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Output: "chunk-a",
+				StartSecs: &start, EndSecs: &end,
+			}).Error).NotTo(HaveOccurred())
+
+			Expect(dbConn.Create(&db.HighlightResult{
+				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Title: "hl-a",
+			}).Error).NotTo(HaveOccurred())
+
+			repo := controllers.NewGormAnalysisResultRepository(dbConn)
+			hlRepo := controllers.NewGormHighlightResultRepository(dbConn)
+			router = newTestRouter(controllers.Config{
+				AnalysisResults:  repo,
+				HighlightResults: hlRepo,
+			})
+		})
+
+		It("GET /analysis/:session_id returns only the requested session", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionA, nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var results []db.AnalysisResult
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(1))
+			Expect(results[0].SessionID).To(Equal(sessionA))
+			Expect(results[0].Output).To(Equal("output-a"))
+		})
+
+		It("GET /chunk-analysis/:session_id returns only the requested session", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/chunk-analysis/"+sessionA, nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var results []db.ChunkAnalysisResult
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(1))
+			Expect(results[0].SessionID).To(Equal(sessionA))
+		})
+
+		It("GET /subtitles/:session_id returns SRT for the requested session", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/"+sessionA, nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(w.Body.String()).To(ContainSubstring("chunk-a"))
+		})
+
+		It("GET /highlight/:session_id returns highlights for the requested session", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/highlight/"+sessionA, nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var results []db.HighlightResult
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(1))
+			Expect(results[0].SessionID).To(Equal(sessionA))
+		})
+	})
 })
 
 
