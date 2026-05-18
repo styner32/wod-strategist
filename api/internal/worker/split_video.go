@@ -141,7 +141,8 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 					zap.Int("chunk_index", idx),
 					zap.Error(analysisErr))
 				// Still record a FAILED entry so the chunk is tracked
-				w.saveChunkResult(p, gcsURI, start, end, "FAILED", "", "Analysis failed: "+analysisErr.Error())
+				// Security: Do not expose raw internal error strings to user-facing database fields (CWE-209).
+				w.saveChunkResult(p, gcsURI, start, end, "FAILED", "", "An internal error occurred during chunk analysis.")
 				errCount.Add(1)
 			}
 

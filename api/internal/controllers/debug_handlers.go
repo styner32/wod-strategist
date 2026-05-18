@@ -36,7 +36,7 @@ type DebugTelemetryRequest struct {
 	Samples     []DebugTelemetrySample `json:"samples"`
 	AppVersion  string                 `json:"appVersion"`
 	Platform    string                 `json:"platform"`
-	DeviceModel string                `json:"deviceModel"`
+	DeviceModel string                 `json:"deviceModel"`
 }
 
 // ---------------------------------------------------------------------------
