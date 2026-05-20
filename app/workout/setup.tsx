@@ -1,12 +1,14 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { t } from '@/features/i18n';
-import { fetchMovementGroups, type MovementGroup } from '@/features/wod/api';
+import { fetchMovementGroups, parseWorkoutImage, type MovementGroup } from '@/features/wod/api';
 import { useActiveProfile } from '@/store/useProfileStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   GestureResponderEvent,
   Platform,
   ScrollView,
@@ -18,6 +20,9 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+
+type SetupStep = 'input' | 'confirm';
+type InputMethod = 'text' | 'photo' | 'movements';
 
 const VIDEO_PREFS_KEY = 'wod_video_preferences';
 const ALL_FILTER = 'All';
@@ -83,6 +88,13 @@ export default function WorkoutSetup() {
   // Search + filter
   const [searchText, setSearchText] = useState('');
   const [activeFilter, setActiveFilter] = useState(ALL_FILTER);
+
+  // Wizard state
+  const [currentStep, setCurrentStep] = useState<SetupStep>('input');
+  const [inputMethod, setInputMethod] = useState<InputMethod>('movements');
+  const [wodDescription, setWodDescription] = useState('');
+  const [rawText, setRawText] = useState('');
+  const [scanning, setScanning] = useState(false);
 
   // Load persisted video preferences
   useEffect(() => {
@@ -194,18 +206,45 @@ export default function WorkoutSetup() {
     setVideoPrefs(prev => ({ ...prev, [key]: value }));
   };
 
-  const handleStart = async () => {
+  const pickImage = async (useCamera: boolean) => {
+    const pickerFn = useCamera ? ImagePicker.launchCameraAsync : ImagePicker.launchImageLibraryAsync;
+    const result = await pickerFn({ mediaTypes: ['images'], quality: 0.8, allowsEditing: false });
+    if (result.canceled || !result.assets?.[0]) return null;
+    return result.assets[0].uri;
+  };
 
-    // Persist video preferences for next session
+  const handleScanWhiteboard = async (useCamera: boolean) => {
+    const uri = await pickImage(useCamera);
+    if (!uri) return;
+    setScanning(true);
+    try {
+      const result = await parseWorkoutImage(uri);
+      setWodDescription(result.wod_description || '');
+      setRawText(result.raw_text || '');
+      if (result.movements?.length > 0) {
+        setSelectedMovements(prev => {
+          const combined = new Set([...prev, ...result.movements]);
+          return Array.from(combined);
+        });
+      }
+      setCurrentStep('confirm');
+    } catch (err) {
+      console.error('Whiteboard scan failed:', err);
+      Alert.alert(t('common.error'), t('setup.scanFailed'));
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const handleNext = () => setCurrentStep('confirm');
+
+  const handleStart = async () => {
     try {
       await AsyncStorage.setItem(VIDEO_PREFS_KEY, JSON.stringify(videoPrefs));
     } catch (e) {
       console.warn('Failed to persist video prefs:', e);
     }
-
-    // Get injuries from active profile
     const injuries = activeProfile?.injuries ?? [];
-
     router.push({
       pathname: '/workout/visionTestPage',
       params: {
@@ -213,6 +252,7 @@ export default function WorkoutSetup() {
         workoutType,
         movements: selectedMovements.join(', '),
         injuries: injuries.join(', '),
+        wodDescription: wodDescription.trim(),
         autoRecord: videoPrefs.autoRecord ? 'true' : 'false',
         showSkeleton: videoPrefs.showSkeleton ? 'true' : 'false',
         lowFps: videoPrefs.lowFps ? 'true' : 'false',
@@ -254,355 +294,126 @@ export default function WorkoutSetup() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+        <TouchableOpacity onPress={() => currentStep === 'confirm' ? setCurrentStep('input') : router.back()} style={styles.backBtn}>
           <IconSymbol name="chevron.left" size={28} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.title}>{t('setup.title')}</Text>
+        <Text style={styles.title}>{currentStep === 'confirm' ? t('setup.confirmTitle') : t('setup.title')}</Text>
         <View style={{ width: 28 }} />
       </View>
 
-      {/* Search bar */}
-      <View style={styles.searchContainer}>
-        <IconSymbol name="magnifyingglass" size={18} color="#666" />
-        <TextInput
-          style={styles.searchInput}
-          placeholder={t('setup.searchMovements')}
-          placeholderTextColor="#555"
-          value={searchText}
-          onChangeText={setSearchText}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        {searchText.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchText('')}>
-            <IconSymbol name="xmark.circle.fill" size={18} color="#555" />
-          </TouchableOpacity>
-        )}
-      </View>
+      {/* ─── STEP 1: INPUT ─── */}
+      {currentStep === 'input' && (<>
+        <View style={styles.inputMethodTabs}>
+          {(['text', 'photo', 'movements'] as InputMethod[]).map(method => {
+            const active = inputMethod === method;
+            const icons: Record<InputMethod, string> = { text: '📝', photo: '📷', movements: '🏋️' };
+            const tKey = `inputMethod${method.charAt(0).toUpperCase() + method.slice(1)}`;
+            return (<TouchableOpacity key={method} style={[styles.inputMethodTab, active && styles.inputMethodTabActive]} onPress={() => setInputMethod(method)}><Text style={[styles.inputMethodTabText, active && styles.inputMethodTabTextActive]}>{icons[method]} {t(`setup.${tKey}`)}</Text></TouchableOpacity>);
+          })}
+        </View>
 
-      {/* Category filter tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filterTabsContent}
-        style={styles.filterTabs}
-      >
-        {categoryTabs.map(tab => {
-          const isActive = activeFilter === tab;
-          return (
-            <TouchableOpacity
-              key={tab}
-              style={[styles.filterTab, isActive && styles.filterTabActive]}
-              onPress={() => setActiveFilter(tab)}
-            >
-              <Text style={[styles.filterTabText, isActive && styles.filterTabTextActive]}>
-                {tab === ALL_FILTER ? t('setup.categoryAll') : tab}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
-
-      {/* Movement list */}
-      <ScrollView
-        contentContainerStyle={styles.movementListContent}
-        style={styles.movementList}
-      >
-        {loading ? (
-          <ActivityIndicator color="#00E5FF" style={{ marginTop: 40 }} />
-        ) : (
-          <>
-            {/* Profile summary */}
-            {activeProfile && (
-              <TouchableOpacity
-                style={styles.profileBanner}
-                onPress={() => router.push(`/profile?id=${activeProfile.id}` as any)}
-              >
-                <View style={styles.profileBannerLeft}>
-                  <View style={styles.miniAvatar}>
-                    <Text style={styles.miniAvatarText}>
-                      {activeProfile.name ? activeProfile.name[0].toUpperCase() : '?'}
-                    </Text>
-                  </View>
-                  <View>
-                    <Text style={styles.profileBannerName}>{activeProfile.name || t('tabs.profile')}</Text>
-                    <Text style={styles.profileBannerMeta}>
-                      {[
-                        t(`profileEdit.${activeProfile.fitnessLevel ?? 'intermediate'}`),
-                        injuryCount > 0 ? t('setup.injuries', { count: injuryCount }) : t('setup.noInjuries'),
-                        `${videoPrefs.resolution}`,
-                        videoPrefs.lowFps ? '24fps' : '30fps',
-                      ].join(' · ')}
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.chevron}>›</Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Add custom movement button */}
-            {canAddCustom && (
-              <TouchableOpacity style={styles.addCustomBtn} onPress={addCustomMovement}>
-                <IconSymbol name="plus.circle.fill" size={20} color="#00E5FF" />
-                <Text style={styles.addCustomText}>
-                  {t('setup.addCustomMovement', { name: searchText.trim() })}
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Movement cards by group */}
-            {filteredGroups.map(group => (
-              <View key={group.category} style={styles.groupSection}>
-                <Text style={styles.groupHeader}>{group.category.toUpperCase()}</Text>
-                {group.movements.map(movement => {
-                  const isSelected = selectedMovements.includes(movement);
-                  const isCustom = customMovements.includes(movement);
-                  return (
-                    <TouchableOpacity
-                      key={movement}
-                      style={[styles.movementCard, isSelected && styles.movementCardSelected]}
-                      onPress={() => toggleMovement(movement)}
-                    >
-                      <View style={styles.movementCardIcon}>
-                        <IconSymbol
-                          name={getCategoryIcon(group.category) as any}
-                          size={20}
-                          color={isSelected ? '#00E5FF' : '#666'}
-                        />
-                      </View>
-                      <View style={styles.movementCardInfo}>
-                        <Text style={[styles.movementName, isSelected && styles.movementNameSelected]}>
-                          {movement.toUpperCase()}
-                        </Text>
-                        <Text style={styles.movementCategory}>
-                          {group.category.toUpperCase()}
-                        </Text>
-                      </View>
-                      {isCustom ? (
-                        <TouchableOpacity
-                          onPress={(e: GestureResponderEvent) => {
-                            e.stopPropagation();
-                            removeCustomMovement(movement);
-                          }}
-                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        >
-                          <IconSymbol name="xmark.circle" size={22} color="#666" />
-                        </TouchableOpacity>
-                      ) : (
-                        <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
-                          {isSelected && (
-                            <IconSymbol name="checkmark" size={14} color="#000" />
-                          )}
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ))}
-
-            {filteredGroups.length === 0 && !canAddCustom && (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyText}>{t('setup.noResults')}</Text>
-              </View>
-            )}
-
-            {/* Advanced Options (collapsible) */}
-            <TouchableOpacity
-              style={styles.advancedHeader}
-              onPress={() => setAdvancedExpanded(!advancedExpanded)}
-            >
-              <Text style={styles.advancedHeaderText}>{t('setup.advancedOptions')}</Text>
-              <Text style={styles.advancedChevron}>{advancedExpanded ? '▼' : '▶'}</Text>
-            </TouchableOpacity>
-
-            {advancedExpanded && (
-              <View style={styles.advancedSection}>
-                <View style={styles.optionRow}>
-                  <Text style={styles.optionLabel}>{t('setup.resolution')}</Text>
-                  <View style={styles.toggleGroup}>
-                    <TouchableOpacity
-                      style={[styles.toggleBtn, videoPrefs.resolution === '720p' && styles.toggleActive]}
-                      onPress={() => updatePref('resolution', '720p')}
-                    >
-                      <Text style={styles.toggleText}>720p</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.toggleBtn, videoPrefs.resolution === '1080p' && styles.toggleActive]}
-                      onPress={() => updatePref('resolution', '1080p')}
-                    >
-                      <Text style={styles.toggleText}>1080p</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                <Text style={styles.hint}>{t('setup.resolutionHint')}</Text>
-
-                <View style={[styles.optionRow, { marginTop: 16 }]}>
-                  <View>
-                    <Text style={styles.optionLabel}>{t('setup.skeletonOverlay')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>
-                      {Platform.OS === 'android' ? t('setup.skeletonAndroid') : t('setup.skeletonIos')}
-                    </Text>
-                  </View>
-                  <Switch
-                    value={videoPrefs.showSkeleton}
-                    onValueChange={(v) => updatePref('showSkeleton', v)}
-                    trackColor={{ false: '#767577', true: '#81b0ff' }}
-                    thumbColor={videoPrefs.showSkeleton ? '#f5dd4b' : '#f4f3f4'}
-                  />
-                </View>
-                <View style={[styles.optionRow, { marginTop: 16 }]}>
-                  <View>
-                    <Text style={styles.optionLabel}>{t('setup.lowFps')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.lowFpsHint')}</Text>
-                  </View>
-                  <Switch
-                    value={videoPrefs.lowFps}
-                    onValueChange={(v) => updatePref('lowFps', v)}
-                    trackColor={{ false: '#767577', true: '#81b0ff' }}
-                    thumbColor={videoPrefs.lowFps ? '#f5dd4b' : '#f4f3f4'}
-                  />
-                </View>
-                <View style={[styles.optionRow, { marginTop: 16 }]}>
-                  <View>
-                    <Text style={styles.optionLabel}>{t('setup.resolution')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.resolutionHint')}</Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => {
-                      const cycle: Record<string, '480p' | '720p' | '1080p' | '2160p'> = { '480p': '720p', '720p': '1080p', '1080p': '2160p', '2160p': '480p' };
-                      updatePref('resolution', cycle[videoPrefs.resolution] || '720p');
-                    }}
-                    style={{ backgroundColor: '#333', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8 }}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>{videoPrefs.resolution}</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={[styles.optionRow, { marginTop: 16 }]}>
-                  <View>
-                    <Text style={styles.optionLabel}>{t('setup.skipCompression')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.skipCompressionHint')}</Text>
-                  </View>
-                  <Switch
-                    value={videoPrefs.skipCompression}
-                    onValueChange={(v) => updatePref('skipCompression', v)}
-                    trackColor={{ false: '#767577', true: '#81b0ff' }}
-                    thumbColor={videoPrefs.skipCompression ? '#f5dd4b' : '#f4f3f4'}
-                  />
-                </View>
-                <View style={[styles.optionRow, { marginTop: 16 }]}>
-                  <View>
-                    <Text style={styles.optionLabel}>{t('setup.serialUpload')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.serialUploadHint')}</Text>
-                  </View>
-                  <Switch
-                    value={videoPrefs.serialUpload}
-                    onValueChange={(v) => updatePref('serialUpload', v)}
-                    trackColor={{ false: '#767577', true: '#81b0ff' }}
-                    thumbColor={videoPrefs.serialUpload ? '#f5dd4b' : '#f4f3f4'}
-                  />
-                </View>
-                <View style={[styles.optionRow, { marginTop: 16 }]}>
-                  <View>
-                    <Text style={styles.optionLabel}>{t('setup.landscapeMode')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.landscapeModeHint')}</Text>
-                  </View>
-                  <Switch
-                    value={videoPrefs.landscapeMode}
-                    onValueChange={(v) => updatePref('landscapeMode', v)}
-                    trackColor={{ false: '#767577', true: '#81b0ff' }}
-                    thumbColor={videoPrefs.landscapeMode ? '#f5dd4b' : '#f4f3f4'}
-                  />
-                </View>
-                <View style={[styles.optionRow, { marginTop: 16 }]}>
-                  <View>
-                    <Text style={styles.optionLabel}>{t('setup.autoRecord')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.autoRecordHint')}</Text>
-                  </View>
-                  <Switch
-                    value={videoPrefs.autoRecord}
-                    onValueChange={(v) => updatePref('autoRecord', v)}
-                    trackColor={{ false: '#767577', true: '#81b0ff' }}
-                    thumbColor={videoPrefs.autoRecord ? '#f5dd4b' : '#f4f3f4'}
-                  />
-                </View>
-                <View style={[styles.optionRow, { marginTop: 16 }]}>
-                  <View>
-                    <Text style={styles.optionLabel}>{t('setup.zoomMode')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.zoomModeHint')}</Text>
-                  </View>
-                  <Switch
-                    value={videoPrefs.zoomMode}
-                    onValueChange={(v) => updatePref('zoomMode', v)}
-                    trackColor={{ false: '#767577', true: '#81b0ff' }}
-                    thumbColor={videoPrefs.zoomMode ? '#f5dd4b' : '#f4f3f4'}
-                  />
-                </View>
-                <View style={[styles.optionRow, { marginTop: 16 }]}>
-                  <View>
-                    <Text style={styles.optionLabel}>{t('setup.aspectRatio')}</Text>
-                    <Text style={[styles.hint, { marginTop: 2 }]}>{t('setup.aspectRatioHint')}</Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => updatePref('aspectRatio', videoPrefs.aspectRatio === '16:9' ? '4:3' : '16:9')}
-                    style={{ backgroundColor: '#333', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8 }}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '700', fontSize: 14 }}>{videoPrefs.aspectRatio}</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-          </>
-        )}
-      </ScrollView>
-
-      {/* Bottom staging bar */}
-      <View style={styles.bottomBar}>
-        {selectedMovements.length > 0 && (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.stagedChipsContent}
-            style={styles.stagedChipsScroll}
-          >
-            {selectedMovements.map(m => (
-              <View key={m} style={styles.stagedChip}>
-                <Text style={styles.stagedChipText}>{m}</Text>
-                <TouchableOpacity
-                  onPress={() => toggleMovement(m)}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                >
-                  <IconSymbol name="xmark.circle.fill" size={14} color="#00E5FF" />
-                </TouchableOpacity>
-              </View>
-            ))}
+        {inputMethod === 'text' && (
+          <ScrollView contentContainerStyle={styles.movementListContent} style={styles.movementList}>
+            <Text style={styles.sectionLabel}>{t('setup.wodDescriptionLabel')}</Text>
+            <TextInput style={styles.wodTextInput} placeholder={t('setup.wodTextPlaceholder')} placeholderTextColor="#555" value={wodDescription} onChangeText={setWodDescription} multiline numberOfLines={5} textAlignVertical="top" />
           </ScrollView>
         )}
-        <TouchableOpacity
-          style={styles.startBtn}
-          onPress={handleStart}
-        >
-          <Text style={styles.startText}>{t('setup.startWorkout')}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.previewBtn}
-          onPress={handlePreview}
-        >
-          <IconSymbol name="eye" size={18} color="#00E5FF" />
-          <Text style={styles.previewBtnText}>{t('setup.previewCamera')}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.testPoseBtn}
-          onPress={() => router.push('/workout/poseTestPage' as any)}
-        >
-          <IconSymbol name="eye" size={18} color="#888" />
-          <Text style={styles.testPoseText}>Test Pose Detection</Text>
-        </TouchableOpacity>
-      </View>
+
+        {inputMethod === 'photo' && (
+          <ScrollView contentContainerStyle={styles.movementListContent} style={styles.movementList}>
+            {scanning ? (
+              <View style={styles.scanningContainer}><ActivityIndicator color="#00E5FF" size="large" /><Text style={styles.scanningText}>{t('setup.scanningImage')}</Text></View>
+            ) : (<>
+              <TouchableOpacity style={styles.photoBtn} onPress={() => handleScanWhiteboard(true)}><IconSymbol name="camera.fill" size={28} color="#00E5FF" /><Text style={styles.photoBtnText}>{t('setup.takePhoto')}</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.photoBtn} onPress={() => handleScanWhiteboard(false)}><IconSymbol name="photo.fill" size={28} color="#00E5FF" /><Text style={styles.photoBtnText}>{t('setup.chooseFromGallery')}</Text></TouchableOpacity>
+            </>)}
+          </ScrollView>
+        )}
+
+        {inputMethod === 'movements' && (<>
+          <View style={styles.searchContainer}>
+            <IconSymbol name="magnifyingglass" size={18} color="#666" />
+            <TextInput style={styles.searchInput} placeholder={t('setup.searchMovements')} placeholderTextColor="#555" value={searchText} onChangeText={setSearchText} autoCapitalize="none" autoCorrect={false} />
+            {searchText.length > 0 && (<TouchableOpacity onPress={() => setSearchText('')}><IconSymbol name="xmark.circle.fill" size={18} color="#555" /></TouchableOpacity>)}
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterTabsContent} style={styles.filterTabs}>
+            {categoryTabs.map(tab => {
+              const isActive = activeFilter === tab;
+              return (<TouchableOpacity key={tab} style={[styles.filterTab, isActive && styles.filterTabActive]} onPress={() => setActiveFilter(tab)}><Text style={[styles.filterTabText, isActive && styles.filterTabTextActive]}>{tab === ALL_FILTER ? t('setup.categoryAll') : tab}</Text></TouchableOpacity>);
+            })}
+          </ScrollView>
+          <ScrollView contentContainerStyle={styles.movementListContent} style={styles.movementList}>
+            {loading ? (<ActivityIndicator color="#00E5FF" style={{ marginTop: 40 }} />) : (<>
+              {canAddCustom && (<TouchableOpacity style={styles.addCustomBtn} onPress={addCustomMovement}><IconSymbol name="plus.circle.fill" size={20} color="#00E5FF" /><Text style={styles.addCustomText}>{t('setup.addCustomMovement', { name: searchText.trim() })}</Text></TouchableOpacity>)}
+              {filteredGroups.map(group => (
+                <View key={group.category} style={styles.groupSection}>
+                  <Text style={styles.groupHeader}>{group.category.toUpperCase()}</Text>
+                  {group.movements.map(movement => {
+                    const isSelected = selectedMovements.includes(movement);
+                    const isCustom = customMovements.includes(movement);
+                    return (
+                      <TouchableOpacity key={movement} style={[styles.movementCard, isSelected && styles.movementCardSelected]} onPress={() => toggleMovement(movement)}>
+                        <View style={styles.movementCardIcon}><IconSymbol name={getCategoryIcon(group.category) as any} size={20} color={isSelected ? '#00E5FF' : '#666'} /></View>
+                        <View style={styles.movementCardInfo}><Text style={[styles.movementName, isSelected && styles.movementNameSelected]}>{movement.toUpperCase()}</Text><Text style={styles.movementCategory}>{group.category.toUpperCase()}</Text></View>
+                        {isCustom ? (<TouchableOpacity onPress={(e: GestureResponderEvent) => { e.stopPropagation(); removeCustomMovement(movement); }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}><IconSymbol name="xmark.circle" size={22} color="#666" /></TouchableOpacity>) : (<View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>{isSelected && (<IconSymbol name="checkmark" size={14} color="#000" />)}</View>)}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ))}
+              {filteredGroups.length === 0 && !canAddCustom && (<View style={styles.emptyState}><Text style={styles.emptyText}>{t('setup.noResults')}</Text></View>)}
+            </>)}
+          </ScrollView>
+        </>)}
+
+        <View style={styles.bottomBar}>
+          {selectedMovements.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.stagedChipsContent} style={styles.stagedChipsScroll}>
+              {selectedMovements.map(m => (<View key={m} style={styles.stagedChip}><Text style={styles.stagedChipText}>{m}</Text><TouchableOpacity onPress={() => toggleMovement(m)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}><IconSymbol name="xmark.circle.fill" size={14} color="#00E5FF" /></TouchableOpacity></View>))}
+            </ScrollView>
+          )}
+          <TouchableOpacity style={styles.startBtn} onPress={handleNext}><Text style={styles.startText}>{t('setup.nextStep')}</Text></TouchableOpacity>
+        </View>
+      </>)}
+
+      {/* ─── STEP 2: CONFIRM ─── */}
+      {currentStep === 'confirm' && (<>
+        <ScrollView contentContainerStyle={styles.movementListContent} style={styles.movementList}>
+          <Text style={styles.confirmHint}>{t('setup.confirmHint')}</Text>
+          <Text style={styles.sectionLabel}>{t('setup.wodDescriptionLabel')}</Text>
+          <TextInput style={styles.wodTextInput} placeholder={t('setup.wodDescriptionPlaceholder')} placeholderTextColor="#555" value={wodDescription} onChangeText={setWodDescription} multiline numberOfLines={3} textAlignVertical="top" />
+          {rawText.length > 0 && (<View style={styles.rawTextSection}><Text style={styles.rawTextLabel}>{t('setup.rawTextLabel')}</Text><Text style={styles.rawTextValue}>{rawText}</Text></View>)}
+          <Text style={[styles.sectionLabel, { marginTop: 20 }]}>{t('setup.plannedMovements')}</Text>
+          {selectedMovements.length > 0 ? (
+            <View style={styles.confirmChipsWrap}>{selectedMovements.map(m => (<View key={m} style={styles.confirmChip}><Text style={styles.confirmChipText}>{m}</Text><TouchableOpacity onPress={() => toggleMovement(m)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}><IconSymbol name="xmark.circle.fill" size={14} color="#00E5FF" /></TouchableOpacity></View>))}</View>
+          ) : (<Text style={styles.noMovementsText}>{t('setup.noMovementsSelected')}</Text>)}
+          <TouchableOpacity style={styles.addMoreBtn} onPress={() => { setInputMethod('movements'); setCurrentStep('input'); }}><Text style={styles.addMoreBtnText}>{t('setup.addMoreMovements')}</Text></TouchableOpacity>
+          {activeProfile && (
+            <TouchableOpacity style={[styles.profileBanner, { marginTop: 20 }]} onPress={() => router.push(`/profile?id=${activeProfile.id}` as any)}>
+              <View style={styles.profileBannerLeft}>
+                <View style={styles.miniAvatar}><Text style={styles.miniAvatarText}>{activeProfile.name ? activeProfile.name[0].toUpperCase() : '?'}</Text></View>
+                <View><Text style={styles.profileBannerName}>{activeProfile.name || t('tabs.profile')}</Text><Text style={styles.profileBannerMeta}>{[t(`profileEdit.${activeProfile.fitnessLevel ?? 'intermediate'}`), injuryCount > 0 ? t('setup.injuries', { count: injuryCount }) : t('setup.noInjuries')].join(' · ')}</Text></View>
+              </View>
+              <Text style={styles.chevron}>›</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.advancedHeader} onPress={() => setAdvancedExpanded(!advancedExpanded)}><Text style={styles.advancedHeaderText}>{t('setup.advancedOptions')}</Text><Text style={styles.advancedChevron}>{advancedExpanded ? '▼' : '▶'}</Text></TouchableOpacity>
+          {advancedExpanded && (
+            <View style={styles.advancedSection}>
+              <View style={styles.optionRow}><Text style={styles.optionLabel}>{t('setup.resolution')}</Text><View style={styles.toggleGroup}><TouchableOpacity style={[styles.toggleBtn, videoPrefs.resolution === '720p' && styles.toggleActive]} onPress={() => updatePref('resolution', '720p')}><Text style={styles.toggleText}>720p</Text></TouchableOpacity><TouchableOpacity style={[styles.toggleBtn, videoPrefs.resolution === '1080p' && styles.toggleActive]} onPress={() => updatePref('resolution', '1080p')}><Text style={styles.toggleText}>1080p</Text></TouchableOpacity></View></View>
+              <View style={[styles.optionRow, { marginTop: 16 }]}><View><Text style={styles.optionLabel}>{t('setup.skeletonOverlay')}</Text></View><Switch value={videoPrefs.showSkeleton} onValueChange={v => updatePref('showSkeleton', v)} trackColor={{ false: '#767577', true: '#81b0ff' }} thumbColor={videoPrefs.showSkeleton ? '#f5dd4b' : '#f4f3f4'} /></View>
+              <View style={[styles.optionRow, { marginTop: 16 }]}><View><Text style={styles.optionLabel}>{t('setup.autoRecord')}</Text></View><Switch value={videoPrefs.autoRecord} onValueChange={v => updatePref('autoRecord', v)} trackColor={{ false: '#767577', true: '#81b0ff' }} thumbColor={videoPrefs.autoRecord ? '#f5dd4b' : '#f4f3f4'} /></View>
+            </View>
+          )}
+        </ScrollView>
+        <View style={styles.bottomBar}>
+          <TouchableOpacity style={styles.startBtn} onPress={handleStart}><Text style={styles.startText}>{t('setup.startWorkout')}</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.previewBtn} onPress={handlePreview}><IconSymbol name="eye" size={18} color="#00E5FF" /><Text style={styles.previewBtnText}>{t('setup.previewCamera')}</Text></TouchableOpacity>
+        </View>
+      </>)}
     </SafeAreaView>
   );
 }
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0A0E14' },
   header: {
@@ -933,4 +744,33 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+
+  // Input method tabs
+  inputMethodTabs: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, gap: 8 },
+  inputMethodTab: { flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: '#141A24', borderWidth: 1, borderColor: '#1E2630', alignItems: 'center' },
+  inputMethodTabActive: { backgroundColor: '#00303D', borderColor: '#00E5FF40' },
+  inputMethodTabText: { color: '#666', fontSize: 13, fontWeight: '700' },
+  inputMethodTabTextActive: { color: '#00E5FF' },
+
+  // Text input mode
+  sectionLabel: { color: '#00E5FF', fontSize: 12, fontWeight: '800', textTransform: 'uppercase' as const, letterSpacing: 1, marginBottom: 8, marginTop: 12 },
+  wodTextInput: { backgroundColor: '#141A24', borderRadius: 12, padding: 14, color: '#fff', fontSize: 15, borderWidth: 1, borderColor: '#1E2630', minHeight: 100, textAlignVertical: 'top' as const },
+
+  // Photo mode
+  photoBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 14, backgroundColor: '#141A24', borderRadius: 14, padding: 20, marginBottom: 12, borderWidth: 1, borderColor: '#1E2630' },
+  photoBtnText: { color: '#C8D0DA', fontSize: 16, fontWeight: '600' },
+  scanningContainer: { alignItems: 'center' as const, paddingVertical: 60, gap: 16 },
+  scanningText: { color: '#00E5FF', fontSize: 14, fontWeight: '600' },
+
+  // Confirm step
+  confirmHint: { color: '#4A5568', fontSize: 13, marginBottom: 16, lineHeight: 18 },
+  confirmChipsWrap: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 8 },
+  confirmChip: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6, backgroundColor: '#00303D', borderRadius: 16, paddingVertical: 8, paddingLeft: 14, paddingRight: 10, borderWidth: 1, borderColor: '#00E5FF30' },
+  confirmChipText: { color: '#00E5FF', fontSize: 13, fontWeight: '700' },
+  noMovementsText: { color: '#4A5568', fontSize: 14, fontStyle: 'italic' as const },
+  addMoreBtn: { marginTop: 12, paddingVertical: 10 },
+  addMoreBtnText: { color: '#00E5FF', fontSize: 14, fontWeight: '700' },
+  rawTextSection: { backgroundColor: '#141A24', borderRadius: 10, padding: 12, marginTop: 12, borderWidth: 1, borderColor: '#1E2630' },
+  rawTextLabel: { color: '#4A5568', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' as const, letterSpacing: 0.5, marginBottom: 4 },
+  rawTextValue: { color: '#888', fontSize: 13, lineHeight: 18 },
 });

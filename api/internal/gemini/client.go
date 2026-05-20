@@ -615,3 +615,40 @@ func writeLE16(f *os.File, v uint16) {
 	b[1] = byte(v >> 8)
 	f.Write(b)
 }
+
+// ParseImage sends an image inline (no file upload) to the Flash model and
+// returns the raw text response. Ideal for lightweight OCR tasks like reading
+// a gym whiteboard photo.
+//
+// imageBytes should already be normalized (resized/compressed) by NormalizeImage.
+func (c *Client) ParseImage(ctx context.Context, imageBytes []byte, mimeType string, prompt string) (string, *TokenUsage, error) {
+	c.logger.Info("Parsing image with Flash",
+		zap.String("model", flashModel),
+		zap.Int("image_bytes", len(imageBytes)),
+		zap.String("mime_type", mimeType))
+
+	resp, err := c.client.Models.GenerateContent(ctx, flashModel, []*genai.Content{{
+		Role: genai.RoleUser,
+		Parts: []*genai.Part{
+			{InlineData: &genai.Blob{MIMEType: mimeType, Data: imageBytes}},
+			genai.NewPartFromText(prompt),
+		},
+	}}, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to parse image: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", nil, fmt.Errorf("no content from image parsing")
+	}
+
+	usage := extractTokenUsage(resp, flashModel)
+
+	var result string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		result += part.Text
+	}
+
+	c.logger.Info("Image parsed", zap.Int("response_length", len(result)))
+	return result, usage, nil
+}

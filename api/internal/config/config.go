@@ -28,12 +28,13 @@ type Common struct {
 
 type Server struct {
 	Common
-	APISecret         string
-	JWTSigningSecret  string
-	Port              string
-	DevAllowedOrigins []string
-	WebOrigin         string // WEB_ORIGIN — production web app origin (e.g. https://app.wod-strategist.com)
-	CookieDomain      string // COOKIE_DOMAIN — domain for auth cookie (e.g. .wod-strategist.com); empty = origin-only
+	APISecret          string
+	JWTSigningSecret   string
+	GeminiAPIKey       string // GEMINI_API_KEY — optional; enables /parse-workout-image endpoint
+	Port               string
+	DevAllowedOrigins  []string
+	WebOrigin          string // WEB_ORIGIN — production web app origin (e.g. https://app.wod-strategist.com)
+	CookieDomain       string // COOKIE_DOMAIN — domain for auth cookie (e.g. .wod-strategist.com); empty = origin-only
 	CookieSecure       bool   // COOKIE_SECURE — set Secure flag on cookie; default true in prod, false for local dev
 }
 
@@ -63,6 +64,7 @@ func InitServer() (Server, error) {
 		},
 		APISecret:         strings.TrimSpace(os.Getenv("API_SECRET")),
 		JWTSigningSecret:  strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
+		GeminiAPIKey:      strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		Port:              strings.TrimSpace(os.Getenv("PORT")),
 		DevAllowedOrigins: parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
 		WebOrigin:         strings.TrimSpace(os.Getenv("WEB_ORIGIN")),

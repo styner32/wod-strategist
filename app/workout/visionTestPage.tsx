@@ -71,6 +71,7 @@ export default function VisionTestPage() {
     previewOnly: previewOnlyParam,
     zoomMode: zoomModeParam,
     aspectRatio: aspectRatioParam,
+    wodDescription: wodDescriptionParam,
   } = useLocalSearchParams<{
     resolution?: string;
     movements?: string;
@@ -85,12 +86,14 @@ export default function VisionTestPage() {
     previewOnly?: string;
     zoomMode?: string;
     aspectRatio?: string;
+    wodDescription?: string;
   }>();
 
   const landscapeMode = landscapeModeParam === 'true';
   const previewOnly = previewOnlyParam === 'true';
   const zoomMode = zoomModeParam === 'true';
   const aspectRatio = (aspectRatioParam === '4:3' ? '4:3' : '16:9') as '4:3' | '16:9';
+  const wodDescription = wodDescriptionParam || '';
 
   // Performance flags — default to power-saving on Android, full quality on iOS
   const showSkeleton = showSkeletonParam !== undefined
@@ -645,6 +648,7 @@ export default function VisionTestPage() {
               movements: movementsArray,
               injuries: injuriesArray,
               profileId: profileId!,
+              wodDescription: wodDescription || undefined,
             });
             console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
           } catch (e) {

@@ -113,6 +113,7 @@ var _ = Describe("NewChunkAnalysisTask", func() {
 			10.5,
 			20.5,
 			0,
+			"",
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -234,6 +235,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			0,
 			0.0, 10.0,
 			0,
+			"",
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -280,6 +282,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			profile.ID,
 			5.0, 15.0,
 			0,
+			"",
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -345,6 +348,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			WorkoutTypeWOD,
 			nil, nil, 0, 0, 10,
 			0,
+			"",
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -364,6 +368,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			WorkoutTypeWOD,
 			nil, nil, 0, 0, 10,
 			0,
+			"",
 		)
 		Expect(err).NotTo(HaveOccurred())
 

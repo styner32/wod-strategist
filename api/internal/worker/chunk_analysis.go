@@ -164,17 +164,18 @@ func levelPolicyForFitnessLevel(level string) string {
 	}
 }
 
-func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int) (*asynq.Task, error) {
+func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int, wodDescription string) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
-		SessionID:    sessionID,
-		FilePath:     filePath,
-		WorkoutType:  NormalizeWorkoutType(workoutType),
-		Movements:    movements,
-		Injuries:     injuries,
-		ProfileID:    profileID,
-		StartSecs:    startSecs,
-		EndSecs:      endSecs,
-		HeartRateBPM: heartRateBPM,
+		SessionID:      sessionID,
+		FilePath:       filePath,
+		WorkoutType:    NormalizeWorkoutType(workoutType),
+		Movements:      movements,
+		Injuries:       injuries,
+		ProfileID:      profileID,
+		StartSecs:      startSecs,
+		EndSecs:        endSecs,
+		HeartRateBPM:   heartRateBPM,
+		WODDescription: wodDescription,
 	}
 
 	data, err := json.Marshal(payload)
@@ -298,6 +299,12 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 	// Inject fitness-level-specific coaching policy
 	fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
 	prompt += levelPolicyForFitnessLevel(fitnessLevel)
+
+	// Inject WOD descriptor context so chunk feedback is aware of the WOD type
+	// (e.g. "For Time: 5 rounds" → expect fatigue in later rounds).
+	if wod := buildWODContext(p.WODDescription); wod != "" {
+		prompt += wod
+	}
 
 	if len(p.Movements) > 0 {
 		prompt += fmt.Sprintf("\n\n## 확인된 운동 종목 (사용자 입력)\n아래 운동들은 이 세션에서 **확실히 수행되는 운동**입니다. AI 감지가 불확실할 경우 이 목록을 우선 참고하세요.\n%s", strings.Join(p.Movements, ", "))

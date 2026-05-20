@@ -33,6 +33,8 @@ const MAPPING = {
   'plus.circle.fill': 'add-circle',
   'checkmark': 'check',
   'dumbbell.fill': 'fitness-center',
+  'camera.fill': 'camera-alt',
+  'photo.fill': 'photo-library',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**

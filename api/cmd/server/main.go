@@ -22,6 +22,7 @@ import (
 	"github.com/wod-strategist/api/internal/config"
 	"github.com/wod-strategist/api/internal/controllers"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/server"
 	"github.com/wod-strategist/api/internal/storage"
@@ -63,6 +64,22 @@ func main() {
 		logger.Log.Fatal("Failed to create storage client", zap.Error(err))
 	}
 
+	// Initialize optional Gemini client for image parsing (parse-workout-image).
+	// If GEMINI_API_KEY is not set, the endpoint returns 503.
+	var imageParser controllers.ImageParser
+	if cfg.GeminiAPIKey != "" {
+		geminiClient, geminiErr := gemini.NewClientWithOptions(context.Background(), logger.Log, gemini.Options{
+			APIKey: cfg.GeminiAPIKey,
+			Model:  "gemini-3-flash-preview",
+		})
+		if geminiErr != nil {
+			logger.Log.Warn("Failed to create Gemini client for image parsing; endpoint disabled", zap.Error(geminiErr))
+		} else {
+			imageParser = geminiClient
+			logger.Log.Info("Gemini image parser initialized (gemini-3-flash-preview)")
+		}
+	}
+
 	handlers := controllers.New(controllers.Config{
 		DB:               dbConn,
 		QueueClient:      client,
@@ -70,6 +87,7 @@ func main() {
 		Profiles:         controllers.NewGormProfileRepository(dbConn),
 		HighlightResults: controllers.NewGormHighlightResultRepository(dbConn),
 		StorageClient:    storageClient,
+		ImageParser:      imageParser,
 		BucketName:       cfg.GCSBucketName,
 		GitCommit:        GitCommit,
 	})

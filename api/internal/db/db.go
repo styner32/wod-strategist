@@ -53,9 +53,16 @@ type AnalysisResult struct {
 	InjuryOutput      string     `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
 	HighlightSegments string     `json:"highlight_segments"`      // JSON array of highlight segments
 	Verified          *bool      `json:"verified,omitempty"`      // nil=unchecked, true=confirmed, false=hallucination detected
-	ArchivedAt        *time.Time `json:"archived_at,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	// WODDescription is the user-supplied workout descriptor (e.g. "Fran", "For Time: 5 rounds of...").
+	// Injected into analysis prompts to enable benchmark comparison and WOD-type-aware scoring.
+	WODDescription string `gorm:"type:text;not null;default:''" json:"wod_description,omitempty"`
+	// SessionScore is a compact JSON blob of per-dimension scores (0–100) produced at analysis time.
+	// Schema: {"overall":74,"form":68,"intensity":82,"consistency":72,"movements":{},"summary":"..."}
+	// Used to inject historical performance context into future analysis prompts.
+	SessionScore string     `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
+	ArchivedAt   *time.Time `json:"archived_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 type HighlightResult struct {
