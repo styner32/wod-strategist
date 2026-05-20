@@ -3,13 +3,13 @@ package config
 import (
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 
-	"os"
-
 	"github.com/joho/godotenv"
+	"github.com/wod-strategist/api/internal/gemini"
 )
 
 const defaultPort = "8080"
@@ -120,7 +120,7 @@ func InitWorker() (Worker, error) {
 		UseCache:     strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_USE_CACHE")), "true"),
 	}
 	if cfg.GeminiModel == "" {
-		cfg.GeminiModel = "gemini-3.1-pro-preview"
+		cfg.GeminiModel = gemini.ModelPro31Preview
 	}
 
 	if err := validateRequired(

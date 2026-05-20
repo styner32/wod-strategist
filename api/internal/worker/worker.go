@@ -64,6 +64,7 @@ type StorageClient interface {
 type GeminiClient interface {
 	// File-upload based analysis (used by chunk analysis, legacy path)
 	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, *gemini.TokenUsage, error)
+	AnalyzeVideoWithModel(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
 	DeleteFile(ctx context.Context, name string) error
 	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"go.uber.org/zap"
 )
 
@@ -226,7 +227,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	prompt := w.buildChunkAnalysisPrompt(p)
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash35)
 
 	defer func() {
 		os.Remove(localFilePath)

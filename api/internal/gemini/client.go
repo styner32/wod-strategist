@@ -34,7 +34,14 @@ func extractTokenUsage(resp *genai.GenerateContentResponse, model string) *Token
 	}
 }
 
-const defaultModel = "gemini-3.1-pro-preview"
+const (
+	ModelPro31Preview      = "gemini-3.1-pro-preview"
+	ModelFlash30Preview    = "gemini-3-flash-preview"
+	ModelFlash35           = "gemini-3.5-flash"
+	ModelFlashTTS31Preview = "gemini-3.1-flash-tts-preview"
+)
+
+const defaultModel = ModelPro31Preview
 
 type Client struct {
 	client       *genai.Client
@@ -145,6 +152,11 @@ func formatFileSize(bytes int64) string {
 
 // AnalyzeVideo returns the analysis result, the name of the uploaded file on Gemini, and token usage.
 func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt string) (string, string, *TokenUsage, error) {
+	return c.AnalyzeVideoWithModel(ctx, filePath, prompt, c.model)
+}
+
+// AnalyzeVideoWithModel returns the analysis result, the name of the uploaded file on Gemini, and token usage using the specified model.
+func (c *Client) AnalyzeVideoWithModel(ctx context.Context, filePath string, prompt string, model string) (string, string, *TokenUsage, error) {
 	// Upload file
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -193,7 +205,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 	c.logger.Info("File uploaded", zap.Any("file", uploadResult), zap.String("mime_type", mimeType))
 
 	// Generate content — single multimodal turn with video first for better temporal grounding
-	resp, err := c.client.Models.GenerateContent(ctx, c.model, []*genai.Content{{
+	resp, err := c.client.Models.GenerateContent(ctx, model, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}},
@@ -210,7 +222,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 
 	c.logger.Info("Gemini response", zap.Any("response", resp))
 
-	usage := extractTokenUsage(resp, c.model)
+	usage := extractTokenUsage(resp, model)
 
 	// Extract text from response
 	var result string
@@ -272,7 +284,7 @@ func (c *Client) GenerateWorkoutMusic(ctx context.Context, model, prompt, output
 	return nil
 }
 
-const flashModel = "gemini-3-flash-preview"
+const flashModel = ModelFlash35
 
 // UploadResult holds info about an uploaded file for use across multiple passes.
 type UploadResult struct {
@@ -503,7 +515,7 @@ func (c *Client) QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt 
 	return result, usage, nil
 }
 
-const ttsModel = "gemini-3.1-flash-tts-preview"
+const ttsModel = ModelFlashTTS31Preview
 
 // GenerateSpeech converts text to speech using the Gemini TTS model and writes
 // the output as a WAV file (24kHz, 16-bit, mono PCM) to outputPath.
