@@ -114,6 +114,7 @@ var _ = Describe("NewChunkAnalysisTask", func() {
 			20.5,
 			0,
 			"",
+			0.85,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -124,6 +125,7 @@ var _ = Describe("NewChunkAnalysisTask", func() {
 		Expect(payload.EndSecs).To(Equal(20.5))
 		Expect(payload.Movements).To(Equal([]string{"Deadlift"}))
 		Expect(payload.ProfileID).To(Equal(uint(7)))
+		Expect(payload.WorkoutConfidence).To(Equal(0.85))
 	})
 })
 
@@ -236,6 +238,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			0.0, 10.0,
 			0,
 			"",
+			0.75,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -255,6 +258,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 		Expect(*result.StartSecs).To(BeNumerically("~", 0.0))
 		Expect(result.EndSecs).NotTo(BeNil())
 		Expect(*result.EndSecs).To(BeNumerically("~", 10.0))
+		Expect(result.WorkoutConfidence).To(Equal(0.75))
 	})
 
 	It("sets ProfileID on the result when ProfileID > 0", func() {
@@ -283,6 +287,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			5.0, 15.0,
 			0,
 			"",
+			0.0,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -293,6 +298,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 		Expect(dbConn.Where("session_id = ?", "sess-chunk-profile-001").First(&result).Error).
 			NotTo(HaveOccurred())
 		Expect(result.ProfileID).To(Equal(profile.ID))
+		Expect(result.WorkoutConfidence).To(Equal(0.0))
 	})
 
 	It("returns an error and saves no record when Gemini returns empty candidates", func() {
@@ -349,6 +355,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			nil, nil, 0, 0, 10,
 			0,
 			"",
+			0.0,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -369,6 +376,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			nil, nil, 0, 0, 10,
 			0,
 			"",
+			0.0,
 		)
 		Expect(err).NotTo(HaveOccurred())
 

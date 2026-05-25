@@ -565,7 +565,7 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
-	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WODDescription)
+	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WODDescription, req.WorkoutConfidence)
 	if err != nil {
 		logger.Log.Error("failed to create chunk task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})

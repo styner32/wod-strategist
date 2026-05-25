@@ -165,18 +165,19 @@ func levelPolicyForFitnessLevel(level string) string {
 	}
 }
 
-func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int, wodDescription string) (*asynq.Task, error) {
+func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int, wodDescription string, workoutConfidence float64) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
-		SessionID:      sessionID,
-		FilePath:       filePath,
-		WorkoutType:    NormalizeWorkoutType(workoutType),
-		Movements:      movements,
-		Injuries:       injuries,
-		ProfileID:      profileID,
-		StartSecs:      startSecs,
-		EndSecs:        endSecs,
-		HeartRateBPM:   heartRateBPM,
-		WODDescription: wodDescription,
+		SessionID:         sessionID,
+		FilePath:          filePath,
+		WorkoutType:       NormalizeWorkoutType(workoutType),
+		Movements:         movements,
+		Injuries:          injuries,
+		ProfileID:         profileID,
+		StartSecs:         startSecs,
+		EndSecs:           endSecs,
+		HeartRateBPM:      heartRateBPM,
+		WODDescription:    wodDescription,
+		WorkoutConfidence: workoutConfidence,
 	}
 
 	data, err := json.Marshal(payload)
@@ -249,10 +250,11 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	if err != nil {
 		w.logger.Error("Chunk analysis failed", zap.Error(err))
 		chunkFailed := &db.ChunkAnalysisResult{
-			SessionID: p.SessionID,
-			FilePath:  p.FilePath,
-			Status:    "FAILED",
-			Output:    "An internal error occurred during chunk analysis.",
+			SessionID:         p.SessionID,
+			FilePath:          p.FilePath,
+			Status:            "FAILED",
+			Output:            "An internal error occurred during chunk analysis.",
+			WorkoutConfidence: p.WorkoutConfidence,
 		}
 		chunkFailed.ProfileID = p.ProfileID
 		if p.StartSecs > 0 || p.EndSecs > 0 {
@@ -272,13 +274,14 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	cleanOutput = stripObservedSignals(cleanOutput)
 
 	chunkResult := &db.ChunkAnalysisResult{
-		SessionID:       p.SessionID,
-		FilePath:        p.FilePath,
-		ExerciseType:    detectedExercise,
-		Status:          "COMPLETED",
-		Output:          cleanOutput,
-		ObservedSignals: observedSignals,
-		HeartRateBPM:    p.HeartRateBPM,
+		SessionID:         p.SessionID,
+		FilePath:          p.FilePath,
+		ExerciseType:      detectedExercise,
+		Status:            "COMPLETED",
+		Output:            cleanOutput,
+		ObservedSignals:   observedSignals,
+		HeartRateBPM:      p.HeartRateBPM,
+		WorkoutConfidence: p.WorkoutConfidence,
 	}
 	chunkResult.ProfileID = p.ProfileID
 	if p.StartSecs > 0 || p.EndSecs > 0 {

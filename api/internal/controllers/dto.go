@@ -87,16 +87,17 @@ type MergeChunksResponse struct {
 }
 
 type ChunkCompleteRequest struct {
-	SessionID      string   `json:"session_id"`
-	GCSURI         string   `json:"gcs_uri"`
-	Movements      []string `json:"movements"`
-	Injuries       []string `json:"injuries"`
-	WorkoutType    string   `json:"workout_type"`
-	ProfileID      uint     `json:"profile_id"`
-	StartSecs      float64  `json:"start_secs"`
-	EndSecs        float64  `json:"end_secs"`
-	HeartRateBPM   int      `json:"heart_rate_bpm"`
-	WODDescription string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
+	SessionID         string   `json:"session_id"`
+	GCSURI            string   `json:"gcs_uri"`
+	Movements         []string `json:"movements"`
+	Injuries          []string `json:"injuries"`
+	WorkoutType       string   `json:"workout_type"`
+	ProfileID         uint     `json:"profile_id"`
+	StartSecs         float64  `json:"start_secs"`
+	EndSecs           float64  `json:"end_secs"`
+	HeartRateBPM      int      `json:"heart_rate_bpm"`
+	WODDescription    string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
+	WorkoutConfidence float64  `json:"workout_confidence"`
 }
 
 type GenerateHighlightRequest struct {

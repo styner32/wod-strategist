@@ -55,7 +55,7 @@ type ImageParser interface {
 
 type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool, wodDescription string) (*asynq.Task, error)
 
-type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int, wodDescription string) (*asynq.Task, error)
+type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int, wodDescription string, workoutConfidence float64) (*asynq.Task, error)
 
 type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int) (*asynq.Task, error)
 

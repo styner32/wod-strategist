@@ -144,6 +144,9 @@ export default function VisionTestPage() {
   const chunkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isChunkRecordingActive = useRef(false);
 
+  // Track frames during the current chunk to calculate workout confidence
+  const chunkWorkoutFrames = useRef<boolean[]>([]);
+
 
 
   // Store chunk paths locally (Android: used as final video source)
@@ -242,6 +245,13 @@ export default function VisionTestPage() {
     }
     return () => clearInterval(interval);
   }, [isRecording, workoutType]);
+
+  // Accumulate workout detection frames during chunk recording
+  useEffect(() => {
+    if (isRecording) {
+      chunkWorkoutFrames.current.push(monitorData.isWorkingOut);
+    }
+  }, [monitorData, isRecording]);
 
   // Keep screen awake while recording (prevents Android/iOS sleep)
   useEffect(() => {
@@ -369,6 +379,15 @@ export default function VisionTestPage() {
           // even if recording has stopped (orphan chunk).
           chunkPaths.current.push(video.path);
 
+          // Calculate workout confidence index based on collected frames
+          const frames = chunkWorkoutFrames.current;
+          const workoutConfidence = frames.length > 0
+            ? frames.filter(Boolean).length / frames.length
+            : 0.0;
+          // Reset frames array for the next chunk
+          chunkWorkoutFrames.current = [];
+          console.log(`📊 Chunk workout confidence: ${(workoutConfidence * 100).toFixed(1)}% (${frames.filter(Boolean).length}/${frames.length} frames)`);
+
           // Skip upload if recording has already been stopped
           if (!isRecordingChunks.current) {
             console.log("⏹️ Recording stopped — skipping upload for final chunk");
@@ -391,6 +410,7 @@ export default function VisionTestPage() {
                     startSecs,
                     endSecs,
                     heartRateBpm: bpmRef.current > 0 ? bpmRef.current : undefined,
+                    workoutConfidence,
                   });
                   console.log("✅ Chunk uploaded to backend");
                 } catch (err) {

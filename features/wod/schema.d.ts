@@ -4,6 +4,576 @@
  */
 
 export interface paths {
+    "/chunk-analysis/:session_id": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Chunk Analysis
+         * @description Fetches the partial analysis chunks for a given session
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["db.ChunkAnalysisResult"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chunk-complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Chunk Complete
+         * @description Notifies the backend that a chunk upload is complete and triggers chunk analysis
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: components["requestBodies"]["controllers.CompleteUploadRequest"];
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.CompleteUploadResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/debug/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Debug Telemetry
+         * @description Receives a telemetry session from the app and stores it in GCS for debugging
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Telemetry session */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.DebugTelemetryRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: unknown;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dev/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Session Catalog
+         * @description Lists existing sessions discovered from uploaded storage assets
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.SessionCatalogResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dev/sessions/{session_id}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Assets
+         * @description Lists playable session assets for the browser QA workbench
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.SessionAssetsResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/dev/sessions/{session_id}/play-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Play URL
+         * @description Resolves a playable signed URL for a session asset
+         */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Asset kind */
+                    kind: string;
+                    /** @description Asset variant */
+                    variant?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.PlayURLResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/generate-hardsub": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Hardsubbed Video
+         * @description Creates a hardsubbed version of the video with burned-in subtitles
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Session and profile */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.GenerateHardSubRequest"];
+                };
+            };
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.GenerateHardSubResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/generate-highlight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Highlight
+         * @description Triggers short-form highlight video generation from WOD analysis for a session
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Session ID and options */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.GenerateHighlightRequest"];
+                };
+            };
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/highlight-download/:id": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Highlight Download URL
+         * @description Returns a time-limited signed URL for downloading a specific highlight video
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Highlight result ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.VideoDownloadURLResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/highlight/:session_id": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Highlight
+         * @description Returns highlight generation results for a given session
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["db.HighlightResult"][];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/injuries": {
         parameters: {
             query?: never;
@@ -31,6 +601,107 @@ export interface paths {
                     };
                     content: {
                         "application/json": string[];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/merge-chunks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Merge Chunks
+         * @description Triggers server-side merging of all uploaded chunks for a session, then runs full video analysis
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Session and workout metadata */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.MergeChunksRequest"];
+                };
+            };
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.MergeChunksResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/movement-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List movement groups
+         * @description Returns all supported workout movements organized by category
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.MovementGroup"][];
                     };
                 };
             };
@@ -82,6 +753,204 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/parse-workout-image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Parse Workout Image
+         * @description Extracts workout description and movements from a whiteboard photo
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "multipart/form-data": {
+                        /**
+                         * Format: binary
+                         * @description Whiteboard photo (JPEG/PNG, max 10MB)
+                         */
+                        image: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ParseWorkoutImageResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Unprocessable Entity */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/retry-analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry Analysis
+         * @description Re-enqueues a video analysis task for a failed session using existing GCS files
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Session and profile */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.RetryAnalysisRequest"];
+                };
+            };
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.RetryAnalysisResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/subtitles/:session_id": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Subtitles
+         * @description Returns chunk analysis feedback as an SRT subtitle file for a given session
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description SRT subtitle content */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": string;
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/upload-complete": {
         parameters: {
             query?: never;
@@ -102,12 +971,7 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            /** @description Upload metadata */
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["controllers.CompleteUploadRequest"];
-                };
-            };
+            requestBody: components["requestBodies"]["controllers.CompleteUploadRequest"];
             responses: {
                 /** @description Accepted */
                 202: {
@@ -206,16 +1070,162 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/verify-highlights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Highlights
+         * @description Triggers verification of highlight segments to detect hallucinated movements
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Session ID */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.VerifyHighlightsRequest"];
+                };
+            };
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/video-download/:session_id": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Video Download URL
+         * @description Returns a time-limited signed URL for downloading the merged or hardsubbed video
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Video kind: merged (default) or hardsubbed */
+                    kind?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.VideoDownloadURLResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        "controllers.ChunkAnalysisSummaryResponse": {
+            completed?: number;
+            failed?: number;
+            pending?: number;
+            total?: number;
+        };
         "controllers.CompleteUploadRequest": {
-            gcs_uri: string;
+            enable_tts?: boolean;
+            gcs_uri?: string;
             injuries?: string[];
-            movements: string[];
-            session_id: string;
-            workout_type: string;
+            movements?: string[];
+            profile_id?: number;
+            session_id?: string;
+            /** @description e.g. "Fran" or "For Time: 5 rounds of..." */
+            wod_description?: string;
+            workout_type?: string;
         };
         "controllers.CompleteUploadResponse": {
             message?: string;
@@ -223,20 +1233,195 @@ export interface components {
             task_id?: string;
         };
         "controllers.CreateUploadURLRequest": {
-            filename: string;
-            session_id: string;
+            filename?: string;
+            profile_id?: number;
+            session_id?: string;
         };
         "controllers.CreateUploadURLResponse": {
             gcs_uri?: string;
             upload_url?: string;
         };
+        "controllers.DebugTelemetryRequest": {
+            appVersion?: string;
+            deviceModel?: string;
+            endedAt?: number;
+            platform?: string;
+            profileId?: number;
+            samples?: components["schemas"]["controllers.DebugTelemetrySample"][];
+            sessionId?: string;
+            startedAt?: number;
+        };
+        "controllers.DebugTelemetrySample": {
+            batt?: number;
+            chunkIdx?: number;
+            hr?: number;
+            motion?: {
+                [key: string]: unknown;
+            };
+            ts?: number;
+        };
         "controllers.ErrorResponse": {
             error?: string;
+        };
+        "controllers.FullAnalysisStatusResponse": {
+            analysis_type?: string;
+            created_at?: string;
+            status?: string;
+            updated_at?: string;
+        };
+        "controllers.GenerateHardSubRequest": {
+            enable_tts?: boolean;
+            profile_id?: number;
+            session_id?: string;
+        };
+        "controllers.GenerateHardSubResponse": {
+            message?: string;
+            session_id?: string;
+            task_id?: string;
+        };
+        "controllers.GenerateHighlightRequest": {
+            /** @description seconds, default 60 */
+            max_duration?: number;
+            profile_id?: number;
+            session_id?: string;
+        };
+        "controllers.MergeChunksRequest": {
+            enable_tts?: boolean;
+            injuries?: string[];
+            movements?: string[];
+            profile_id?: number;
+            session_id?: string;
+            /** @description e.g. "Fran" or "For Time: 5 rounds of..." */
+            wod_description?: string;
+            workout_type?: string;
+        };
+        "controllers.MergeChunksResponse": {
+            message?: string;
+            session_id?: string;
+            task_id?: string;
+        };
+        "controllers.MovementGroup": {
+            category?: string;
+            movements?: string[];
+        };
+        "controllers.ParseWorkoutImageResponse": {
+            /** @description e.g. ["Thruster", "Pull-up"] */
+            movements?: string[];
+            /** @description raw OCR text extracted from the whiteboard */
+            raw_text?: string;
+            /** @description e.g. "Fran" or "For Time: 5 rounds of 10 Deadlifts + 15 Box Jumps" */
+            wod_description?: string;
+        };
+        "controllers.PlayURLResponse": {
+            cache_key?: string;
+            expires_at?: string;
+            gcs_uri?: string;
+            kind?: string;
+            public_url?: string;
+            session_id?: string;
+            signed_url?: string;
+            variant?: string;
+        };
+        "controllers.RetryAnalysisRequest": {
+            profile_id?: number;
+            session_id?: string;
+        };
+        "controllers.RetryAnalysisResponse": {
+            message?: string;
+            session_id?: string;
+            task_id?: string;
+        };
+        "controllers.SessionAssetResponse": {
+            cache_key?: string;
+            created_at?: string;
+            gcs_uri?: string;
+            kind?: string;
+            label?: string;
+            object_name?: string;
+            public_url?: string;
+            variant?: string;
+        };
+        "controllers.SessionAssetsResponse": {
+            assets?: components["schemas"]["controllers.SessionAssetResponse"][];
+            chunk_summary?: components["schemas"]["controllers.ChunkAnalysisSummaryResponse"];
+            full_analysis?: components["schemas"]["controllers.FullAnalysisStatusResponse"];
+            session_id?: string;
+            subtitle_available?: boolean;
+        };
+        "controllers.SessionCatalogItemResponse": {
+            chunk_count?: number;
+            has_hardsubbed?: boolean;
+            has_merged?: boolean;
+            highlight_count?: number;
+            latest_created_at?: string;
+            session_id?: string;
+        };
+        "controllers.SessionCatalogResponse": {
+            sessions?: components["schemas"]["controllers.SessionCatalogItemResponse"][];
+        };
+        "controllers.VerifyHighlightsRequest": {
+            session_id?: string;
+        };
+        "controllers.VideoDownloadURLResponse": {
+            download_url?: string;
+            expires_at?: string;
+            filename?: string;
+            kind?: string;
+            session_id?: string;
+        };
+        "db.ChunkAnalysisResult": {
+            created_at?: string;
+            end_secs?: number;
+            /** @description detected movement (e.g. "Snatch", "Pull-up") */
+            exercise_type?: string;
+            file_path?: string;
+            /** @description BLE heart rate at chunk capture time (0 = unavailable) */
+            heart_rate_bpm?: number;
+            id?: number;
+            /** @description JSON: estimated workout metrics for benchmarking */
+            observed_signals?: string;
+            output?: string;
+            profile_id?: number;
+            session_id?: string;
+            start_secs?: number;
+            /** @description PENDING, COMPLETED, FAILED */
+            status?: string;
+            updated_at?: string;
+            /** @description confidence if person actually workout */
+            workout_confidence?: number;
+        };
+        "db.HighlightResult": {
+            created_at?: string;
+            /** @description total highlight duration in seconds */
+            duration_sec?: number;
+            /** @description gs:// URI of the polished highlight video */
+            gcs_uri?: string;
+            id?: number;
+            /** @description gs:// URI of the Lyria-generated music track */
+            music_gcs_uri?: string;
+            /** @description error message or AI summary */
+            output?: string;
+            profile_id?: number;
+            /** @description JSON: selected segments used */
+            segments?: string;
+            session_id?: string;
+            /** @description PENDING, PROCESSING, COMPLETED, FAILED */
+            status?: string;
+            /** @description e.g. "Full Reel", "Best Forms" */
+            title?: string;
+            updated_at?: string;
         };
     };
     responses: never;
     parameters: never;
-    requestBodies: never;
+    requestBodies: {
+        /** @description Upload metadata */
+        "controllers.CompleteUploadRequest": {
+            content: {
+                "application/json": components["schemas"]["controllers.CompleteUploadRequest"];
+            };
+        };
+    };
     headers: never;
     pathItems: never;
 }

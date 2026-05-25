@@ -89,10 +89,11 @@ type ChunkAnalysisResult struct {
 	Status          string    `json:"status"`                  // PENDING, COMPLETED, FAILED
 	Output          string    `json:"output"`
 	ObservedSignals string    `gorm:"type:text;not null;default:'{}'" json:"observed_signals"` // JSON: estimated workout metrics for benchmarking
-	HeartRateBPM    int       `gorm:"not null;default:0" json:"heart_rate_bpm"`                // BLE heart rate at chunk capture time (0 = unavailable)
-	StartSecs       *float64  `json:"start_secs,omitempty"`
-	EndSecs         *float64  `json:"end_secs,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
+	HeartRateBPM      int       `gorm:"not null;default:0" json:"heart_rate_bpm"`                // BLE heart rate at chunk capture time (0 = unavailable)
+	StartSecs         *float64  `json:"start_secs,omitempty"`
+	EndSecs           *float64  `json:"end_secs,omitempty"`
+	WorkoutConfidence float64   `gorm:"not null;default:0.0" json:"workout_confidence"`          // confidence if person actually workout
+	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
