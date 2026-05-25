@@ -3,7 +3,9 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as ScreenOrientation from "expo-screen-orientation";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
+  Animated,
   Linking,
   Platform,
   StyleSheet,
@@ -207,6 +209,9 @@ export default function VisionTestPage() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergeChunkTotal, setMergeChunkTotal] = useState(0);
+  const mergeShimmerAnim = useRef(new Animated.Value(0)).current;
   const [chunkFeedback, setChunkFeedback] = useState<string | null>(null);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [chunkCount, setChunkCount] = useState(0);
@@ -261,6 +266,22 @@ export default function VisionTestPage() {
     }, 1000);
     return () => clearInterval(tick);
   }, [isRecording]);
+
+  // Shimmer animation for merging progress bar
+  useEffect(() => {
+    if (isMerging) {
+      mergeShimmerAnim.setValue(0);
+      const loop = Animated.loop(
+        Animated.timing(mergeShimmerAnim, {
+          toValue: 1,
+          duration: 1500,
+          useNativeDriver: false,
+        }),
+      );
+      loop.start();
+      return () => loop.stop();
+    }
+  }, [isMerging]);
 
   // Orientation lock: landscape mode from setup page
   // iOS: lock to landscape (works perfectly with AVCaptureSession)
@@ -369,7 +390,7 @@ export default function VisionTestPage() {
                     profileId: profileId!,
                     startSecs,
                     endSecs,
-                    heartRateBpm: bpm > 0 ? bpm : undefined,
+                    heartRateBpm: bpmRef.current > 0 ? bpmRef.current : undefined,
                   });
                   console.log("✅ Chunk uploaded to backend");
                 } catch (err) {
@@ -674,13 +695,19 @@ export default function VisionTestPage() {
         const outPath = mergedOutputPath(sessionId);
         console.log(`📦 Merge output path: ${outPath}`);
 
-        // Show the gallery save alert while merge runs in background.
+        // Show merging indicator
+        setMergeChunkTotal(localChunks.length);
+        setIsMerging(true);
+
+        // Show the gallery save alert after merge completes.
         // The alert is shown BEFORE navigating so it stays visible.
         const performMergeAndPrompt = async () => {
           try {
             console.log(`🎬 Starting local merge of ${localChunks.length} chunks...`);
             await mergeChunksLocal(localChunks, outPath);
             console.log(`🎬 Local merge succeeded, showing gallery save alert`);
+
+            setIsMerging(false);
 
             Alert.alert(
               "갤러리에 저장하시겠습니까?",
@@ -701,21 +728,38 @@ export default function VisionTestPage() {
                   text: "저장",
                   onPress: () => {
                     MediaLibrary.saveToLibraryAsync(outPath)
-                      .then(() => console.log("📱 Saved merged video to gallery"))
-                      .catch((e) => console.warn("⚠️ Gallery save failed:", e))
-                      .finally(() => {
-                        // Saved to gallery — safe to delete app-container copy + chunks
+                      .then(() => {
+                        console.log("📱 Saved merged video to gallery");
+                        // Safe to delete both merged and chunks since it's fully saved in gallery
                         cleanupMergedAndChunks(outPath, localChunks);
                         router.replace("/history" as any);
+                      })
+                      .catch((e) => {
+                        console.warn("⚠️ Gallery save failed:", e);
+                        // Save failed! Keep the merged file, only delete the raw chunks.
+                        cleanupLocalChunkFiles(localChunks);
+                        chunkPaths.current = [];
+                        Alert.alert(
+                          "저장 실패",
+                          "갤러리에 저장하지 못했습니다. 하지만 병합된 파일은 안전하게 보관되어 있습니다. Files 앱에서 직접 가져오실 수 있습니다.",
+                          [{ text: "확인", onPress: () => router.replace("/history" as any) }]
+                        );
                       });
                   },
                 },
               ]
             );
           } catch (mergeErr) {
-            console.warn("⚠️ Local merge failed, skipping gallery save:", mergeErr);
-            cleanupLocalChunkFiles(localChunks);
-            router.replace("/history" as any);
+            console.warn("⚠️ Local merge failed:", mergeErr);
+            setIsMerging(false);
+            
+            // CRITICAL: DO NOT delete local chunks on merge failure!
+            // Instead, keep them in cache/tmp, alert the user, and navigate to history.
+            Alert.alert(
+              "로컬 병합 실패",
+              "비디오 조각 병합에 실패했습니다. 하지만 촬영된 원본 비디오 조각들은 삭제되지 않고 안전하게 보관되었습니다. 디버그 메뉴에서 PC로 내보낼 수 있습니다.",
+              [{ text: "확인", onPress: () => router.replace("/history" as any) }]
+            );
           }
         };
 
@@ -918,8 +962,36 @@ export default function VisionTestPage() {
         </View>
       )}
 
+      {/* Merging indicator overlay */}
+      {isMerging && (
+        <View style={styles.mergingOverlay}>
+          <View style={styles.mergingCard}>
+            <ActivityIndicator size="large" color="#30D158" />
+            <Text style={styles.mergingTitle}>영상 병합 중...</Text>
+            <Text style={styles.mergingSubtitle}>
+              {mergeChunkTotal}개 클립을 합치고 있습니다
+            </Text>
+            <View style={styles.mergingProgressBg}>
+              <Animated.View
+                style={[
+                  styles.mergingProgressIndeterminate,
+                  {
+                    transform: [{
+                      translateX: mergeShimmerAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [-60, 160],
+                      }),
+                    }],
+                  },
+                ]}
+              />
+            </View>
+          </View>
+        </View>
+      )}
+
       {/* Recording controls — compact pill bar */}
-      {!previewOnly && (
+      {!previewOnly && !isMerging && (
         <View style={[styles.recordControl, applyLandscapeStyles && styles.recordControlLandscape]}>
         {isSaving ? (
           <View style={styles.postRecordingFooter}>
@@ -1226,5 +1298,50 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "bold",
     textAlign: "center",
+  },
+  // --- Merging indicator overlay ---
+  mergingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 100,
+  },
+  mergingCard: {
+    backgroundColor: 'rgba(30, 30, 30, 0.95)',
+    borderRadius: 20,
+    paddingVertical: 32,
+    paddingHorizontal: 40,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#333',
+    gap: 12,
+    minWidth: 260,
+  },
+  mergingTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '700',
+    marginTop: 8,
+  },
+  mergingSubtitle: {
+    color: '#999',
+    fontSize: 14,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  mergingProgressBg: {
+    width: '100%',
+    height: 4,
+    backgroundColor: '#333',
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginTop: 8,
+  },
+  mergingProgressIndeterminate: {
+    width: '40%',
+    height: '100%',
+    backgroundColor: '#30D158',
+    borderRadius: 2,
   },
 });
