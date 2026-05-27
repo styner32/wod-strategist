@@ -3,9 +3,12 @@ package testhelpers
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"sync/atomic"
 
 	g "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/db"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -52,4 +55,44 @@ func CleanupDB(db *gorm.DB) {
 		err := db.Exec(query).Error
 		g.Expect(err).NotTo(g.HaveOccurred(), "Failed to truncate table: "+table)
 	}
+}
+
+func CreateUser(dbConn *gorm.DB, userAttr *db.User) db.User {
+	u := db.User{
+		Username:     userAttr.Username,
+		PasswordHash: userAttr.PasswordHash,
+		DeletedAt:    userAttr.DeletedAt,
+	}
+
+	g.Expect(dbConn.Create(&u).Error).NotTo(g.HaveOccurred())
+	return u
+}
+
+var userCounter uint64
+
+func CreateProfile(dbConn *gorm.DB, profileAttr *db.Profile) db.Profile {
+	p := db.Profile{
+		UserID:       profileAttr.UserID,
+		Name:         profileAttr.Name,
+		BirthYear:    profileAttr.BirthYear,
+		BirthMonth:   profileAttr.BirthMonth,
+		BirthDay:     profileAttr.BirthDay,
+		Gender:       profileAttr.Gender,
+		HeightCm:     profileAttr.HeightCm,
+		WeightKg:     profileAttr.WeightKg,
+		FitnessLevel: profileAttr.FitnessLevel,
+		Injuries:     profileAttr.Injuries,
+		ArchivedAt:   profileAttr.ArchivedAt,
+	}
+
+	if p.UserID == 0 {
+		val := atomic.AddUint64(&userCounter, 1)
+		u := CreateUser(dbConn, &db.User{
+			Username: "test-user-" + strconv.FormatUint(val, 10),
+		})
+		p.UserID = u.ID
+	}
+
+	g.Expect(dbConn.Create(&p).Error).NotTo(g.HaveOccurred())
+	return p
 }

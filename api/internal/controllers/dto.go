@@ -202,5 +202,17 @@ type VideoDownloadURLResponse struct {
 type ParseWorkoutImageResponse struct {
 	WODDescription string   `json:"wod_description"` // e.g. "Fran" or "For Time: 5 rounds of 10 Deadlifts + 15 Box Jumps"
 	Movements      []string `json:"movements"`       // e.g. ["Thruster", "Pull-up"]
-	RawText        string   `json:"raw_text"`         // raw OCR text extracted from the whiteboard
+	RawText        string   `json:"raw_text"`        // raw OCR text extracted from the whiteboard
+}
+
+type CreateSessionRequest struct {
+	ProfileID      uint     `json:"profile_id"`
+	IdempotencyKey string   `json:"idempotency_key"`
+	Movements      []string `json:"movements,omitempty"`
+	WODDescription string   `json:"wod_description,omitempty"`
+}
+
+type CreateSessionResponse struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
 }

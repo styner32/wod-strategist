@@ -106,6 +106,7 @@ func SetupRouter(appEnv string, apiKey string, allowedOrigins []string,
 	api.POST("/generate-hardsub", ctl.GenerateHardSub)
 	api.POST("/debug/telemetry", ctl.UploadDebugTelemetry)
 	api.POST("/parse-workout-image", ctl.ParseWorkoutImage)
+	api.POST("/sessions", ctl.CreateSession)
 
 	return r, nil
 }

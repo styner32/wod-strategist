@@ -101,7 +101,6 @@ var _ = Describe("stripObservedSignals", func() {
 })
 
 var _ = Describe("NewChunkAnalysisTask", func() {
-
 	It("includes timing fields in the payload", func() {
 		task, err := NewChunkAnalysisTask(
 			"session-1",
@@ -182,7 +181,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			JSON(map[string]any{"name": "files/mock-chunk", "state": "ACTIVE"})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/" + gemini.ModelFlash35 + ":generateContent").
+			Post("/v1beta/models/"+gemini.ModelFlash35+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{

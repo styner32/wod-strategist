@@ -18,8 +18,15 @@
 ## Authoring rules
 - When adding or modifying a column on a model in `internal/db/`, always create a matching migration pair.
 - Prefer `ALTER TABLE ... ADD COLUMN ... DEFAULT <value>` so existing rows are not broken.
-- `down.sql` must use `DROP COLUMN IF EXISTS` for safe rollback.
+- `down.sql` must use `DROP COLUMN IF EXISTS` for safe rollback. For `CREATE TABLE` migrations, `down.sql` must use `DROP TABLE IF EXISTS`.
 - Never call `db.AutoMigrate()` — it bypasses version history and makes rollbacks impossible.
+
+## Schema authority — migrations, not struct tags
+The migration SQL is the **single source of truth** for schema constraints. Do not rely on gorm struct tags (`gorm:"not null;default:..."`, `gorm:"uniqueIndex"`) to enforce anything — they are advisory and silently diverge from the real schema.
+
+- Put `NOT NULL`, `DEFAULT`, `UNIQUE`, foreign keys, and indexes in the `.up.sql` file.
+- Keep gorm struct tags minimal: `primaryKey`, `json:"..."`, and pointer types for nullable columns. Treat the struct as a Go-side row shape, not a schema definition.
+- Use `BIGSERIAL` / `BIGINT` for ID columns to match `uint` in Go without overflow.
 
 ## Migration vs. code order
 - The migration must be authored before or alongside the Go model change — running code against a pre-migration schema will fail at startup.

@@ -4,8 +4,27 @@
 - Prefer real clients over interface-only fakes.
 - Use `api/internal/testhelpers.MockTransport` for outbound HTTP tests.
 - Reuse existing test harnesses and helpers before inventing new ones.
+- Use factories in `testhelpers/factory.go` for entity setup
+  (`CreateUser`, `CreateProfile`, ...). Don't inline `dbConn.Create(&db.Foo{...})`
+  in tests — add a factory and call it.
 
 **Why no `fake*` structs:** IDE "Go to Definition" lands on the interface, not the fake, which slows debugging. Fakes also drift from real client behavior silently (URI parsing, retries, encoding). Real client + `MockTransport` tests the actual code path.
+
+## Controller (route) tests
+
+Integration tests for HTTP routes live in
+`internal/controllers/handlers_integration_test.go`.
+
+- **One `Describe` block per route**, named after the route
+  (`Describe("POST /api/v1/sessions")`, `Describe("GET /api/v1/analysis/:session_id")`).
+  Do not group multiple routes under an omnibus `Describe` like
+  "Controller handlers" or "session_id handlers" — those are legacy.
+- Setup inside `BeforeEach` uses factories from `testhelpers/`. Avoid
+  inline `dbConn.Create(...)` for entities a factory exists for.
+- Use the real `controllers.Controller` wired to the test DB
+  (`config.DB = dbConn`) — no repository fakes.
+- Never leave `FDescribe` / `FIt` / `FContext` in committed code; they
+  cause Ginkgo to silently skip every non-focused spec in the file.
 
 ## Worker integration testing
 Worker handler tests in `internal/worker/*_test.go` follow a **4-layer real-client** strategy:

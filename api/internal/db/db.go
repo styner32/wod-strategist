@@ -44,15 +44,15 @@ const (
 )
 
 type AnalysisResult struct {
-	ID                uint       `gorm:"primaryKey" json:"id"`
-	SessionID         string     `gorm:"uniqueIndex;not null" json:"session_id"`
-	ProfileID         uint       `gorm:"index;not null" json:"profile_id"`
-	AnalysisType      string     `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
-	Status            string     `json:"status"`                           // PENDING, COMPLETED, FAILED
-	Output            string     `json:"output"`
-	InjuryOutput      string     `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
-	HighlightSegments string     `json:"highlight_segments"`      // JSON array of highlight segments
-	Verified          *bool      `json:"verified,omitempty"`      // nil=unchecked, true=confirmed, false=hallucination detected
+	ID                uint   `gorm:"primaryKey" json:"id"`
+	SessionID         string `gorm:"uniqueIndex;not null" json:"session_id"`
+	ProfileID         uint   `gorm:"index;not null" json:"profile_id"`
+	AnalysisType      string `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
+	Status            string `json:"status"`                           // PENDING, COMPLETED, FAILED
+	Output            string `json:"output"`
+	InjuryOutput      string `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
+	HighlightSegments string `json:"highlight_segments"`      // JSON array of highlight segments
+	Verified          *bool  `json:"verified,omitempty"`      // nil=unchecked, true=confirmed, false=hallucination detected
 	// WODDescription is the user-supplied workout descriptor (e.g. "Fran", "For Time: 5 rounds of...").
 	// Injected into analysis prompts to enable benchmark comparison and WOD-type-aware scoring.
 	WODDescription string `gorm:"type:text;not null;default:''" json:"wod_description,omitempty"`
@@ -81,20 +81,20 @@ type HighlightResult struct {
 }
 
 type ChunkAnalysisResult struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
-	SessionID       string    `gorm:"index;not null" json:"session_id"`
-	ProfileID       uint      `gorm:"index;not null" json:"profile_id"`
-	FilePath        string    `json:"file_path"`
-	ExerciseType    string    `json:"exercise_type,omitempty"` // detected movement (e.g. "Snatch", "Pull-up")
-	Status          string    `json:"status"`                  // PENDING, COMPLETED, FAILED
-	Output          string    `json:"output"`
-	ObservedSignals string    `gorm:"type:text;not null;default:'{}'" json:"observed_signals"` // JSON: estimated workout metrics for benchmarking
+	ID                uint      `gorm:"primaryKey" json:"id"`
+	SessionID         string    `gorm:"index;not null" json:"session_id"`
+	ProfileID         uint      `gorm:"index;not null" json:"profile_id"`
+	FilePath          string    `json:"file_path"`
+	ExerciseType      string    `json:"exercise_type,omitempty"` // detected movement (e.g. "Snatch", "Pull-up")
+	Status            string    `json:"status"`                  // PENDING, COMPLETED, FAILED
+	Output            string    `json:"output"`
+	ObservedSignals   string    `gorm:"type:text;not null;default:'{}'" json:"observed_signals"` // JSON: estimated workout metrics for benchmarking
 	HeartRateBPM      int       `gorm:"not null;default:0" json:"heart_rate_bpm"`                // BLE heart rate at chunk capture time (0 = unavailable)
 	StartSecs         *float64  `json:"start_secs,omitempty"`
 	EndSecs           *float64  `json:"end_secs,omitempty"`
-	WorkoutConfidence float64   `gorm:"not null;default:0.0" json:"workout_confidence"`          // confidence if person actually workout
+	WorkoutConfidence float64   `gorm:"not null;default:0.0" json:"workout_confidence"` // confidence if person actually workout
 	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type TokenUsage struct {
@@ -107,6 +107,29 @@ type TokenUsage struct {
 	CandidateTokens int32     `gorm:"not null;default:0" json:"candidate_tokens"`
 	TotalTokens     int32     `gorm:"not null;default:0" json:"total_tokens"`
 	CreatedAt       time.Time `json:"created_at"`
+}
+
+const (
+	SessionStatusStarted   = "started"
+	SessionStatusCompleted = "completed"
+	SessionStatusFailed    = "failed"
+)
+
+type SessionStatus string
+
+func (s SessionStatus) String() string {
+	return string(s)
+}
+
+type Session struct {
+	ID             uint          `gorm:"primaryKey" json:"id"`
+	SessionID      string        `gorm:"uniqueIndex;not null" json:"session_id"`
+	Status         SessionStatus `json:"status"` // started, completed, failed
+	ProfileID      uint          `gorm:"index;not null" json:"profile_id"`
+	IdempotencyKey string        `gorm:"index;not null" json:"idempotency_key"`
+	WODDescription string        `gorm:"not null" json:"wod_description"`
+	UpdatedAt      time.Time     `json:"updated_at"`
+	CreatedAt      time.Time     `json:"created_at"`
 }
 
 func Connect(databaseURL string) (*gorm.DB, error) {

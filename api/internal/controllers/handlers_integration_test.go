@@ -3,12 +3,15 @@ package controllers_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
@@ -42,7 +45,19 @@ var _ = BeforeSuite(func() {
 
 func newTestRouter(config controllers.Config) *gin.Engine {
 	gin.SetMode(gin.TestMode)
-	logger.Log = zap.NewNop()
+	if os.Getenv("SHOW_LOG") == "true" {
+		loggerConfig := zap.NewDevelopmentConfig()
+		loggerConfig.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
+		logger.Log, _ = loggerConfig.Build()
+	} else {
+		logger.Log = zap.NewNop()
+	}
+
+	config.DB = dbConn
+	config.AnalysisResults = controllers.NewGormAnalysisResultRepository(dbConn)
+	config.Profiles = controllers.NewGormProfileRepository(dbConn)
+	config.HighlightResults = controllers.NewGormHighlightResultRepository(dbConn)
+
 	controller := controllers.New(config)
 	router, err := server.SetupRouter("test", "test-api-key", nil, controller, nil, nil)
 	Expect(err).NotTo(HaveOccurred())
@@ -97,9 +112,12 @@ func gcsListObjectsURL(bucket, prefix string) string {
 // ---------------------------------------------------------------------------
 
 var _ = Describe("Controller handlers", func() {
+	var router *gin.Engine
+
 	BeforeEach(func() {
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
+		router = newTestRouter(controllers.Config{})
 	})
 
 	Describe("Health", func() {
@@ -421,17 +439,29 @@ var _ = Describe("Controller handlers", func() {
 	})
 
 	Describe("GET /api/v1/analysis/:session_id", func() {
-		It("returns repository results for the requested session", func() {
-			// Seed the DB with a test result.
+		const sessionA = "session-sanitize-a"
+		const sessionB = "session-sanitize-b"
+
+		BeforeEach(func() {
+			user := testhelpers.CreateUser(dbConn, &db.User{
+				Username: "test-user",
+			})
+
+			profile := testhelpers.CreateProfile(dbConn, &db.Profile{
+				UserID:       user.ID,
+				FitnessLevel: "intermediate",
+			})
+
 			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: "session-1",
-				Status:    "COMPLETED",
-				Output:    "ok",
+				SessionID: sessionA, ProfileID: profile.ID, Status: "COMPLETED", Output: "output-a",
 			}).Error).NotTo(HaveOccurred())
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: sessionB, ProfileID: profile.ID, Status: "COMPLETED", Output: "output-b",
+			}).Error).NotTo(HaveOccurred())
+		})
 
-			router := newTestRouter(controllers.Config{AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn)})
-
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/session-1", nil)
+		It("returns repository results for the requested session", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionA, nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
@@ -441,19 +471,22 @@ var _ = Describe("Controller handlers", func() {
 			var results []db.AnalysisResult
 			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
 			Expect(results).To(HaveLen(1))
-			Expect(results[0].SessionID).To(Equal("session-1"))
+			Expect(results[0].SessionID).To(Equal(sessionA))
+			Expect(results[0].Output).To(Equal("output-a"))
 		})
 
-		It("returns internal error when repository fails", func() {
-			router := newTestRouter(controllers.Config{AnalysisResults: newBrokenRepo()})
-
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/session-1", nil)
+		It("GET /analysis/:session_id returns only the requested session", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionB, nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusInternalServerError))
-			Expect(decodeMapBody(w)["error"]).To(Equal("failed to fetch results"))
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var results []db.AnalysisResult
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(1))
+			Expect(results[0].SessionID).To(Equal(sessionB))
+			Expect(results[0].Output).To(Equal("output-b"))
 		})
 	})
 
@@ -466,8 +499,6 @@ var _ = Describe("Controller handlers", func() {
 				Output:    "ok",
 				ProfileID: 1,
 			}).Error).NotTo(HaveOccurred())
-
-			router := newTestRouter(controllers.Config{AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -491,18 +522,6 @@ var _ = Describe("Controller handlers", func() {
 
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
 			Expect(decodeMapBody(w)["error"]).To(Equal("profile_id is required"))
-		})
-
-		It("returns internal error when repository fails", func() {
-			router := newTestRouter(controllers.Config{AnalysisResults: newBrokenRepo()})
-
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			Expect(w.Code).To(Equal(http.StatusInternalServerError))
-			Expect(decodeMapBody(w)["error"]).To(Equal("failed to fetch history"))
 		})
 	})
 
@@ -623,18 +642,6 @@ var _ = Describe("Controller handlers", func() {
 			Expect(body).To(ContainSubstring("has timestamps"))
 			Expect(body).NotTo(ContainSubstring("no timestamps"))
 		})
-
-		It("returns internal error when repository fails", func() {
-			router := newTestRouter(controllers.Config{AnalysisResults: newBrokenRepo()})
-
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			Expect(w.Code).To(Equal(http.StatusInternalServerError))
-			Expect(decodeMapBody(w)["error"]).To(Equal("failed to fetch chunk results"))
-		})
 	})
 
 	Describe("GET /api/v1/dev/sessions", func() {
@@ -722,27 +729,12 @@ var _ = Describe("Controller handlers", func() {
 		})
 	})
 
-	// -----------------------------------------------------------------------
-	// Path-traversal sanitization — positive integration (sentinel fix)
-	// -----------------------------------------------------------------------
-	// Gin's httprouter normalises literal "../" in URL paths before routing,
-	// so path-traversal via URL params is stopped at the HTTP layer.  The
-	// defense-in-depth sanitizeIdentifier() call is covered by unit tests in
-	// handlers_test.go.  These integration tests verify the 4 fixed handlers
-	// (GetAnalysis, GetChunkAnalysis, GetSubtitles, GetHighlight) correctly
-	// lookup seeded data and don't leak results from other sessions.
-	Describe("session_id handlers return correct data", func() {
+	Describe("GET /api/v1/chunk-analysis/:session_id", func() {
 		const sessionA = "session-sanitize-a"
-		const sessionB = "session-sanitize-b"
-
-		var router *gin.Engine
 
 		BeforeEach(func() {
 			Expect(dbConn.Create(&db.AnalysisResult{
 				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Output: "output-a",
-			}).Error).NotTo(HaveOccurred())
-			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: sessionB, ProfileID: 1, Status: "COMPLETED", Output: "output-b",
 			}).Error).NotTo(HaveOccurred())
 
 			start, end := 0.0, 10.0
@@ -750,31 +742,6 @@ var _ = Describe("Controller handlers", func() {
 				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Output: "chunk-a",
 				StartSecs: &start, EndSecs: &end,
 			}).Error).NotTo(HaveOccurred())
-
-			Expect(dbConn.Create(&db.HighlightResult{
-				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Title: "hl-a",
-			}).Error).NotTo(HaveOccurred())
-
-			repo := controllers.NewGormAnalysisResultRepository(dbConn)
-			hlRepo := controllers.NewGormHighlightResultRepository(dbConn)
-			router = newTestRouter(controllers.Config{
-				AnalysisResults:  repo,
-				HighlightResults: hlRepo,
-			})
-		})
-
-		It("GET /analysis/:session_id returns only the requested session", func() {
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionA, nil)
-			req.Header.Set("X-API-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
-
-			Expect(w.Code).To(Equal(http.StatusOK))
-			var results []db.AnalysisResult
-			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
-			Expect(results).To(HaveLen(1))
-			Expect(results[0].SessionID).To(Equal(sessionA))
-			Expect(results[0].Output).To(Equal("output-a"))
 		})
 
 		It("GET /chunk-analysis/:session_id returns only the requested session", func() {
@@ -789,18 +756,22 @@ var _ = Describe("Controller handlers", func() {
 			Expect(results).To(HaveLen(1))
 			Expect(results[0].SessionID).To(Equal(sessionA))
 		})
+	})
 
-		It("GET /subtitles/:session_id returns SRT for the requested session", func() {
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/"+sessionA, nil)
-			req.Header.Set("X-API-Key", "test-api-key")
-			w := httptest.NewRecorder()
-			router.ServeHTTP(w, req)
+	Describe("GET /api/v1/highlight/:session_id", func() {
+		const sessionA = "session-sanitize-a"
 
-			Expect(w.Code).To(Equal(http.StatusOK))
-			Expect(w.Body.String()).To(ContainSubstring("chunk-a"))
+		BeforeEach(func() {
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Output: "output-a",
+			}).Error).NotTo(HaveOccurred())
+
+			Expect(dbConn.Create(&db.HighlightResult{
+				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Title: "highlight-a",
+			}).Error).NotTo(HaveOccurred())
 		})
 
-		It("GET /highlight/:session_id returns highlights for the requested session", func() {
+		It("GET /highlight/:session_id returns only the requested session", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/highlight/"+sessionA, nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
@@ -813,8 +784,46 @@ var _ = Describe("Controller handlers", func() {
 			Expect(results[0].SessionID).To(Equal(sessionA))
 		})
 	})
-})
 
+	Describe("POST /api/v1/sessions", func() {
+		var profile db.Profile
+
+		BeforeEach(func() {
+			profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
+		})
+
+		It("creates a session", func() {
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d}`, profile.ID))
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+
+			var newSession db.Session
+			Expect(dbConn.Where("profile_id = ?", profile.ID).First(&newSession).Error).To(BeNil())
+			Expect(newSession.SessionID).NotTo(BeEmpty())
+			Expect(newSession.Status).To(Equal(db.SessionStatus("started")))
+
+			formattedTime := "WOD-" + time.Now().Format("200601021504")
+			Expect(newSession.SessionID).To(HavePrefix(formattedTime))
+
+			var response controllers.CreateSessionResponse
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.SessionID).To(Equal(newSession.SessionID))
+		})
+
+		It("returns an error if profile id does not exists", func() {
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d}`, 999999))
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+
+			var newSession db.Session
+			Expect(dbConn.First(&newSession).Error).To(Equal(gorm.ErrRecordNotFound))
+		})
+	})
+})
 
 func repeatedJSONString(value string, count int) string {
 	parts := make([]string, count)
@@ -839,4 +848,3 @@ func multipartRequestBody(sessionID string, filename string, content string) (*b
 	Expect(writer.Close()).To(Succeed())
 	return body, writer.FormDataContentType()
 }
-

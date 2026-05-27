@@ -254,13 +254,8 @@ func (ctl *Controller) Upload(c *gin.Context) {
 	})
 }
 
+// GET /analysis/:session_id
 func (ctl *Controller) GetAnalysis(c *gin.Context) {
-	if ctl.analysisResults == nil {
-		logger.Log.Error("analysis result repository is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch results"})
-		return
-	}
-
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
 	if !ctl.assertOwnsSession(c, sessionID) {
 		return
