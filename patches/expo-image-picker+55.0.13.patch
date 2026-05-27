@@ -1,0 +1,17 @@
+diff --git a/node_modules/expo-image-picker/ios/ImagePickerPermissionRequesters.swift b/node_modules/expo-image-picker/ios/ImagePickerPermissionRequesters.swift
+index f47b6ef..f6b2b73 100644
+--- a/node_modules/expo-image-picker/ios/ImagePickerPermissionRequesters.swift
++++ b/node_modules/expo-image-picker/ios/ImagePickerPermissionRequesters.swift
+@@ -19,10 +19,10 @@ public class CameraPermissionRequester: NSObject, EXPermissionsRequester {
+     var status: EXPermissionStatus
+     let cameraUsageDescription = Bundle.main.object(forInfoDictionaryKey: "NSCameraUsageDescription")
+     if cameraUsageDescription == nil {
+-      RCTFatal(RCTErrorWithMessage("""
++      fatalError("""
+       This app is missing 'NSCameraUsageDescription', video services will fail. \
+       Ensure this key exists in the app's Info.plist
+-      """))
++      """)
+       systemStatus = AVAuthorizationStatus.denied
+     } else {
+       systemStatus = AVCaptureDevice.authorizationStatus(for: AVMediaType.video)

@@ -77,6 +77,7 @@ function collectSample(): TelemetrySample {
     ...(cachedBattery !== undefined ? { batt: cachedBattery } : {}),
     ...(merged.chunkIdx !== undefined ? { chunkIdx: merged.chunkIdx } : {}),
     ...(merged.motion ? { motion: merged.motion } : {}),
+    ...(merged.workoutConf !== undefined ? { workoutConf: merged.workoutConf } : {}),
   };
 }
 

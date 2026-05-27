@@ -145,7 +145,8 @@ export default function VisionTestPage() {
   const isChunkRecordingActive = useRef(false);
 
   // Track frames during the current chunk to calculate workout confidence
-  const chunkWorkoutFrames = useRef<boolean[]>([]);
+  // (counting now happens inside usePoseDetection's useRunOnJS callback,
+  // which is immune to React state batching — see resetFrameCounts below)
 
 
 
@@ -246,12 +247,7 @@ export default function VisionTestPage() {
     return () => clearInterval(interval);
   }, [isRecording, workoutType]);
 
-  // Accumulate workout detection frames during chunk recording
-  useEffect(() => {
-    if (isRecording) {
-      chunkWorkoutFrames.current.push(monitorData.isWorkingOut);
-    }
-  }, [monitorData, isRecording]);
+
 
   // Keep screen awake while recording (prevents Android/iOS sleep)
   useEffect(() => {
@@ -312,7 +308,7 @@ export default function VisionTestPage() {
   );
 
   // Pass isRecording to the hook to toggle inference on/off
-  const { frameProcessor, poseResult, monitorData } = usePoseDetection(isRecording);
+  const { frameProcessor, poseResult, monitorData, resetFrameCounts, getWorkoutConfidence } = usePoseDetection(isRecording);
   const { bpm, status: hrStatus } = useBleHeartRate();
   // const { bpm, status: hrStatus } = useHeartRate();
 
@@ -379,14 +375,15 @@ export default function VisionTestPage() {
           // even if recording has stopped (orphan chunk).
           chunkPaths.current.push(video.path);
 
-          // Calculate workout confidence index based on collected frames
-          const frames = chunkWorkoutFrames.current;
-          const workoutConfidence = frames.length > 0
-            ? frames.filter(Boolean).length / frames.length
+          // Calculate workout confidence index from per-frame counts.
+          // resetFrameCounts reads and resets the counters that are incremented
+          // directly in the useRunOnJS callback (not via useEffect), so every
+          // inference frame is counted regardless of React state batching.
+          const { total: totalFrames, workout: workoutFrames } = resetFrameCounts();
+          const workoutConfidence = totalFrames > 0
+            ? workoutFrames / totalFrames
             : 0.0;
-          // Reset frames array for the next chunk
-          chunkWorkoutFrames.current = [];
-          console.log(`📊 Chunk workout confidence: ${(workoutConfidence * 100).toFixed(1)}% (${frames.filter(Boolean).length}/${frames.length} frames)`);
+          console.log(`📊 Chunk workout confidence: ${(workoutConfidence * 100).toFixed(1)}% (${workoutFrames}/${totalFrames} frames)`);
 
           // Skip upload if recording has already been stopped
           if (!isRecordingChunks.current) {
@@ -632,6 +629,9 @@ export default function VisionTestPage() {
       TelemetryRecorder.start(sessionIdRef.current, profileId!);
       TelemetryRecorder.registerProvider('hr', () => ({ hr: bpmRef.current }));
       TelemetryRecorder.registerProvider('chunk', () => ({ chunkIdx: chunkCountRef.current }));
+      TelemetryRecorder.registerProvider('workoutConf', () => ({
+        workoutConf: Math.round(getWorkoutConfidence() * 1000) / 1000,
+      }));
 
       // Record sequential chunks: each is uploaded for real-time analysis,
       // and raw chunk files are kept locally for gallery-save merge.

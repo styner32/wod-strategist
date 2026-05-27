@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { useTensorflowModel } from 'react-native-fast-tflite';
 import { useSharedValue } from 'react-native-reanimated';
@@ -40,6 +40,11 @@ export function usePoseDetection(
   const lastPose = useSharedValue<number[] | null>(null);
   const motionEma = useSharedValue(0);
 
+  // Frame-level workout counters — incremented inside the useRunOnJS callback
+  // (which fires for every inference frame, bypassing React state batching).
+  const inferenceFrameCount = useRef(0);
+  const workoutFrameCount = useRef(0);
+
   // Use a SharedValue for isRecording so the worklet always sees the latest
   // value without depending on closure re-capture timing.
   const isRecordingSV = useSharedValue(isRecording);
@@ -60,6 +65,12 @@ export function usePoseDetection(
 
   const updateMonitorSafe = useRunOnJS((data) => {
     setMonitorData(data);
+    // Count frames for workout confidence — runs per-frame, not via useEffect,
+    // so it is immune to React state batching that can drop intermediate values.
+    inferenceFrameCount.current++;
+    if (data.isWorkingOut) {
+      workoutFrameCount.current++;
+    }
     // Log every 15th frame to Metro console for debugging
     if (data._debugCount !== undefined && data._debugCount % 15 === 0) {
       console.log(`🦴 POSE [${data._debugCount}] conf=${(data.confidence * 100).toFixed(1)}% frame=${data._frameW}x${data._frameH} orient=${data._frameOrientation} raw=[${
@@ -210,5 +221,26 @@ export function usePoseDetection(
     });
   }, [plugin, updateMonitorSafe]);
 
-  return { frameProcessor, poseResult, monitorData, isModelLoaded: plugin.state === 'loaded' };
+  /**
+   * Returns the accumulated workout/total frame counts since the last reset.
+   * Call this at chunk boundaries to compute workout confidence, then reset.
+   */
+  const resetFrameCounts = useCallback(() => {
+    const total = inferenceFrameCount.current;
+    const workout = workoutFrameCount.current;
+    inferenceFrameCount.current = 0;
+    workoutFrameCount.current = 0;
+    return { total, workout };
+  }, []);
+
+  /**
+   * Returns the current workout confidence (0..1) without resetting counters.
+   * Useful for telemetry sampling at 1Hz.
+   */
+  const getWorkoutConfidence = useCallback((): number => {
+    const total = inferenceFrameCount.current;
+    return total > 0 ? workoutFrameCount.current / total : 0;
+  }, []);
+
+  return { frameProcessor, poseResult, monitorData, isModelLoaded: plugin.state === 'loaded', resetFrameCounts, getWorkoutConfidence };
 }
