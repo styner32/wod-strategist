@@ -17,6 +17,7 @@ import (
 	"github.com/hibiken/asynq"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/auth"
 	"github.com/wod-strategist/api/internal/controllers"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
@@ -28,8 +29,9 @@ import (
 )
 
 var (
-	dbConn    *gorm.DB
-	inspector *asynq.Inspector
+	dbConn      *gorm.DB
+	inspector   *asynq.Inspector
+	authService *auth.Service
 )
 
 var _ = BeforeSuite(func() {
@@ -37,6 +39,11 @@ var _ = BeforeSuite(func() {
 	dbConn, err = testhelpers.InitDB()
 	Expect(err).NotTo(HaveOccurred())
 	inspector = testhelpers.NewQueueInspector()
+
+	testJWTSecret := []byte(os.Getenv("JWT_SIGNING_SECRET"))
+	authService = auth.NewService(dbConn, []byte(testJWTSecret))
+
+	testhelpers.InitLogger()
 })
 
 // ---------------------------------------------------------------------------
@@ -45,13 +52,6 @@ var _ = BeforeSuite(func() {
 
 func newTestRouter(config controllers.Config) *gin.Engine {
 	gin.SetMode(gin.TestMode)
-	if os.Getenv("SHOW_LOG") == "true" {
-		loggerConfig := zap.NewDevelopmentConfig()
-		loggerConfig.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
-		logger.Log, _ = loggerConfig.Build()
-	} else {
-		logger.Log = zap.NewNop()
-	}
 
 	config.DB = dbConn
 	config.AnalysisResults = controllers.NewGormAnalysisResultRepository(dbConn)
@@ -64,10 +64,39 @@ func newTestRouter(config controllers.Config) *gin.Engine {
 	return router
 }
 
-func newAuthorizedJSONRequest(method string, path string, body string) *http.Request {
+func newTestRouterWithAuthService(config controllers.Config) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	if os.Getenv("SHOW_LOG") == "true" {
+		loggerConfig := zap.NewDevelopmentConfig()
+		loggerConfig.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
+		loggerConfig.DisableStacktrace = true
+		logger.Log, _ = loggerConfig.Build()
+	} else {
+		logger.Log = zap.NewNop()
+	}
+
+	config.DB = dbConn
+	config.AnalysisResults = controllers.NewGormAnalysisResultRepository(dbConn)
+	config.Profiles = controllers.NewGormProfileRepository(dbConn)
+	config.HighlightResults = controllers.NewGormHighlightResultRepository(dbConn)
+
+	controller := controllers.New(config)
+	router, err := server.SetupRouter("test", "test-api-key", nil, controller, nil, authService)
+	Expect(err).NotTo(HaveOccurred())
+	return router
+}
+
+func newAuthorizedJSONRequest(method string, path string, body string, user ...*db.User) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-API-Key", "test-api-key")
+
+	if len(user) > 0 {
+		token, err := authService.IssueTokenByUser(user[0])
+		Expect(err).NotTo(HaveOccurred())
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
 	return req
 }
 
@@ -81,17 +110,6 @@ func decodeMapBody(w *httptest.ResponseRecorder) map[string]any {
 // because it points at an unreachable Redis address.
 func newBrokenQueueClient() *asynq.Client {
 	return asynq.NewClient(asynq.RedisClientOpt{Addr: "localhost:1"})
-}
-
-// newBrokenRepo returns a controllers.GormAnalysisResultRepository backed by a closed DB
-// connection so every query returns an error.
-func newBrokenRepo() *controllers.GormAnalysisResultRepository {
-	closedDB, err := testhelpers.InitDB()
-	Expect(err).NotTo(HaveOccurred())
-	sqlDB, err := closedDB.DB()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(sqlDB.Close()).To(Succeed())
-	return controllers.NewGormAnalysisResultRepository(closedDB)
 }
 
 // gcsUploadURL builds the exact URL path the GCS Go client sends for a
@@ -117,7 +135,6 @@ var _ = Describe("Controller handlers", func() {
 	BeforeEach(func() {
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
-		router = newTestRouter(controllers.Config{})
 	})
 
 	Describe("Health", func() {
@@ -443,6 +460,8 @@ var _ = Describe("Controller handlers", func() {
 		const sessionB = "session-sanitize-b"
 
 		BeforeEach(func() {
+			router = newTestRouter(controllers.Config{})
+
 			user := testhelpers.CreateUser(dbConn, &db.User{
 				Username: "test-user",
 			})
@@ -787,13 +806,17 @@ var _ = Describe("Controller handlers", func() {
 
 	Describe("POST /api/v1/sessions", func() {
 		var profile db.Profile
+		var user db.User
 
 		BeforeEach(func() {
+			router = newTestRouterWithAuthService(controllers.Config{})
 			profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
+			err := dbConn.Where("id = ?", profile.UserID).First(&user).Error
+			Expect(err).To(BeNil())
 		})
 
 		It("creates a session", func() {
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d}`, profile.ID))
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d}`, profile.ID), &user)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -813,11 +836,29 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("returns an error if profile id does not exists", func() {
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d}`, 999999))
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d}`, 999999), &user)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(w.Body.String()).To(ContainSubstring("profile not found"))
+
+			var newSession db.Session
+			Expect(dbConn.First(&newSession).Error).To(Equal(gorm.ErrRecordNotFound))
+		})
+
+		It("returns an error if profile does not belong to current user", func() {
+			profile2 := testhelpers.CreateProfile(dbConn, &db.Profile{})
+			user2 := db.User{}
+			err := dbConn.Where("id = ?", profile2.UserID).First(&user2).Error
+			Expect(err).To(BeNil())
+
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d}`, profile.ID), &user2)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusForbidden))
+			Expect(w.Body.String()).To(ContainSubstring("not authorized for this profile"))
 
 			var newSession db.Session
 			Expect(dbConn.First(&newSession).Error).To(Equal(gorm.ErrRecordNotFound))

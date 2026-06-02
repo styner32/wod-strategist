@@ -26,14 +26,12 @@ func (ctl *Controller) CreateSession(c *gin.Context) {
 	if req.WODDescription != "" {
 		wodDescription = req.WODDescription
 	} else if len(req.Movements) > 0 {
-		wodDescription = strings.Join(req.Movements, ",")
+		wodDescription = "Individual movements: " + strings.Join(req.Movements, ",")
 	} else {
 		logger.Log.Warn("No WOD description or movements provided for CreateSession", zap.Any("request", req))
 	}
 
-	// TODO: validate wod does not have prompt injection.
-
-	_, err := gorm.G[db.Profile](ctl.db).Where("id = ?", req.ProfileID).First(c)
+	profile, err := gorm.G[db.Profile](ctl.db).Where("id = ?", req.ProfileID).First(c)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "profile not found"})
@@ -45,7 +43,12 @@ func (ctl *Controller) CreateSession(c *gin.Context) {
 		return
 	}
 
-	sessionName := "WOD-" + time.Now().Format("200601021504") + "-" + ulid.Make().String() // WOD-{YYYYMMDDHHMM}-{ULID}
+	if !ctl.assertOwnsProfile(c, profile.ID) {
+		return
+	}
+
+	// WOD-{YYYYMMDDHHMM}-{ULID}
+	sessionName := "WOD-" + time.Now().Format("200601021504") + "-" + ulid.Make().String()
 	newSession := db.Session{SessionID: sessionName, ProfileID: req.ProfileID, IdempotencyKey: req.IdempotencyKey, WODDescription: wodDescription}
 	if err := gorm.G[db.Session](ctl.db).Select("SessionID", "ProfileID", "IdempotencyKey", "WODDescription").Create(c, &newSession); err != nil {
 		logger.Log.Error("Failed to create session", zap.Any("request", req), zap.Error(err))

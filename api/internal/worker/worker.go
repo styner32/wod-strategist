@@ -19,29 +19,42 @@ import (
 )
 
 const (
-	TypeVideoAnalysis     = "video:analysis"
-	TypeChunkAnalysis     = "chunk:analysis"
-	TypeMergeChunks       = "merge:chunks"
-	TypeInjuryAnalysis    = "injury:analysis"
-	TypeGenerateHighlight = "highlight:generate"
-	TypeVerifyHighlights  = "highlight:verify"
-	TypeGenerateHardSub   = "hardsub:generate"
-	WorkoutTypeWOD        = "wod"
+	TypeVideoAnalysis            = "video:analysis"
+	TypeChunkAnalysis            = "chunk:analysis"
+	TypeChunkAnalysisWithSession = "chunk:analysis-with-session"
+	TypeMergeChunks              = "merge:chunks"
+	TypeInjuryAnalysis           = "injury:analysis"
+	TypeGenerateHighlight        = "highlight:generate"
+	TypeVerifyHighlights         = "highlight:verify"
+	TypeGenerateHardSub          = "hardsub:generate"
+	WorkoutTypeWOD               = "wod"
 )
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.
 type VideoAnalysisPayload struct {
-	SessionID      string
-	FilePath       string
-	WorkoutType    string
-	Movements      []string
-	Injuries       []string
-	ProfileID      uint
-	StartSecs      float64
-	EndSecs        float64
-	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`   // BLE heart rate at chunk capture time
-	EnableTTS         bool    `json:"enable_tts,omitempty"`       // generate TTS narration in hardsub
-	WODDescription    string  `json:"wod_description,omitempty"`  // user-supplied WOD descriptor (e.g. "Fran", "For Time: 5 rounds of...")
+	SessionID         string
+	FilePath          string
+	WorkoutType       string
+	Movements         []string
+	Injuries          []string
+	ProfileID         uint
+	StartSecs         float64
+	EndSecs           float64
+	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate at chunk capture time
+	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
+	WODDescription    string  `json:"wod_description,omitempty"`    // user-supplied WOD descriptor (e.g. "Fran", "For Time: 5 rounds of...")
+	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
+}
+
+// VideoAnalysisWithSessionPayload is used when session_id is available (when user has selected a session to upload)
+type VideoAnalysisWithSessionPayload struct {
+	SessionID         string
+	FilePath          string
+	ProfileID         uint
+	StartSecs         float64
+	EndSecs           float64
+	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate at chunk capture time
+	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
 	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
 }
 

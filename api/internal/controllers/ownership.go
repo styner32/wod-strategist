@@ -1,12 +1,14 @@
 package controllers
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // assertOwnsProfile checks that the given profile belongs to the authenticated
@@ -19,20 +21,20 @@ func (ctl *Controller) assertOwnsProfile(c *gin.Context, profileID uint) bool {
 		return true
 	}
 
-	if ctl.db == nil {
-		logger.Log.Error("db not configured for ownership check")
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return false
-	}
-
 	var profile db.Profile
 	err := ctl.db.Where("id = ? AND user_id = ?", profileID, userID).First(&profile).Error
 	if err != nil {
-		logger.Log.Warn("profile ownership check failed",
-			zap.Uint("profile_id", profileID),
-			zap.Uint("user_id", userID),
-			zap.Error(err))
-		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			logger.Log.Warn("No workout profile found for current user",
+				zap.Uint("profile_id", profileID),
+				zap.Uint("user_id", userID))
+
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "not authorized for this profile"})
+			return false
+		}
+
+		logger.Log.Warn("profile ownership check failed", zap.Error(err))
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return false
 	}
 

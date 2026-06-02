@@ -1,127 +1,94 @@
 package worker
 
 import (
-	"strings"
-	"testing"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 // ── parseSessionScore ──────────────────────────────────────────────────────────
 
-func TestParseSessionScore_Valid(t *testing.T) {
-	input := `분석 완료.
+var _ = Describe("parseSessionScore", func() {
+	It("extracts valid score JSON from a ```score block", func() {
+		input := `분석 완료.
 
 ` + "```score\n" + `{"overall":74,"form":68,"intensity":82,"consistency":72,"movements":{"Snatch":{"form":65,"intensity":80}},"summary":"스내치 풀 익스텐션이 개선되었습니다."}
 ` + "```"
 
-	got := parseSessionScore(input)
-	if got == "{}" {
-		t.Fatal("expected non-empty score JSON, got {}")
-	}
-	if !strings.Contains(got, "74") {
-		t.Errorf("expected overall=74 in output, got: %s", got)
-	}
-	if !strings.Contains(got, "Snatch") {
-		t.Errorf("expected Snatch movement in output, got: %s", got)
-	}
-}
+		got := parseSessionScore(input)
+		Expect(got).NotTo(Equal("{}"))
+		Expect(got).To(ContainSubstring("74"))
+		Expect(got).To(ContainSubstring("Snatch"))
+	})
 
-func TestParseSessionScore_Missing(t *testing.T) {
-	input := "분석만 있고 점수 블록 없음."
-	got := parseSessionScore(input)
-	if got != "{}" {
-		t.Errorf("expected '{}' when no score block, got: %s", got)
-	}
-}
+	It("returns {} when no score block is present", func() {
+		got := parseSessionScore("분석만 있고 점수 블록 없음.")
+		Expect(got).To(Equal("{}"))
+	})
 
-func TestParseSessionScore_MalformedJSON(t *testing.T) {
-	input := "```score\n{not valid json}\n```"
-	got := parseSessionScore(input)
-	if got != "{}" {
-		t.Errorf("expected '{}' for malformed JSON, got: %s", got)
-	}
-}
+	It("returns {} for malformed JSON inside a score block", func() {
+		got := parseSessionScore("```score\n{not valid json}\n```")
+		Expect(got).To(Equal("{}"))
+	})
 
-func TestParseSessionScore_ZeroScoreSkipped(t *testing.T) {
-	// A valid JSON with all-zero values still parses (zero is a valid score)
-	input := "```score\n{\"overall\":0,\"form\":0,\"intensity\":0,\"consistency\":0,\"movements\":{},\"summary\":\"\"}\n```"
-	got := parseSessionScore(input)
-	// Should parse successfully and return the zero-score JSON
-	if got == "{}" {
-		t.Errorf("expected valid JSON output for zero scores, got: %s", got)
-	}
-}
+	It("parses valid JSON with all-zero scores", func() {
+		// A valid JSON with all-zero values still parses (zero is a valid score)
+		input := "```score\n{\"overall\":0,\"form\":0,\"intensity\":0,\"consistency\":0,\"movements\":{},\"summary\":\"\"}\n```"
+		got := parseSessionScore(input)
+		// Should parse successfully and return the zero-score JSON
+		Expect(got).NotTo(Equal("{}"))
+	})
+})
 
 // ── buildWODContext ───────────────────────────────────────────────────────────
 
-func TestBuildWODContext_Empty(t *testing.T) {
-	got := buildWODContext("")
-	if got != "" {
-		t.Errorf("expected empty string for empty WOD, got: %q", got)
-	}
-}
+var _ = Describe("buildWODContext", func() {
+	It("returns empty string for empty WOD", func() {
+		Expect(buildWODContext("")).To(BeEmpty())
+	})
 
-func TestBuildWODContext_Whitespace(t *testing.T) {
-	got := buildWODContext("   ")
-	if got != "" {
-		t.Errorf("expected empty string for whitespace-only WOD, got: %q", got)
-	}
-}
+	It("returns empty string for whitespace-only WOD", func() {
+		Expect(buildWODContext("   ")).To(BeEmpty())
+	})
 
-func TestBuildWODContext_NamedFran(t *testing.T) {
-	got := buildWODContext("Fran")
-	if !strings.Contains(got, "21-15-9") {
-		t.Errorf("expected Fran benchmark text, got: %s", got)
-	}
-	if !strings.Contains(got, "For Time") {
-		t.Errorf("expected 'For Time' hint in Fran context, got: %s", got)
-	}
-}
+	It("includes WOD description and hint for named WOD 'Fran'", func() {
+		got := buildWODContext("Fran")
+		Expect(got).To(ContainSubstring("Fran"))
+		Expect(got).To(ContainSubstring("WOD 구성을 참고"))
+	})
 
-func TestBuildWODContext_NamedGrace(t *testing.T) {
-	got := buildWODContext("Grace")
-	if !strings.Contains(got, "Clean & Jerks") {
-		t.Errorf("expected Grace benchmark text, got: %s", got)
-	}
-}
+	It("includes WOD description and hint for named WOD 'Grace'", func() {
+		got := buildWODContext("Grace")
+		Expect(got).To(ContainSubstring("Grace"))
+		Expect(got).To(ContainSubstring("WOD 구성을 참고"))
+	})
 
-func TestBuildWODContext_CustomForTime(t *testing.T) {
-	got := buildWODContext("For Time: 5 rounds of 10 Deadlifts + 15 Box Jumps")
-	if !strings.Contains(got, "For Time") {
-		t.Errorf("expected 'For Time' context, got: %s", got)
-	}
-}
+	It("includes 'For Time' context for custom For Time WOD", func() {
+		got := buildWODContext("For Time: 5 rounds of 10 Deadlifts + 15 Box Jumps")
+		Expect(got).To(ContainSubstring("For Time"))
+	})
 
-func TestBuildWODContext_CustomAMRAP(t *testing.T) {
-	got := buildWODContext("AMRAP 20: 5 Pull-ups, 10 Push-ups, 15 Air Squats")
-	if !strings.Contains(got, "AMRAP") {
-		t.Errorf("expected 'AMRAP' context, got: %s", got)
-	}
-}
+	It("includes 'AMRAP' context for custom AMRAP WOD", func() {
+		got := buildWODContext("AMRAP 20: 5 Pull-ups, 10 Push-ups, 15 Air Squats")
+		Expect(got).To(ContainSubstring("AMRAP"))
+	})
 
-func TestBuildWODContext_CustomEMOM(t *testing.T) {
-	got := buildWODContext("EMOM 12: 8 KB Swings")
-	if !strings.Contains(got, "EMOM") {
-		t.Errorf("expected 'EMOM' context, got: %s", got)
-	}
-	if !strings.Contains(got, "form") {
-		t.Errorf("expected form emphasis for EMOM, got: %s", got)
-	}
-}
+	It("includes EMOM context with form emphasis", func() {
+		got := buildWODContext("EMOM 12: 8 KB Swings")
+		Expect(got).To(ContainSubstring("EMOM"))
+		Expect(got).To(ContainSubstring("form"))
+	})
+})
 
 // ── buildHistoryContext (nil-safe checks) ─────────────────────────────────────
 
-func TestBuildHistoryContext_NilDB(t *testing.T) {
-	w := &Worker{DB: nil}
-	got := w.buildHistoryContext(1, 5)
-	if got != "" {
-		t.Errorf("expected empty string when DB is nil, got: %q", got)
-	}
-}
+var _ = Describe("buildHistoryContext", func() {
+	It("returns empty string when DB is nil", func() {
+		w := &Worker{DB: nil}
+		Expect(w.buildHistoryContext(1, 5)).To(BeEmpty())
+	})
 
-func TestBuildHistoryContext_ZeroProfileID(t *testing.T) {
-	w := &Worker{DB: nil}
-	got := w.buildHistoryContext(0, 5)
-	if got != "" {
-		t.Errorf("expected empty string when profileID is 0, got: %q", got)
-	}
-}
+	It("returns empty string when profileID is 0", func() {
+		w := &Worker{DB: nil}
+		Expect(w.buildHistoryContext(0, 5)).To(BeEmpty())
+	})
+})

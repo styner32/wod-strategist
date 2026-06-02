@@ -43,12 +43,12 @@ var scoreBlockRegex = regexp.MustCompile("(?is)```score\\s*(\\{.*?\\})\\s*```")
 
 // SessionScore is the parsed structure of the score JSON block.
 type SessionScore struct {
-	Overall     int                        `json:"overall"`
-	Form        int                        `json:"form"`
-	Intensity   int                        `json:"intensity"`
-	Consistency int                        `json:"consistency"`
-	Movements   map[string]map[string]int  `json:"movements"`
-	Summary     string                     `json:"summary"`
+	Overall     int                       `json:"overall"`
+	Form        int                       `json:"form"`
+	Intensity   int                       `json:"intensity"`
+	Consistency int                       `json:"consistency"`
+	Movements   map[string]map[string]int `json:"movements"`
+	Summary     string                    `json:"summary"`
 }
 
 // parseSessionScore extracts the ```score {...} ``` JSON block from model output.
@@ -73,74 +73,42 @@ func parseSessionScore(output string) string {
 }
 
 // buildWODContext returns a Korean prompt section describing the WOD if wod_description is set.
-// For named WODs (Fran, Grace, etc.) it adds known benchmark context.
-// For custom WODs it adds round/rep structure context.
-// Returns "" if wod_description is empty.
 func buildWODContext(wodDescription string) string {
 	if strings.TrimSpace(wodDescription) == "" {
 		return ""
+	}
+
+	if strings.HasPrefix(strings.ToLower(wodDescription), "individual movements: ") {
+		return fmt.Sprintf("\n\n## 확인된 운동 종목 (사용자 입력)\n아래 운동들은 이 세션에서 **확실히 수행되는 운동**입니다. AI 감지가 불확실할 경우 이 목록을 우선 참고하세요.\n%s", strings.TrimPrefix(wodDescription, "Individual movements: "))
 	}
 
 	var sb strings.Builder
 	sb.WriteString("\n\n## 오늘의 WOD\n")
 	sb.WriteString(wodDescription)
 
-	// Named WOD benchmark hints
-	lower := strings.ToLower(strings.TrimSpace(wodDescription))
-	switch lower {
-	case "fran":
-		sb.WriteString(`
-→ Fran: 21-15-9 Thrusters (43/30kg) + Pull-ups, For Time
-→ 엘리트 기준: ~2분, 중급: ~5-7분, 초급: ~10분 이하
-→ 짧고 강도 높은 구성 — 강도(intensity)와 페이스 유지를 중점 평가하세요.`)
-	case "grace":
-		sb.WriteString(`
-→ Grace: 30 Clean & Jerks (61/43kg), For Time
-→ 엘리트 기준: ~1분 30초, 중급: ~4-6분, 초급: ~8분 이하
-→ 단순 반복 구성 — 세트 간 케이던스 일관성을 중점 평가하세요.`)
-	case "helen":
-		sb.WriteString(`
-→ Helen: 3 rounds — 400m Run + 21 KB Swings (24/16kg) + 12 Pull-ups, For Time
-→ 엘리트 기준: ~8분, 중급: ~12-15분, 초급: ~20분 이하
-→ 라운드별 페이스 유지와 피로 누적을 추적하세요.`)
-	case "murph":
-		sb.WriteString(`
-→ Murph: 1 Mile Run + 100 Pull-ups + 200 Push-ups + 300 Air Squats + 1 Mile Run, For Time (조끼 선택)
-→ 볼륨이 매우 높음 — 자세 붕괴 시점과 파티셔닝 전략을 평가하세요.`)
-	case "cindy":
-		sb.WriteString(`
-→ Cindy: AMRAP 20 — 5 Pull-ups + 10 Push-ups + 15 Air Squats
-→ AMRAP 구성 — 완료 라운드 수와 라운드 후반 페이스를 평가하세요.`)
-	case "annie":
-		sb.WriteString(`
-→ Annie: 50-40-30-20-10 Double-Unders + Sit-ups, For Time
-→ 점프로프 기술과 코어 내구성을 중점 평가하세요.`)
-	default:
-		// Custom WOD — infer type from description
-		lowerDesc := strings.ToLower(wodDescription)
-		switch {
-		case strings.Contains(lowerDesc, "for time") && containsRoundsPattern(lowerDesc):
-			rounds := extractRoundsHint(wodDescription)
-			sb.WriteString(fmt.Sprintf(`
+	lowerDesc := strings.ToLower(wodDescription)
+	switch {
+	case strings.Contains(lowerDesc, "for time") && containsRoundsPattern(lowerDesc):
+		rounds := extractRoundsHint(wodDescription)
+		sb.WriteString(fmt.Sprintf(`
 → For Time 구성 (다중 라운드) — 강도와 라운드별 자세 일관성을 추적하세요.
 → %s후반 라운드에서 자세 붕괴가 시작되는 시점에 주목하세요.`, rounds))
-		case strings.Contains(lowerDesc, "for time"):
-			sb.WriteString(`
+	case strings.Contains(lowerDesc, "for time"):
+		sb.WriteString(`
 → For Time 구성 — 강도와 페이스를 중점 평가하세요.`)
-		case strings.Contains(lowerDesc, "amrap"):
-			sb.WriteString(`
+	case strings.Contains(lowerDesc, "amrap"):
+		sb.WriteString(`
 → AMRAP 구성 — 완료 라운드/반복 수와 페이스 유지를 평가하세요.`)
-		case strings.Contains(lowerDesc, "emom"):
-			sb.WriteString(`
+	case strings.Contains(lowerDesc, "emom"):
+		sb.WriteString(`
 → EMOM 구성 — 매 인터벌 내 자세 완성도와 미션 완료 여부를 평가하세요.
 → 자세(form)를 가장 높게 가중하세요.`)
-		case strings.Contains(lowerDesc, "1rm") || strings.Contains(lowerDesc, "max") || strings.Contains(lowerDesc, "skill"):
-			sb.WriteString(`
+	case strings.Contains(lowerDesc, "1rm") || strings.Contains(lowerDesc, "max") || strings.Contains(lowerDesc, "skill"):
+		sb.WriteString(`
 → 스킬/강도(Strength/Skill) WOD — 자세(form)를 최우선으로 평가하세요. 페이스는 부차적입니다.`)
-		default:
-			sb.WriteString(`
+	default:
+		sb.WriteString(`
 → WOD 구성을 참고하여 적절한 평가 기준을 적용하세요.`)
-		}
 	}
 	sb.WriteString("\n")
 	return sb.String()

@@ -96,3 +96,16 @@ func CreateProfile(dbConn *gorm.DB, profileAttr *db.Profile) db.Profile {
 	g.Expect(dbConn.Create(&p).Error).NotTo(g.HaveOccurred())
 	return p
 }
+
+func CreateSession(dbConn *gorm.DB, sessionAttr *db.Session) db.Session {
+	s := db.Session{
+		SessionID:      sessionAttr.SessionID,
+		ProfileID:      sessionAttr.ProfileID,
+		Status:         sessionAttr.Status,
+		IdempotencyKey: sessionAttr.IdempotencyKey,
+		WODDescription: sessionAttr.WODDescription,
+	}
+
+	g.Expect(dbConn.Create(&s).Error).NotTo(g.HaveOccurred())
+	return s
+}

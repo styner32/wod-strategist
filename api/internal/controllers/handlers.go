@@ -516,12 +516,6 @@ func isValidGCSURI(raw string) bool {
 // @Success      202 {object} CompleteUploadResponse
 // @Router       /chunk-complete [post]
 func (ctl *Controller) ChunkComplete(c *gin.Context) {
-	if ctl.queueClient == nil {
-		logger.Log.Error("queue client is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
-		return
-	}
-
 	var req ChunkCompleteRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -559,6 +553,14 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 	}
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
+
+	logger.Log.Info("chunk-complete received",
+		zap.String("session_id", req.SessionID),
+		zap.Float64("workout_confidence", req.WorkoutConfidence),
+		zap.Int("heart_rate_bpm", req.HeartRateBPM),
+		zap.Float64("start_secs", req.StartSecs),
+		zap.Float64("end_secs", req.EndSecs),
+	)
 
 	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WODDescription, req.WorkoutConfidence)
 	if err != nil {
