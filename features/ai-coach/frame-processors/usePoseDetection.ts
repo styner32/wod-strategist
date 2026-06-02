@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform } from 'react-native';
+
 import { useTensorflowModel } from 'react-native-fast-tflite';
 import { useSharedValue } from 'react-native-reanimated';
 import { useFrameProcessor } from 'react-native-vision-camera';
@@ -40,11 +40,6 @@ export function usePoseDetection(
   const lastPose = useSharedValue<number[] | null>(null);
   const motionEma = useSharedValue(0);
 
-  // Frame-level workout counters — incremented inside the useRunOnJS callback
-  // (which fires for every inference frame, bypassing React state batching).
-  const inferenceFrameCount = useRef(0);
-  const workoutFrameCount = useRef(0);
-
   // Use a SharedValue for isRecording so the worklet always sees the latest
   // value without depending on closure re-capture timing.
   const isRecordingSV = useSharedValue(isRecording);
@@ -63,40 +58,90 @@ export function usePoseDetection(
 
   const debugCounter = useSharedValue(0);
 
+  // --- Ref-based bridge: worklet → useRunOnJS → ref → polling → React state ---
+  // Why not SharedValues? Reading .value on the JS thread triggers Reanimated
+  // strict-mode warnings and returns stale/zero values during recording.
+  // Why not setMonitorData directly in useRunOnJS? That worked but caused
+  // UI blinking when called at high frequency.
+  // Solution: useRunOnJS writes to a ref (always fast), polling reads ref
+  // and updates React state at a steady 500ms cadence.
+  const latestInferenceRef = useRef({
+    confidence: 0,
+    motion: 0,
+    isWorkingOut: false,
+    poseData: [] as number[],
+    rawScores: [] as number[],
+    rawFirstValues: [] as number[],
+  });
+
+  // Frame count refs — updated in useRunOnJS callback, read in
+  // resetFrameCounts/getWorkoutConfidence. Declared before updateMonitorSafe
+  // for readability (the callback references them but isn't invoked synchronously).
+  const inferenceFrameCountRef = useRef(0);
+  const workoutFrameCountRef = useRef(0);
+
+  // Polling: read from the ref (plain JS, no SharedValue .value reads)
+  // and push to React state at a steady cadence.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const latest = latestInferenceRef.current;
+      setMonitorData({
+        confidence: latest.confidence,
+        motion: latest.motion,
+        isWorkingOut: latest.isWorkingOut,
+        poseData: latest.poseData,
+        rawScores: latest.rawScores,
+        rawFirstValues: latest.rawFirstValues,
+      });
+    }, 500);
+    return () => clearInterval(interval);
+  }, []);
+
+  // useRunOnJS callback — writes to ref + frame counting + debug logging.
+  // The ref write is cheap (no React state update), so even at 15fps on
+  // the poseTestPage there's no performance concern.
   const updateMonitorSafe = useRunOnJS((data) => {
-    setMonitorData(data);
-    // Count frames for workout confidence — runs per-frame, not via useEffect,
-    // so it is immune to React state batching that can drop intermediate values.
-    inferenceFrameCount.current++;
+    // Write to ref — always succeeds, no render triggered
+    latestInferenceRef.current = {
+      confidence: data.confidence,
+      motion: data.motion,
+      isWorkingOut: data.isWorkingOut,
+      poseData: data.poseData,
+      rawScores: data.rawScores,
+      rawFirstValues: data.rawFirstValues,
+    };
+    // Always count frames — refs are reset at each chunk boundary by
+    // resetFrameCounts(), so only inter-chunk frames contribute to confidence.
+    // (Gating on data._isRecording was tried and failed — the SV read from
+    // the worklet returns false during recording on this device, zeroing
+    // the counts. Preview-frame pollution at 1fps is tolerable.)
+    inferenceFrameCountRef.current++;
     if (data.isWorkingOut) {
-      workoutFrameCount.current++;
+      workoutFrameCountRef.current++;
     }
     // Log every 15th frame to Metro console for debugging
     if (data._debugCount !== undefined && data._debugCount % 15 === 0) {
-      console.log(`🦴 POSE [${data._debugCount}] conf=${(data.confidence * 100).toFixed(1)}% frame=${data._frameW}x${data._frameH} orient=${data._frameOrientation} raw=[${
-        data.rawFirstValues?.map((v: number) => v.toFixed(3)).join(', ') ?? 'none'
-      }] scores=[${
+      console.log(`🦴 POSE [${data._debugCount}] conf=${(data.confidence * 100).toFixed(1)}% rec=${data._isRecording} refTotal=${inferenceFrameCountRef.current} visible=${data._visibleCount} scores=[${
         data.rawScores?.slice(0, 5).map((v: number) => (v * 100).toFixed(1)).join(', ') ?? 'none'
       }...]`);
     }
   }, []);
 
   const minKeypointScore = 0.3;
-  const minConfidence = 0.2;
-  const minMotion = 0.015;
+  const minConfidence = 0.12; // lowered from 0.2 — avg across 17 keypoints drops fast with partial occlusion
+  const minMotion = 0.008;    // lowered from 0.015 — EMA at 2fps with decay=0.7 ramps slowly
   const motionEmaDecay = 0.7;
 
   const frameProcessor = useFrameProcessor((frame) => {
     'worklet';
     if (plugin.state !== 'loaded' || plugin.model == null) return;
-    
-    // Optimization: Skip inference if not recording
-    if (!isRecordingSV.value) return;
 
     // Throttle to target FPS — skips frames that exceed the budget,
     // preventing the resize→inference pipeline from allocating buffers
     // on every camera frame (critical for Android memory stability).
-    runAtTargetFps(inferenceFps, () => {
+    // Use lower FPS in preview mode (1fps) to save battery while still
+    // providing live CONF/MOTION/STATE feedback on the dashboard.
+    runAtTargetFps(isRecordingSV.value ? inferenceFps : 1, () => {
       'worklet';
 
       // 1. Preprocessing — let the resize plugin center-crop automatically.
@@ -191,8 +236,16 @@ export function usePoseDetection(
         motionEma.value = smoothedMotion;
         lastPose.value = newPose;
 
-        const isWorkingOut =
-          confidence > minConfidence && smoothedMotion > minMotion;
+        // Person is "working out" if detected AND moving.
+        // Detection alone (standing still in frame) doesn't count as exercising.
+        // (a) person detected: high confidence OR enough keypoints visible, AND
+        // (b) there's actual motion between frames
+        let visibleCount = 0;
+        for (let vi = 0; vi < 17; vi++) {
+          if (newPose[vi * 3 + 2] >= 0.2) visibleCount++;
+        }
+        const personDetected = confidence > 0.15 || visibleCount >= 5;
+        const isWorkingOut = personDetected && smoothedMotion > minMotion;
 
         // Collect raw per-keypoint scores for debug
         const rawScores = new Array(17);
@@ -204,7 +257,7 @@ export function usePoseDetection(
 
         debugCounter.value = debugCounter.value + 1;
 
-        // Update monitor data on every inference frame
+        // Bridge all data to JS thread via useRunOnJS → ref
         updateMonitorSafe({
           isWorkingOut: isWorkingOut,
           confidence: confidence,
@@ -212,7 +265,9 @@ export function usePoseDetection(
           rawScores: rawScores,
           rawFirstValues: rawFirstValues,
           poseData: newPose,
+          _isRecording: isRecordingSV.value,
           _debugCount: debugCounter.value,
+          _visibleCount: visibleCount,
           _frameW,
           _frameH,
           _frameOrientation,
@@ -226,21 +281,30 @@ export function usePoseDetection(
    * Call this at chunk boundaries to compute workout confidence, then reset.
    */
   const resetFrameCounts = useCallback(() => {
-    const total = inferenceFrameCount.current;
-    const workout = workoutFrameCount.current;
-    inferenceFrameCount.current = 0;
-    workoutFrameCount.current = 0;
+    const total = inferenceFrameCountRef.current;
+    const workout = workoutFrameCountRef.current;
+    inferenceFrameCountRef.current = 0;
+    workoutFrameCountRef.current = 0;
     return { total, workout };
   }, []);
 
   /**
    * Returns the current workout confidence (0..1) without resetting counters.
-   * Useful for telemetry sampling at 1Hz.
+   * Reads from refs updated by useRunOnJS at inference FPS.
    */
   const getWorkoutConfidence = useCallback((): number => {
-    const total = inferenceFrameCount.current;
-    return total > 0 ? workoutFrameCount.current / total : 0;
+    const total = inferenceFrameCountRef.current;
+    return total > 0 ? workoutFrameCountRef.current / total : 0;
   }, []);
 
-  return { frameProcessor, poseResult, monitorData, isModelLoaded: plugin.state === 'loaded', resetFrameCounts, getWorkoutConfidence };
+  /**
+   * Returns the latest motion/confidence snapshot directly from the ref.
+   * Avoids stale React state closures — safe for telemetry providers.
+   */
+  const getLatestMotion = useCallback(() => ({
+    detected: latestInferenceRef.current.isWorkingOut,
+    confidence: latestInferenceRef.current.confidence,
+  }), []);
+
+  return { frameProcessor, poseResult, monitorData, isModelLoaded: plugin.state === 'loaded', resetFrameCounts, getWorkoutConfidence, getLatestMotion };
 }

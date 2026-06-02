@@ -66,8 +66,9 @@ function collectSample(): TelemetrySample {
   for (const fn of providers.values()) {
     try {
       Object.assign(merged, fn());
-    } catch {
-      // Provider threw — skip silently to avoid breaking the sampler
+    } catch (e) {
+      // Provider threw — log for debugging
+      console.warn('📊 Telemetry provider error:', e);
     }
   }
 

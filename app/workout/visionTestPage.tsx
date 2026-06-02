@@ -307,8 +307,8 @@ export default function VisionTestPage() {
     }, [landscapeMode])
   );
 
-  // Pass isRecording to the hook to toggle inference on/off
-  const { frameProcessor, poseResult, monitorData, resetFrameCounts, getWorkoutConfidence } = usePoseDetection(isRecording);
+  // Pass isRecording to the hook — inference always runs, but frame counting only during recording
+  const { frameProcessor, poseResult, monitorData, isModelLoaded, resetFrameCounts, getWorkoutConfidence, getLatestMotion } = usePoseDetection(isRecording);
   const { bpm, status: hrStatus } = useBleHeartRate();
   // const { bpm, status: hrStatus } = useHeartRate();
 
@@ -375,15 +375,11 @@ export default function VisionTestPage() {
           // even if recording has stopped (orphan chunk).
           chunkPaths.current.push(video.path);
 
-          // Calculate workout confidence index from per-frame counts.
-          // resetFrameCounts reads and resets the counters that are incremented
-          // directly in the useRunOnJS callback (not via useEffect), so every
-          // inference frame is counted regardless of React state batching.
           const { total: totalFrames, workout: workoutFrames } = resetFrameCounts();
           const workoutConfidence = totalFrames > 0
             ? workoutFrames / totalFrames
             : 0.0;
-          console.log(`📊 Chunk workout confidence: ${(workoutConfidence * 100).toFixed(1)}% (${workoutFrames}/${totalFrames} frames)`);
+          console.log(`📊 Chunk confidence: ${(workoutConfidence * 100).toFixed(1)}% (workout=${workoutFrames} / total=${totalFrames}) | UI_CONF=${(monitorData.confidence * 100).toFixed(1)}%`);
 
           // Skip upload if recording has already been stopped
           if (!isRecordingChunks.current) {
@@ -631,6 +627,9 @@ export default function VisionTestPage() {
       TelemetryRecorder.registerProvider('chunk', () => ({ chunkIdx: chunkCountRef.current }));
       TelemetryRecorder.registerProvider('workoutConf', () => ({
         workoutConf: Math.round(getWorkoutConfidence() * 1000) / 1000,
+      }));
+      TelemetryRecorder.registerProvider('motion', () => ({
+        motion: getLatestMotion(),
       }));
 
       // Record sequential chunks: each is uploaded for real-time analysis,
@@ -880,10 +879,10 @@ export default function VisionTestPage() {
         </View>
       )}
 
-      {/* Energy impact monitor — compare with poseTestPage (heavy model at 15fps) */}
-      {isRecording && !previewOnly && (
+      {/* Energy impact monitor — always visible for testing */}
+      {!previewOnly && (
         <View style={[styles.energyMonitorContainer, applyLandscapeStyles && styles.energyMonitorLandscape]}>
-          <EnergyMonitor label="Default Model (7MB) · 2fps" />
+          <EnergyMonitor label={isRecording ? "Default Model (7MB) · 2fps" : "Preview · 1fps"} />
         </View>
       )}
 
@@ -967,6 +966,33 @@ export default function VisionTestPage() {
                 <Text style={{ color: inflightUploads > 2 ? '#FF453A' : '#555', fontSize: 9, fontFamily: 'monospace', marginTop: 2 }}>
                   UL: {inflightUploads} inflight · {pendingUploads} queued · {chunkCount} chunks
                 </Text>
+              </View>
+            </>
+          )}
+
+          {/* Pose detection metrics — visible during preview and recording */}
+          {!previewOnly && (
+            <>
+              <View style={{ marginTop: 4, borderTopWidth: 1, borderTopColor: '#333', paddingTop: 4 }}>
+                <Text style={[styles.label, { fontSize: 8, color: '#666', marginBottom: 2 }]}>
+                  POSE {isModelLoaded ? '✅' : '⏳ LOADING...'}
+                </Text>
+                <View style={styles.row}>
+                  <Text style={styles.label}>CONF:</Text>
+                  <Text style={styles.val}>
+                    {(monitorData.confidence * 100).toFixed(0)}%
+                  </Text>
+                </View>
+                <View style={styles.row}>
+                  <Text style={styles.label}>MOTION:</Text>
+                  <Text style={styles.val}>{monitorData.motion.toFixed(3)}</Text>
+                </View>
+                <View style={styles.row}>
+                  <Text style={styles.label}>STATE:</Text>
+                  <Text style={[styles.val, { color: monitorData.isWorkingOut ? '#30D158' : '#888' }]}>
+                    {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
+                  </Text>
+                </View>
               </View>
             </>
           )}
