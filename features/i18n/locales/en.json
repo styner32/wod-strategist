@@ -58,9 +58,19 @@
     "videoQueue": "Video Queue",
     "videoQueueDesc": "Encoding & upload status"
   },
+  "workoutType": {
+    "label": "Workout Type",
+    "wod": "WOD",
+    "warmup": "Warm-up",
+    "accessory": "Accessory",
+    "cooldown": "Cooldown"
+  },
   "history": {
     "title": "Analysis History",
-    "subtitle": "Recent AI coaching sessions."
+    "subtitle": "Recent AI coaching sessions.",
+    "timeGap": "{{minutes}} min later",
+    "today": "Today",
+    "yesterday": "Yesterday"
   },
   "profileTab": {
     "noProfile": "No Profile Selected",

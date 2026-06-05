@@ -1,6 +1,7 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { t } from '@/features/i18n';
 import { fetchMovementGroups, parseWorkoutImage, type MovementGroup } from '@/features/wod/api';
+import { WORKOUT_TYPES, type WorkoutType } from '@/features/wod/workoutType';
 import { useActiveProfile } from '@/store/useProfileStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
@@ -71,7 +72,7 @@ function getCategoryIcon(category: string): string {
 }
 
 export default function WorkoutSetup() {
-  const workoutType = 'wod';
+  const [workoutType, setWorkoutType] = useState<WorkoutType>('wod');
   const activeProfile = useActiveProfile();
 
   // Video preferences (persisted to AsyncStorage)
@@ -303,6 +304,12 @@ export default function WorkoutSetup() {
 
       {/* ─── STEP 1: INPUT ─── */}
       {currentStep === 'input' && (<>
+        <View style={styles.workoutTypeTabs}>
+          {WORKOUT_TYPES.map(wt => {
+            const active = workoutType === wt;
+            return (<TouchableOpacity key={wt} style={[styles.workoutTypeTab, active && styles.workoutTypeTabActive]} onPress={() => setWorkoutType(wt)}><Text style={[styles.workoutTypeTabText, active && styles.workoutTypeTabTextActive]}>{t(`workoutType.${wt}`)}</Text></TouchableOpacity>);
+          })}
+        </View>
         <View style={styles.inputMethodTabs}>
           {(['text', 'photo', 'movements'] as InputMethod[]).map(method => {
             const active = inputMethod === method;
@@ -745,8 +752,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
+  // Workout type tabs
+  workoutTypeTabs: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, gap: 6 },
+  workoutTypeTab: { flex: 1, paddingVertical: 8, borderRadius: 10, backgroundColor: '#141A24', borderWidth: 1, borderColor: '#1E2630', alignItems: 'center' },
+  workoutTypeTabActive: { backgroundColor: '#00303D', borderColor: '#00E5FF' },
+  workoutTypeTabText: { color: '#666', fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  workoutTypeTabTextActive: { color: '#00E5FF' },
+
   // Input method tabs
-  inputMethodTabs: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, gap: 8 },
+  inputMethodTabs: { flexDirection: 'row', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4, gap: 8 },
   inputMethodTab: { flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: '#141A24', borderWidth: 1, borderColor: '#1E2630', alignItems: 'center' },
   inputMethodTabActive: { backgroundColor: '#00303D', borderColor: '#00E5FF40' },
   inputMethodTabText: { color: '#666', fontSize: 13, fontWeight: '700' },

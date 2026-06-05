@@ -58,9 +58,19 @@
     "videoQueue": "영상 대기열",
     "videoQueueDesc": "인코딩 및 업로드 상태"
   },
+  "workoutType": {
+    "label": "운동 유형",
+    "wod": "WOD",
+    "warmup": "워밍업",
+    "accessory": "보조 운동",
+    "cooldown": "쿨다운"
+  },
   "history": {
     "title": "분석 기록",
-    "subtitle": "최근 AI 코칭 세션."
+    "subtitle": "최근 AI 코칭 세션.",
+    "timeGap": "{{minutes}}분 후",
+    "today": "오늘",
+    "yesterday": "어제"
   },
   "profileTab": {
     "noProfile": "프로필 미선택",

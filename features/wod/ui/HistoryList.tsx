@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@/features/i18n";
 import { router } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
+  SectionList,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -39,11 +39,17 @@ import { HighlightVideoPlayer } from "./HighlightVideoPlayer";
 function formatSessionLabel(sessionId: string): string {
   const parts = sessionId.split("-");
   if (parts.length === 0) return t("common.workout");
-  // First segment is the workout type (WOD, STRENGTH, etc.)
+  // First segment is the workout type (WOD, WARMUP, ACCESSORY, COOLDOWN, etc.)
   const type = parts[0].toUpperCase();
   switch (type) {
     case "WOD":
       return "WOD";
+    case "WARMUP":
+      return "Warm-up";
+    case "ACCESSORY":
+      return "Accessory";
+    case "COOLDOWN":
+      return "Cooldown";
     case "STRENGTH":
       return "Strength";
     case "CARDIO":
@@ -1029,14 +1035,100 @@ interface HistoryListProps {
   onArchive?: (id: number) => void;
 }
 
+/** Extract date key (YYYY-MM-DD) from a created_at timestamp */
+function getDateKey(dateStr: string): string {
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Format a date key into a human-readable section header */
+function formatSectionTitle(dateKey: string): string {
+  const now = new Date();
+  const todayKey = getDateKey(now.toISOString());
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayKey = getDateKey(yesterday.toISOString());
+
+  if (dateKey === todayKey) return t("history.today");
+  if (dateKey === yesterdayKey) return t("history.yesterday");
+
+  const d = new Date(dateKey + "T00:00:00");
+  return d.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+/** Compute minute gap between two consecutive sessions */
+function getMinuteGap(olderDate: string, newerDate: string): number {
+  const diff = new Date(newerDate).getTime() - new Date(olderDate).getTime();
+  return Math.round(diff / (1000 * 60));
+}
+
+interface DateSection {
+  title: string;
+  data: AnalysisResult[];
+}
+
+/** Group items by date, preserving original order (newest first) */
+function groupByDate(items: AnalysisResult[]): DateSection[] {
+  const sections: DateSection[] = [];
+  let currentKey = "";
+  let currentSection: DateSection | null = null;
+
+  for (const item of items) {
+    const key = getDateKey(item.created_at);
+    if (key !== currentKey) {
+      currentKey = key;
+      currentSection = { title: formatSectionTitle(key), data: [] };
+      sections.push(currentSection);
+    }
+    currentSection!.data.push(item);
+  }
+
+  return sections;
+}
+
 export function HistoryList({ data, loading, onArchive }: HistoryListProps) {
   // Split pending items into processing section vs completed list
   const pendingItems = data.filter((item) => item.status === "PENDING");
   const nonPendingItems = data.filter((item) => item.status !== "PENDING");
 
+  const sections = useMemo(() => groupByDate(nonPendingItems), [nonPendingItems]);
+
   const renderItem = useCallback(
-    ({ item }: { item: AnalysisResult }) => <HistoryCard item={item} onArchive={onArchive} />,
+    ({ item, index, section }: { item: AnalysisResult; index: number; section: DateSection }) => {
+      const nodes: React.ReactNode[] = [];
+
+      // Time gap between consecutive items in the same section
+      if (index > 0) {
+        const prevItem = section.data[index - 1];
+        const gap = getMinuteGap(prevItem.created_at, item.created_at);
+        if (gap > 0) {
+          nodes.push(
+            <View key={`gap-${item.id}`} style={styles.timeGapContainer}>
+              <View style={styles.timeGapLine} />
+              <Text style={styles.timeGapText}>{t("history.timeGap", { minutes: Math.abs(gap) })}</Text>
+              <View style={styles.timeGapLine} />
+            </View>
+          );
+        }
+      }
+
+      nodes.push(<HistoryCard key={item.id} item={item} onArchive={onArchive} />);
+      return <>{nodes}</>;
+    },
     [onArchive]
+  );
+
+  const renderSectionHeader = useCallback(
+    ({ section }: { section: DateSection }) => (
+      <View style={styles.sectionHeaderContainer}>
+        <Text style={styles.sectionHeaderText}>{section.title}</Text>
+      </View>
+    ),
+    []
   );
 
   if (loading) {
@@ -1052,10 +1144,11 @@ export function HistoryList({ data, loading, onArchive }: HistoryListProps) {
     <>
       <MergeBanner />
       <ProcessingSection items={pendingItems} />
-      <FlatList
-        data={nonPendingItems}
+      <SectionList
+        sections={sections}
         keyExtractor={(item) => item.id.toString()}
         renderItem={renderItem}
+        renderSectionHeader={renderSectionHeader}
         contentContainerStyle={styles.list}
         ListEmptyComponent={
           pendingItems.length === 0 ? (
@@ -1069,6 +1162,7 @@ export function HistoryList({ data, loading, onArchive }: HistoryListProps) {
           ) : null
         }
         scrollEnabled={false}
+        stickySectionHeadersEnabled={false}
       />
     </>
   );
@@ -1081,7 +1175,38 @@ const styles = StyleSheet.create({
     gap: 12,
   },
 
-  // Card
+  // Section headers (date grouping)
+  sectionHeaderContainer: {
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    marginTop: 8,
+  },
+  sectionHeaderText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#64D2FF",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+  },
+
+  // Time gap between sessions
+  timeGapContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    gap: 10,
+  },
+  timeGapLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "rgba(100,210,255,0.15)",
+  },
+  timeGapText: {
+    fontSize: 11,
+    color: "#667",
+    fontWeight: "600",
+  },
   card: {
     borderRadius: 16,
     padding: 16,
