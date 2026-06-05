@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/google/uuid"
 	g "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/db"
 	"gorm.io/driver/postgres"
@@ -104,6 +105,11 @@ func CreateSession(dbConn *gorm.DB, sessionAttr *db.Session) db.Session {
 		Status:         sessionAttr.Status,
 		IdempotencyKey: sessionAttr.IdempotencyKey,
 		WODDescription: sessionAttr.WODDescription,
+		WorkoutType:    sessionAttr.WorkoutType,
+	}
+
+	if s.IdempotencyKey == "" {
+		s.IdempotencyKey = uuid.NewString()
 	}
 
 	g.Expect(dbConn.Create(&s).Error).NotTo(g.HaveOccurred())

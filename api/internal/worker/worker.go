@@ -28,6 +28,9 @@ const (
 	TypeVerifyHighlights         = "highlight:verify"
 	TypeGenerateHardSub          = "hardsub:generate"
 	WorkoutTypeWOD               = "wod"
+	WorkoutTypeWarmup            = "warmup"
+	WorkoutTypeAccessory         = "accessory"
+	WorkoutTypeCooldown          = "cooldown"
 )
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.
@@ -148,12 +151,26 @@ func (w *Worker) saveTokenUsage(sessionID string, profileID uint, taskType strin
 	}
 }
 
-func NormalizeWorkoutType(_ string) string {
-	return WorkoutTypeWOD
+func NormalizeWorkoutType(wt string) string {
+	switch strings.ToLower(strings.TrimSpace(wt)) {
+	case WorkoutTypeWarmup:
+		return WorkoutTypeWarmup
+	case WorkoutTypeAccessory:
+		return WorkoutTypeAccessory
+	case WorkoutTypeCooldown:
+		return WorkoutTypeCooldown
+	default:
+		return WorkoutTypeWOD
+	}
 }
 
-func IsValidWorkoutType(_ string) bool {
-	return true // All values normalize to "wod"
+func IsValidWorkoutType(wt string) bool {
+	switch strings.ToLower(strings.TrimSpace(wt)) {
+	case WorkoutTypeWOD, WorkoutTypeWarmup, WorkoutTypeAccessory, WorkoutTypeCooldown:
+		return true
+	default:
+		return false
+	}
 }
 
 // validateSessionID checks that a session ID is safe to use in file paths.

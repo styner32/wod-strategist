@@ -269,7 +269,7 @@ var _ = Describe("Controller handlers", func() {
 				NewVideoAnalysisTask: worker.NewVideoAnalysisTask,
 			})
 
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"],"injuries":["Left Knee"],"workout_type":"rehab","profile_id":1}`)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"],"injuries":["Left Knee"],"workout_type":"wod","profile_id":1}`)
 			w := httptest.NewRecorder()
 			failRouter.ServeHTTP(w, req)
 
@@ -541,6 +541,55 @@ var _ = Describe("Controller handlers", func() {
 
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
 			Expect(decodeMapBody(w)["error"]).To(Equal("profile_id is required"))
+		})
+
+		It("returns only sessions within the from/to date range", func() {
+			now := time.Now()
+			yesterday := now.AddDate(0, 0, -1)
+			lastWeek := now.AddDate(0, 0, -7)
+
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: "session-today", Status: "COMPLETED", Output: "today workout", ProfileID: 1, CreatedAt: now,
+			}).Error).NotTo(HaveOccurred())
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: "session-yesterday", Status: "COMPLETED", Output: "yesterday workout", ProfileID: 1, CreatedAt: yesterday,
+			}).Error).NotTo(HaveOccurred())
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: "session-lastweek", Status: "COMPLETED", Output: "last week workout", ProfileID: 1, CreatedAt: lastWeek,
+			}).Error).NotTo(HaveOccurred())
+
+			from := now.AddDate(0, 0, -2).Format("2006-01-02")
+			to := now.Format("2006-01-02")
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=1&from=%s&to=%s", from, to), nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+
+			var results []json.RawMessage
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(2)) // today + yesterday, not last week
+		})
+
+		It("returns bad request for invalid from date", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&from=bad-date&to=2026-06-01", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(decodeMapBody(w)["error"]).To(ContainSubstring("invalid from date"))
+		})
+
+		It("returns bad request for invalid to date", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&from=2026-06-01&to=bad-date", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(decodeMapBody(w)["error"]).To(ContainSubstring("invalid to date"))
 		})
 	})
 
@@ -862,6 +911,50 @@ var _ = Describe("Controller handlers", func() {
 
 			var newSession db.Session
 			Expect(dbConn.First(&newSession).Error).To(Equal(gorm.ErrRecordNotFound))
+		})
+
+		It("stores workout_type when provided", func() {
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d, "workout_type": "warmup"}`, profile.ID), &user)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+
+			var response controllers.CreateSessionResponse
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.WorkoutType).To(Equal("warmup"))
+
+			var newSession db.Session
+			Expect(dbConn.Where("profile_id = ?", profile.ID).First(&newSession).Error).To(BeNil())
+			Expect(newSession.WorkoutType).To(Equal("warmup"))
+		})
+
+		It("defaults workout_type to wod when not provided", func() {
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d}`, profile.ID), &user)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+
+			var response controllers.CreateSessionResponse
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.WorkoutType).To(Equal("wod"))
+
+			var newSession db.Session
+			Expect(dbConn.Where("profile_id = ?", profile.ID).First(&newSession).Error).To(BeNil())
+			Expect(newSession.WorkoutType).To(Equal("wod"))
+		})
+
+		It("normalizes unknown workout_type to wod", func() {
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d, "workout_type": "rehab"}`, profile.ID), &user)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+
+			var response controllers.CreateSessionResponse
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.WorkoutType).To(Equal("wod"))
 		})
 	})
 })

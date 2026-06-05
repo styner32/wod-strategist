@@ -29,6 +29,7 @@ type ObjectStorage interface {
 type AnalysisResultRepository interface {
 	FindBySessionID(ctx context.Context, sessionID string) ([]db.AnalysisResult, error)
 	ListRecent(ctx context.Context, limit int, profileID uint) ([]db.AnalysisResult, error)
+	ListByDateRange(ctx context.Context, profileID uint, from, to time.Time) ([]db.AnalysisResult, error)
 	FindChunksBySessionID(ctx context.Context, sessionID string) ([]db.ChunkAnalysisResult, error)
 	Archive(ctx context.Context, id uint) error
 	Unarchive(ctx context.Context, id uint) error

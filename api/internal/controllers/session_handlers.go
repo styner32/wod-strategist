@@ -10,6 +10,7 @@ import (
 	"github.com/oklog/ulid/v2"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -47,17 +48,20 @@ func (ctl *Controller) CreateSession(c *gin.Context) {
 		return
 	}
 
+	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
+
 	// WOD-{YYYYMMDDHHMM}-{ULID}
 	sessionName := "WOD-" + time.Now().Format("200601021504") + "-" + ulid.Make().String()
-	newSession := db.Session{SessionID: sessionName, ProfileID: req.ProfileID, IdempotencyKey: req.IdempotencyKey, WODDescription: wodDescription}
-	if err := gorm.G[db.Session](ctl.db).Select("SessionID", "ProfileID", "IdempotencyKey", "WODDescription").Create(c, &newSession); err != nil {
+	newSession := db.Session{SessionID: sessionName, ProfileID: req.ProfileID, IdempotencyKey: req.IdempotencyKey, WODDescription: wodDescription, WorkoutType: workoutType}
+	if err := gorm.G[db.Session](ctl.db).Select("SessionID", "ProfileID", "IdempotencyKey", "WODDescription", "WorkoutType").Create(c, &newSession); err != nil {
 		logger.Log.Error("Failed to create session", zap.Any("request", req), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
 		return
 	}
 
 	c.JSON(http.StatusOK, CreateSessionResponse{
-		SessionID: newSession.SessionID,
-		Status:    newSession.Status.String(),
+		SessionID:   newSession.SessionID,
+		Status:      newSession.Status.String(),
+		WorkoutType: newSession.WorkoutType,
 	})
 }

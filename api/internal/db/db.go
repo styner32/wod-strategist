@@ -128,6 +128,7 @@ type Session struct {
 	ProfileID      uint          `gorm:"index;not null" json:"profile_id"`
 	IdempotencyKey string        `gorm:"index;not null" json:"idempotency_key"`
 	WODDescription string        `gorm:"not null" json:"wod_description"`
+	WorkoutType    string        `json:"workout_type"`
 	UpdatedAt      time.Time     `json:"updated_at"`
 	CreatedAt      time.Time     `json:"created_at"`
 }

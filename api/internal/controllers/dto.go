@@ -210,9 +210,11 @@ type CreateSessionRequest struct {
 	IdempotencyKey string   `json:"idempotency_key"`
 	Movements      []string `json:"movements,omitempty"`
 	WODDescription string   `json:"wod_description,omitempty"`
+	WorkoutType    string   `json:"workout_type,omitempty"`
 }
 
 type CreateSessionResponse struct {
-	SessionID string `json:"session_id"`
-	Status    string `json:"status"`
+	SessionID   string `json:"session_id"`
+	Status      string `json:"status"`
+	WorkoutType string `json:"workout_type"`
 }

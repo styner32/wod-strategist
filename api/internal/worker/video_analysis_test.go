@@ -69,12 +69,27 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		Expect(prompt).To(ContainSubstring("1984년 10월 17일"))
 	})
 
-	It("normalizes any workout type to wod", func() {
-		Expect(NormalizeWorkoutType("rehab")).To(Equal(WorkoutTypeWOD))
-		Expect(NormalizeWorkoutType("REHAB")).To(Equal(WorkoutTypeWOD))
+	It("normalizes known workout types and defaults unknown to wod", func() {
+		Expect(NormalizeWorkoutType("warmup")).To(Equal(WorkoutTypeWarmup))
+		Expect(NormalizeWorkoutType("WARMUP")).To(Equal(WorkoutTypeWarmup))
+		Expect(NormalizeWorkoutType("accessory")).To(Equal(WorkoutTypeAccessory))
+		Expect(NormalizeWorkoutType("cooldown")).To(Equal(WorkoutTypeCooldown))
 		Expect(NormalizeWorkoutType("wod")).To(Equal(WorkoutTypeWOD))
+		Expect(NormalizeWorkoutType("rehab")).To(Equal(WorkoutTypeWOD))
 		Expect(NormalizeWorkoutType("anything")).To(Equal(WorkoutTypeWOD))
 		Expect(NormalizeWorkoutType("")).To(Equal(WorkoutTypeWOD))
+	})
+
+	It("validates known workout types and rejects unknown ones", func() {
+		Expect(IsValidWorkoutType("wod")).To(BeTrue())
+		Expect(IsValidWorkoutType("WOD")).To(BeTrue())
+		Expect(IsValidWorkoutType("warmup")).To(BeTrue())
+		Expect(IsValidWorkoutType("WARMUP")).To(BeTrue())
+		Expect(IsValidWorkoutType("accessory")).To(BeTrue())
+		Expect(IsValidWorkoutType("cooldown")).To(BeTrue())
+		Expect(IsValidWorkoutType("rehab")).To(BeFalse())
+		Expect(IsValidWorkoutType("anything")).To(BeFalse())
+		Expect(IsValidWorkoutType("")).To(BeFalse())
 	})
 })
 

@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -12,12 +13,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	geminiPkg "github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/subtitle"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func (ctl *Controller) Health(c *gin.Context) {
@@ -153,13 +156,13 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	if !worker.IsValidWorkoutType(req.WorkoutType) {
-		logger.Log.Error("invalid workout type", zap.String("workout_type", req.WorkoutType))
+	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
+	if !worker.IsValidWorkoutType(workoutType) {
+		logger.Log.Error("invalid workout type", zap.String("workout_type", workoutType))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workout type"})
 		return
 	}
 
-	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 	logger.Log.Info("Submit a video analysis request",
 		zap.String("session_id", req.SessionID),
 		zap.String("gcs_uri", req.GCSURI),
@@ -322,11 +325,38 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		return
 	}
 
-	results, err := ctl.analysisResults.ListRecent(c.Request.Context(), 20, profileID)
-	if err != nil {
-		logger.Log.Error("failed to fetch history", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
-		return
+	// Optional date range filtering
+	fromStr := c.Query("from")
+	toStr := c.Query("to")
+
+	var results []db.AnalysisResult
+	if fromStr != "" && toStr != "" {
+		fromDate, err := time.Parse("2006-01-02", fromStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date, expected YYYY-MM-DD"})
+			return
+		}
+		toDate, err := time.Parse("2006-01-02", toStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date, expected YYYY-MM-DD"})
+			return
+		}
+		// Add one day to 'to' so it's inclusive of the end date
+		toDate = toDate.AddDate(0, 0, 1)
+		results, err = ctl.analysisResults.ListByDateRange(c.Request.Context(), profileID, fromDate, toDate)
+		if err != nil {
+			logger.Log.Error("failed to fetch history by date range", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+			return
+		}
+	} else {
+		var err error
+		results, err = ctl.analysisResults.ListRecent(c.Request.Context(), 20, profileID)
+		if err != nil {
+			logger.Log.Error("failed to fetch history", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+			return
+		}
 	}
 
 	// Enrich with available video kinds per session (best-effort)
@@ -562,11 +592,30 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		zap.Float64("end_secs", req.EndSecs),
 	)
 
-	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WODDescription, req.WorkoutConfidence)
+	var task *asynq.Task
+	_, err := gorm.G[db.Session](ctl.db).Where("session_id = ? AND profile_id = ?", req.SessionID, req.ProfileID).First(c)
 	if err != nil {
-		logger.Log.Error("failed to create chunk task", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
-		return
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			task, err = worker.NewChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WODDescription, req.WorkoutConfidence)
+			if err != nil {
+				logger.Log.Error("failed to create chunk task", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+				return
+			}
+		} else {
+			logger.Log.Error("failed to get session", zap.Error(err), zap.String("session_id", req.SessionID), zap.Uint("profile_id", req.ProfileID))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to get session"})
+			return
+		}
+	}
+
+	if task == nil {
+		task, err = worker.NewChunkAnalysisWithSessionTask(req.SessionID, req.GCSURI, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WorkoutConfidence)
+		if err != nil {
+			logger.Log.Error("failed to create chunk task", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+			return
+		}
 	}
 
 	info, err := ctl.queueClient.Enqueue(task)
