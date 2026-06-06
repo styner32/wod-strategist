@@ -78,6 +78,11 @@ func (ctl *Controller) UploadDebugTelemetry(c *gin.Context) {
 		return
 	}
 
+	// Security: Verify user owns the profile they are uploading telemetry for
+	if !ctl.assertOwnsProfile(c, uint(req.ProfileID)) {
+		return
+	}
+
 	if ctl.storageClient == nil {
 		logger.Log.Error("storage client is not configured")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage not configured"})
