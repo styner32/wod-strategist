@@ -36,3 +36,8 @@
 **Vulnerability:** Path parameters such as `session_id` in API handlers (e.g. `GetAnalysis`, `GetHighlight`) were being read directly via `c.Param("session_id")` and used in database lookups or file path constructions without sanitization.
 **Learning:** Even though ORMs like GORM provide some injection protection, unvalidated strings read directly from HTTP paths can lead to path traversal if they are subsequently used to fetch or construct storage URIs (e.g., interacting with local disk or GCS).
 **Prevention:** Always wrap path or query parameters that function as identifiers with a dedicated sanitization function (like `sanitizeIdentifier`) before using them in further logic.
+
+## 2025-02-24 - [CRITICAL] Prevent Path Traversal in Worker sessionID via Explicit Character Checks
+**Vulnerability:** The background worker validation function `validateSessionID` was using `strings.ContainsRune(sessionID, filepath.Separator)` to prevent path traversal when downloading or manipulating user chunks. Since `filepath.Separator` is OS-dependent (e.g. `/` on Linux), an attacker could supply Windows-style path separators (`\`) or `..` and potentially bypass validation.
+**Learning:** Checking for path separators using OS-specific variables like `filepath.Separator` is insufficient for network inputs which might be processed or forwarded cross-platform.
+**Prevention:** Always explicitly validate against both Unix (`/`) and Windows (`\`) path separators, as well as directory traversal characters (`..`), to prevent cross-platform bypasses and path traversal.
