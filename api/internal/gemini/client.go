@@ -394,7 +394,7 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 		zap.String("file_uri", fileURI),
 		zap.String("model", flashModel))
 
-	resp, err := c.client.Models.GenerateContent(ctx, c.model, []*genai.Content{{
+	resp, err := c.client.Models.GenerateContent(ctx, flashModel, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			{FileData: &genai.FileData{FileURI: fileURI, MIMEType: mimeType}},
@@ -411,7 +411,7 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 		return "", nil, fmt.Errorf("no content from video indexing")
 	}
 
-	usage := extractTokenUsage(resp, c.model)
+	usage := extractTokenUsage(resp, flashModel)
 
 	var result string
 	for _, part := range resp.Candidates[0].Content.Parts {
