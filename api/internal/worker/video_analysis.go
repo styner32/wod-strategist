@@ -89,15 +89,16 @@ var highlightBlockRegex = regexp.MustCompile("(?is)(?:```highlights\\s*(\\[.*?\\
 // injuryTimestampBlockRegex matches fenced ```injury_timestamps ... ```, ```json ... ```, or <injury_timestamps> ... </injury_timestamps> blocks in Gemini output.
 var injuryTimestampBlockRegex = regexp.MustCompile("(?is)(?:```(?:injury_timestamps|json)\\s*(\\[.*?\\])\\s*```|<injury_timestamps>\\s*(\\[.*?\\])\\s*</injury_timestamps>)")
 
-func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool) (*asynq.Task, error) {
+func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool, wodDescription string) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
-		SessionID:   sessionID,
-		FilePath:    filePath,
-		WorkoutType: NormalizeWorkoutType(workoutType),
-		Movements:   movements,
-		Injuries:    injuries,
-		ProfileID:   profileID,
-		EnableTTS:   enableTTS,
+		SessionID:      sessionID,
+		FilePath:       filePath,
+		WorkoutType:    NormalizeWorkoutType(workoutType),
+		Movements:      movements,
+		Injuries:       injuries,
+		ProfileID:      profileID,
+		EnableTTS:      enableTTS,
+		WODDescription: wodDescription,
 	}
 
 	data, err := json.Marshal(payload)
@@ -482,19 +483,32 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	}
 
 	// ── Pass 2: Analyze each segment with Pro ──
+	// Build shared context once: WOD descriptor and historical scores.
+	wodContext := buildWODContext(p.WODDescription)
+	historyContext := w.buildHistoryContext(p.ProfileID, 5)
+
+	w.logger.Info("Pass 2 context prepared",
+		zap.String("session_id", p.SessionID),
+		zap.Bool("has_wod_context", wodContext != ""),
+		zap.Bool("has_history", historyContext != ""))
+
 	var allAnalysis strings.Builder
 	for i, seg := range segments {
 		start := convertToSeconds(seg.Start)
 		end := convertToSeconds(seg.End)
 
-		segPrompt := w.buildSegmentAnalysisPrompt(p, seg)
+		// Inject score prompt and history only into the last segment to avoid
+		// asking every segment for a session-wide score.
+		isLast := i == len(segments)-1
+		segPrompt := w.buildSegmentAnalysisPrompt(p, seg, wodContext, historyContext, isLast)
 
 		w.logger.Info("Pass 2: Analyzing segment",
 			zap.Int("segment", i+1),
 			zap.Int("total", len(segments)),
 			zap.String("type", seg.Type),
 			zap.Duration("start", start),
-			zap.Duration("end", end))
+			zap.Duration("end", end),
+			zap.Bool("score_prompt", isLast))
 
 		segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
 			ctx, upload.FileURI, upload.MIMEType, start, end, segPrompt,
@@ -519,6 +533,11 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	}
 
 	highlightSegments := ParseHighlightSegments(analysis)
+	sessionScore := parseSessionScore(analysis)
+
+	w.logger.Info("Session score parsed",
+		zap.String("session_id", p.SessionID),
+		zap.String("session_score", sessionScore))
 
 	result := &db.AnalysisResult{
 		SessionID:         p.SessionID,
@@ -526,6 +545,8 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		Output:            analysis,
 		AnalysisType:      db.AnalysisTypeWOD,
 		HighlightSegments: highlightSegments,
+		WODDescription:    p.WODDescription,
+		SessionScore:      sessionScore,
 	}
 	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
@@ -570,7 +591,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 }
 
 // buildSegmentAnalysisPrompt builds the analysis prompt for a specific segment.
-func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment) string {
+// wodContext and historyContext are pre-built shared strings (may be empty).
+// If isLastSegment is true, the score output prompt and history context are appended
+// so Gemini produces a session-wide score at the end of the final segment.
+func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment, wodContext, historyContext string, isLastSegment bool) string {
 	personalProfile := w.lookupProfileString(p.ProfileID)
 
 	prompt := fmt.Sprintf(`# 운동 영상 분석 요청
@@ -579,6 +603,11 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment)
 ## 개인 프로필
 %s
 `, seg.Type, seg.Start, seg.End, personalProfile)
+
+	// WOD context (type-specific analysis guidance)
+	if wodContext != "" {
+		prompt += wodContext
+	}
 
 	prompt += AnalysisPrompt
 
@@ -602,6 +631,14 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment)
 - 이 구간은 %s ~ %s 입니다.
 - 모든 타임스탬프는 이 범위 안에서만 지정하세요.
 - 클립 내의 초 단위로 부상 위험이 있는 정확한 시점을 설명하세요.`, seg.Start, seg.End)
+
+	// On the last segment: inject history table and request a session-wide score.
+	if isLastSegment {
+		if historyContext != "" {
+			prompt += historyContext
+		}
+		prompt += ScoreOutputPrompt
+	}
 
 	return prompt
 }

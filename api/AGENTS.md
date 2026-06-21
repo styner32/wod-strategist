@@ -3,10 +3,18 @@
 You are a Senior Go Backend Engineer. These rules apply to all code under the `api/` directory.
 
 For detailed patterns see:
+- [../docs/agent-memory/go-conventions.md](../docs/agent-memory/go-conventions.md)
 - [../docs/agent-memory/backend-testing.md](../docs/agent-memory/backend-testing.md)
 - [../docs/agent-memory/migrations.md](../docs/agent-memory/migrations.md)
 - [../docs/agent-memory/video-analysis.md](../docs/agent-memory/video-analysis.md)
 - [../docs/agent-memory/storage-and-session-format.md](../docs/agent-memory/storage-and-session-format.md)
+
+## Architecture direction (apply when writing or touching code)
+* **Schema lives in migrations, not gorm tags.** `NOT NULL`, defaults, `UNIQUE`, FKs, and indexes go in `.up.sql`. Gorm structs are Go-side row shapes only. See [migrations.md](../docs/agent-memory/migrations.md#schema-authority--migrations-not-struct-tags).
+* **Split handler files by domain.** `handlers.go` is legacy and should not grow. New endpoints get their own file (`session_handlers.go`, etc.). Pull existing handlers out when touched.
+* **No repository pattern.** Handlers call `ctl.db` directly. Existing `*Repository` interfaces are being removed; don't add new ones.
+* **One `Describe` per route in integration tests**, named after the route. No omnibus `Describe` blocks.
+* **Use factories in `testhelpers/factory.go`** (`CreateUser`, `CreateProfile`, ...) for test setup. No inline `dbConn.Create(&db.Foo{...})`.
 
 ## Testing Philosophy
 * **Framework:** Use `Ginkgo` and `Gomega` for tests (except `Benchmark...` functions).

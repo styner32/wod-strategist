@@ -7,6 +7,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/storage"
 	"github.com/wod-strategist/api/internal/worker"
 	"gorm.io/gorm"
@@ -28,6 +29,7 @@ type ObjectStorage interface {
 type AnalysisResultRepository interface {
 	FindBySessionID(ctx context.Context, sessionID string) ([]db.AnalysisResult, error)
 	ListRecent(ctx context.Context, limit int, profileID uint) ([]db.AnalysisResult, error)
+	ListByDateRange(ctx context.Context, profileID uint, from, to time.Time) ([]db.AnalysisResult, error)
 	FindChunksBySessionID(ctx context.Context, sessionID string) ([]db.ChunkAnalysisResult, error)
 	Archive(ctx context.Context, id uint) error
 	Unarchive(ctx context.Context, id uint) error
@@ -47,9 +49,14 @@ type HighlightResultRepository interface {
 	FindByID(ctx context.Context, id uint) (*db.HighlightResult, error)
 }
 
-type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool) (*asynq.Task, error)
+// ImageParser is the minimal interface for synchronous inline image analysis.
+type ImageParser interface {
+	ParseImage(ctx context.Context, imageBytes []byte, mimeType string, prompt string) (string, *gemini.TokenUsage, error)
+}
 
-type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int) (*asynq.Task, error)
+type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool, wodDescription string) (*asynq.Task, error)
+
+type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int, wodDescription string, workoutConfidence float64) (*asynq.Task, error)
 
 type HighlightTaskFactory func(sessionID string, profileID uint, maxDuration int) (*asynq.Task, error)
 
@@ -64,6 +71,7 @@ type Config struct {
 	Profiles                ProfileRepository
 	HighlightResults        HighlightResultRepository
 	StorageClient           ObjectStorage
+	ImageParser             ImageParser // optional — enables /parse-workout-image
 	BucketName              string
 	GitCommit               string
 	NewVideoAnalysisTask    VideoAnalysisTaskFactory
@@ -81,6 +89,7 @@ type Controller struct {
 	profiles                ProfileRepository
 	highlightResults        HighlightResultRepository
 	storageClient           ObjectStorage
+	imageParser             ImageParser
 	bucketName              string
 	gitCommit               string
 	newVideoAnalysisTask    VideoAnalysisTaskFactory
@@ -136,6 +145,7 @@ func New(config Config) *Controller {
 		profiles:                config.Profiles,
 		highlightResults:        config.HighlightResults,
 		storageClient:           config.StorageClient,
+		imageParser:             config.ImageParser,
 		bucketName:              config.BucketName,
 		gitCommit:               commit,
 		newVideoAnalysisTask:    taskFactory,

@@ -34,7 +34,14 @@ func extractTokenUsage(resp *genai.GenerateContentResponse, model string) *Token
 	}
 }
 
-const defaultModel = "gemini-3.1-pro-preview"
+const (
+	ModelPro31Preview      = "gemini-3.1-pro-preview"
+	ModelFlash30Preview    = "gemini-3-flash-preview"
+	ModelFlash35           = "gemini-3.5-flash"
+	ModelFlashTTS31Preview = "gemini-3.1-flash-tts-preview"
+)
+
+const defaultModel = ModelPro31Preview
 
 type Client struct {
 	client       *genai.Client
@@ -145,6 +152,11 @@ func formatFileSize(bytes int64) string {
 
 // AnalyzeVideo returns the analysis result, the name of the uploaded file on Gemini, and token usage.
 func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt string) (string, string, *TokenUsage, error) {
+	return c.AnalyzeVideoWithModel(ctx, filePath, prompt, c.model)
+}
+
+// AnalyzeVideoWithModel returns the analysis result, the name of the uploaded file on Gemini, and token usage using the specified model.
+func (c *Client) AnalyzeVideoWithModel(ctx context.Context, filePath string, prompt string, model string) (string, string, *TokenUsage, error) {
 	// Upload file
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -193,7 +205,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 	c.logger.Info("File uploaded", zap.Any("file", uploadResult), zap.String("mime_type", mimeType))
 
 	// Generate content — single multimodal turn with video first for better temporal grounding
-	resp, err := c.client.Models.GenerateContent(ctx, c.model, []*genai.Content{{
+	resp, err := c.client.Models.GenerateContent(ctx, model, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}},
@@ -210,7 +222,7 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 
 	c.logger.Info("Gemini response", zap.Any("response", resp))
 
-	usage := extractTokenUsage(resp, c.model)
+	usage := extractTokenUsage(resp, model)
 
 	// Extract text from response
 	var result string
@@ -272,7 +284,7 @@ func (c *Client) GenerateWorkoutMusic(ctx context.Context, model, prompt, output
 	return nil
 }
 
-const flashModel = "gemini-3-flash-preview"
+const flashModel = ModelFlash35
 
 // UploadResult holds info about an uploaded file for use across multiple passes.
 type UploadResult struct {
@@ -382,7 +394,7 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 		zap.String("file_uri", fileURI),
 		zap.String("model", flashModel))
 
-	resp, err := c.client.Models.GenerateContent(ctx, c.model, []*genai.Content{{
+	resp, err := c.client.Models.GenerateContent(ctx, flashModel, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			{FileData: &genai.FileData{FileURI: fileURI, MIMEType: mimeType}},
@@ -399,7 +411,7 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 		return "", nil, fmt.Errorf("no content from video indexing")
 	}
 
-	usage := extractTokenUsage(resp, c.model)
+	usage := extractTokenUsage(resp, flashModel)
 
 	var result string
 	for _, part := range resp.Candidates[0].Content.Parts {
@@ -503,7 +515,7 @@ func (c *Client) QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt 
 	return result, usage, nil
 }
 
-const ttsModel = "gemini-3.1-flash-tts-preview"
+const ttsModel = ModelFlashTTS31Preview
 
 // GenerateSpeech converts text to speech using the Gemini TTS model and writes
 // the output as a WAV file (24kHz, 16-bit, mono PCM) to outputPath.
@@ -614,4 +626,41 @@ func writeLE16(f *os.File, v uint16) {
 	b[0] = byte(v)
 	b[1] = byte(v >> 8)
 	f.Write(b)
+}
+
+// ParseImage sends an image inline (no file upload) to the Flash model and
+// returns the raw text response. Ideal for lightweight OCR tasks like reading
+// a gym whiteboard photo.
+//
+// imageBytes should already be normalized (resized/compressed) by NormalizeImage.
+func (c *Client) ParseImage(ctx context.Context, imageBytes []byte, mimeType string, prompt string) (string, *TokenUsage, error) {
+	c.logger.Info("Parsing image with Flash",
+		zap.String("model", flashModel),
+		zap.Int("image_bytes", len(imageBytes)),
+		zap.String("mime_type", mimeType))
+
+	resp, err := c.client.Models.GenerateContent(ctx, flashModel, []*genai.Content{{
+		Role: genai.RoleUser,
+		Parts: []*genai.Part{
+			{InlineData: &genai.Blob{MIMEType: mimeType, Data: imageBytes}},
+			genai.NewPartFromText(prompt),
+		},
+	}}, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to parse image: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", nil, fmt.Errorf("no content from image parsing")
+	}
+
+	usage := extractTokenUsage(resp, flashModel)
+
+	var result string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		result += part.Text
+	}
+
+	c.logger.Info("Image parsed", zap.Int("response_length", len(result)))
+	return result, usage, nil
 }

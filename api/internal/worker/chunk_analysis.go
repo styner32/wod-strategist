@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,7 +11,9 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 const ChunkAnalysisPrompt = `
@@ -164,17 +167,19 @@ func levelPolicyForFitnessLevel(level string) string {
 	}
 }
 
-func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int) (*asynq.Task, error) {
+func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int, wodDescription string, workoutConfidence float64) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
-		SessionID:    sessionID,
-		FilePath:     filePath,
-		WorkoutType:  NormalizeWorkoutType(workoutType),
-		Movements:    movements,
-		Injuries:     injuries,
-		ProfileID:    profileID,
-		StartSecs:    startSecs,
-		EndSecs:      endSecs,
-		HeartRateBPM: heartRateBPM,
+		SessionID:         sessionID,
+		FilePath:          filePath,
+		WorkoutType:       NormalizeWorkoutType(workoutType),
+		Movements:         movements,
+		Injuries:          injuries,
+		ProfileID:         profileID,
+		StartSecs:         startSecs,
+		EndSecs:           endSecs,
+		HeartRateBPM:      heartRateBPM,
+		WODDescription:    wodDescription,
+		WorkoutConfidence: workoutConfidence,
 	}
 
 	data, err := json.Marshal(payload)
@@ -182,6 +187,24 @@ func NewChunkAnalysisTask(sessionID, filePath, workoutType string, movements []s
 		return nil, err
 	}
 	return asynq.NewTask(TypeChunkAnalysis, data), nil
+}
+
+func NewChunkAnalysisWithSessionTask(sessionID, filePath string, profileID uint, startSecs, endSecs float64, heartRateBPM int, workoutConfidence float64) (*asynq.Task, error) {
+	payload := VideoAnalysisWithSessionPayload{
+		SessionID:         sessionID,
+		FilePath:          filePath,
+		ProfileID:         profileID,
+		StartSecs:         startSecs,
+		EndSecs:           endSecs,
+		HeartRateBPM:      heartRateBPM,
+		WorkoutConfidence: workoutConfidence,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeChunkAnalysisWithSession, data), nil
 }
 
 func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) error {
@@ -225,7 +248,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	prompt := w.buildChunkAnalysisPrompt(p)
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash35)
 
 	defer func() {
 		os.Remove(localFilePath)
@@ -247,10 +270,11 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	if err != nil {
 		w.logger.Error("Chunk analysis failed", zap.Error(err))
 		chunkFailed := &db.ChunkAnalysisResult{
-			SessionID: p.SessionID,
-			FilePath:  p.FilePath,
-			Status:    "FAILED",
-			Output:    "An internal error occurred during chunk analysis.",
+			SessionID:         p.SessionID,
+			FilePath:          p.FilePath,
+			Status:            "FAILED",
+			Output:            "An internal error occurred during chunk analysis.",
+			WorkoutConfidence: p.WorkoutConfidence,
 		}
 		chunkFailed.ProfileID = p.ProfileID
 		if p.StartSecs > 0 || p.EndSecs > 0 {
@@ -270,13 +294,139 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	cleanOutput = stripObservedSignals(cleanOutput)
 
 	chunkResult := &db.ChunkAnalysisResult{
-		SessionID:       p.SessionID,
-		FilePath:        p.FilePath,
-		ExerciseType:    detectedExercise,
-		Status:          "COMPLETED",
-		Output:          cleanOutput,
-		ObservedSignals: observedSignals,
-		HeartRateBPM:    p.HeartRateBPM,
+		SessionID:         p.SessionID,
+		FilePath:          p.FilePath,
+		ExerciseType:      detectedExercise,
+		Status:            "COMPLETED",
+		Output:            cleanOutput,
+		ObservedSignals:   observedSignals,
+		HeartRateBPM:      p.HeartRateBPM,
+		WorkoutConfidence: p.WorkoutConfidence,
+	}
+	chunkResult.ProfileID = p.ProfileID
+	if p.StartSecs > 0 || p.EndSecs > 0 {
+		chunkResult.StartSecs = &p.StartSecs
+		chunkResult.EndSecs = &p.EndSecs
+	}
+	w.DB.Create(chunkResult)
+
+	w.logger.Info("Chunk analysis completed",
+		zap.String("session_id", p.SessionID),
+		zap.String("detected_exercise", detectedExercise),
+		zap.String("observed_signals", observedSignals))
+	return nil
+}
+
+func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asynq.Task) error {
+	var p VideoAnalysisWithSessionPayload
+	if err := json.Unmarshal(t.Payload(), &p); err != nil {
+		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+	}
+
+	retryCount, ok := asynq.GetRetryCount(ctx)
+	if !ok {
+		retryCount = 0
+	}
+
+	w.logger.Info("Processing chunk analysis",
+		zap.String("session_id", p.SessionID),
+		zap.String("file_path", p.FilePath),
+		zap.Int("retry_count", int(retryCount)))
+
+	if retryCount >= 3 {
+		w.logger.Error("Max retries reached. Skipping chunk analysis.")
+		return asynq.SkipRetry
+	}
+
+	if !strings.HasPrefix(p.FilePath, "gs://") {
+		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
+	}
+
+	var profile db.Profile
+	if err := w.DB.Where("id = ?", p.ProfileID).First(&profile).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			w.logger.Error("No profile found", zap.Uint("profile_id", p.ProfileID))
+			return fmt.Errorf("profile not found: %w", asynq.SkipRetry)
+		}
+		w.logger.Error("Failed to load profile", zap.Uint("profile_id", p.ProfileID))
+		return fmt.Errorf("failed to load profile: %w", err)
+	}
+
+	var session db.Session
+	if err := w.DB.Where("session_id = ?", p.SessionID).First(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			w.logger.Error("No session found", zap.String("session_id", p.SessionID))
+			return fmt.Errorf("session not found: %w", asynq.SkipRetry)
+		}
+		w.logger.Error("Failed to load session", zap.String("session_id", p.SessionID))
+		return fmt.Errorf("failed to load session: %w", err)
+	}
+
+	localFilePath, err := createTempFile("chunk", ".mp4")
+	if err != nil {
+		return err
+	}
+
+	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
+	}
+
+	prompt := w.buildChunkAnalysisWithSessionPrompt(p, &profile, &session)
+
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash35)
+
+	defer func() {
+		os.Remove(localFilePath)
+	}()
+
+	if geminiFile != "" {
+		defer func() {
+			w.GeminiClient.DeleteFile(ctx, geminiFile)
+		}()
+	}
+
+	// Save token usage regardless of analysis outcome
+	w.saveTokenUsage(p.SessionID, p.ProfileID, "chunk:analysis", usage)
+
+	if analysis == "" {
+		return fmt.Errorf("chunk analysis is empty")
+	}
+
+	if err != nil {
+		w.logger.Error("Chunk analysis failed", zap.Error(err))
+		chunkFailed := &db.ChunkAnalysisResult{
+			SessionID:         p.SessionID,
+			FilePath:          p.FilePath,
+			Status:            "FAILED",
+			Output:            "An internal error occurred during chunk analysis.",
+			WorkoutConfidence: p.WorkoutConfidence,
+		}
+		chunkFailed.ProfileID = p.ProfileID
+		if p.StartSecs > 0 || p.EndSecs > 0 {
+			chunkFailed.StartSecs = &p.StartSecs
+			chunkFailed.EndSecs = &p.EndSecs
+		}
+		w.DB.Create(chunkFailed)
+		return err
+	}
+
+	// Extract exercise type detected by the model from the response
+	detectedExercise := parseChunkExercise(analysis)
+	// Extract observed signals JSON for benchmarking
+	observedSignals := parseObservedSignals(analysis)
+	// Strip tags and signals block from the output, leaving just coaching feedback
+	cleanOutput := stripExerciseTag(analysis)
+	cleanOutput = stripObservedSignals(cleanOutput)
+
+	chunkResult := &db.ChunkAnalysisResult{
+		SessionID:         p.SessionID,
+		FilePath:          p.FilePath,
+		ExerciseType:      detectedExercise,
+		Status:            "COMPLETED",
+		Output:            cleanOutput,
+		ObservedSignals:   observedSignals,
+		HeartRateBPM:      p.HeartRateBPM,
+		WorkoutConfidence: p.WorkoutConfidence,
 	}
 	chunkResult.ProfileID = p.ProfileID
 	if p.StartSecs > 0 || p.EndSecs > 0 {
@@ -299,12 +449,47 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 	fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
 	prompt += levelPolicyForFitnessLevel(fitnessLevel)
 
+	// Inject WOD descriptor context so chunk feedback is aware of the WOD type
+	// (e.g. "For Time: 5 rounds" → expect fatigue in later rounds).
+	if wod := buildWODContext(p.WODDescription); wod != "" {
+		prompt += wod
+	}
+
 	if len(p.Movements) > 0 {
 		prompt += fmt.Sprintf("\n\n## 확인된 운동 종목 (사용자 입력)\n아래 운동들은 이 세션에서 **확실히 수행되는 운동**입니다. AI 감지가 불확실할 경우 이 목록을 우선 참고하세요.\n%s", strings.Join(p.Movements, ", "))
 	}
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", strings.Join(p.Injuries, ", "))
+	}
+
+	personalProfile := w.lookupProfileString(p.ProfileID)
+	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
+
+	// Add real-time heart rate context if available
+	if p.HeartRateBPM > 0 {
+		prompt += fmt.Sprintf("\n\n## 실시간 심박수 데이터\n현재 심박수: %d bpm\n(심박수가 높으면 피로도와 연관지어 코칭하세요. 단, 심박수 자체를 피드백 문장에 포함하지 마세요.)", p.HeartRateBPM)
+	}
+
+	// Add observed signals requirement
+	prompt += ObservedSignalsPrompt
+
+	return prompt
+}
+
+func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionPayload, profile *db.Profile, session *db.Session) string {
+	prompt := ChunkAnalysisPrompt
+
+	// Inject fitness-level-specific coaching policy
+	fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
+	prompt += levelPolicyForFitnessLevel(fitnessLevel)
+
+	if wod := buildWODContext(session.WODDescription); wod != "" {
+		prompt += wod
+	}
+
+	if profile.Injuries != nil && *profile.Injuries != "" {
+		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", *profile.Injuries)
 	}
 
 	personalProfile := w.lookupProfileString(p.ProfileID)

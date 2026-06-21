@@ -95,6 +95,7 @@ export interface ProcessWorkoutVideoOptions {
   startSecs?: number;
   endSecs?: number;
   heartRateBpm?: number;
+  workoutConfidence?: number;
 }
 
 export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
@@ -298,7 +299,8 @@ export async function notifyChunkUploadComplete(
   profileId: number,
   startSecs?: number,
   endSecs?: number,
-  heartRateBpm?: number
+  heartRateBpm?: number,
+  workoutConfidence?: number
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
@@ -312,6 +314,7 @@ export async function notifyChunkUploadComplete(
       ...(startSecs !== undefined ? { start_secs: startSecs } : {}),
       ...(endSecs !== undefined ? { end_secs: endSecs } : {}),
       ...(heartRateBpm !== undefined && heartRateBpm > 0 ? { heart_rate_bpm: heartRateBpm } : {}),
+      ...(workoutConfidence !== undefined ? { workout_confidence: workoutConfidence } : {}),
     },
   });
 }
@@ -377,6 +380,7 @@ export async function processWorkoutChunk(
     startSecs,
     endSecs,
     heartRateBpm,
+    workoutConfidence,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
 
@@ -400,7 +404,8 @@ export async function processWorkoutChunk(
     profileId,
     startSecs,
     endSecs,
-    heartRateBpm
+    heartRateBpm,
+    workoutConfidence
   );
 
   return {
@@ -428,6 +433,7 @@ export async function mergeChunks(
     injuries?: string[];
     profileId: number;
     enableTts?: boolean;
+    wodDescription?: string;
   }
 ): Promise<MergeChunksResult> {
   const {
@@ -436,6 +442,7 @@ export async function mergeChunks(
     injuries = [],
     profileId,
     enableTts = false,
+    wodDescription,
   } = options;
 
   const result = await apiClient<{
@@ -451,6 +458,7 @@ export async function mergeChunks(
       injuries,
       profile_id: profileId,
       enable_tts: enableTts,
+      ...(wodDescription ? { wod_description: wodDescription } : {}),
     },
   });
 
@@ -604,6 +612,70 @@ export async function generateHardSub(
       enable_tts: enableTts,
     },
   });
+}
+
+// ==========================================
+// Parse Workout Image (Whiteboard OCR)
+// ==========================================
+
+export interface ParseWorkoutImageResponse {
+  wod_description: string;
+  movements: string[];
+  raw_text: string;
+}
+
+/**
+ * Sends a whiteboard photo to the backend for Gemini-based OCR + typo correction.
+ * Returns structured WOD data including description, movements, and raw text.
+ *
+ * @param imageUri - Local file URI of the image (camera or gallery)
+ */
+export async function parseWorkoutImage(
+  imageUri: string
+): Promise<ParseWorkoutImageResponse> {
+  const url = `${API_BASE_URL}/parse-workout-image`;
+
+  const formData = new FormData();
+  const filename = imageUri.split("/").pop() || "whiteboard.jpg";
+  const ext = filename.split(".").pop()?.toLowerCase();
+  const mimeType = ext === "png" ? "image/png" : "image/jpeg";
+
+  formData.append("image", {
+    uri: imageUri,
+    name: filename,
+    type: mimeType,
+  } as any);
+
+  const headers: Record<string, string> = {
+    "X-API-Key": API_SECRET_KEY,
+  };
+
+  const token = await getToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    const { useAuthStore } = await import("@/features/auth/useAuthStore");
+    useAuthStore.getState().handleUnauthorized();
+    throw new Error("Unauthorized");
+  }
+
+  if (!res.ok) {
+    let errorText = res.statusText;
+    try {
+      errorText = await res.text();
+    } catch {}
+    throw new Error(`API Error [${res.status}]: ${errorText || res.statusText}`);
+  }
+
+  return res.json() as Promise<ParseWorkoutImageResponse>;
 }
 
 // ==========================================

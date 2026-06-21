@@ -1,0 +1,74 @@
+# ==============================================================================
+# .securecodeignore - Security Scanner Exclusions
+# ==============================================================================
+# This file defines paths that should be excluded from static application
+# security testing (SAST), secret scanning, and dependency analysis.
+#
+# Syntax: Standard glob matching (similar to .gitignore).
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. Third-Party Dependencies (Avoid scanning code outside project control)
+# ------------------------------------------------------------------------------
+**/node_modules/         # Node dependencies
+**/ios/Pods/             # Cocoapods dependencies
+**/api/vendor/           # Third-party Go dependencies (if present)
+**/patches/              # Local npm dependency patches (patch-package)
+
+# ------------------------------------------------------------------------------
+# 2. Build Outputs, Transpiled Code & Bundler Caches
+# ------------------------------------------------------------------------------
+# Frontend / Expo
+**/.expo/                # Expo build cache
+**/web-build/            # Web production build
+**/dist/                 # General distribution build
+**/build/
+**/out/
+
+# Android Native Build Outputs
+**/android/build/
+**/android/app/build/
+**/android/.gradle/
+**/*.apk
+**/*.aab
+
+# iOS Native Build Outputs
+**/ios/build/
+**/ios/DerivedData/
+**/*.ipa
+**/*.xcarchive
+
+# Go Backend Build Outputs
+**/api/bin/
+**/api/.gocache/
+**/api/.gotmp/
+
+# ------------------------------------------------------------------------------
+# 3. Test Suites, Coverage, Mocks & Tooling Configuration
+# ------------------------------------------------------------------------------
+# Ignoring test folders prevents false positives from hardcoded test keys,
+# mock objects, or testing utilities.
+**/__mocks__/            # Jest mocks
+**/tests/
+**/specs/
+**/coverage/             # Coverage reports
+**/*.test.{js,ts,jsx,tsx}
+**/*.spec.{js,ts,jsx,tsx}
+**/*_test.go             # Go tests
+
+# ------------------------------------------------------------------------------
+# 4. Auto-Generated Code & API Documentation
+# ------------------------------------------------------------------------------
+# Swagger / OpenAPI descriptors and auto-generated routing schemas
+**/api/docs/swagger.json
+**/api/docs/openapi.json
+**/features/wod/schema.d.ts
+
+# ------------------------------------------------------------------------------
+# 5. Local Logs, Temp Files & Caching
+# ------------------------------------------------------------------------------
+**/*.log
+**/agy_debug.log
+**/.npm/
+**/.cache/
+**/tmp/

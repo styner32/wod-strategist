@@ -16,6 +16,8 @@ export interface TelemetrySample {
   chunkIdx?: number;
   /** Pose/motion detection snapshot. */
   motion?: { detected: boolean; confidence: number };
+  /** Workout confidence 0..1, ratio of "working out" frames to total inference frames. */
+  workoutConf?: number;
 }
 
 export interface TelemetrySession {

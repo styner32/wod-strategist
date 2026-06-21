@@ -19,28 +19,46 @@ import (
 )
 
 const (
-	TypeVideoAnalysis     = "video:analysis"
-	TypeChunkAnalysis     = "chunk:analysis"
-	TypeMergeChunks       = "merge:chunks"
-	TypeInjuryAnalysis    = "injury:analysis"
-	TypeGenerateHighlight = "highlight:generate"
-	TypeVerifyHighlights  = "highlight:verify"
-	TypeGenerateHardSub   = "hardsub:generate"
-	WorkoutTypeWOD        = "wod"
+	TypeVideoAnalysis            = "video:analysis"
+	TypeChunkAnalysis            = "chunk:analysis"
+	TypeChunkAnalysisWithSession = "chunk:analysis-with-session"
+	TypeMergeChunks              = "merge:chunks"
+	TypeInjuryAnalysis           = "injury:analysis"
+	TypeGenerateHighlight        = "highlight:generate"
+	TypeVerifyHighlights         = "highlight:verify"
+	TypeGenerateHardSub          = "hardsub:generate"
+	WorkoutTypeWOD               = "wod"
+	WorkoutTypeWarmup            = "warmup"
+	WorkoutTypeAccessory         = "accessory"
+	WorkoutTypeCooldown          = "cooldown"
 )
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.
 type VideoAnalysisPayload struct {
-	SessionID    string
-	FilePath     string
-	WorkoutType  string
-	Movements    []string
-	Injuries     []string
-	ProfileID    uint
-	StartSecs    float64
-	EndSecs      float64
-	HeartRateBPM int  `json:"heart_rate_bpm,omitempty"` // BLE heart rate at chunk capture time
-	EnableTTS    bool `json:"enable_tts,omitempty"`     // generate TTS narration in hardsub
+	SessionID         string
+	FilePath          string
+	WorkoutType       string
+	Movements         []string
+	Injuries          []string
+	ProfileID         uint
+	StartSecs         float64
+	EndSecs           float64
+	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate at chunk capture time
+	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
+	WODDescription    string  `json:"wod_description,omitempty"`    // user-supplied WOD descriptor (e.g. "Fran", "For Time: 5 rounds of...")
+	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
+}
+
+// VideoAnalysisWithSessionPayload is used when session_id is available (when user has selected a session to upload)
+type VideoAnalysisWithSessionPayload struct {
+	SessionID         string
+	FilePath          string
+	ProfileID         uint
+	StartSecs         float64
+	EndSecs           float64
+	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate at chunk capture time
+	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
+	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
 }
 
 // HighlightSegment is shared between video analysis (parsing) and highlight generation (processing).
@@ -63,6 +81,7 @@ type StorageClient interface {
 type GeminiClient interface {
 	// File-upload based analysis (used by chunk analysis, legacy path)
 	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, *gemini.TokenUsage, error)
+	AnalyzeVideoWithModel(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
 	DeleteFile(ctx context.Context, name string) error
 	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error
 
@@ -132,12 +151,26 @@ func (w *Worker) saveTokenUsage(sessionID string, profileID uint, taskType strin
 	}
 }
 
-func NormalizeWorkoutType(_ string) string {
-	return WorkoutTypeWOD
+func NormalizeWorkoutType(wt string) string {
+	switch strings.ToLower(strings.TrimSpace(wt)) {
+	case WorkoutTypeWarmup:
+		return WorkoutTypeWarmup
+	case WorkoutTypeAccessory:
+		return WorkoutTypeAccessory
+	case WorkoutTypeCooldown:
+		return WorkoutTypeCooldown
+	default:
+		return WorkoutTypeWOD
+	}
 }
 
-func IsValidWorkoutType(_ string) bool {
-	return true // All values normalize to "wod"
+func IsValidWorkoutType(wt string) bool {
+	switch strings.ToLower(strings.TrimSpace(wt)) {
+	case WorkoutTypeWOD, WorkoutTypeWarmup, WorkoutTypeAccessory, WorkoutTypeCooldown:
+		return true
+	default:
+		return false
+	}
 }
 
 // validateSessionID checks that a session ID is safe to use in file paths.

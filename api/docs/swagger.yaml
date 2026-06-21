@@ -1,7 +1,20 @@
 basePath: /api/v1
 definitions:
+  controllers.ChunkAnalysisSummaryResponse:
+    properties:
+      completed:
+        type: integer
+      failed:
+        type: integer
+      pending:
+        type: integer
+      total:
+        type: integer
+    type: object
   controllers.CompleteUploadRequest:
     properties:
+      enable_tts:
+        type: boolean
       gcs_uri:
         type: string
       injuries:
@@ -12,15 +25,15 @@ definitions:
         items:
           type: string
         type: array
+      profile_id:
+        type: integer
       session_id:
+        type: string
+      wod_description:
+        description: 'e.g. "Fran" or "For Time: 5 rounds of..."'
         type: string
       workout_type:
         type: string
-    required:
-    - gcs_uri
-    - movements
-    - session_id
-    - workout_type
     type: object
   controllers.CompleteUploadResponse:
     properties:
@@ -35,11 +48,10 @@ definitions:
     properties:
       filename:
         type: string
+      profile_id:
+        type: integer
       session_id:
         type: string
-    required:
-    - filename
-    - session_id
     type: object
   controllers.CreateUploadURLResponse:
     properties:
@@ -48,9 +60,317 @@ definitions:
       upload_url:
         type: string
     type: object
+  controllers.DebugTelemetryRequest:
+    properties:
+      appVersion:
+        type: string
+      deviceModel:
+        type: string
+      endedAt:
+        type: integer
+      platform:
+        type: string
+      profileId:
+        type: integer
+      samples:
+        items:
+          $ref: '#/definitions/controllers.DebugTelemetrySample'
+        type: array
+      sessionId:
+        type: string
+      startedAt:
+        type: integer
+    type: object
+  controllers.DebugTelemetrySample:
+    properties:
+      batt:
+        type: number
+      chunkIdx:
+        type: integer
+      hr:
+        type: integer
+      motion:
+        additionalProperties: true
+        type: object
+      ts:
+        type: number
+    type: object
   controllers.ErrorResponse:
     properties:
       error:
+        type: string
+    type: object
+  controllers.FullAnalysisStatusResponse:
+    properties:
+      analysis_type:
+        type: string
+      created_at:
+        type: string
+      status:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  controllers.GenerateHardSubRequest:
+    properties:
+      enable_tts:
+        type: boolean
+      profile_id:
+        type: integer
+      session_id:
+        type: string
+    type: object
+  controllers.GenerateHardSubResponse:
+    properties:
+      message:
+        type: string
+      session_id:
+        type: string
+      task_id:
+        type: string
+    type: object
+  controllers.GenerateHighlightRequest:
+    properties:
+      max_duration:
+        description: seconds, default 60
+        type: integer
+      profile_id:
+        type: integer
+      session_id:
+        type: string
+    type: object
+  controllers.MergeChunksRequest:
+    properties:
+      enable_tts:
+        type: boolean
+      injuries:
+        items:
+          type: string
+        type: array
+      movements:
+        items:
+          type: string
+        type: array
+      profile_id:
+        type: integer
+      session_id:
+        type: string
+      wod_description:
+        description: 'e.g. "Fran" or "For Time: 5 rounds of..."'
+        type: string
+      workout_type:
+        type: string
+    type: object
+  controllers.MergeChunksResponse:
+    properties:
+      message:
+        type: string
+      session_id:
+        type: string
+      task_id:
+        type: string
+    type: object
+  controllers.MovementGroup:
+    properties:
+      category:
+        type: string
+      movements:
+        items:
+          type: string
+        type: array
+    type: object
+  controllers.ParseWorkoutImageResponse:
+    properties:
+      movements:
+        description: e.g. ["Thruster", "Pull-up"]
+        items:
+          type: string
+        type: array
+      raw_text:
+        description: raw OCR text extracted from the whiteboard
+        type: string
+      wod_description:
+        description: 'e.g. "Fran" or "For Time: 5 rounds of 10 Deadlifts + 15 Box
+          Jumps"'
+        type: string
+    type: object
+  controllers.PlayURLResponse:
+    properties:
+      cache_key:
+        type: string
+      expires_at:
+        type: string
+      gcs_uri:
+        type: string
+      kind:
+        type: string
+      public_url:
+        type: string
+      session_id:
+        type: string
+      signed_url:
+        type: string
+      variant:
+        type: string
+    type: object
+  controllers.RetryAnalysisRequest:
+    properties:
+      profile_id:
+        type: integer
+      session_id:
+        type: string
+    type: object
+  controllers.RetryAnalysisResponse:
+    properties:
+      message:
+        type: string
+      session_id:
+        type: string
+      task_id:
+        type: string
+    type: object
+  controllers.SessionAssetResponse:
+    properties:
+      cache_key:
+        type: string
+      created_at:
+        type: string
+      gcs_uri:
+        type: string
+      kind:
+        type: string
+      label:
+        type: string
+      object_name:
+        type: string
+      public_url:
+        type: string
+      variant:
+        type: string
+    type: object
+  controllers.SessionAssetsResponse:
+    properties:
+      assets:
+        items:
+          $ref: '#/definitions/controllers.SessionAssetResponse'
+        type: array
+      chunk_summary:
+        $ref: '#/definitions/controllers.ChunkAnalysisSummaryResponse'
+      full_analysis:
+        $ref: '#/definitions/controllers.FullAnalysisStatusResponse'
+      session_id:
+        type: string
+      subtitle_available:
+        type: boolean
+    type: object
+  controllers.SessionCatalogItemResponse:
+    properties:
+      chunk_count:
+        type: integer
+      has_hardsubbed:
+        type: boolean
+      has_merged:
+        type: boolean
+      highlight_count:
+        type: integer
+      latest_created_at:
+        type: string
+      session_id:
+        type: string
+    type: object
+  controllers.SessionCatalogResponse:
+    properties:
+      sessions:
+        items:
+          $ref: '#/definitions/controllers.SessionCatalogItemResponse'
+        type: array
+    type: object
+  controllers.VerifyHighlightsRequest:
+    properties:
+      session_id:
+        type: string
+    type: object
+  controllers.VideoDownloadURLResponse:
+    properties:
+      download_url:
+        type: string
+      expires_at:
+        type: string
+      filename:
+        type: string
+      kind:
+        type: string
+      session_id:
+        type: string
+    type: object
+  db.ChunkAnalysisResult:
+    properties:
+      created_at:
+        type: string
+      end_secs:
+        type: number
+      exercise_type:
+        description: detected movement (e.g. "Snatch", "Pull-up")
+        type: string
+      file_path:
+        type: string
+      heart_rate_bpm:
+        description: BLE heart rate at chunk capture time (0 = unavailable)
+        type: integer
+      id:
+        type: integer
+      observed_signals:
+        description: 'JSON: estimated workout metrics for benchmarking'
+        type: string
+      output:
+        type: string
+      profile_id:
+        type: integer
+      session_id:
+        type: string
+      start_secs:
+        type: number
+      status:
+        description: PENDING, COMPLETED, FAILED
+        type: string
+      updated_at:
+        type: string
+      workout_confidence:
+        description: confidence if person actually workout
+        type: number
+    type: object
+  db.HighlightResult:
+    properties:
+      created_at:
+        type: string
+      duration_sec:
+        description: total highlight duration in seconds
+        type: number
+      gcs_uri:
+        description: gs:// URI of the polished highlight video
+        type: string
+      id:
+        type: integer
+      music_gcs_uri:
+        description: gs:// URI of the Lyria-generated music track
+        type: string
+      output:
+        description: error message or AI summary
+        type: string
+      profile_id:
+        type: integer
+      segments:
+        description: 'JSON: selected segments used'
+        type: string
+      session_id:
+        type: string
+      status:
+        description: PENDING, PROCESSING, COMPLETED, FAILED
+        type: string
+      title:
+        description: e.g. "Full Reel", "Best Forms"
+        type: string
+      updated_at:
         type: string
     type: object
 host: localhost:8088
@@ -60,6 +380,280 @@ info:
   title: WOD Strategist API
   version: "1.0"
 paths:
+  /chunk-analysis/:session_id:
+    get:
+      description: Fetches the partial analysis chunks for a given session
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/db.ChunkAnalysisResult'
+            type: array
+      summary: Get Chunk Analysis
+      tags:
+      - analysis
+  /chunk-complete:
+    post:
+      consumes:
+      - application/json
+      description: Notifies the backend that a chunk upload is complete and triggers
+        chunk analysis
+      parameters:
+      - description: Upload metadata
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.CompleteUploadRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/controllers.CompleteUploadResponse'
+      summary: Chunk Complete
+      tags:
+      - upload
+  /debug/telemetry:
+    post:
+      consumes:
+      - application/json
+      description: Receives a telemetry session from the app and stores it in GCS
+        for debugging
+      parameters:
+      - description: Telemetry session
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.DebugTelemetryRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Upload Debug Telemetry
+      tags:
+      - debug
+  /dev/sessions:
+    get:
+      description: Lists existing sessions discovered from uploaded storage assets
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.SessionCatalogResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: List Session Catalog
+      tags:
+      - dev
+  /dev/sessions/{session_id}/assets:
+    get:
+      description: Lists playable session assets for the browser QA workbench
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.SessionAssetsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Get Session Assets
+      tags:
+      - dev
+  /dev/sessions/{session_id}/play-url:
+    get:
+      description: Resolves a playable signed URL for a session asset
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Asset kind
+        in: query
+        name: kind
+        required: true
+        type: string
+      - description: Asset variant
+        in: query
+        name: variant
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.PlayURLResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Get Session Play URL
+      tags:
+      - dev
+  /generate-hardsub:
+    post:
+      consumes:
+      - application/json
+      description: Creates a hardsubbed version of the video with burned-in subtitles
+      parameters:
+      - description: Session and profile
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.GenerateHardSubRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/controllers.GenerateHardSubResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Generate Hardsubbed Video
+      tags:
+      - video
+  /generate-highlight:
+    post:
+      consumes:
+      - application/json
+      description: Triggers short-form highlight video generation from WOD analysis
+        for a session
+      parameters:
+      - description: Session ID and options
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.GenerateHighlightRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Generate Highlight
+      tags:
+      - highlight
+  /highlight-download/:id:
+    get:
+      description: Returns a time-limited signed URL for downloading a specific highlight
+        video
+      parameters:
+      - description: Highlight result ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.VideoDownloadURLResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Get Highlight Download URL
+      tags:
+      - highlight
+  /highlight/:session_id:
+    get:
+      description: Returns highlight generation results for a given session
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/db.HighlightResult'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Get Highlight
+      tags:
+      - highlight
   /injuries:
     get:
       description: Returns a list of all supported injuries that can be analyzed
@@ -73,6 +667,52 @@ paths:
               type: string
             type: array
       summary: List supported injuries
+      tags:
+      - metadata
+  /merge-chunks:
+    post:
+      consumes:
+      - application/json
+      description: Triggers server-side merging of all uploaded chunks for a session,
+        then runs full video analysis
+      parameters:
+      - description: Session and workout metadata
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.MergeChunksRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/controllers.MergeChunksResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Merge Chunks
+      tags:
+      - upload
+  /movement-groups:
+    get:
+      description: Returns all supported workout movements organized by category
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/controllers.MovementGroup'
+            type: array
+      summary: List movement groups
       tags:
       - metadata
   /movements:
@@ -90,6 +730,98 @@ paths:
       summary: List supported movements
       tags:
       - metadata
+  /parse-workout-image:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Extracts workout description and movements from a whiteboard photo
+      parameters:
+      - description: Whiteboard photo (JPEG/PNG, max 10MB)
+        in: formData
+        name: image
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.ParseWorkoutImageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Parse Workout Image
+      tags:
+      - workout
+  /retry-analysis:
+    post:
+      consumes:
+      - application/json
+      description: Re-enqueues a video analysis task for a failed session using existing
+        GCS files
+      parameters:
+      - description: Session and profile
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.RetryAnalysisRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/controllers.RetryAnalysisResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Retry Analysis
+      tags:
+      - analysis
+  /subtitles/:session_id:
+    get:
+      description: Returns chunk analysis feedback as an SRT subtitle file for a given
+        session
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - text/plain
+      responses:
+        "200":
+          description: SRT subtitle content
+          schema:
+            type: string
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Get Subtitles
+      tags:
+      - analysis
   /upload-complete:
     post:
       consumes:
@@ -151,4 +883,73 @@ paths:
       summary: Create Upload URL
       tags:
       - upload
+  /verify-highlights:
+    post:
+      consumes:
+      - application/json
+      description: Triggers verification of highlight segments to detect hallucinated
+        movements
+      parameters:
+      - description: Session ID
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.VerifyHighlightsRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Verify Highlights
+      tags:
+      - highlight
+  /video-download/:session_id:
+    get:
+      description: Returns a time-limited signed URL for downloading the merged or
+        hardsubbed video
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: 'Video kind: merged (default) or hardsubbed'
+        in: query
+        name: kind
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.VideoDownloadURLResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Get Video Download URL
+      tags:
+      - video
 swagger: "2.0"

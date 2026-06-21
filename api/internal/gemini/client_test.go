@@ -109,7 +109,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -128,6 +128,74 @@ var _ = Describe("Gemini client", func() {
 			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), videoPath, "analyze this")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("first second"))
+			Expect(geminiFile).To(Equal("files/mock-file"))
+			Expect(transport.Requests()).To(HaveLen(5))
+		})
+
+		It("uploads, polls until active, and generates content with explicit model using AnalyzeVideoWithModel", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				MatchHeader("X-Goog-Upload-Protocol", "resumable").
+				MatchHeader("X-Goog-Upload-Command", "start").
+				MatchHeader("X-Goog-Upload-Header-Content-Type", mimeType).
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				MatchHeader("X-Goog-Upload-Command", "upload, finalize").
+				MatchHeader("X-Goog-Upload-Offset", "0").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Status", "final").
+				JSON(map[string]any{
+					"file": map[string]any{
+						"name":     "files/mock-file",
+						"uri":      "https://example.test/files/mock-file",
+						"mimeType": mimeType,
+					},
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-file").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-file",
+					"state": "PROCESSING",
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-file").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-file",
+					"state": "ACTIVE",
+				})
+
+			transport.New(baseURL).
+				Post("/v1beta/models/" + ModelFlash35 + ":generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{
+						{
+							"content": map[string]any{
+								"parts": []map[string]any{
+									{"text": "flash "},
+									{"text": "3.5 response"},
+								},
+							},
+						},
+					},
+				})
+
+			result, geminiFile, _, err := client.AnalyzeVideoWithModel(context.Background(), videoPath, "analyze this", ModelFlash35)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("flash 3.5 response"))
 			Expect(geminiFile).To(Equal("files/mock-file"))
 			Expect(transport.Requests()).To(HaveLen(5))
 		})
@@ -257,7 +325,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{
@@ -299,7 +367,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
 				Reply(http.StatusOK).
 				JSON(map[string]any{
 					"candidates": []map[string]any{},
@@ -373,7 +441,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Post("/v1beta/models/" + ModelFlash35 + ":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -401,7 +469,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Post("/v1beta/models/" + ModelFlash35 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{"message": "indexing failed"},
@@ -432,7 +500,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -465,7 +533,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{"message": "analysis failed"},
@@ -492,7 +560,7 @@ var _ = Describe("Gemini client", func() {
 	})
 
 	Describe("Model option", func() {
-		It("defaults to gemini-3.1-pro-preview", func() {
+		It("defaults to "+ModelPro31Preview, func() {
 			transport := testhelpers.NewMockTransport()
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:     "test-key",
@@ -500,7 +568,7 @@ var _ = Describe("Gemini client", func() {
 				HTTPClient: &http.Client{Transport: transport},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(client.model).To(Equal("gemini-3.1-pro-preview"))
+			Expect(client.model).To(Equal(ModelPro31Preview))
 		})
 
 		It("uses the configured model", func() {
@@ -508,11 +576,11 @@ var _ = Describe("Gemini client", func() {
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:     "test-key",
 				BaseURL:    "https://example.test",
-				Model:      "gemini-3-flash-preview",
+				Model:      ModelFlash30Preview,
 				HTTPClient: &http.Client{Transport: transport},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(client.model).To(Equal("gemini-3-flash-preview"))
+			Expect(client.model).To(Equal(ModelFlash30Preview))
 		})
 	})
 })

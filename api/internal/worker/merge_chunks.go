@@ -16,15 +16,16 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool) (*asynq.Task, error) {
+func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool, wodDescription string) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
-		SessionID:   sessionID,
-		FilePath:    filePath,
-		WorkoutType: NormalizeWorkoutType(workoutType),
-		Movements:   movements,
-		Injuries:    injuries,
-		ProfileID:   profileID,
-		EnableTTS:   enableTTS,
+		SessionID:      sessionID,
+		FilePath:       filePath,
+		WorkoutType:    NormalizeWorkoutType(workoutType),
+		Movements:      movements,
+		Injuries:       injuries,
+		ProfileID:      profileID,
+		EnableTTS:      enableTTS,
+		WODDescription: wodDescription,
 	}
 
 	data, err := json.Marshal(payload)
@@ -224,7 +225,7 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	// Hardsub generation is deferred: it will be auto-enqueued after the full
 	// analysis completes, so it can burn the more accurate final analysis
 	// feedback (strengths + weaknesses) instead of real-time chunk cues.
-	analysisTask, err := NewVideoAnalysisTask(p.SessionID, analysisGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID, p.EnableTTS)
+	analysisTask, err := NewVideoAnalysisTask(p.SessionID, analysisGCSURI, p.WorkoutType, p.Movements, p.Injuries, p.ProfileID, p.EnableTTS, p.WODDescription)
 	if err != nil {
 		return fmt.Errorf("failed to create analysis task for merged video: %w", err)
 	}

@@ -58,9 +58,19 @@
     "videoQueue": "Video Queue",
     "videoQueueDesc": "Encoding & upload status"
   },
+  "workoutType": {
+    "label": "Workout Type",
+    "wod": "WOD",
+    "warmup": "Warm-up",
+    "accessory": "Accessory",
+    "cooldown": "Cooldown"
+  },
   "history": {
     "title": "Analysis History",
-    "subtitle": "Recent AI coaching sessions."
+    "subtitle": "Recent AI coaching sessions.",
+    "timeGap": "{{minutes}} min later",
+    "today": "Today",
+    "yesterday": "Yesterday"
   },
   "profileTab": {
     "noProfile": "No Profile Selected",
@@ -178,7 +188,25 @@
     "aspectRatioHint": "Camera format: 16:9 (wide) or 4:3 (standard)",
     "previewCamera": "Preview Camera",
     "injuries": "%{count} injuries",
-    "noInjuries": "No injuries"
+    "noInjuries": "No injuries",
+    "inputMethodText": "Text",
+    "inputMethodPhoto": "Photo",
+    "inputMethodMovements": "Movements",
+    "wodDescriptionLabel": "WOD Description",
+    "wodDescriptionPlaceholder": "e.g. Fran, AMRAP 20: 5 Pull-ups + 10 Push-ups...",
+    "scanWhiteboard": "📷 Scan Whiteboard",
+    "takePhoto": "Take Photo",
+    "chooseFromGallery": "Choose from Gallery",
+    "scanningImage": "Analyzing whiteboard...",
+    "scanSuccess": "Workout detected!",
+    "scanFailed": "Could not read whiteboard. Try a clearer photo.",
+    "nextStep": "Next →",
+    "confirmTitle": "Verify Workout",
+    "confirmHint": "Check if the workout details are correct before starting.",
+    "addMoreMovements": "+ Add More",
+    "noMovementsSelected": "No movements selected yet",
+    "rawTextLabel": "Original Text",
+    "wodTextPlaceholder": "Describe today's workout...\ne.g. For Time: 21-15-9 Thrusters (43kg) + Pull-ups"
   },
   "upload": {
     "title": "Upload Video",

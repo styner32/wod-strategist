@@ -43,3 +43,25 @@
 - When adding a new handler, register it directly in `SetupRouter`
   (`api.GET("/path", ctl.Method)`) — no route-definition tables, no
   interface methods to declare.
+
+## Handler organization
+
+- Split handler files by domain. `handlers.go` is a legacy catch-all
+  (~1500 lines) and should not grow. New endpoints go in their own file
+  (`session_handlers.go`, `upload_handlers.go`, etc.).
+- When touching an existing handler in `handlers.go`, pull it into a
+  domain-named file as part of the change.
+- Methods on `*Controller` stay in `controllers/`; route registration
+  stays in `server.SetupRouter`.
+
+## Data access — no repository pattern
+
+- Handlers call `ctl.db` (gorm) directly. Do not introduce repository
+  interfaces (`AnalysisResultRepository`, `ProfileRepository`, etc.) —
+  the existing ones are being removed.
+- A repository abstraction over a single gorm-backed implementation adds
+  a layer of mocks and parallel test paths without paying for itself.
+  Integration tests against a real PostgreSQL test DB cover the same
+  ground more honestly.
+- When removing a repository, also remove the "broken repo returns 500"
+  test cases — they exist only to exercise the abstraction.

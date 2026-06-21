@@ -1,15 +1,27 @@
 import { ulid } from "ulid";
 
-export type WorkoutType = "wod";
+export type WorkoutType = "wod" | "warmup" | "accessory" | "cooldown";
+
+export const WORKOUT_TYPES: WorkoutType[] = ["wod", "warmup", "accessory", "cooldown"];
 
 export const DEFAULT_WORKOUT_TYPE: WorkoutType = "wod";
 
 export function parseWorkoutType(value?: string | null): WorkoutType {
+  const lower = value?.toLowerCase()?.trim();
+  if (lower === "warmup" || lower === "accessory" || lower === "cooldown") {
+    return lower;
+  }
   return DEFAULT_WORKOUT_TYPE;
 }
 
 export function formatWorkoutTypeLabel(value: WorkoutType): string {
-  return "WOD";
+  const labels: Record<WorkoutType, string> = {
+    wod: "WOD",
+    warmup: "Warm-up",
+    accessory: "Accessory",
+    cooldown: "Cooldown",
+  };
+  return labels[value] ?? "WOD";
 }
 
 /**

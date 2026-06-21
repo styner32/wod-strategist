@@ -69,12 +69,27 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		Expect(prompt).To(ContainSubstring("1984년 10월 17일"))
 	})
 
-	It("normalizes any workout type to wod", func() {
-		Expect(NormalizeWorkoutType("rehab")).To(Equal(WorkoutTypeWOD))
-		Expect(NormalizeWorkoutType("REHAB")).To(Equal(WorkoutTypeWOD))
+	It("normalizes known workout types and defaults unknown to wod", func() {
+		Expect(NormalizeWorkoutType("warmup")).To(Equal(WorkoutTypeWarmup))
+		Expect(NormalizeWorkoutType("WARMUP")).To(Equal(WorkoutTypeWarmup))
+		Expect(NormalizeWorkoutType("accessory")).To(Equal(WorkoutTypeAccessory))
+		Expect(NormalizeWorkoutType("cooldown")).To(Equal(WorkoutTypeCooldown))
 		Expect(NormalizeWorkoutType("wod")).To(Equal(WorkoutTypeWOD))
+		Expect(NormalizeWorkoutType("rehab")).To(Equal(WorkoutTypeWOD))
 		Expect(NormalizeWorkoutType("anything")).To(Equal(WorkoutTypeWOD))
 		Expect(NormalizeWorkoutType("")).To(Equal(WorkoutTypeWOD))
+	})
+
+	It("validates known workout types and rejects unknown ones", func() {
+		Expect(IsValidWorkoutType("wod")).To(BeTrue())
+		Expect(IsValidWorkoutType("WOD")).To(BeTrue())
+		Expect(IsValidWorkoutType("warmup")).To(BeTrue())
+		Expect(IsValidWorkoutType("WARMUP")).To(BeTrue())
+		Expect(IsValidWorkoutType("accessory")).To(BeTrue())
+		Expect(IsValidWorkoutType("cooldown")).To(BeTrue())
+		Expect(IsValidWorkoutType("rehab")).To(BeFalse())
+		Expect(IsValidWorkoutType("anything")).To(BeFalse())
+		Expect(IsValidWorkoutType("")).To(BeFalse())
 	})
 })
 
@@ -254,6 +269,7 @@ var _ = Describe("NewVideoAnalysisTask", func() {
 			[]string{"Knee"},
 			42,
 			false,
+			"",
 		)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -333,7 +349,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 			JSON(map[string]any{"name": "files/mock-file", "state": "ACTIVE"})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -525,7 +541,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 
 		// ...but generateContent returns no candidates
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
 			Reply(http.StatusOK).
 			JSON(map[string]any{"candidates": []map[string]any{}})
 
@@ -620,7 +636,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		// Segment 1 (Snatch) analysis
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -633,7 +649,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		// Segment 2 (Pull-up) analysis
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/gemini-3.1-pro-preview:generateContent").
+			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{

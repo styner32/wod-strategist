@@ -9,6 +9,7 @@ TEST_DATABASE_URL ?= postgresql://sunjinlee@localhost:5432/wod_test?sslmode=disa
 MIGRATIONS_DIR ?= internal/db/migrations
 IMAGE_REPO ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)
 CMD_DIR ?= cmd
+TEST_DIR ?= ./...
 
 GIT_SHA := $(shell git rev-parse --short HEAD)
 
@@ -73,7 +74,7 @@ test-chunk-upload: ## Replay chunk upload from a saved video. Usage: make test-c
 		../scripts/test-chunk-upload.js
 
 test: ## Run the tests
-	go test ./... -p 1 -v
+	go test $(TEST_DIR) -p 1 -v
 
 migrate-test-redo:
 ifndef TEST_DATABASE_URL

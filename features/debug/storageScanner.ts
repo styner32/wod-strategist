@@ -8,7 +8,7 @@ import {
   readDirectoryAsync,
   writeAsStringAsync,
 } from "expo-file-system/legacy";
-import { File as FSFile } from "expo-file-system";
+import { Directory, File } from "expo-file-system";
 import { Alert, Share } from "react-native";
 
 interface DirEntry {
@@ -186,28 +186,44 @@ const copyRecursive = async (
   destDir: string,
   onProgress?: (file: string) => void
 ): Promise<number> => {
-  const items = await readDirectoryAsync(srcDir);
+  const src = new Directory(srcDir);
+  const dest = new Directory(destDir);
+
+  if (!src.exists) {
+    console.warn(`Source directory does not exist: ${srcDir}`);
+    return 0;
+  }
+
+  if (!dest.exists) {
+    dest.create({ intermediates: true, idempotent: true });
+  }
+
   let copied = 0;
-
-  for (const item of items) {
-    const srcPath = `${srcDir}${item}`;
-    const destPath = `${destDir}${item}`;
-
-    try {
-      const info = await getInfoAsync(srcPath);
-      if (!info.exists) continue;
-
-      if (info.isDirectory) {
-        await makeDirectoryAsync(destPath, { intermediates: true });
-        copied += await copyRecursive(`${srcPath}/`, `${destPath}/`, onProgress);
-      } else {
-        onProgress?.(item);
-        await copyAsync({ from: srcPath, to: destPath });
-        copied++;
+  try {
+    const list = src.list();
+    for (const item of list) {
+      const name = item.uri.substring(item.uri.lastIndexOf('/') + 1);
+      if (item instanceof Directory) {
+        copied += await copyRecursive(`${item.uri}/`, `${destDir}${name}/`, onProgress);
+      } else if (item instanceof File) {
+        onProgress?.(name);
+        try {
+          const targetFile = new File(`${destDir}${name}`);
+          if (targetFile.exists) {
+            targetFile.delete();
+          }
+          item.copy(targetFile);
+          copied++;
+          console.log(`📦 Copied natively (JSI): ${name}`);
+        } catch (copyErr) {
+          console.warn(`JSI Copy failed for ${name}, trying legacy fallback:`, copyErr);
+          await copyAsync({ from: item.uri, to: `${destDir}${name}` });
+          copied++;
+        }
       }
-    } catch (e) {
-      console.warn(`Failed to copy ${srcPath}:`, e);
     }
+  } catch (e) {
+    console.error("Failed to copy recursive:", e);
   }
 
   return copied;
@@ -220,6 +236,10 @@ const copyRecursive = async (
 export const extractCacheToDocuments = async (
   onProgress?: (file: string) => void
 ): Promise<number> => {
+  // Write a dummy file to the root Documents folder to force iOS to show the app folder in Files app immediately!
+  const forceFileUri = `${documentDirectory!}000_RECOVERY_STARTED.txt`;
+  await writeAsStringAsync(forceFileUri, `Recovery started at ${new Date().toISOString()}`);
+
   const destDir = `${documentDirectory!}Hidden_Cache/`;
   await makeDirectoryAsync(destDir, { intermediates: true });
   return copyRecursive(cacheDirectory!, destDir, onProgress);
@@ -233,6 +253,10 @@ export const extractDirToDocuments = async (
   relPath: string,
   onProgress?: (file: string) => void
 ): Promise<number> => {
+  // Write a dummy file to the root Documents folder to force iOS to show the app folder in Files app immediately!
+  const forceFileUri = `${documentDirectory!}000_RECOVERY_STARTED.txt`;
+  await writeAsStringAsync(forceFileUri, `Recovery started at ${new Date().toISOString()}`);
+
   const safeName = relPath.replace(/\//g, "_");
   const srcDir = `${getContainerRoot()}${relPath}/`;
   const destDir = `${documentDirectory!}Extracted_${safeName}/`;
@@ -301,7 +325,7 @@ const deleteDirItem = async (baseDir: string, name: string): Promise<void> => {
   try {
     // Strip file:// prefix for the new File API
     const nativePath = fullPath.replace(/^file:\/\//, "");
-    const f = new FSFile(nativePath);
+    const f = new File(nativePath);
     if (f.exists) {
       f.delete();
       console.log("🗑️ Deleted (File API):", name);
@@ -334,7 +358,7 @@ const deleteAllInDir = async (
       onProgress?.(item);
       // Strip file:// prefix for the new File API
       const nativePath = fullPath.replace(/^file:\/\//, "");
-      const f = new FSFile(nativePath);
+      const f = new File(nativePath);
       if (f.exists) {
         f.delete();
         deleted++;

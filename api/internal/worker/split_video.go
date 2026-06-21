@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"go.uber.org/zap"
 )
 
@@ -183,7 +184,7 @@ func (w *Worker) analyzeChunkInline(ctx context.Context, localPath, gcsURI strin
 		EndSecs:     endSecs,
 	})
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localPath, prompt)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localPath, prompt, gemini.ModelFlash35)
 
 	// Clean up Gemini file if uploaded
 	if geminiFile != "" {

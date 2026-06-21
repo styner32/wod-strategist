@@ -53,3 +53,6 @@ infra/*.tfvars
 
 # gcp key
 api/gcp-key.json
+
+# antigravity
+.antigravitycli

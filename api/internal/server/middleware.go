@@ -21,11 +21,16 @@ func RequestLogger() gin.HandlerFunc {
 
 		c.Next()
 
+		// user_id is set by AuthMiddleware after JWT validation.
+		// 0 means no auth context (unauthenticated or auth middleware not applied).
+		userID, _ := c.Get("user_id")
+
 		logger.Log.Info("Request",
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
 			zap.Int("status", c.Writer.Status()),
 			zap.Duration("latency", time.Since(start)),
+			zap.Any("user_id", userID),
 		)
 	}
 }

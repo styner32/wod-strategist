@@ -49,6 +49,22 @@ func (r *GormAnalysisResultRepository) ListRecent(ctx context.Context, limit int
 	return results, nil
 }
 
+func (r *GormAnalysisResultRepository) ListByDateRange(ctx context.Context, profileID uint, from, to time.Time) ([]db.AnalysisResult, error) {
+	if r.db == nil {
+		return nil, errRepositoryNotConfigured
+	}
+
+	var results []db.AnalysisResult
+	q := r.db.WithContext(ctx).Where("archived_at IS NULL").Where("profile_id = ?", profileID).Order("created_at desc")
+	q = q.Where("created_at >= ?", from)
+	q = q.Where("created_at < ?", to)
+	if err := q.Find(&results).Error; err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
 func (r *GormAnalysisResultRepository) FindChunksBySessionID(ctx context.Context, sessionID string) ([]db.ChunkAnalysisResult, error) {
 	if r.db == nil {
 		return nil, errRepositoryNotConfigured

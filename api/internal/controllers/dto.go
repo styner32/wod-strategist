@@ -16,13 +16,14 @@ type ErrorResponse struct {
 }
 
 type CompleteUploadRequest struct {
-	SessionID   string   `json:"session_id"`
-	GCSURI      string   `json:"gcs_uri"`
-	Movements   []string `json:"movements"`
-	Injuries    []string `json:"injuries"`
-	WorkoutType string   `json:"workout_type"`
-	ProfileID   uint     `json:"profile_id"`
-	EnableTTS   bool     `json:"enable_tts,omitempty"`
+	SessionID      string   `json:"session_id"`
+	GCSURI         string   `json:"gcs_uri"`
+	Movements      []string `json:"movements"`
+	Injuries       []string `json:"injuries"`
+	WorkoutType    string   `json:"workout_type"`
+	ProfileID      uint     `json:"profile_id"`
+	EnableTTS      bool     `json:"enable_tts,omitempty"`
+	WODDescription string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
 }
 
 type CompleteUploadResponse struct {
@@ -70,12 +71,13 @@ type ProfileResponse struct {
 }
 
 type MergeChunksRequest struct {
-	SessionID   string   `json:"session_id"`
-	WorkoutType string   `json:"workout_type"`
-	Movements   []string `json:"movements"`
-	Injuries    []string `json:"injuries"`
-	ProfileID   uint     `json:"profile_id"`
-	EnableTTS   bool     `json:"enable_tts,omitempty"`
+	SessionID      string   `json:"session_id"`
+	WorkoutType    string   `json:"workout_type"`
+	Movements      []string `json:"movements"`
+	Injuries       []string `json:"injuries"`
+	ProfileID      uint     `json:"profile_id"`
+	EnableTTS      bool     `json:"enable_tts,omitempty"`
+	WODDescription string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
 }
 
 type MergeChunksResponse struct {
@@ -85,15 +87,17 @@ type MergeChunksResponse struct {
 }
 
 type ChunkCompleteRequest struct {
-	SessionID    string   `json:"session_id"`
-	GCSURI       string   `json:"gcs_uri"`
-	Movements    []string `json:"movements"`
-	Injuries     []string `json:"injuries"`
-	WorkoutType  string   `json:"workout_type"`
-	ProfileID    uint     `json:"profile_id"`
-	StartSecs    float64  `json:"start_secs"`
-	EndSecs      float64  `json:"end_secs"`
-	HeartRateBPM int      `json:"heart_rate_bpm"`
+	SessionID         string   `json:"session_id"`
+	GCSURI            string   `json:"gcs_uri"`
+	Movements         []string `json:"movements"`
+	Injuries          []string `json:"injuries"`
+	WorkoutType       string   `json:"workout_type"`
+	ProfileID         uint     `json:"profile_id"`
+	StartSecs         float64  `json:"start_secs"`
+	EndSecs           float64  `json:"end_secs"`
+	HeartRateBPM      int      `json:"heart_rate_bpm"`
+	WODDescription    string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
+	WorkoutConfidence float64  `json:"workout_confidence"`
 }
 
 type GenerateHighlightRequest struct {
@@ -192,4 +196,25 @@ type VideoDownloadURLResponse struct {
 	DownloadURL string `json:"download_url"`
 	Filename    string `json:"filename"`
 	ExpiresAt   string `json:"expires_at"`
+}
+
+// ParseWorkoutImageResponse is the response for POST /parse-workout-image.
+type ParseWorkoutImageResponse struct {
+	WODDescription string   `json:"wod_description"` // e.g. "Fran" or "For Time: 5 rounds of 10 Deadlifts + 15 Box Jumps"
+	Movements      []string `json:"movements"`       // e.g. ["Thruster", "Pull-up"]
+	RawText        string   `json:"raw_text"`        // raw OCR text extracted from the whiteboard
+}
+
+type CreateSessionRequest struct {
+	ProfileID      uint     `json:"profile_id"`
+	IdempotencyKey string   `json:"idempotency_key"`
+	Movements      []string `json:"movements,omitempty"`
+	WODDescription string   `json:"wod_description,omitempty"`
+	WorkoutType    string   `json:"workout_type,omitempty"`
+}
+
+type CreateSessionResponse struct {
+	SessionID   string `json:"session_id"`
+	Status      string `json:"status"`
+	WorkoutType string `json:"workout_type"`
 }

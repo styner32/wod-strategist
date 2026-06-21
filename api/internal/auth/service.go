@@ -27,8 +27,6 @@ var (
 
 var usernameRegex = regexp.MustCompile(`^[a-z0-9_]{3,20}$`)
 
-
-
 // cachedUser holds a validated user lookup with a TTL.
 type cachedUser struct {
 	tokenVersion int
@@ -91,12 +89,17 @@ func (s *Service) Signup(ctx context.Context, username, password string) (token 
 		return "", 0, fmt.Errorf("create default profile: %w", err)
 	}
 
-	token, err = IssueToken(s.jwtSecret, user.ID, user.Username, user.TokenVersion)
+	token, err = s.IssueTokenByUser(&user)
 	if err != nil {
 		return "", 0, err
 	}
 
 	return token, user.ID, nil
+}
+
+// Issue token for a user
+func (s *Service) IssueTokenByUser(u *db.User) (token string, err error) {
+	return IssueToken(s.jwtSecret, u.ID, u.Username, u.TokenVersion)
 }
 
 // Login authenticates a user and returns a JWT.
@@ -112,7 +115,7 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 		return "", 0, ErrInvalidCredentials
 	}
 
-	token, err = IssueToken(s.jwtSecret, user.ID, user.Username, user.TokenVersion)
+	token, err = s.IssueTokenByUser(&user)
 	if err != nil {
 		return "", 0, err
 	}

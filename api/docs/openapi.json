@@ -7,6 +7,483 @@
         "version": "1.0"
     },
     "paths": {
+        "/chunk-analysis/:session_id": {
+            "get": {
+                "description": "Fetches the partial analysis chunks for a given session",
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get Chunk Analysis",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/db.ChunkAnalysisResult"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/chunk-complete": {
+            "post": {
+                "description": "Notifies the backend that a chunk upload is complete and triggers chunk analysis",
+                "tags": [
+                    "upload"
+                ],
+                "summary": "Chunk Complete",
+                "requestBody": {
+                    "$ref": "#/components/requestBodies/controllers.CompleteUploadRequest"
+                },
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.CompleteUploadResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/debug/telemetry": {
+            "post": {
+                "description": "Receives a telemetry session from the app and stores it in GCS for debugging",
+                "tags": [
+                    "debug"
+                ],
+                "summary": "Upload Debug Telemetry",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.DebugTelemetryRequest"
+                            }
+                        }
+                    },
+                    "description": "Telemetry session",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": true
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/dev/sessions": {
+            "get": {
+                "description": "Lists existing sessions discovered from uploaded storage assets",
+                "tags": [
+                    "dev"
+                ],
+                "summary": "List Session Catalog",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.SessionCatalogResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/dev/sessions/{session_id}/assets": {
+            "get": {
+                "description": "Lists playable session assets for the browser QA workbench",
+                "tags": [
+                    "dev"
+                ],
+                "summary": "Get Session Assets",
+                "parameters": [
+                    {
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.SessionAssetsResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/dev/sessions/{session_id}/play-url": {
+            "get": {
+                "description": "Resolves a playable signed URL for a session asset",
+                "tags": [
+                    "dev"
+                ],
+                "summary": "Get Session Play URL",
+                "parameters": [
+                    {
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Asset kind",
+                        "name": "kind",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Asset variant",
+                        "name": "variant",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.PlayURLResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/generate-hardsub": {
+            "post": {
+                "description": "Creates a hardsubbed version of the video with burned-in subtitles",
+                "tags": [
+                    "video"
+                ],
+                "summary": "Generate Hardsubbed Video",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.GenerateHardSubRequest"
+                            }
+                        }
+                    },
+                    "description": "Session and profile",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.GenerateHardSubResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/generate-highlight": {
+            "post": {
+                "description": "Triggers short-form highlight video generation from WOD analysis for a session",
+                "tags": [
+                    "highlight"
+                ],
+                "summary": "Generate Highlight",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.GenerateHighlightRequest"
+                            }
+                        }
+                    },
+                    "description": "Session ID and options",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/highlight-download/:id": {
+            "get": {
+                "description": "Returns a time-limited signed URL for downloading a specific highlight video",
+                "tags": [
+                    "highlight"
+                ],
+                "summary": "Get Highlight Download URL",
+                "parameters": [
+                    {
+                        "description": "Highlight result ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.VideoDownloadURLResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/highlight/:session_id": {
+            "get": {
+                "description": "Returns highlight generation results for a given session",
+                "tags": [
+                    "highlight"
+                ],
+                "summary": "Get Highlight",
+                "parameters": [
+                    {
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/db.HighlightResult"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/injuries": {
             "get": {
                 "description": "Returns a list of all supported injuries that can be analyzed",
@@ -23,6 +500,82 @@
                                     "type": "array",
                                     "items": {
                                         "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/merge-chunks": {
+            "post": {
+                "description": "Triggers server-side merging of all uploaded chunks for a session, then runs full video analysis",
+                "tags": [
+                    "upload"
+                ],
+                "summary": "Merge Chunks",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.MergeChunksRequest"
+                            }
+                        }
+                    },
+                    "description": "Session and workout metadata",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.MergeChunksResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/movement-groups": {
+            "get": {
+                "description": "Returns all supported workout movements organized by category",
+                "tags": [
+                    "metadata"
+                ],
+                "summary": "List movement groups",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/controllers.MovementGroup"
                                     }
                                 }
                             }
@@ -55,6 +608,181 @@
                 }
             }
         },
+        "/parse-workout-image": {
+            "post": {
+                "description": "Extracts workout description and movements from a whiteboard photo",
+                "tags": [
+                    "workout"
+                ],
+                "summary": "Parse Workout Image",
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "image": {
+                                        "description": "Whiteboard photo (JPEG/PNG, max 10MB)",
+                                        "type": "string",
+                                        "format": "binary"
+                                    }
+                                },
+                                "required": [
+                                    "image"
+                                ]
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ParseWorkoutImageResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/retry-analysis": {
+            "post": {
+                "description": "Re-enqueues a video analysis task for a failed session using existing GCS files",
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Retry Analysis",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.RetryAnalysisRequest"
+                            }
+                        }
+                    },
+                    "description": "Session and profile",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.RetryAnalysisResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/subtitles/:session_id": {
+            "get": {
+                "description": "Returns chunk analysis feedback as an SRT subtitle file for a given session",
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get Subtitles",
+                "parameters": [
+                    {
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SRT subtitle content",
+                        "content": {
+                            "text/plain": {
+                                "schema": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "text/plain": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/upload-complete": {
             "post": {
                 "description": "Notifies the backend that a video upload is complete and triggers analysis",
@@ -63,15 +791,7 @@
                 ],
                 "summary": "Complete Upload",
                 "requestBody": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "$ref": "#/components/schemas/controllers.CompleteUploadRequest"
-                            }
-                        }
-                    },
-                    "description": "Upload metadata",
-                    "required": true
+                    "$ref": "#/components/requestBodies/controllers.CompleteUploadRequest"
                 },
                 "responses": {
                     "202": {
@@ -158,6 +878,131 @@
                     }
                 }
             }
+        },
+        "/verify-highlights": {
+            "post": {
+                "description": "Triggers verification of highlight segments to detect hallucinated movements",
+                "tags": [
+                    "highlight"
+                ],
+                "summary": "Verify Highlights",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.VerifyHighlightsRequest"
+                            }
+                        }
+                    },
+                    "description": "Session ID",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/video-download/:session_id": {
+            "get": {
+                "description": "Returns a time-limited signed URL for downloading the merged or hardsubbed video",
+                "tags": [
+                    "video"
+                ],
+                "summary": "Get Video Download URL",
+                "parameters": [
+                    {
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Video kind: merged (default) or hardsubbed",
+                        "name": "kind",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.VideoDownloadURLResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ErrorResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "servers": [
@@ -166,16 +1011,43 @@
         }
     ],
     "components": {
+        "requestBodies": {
+            "controllers.CompleteUploadRequest": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/controllers.CompleteUploadRequest"
+                        }
+                    }
+                },
+                "description": "Upload metadata",
+                "required": true
+            }
+        },
         "schemas": {
+            "controllers.ChunkAnalysisSummaryResponse": {
+                "type": "object",
+                "properties": {
+                    "completed": {
+                        "type": "integer"
+                    },
+                    "failed": {
+                        "type": "integer"
+                    },
+                    "pending": {
+                        "type": "integer"
+                    },
+                    "total": {
+                        "type": "integer"
+                    }
+                }
+            },
             "controllers.CompleteUploadRequest": {
                 "type": "object",
-                "required": [
-                    "gcs_uri",
-                    "movements",
-                    "session_id",
-                    "workout_type"
-                ],
                 "properties": {
+                    "enable_tts": {
+                        "type": "boolean"
+                    },
                     "gcs_uri": {
                         "type": "string"
                     },
@@ -191,7 +1063,14 @@
                             "type": "string"
                         }
                     },
+                    "profile_id": {
+                        "type": "integer"
+                    },
                     "session_id": {
+                        "type": "string"
+                    },
+                    "wod_description": {
+                        "description": "e.g. \"Fran\" or \"For Time: 5 rounds of...\"",
                         "type": "string"
                     },
                     "workout_type": {
@@ -215,13 +1094,12 @@
             },
             "controllers.CreateUploadURLRequest": {
                 "type": "object",
-                "required": [
-                    "filename",
-                    "session_id"
-                ],
                 "properties": {
                     "filename": {
                         "type": "string"
+                    },
+                    "profile_id": {
+                        "type": "integer"
                     },
                     "session_id": {
                         "type": "string"
@@ -239,10 +1117,472 @@
                     }
                 }
             },
+            "controllers.DebugTelemetryRequest": {
+                "type": "object",
+                "properties": {
+                    "appVersion": {
+                        "type": "string"
+                    },
+                    "deviceModel": {
+                        "type": "string"
+                    },
+                    "endedAt": {
+                        "type": "integer"
+                    },
+                    "platform": {
+                        "type": "string"
+                    },
+                    "profileId": {
+                        "type": "integer"
+                    },
+                    "samples": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/controllers.DebugTelemetrySample"
+                        }
+                    },
+                    "sessionId": {
+                        "type": "string"
+                    },
+                    "startedAt": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "controllers.DebugTelemetrySample": {
+                "type": "object",
+                "properties": {
+                    "batt": {
+                        "type": "number"
+                    },
+                    "chunkIdx": {
+                        "type": "integer"
+                    },
+                    "hr": {
+                        "type": "integer"
+                    },
+                    "motion": {
+                        "type": "object",
+                        "additionalProperties": true
+                    },
+                    "ts": {
+                        "type": "number"
+                    }
+                }
+            },
             "controllers.ErrorResponse": {
                 "type": "object",
                 "properties": {
                     "error": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.FullAnalysisStatusResponse": {
+                "type": "object",
+                "properties": {
+                    "analysis_type": {
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.GenerateHardSubRequest": {
+                "type": "object",
+                "properties": {
+                    "enable_tts": {
+                        "type": "boolean"
+                    },
+                    "profile_id": {
+                        "type": "integer"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.GenerateHardSubResponse": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "task_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.GenerateHighlightRequest": {
+                "type": "object",
+                "properties": {
+                    "max_duration": {
+                        "description": "seconds, default 60",
+                        "type": "integer"
+                    },
+                    "profile_id": {
+                        "type": "integer"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.MergeChunksRequest": {
+                "type": "object",
+                "properties": {
+                    "enable_tts": {
+                        "type": "boolean"
+                    },
+                    "injuries": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "movements": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "profile_id": {
+                        "type": "integer"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "wod_description": {
+                        "description": "e.g. \"Fran\" or \"For Time: 5 rounds of...\"",
+                        "type": "string"
+                    },
+                    "workout_type": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.MergeChunksResponse": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "task_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.MovementGroup": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string"
+                    },
+                    "movements": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "controllers.ParseWorkoutImageResponse": {
+                "type": "object",
+                "properties": {
+                    "movements": {
+                        "description": "e.g. [\"Thruster\", \"Pull-up\"]",
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "raw_text": {
+                        "description": "raw OCR text extracted from the whiteboard",
+                        "type": "string"
+                    },
+                    "wod_description": {
+                        "description": "e.g. \"Fran\" or \"For Time: 5 rounds of 10 Deadlifts + 15 Box Jumps\"",
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.PlayURLResponse": {
+                "type": "object",
+                "properties": {
+                    "cache_key": {
+                        "type": "string"
+                    },
+                    "expires_at": {
+                        "type": "string"
+                    },
+                    "gcs_uri": {
+                        "type": "string"
+                    },
+                    "kind": {
+                        "type": "string"
+                    },
+                    "public_url": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "signed_url": {
+                        "type": "string"
+                    },
+                    "variant": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.RetryAnalysisRequest": {
+                "type": "object",
+                "properties": {
+                    "profile_id": {
+                        "type": "integer"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.RetryAnalysisResponse": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "task_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.SessionAssetResponse": {
+                "type": "object",
+                "properties": {
+                    "cache_key": {
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "gcs_uri": {
+                        "type": "string"
+                    },
+                    "kind": {
+                        "type": "string"
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "object_name": {
+                        "type": "string"
+                    },
+                    "public_url": {
+                        "type": "string"
+                    },
+                    "variant": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.SessionAssetsResponse": {
+                "type": "object",
+                "properties": {
+                    "assets": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/controllers.SessionAssetResponse"
+                        }
+                    },
+                    "chunk_summary": {
+                        "$ref": "#/components/schemas/controllers.ChunkAnalysisSummaryResponse"
+                    },
+                    "full_analysis": {
+                        "$ref": "#/components/schemas/controllers.FullAnalysisStatusResponse"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "subtitle_available": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "controllers.SessionCatalogItemResponse": {
+                "type": "object",
+                "properties": {
+                    "chunk_count": {
+                        "type": "integer"
+                    },
+                    "has_hardsubbed": {
+                        "type": "boolean"
+                    },
+                    "has_merged": {
+                        "type": "boolean"
+                    },
+                    "highlight_count": {
+                        "type": "integer"
+                    },
+                    "latest_created_at": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.SessionCatalogResponse": {
+                "type": "object",
+                "properties": {
+                    "sessions": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/controllers.SessionCatalogItemResponse"
+                        }
+                    }
+                }
+            },
+            "controllers.VerifyHighlightsRequest": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.VideoDownloadURLResponse": {
+                "type": "object",
+                "properties": {
+                    "download_url": {
+                        "type": "string"
+                    },
+                    "expires_at": {
+                        "type": "string"
+                    },
+                    "filename": {
+                        "type": "string"
+                    },
+                    "kind": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "db.ChunkAnalysisResult": {
+                "type": "object",
+                "properties": {
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "end_secs": {
+                        "type": "number"
+                    },
+                    "exercise_type": {
+                        "description": "detected movement (e.g. \"Snatch\", \"Pull-up\")",
+                        "type": "string"
+                    },
+                    "file_path": {
+                        "type": "string"
+                    },
+                    "heart_rate_bpm": {
+                        "description": "BLE heart rate at chunk capture time (0 = unavailable)",
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "integer"
+                    },
+                    "observed_signals": {
+                        "description": "JSON: estimated workout metrics for benchmarking",
+                        "type": "string"
+                    },
+                    "output": {
+                        "type": "string"
+                    },
+                    "profile_id": {
+                        "type": "integer"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "start_secs": {
+                        "type": "number"
+                    },
+                    "status": {
+                        "description": "PENDING, COMPLETED, FAILED",
+                        "type": "string"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    },
+                    "workout_confidence": {
+                        "description": "confidence if person actually workout",
+                        "type": "number"
+                    }
+                }
+            },
+            "db.HighlightResult": {
+                "type": "object",
+                "properties": {
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "duration_sec": {
+                        "description": "total highlight duration in seconds",
+                        "type": "number"
+                    },
+                    "gcs_uri": {
+                        "description": "gs:// URI of the polished highlight video",
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "integer"
+                    },
+                    "music_gcs_uri": {
+                        "description": "gs:// URI of the Lyria-generated music track",
+                        "type": "string"
+                    },
+                    "output": {
+                        "description": "error message or AI summary",
+                        "type": "string"
+                    },
+                    "profile_id": {
+                        "type": "integer"
+                    },
+                    "segments": {
+                        "description": "JSON: selected segments used",
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "description": "PENDING, PROCESSING, COMPLETED, FAILED",
+                        "type": "string"
+                    },
+                    "title": {
+                        "description": "e.g. \"Full Reel\", \"Best Forms\"",
+                        "type": "string"
+                    },
+                    "updated_at": {
                         "type": "string"
                     }
                 }

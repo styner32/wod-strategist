@@ -2,20 +2,25 @@ package controllers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
+	geminiPkg "github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/subtitle"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 func (ctl *Controller) Health(c *gin.Context) {
@@ -151,13 +156,13 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	if !worker.IsValidWorkoutType(req.WorkoutType) {
-		logger.Log.Error("invalid workout type", zap.String("workout_type", req.WorkoutType))
+	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
+	if !worker.IsValidWorkoutType(workoutType) {
+		logger.Log.Error("invalid workout type", zap.String("workout_type", workoutType))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workout type"})
 		return
 	}
 
-	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 	logger.Log.Info("Submit a video analysis request",
 		zap.String("session_id", req.SessionID),
 		zap.String("gcs_uri", req.GCSURI),
@@ -166,7 +171,7 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		zap.String("workout_type", workoutType),
 	)
 
-	task, err := ctl.newVideoAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.EnableTTS)
+	task, err := ctl.newVideoAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.EnableTTS, req.WODDescription)
 	if err != nil {
 		logger.Log.Error("failed to create task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -230,7 +235,7 @@ func (ctl *Controller) Upload(c *gin.Context) {
 		return
 	}
 
-	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, 0, false)
+	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, 0, false, "")
 	if err != nil {
 		logger.Log.Error("failed to create task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -252,13 +257,8 @@ func (ctl *Controller) Upload(c *gin.Context) {
 	})
 }
 
+// GET /analysis/:session_id
 func (ctl *Controller) GetAnalysis(c *gin.Context) {
-	if ctl.analysisResults == nil {
-		logger.Log.Error("analysis result repository is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch results"})
-		return
-	}
-
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
 	if !ctl.assertOwnsSession(c, sessionID) {
 		return
@@ -325,11 +325,38 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		return
 	}
 
-	results, err := ctl.analysisResults.ListRecent(c.Request.Context(), 20, profileID)
-	if err != nil {
-		logger.Log.Error("failed to fetch history", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
-		return
+	// Optional date range filtering
+	fromStr := c.Query("from")
+	toStr := c.Query("to")
+
+	var results []db.AnalysisResult
+	if fromStr != "" && toStr != "" {
+		fromDate, err := time.Parse("2006-01-02", fromStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date, expected YYYY-MM-DD"})
+			return
+		}
+		toDate, err := time.Parse("2006-01-02", toStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date, expected YYYY-MM-DD"})
+			return
+		}
+		// Add one day to 'to' so it's inclusive of the end date
+		toDate = toDate.AddDate(0, 0, 1)
+		results, err = ctl.analysisResults.ListByDateRange(c.Request.Context(), profileID, fromDate, toDate)
+		if err != nil {
+			logger.Log.Error("failed to fetch history by date range", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+			return
+		}
+	} else {
+		var err error
+		results, err = ctl.analysisResults.ListRecent(c.Request.Context(), 20, profileID)
+		if err != nil {
+			logger.Log.Error("failed to fetch history", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+			return
+		}
 	}
 
 	// Enrich with available video kinds per session (best-effort)
@@ -519,12 +546,6 @@ func isValidGCSURI(raw string) bool {
 // @Success      202 {object} CompleteUploadResponse
 // @Router       /chunk-complete [post]
 func (ctl *Controller) ChunkComplete(c *gin.Context) {
-	if ctl.queueClient == nil {
-		logger.Log.Error("queue client is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
-		return
-	}
-
 	var req ChunkCompleteRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -563,11 +584,38 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
-	task, err := ctl.newChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM)
+	logger.Log.Info("chunk-complete received",
+		zap.String("session_id", req.SessionID),
+		zap.Float64("workout_confidence", req.WorkoutConfidence),
+		zap.Int("heart_rate_bpm", req.HeartRateBPM),
+		zap.Float64("start_secs", req.StartSecs),
+		zap.Float64("end_secs", req.EndSecs),
+	)
+
+	var task *asynq.Task
+	_, err := gorm.G[db.Session](ctl.db).Where("session_id = ? AND profile_id = ?", req.SessionID, req.ProfileID).First(c)
 	if err != nil {
-		logger.Log.Error("failed to create chunk task", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
-		return
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			task, err = worker.NewChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WODDescription, req.WorkoutConfidence)
+			if err != nil {
+				logger.Log.Error("failed to create chunk task", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+				return
+			}
+		} else {
+			logger.Log.Error("failed to get session", zap.Error(err), zap.String("session_id", req.SessionID), zap.Uint("profile_id", req.ProfileID))
+			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to get session"})
+			return
+		}
+	}
+
+	if task == nil {
+		task, err = worker.NewChunkAnalysisWithSessionTask(req.SessionID, req.GCSURI, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WorkoutConfidence)
+		if err != nil {
+			logger.Log.Error("failed to create chunk task", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
+			return
+		}
 	}
 
 	info, err := ctl.queueClient.Enqueue(task)
@@ -907,7 +955,7 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 	// prefix = "videos/{profileId}/{sessionId}/"
 	placeholderGCSURI := fmt.Sprintf("gs://%s/videos/%d/%s/", ctl.bucketName, req.ProfileID, req.SessionID)
 
-	task, err := ctl.newMergeChunksTask(req.SessionID, placeholderGCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.EnableTTS)
+	task, err := ctl.newMergeChunksTask(req.SessionID, placeholderGCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.EnableTTS, req.WODDescription)
 	if err != nil {
 		logger.Log.Error("failed to create merge task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -1373,7 +1421,7 @@ func (ctl *Controller) RetryAnalysis(c *gin.Context) {
 		zap.Uint("profile_id", req.ProfileID),
 		zap.String("gcs_uri", gcsURI))
 
-	task, err := ctl.newVideoAnalysisTask(req.SessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, req.ProfileID, false)
+	task, err := ctl.newVideoAnalysisTask(req.SessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, req.ProfileID, false, "")
 	if err != nil {
 		logger.Log.Error("failed to create retry task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -1454,4 +1502,140 @@ func (ctl *Controller) GenerateHardSub(c *gin.Context) {
 		TaskID:    info.ID,
 		SessionID: req.SessionID,
 	})
+}
+
+// workoutBlockRegex extracts the JSON content from a ```workout ... ``` fenced block.
+var workoutBlockRegex = regexp.MustCompile("(?s)```workout\\s*\\n?(.*?)\\n?```")
+
+// parseWorkoutBlock extracts the structured workout JSON from Gemini's output.
+func parseWorkoutBlock(output string) (*ParseWorkoutImageResponse, error) {
+	matches := workoutBlockRegex.FindStringSubmatch(output)
+	if len(matches) < 2 {
+		return nil, fmt.Errorf("no ```workout``` block found in output")
+	}
+
+	var resp ParseWorkoutImageResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(matches[1])), &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse workout JSON: %w", err)
+	}
+
+	return &resp, nil
+}
+
+// maxImageUploadSize is the maximum allowed image upload size (10 MB).
+const maxImageUploadSize = 10 << 20 // 10 MB
+
+// wodParsePrompt is the prompt for extracting workout info from a whiteboard photo.
+const wodParsePrompt = `당신은 크로스핏 박스의 화이트보드 사진을 읽고 오늘의 운동(WOD)을 구조화된 형식으로 추출하는 전문가입니다.
+
+## 작업
+1. 화이트보드에 보이는 모든 텍스트를 읽으세요.
+2. 운동 유형을 식별하세요: 이름이 있는 벤치마크(Fran, Grace 등), For Time, AMRAP, EMOM, 또는 기타 형식.
+3. 개별 운동 종목을 추출하세요.
+4. **오타 및 약어를 교정하세요**: "Thuster" → "Thruster", "PU" → "Pull-up", "DL" → "Deadlift", "KB" → "Kettlebell", "BJ" → "Box Jump", "HSPUs" → "Handstand Push-up", "C2B" → "Chest to Bar", "T2B" → "Toes to Bar", "MU" → "Muscle-up", "DU" → "Double Under", "SU" → "Single Under", "WB" → "Wall Ball", "S2OH" → "Shoulder to Overhead", "G2OH" → "Ground to Overhead", "PC" → "Power Clean", "SC" → "Squat Clean", "PP" → "Push Press", "PJ" → "Push Jerk", "SJ" → "Split Jerk", "FS" → "Front Squat", "BS" → "Back Squat", "OHS" → "Overhead Squat", "SDHP" → "Sumo Deadlift High Pull", "RDL" → "Romanian Deadlift"
+5. 영어와 한국어 모두 인식하세요.
+
+## 출력 형식
+반드시 아래 JSON 형식을 ` + "```workout```" + ` 코드 블록 안에 작성하세요:
+
+` + "```workout" + `
+{
+  "wod_description": "운동 설명 (예: Fran, For Time: 5 rounds of..., AMRAP 20 min: ...)",
+  "movements": ["운동종목1", "운동종목2"],
+  "raw_text": "화이트보드에서 읽은 원본 텍스트 그대로"
+}
+` + "```" + `
+
+## 규칙
+- wod_description과 raw_text는 가독성과 모바일 앱에서의 쉬운 편집을 위해 **반드시 한 줄로 합치지 말고, 줄바꿈 문자(\\n)를 활용하여 여러 줄(multi-line)로 포맷팅**하여 반환하세요.
+- wod_description은 가능한 한 구체적으로 작성하세요 (세트, 반복수, 무게 포함). 각 운동이나 라운드 정보 사이에는 쉼표 대신 줄바꿈(\\n)을 포함하여 구조화하세요.
+- movements에는 교정된 공식 운동 이름만 포함하세요.
+- raw_text에는 화이트보드 원본 레이아웃의 줄바꿈과 줄 번호 등을 그대로 살려 교정 전 원본 텍스트를 포함하세요.
+- 화이트보드를 읽을 수 없으면 빈 JSON을 반환하세요: {"wod_description": "", "movements": [], "raw_text": ""}
+- 운동과 관련 없는 텍스트(날짜, 공지사항 등)는 wod_description에서 제외하세요.`
+
+// ParseWorkoutImage reads a whiteboard photo, sends it to Gemini Flash for
+// OCR + typo correction, and returns structured WOD data.
+//
+// @Summary      Parse Workout Image
+// @Description  Extracts workout description and movements from a whiteboard photo
+// @Tags         workout
+// @Accept       multipart/form-data
+// @Produce      json
+// @Param        image formData file true "Whiteboard photo (JPEG/PNG, max 10MB)"
+// @Success      200 {object} ParseWorkoutImageResponse
+// @Failure      400 {object} ErrorResponse
+// @Failure      422 {object} ErrorResponse
+// @Failure      500 {object} ErrorResponse
+// @Router       /parse-workout-image [post]
+func (ctl *Controller) ParseWorkoutImage(c *gin.Context) {
+	if ctl.imageParser == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "image parsing is not configured"})
+		return
+	}
+
+	// Limit request body size
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxImageUploadSize)
+
+	file, header, err := c.Request.FormFile("image")
+	if err != nil {
+		logger.Log.Warn("failed to read image from form", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+		return
+	}
+	defer file.Close()
+
+	logger.Log.Info("Received workout image",
+		zap.String("filename", header.Filename),
+		zap.Int64("size_bytes", header.Size))
+
+	// Read all bytes
+	imageBytes := make([]byte, header.Size)
+	if _, err := file.Read(imageBytes); err != nil {
+		logger.Log.Error("failed to read image bytes", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image"})
+		return
+	}
+
+	// Detect MIME type from content
+	mimeType := geminiPkg.DetectImageMIME(imageBytes)
+	if mimeType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported image format; use JPEG or PNG"})
+		return
+	}
+
+	// Normalize: resize to max 1024px, re-encode as JPEG
+	normalized, normalizedMIME, err := geminiPkg.NormalizeImage(imageBytes, mimeType)
+	if err != nil {
+		logger.Log.Error("failed to normalize image", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to process image"})
+		return
+	}
+
+	logger.Log.Info("Image normalized",
+		zap.Int("original_bytes", len(imageBytes)),
+		zap.Int("normalized_bytes", len(normalized)))
+
+	// Call Gemini Flash for parsing
+	output, _, err := ctl.imageParser.ParseImage(c.Request.Context(), normalized, normalizedMIME, wodParsePrompt)
+	if err != nil {
+		logger.Log.Error("Gemini ParseImage failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to analyze image"})
+		return
+	}
+
+	// Parse the ```workout { ... } ``` JSON block from Gemini output
+	resp, err := parseWorkoutBlock(output)
+	if err != nil {
+		logger.Log.Warn("failed to parse workout block from Gemini output",
+			zap.Error(err),
+			zap.String("raw_output", output))
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":      "could not extract workout from image",
+			"raw_output": output,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
 }

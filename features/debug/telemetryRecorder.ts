@@ -66,8 +66,9 @@ function collectSample(): TelemetrySample {
   for (const fn of providers.values()) {
     try {
       Object.assign(merged, fn());
-    } catch {
-      // Provider threw — skip silently to avoid breaking the sampler
+    } catch (e) {
+      // Provider threw — log for debugging
+      console.warn('📊 Telemetry provider error:', e);
     }
   }
 
@@ -77,6 +78,7 @@ function collectSample(): TelemetrySample {
     ...(cachedBattery !== undefined ? { batt: cachedBattery } : {}),
     ...(merged.chunkIdx !== undefined ? { chunkIdx: merged.chunkIdx } : {}),
     ...(merged.motion ? { motion: merged.motion } : {}),
+    ...(merged.workoutConf !== undefined ? { workoutConf: merged.workoutConf } : {}),
   };
 }
 
