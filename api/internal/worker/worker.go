@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -177,8 +176,8 @@ func IsValidWorkoutType(wt string) bool {
 // Returns a non-retryable error if the session ID contains path separators
 // or other dangerous characters.
 func validateSessionID(sessionID string) error {
-	if strings.ContainsRune(sessionID, filepath.Separator) {
-		return fmt.Errorf("invalid session ID: contains path separator: %w", asynq.SkipRetry)
+	if strings.Contains(sessionID, "/") || strings.Contains(sessionID, "\\") || strings.Contains(sessionID, "..") {
+		return fmt.Errorf("invalid session ID: contains path separator or traversal characters: %w", asynq.SkipRetry)
 	}
 	return nil
 }
