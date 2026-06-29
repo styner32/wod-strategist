@@ -1101,15 +1101,14 @@ func (ctl *Controller) GetHighlight(c *gin.Context) {
 	}
 
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if !ctl.assertOwnsSession(c, sessionID) {
+		return
+	}
+
 	results, err := ctl.highlightResults.FindBySessionID(c.Request.Context(), sessionID)
 	if err != nil {
 		logger.Log.Error("failed to fetch highlight results", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch highlights"})
-		return
-	}
-
-	// Verify ownership through the first result's profile_id
-	if len(results) > 0 && !ctl.assertOwnsProfile(c, results[0].ProfileID) {
 		return
 	}
 
@@ -1144,6 +1143,10 @@ func (ctl *Controller) GetHighlightDownloadURL(c *gin.Context) {
 	if err != nil {
 		logger.Log.Error("highlight result not found", zap.Uint64("id", id), zap.Error(err))
 		c.JSON(http.StatusNotFound, gin.H{"error": "highlight not found"})
+		return
+	}
+
+	if !ctl.assertOwnsProfile(c, result.ProfileID) {
 		return
 	}
 
@@ -1217,6 +1220,10 @@ func (ctl *Controller) VerifyHighlights(c *gin.Context) {
 
 	if req.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	if !ctl.assertOwnsSession(c, req.SessionID) {
 		return
 	}
 
