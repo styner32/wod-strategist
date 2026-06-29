@@ -32,6 +32,7 @@
 **Vulnerability:** Path Traversal vulnerability check bypass in background workers.
 **Learning:** `filepath.Base()` strips path separators from strings. Calling `filepath.Base()` on user input and then checking the *result* for path separators using `strings.ContainsRune(val, filepath.Separator)` will always silently pass, bypassing the validation logic meant to reject malicious input. The validation must occur *before* sanitizing the input or checking the original input string.
 **Prevention:** Always validate and check for path separators on the *raw* user input before applying any path transformation or sanitization functions.
+
 ## 2025-05-13 - [Path Traversal in Session ID Handlers]
 **Vulnerability:** Path parameters such as `session_id` in API handlers (e.g. `GetAnalysis`, `GetHighlight`) were being read directly via `c.Param("session_id")` and used in database lookups or file path constructions without sanitization.
 **Learning:** Even though ORMs like GORM provide some injection protection, unvalidated strings read directly from HTTP paths can lead to path traversal if they are subsequently used to fetch or construct storage URIs (e.g., interacting with local disk or GCS).
@@ -41,3 +42,8 @@
 **Vulnerability:** The `validateSessionID` function merely checks for `filepath.Separator` (e.g. `/` or `\` depending on OS) to prevent path traversal issues. However, if paths are built using simple concatenation or other means, `filepath.Base` is recommended per memory guidelines: "Do not trust payloads from the Asynq task queue implicitly; always re-sanitize and validate inputs (e.g., applying `filepath.Base` to identifiers) within background workers, as the queue could potentially be manipulated or bypass API validation."
 **Learning:** Checking for separators is insufficient, especially when components like `..` can be manipulated and bypass simple checks. Using `filepath.Base` ensures that only the final element of the path is used, inherently preventing directory traversal attacks.
 **Prevention:** Always use `filepath.Base` on user-supplied identifiers intended to be part of file paths or object names before using them.
+
+## 2025-05-24 - Path Traversal Check OS-Dependency Bypass
+**Vulnerability:** The `validateSessionID` function in `api/internal/worker/worker.go` used `strings.ContainsRune(sessionID, filepath.Separator)` to check for path separators. Because `filepath.Separator` is determined by the operating system the code is compiled for/running on (`/` on Linux, `\` on Windows), this check would fail to detect a backslash (`\`) when running on a Linux system, allowing potential path traversal bypasses if the payload later reached a Windows-based system or a loosely-parsed filesystem implementation.
+**Learning:** Security validation logic should not rely on OS-specific path separators. Attackers can supply cross-platform payloads (like Windows-style paths `..\`) to applications running on Unix, bypassing validation checks that only look for Unix separators.
+**Prevention:** When explicitly denying path characters to prevent traversal or arbitrary file operations, always check for both Unix (`/`) and Windows (`\`) separators manually (e.g., using `strings.ContainsAny(sessionID, "/\\")`), rather than relying on the single OS-dependent `filepath.Separator`.
