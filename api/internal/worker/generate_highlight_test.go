@@ -45,8 +45,9 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 	const highlightSegs = `[{"start":"0:00","end":"0:01","type":"best_form","reason":"완벽한 자세"},{"start":"0:01","end":"0:02","type":"key_moment","reason":"최고 페이스"}]`
 
 	var (
-		dbConn *gorm.DB
-		w      *Worker
+		dbConn    *gorm.DB
+		w         *Worker
+		profileID uint
 	)
 
 	const (
@@ -85,6 +86,9 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 			BucketName:    "test-bucket",
 			logger:        zap.NewNop(),
 		}
+
+		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		profileID = p.ID
 	})
 
 	It("returns SkipRetry when no completed WOD analysis exists", func() {
@@ -98,6 +102,7 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 	It("returns SkipRetry when WOD analysis has no highlight segments", func() {
 		Expect(dbConn.Create(&db.AnalysisResult{
 			SessionID:         "sess-hl-nosegments",
+			ProfileID:         profileID,
 			AnalysisType:      db.AnalysisTypeWOD,
 			Status:            "COMPLETED",
 			Output:            "분석 완료",
@@ -114,6 +119,7 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 	It("returns SkipRetry when highlight segments JSON is invalid", func() {
 		Expect(dbConn.Create(&db.AnalysisResult{
 			SessionID:         "sess-hl-badjson",
+			ProfileID:         profileID,
 			AnalysisType:      db.AnalysisTypeWOD,
 			Status:            "COMPLETED",
 			Output:            "분석",
@@ -131,6 +137,7 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 		// No ChunkAnalysisResult records with file_path → returns error
 		Expect(dbConn.Create(&db.AnalysisResult{
 			SessionID:         "sess-hl-nochunks",
+			ProfileID:         profileID,
 			AnalysisType:      db.AnalysisTypeWOD,
 			Status:            "COMPLETED",
 			Output:            "분석",
@@ -154,6 +161,7 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 		It("creates COMPLETED HighlightResult records for each theme group", func() {
 			Expect(dbConn.Create(&db.AnalysisResult{
 				SessionID:         "sess-hl-happy",
+				ProfileID:         profileID,
 				AnalysisType:      db.AnalysisTypeWOD,
 				Status:            "COMPLETED",
 				Output:            "훌륭한 운동",
@@ -172,11 +180,13 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: "sess-hl-happy", Status: "COMPLETED", FilePath: chunk1URI,
-				Output: "좋아요", StartSecs: &start1, EndSecs: &end1,
+				ProfileID: profileID,
+				Output:    "좋아요", StartSecs: &start1, EndSecs: &end1,
 			}).Error).NotTo(HaveOccurred())
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: "sess-hl-happy", Status: "COMPLETED", FilePath: chunk2URI,
-				Output: "계속하세요", StartSecs: &start2, EndSecs: &end2,
+				ProfileID: profileID,
+				Output:    "계속하세요", StartSecs: &start2, EndSecs: &end2,
 			}).Error).NotTo(HaveOccurred())
 
 			// Create a fresh transport with all GCS expectations for this test
