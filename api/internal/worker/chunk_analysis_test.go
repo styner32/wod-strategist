@@ -141,6 +141,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 		storageTransport *testhelpers.MockTransport
 		queueClient      *asynq.Client
 		w                *Worker
+		profileID        uint
 	)
 
 	setupGeminiTransport := func(generateContentText string) *testhelpers.MockTransport {
@@ -221,6 +222,9 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			BucketName:    "test-bucket",
 			logger:        zap.NewNop(),
 		}
+
+		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		profileID = p.ID
 	})
 
 	It("persists a COMPLETED ChunkAnalysisResult", func() {
@@ -233,7 +237,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			WorkoutTypeWOD,
 			[]string{"Deadlift"},
 			nil,
-			0,
+			profileID,
 			0.0, 10.0,
 			0,
 			"",

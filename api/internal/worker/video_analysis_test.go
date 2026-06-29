@@ -305,6 +305,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		queueClient      *asynq.Client
 		inspector        *asynq.Inspector
 		w                *Worker
+		profileID        uint
 	)
 
 	// setupGeminiTransport creates a real gemini.Client backed by MockTransport
@@ -349,7 +350,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 			JSON(map[string]any{"name": "files/mock-file", "state": "ACTIVE"})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
+			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -383,14 +384,18 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		inspector = testhelpers.NewQueueInspector()
 		testhelpers.CleanupQueue(inspector)
 
+		logger, _ := zap.NewDevelopment()
 		w = &Worker{
 			DB:            dbConn,
 			StorageClient: storageClient,
 			GeminiClient:  nil, // set per-test via setupGeminiTransport
 			QueueClient:   queueClient,
 			BucketName:    "test-bucket",
-			logger:        zap.NewNop(),
+			logger:        logger,
 		}
+
+		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		profileID = p.ID
 	})
 
 	It("persists a COMPLETED AnalysisResult with parsed highlight segments", func() {
@@ -399,6 +404,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
 			SessionID:   "sess-happy-001",
+			ProfileID:   profileID,
 			FilePath:    "gs://test-bucket/videos/sess-happy-001/chunk_001.mp4",
 			WorkoutType: WorkoutTypeWOD,
 			Movements:   []string{"Burpee", "Pull-up"},
@@ -577,17 +583,15 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 })
 
 var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
-	const (
-		geminiBaseURL = "https://generativelanguage.googleapis.com"
-		geminiAPIKey  = "test-api-key"
-	)
-
 	var (
+		geminiBaseURL    = "https://generativelanguage.googleapis.com"
+		geminiAPIKey     = "test-api-key"
 		dbConn           *gorm.DB
 		storageTransport *testhelpers.MockTransport
 		queueClient      *asynq.Client
 		inspector        *asynq.Inspector
 		w                *Worker
+		profileID        uint
 	)
 
 	// setupTwoPassTransport: upload → poll → analyzeSegment x2 (Pro) → deleteFile
@@ -636,7 +640,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		// Segment 1 (Snatch) analysis
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
+			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -649,7 +653,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		// Segment 2 (Pull-up) analysis
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
+			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -671,13 +675,14 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		return transport
 	}
 
-	seedChunks := func(sessionID string) {
+	seedChunks := func(sessionID string, profileID uint) {
 		start0 := 0.0
 		end0 := 45.0
 		start1 := 50.0
 		end1 := 90.0
 		Expect(dbConn.Create(&db.ChunkAnalysisResult{
 			SessionID:    sessionID,
+			ProfileID:    profileID,
 			FilePath:     "gs://test-bucket/videos/" + sessionID + "/chunk_0.mp4",
 			Status:       "COMPLETED",
 			ExerciseType: "Snatch",
@@ -687,6 +692,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		}).Error).NotTo(HaveOccurred())
 		Expect(dbConn.Create(&db.ChunkAnalysisResult{
 			SessionID:    sessionID,
+			ProfileID:    profileID,
 			FilePath:     "gs://test-bucket/videos/" + sessionID + "/chunk_1.mp4",
 			Status:       "COMPLETED",
 			ExerciseType: "Pull-up",
@@ -719,15 +725,19 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			UseCache:      true,
 			logger:        zap.NewNop(),
 		}
+
+		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		profileID = p.ID
 	})
 
 	It("persists COMPLETED result using chunk-based segments (no injuries)", func() {
-		seedChunks("sess-twopass-001")
+		seedChunks("sess-twopass-001", profileID)
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-twopass-001/merged.mp4")
 		transport := setupTwoPassTransport(analysisWithHighlights, false)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
 			SessionID:   "sess-twopass-001",
+			ProfileID:   profileID,
 			FilePath:    "gs://test-bucket/videos/sess-twopass-001/merged.mp4",
 			WorkoutType: WorkoutTypeWOD,
 			Movements:   []string{"Snatch"},
@@ -746,11 +756,13 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(pending).To(BeEmpty())
+		// Only hardsub:generate should be enqueued (no injury task)
+		Expect(pending).To(HaveLen(1))
+		Expect(pending[0].Type).To(Equal("hardsub:generate"))
 	})
 
 	It("enqueues injury task with file URI and does NOT delete file", func() {
-		seedChunks("sess-twopass-inj-001")
+		seedChunks("sess-twopass-inj-001", profileID)
 		analysisWithInjury := analysisWithHighlights + "\n```injury_timestamps\n" +
 			`[{"start":"0:32","end":"0:45","reason":"무릎 내전 관찰"}]` + "\n```"
 

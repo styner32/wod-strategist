@@ -131,10 +131,14 @@ func gcsListObjectsURL(bucket, prefix string) string {
 
 var _ = Describe("Controller handlers", func() {
 	var router *gin.Engine
+	var profileID uint
 
 	BeforeEach(func() {
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
+
+		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		profileID = p.ID
 	})
 
 	Describe("Health", func() {
@@ -516,7 +520,7 @@ var _ = Describe("Controller handlers", func() {
 				SessionID: "session-1",
 				Status:    "COMPLETED",
 				Output:    "ok",
-				ProfileID: 1,
+				ProfileID: profileID,
 			}).Error).NotTo(HaveOccurred())
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1", nil)
@@ -549,13 +553,13 @@ var _ = Describe("Controller handlers", func() {
 			lastWeek := now.AddDate(0, 0, -7)
 
 			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: "session-today", Status: "COMPLETED", Output: "today workout", ProfileID: 1, CreatedAt: now,
+				SessionID: "session-today", Status: "COMPLETED", Output: "today workout", ProfileID: profileID, CreatedAt: now,
 			}).Error).NotTo(HaveOccurred())
 			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: "session-yesterday", Status: "COMPLETED", Output: "yesterday workout", ProfileID: 1, CreatedAt: yesterday,
+				SessionID: "session-yesterday", Status: "COMPLETED", Output: "yesterday workout", ProfileID: profileID, CreatedAt: yesterday,
 			}).Error).NotTo(HaveOccurred())
 			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: "session-lastweek", Status: "COMPLETED", Output: "last week workout", ProfileID: 1, CreatedAt: lastWeek,
+				SessionID: "session-lastweek", Status: "COMPLETED", Output: "last week workout", ProfileID: profileID, CreatedAt: lastWeek,
 			}).Error).NotTo(HaveOccurred())
 
 			from := now.AddDate(0, 0, -2).Format("2006-01-02")
@@ -647,9 +651,11 @@ var _ = Describe("Controller handlers", func() {
 			start2, end2 := 0.0, 10.0
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: "session-1", Status: "COMPLETED", Output: "Second chunk",
+				ProfileID: profileID,
 				StartSecs: &start1, EndSecs: &end1,
 			}).Error).NotTo(HaveOccurred())
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				ProfileID: profileID,
 				SessionID: "session-1", Status: "COMPLETED", Output: "First chunk",
 				StartSecs: &start2, EndSecs: &end2,
 			}).Error).NotTo(HaveOccurred())
@@ -674,6 +680,7 @@ var _ = Describe("Controller handlers", func() {
 			start, end := 0.0, 10.0
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: "session-1", Status: "FAILED", Output: "error",
+				ProfileID: profileID,
 				StartSecs: &start, EndSecs: &end,
 			}).Error).NotTo(HaveOccurred())
 
@@ -692,10 +699,12 @@ var _ = Describe("Controller handlers", func() {
 			start, end := 0.0, 10.0
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: "session-1", Status: "COMPLETED", Output: "has timestamps",
+				ProfileID: profileID,
 				StartSecs: &start, EndSecs: &end,
 			}).Error).NotTo(HaveOccurred())
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: "session-1", Status: "COMPLETED", Output: "no timestamps",
+				ProfileID: profileID,
 			}).Error).NotTo(HaveOccurred())
 
 			router := newTestRouter(controllers.Config{AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn)})
@@ -802,12 +811,12 @@ var _ = Describe("Controller handlers", func() {
 
 		BeforeEach(func() {
 			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Output: "output-a",
+				SessionID: sessionA, ProfileID: profileID, Status: "COMPLETED", Output: "output-a",
 			}).Error).NotTo(HaveOccurred())
 
 			start, end := 0.0, 10.0
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
-				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Output: "chunk-a",
+				SessionID: sessionA, ProfileID: profileID, Status: "COMPLETED", Output: "chunk-a",
 				StartSecs: &start, EndSecs: &end,
 			}).Error).NotTo(HaveOccurred())
 		})
@@ -831,11 +840,11 @@ var _ = Describe("Controller handlers", func() {
 
 		BeforeEach(func() {
 			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Output: "output-a",
+				SessionID: sessionA, ProfileID: profileID, Status: "COMPLETED", Output: "output-a",
 			}).Error).NotTo(HaveOccurred())
 
 			Expect(dbConn.Create(&db.HighlightResult{
-				SessionID: sessionA, ProfileID: 1, Status: "COMPLETED", Title: "highlight-a",
+				SessionID: sessionA, ProfileID: profileID, Status: "COMPLETED", Title: "highlight-a",
 			}).Error).NotTo(HaveOccurred())
 		})
 

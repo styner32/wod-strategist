@@ -12,8 +12,8 @@ const TokenTTL = 30 * 24 * time.Hour
 
 // Claims are the custom JWT claims used by the auth system.
 type Claims struct {
-	UserID       uint   `json:"uid"`
-	TokenVersion int    `json:"ver"`
+	UserID       uint `json:"uid"`
+	TokenVersion int  `json:"ver"`
 	jwt.RegisteredClaims
 }
 

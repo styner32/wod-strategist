@@ -49,6 +49,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 		queueClient      *asynq.Client
 		inspector        *asynq.Inspector
 		w                *Worker
+		profileID        uint
 	)
 
 	BeforeEach(func() {
@@ -64,6 +65,9 @@ var _ = Describe("HandleMergeChunksTask", func() {
 		storageTransport = testhelpers.NewMockTransport()
 		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)
 		Expect(sErr).NotTo(HaveOccurred())
+
+		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		profileID = p.ID
 
 		w = &Worker{
 			DB:            dbConn,
@@ -146,6 +150,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			end0 := 1.0
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: "sess-merge-001",
+				ProfileID: profileID,
 				FilePath:  "gs://test-bucket/videos/sess-merge-001/chunk_001.mp4",
 				Status:    "COMPLETED",
 				Output:    "good form",
@@ -207,6 +212,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			end1 := 20.0
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: sessionID,
+				ProfileID: profileID,
 				FilePath:  "gs://test-bucket/videos/" + sessionID + "/camera_chunk_001.mp4",
 				Status:    "COMPLETED",
 				Output:    "chunk 1",
@@ -216,6 +222,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: sessionID,
+				ProfileID: profileID,
 				FilePath:  "gs://test-bucket/videos/" + sessionID + "/camera_chunk_002.mp4",
 				Status:    "COMPLETED",
 				Output:    "chunk 2",
@@ -226,6 +233,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			// Seed: 2 split_chunk records from splitAndAnalyzeChunks (should be EXCLUDED)
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: sessionID,
+				ProfileID: profileID,
 				FilePath:  "gs://test-bucket/videos/" + sessionID + "/split_chunk_000.mp4",
 				Status:    "COMPLETED",
 				Output:    "split chunk 0",
@@ -235,6 +243,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 
 			Expect(dbConn.Create(&db.ChunkAnalysisResult{
 				SessionID: sessionID,
+				ProfileID: profileID,
 				FilePath:  "gs://test-bucket/videos/" + sessionID + "/split_chunk_001.mp4",
 				Status:    "COMPLETED",
 				Output:    "split chunk 1",

@@ -83,6 +83,7 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 		storageTransport *testhelpers.MockTransport
 		queueClient      *asynq.Client
 		w                *Worker
+		profileID        uint
 	)
 
 	setupGeminiTransport := func(generateContentText string) *testhelpers.MockTransport {
@@ -123,7 +124,7 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 			JSON(map[string]any{"name": "files/mock-injury", "state": "ACTIVE"})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
+			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -163,12 +164,16 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 			BucketName:    "test-bucket",
 			logger:        zap.NewNop(),
 		}
+
+		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		profileID = p.ID
 	})
 
 	It("appends injury output to existing WOD analysis row", func() {
 		// Pre-create a WOD analysis row for the session
 		wodResult := &db.AnalysisResult{
 			SessionID:    "sess-injury-001",
+			ProfileID:    profileID,
 			AnalysisType: db.AnalysisTypeWOD,
 			Status:       "COMPLETED",
 			Output:       "WOD analysis output",
