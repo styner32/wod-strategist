@@ -242,4 +242,3 @@ var _ = Describe("SetupRouter", func() {
 		Expect(w.Code).To(Equal(http.StatusOK))
 	})
 })
-

@@ -304,4 +304,3 @@ var _ = Describe("Auth Service", func() {
 	})
 
 })
-

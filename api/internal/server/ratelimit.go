@@ -16,10 +16,10 @@ type rateLimitEntry struct {
 
 // RateLimiter provides per-IP rate limiting using a sliding window.
 type RateLimiter struct {
-	mu       sync.Mutex
-	entries  map[string]*rateLimitEntry
-	limit    int
-	window   time.Duration
+	mu        sync.Mutex
+	entries   map[string]*rateLimitEntry
+	limit     int
+	window    time.Duration
 	lastPurge time.Time
 }
 
