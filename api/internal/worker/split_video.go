@@ -122,9 +122,30 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 				zap.Float64("start_secs", start),
 				zap.Float64("end_secs", end))
 
+			// Start motion probe concurrently with GCS upload
+			type probeResult struct {
+				score float64
+				err   error
+			}
+			probeChan := make(chan probeResult, 1)
+			go func() {
+				score, pErr := probeMotionScore(ctx, path)
+				probeChan <- probeResult{score: score, err: pErr}
+			}()
+
 			// Upload chunk to GCS
 			objectName := fmt.Sprintf("videos/%d/%s/split_chunk_%03d.mp4", p.ProfileID, p.SessionID, idx)
 			gcsURI, uploadErr := w.StorageClient.UploadFromFile(ctx, path, objectName)
+
+			// Wait for motion probe to finish
+			var motionScore *float64
+			pRes := <-probeChan
+			if pRes.err == nil {
+				motionScore = &pRes.score
+			} else {
+				w.logger.Warn("motion probe failed for split chunk", zap.Int("chunk_index", idx), zap.Error(pRes.err))
+			}
+
 			if uploadErr != nil {
 				w.logger.Error("Failed to upload split chunk to GCS, skipping",
 					zap.Int("chunk_index", idx),
@@ -132,14 +153,6 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 				errCount.Add(1)
 				os.Remove(path)
 				return
-			}
-
-			// Probe motion score (shadow mode)
-			var motionScore *float64
-			if score, probeErr := probeMotionScore(ctx, path); probeErr == nil {
-				motionScore = &score
-			} else {
-				w.logger.Warn("motion probe failed for split chunk", zap.Int("chunk_index", idx), zap.Error(probeErr))
 			}
 
 			// Run chunk analysis (reuse the same logic as HandleChunkAnalysisTask)

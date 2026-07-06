@@ -98,26 +98,28 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		return fmt.Errorf("no highlight segments to verify: %w", asynq.SkipRetry)
 	}
 
-	// 3. Find the source video in GCS (prefer _merged_, fall back to _encoded)
-	videoURI, err := w.findSourceVideo(ctx, p.SessionID)
-	if err != nil {
-		w.logger.Error("Failed to find source video for verification",
-			zap.String("session_id", p.SessionID), zap.Error(err))
-		return fmt.Errorf("source video not found: %w", asynq.SkipRetry)
-	}
-
-	w.logger.Info("Source video found for verification",
-		zap.String("session_id", p.SessionID),
-		zap.String("video_uri", videoURI))
-
-	// 4. Download video and upload to Gemini Files API unless we can reuse the existing one
-	var fileURI, mimeType string
-	var uploadBytes int64
-	var uploadFileNameToCleanup string
-
+	// 3. Determine if we can reuse the existing Gemini file
 	reused := analysisResult.GeminiFileURI != "" &&
 		analysisResult.GeminiFileExpiresAt != nil &&
 		time.Now().Before(*analysisResult.GeminiFileExpiresAt)
+
+	if reused {
+		// Verify if the file actually exists on Gemini Files API
+		exists, err := w.GeminiClient.FileExists(ctx, analysisResult.GeminiFileName)
+		if err != nil {
+			if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+				reused = false
+			} else {
+				return fmt.Errorf("failed to check Gemini file existence: %w", err)
+			}
+		} else if !exists {
+			reused = false
+		}
+	}
+
+	var fileURI, mimeType string
+	var uploadBytes int64
+	var uploadFileNameToCleanup string
 
 	if reused {
 		fileURI = analysisResult.GeminiFileURI
@@ -126,8 +128,20 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 			zap.String("session_id", p.SessionID),
 			zap.String("file_uri", fileURI))
 	} else {
-		w.logger.Info("Gemini file not found or expired, uploading source video",
+		w.logger.Info("Gemini file not found, expired, or deleted; uploading source video",
 			zap.String("session_id", p.SessionID))
+
+		// Find the source video in GCS (prefer _merged_, fall back to _encoded)
+		videoURI, err := w.findSourceVideo(ctx, p.SessionID)
+		if err != nil {
+			w.logger.Error("Failed to find source video for verification",
+				zap.String("session_id", p.SessionID), zap.Error(err))
+			return fmt.Errorf("source video not found: %w", asynq.SkipRetry)
+		}
+
+		w.logger.Info("Source video found for verification",
+			zap.String("session_id", p.SessionID),
+			zap.String("video_uri", videoURI))
 
 		localFilePath, err := createTempFile("verify", ".mp4")
 		if err != nil {
@@ -178,23 +192,30 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 
 	// 7. Parse verification results
 	results := parseVerificationResults(output, len(segments))
-	allVerified := true
-	for _, r := range results {
-		w.logger.Info("Verification result",
-			zap.Int("index", r.Index),
-			zap.Bool("verified", r.Verified),
-			zap.String("reason", r.Reason))
-		if !r.Verified {
-			allVerified = false
-		}
-	}
-
-	// If we couldn't parse any results, treat as inconclusive (don't update)
 	if len(results) == 0 {
 		w.logger.Warn("Could not parse verification results from model output",
 			zap.String("session_id", p.SessionID),
 			zap.String("raw_output", output))
 		return fmt.Errorf("verification results unparseable")
+	}
+
+	// Map verified state by index to verify that all indices exist and are true
+	verifiedMap := make(map[int]bool)
+	for _, r := range results {
+		w.logger.Info("Verification result",
+			zap.Int("index", r.Index),
+			zap.Bool("verified", r.Verified),
+			zap.String("reason", r.Reason))
+		verifiedMap[r.Index] = r.Verified
+	}
+
+	allVerified := true
+	for i := 0; i < len(segments); i++ {
+		val, found := verifiedMap[i]
+		if !found || !val {
+			allVerified = false
+			w.logger.Info("Segment not verified", zap.Int("index", i), zap.Bool("found_in_response", found))
+		}
 	}
 
 	// 8. Update the analysis result with the verified flag
@@ -214,7 +235,17 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 	if !reused {
 		apiCalls = 2
 	}
-	w.recordStageMetrics(p.SessionID, profileID, "verify_highlights", string(w.PipelineMode), apiCalls, 0, uploadBytes, time.Since(started))
+
+	// Map pipeline mode to legacy/optimized variant
+	pMode := string(w.PipelineMode)
+	if pMode == "" && w.UseCache {
+		pMode = string(PipelineModeOptimized)
+	}
+	variant := "legacy"
+	if pMode == "optimized" || pMode == "compare" {
+		variant = "optimized"
+	}
+	w.recordStageMetrics(p.SessionID, profileID, "verify_highlights", variant, apiCalls, 0, uploadBytes, time.Since(started))
 
 	return nil
 }

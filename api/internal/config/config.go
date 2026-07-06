@@ -116,6 +116,8 @@ func InitWorker() (Worker, error) {
 		} else {
 			pMode = "legacy"
 		}
+	} else if pMode != "legacy" && pMode != "optimized" && pMode != "compare" {
+		pMode = "legacy"
 	}
 
 	cfg := Worker{

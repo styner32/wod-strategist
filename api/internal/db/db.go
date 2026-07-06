@@ -51,11 +51,11 @@ type AnalysisResult struct {
 	Status            string `json:"status"`                           // PENDING, COMPLETED, FAILED
 	Output            string `json:"output"`
 	InjuryOutput      string     `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
-	InjuryOutputAlt   string     `json:"injury_output_alt,omitempty"`
-	GeminiFileURI     string     `json:"gemini_file_uri,omitempty"`
-	GeminiFileName    string     `json:"gemini_file_name,omitempty"`
-	GeminiMIMEType    string     `json:"gemini_mime_type,omitempty"`
-	GeminiFileExpiresAt *time.Time `json:"gemini_file_expires_at,omitempty"`
+	InjuryOutputAlt   string     `json:"-"`
+	GeminiFileURI     string     `json:"-"`
+	GeminiFileName    string     `json:"-"`
+	GeminiMIMEType    string     `json:"-"`
+	GeminiFileExpiresAt *time.Time `json:"-"`
 	HighlightSegments string     `json:"highlight_segments"`      // JSON array of highlight segments
 	Verified          *bool      `json:"verified,omitempty"`      // nil=unchecked, true=confirmed, false=hallucination detected
 	// WODDescription is the user-supplied workout descriptor (e.g. "Fran", "For Time: 5 rounds of...").
@@ -196,4 +196,3 @@ type PipelineStageMetric struct {
 	DurationMs   int64     `gorm:"not null;default:0" json:"duration_ms"`
 	CreatedAt    time.Time `json:"created_at"`
 }
-

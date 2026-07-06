@@ -246,17 +246,29 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
 	}
 
-	// Probe motion score (shadow mode)
-	var motionScore *float64
-	if score, probeErr := probeMotionScore(ctx, localFilePath); probeErr == nil {
-		motionScore = &score
-	} else {
-		w.logger.Warn("motion probe failed for chunk analysis", zap.Error(probeErr))
+	// Start motion probe concurrently with the Gemini API call
+	type probeResult struct {
+		score float64
+		err   error
 	}
+	probeChan := make(chan probeResult, 1)
+	go func() {
+		score, pErr := probeMotionScore(ctx, localFilePath)
+		probeChan <- probeResult{score: score, err: pErr}
+	}()
 
 	prompt := w.buildChunkAnalysisPrompt(p)
 
 	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash35)
+
+	// Wait for motion probe to finish
+	var motionScore *float64
+	pRes := <-probeChan
+	if pRes.err == nil {
+		motionScore = &pRes.score
+	} else {
+		w.logger.Warn("motion probe failed for chunk analysis", zap.Error(pRes.err))
+	}
 
 	defer func() {
 		os.Remove(localFilePath)
@@ -383,17 +395,29 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
 	}
 
-	// Probe motion score (shadow mode)
-	var motionScoreWithSession *float64
-	if score, probeErr := probeMotionScore(ctx, localFilePath); probeErr == nil {
-		motionScoreWithSession = &score
-	} else {
-		w.logger.Warn("motion probe failed for chunk analysis with session", zap.Error(probeErr))
+	// Start motion probe concurrently with the Gemini API call
+	type probeResult struct {
+		score float64
+		err   error
 	}
+	probeChan := make(chan probeResult, 1)
+	go func() {
+		score, pErr := probeMotionScore(ctx, localFilePath)
+		probeChan <- probeResult{score: score, err: pErr}
+	}()
 
 	prompt := w.buildChunkAnalysisWithSessionPrompt(p, &profile, &session)
 
 	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash35)
+
+	// Wait for motion probe to finish
+	var motionScoreWithSession *float64
+	pRes := <-probeChan
+	if pRes.err == nil {
+		motionScoreWithSession = &pRes.score
+	} else {
+		w.logger.Warn("motion probe failed for chunk analysis with session", zap.Error(pRes.err))
+	}
 
 	defer func() {
 		os.Remove(localFilePath)

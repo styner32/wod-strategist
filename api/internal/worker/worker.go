@@ -84,6 +84,7 @@ type GeminiClient interface {
 	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, *gemini.TokenUsage, error)
 	AnalyzeVideoWithModel(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
 	DeleteFile(ctx context.Context, name string) error
+	FileExists(ctx context.Context, name string) (bool, error)
 	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error
 
 	// Two-pass analysis: upload → index (Flash) → per-segment analysis (Pro)

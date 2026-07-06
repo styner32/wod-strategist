@@ -146,6 +146,9 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	if pMode == "" {
 		pMode = string(w.PipelineMode)
 	}
+	if pMode == "" && w.UseCache {
+		pMode = string(PipelineModeOptimized)
+	}
 
 	if pMode == string(PipelineModeOptimized) || pMode == string(PipelineModeCompare) {
 		w.logger.Info("Using two-pass analysis for video (optimized)", zap.String("session_id", p.SessionID), zap.String("mode", pMode))
@@ -365,10 +368,23 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	}
 
 	// Upload to Gemini Files API (uses re-encoded path if available)
+	uploadTime := time.Now()
 	upload, err := w.GeminiClient.UploadVideo(ctx, geminiInputPath)
 	if err != nil {
 		return fmt.Errorf("failed to upload video: %w", err)
 	}
+
+	success := false
+	defer func() {
+		if !success {
+			w.logger.Info("Deleting Gemini file after two-pass analysis failure to prevent leak",
+				zap.String("session_id", p.SessionID),
+				zap.String("file_name", upload.FileName))
+			if delErr := w.GeminiClient.DeleteFile(context.Background(), upload.FileName); delErr != nil {
+				w.logger.Error("Failed to delete Gemini file after failure", zap.Error(delErr))
+			}
+		}
+	}()
 	hasInjuries := len(p.Injuries) > 0
 
 	// ── Pass 1: Build segment index ──
@@ -540,7 +556,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.String("session_id", p.SessionID),
 		zap.String("session_score", sessionScore))
 
-	expiresAt := time.Now().Add(47 * time.Hour)
+	expiresAt := uploadTime.Add(47 * time.Hour)
 	result := &db.AnalysisResult{
 		SessionID:           p.SessionID,
 		Status:              "COMPLETED",
@@ -556,6 +572,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	}
 	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
+	success = true
 
 	w.logger.Info("Two-pass analysis completed",
 		zap.String("session_id", p.SessionID),
@@ -886,11 +903,17 @@ func parseTriagedSegments(output string, allSegments []Segment, maxSegs int) []S
 	return selected
 }
 
-// convertToSeconds parses "MM:SS" format to time.Duration.
+// convertToSeconds parses "MM:SS" or "H:MM:SS" format to time.Duration.
 func convertToSeconds(input string) time.Duration {
 	input = strings.TrimSpace(input)
 	if strings.Contains(input, ":") {
 		parts := strings.Split(input, ":")
+		if len(parts) == 3 {
+			hours, _ := strconv.Atoi(parts[0])
+			mins, _ := strconv.Atoi(parts[1])
+			secs, _ := strconv.Atoi(parts[2])
+			return time.Duration((hours*3600)+(mins*60)+secs) * time.Second
+		}
 		if len(parts) == 2 {
 			mins, _ := strconv.Atoi(parts[0])
 			secs, _ := strconv.Atoi(parts[1])

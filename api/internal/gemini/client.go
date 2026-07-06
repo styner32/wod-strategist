@@ -243,6 +243,17 @@ func (c *Client) DeleteFile(ctx context.Context, name string) error {
 	return nil
 }
 
+func (c *Client) FileExists(ctx context.Context, name string) (bool, error) {
+	_, err := c.client.Files.Get(ctx, name, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check file existence: %w", err)
+	}
+	return true, nil
+}
+
 // GenerateWorkoutMusic generates a music clip using the Lyria 3 model and writes
 // the resulting MP3 audio to outputPath.
 // Use "lyria-3-clip-preview" for a 30-second clip or "lyria-3-pro-preview" for

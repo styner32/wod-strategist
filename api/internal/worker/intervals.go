@@ -29,9 +29,11 @@ func toIntervals(entries []FocusEntry) []mergedInterval {
 	for _, e := range entries {
 		start := convertToSeconds(e.Start).Seconds()
 		end := convertToSeconds(e.End).Seconds()
+
 		if end <= start {
 			continue
 		}
+
 		intervals = append(intervals, mergedInterval{
 			StartSecs: start,
 			EndSecs:   end,
@@ -44,15 +46,7 @@ func toIntervals(entries []FocusEntry) []mergedInterval {
 // mergeFocusIntervals sorts entries and unions overlapping/near-adjacent ranges.
 // Reasons of merged entries are concatenated so the prompt keeps every finding.
 func mergeFocusIntervals(entries []FocusEntry) []mergedInterval {
-	items := make([]mergedInterval, 0, len(entries))
-	for _, e := range entries {
-		start := convertToSeconds(e.Start).Seconds()
-		end := convertToSeconds(e.End).Seconds()
-		if end <= start {
-			continue
-		}
-		items = append(items, mergedInterval{StartSecs: start, EndSecs: end, Reasons: []string{e.Reason}})
-	}
+	items := toIntervals(entries)
 	if len(items) == 0 {
 		return nil
 	}

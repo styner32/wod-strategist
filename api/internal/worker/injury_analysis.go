@@ -114,40 +114,45 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 		_ = json.Unmarshal([]byte(p.FocusTimestamps), &focusEntries)
 	}
 
-	legacyIntervals := toIntervals(focusEntries)
-	mergedIntervals := mergeFocusIntervals(focusEntries)
-	optIntervals := capFocusIntervals(mergedIntervals, maxInjuryFocusSegments)
-
-	// Calculate coverage and skipped calls for optimized variant
-	var skippedCalls int
-	var coverage float64 = 1.0
-
-	if len(mergedIntervals) > 0 {
-		skippedCalls = len(mergedIntervals) - len(optIntervals)
-		
-		var unionDuration float64
-		for _, iv := range mergedIntervals {
-			unionDuration += (iv.EndSecs - iv.StartSecs)
-		}
-		
-		var keptDuration float64
-		for _, iv := range optIntervals {
-			keptDuration += (iv.EndSecs - iv.StartSecs)
-		}
-		
-		if unionDuration > 0 {
-			coverage = keptDuration / unionDuration
-		}
-		w.logger.Info("Injury coverage calculated",
-			zap.Float64("coverage", coverage),
-			zap.Int("merged_count", len(mergedIntervals)),
-			zap.Int("capped_count", len(optIntervals)),
-			zap.Int("skipped_calls", skippedCalls))
-	}
-
 	pMode := p.PipelineMode
 	if pMode == "" {
 		pMode = string(w.PipelineMode)
+	}
+	if pMode == "" && w.UseCache {
+		pMode = string(PipelineModeOptimized)
+	}
+
+	var legacyIntervals []mergedInterval
+	if PipelineMode(pMode) == PipelineModeLegacy || PipelineMode(pMode) == PipelineModeCompare {
+		legacyIntervals = toIntervals(focusEntries)
+	}
+
+	var optIntervals []mergedInterval
+	var skippedCalls int
+	if PipelineMode(pMode) == PipelineModeOptimized || PipelineMode(pMode) == PipelineModeCompare {
+		mergedIntervals := mergeFocusIntervals(focusEntries)
+		optIntervals = capFocusIntervals(mergedIntervals, maxInjuryFocusSegments)
+
+		if len(mergedIntervals) > 0 {
+			skippedCalls = len(mergedIntervals) - len(optIntervals)
+			var unionDuration float64
+			for _, iv := range mergedIntervals {
+				unionDuration += (iv.EndSecs - iv.StartSecs)
+			}
+			var keptDuration float64
+			for _, iv := range optIntervals {
+				keptDuration += (iv.EndSecs - iv.StartSecs)
+			}
+			var coverage float64 = 1.0
+			if unionDuration > 0 {
+				coverage = keptDuration / unionDuration
+			}
+			w.logger.Info("Injury coverage calculated",
+				zap.Float64("coverage", coverage),
+				zap.Int("merged_count", len(mergedIntervals)),
+				zap.Int("capped_count", len(optIntervals)),
+				zap.Int("skipped_calls", skippedCalls))
+		}
 	}
 
 	var legacyOut, optOut string
@@ -157,21 +162,52 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 	case PipelineModeOptimized:
 		optOut = w.runInjuryVariant(ctx, p, prompt, "optimized", optIntervals, skippedCalls)
 	case PipelineModeCompare:
-		legacyOut = w.runInjuryVariant(ctx, p, prompt, "legacy", legacyIntervals, 0)
-		optOut = w.runInjuryVariant(ctx, p, prompt, "optimized", optIntervals, skippedCalls)
+		if len(legacyIntervals) == 0 && len(optIntervals) == 0 {
+			// With no focus entries, both variants run the identical full-video call.
+			// Run once and share the output to save 2x Gemini API cost.
+			legacyOut = w.runInjuryVariant(ctx, p, prompt, "legacy", legacyIntervals, 0)
+			optOut = legacyOut
+		} else {
+			legacyOut = w.runInjuryVariant(ctx, p, prompt, "legacy", legacyIntervals, 0)
+			optOut = w.runInjuryVariant(ctx, p, prompt, "optimized", optIntervals, skippedCalls)
+		}
 	default:
 		legacyOut = w.runInjuryVariant(ctx, p, prompt, "legacy", legacyIntervals, 0)
 	}
 
-	// Determine which output to use for the main "injury_output"
-	mainOutput := legacyOut
-	if PipelineMode(pMode) == PipelineModeOptimized {
+	// Determine what goes to main output vs alt output
+	var mainOutput, altOutput string
+	switch PipelineMode(pMode) {
+	case PipelineModeLegacy:
+		mainOutput = legacyOut
+	case PipelineModeOptimized:
 		mainOutput = optOut
+	case PipelineModeCompare:
+		mainOutput = legacyOut
+		altOutput = optOut
+	default:
+		mainOutput = legacyOut
 	}
 
-	if mainOutput == "" && optOut == "" {
-		w.logger.Warn("Both injury analysis variants returned empty. Retrying...")
-		return fmt.Errorf("injury analysis is empty")
+	// Validate retry conditions: compare mode requires both outputs to be non-empty
+	retry := false
+	switch PipelineMode(pMode) {
+	case PipelineModeLegacy:
+		retry = mainOutput == ""
+	case PipelineModeOptimized:
+		retry = mainOutput == ""
+	case PipelineModeCompare:
+		retry = mainOutput == "" || altOutput == ""
+	default:
+		retry = mainOutput == ""
+	}
+
+	if retry {
+		w.logger.Warn("Injury analysis variant returned empty. Retrying...",
+			zap.String("mode", pMode),
+			zap.Bool("legacy_empty", legacyOut == ""),
+			zap.Bool("opt_empty", optOut == ""))
+		return fmt.Errorf("injury analysis failed for one or more variants")
 	}
 
 	// Persist — append to existing result if present
@@ -181,19 +217,31 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 		if mainOutput != "" {
 			newInjuryOutput := mainOutput
 			if existing.InjuryOutput != "" {
-				newInjuryOutput = existing.InjuryOutput + "\n\n---\n\n" + mainOutput
+				// Prevent duplicate appends if this is a retry/redelivery
+				if !strings.Contains(existing.InjuryOutput, mainOutput) {
+					newInjuryOutput = existing.InjuryOutput + "\n\n---\n\n" + mainOutput
+				} else {
+					newInjuryOutput = existing.InjuryOutput
+				}
 			}
 			updates["injury_output"] = newInjuryOutput
 		}
-		if optOut != "" {
-			newInjuryOutputAlt := optOut
+		if altOutput != "" {
+			newInjuryOutputAlt := altOutput
 			if existing.InjuryOutputAlt != "" {
-				newInjuryOutputAlt = existing.InjuryOutputAlt + "\n\n---\n\n" + optOut
+				// Prevent duplicate appends if this is a retry/redelivery
+				if !strings.Contains(existing.InjuryOutputAlt, altOutput) {
+					newInjuryOutputAlt = existing.InjuryOutputAlt + "\n\n---\n\n" + altOutput
+				} else {
+					newInjuryOutputAlt = existing.InjuryOutputAlt
+				}
 			}
 			updates["injury_output_alt"] = newInjuryOutputAlt
 		}
 		if len(updates) > 0 {
-			w.DB.Model(&existing).Updates(updates)
+			if err := w.DB.Model(&existing).Updates(updates).Error; err != nil {
+				return fmt.Errorf("failed to update existing injury result: %w", err)
+			}
 		}
 	} else {
 		result := &db.AnalysisResult{
@@ -201,10 +249,12 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 			AnalysisType:    db.AnalysisTypeInjurySupplement,
 			Status:          "COMPLETED",
 			Output:          mainOutput,
-			InjuryOutputAlt: optOut,
+			InjuryOutputAlt: altOutput,
 		}
 		result.ProfileID = p.ProfileID
-		w.DB.Create(result)
+		if err := w.DB.Create(result).Error; err != nil {
+			return fmt.Errorf("failed to create standalone injury result: %w", err)
+		}
 	}
 
 	w.logger.Info("Injury analysis with file completed",
