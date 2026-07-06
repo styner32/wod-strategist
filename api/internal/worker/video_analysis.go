@@ -361,17 +361,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	if err != nil {
 		return fmt.Errorf("failed to upload video: %w", err)
 	}
-	// Delete the Gemini file unless injury analysis successfully takes ownership.
-	// injuryTaskEnqueued is set to true only after a successful Enqueue call below.
 	hasInjuries := len(p.Injuries) > 0
-	injuryTaskEnqueued := false
-	defer func() {
-		if !injuryTaskEnqueued {
-			if err := w.GeminiClient.DeleteFile(ctx, upload.FileName); err != nil {
-				w.logger.Error("Failed to delete file from Gemini", zap.Error(err))
-			}
-		}
-	}()
 
 	// ── Pass 1: Build segment index ──
 	// Prefer chunk analysis data from DB (app-recorded, accurate timestamps).
@@ -539,14 +529,19 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.String("session_id", p.SessionID),
 		zap.String("session_score", sessionScore))
 
+	expiresAt := time.Now().Add(47 * time.Hour)
 	result := &db.AnalysisResult{
-		SessionID:         p.SessionID,
-		Status:            "COMPLETED",
-		Output:            analysis,
-		AnalysisType:      db.AnalysisTypeWOD,
-		HighlightSegments: highlightSegments,
-		WODDescription:    p.WODDescription,
-		SessionScore:      sessionScore,
+		SessionID:           p.SessionID,
+		Status:              "COMPLETED",
+		Output:              analysis,
+		AnalysisType:        db.AnalysisTypeWOD,
+		HighlightSegments:   highlightSegments,
+		WODDescription:      p.WODDescription,
+		SessionScore:        sessionScore,
+		GeminiFileURI:       upload.FileURI,
+		GeminiFileName:      upload.FileName,
+		GeminiMIMEType:      upload.MIMEType,
+		GeminiFileExpiresAt: &expiresAt,
 	}
 	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
@@ -578,7 +573,6 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			if _, enqErr := w.QueueClient.Enqueue(injuryTask); enqErr != nil {
 				w.logger.Error("Failed to enqueue injury analysis task", zap.Error(enqErr))
 			} else {
-				injuryTaskEnqueued = true
 				w.logger.Info("Injury analysis enqueued with file URI",
 					zap.String("session_id", p.SessionID),
 					zap.String("file_uri", upload.FileURI),

@@ -246,6 +246,14 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
 	}
 
+	// Probe motion score (shadow mode)
+	var motionScore *float64
+	if score, probeErr := probeMotionScore(ctx, localFilePath); probeErr == nil {
+		motionScore = &score
+	} else {
+		w.logger.Warn("motion probe failed for chunk analysis", zap.Error(probeErr))
+	}
+
 	prompt := w.buildChunkAnalysisPrompt(p)
 
 	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash35)
@@ -275,6 +283,8 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 			Status:            "FAILED",
 			Output:            "An internal error occurred during chunk analysis.",
 			WorkoutConfidence: p.WorkoutConfidence,
+			MotionScore:       motionScore,
+			SkipReason:        "",
 		}
 		chunkFailed.ProfileID = p.ProfileID
 		if p.StartSecs > 0 || p.EndSecs > 0 {
@@ -302,6 +312,8 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		ObservedSignals:   observedSignals,
 		HeartRateBPM:      p.HeartRateBPM,
 		WorkoutConfidence: p.WorkoutConfidence,
+		MotionScore:       motionScore,
+		SkipReason:        "",
 	}
 	chunkResult.ProfileID = p.ProfileID
 	if p.StartSecs > 0 || p.EndSecs > 0 {
@@ -371,6 +383,14 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
 	}
 
+	// Probe motion score (shadow mode)
+	var motionScoreWithSession *float64
+	if score, probeErr := probeMotionScore(ctx, localFilePath); probeErr == nil {
+		motionScoreWithSession = &score
+	} else {
+		w.logger.Warn("motion probe failed for chunk analysis with session", zap.Error(probeErr))
+	}
+
 	prompt := w.buildChunkAnalysisWithSessionPrompt(p, &profile, &session)
 
 	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash35)
@@ -400,6 +420,8 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 			Status:            "FAILED",
 			Output:            "An internal error occurred during chunk analysis.",
 			WorkoutConfidence: p.WorkoutConfidence,
+			MotionScore:       motionScoreWithSession,
+			SkipReason:        "",
 		}
 		chunkFailed.ProfileID = p.ProfileID
 		if p.StartSecs > 0 || p.EndSecs > 0 {
@@ -427,6 +449,8 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		ObservedSignals:   observedSignals,
 		HeartRateBPM:      p.HeartRateBPM,
 		WorkoutConfidence: p.WorkoutConfidence,
+		MotionScore:       motionScoreWithSession,
+		SkipReason:        "",
 	}
 	chunkResult.ProfileID = p.ProfileID
 	if p.StartSecs > 0 || p.EndSecs > 0 {

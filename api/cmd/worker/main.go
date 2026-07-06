@@ -71,6 +71,7 @@ func main() {
 
 	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient, logger.Log)
 	w.UseCache = cfg.UseCache
+	w.PipelineMode = worker.PipelineMode(cfg.PipelineMode)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)

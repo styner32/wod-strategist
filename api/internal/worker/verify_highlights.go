@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
@@ -41,6 +42,7 @@ func NewVerifyHighlightsTask(sessionID string) (*asynq.Task, error) {
 }
 
 func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) error {
+	started := time.Now()
 	var p VerifyHighlightsPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
@@ -108,24 +110,53 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		zap.String("session_id", p.SessionID),
 		zap.String("video_uri", videoURI))
 
-	// 4. Download video and upload to Gemini Files API
-	localFilePath, err := createTempFile("verify", ".mp4")
-	if err != nil {
-		return err
+	// 4. Download video and upload to Gemini Files API unless we can reuse the existing one
+	var fileURI, mimeType string
+	var uploadBytes int64
+	var uploadFileNameToCleanup string
+
+	reused := analysisResult.GeminiFileURI != "" &&
+		analysisResult.GeminiFileExpiresAt != nil &&
+		time.Now().Before(*analysisResult.GeminiFileExpiresAt)
+
+	if reused {
+		fileURI = analysisResult.GeminiFileURI
+		mimeType = analysisResult.GeminiMIMEType
+		w.logger.Info("Reusing Gemini file for highlight verification",
+			zap.String("session_id", p.SessionID),
+			zap.String("file_uri", fileURI))
+	} else {
+		w.logger.Info("Gemini file not found or expired, uploading source video",
+			zap.String("session_id", p.SessionID))
+
+		localFilePath, err := createTempFile("verify", ".mp4")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(localFilePath)
+
+		if err := w.StorageClient.DownloadFile(ctx, videoURI, localFilePath); err != nil {
+			return fmt.Errorf("failed to download video: %w", err)
+		}
+
+		if fi, err := os.Stat(localFilePath); err == nil {
+			uploadBytes = fi.Size()
+		}
+
+		upload, err := w.GeminiClient.UploadVideo(ctx, localFilePath)
+		if err != nil {
+			return fmt.Errorf("failed to upload video to Gemini: %w", err)
+		}
+		fileURI = upload.FileURI
+		mimeType = upload.MIMEType
+		uploadFileNameToCleanup = upload.FileName
 	}
 
-	if err := w.StorageClient.DownloadFile(ctx, videoURI, localFilePath); err != nil {
-		return fmt.Errorf("failed to download video: %w", err)
-	}
-	defer os.Remove(localFilePath)
-
-	upload, err := w.GeminiClient.UploadVideo(ctx, localFilePath)
-	if err != nil {
-		return fmt.Errorf("failed to upload video to Gemini: %w", err)
-	}
 	defer func() {
-		if delErr := w.GeminiClient.DeleteFile(ctx, upload.FileName); delErr != nil {
-			w.logger.Error("Failed to delete Gemini file after verification", zap.Error(delErr))
+		if uploadFileNameToCleanup != "" {
+			if delErr := w.GeminiClient.DeleteFile(ctx, uploadFileNameToCleanup); delErr != nil {
+				w.logger.Error("Failed to delete Gemini file after verification", zap.Error(delErr))
+			}
 		}
 	}()
 
@@ -137,7 +168,7 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		zap.Int("segment_count", len(segments)))
 
 	// 6. Query with Flash model (single call for all segments)
-	output, verifyUsage, err := w.GeminiClient.QueryVideoFlash(ctx, upload.FileURI, upload.MIMEType, prompt)
+	output, verifyUsage, err := w.GeminiClient.QueryVideoFlash(ctx, fileURI, mimeType, prompt)
 	if err != nil {
 		return fmt.Errorf("flash verification query failed: %w", err)
 	}
@@ -178,6 +209,12 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		zap.Bool("all_verified", allVerified),
 		zap.Int("total_segments", len(segments)),
 		zap.Int("results_parsed", len(results)))
+
+	apiCalls := 1
+	if !reused {
+		apiCalls = 2
+	}
+	w.recordStageMetrics(p.SessionID, profileID, "verify_highlights", string(w.PipelineMode), apiCalls, 0, uploadBytes, time.Since(started))
 
 	return nil
 }

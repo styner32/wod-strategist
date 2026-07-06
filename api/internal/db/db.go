@@ -50,9 +50,14 @@ type AnalysisResult struct {
 	AnalysisType      string `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
 	Status            string `json:"status"`                           // PENDING, COMPLETED, FAILED
 	Output            string `json:"output"`
-	InjuryOutput      string `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
-	HighlightSegments string `json:"highlight_segments"`      // JSON array of highlight segments
-	Verified          *bool  `json:"verified,omitempty"`      // nil=unchecked, true=confirmed, false=hallucination detected
+	InjuryOutput      string     `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
+	InjuryOutputAlt   string     `json:"injury_output_alt,omitempty"`
+	GeminiFileURI     string     `json:"gemini_file_uri,omitempty"`
+	GeminiFileName    string     `json:"gemini_file_name,omitempty"`
+	GeminiMIMEType    string     `json:"gemini_mime_type,omitempty"`
+	GeminiFileExpiresAt *time.Time `json:"gemini_file_expires_at,omitempty"`
+	HighlightSegments string     `json:"highlight_segments"`      // JSON array of highlight segments
+	Verified          *bool      `json:"verified,omitempty"`      // nil=unchecked, true=confirmed, false=hallucination detected
 	// WODDescription is the user-supplied workout descriptor (e.g. "Fran", "For Time: 5 rounds of...").
 	// Injected into analysis prompts to enable benchmark comparison and WOD-type-aware scoring.
 	WODDescription string `gorm:"type:text;not null;default:''" json:"wod_description,omitempty"`
@@ -93,6 +98,8 @@ type ChunkAnalysisResult struct {
 	StartSecs         *float64  `json:"start_secs,omitempty"`
 	EndSecs           *float64  `json:"end_secs,omitempty"`
 	WorkoutConfidence float64   `gorm:"not null;default:0.0" json:"workout_confidence"` // confidence if person actually workout
+	MotionScore       *float64  `json:"motion_score,omitempty"`
+	SkipReason        string    `json:"skip_reason,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
@@ -176,3 +183,17 @@ func normalizeDatabaseURL(raw string) (string, error) {
 
 	return dsn, nil
 }
+
+type PipelineStageMetric struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	SessionID    string    `gorm:"index;not null" json:"session_id"`
+	ProfileID    uint      `gorm:"not null;default:0" json:"profile_id"`
+	Stage        string    `gorm:"not null" json:"stage"`        // chunk_analysis | injury_analysis | verify_highlights
+	Variant      string    `gorm:"not null" json:"variant"`      // legacy | optimized
+	APICalls     int       `gorm:"not null;default:0" json:"api_calls"`
+	SkippedCalls int       `gorm:"not null;default:0" json:"skipped_calls"`
+	UploadBytes  int64     `gorm:"not null;default:0" json:"upload_bytes"`
+	DurationMs   int64     `gorm:"not null;default:0" json:"duration_ms"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+

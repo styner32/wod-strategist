@@ -103,6 +103,14 @@ type QueueClient interface {
 	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 }
 
+type PipelineMode string
+
+const (
+	PipelineModeLegacy    PipelineMode = "legacy"    // 기존 동작 그대로
+	PipelineModeOptimized PipelineMode = "optimized" // 개선 경로만
+	PipelineModeCompare   PipelineMode = "compare"   // 둘 다 실행, 결과·메트릭 별도 저장
+)
+
 // Worker holds all dependencies shared across task handlers.
 type Worker struct {
 	DB            *gorm.DB
@@ -111,6 +119,7 @@ type Worker struct {
 	GeminiClient  GeminiClient
 	QueueClient   QueueClient
 	UseCache      bool // enable context caching for long video analysis
+	PipelineMode  PipelineMode
 	logger        *zap.Logger
 }
 
@@ -345,4 +354,26 @@ func runFFmpegAnalysisEncode(ctx context.Context, log *zap.Logger, inputPath, ou
 
 	log.Info("FFmpeg analysis re-encode completed", zap.String("output_path", outputPath))
 	return nil
+}
+
+// recordStageMetrics persists per-stage pipeline metrics for variant comparison.
+// Never blocks the main workflow (saveTokenUsage와 동일 정책).
+func (w *Worker) recordStageMetrics(sessionID string, profileID uint,
+	stage, variant string, apiCalls, skippedCalls int, uploadBytes int64, elapsed time.Duration) {
+	if w.DB == nil {
+		return
+	}
+	rec := &db.PipelineStageMetric{
+		SessionID:    sessionID,
+		ProfileID:    profileID,
+		Stage:        stage,
+		Variant:      variant,
+		APICalls:     apiCalls,
+		SkippedCalls: skippedCalls,
+		UploadBytes:  uploadBytes,
+		DurationMs:   elapsed.Milliseconds(),
+	}
+	if err := w.DB.Create(rec).Error; err != nil {
+		w.logger.Error("Failed to save stage metrics", zap.Error(err))
+	}
 }

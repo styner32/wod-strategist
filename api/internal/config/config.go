@@ -43,6 +43,7 @@ type Worker struct {
 	GeminiAPIKey string
 	GeminiModel  string // GEMINI_MODEL — default "gemini-3.1-pro-preview"
 	UseCache     bool   // GEMINI_USE_CACHE — enable context caching for long videos
+	PipelineMode string // PIPELINE_MODE — legacy, optimized, compare
 }
 
 var loadEnvOnce sync.Once
@@ -118,6 +119,10 @@ func InitWorker() (Worker, error) {
 		GeminiAPIKey: strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		GeminiModel:  strings.TrimSpace(os.Getenv("GEMINI_MODEL")),
 		UseCache:     strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_USE_CACHE")), "true"),
+		PipelineMode: strings.TrimSpace(os.Getenv("PIPELINE_MODE")),
+	}
+	if cfg.PipelineMode == "" {
+		cfg.PipelineMode = "legacy"
 	}
 	if cfg.GeminiModel == "" {
 		cfg.GeminiModel = gemini.ModelPro31Preview

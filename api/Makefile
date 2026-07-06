@@ -64,7 +64,7 @@ deploy-worker: ## Deploy Worker to Cloud Run Worker Pools
 	gcloud beta run worker-pools deploy $(WORKER_SERVICE_NAME) --image $(IMAGE_REPO)/worker:latest --region $(REGION) --project $(PROJECT_ID)
 
 migrate-up-remote: ## Run up migrations remotely
-	gcloud run jobs execute $(MIGRATE_SERVICE_NAME) --region $(REGION)
+	gcloud run jobs execute $(MIGRATE_SERVICE_NAME) --region $(REGION) --project $(PROJECT_ID)
 
 test-upload: ## Test video upload locally
 	node --env-file=../.env ../scripts/test-upload.js
@@ -74,7 +74,8 @@ test-chunk-upload: ## Replay chunk upload from a saved video. Usage: make test-c
 		../scripts/test-chunk-upload.js
 
 test: ## Run the tests
-	go test $(TEST_DIR) -p 1 -v
+	@mkdir -p tmp/go-build tmp/go-tmp
+	GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp go test $$(TEST_DIR) -p 1 -v
 
 migrate-test-up:
 ifndef TEST_DATABASE_URL

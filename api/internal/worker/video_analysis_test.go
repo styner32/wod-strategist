@@ -664,13 +664,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 				}},
 			})
 
-		if !hasInjuries {
-			transport.New(geminiBaseURL).
-				Delete("/v1beta/files/mock-two-pass").
-				MatchHeader("X-Goog-Api-Key", geminiAPIKey).
-				Reply(http.StatusOK).
-				JSON(map[string]any{})
-		}
+
 
 		return transport
 	}
@@ -745,8 +739,8 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
 
 		Expect(transport.Verify()).To(Succeed())
-		// 6 requests: upload + finalize + poll + analyzeSegment x2 + deleteFile
-		Expect(transport.Requests()).To(HaveLen(6))
+		// 5 requests: upload + finalize + poll + analyzeSegment x2 (no deleteFile)
+		Expect(transport.Requests()).To(HaveLen(5))
 
 		var result db.AnalysisResult
 		Expect(dbConn.Where("session_id = ?", "sess-twopass-001").First(&result).Error).
