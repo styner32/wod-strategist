@@ -47,6 +47,7 @@ type VideoAnalysisPayload struct {
 	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
 	WODDescription    string  `json:"wod_description,omitempty"`    // user-supplied WOD descriptor (e.g. "Fran", "For Time: 5 rounds of...")
 	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
+	PipelineMode      string  `json:"pipeline_mode,omitempty"`
 }
 
 // VideoAnalysisWithSessionPayload is used when session_id is available (when user has selected a session to upload)

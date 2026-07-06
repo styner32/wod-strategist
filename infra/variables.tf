@@ -73,3 +73,10 @@ variable "admin_cidr" {
   type        = string
   default     = "49.172.61.41/32"
 }
+
+variable "pipeline_mode" {
+  description = "The pipeline mode for video analysis (legacy, optimized, compare)"
+  type        = string
+  default     = "legacy"
+}
+

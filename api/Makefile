@@ -13,7 +13,7 @@ TEST_DIR ?= ./...
 
 GIT_SHA := $(shell git rev-parse --short HEAD)
 
-.PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-upload test-chunk-upload help test
+.PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-upload test-chunk-upload help test tf-apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $1, $2}'
@@ -66,6 +66,9 @@ deploy-worker: ## Deploy Worker to Cloud Run Worker Pools
 migrate-up-remote: ## Run up migrations remotely
 	gcloud run jobs execute $(MIGRATE_SERVICE_NAME) --region $(REGION) --project $(PROJECT_ID)
 
+deploy-web: ## Deploy React web frontend to GCS and Cloudflare Worker proxy
+	../scripts/deploy-web.sh
+
 test-upload: ## Test video upload locally
 	node --env-file=../.env ../scripts/test-upload.js
 
@@ -75,7 +78,7 @@ test-chunk-upload: ## Replay chunk upload from a saved video. Usage: make test-c
 
 test: ## Run the tests
 	@mkdir -p tmp/go-build tmp/go-tmp
-	GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp go test $$(TEST_DIR) -p 1 -v
+	GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp go test $(TEST_DIR) -p 1 -v
 
 migrate-test-up:
 ifndef TEST_DATABASE_URL
@@ -89,3 +92,6 @@ ifndef TEST_DATABASE_URL
 endif
 	migrate -path=$(MIGRATIONS_DIR) -database "$(TEST_DATABASE_URL)" -verbose down 1
 	migrate -path=$(MIGRATIONS_DIR) -database "$(TEST_DATABASE_URL)" -verbose up
+
+tf-apply:
+	cd .. && cd infra && terraform apply

@@ -78,6 +78,10 @@ resource "google_cloud_run_v2_service" "api" {
         value = "gemini-3.1-pro-preview"
       }
       env {
+        name  = "PIPELINE_MODE"
+        value = var.pipeline_mode
+      }
+      env {
         name = "JWT_SIGNING_SECRET"
         value_source {
           secret_key_ref {
@@ -160,6 +164,10 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       env {
         name = "GEMINI_MODEL"
         value = "gemini-3.1-pro-preview"
+      }
+      env {
+        name  = "PIPELINE_MODE"
+        value = var.pipeline_mode
       }
     }
   }

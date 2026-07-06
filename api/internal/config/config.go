@@ -109,6 +109,15 @@ func InitWorker() (Worker, error) {
 		appEnv = "production"
 	}
 
+	pMode := strings.TrimSpace(os.Getenv("PIPELINE_MODE"))
+	if pMode == "" {
+		if strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_USE_CACHE")), "true") {
+			pMode = "optimized"
+		} else {
+			pMode = "legacy"
+		}
+	}
+
 	cfg := Worker{
 		Common: Common{
 			DatabaseURL:   strings.TrimSpace(os.Getenv("DATABASE_URL")),
@@ -119,10 +128,7 @@ func InitWorker() (Worker, error) {
 		GeminiAPIKey: strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		GeminiModel:  strings.TrimSpace(os.Getenv("GEMINI_MODEL")),
 		UseCache:     strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_USE_CACHE")), "true"),
-		PipelineMode: strings.TrimSpace(os.Getenv("PIPELINE_MODE")),
-	}
-	if cfg.PipelineMode == "" {
-		cfg.PipelineMode = "legacy"
+		PipelineMode: pMode,
 	}
 	if cfg.GeminiModel == "" {
 		cfg.GeminiModel = gemini.ModelPro31Preview

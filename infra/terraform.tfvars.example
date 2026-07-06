@@ -7,3 +7,5 @@ api_secret           = "your-api-secret"
 jwt_secret           = "your-jwt-secret"
 cloudflare_api_token = "your-cloudflare-api-token"
 cloudflare_zone_id   = "your-cloudflare-zone-id"
+pipeline_mode        = "legacy"
+

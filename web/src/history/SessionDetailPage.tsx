@@ -25,17 +25,20 @@ const VIDEO_KIND_LABELS: Record<VideoKind, { label: string; icon: string; desc: 
 export function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const { user } = useAuth();
-  const profileId = user?.profiles?.[0]?.id;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [selectedKind, setSelectedKind] = useState<VideoKind>('merged');
+  const [showFullAnalysis, setShowFullAnalysis] = useState(false);
 
   const { data: analyses, isLoading: analysisLoading } = useQuery({
     queryKey: ['analysis', sessionId],
     queryFn: () => historyApi.getAnalysis(sessionId!),
     enabled: !!sessionId,
   });
+
+  const analysis = analyses?.[0];
+  const profileId = analysis?.profile_id || user?.profiles?.[0]?.id;
 
   const { data: chunks } = useQuery({
     queryKey: ['chunks', sessionId],
@@ -75,7 +78,6 @@ export function SessionDetailPage() {
     staleTime: 10 * 60 * 1000, // 10 min (signed URLs expire)
   });
 
-  const analysis = analyses?.[0];
   const parsedOutput = (() => {
     try {
       return analysis?.output ? JSON.parse(analysis.output) : null;
@@ -199,6 +201,14 @@ export function SessionDetailPage() {
                   <p className="text-text-muted">Workout Type</p>
                   <p className="text-text-primary mt-0.5 capitalize">{analysis.workout_type || '—'}</p>
                 </div>
+                {analysis.wod_description && (
+                  <div className="col-span-2 border-t border-border pt-3 mt-1">
+                    <p className="text-text-muted">WOD Description</p>
+                    <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
+                      {analysis.wod_description}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -240,9 +250,30 @@ export function SessionDetailPage() {
                   </div>
                 )}
               </div>
-            ) : analysis?.status === 'completed' ? (
+            ) : analysis?.output ? (() => {
+              const lines = analysis.output.split('\n');
+              const isTruncated = lines.length > 10;
+              const displayedText = showFullAnalysis || !isTruncated
+                ? analysis.output
+                : lines.slice(0, 10).join('\n') + '\n...';
+              return (
+                <div className="bg-bg-secondary p-4 rounded-xl border border-border">
+                  <div className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap font-sans">
+                    {displayedText}
+                  </div>
+                  {isTruncated && (
+                    <button
+                      onClick={() => setShowFullAnalysis(!showFullAnalysis)}
+                      className="mt-3 text-sm font-semibold text-accent hover:underline transition-colors cursor-pointer"
+                    >
+                      {showFullAnalysis ? 'Show Less' : 'Show More'}
+                    </button>
+                  )}
+                </div>
+              );
+            })() : analysis?.status?.toLowerCase() === 'completed' ? (
               <p className="text-text-muted text-sm">Analysis output not available.</p>
-            ) : analysis?.status === 'processing' ? (
+            ) : analysis?.status?.toLowerCase() === 'processing' || analysis?.status?.toLowerCase() === 'pending' ? (
               <div className="flex items-center gap-3 text-text-secondary">
                 <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
                 <span className="text-sm">Analysis in progress...</span>

@@ -96,7 +96,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 	})
 
 	It("returns SkipRetry when no chunk objects are found", func() {
-		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-merge-nochunks", nil)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-merge-nochunks/", nil)
 
 		task, err := NewMergeChunksTask(
 			"sess-merge-nochunks",
@@ -115,7 +115,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 	})
 
 	It("skips merged/hardsubbed objects when filtering", func() {
-		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-filter-001", []string{
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-filter-001/", []string{
 			"videos/sess-filter-001/file_merged_abc.mp4",
 			"videos/sess-filter-001/file_hardsubbed_abc.mp4",
 		})
@@ -164,6 +164,10 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			Expect(sErr).NotTo(HaveOccurred())
 			w.StorageClient = ffmpegStorageClient
 
+			// Mock GCS ListObjects for original chunks lookup
+			testhelpers.MockGCSListObjects(ffmpegTransport, "test-bucket", "videos/sess-merge-001/", []string{
+				"videos/sess-merge-001/chunk_001.mp4",
+			})
 			// DownloadFile for the chunk (serve real mp4 bytes so ffmpeg can process it)
 			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/sess-merge-001/chunk_001.mp4", mp4Bytes)
 			// UploadFromFile for the merged video
@@ -257,6 +261,12 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			Expect(sErr).NotTo(HaveOccurred())
 			w.StorageClient = ffmpegStorageClient
 
+			testhelpers.MockGCSListObjects(ffmpegTransport, "test-bucket", "videos/"+sessionID+"/", []string{
+				"videos/" + sessionID + "/camera_chunk_001.mp4",
+				"videos/" + sessionID + "/camera_chunk_002.mp4",
+				"videos/" + sessionID + "/split_chunk_000.mp4",
+				"videos/" + sessionID + "/split_chunk_001.mp4",
+			})
 			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/"+sessionID+"/camera_chunk_001.mp4", mp4Bytes)
 			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/"+sessionID+"/camera_chunk_002.mp4", mp4Bytes)
 			testhelpers.MockGCSUpload(ffmpegTransport, "test-bucket", "merged")

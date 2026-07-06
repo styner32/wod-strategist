@@ -178,6 +178,16 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
+	if req.PipelineMode != "" {
+		var payload worker.VideoAnalysisPayload
+		if err := json.Unmarshal(task.Payload(), &payload); err == nil {
+			payload.PipelineMode = req.PipelineMode
+			if data, err := json.Marshal(payload); err == nil {
+				task = asynq.NewTask(task.Type(), data)
+			}
+		}
+	}
+
 	info, err := ctl.queueClient.Enqueue(task)
 	if err != nil {
 		logger.Log.Error("failed to enqueue task", zap.Error(err))
@@ -960,6 +970,16 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 		logger.Log.Error("failed to create merge task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
 		return
+	}
+
+	if req.PipelineMode != "" {
+		var payload worker.VideoAnalysisPayload
+		if err := json.Unmarshal(task.Payload(), &payload); err == nil {
+			payload.PipelineMode = req.PipelineMode
+			if data, err := json.Marshal(payload); err == nil {
+				task = asynq.NewTask(task.Type(), data)
+			}
+		}
 	}
 
 	info, err := ctl.queueClient.Enqueue(task)

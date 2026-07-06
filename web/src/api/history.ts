@@ -11,6 +11,7 @@ export interface AnalysisResult {
   updated_at: string;
   archived_at: string | null;
   available_videos?: string[];
+  wod_description?: string;
 }
 
 export interface ChunkAnalysisResult {

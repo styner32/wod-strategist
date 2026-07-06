@@ -35,6 +35,8 @@ export const uploadApi = {
     workout_type: string;
     movements: string[];
     injuries: string[];
+    wod_description?: string;
+    pipeline_mode?: string;
   }) => api.post<UploadCompleteResponse>('/upload-complete', params),
 };
 

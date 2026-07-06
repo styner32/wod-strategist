@@ -44,6 +44,7 @@ type InjuryAnalysisPayload struct {
 	GeminiFileURI  string `json:"gemini_file_uri,omitempty"`
 	GeminiFileName string `json:"gemini_file_name,omitempty"`
 	GeminiMIMEType string `json:"gemini_mime_type,omitempty"`
+	PipelineMode   string `json:"pipeline_mode,omitempty"`
 }
 
 func NewInjuryAnalysisTask(sessionID, filePath string, injuries []string, profileID uint, focusTimestamps string) (*asynq.Task, error) {
@@ -144,8 +145,13 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 			zap.Int("skipped_calls", skippedCalls))
 	}
 
+	pMode := p.PipelineMode
+	if pMode == "" {
+		pMode = string(w.PipelineMode)
+	}
+
 	var legacyOut, optOut string
-	switch w.PipelineMode {
+	switch PipelineMode(pMode) {
 	case PipelineModeLegacy:
 		legacyOut = w.runInjuryVariant(ctx, p, prompt, "legacy", legacyIntervals, 0)
 	case PipelineModeOptimized:
@@ -159,7 +165,7 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 
 	// Determine which output to use for the main "injury_output"
 	mainOutput := legacyOut
-	if w.PipelineMode == PipelineModeOptimized {
+	if PipelineMode(pMode) == PipelineModeOptimized {
 		mainOutput = optOut
 	}
 

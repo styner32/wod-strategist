@@ -142,11 +142,17 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return err
 	}
 
-	if w.UseCache {
-		w.logger.Info("Using two-pass analysis for video", zap.String("session_id", p.SessionID))
+	pMode := p.PipelineMode
+	if pMode == "" {
+		pMode = string(w.PipelineMode)
+	}
+
+	if pMode == string(PipelineModeOptimized) || pMode == string(PipelineModeCompare) {
+		w.logger.Info("Using two-pass analysis for video (optimized)", zap.String("session_id", p.SessionID), zap.String("mode", pMode))
 		return w.handleVideoAnalysisTwoPass(ctx, p)
 	}
 
+	w.logger.Info("Using legacy analysis for video", zap.String("session_id", p.SessionID), zap.String("mode", pMode))
 	return w.handleVideoAnalysisLegacy(ctx, p)
 }
 
@@ -216,6 +222,8 @@ func formatDuration(d time.Duration) string {
 //  2. Index video with Flash model → find exercise segments
 //  3. Analyze each segment with Pro model + VideoMetadata → deep analysis
 func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysisPayload) (retErr error) {
+	started := time.Now()
+	apiCalls := 0
 	// Deferred error handler: write FAILED analysis result to DB on any error
 	// so the user always sees something in history instead of silent nothingness.
 	defer func() {
@@ -417,6 +425,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.String("session_id", p.SessionID),
 			zap.String("file_uri", upload.FileURI))
 
+		apiCalls++
 		indexOutput, indexUsage, indexErr := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, w.buildIndexPrompt(p, upload.VideoDuration))
 		if indexErr != nil {
 			return fmt.Errorf("failed to index video: %w", indexErr)
@@ -456,6 +465,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("total_segments", len(segments)),
 			zap.Int("max_segments", maxSegs))
 
+		apiCalls++
 		triagedSegments, triageUsage, triageErr := w.triageSegments(ctx, upload, segments, maxSegs)
 		if triageErr != nil {
 			w.logger.Warn("Segment triage failed, using first N segments",
@@ -500,6 +510,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Duration("end", end),
 			zap.Bool("score_prompt", isLast))
 
+		apiCalls++
 		segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
 			ctx, upload.FileURI, upload.MIMEType, start, end, segPrompt,
 		)
@@ -567,6 +578,13 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			injPayload.GeminiFileURI = upload.FileURI
 			injPayload.GeminiFileName = upload.FileName
 			injPayload.GeminiMIMEType = upload.MIMEType
+
+			pMode := p.PipelineMode
+			if pMode == "" {
+				pMode = string(w.PipelineMode)
+			}
+			injPayload.PipelineMode = pMode
+
 			data, _ := json.Marshal(injPayload)
 			injuryTask = asynq.NewTask(TypeInjuryAnalysis, data)
 
@@ -581,6 +599,11 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		}
 	}
 
+	pMode := p.PipelineMode
+	if pMode == "" {
+		pMode = string(w.PipelineMode)
+	}
+	w.recordStageMetrics(p.SessionID, p.ProfileID, "video_analysis", pMode, apiCalls, 0, fileSizeBytes, time.Since(started))
 	return nil
 }
 
@@ -898,6 +921,7 @@ func filterSegments(segments []Segment, videoDuration time.Duration) []Segment {
 
 // handleVideoAnalysisLegacy is the original file-upload based path.
 func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisPayload) error {
+	started := time.Now()
 	localFilePath, err := createTempFile("legacy-analysis", ".mp4")
 	if err != nil {
 		return err
@@ -906,6 +930,12 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	w.logger.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
 	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
 		return fmt.Errorf("failed to download file from GCS: %w", err)
+	}
+
+	fi, _ := os.Stat(localFilePath)
+	var fileSizeBytes int64
+	if fi != nil {
+		fileSizeBytes = fi.Size()
 	}
 
 	videoDuration := probeVideoDuration(ctx, localFilePath)
@@ -983,16 +1013,35 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		injuryTask, taskErr := NewInjuryAnalysisTask(p.SessionID, p.FilePath, p.Injuries, p.ProfileID, focusTimestamps)
 		if taskErr != nil {
 			w.logger.Error("Failed to create injury analysis task", zap.Error(taskErr))
-		} else if _, enqErr := w.QueueClient.Enqueue(injuryTask); enqErr != nil {
-			w.logger.Error("Failed to enqueue injury analysis task", zap.Error(enqErr))
 		} else {
-			w.logger.Info("Injury analysis enqueued",
-				zap.String("session_id", p.SessionID),
-				zap.Strings("injuries", p.Injuries),
-				zap.String("focus_timestamps", focusTimestamps))
+			pMode := p.PipelineMode
+			if pMode == "" {
+				pMode = string(w.PipelineMode)
+			}
+			var injPayload InjuryAnalysisPayload
+			if err := json.Unmarshal(injuryTask.Payload(), &injPayload); err == nil {
+				injPayload.PipelineMode = pMode
+				if data, err := json.Marshal(injPayload); err == nil {
+					injuryTask = asynq.NewTask(injuryTask.Type(), data)
+				}
+			}
+
+			if _, enqErr := w.QueueClient.Enqueue(injuryTask); enqErr != nil {
+				w.logger.Error("Failed to enqueue injury analysis task", zap.Error(enqErr))
+			} else {
+				w.logger.Info("Injury analysis enqueued",
+					zap.String("session_id", p.SessionID),
+					zap.Strings("injuries", p.Injuries),
+					zap.String("focus_timestamps", focusTimestamps))
+			}
 		}
 	}
 
+	pMode := p.PipelineMode
+	if pMode == "" {
+		pMode = string(w.PipelineMode)
+	}
+	w.recordStageMetrics(p.SessionID, p.ProfileID, "video_analysis", pMode, 1, 0, fileSizeBytes, time.Since(started))
 	return nil
 }
 

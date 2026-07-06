@@ -24,6 +24,7 @@ type CompleteUploadRequest struct {
 	ProfileID      uint     `json:"profile_id"`
 	EnableTTS      bool     `json:"enable_tts,omitempty"`
 	WODDescription string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
+	PipelineMode   string   `json:"pipeline_mode,omitempty"`
 }
 
 type CompleteUploadResponse struct {
@@ -78,6 +79,7 @@ type MergeChunksRequest struct {
 	ProfileID      uint     `json:"profile_id"`
 	EnableTTS      bool     `json:"enable_tts,omitempty"`
 	WODDescription string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
+	PipelineMode   string   `json:"pipeline_mode,omitempty"`
 }
 
 type MergeChunksResponse struct {
