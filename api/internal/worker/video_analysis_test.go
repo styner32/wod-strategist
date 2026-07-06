@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -349,9 +350,12 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 			Reply(http.StatusOK).
 			JSON(map[string]any{"name": "files/mock-file", "state": "ACTIVE"})
 
+		// The generateContent body must reference the file URI returned by the
+		// upload chain — a client that drops or mangles it fails here, not in prod.
 		transport.New(geminiBaseURL).
 			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			MatchBodyContains(`"fileUri":"`+geminiBaseURL+`/files/mock-file"`).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
 				"candidates": []map[string]any{{
@@ -412,7 +416,17 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
 
 		Expect(transport.Verify()).To(Succeed())
-		Expect(transport.Requests()).To(HaveLen(5))
+
+		// Wire-level body check: the analyze request must carry the prompt built
+		// for this payload's movements. Unmatched extra requests already fail in
+		// RoundTrip, so no exact request-count assertion is needed.
+		var genBody string
+		for _, r := range transport.Requests() {
+			if strings.Contains(r.URL, ":generateContent") {
+				genBody = string(r.Body)
+			}
+		}
+		Expect(genBody).To(ContainSubstring("## 운동 종목: Burpee, Pull-up"))
 
 		var result db.AnalysisResult
 		Expect(dbConn.Where("session_id = ?", "sess-happy-001").First(&result).Error).
