@@ -48,6 +48,7 @@ var _ = Describe("validation helpers", func() {
 		Entry("slash only", "/", ""),
 		Entry("empty string", "", ""),
 		Entry("whitespace only", "   ", ""),
+		Entry("dot dot with alphanumeric", "foo..bar", "foo..bar"),
 		Entry("embedded slashes", "foo/bar/session-1", "session-1"),
 		Entry("trailing slash", "session-1/", "session-1"),
 	)
