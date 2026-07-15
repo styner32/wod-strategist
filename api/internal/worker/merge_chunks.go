@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +15,14 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/storage"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
+
+type concatMediaInterval struct {
+	FilePath string
+	Start    float64
+	End      float64
+}
 
 func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool, wodDescription string) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
@@ -45,6 +53,11 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID))
 		return err
 	}
+	profileID, err := w.resolveVideoAnalysisProfile(ctx, p.SessionID, p.ProfileID)
+	if err != nil {
+		return err
+	}
+	p.ProfileID = profileID
 
 	w.logger.Info("Processing merge chunks",
 		zap.String("session_id", p.SessionID),
@@ -65,9 +78,9 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	var objects []string
 	if w.DB != nil {
 		var dbRecords []db.ChunkAnalysisResult
-		if err := w.DB.Where("session_id = ? AND status IN ? AND file_path NOT LIKE ?",
-			p.SessionID, []string{"COMPLETED", "FAILED"}, "%/split_chunk_%").
-			Order("start_secs ASC").
+		if err := w.DB.Where("session_id = ? AND profile_id = ? AND status IN ? AND file_path NOT LIKE ?",
+			p.SessionID, p.ProfileID, []string{"COMPLETED", "FAILED"}, "%/split_chunk_%").
+			Order("start_secs ASC NULLS LAST, file_path ASC, id ASC").
 			Find(&dbRecords).Error; err != nil {
 			return fmt.Errorf("failed to query chunk records: %w", err)
 		}
@@ -76,6 +89,10 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		dbMap := make(map[string]db.ChunkAnalysisResult)
 		for _, rec := range dbRecords {
 			dbMap[rec.FilePath] = rec
+		}
+		gcsSet := make(map[string]struct{}, len(gcsChunks))
+		for _, chunkURI := range gcsChunks {
+			gcsSet[chunkURI] = struct{}{}
 		}
 
 		var pendingChunks []string
@@ -98,7 +115,7 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		// Build the ordered list of GCS URIs from DB records (ordered by start_secs).
 		for _, rec := range dbRecords {
 			// Only include files that actually exist in GCS
-			if _, exists := dbMap[rec.FilePath]; exists {
+			if _, exists := gcsSet[rec.FilePath]; exists {
 				objects = append(objects, rec.FilePath)
 			}
 		}
@@ -131,6 +148,16 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		w.logger.Info("Downloaded chunk", zap.Int("index", i), zap.String("gcs_uri", gcsURI))
 	}
 
+	mediaIntervals, intervalErr := probeConcatMediaIntervals(ctx, objects, localChunkPaths)
+	if intervalErr != nil {
+		// Merging remains backward-compatible if ffprobe cannot verify one source
+		// chunk. In that case offsets stay NULL and debug re-analysis must use its
+		// exact retained-chunk fallback instead of capture-clock timestamps.
+		w.logger.Warn("Could not verify merged-media chunk intervals",
+			zap.String("session_id", p.SessionID),
+			zap.Error(intervalErr))
+	}
+
 	// 3. Create FFmpeg concat file list and merge in a single pass
 	concatListPath := filepath.Join(tmpDir, "concat_list.txt")
 	var concatEntries []string
@@ -144,6 +171,15 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	mergedPath := filepath.Join(tmpDir, fmt.Sprintf("merged_%s.mp4", p.SessionID))
 	if err := runFFmpegConcat(ctx, w.logger, concatListPath, mergedPath); err != nil {
 		return fmt.Errorf("ffmpeg merge failed: %w", err)
+	}
+	if intervalErr == nil {
+		if err := w.persistConcatMediaIntervals(ctx, p.SessionID, p.ProfileID, mediaIntervals); err != nil {
+			// Do not break the established mobile merge flow for additive debug
+			// metadata. The rows remain NULL, so no unverified interval is usable.
+			w.logger.Warn("Could not persist merged-media chunk intervals",
+				zap.String("session_id", p.SessionID),
+				zap.Error(err))
+		}
 	}
 
 	// Free tmpfs: delete chunk files now that FFmpeg concat is done.
@@ -248,6 +284,56 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		zap.String("session_id", p.SessionID),
 		zap.String("analysis_uri", analysisGCSURI))
 	return nil
+}
+
+func probeConcatMediaIntervals(ctx context.Context, objects, localPaths []string) ([]concatMediaInterval, error) {
+	if len(objects) == 0 || len(objects) != len(localPaths) {
+		return nil, errors.New("concat source list is incomplete")
+	}
+
+	intervals := make([]concatMediaInterval, 0, len(objects))
+	cumulative := 0.0
+	for i, localPath := range localPaths {
+		duration := probeVideoDuration(ctx, localPath)
+		if duration <= 0 {
+			return nil, fmt.Errorf("could not probe duration for concat source %d", i)
+		}
+		intervals = append(intervals, concatMediaInterval{
+			FilePath: objects[i],
+			Start:    cumulative,
+			End:      cumulative + duration,
+		})
+		cumulative += duration
+	}
+	return intervals, nil
+}
+
+func (w *Worker) persistConcatMediaIntervals(ctx context.Context, sessionID string, profileID uint, intervals []concatMediaInterval) error {
+	if w.DB == nil {
+		return errors.New("database is not configured")
+	}
+	if len(intervals) == 0 {
+		return errors.New("no verified concat intervals")
+	}
+
+	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, interval := range intervals {
+			result := tx.Model(&db.ChunkAnalysisResult{}).
+				Where("session_id = ? AND profile_id = ? AND file_path = ? AND file_path NOT LIKE ?",
+					sessionID, profileID, interval.FilePath, "%/split_chunk_%").
+				Updates(map[string]any{
+					"media_start_secs": interval.Start,
+					"media_end_secs":   interval.End,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return fmt.Errorf("concat source row not found for %s", interval.FilePath)
+			}
+		}
+		return nil
+	})
 }
 
 // runFFmpegConcat concatenates video files listed in concatListPath into outputPath.
@@ -361,4 +447,3 @@ func (w *Worker) listOriginalChunks(ctx context.Context, filePath string) ([]str
 	sort.Strings(chunks)
 	return chunks, nil
 }
-

@@ -1,10 +1,23 @@
 import { useParams, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { historyApi, type VideoKind } from '../api/history';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  historyApi,
+  type AnalysisFeedback,
+  type ChunkAnalysisResult,
+  type FeedbackCorrection,
+  type FeedbackListResponse,
+  type ReanalysisListResponse,
+  type VideoKind,
+} from '../api/history';
 import { useAuth } from '../auth/useAuth';
 import { ChunkMetricsChart } from './components/ChunkMetricsChart';
 import { GuidanceTimeline } from './components/GuidanceTimeline';
+import {
+  FeedbackDialog,
+  type FeedbackDialogValue,
+} from './components/FeedbackDialog';
+import { ChunkInspector } from './components/ChunkInspector';
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -22,14 +35,48 @@ const VIDEO_KIND_LABELS: Record<VideoKind, { label: string; icon: string; desc: 
   encoded: { label: 'Encoded', icon: '🎬', desc: 'Compressed version' },
 };
 
+interface FeedbackDialogState {
+  targetType: 'session' | 'chunk';
+  chunk?: ChunkAnalysisResult;
+  existing?: AnalysisFeedback;
+  preset?: FeedbackCorrection;
+  reanalysisRunId?: number;
+}
+
+function normalizeFeedback(response?: FeedbackListResponse) {
+  if (!response) return [];
+  if (Array.isArray(response)) {
+    return response.filter((feedback) => !feedback.retracted && !feedback.retracted_at);
+  }
+  return response.current ?? [];
+}
+
+function normalizeRuns(response?: ReanalysisListResponse) {
+  if (!response) return [];
+  return Array.isArray(response) ? response : response.runs;
+}
+
+function feedbackChunkId(feedback: AnalysisFeedback) {
+  return feedback.chunk_id ?? feedback.target_id ?? undefined;
+}
+
+function feedbackError(error: unknown) {
+  return error instanceof Error ? error.message : 'Unable to save feedback.';
+}
+
 export function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const inspectorRef = useRef<HTMLDivElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
-  const [selectedKind, setSelectedKind] = useState<VideoKind>('merged');
+  const [selectedKind, setSelectedKind] = useState<VideoKind>();
   const [showFullAnalysis, setShowFullAnalysis] = useState(false);
+  const [selectedChunkId, setSelectedChunkId] = useState<number>();
+  const [dialog, setDialog] = useState<FeedbackDialogState>();
+  const closeFeedbackDialog = useCallback(() => setDialog(undefined), []);
 
   const { data: analyses, isLoading: analysisLoading } = useQuery({
     queryKey: ['analysis', sessionId],
@@ -37,14 +84,231 @@ export function SessionDetailPage() {
     enabled: !!sessionId,
   });
 
-  const analysis = analyses?.[0];
-  const profileId = analysis?.profile_id || user?.profiles?.[0]?.id;
+  const { data: sessionAnalysis } = useQuery({
+    queryKey: ['session-analysis', sessionId],
+    queryFn: () => historyApi.getSessionAnalysis(sessionId!),
+    enabled: !!sessionId,
+    retry: false,
+  });
 
-  const { data: chunks } = useQuery({
+  const analysis = sessionAnalysis?.analysis ?? analyses?.[0];
+
+  const { data: legacyChunks } = useQuery({
     queryKey: ['chunks', sessionId],
     queryFn: () => historyApi.getChunkAnalysis(sessionId!),
     enabled: !!sessionId,
   });
+
+  const chunks = useMemo(() => {
+    const byId = new Map<number, ChunkAnalysisResult>();
+    for (const chunk of legacyChunks ?? []) byId.set(chunk.id, chunk);
+    for (const chunk of sessionAnalysis?.chunks ?? []) {
+      byId.set(chunk.id, { ...byId.get(chunk.id), ...chunk });
+    }
+    return [...byId.values()];
+  }, [legacyChunks, sessionAnalysis?.chunks]);
+  const profileId = analysis?.profile_id
+    ?? chunks[0]?.profile_id
+    ?? user?.profiles?.[0]?.id;
+
+  const { data: feedbackResponse } = useQuery({
+    queryKey: ['session-feedback', sessionId],
+    queryFn: () => historyApi.listFeedback(sessionId!),
+    enabled: !!sessionId,
+    retry: false,
+  });
+
+  const { data: movementSuggestions = [] } = useQuery({
+    queryKey: ['movement-suggestions'],
+    queryFn: historyApi.getMovementSuggestions,
+    retry: false,
+  });
+
+  const currentFeedback = useMemo(() => {
+    if (feedbackResponse !== undefined) return normalizeFeedback(feedbackResponse);
+    return (sessionAnalysis?.feedback ?? []).filter(
+      (feedback) => !feedback.retracted && !feedback.retracted_at,
+    );
+  }, [feedbackResponse, sessionAnalysis?.feedback]);
+
+  const feedbackByChunk = useMemo(() => {
+    const result = new Map<number, AnalysisFeedback>();
+    for (const feedback of currentFeedback) {
+      if (feedback.target_type !== 'chunk') continue;
+      const chunkId = feedbackChunkId(feedback);
+      if (chunkId == null) continue;
+      const current = result.get(chunkId);
+      if (!current || Date.parse(feedback.created_at) >= Date.parse(current.created_at)) {
+        result.set(chunkId, feedback);
+      }
+    }
+    return result;
+  }, [currentFeedback]);
+
+  const sessionFeedback = currentFeedback.find(
+    (feedback) => feedback.target_type === 'session' && feedback.category === 'session_accuracy',
+  );
+  const hasChunkCorrections = feedbackByChunk.size > 0;
+  const selectedChunk = chunks.find((chunk) => chunk.id === selectedChunkId)
+    ?? chunks[0];
+
+  const { data: runResponse, isLoading: runsLoading } = useQuery({
+    queryKey: ['chunk-reanalyses', sessionId, selectedChunk?.id],
+    queryFn: () => historyApi.listChunkReanalyses(sessionId!, selectedChunk!.id),
+    enabled: !!sessionId && !!selectedChunk,
+    retry: false,
+    refetchInterval: (query) => {
+      const runs = normalizeRuns(query.state.data as ReanalysisListResponse | undefined);
+      if (!runs.some((run) => run.status === 'QUEUED' || run.status === 'RUNNING')) {
+        return false;
+      }
+      const pollCount = Math.min(query.state.dataUpdateCount, 4);
+      return Math.min(1000 * (2 ** pollCount), 8000);
+    },
+  });
+  const runs = normalizeRuns(runResponse);
+
+  const invalidateFeedback = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['session-feedback', sessionId] }),
+      queryClient.invalidateQueries({ queryKey: ['session-analysis', sessionId] }),
+    ]);
+  };
+
+  const feedbackMutation = useMutation({
+    mutationFn: async ({
+      state,
+      value,
+    }: {
+      state: FeedbackDialogState;
+      value: FeedbackDialogValue;
+    }) => {
+      if (state.existing) {
+        return historyApi.updateFeedback(sessionId!, state.existing.id, {
+          client_request_id: crypto.randomUUID(),
+          expected_revision: state.existing.revision,
+          category: value.category,
+          correction: value.correction,
+          note: value.note || undefined,
+          consent_to_improve: value.consent_to_improve,
+          reanalysis_run_id: state.reanalysisRunId,
+        });
+      }
+      return historyApi.createFeedback(sessionId!, {
+        client_request_id: crypto.randomUUID(),
+        target_type: state.targetType,
+        chunk_id: state.chunk?.id,
+        category: value.category,
+        correction: value.correction,
+        note: value.note || undefined,
+        consent_to_improve: value.consent_to_improve,
+        reanalysis_run_id: state.reanalysisRunId,
+      });
+    },
+    onSuccess: invalidateFeedback,
+  });
+
+  const undoFeedbackMutation = useMutation({
+    mutationFn: (feedback: AnalysisFeedback) => historyApi.deleteFeedback(
+      sessionId!,
+      feedback.id,
+      feedback.revision,
+      crypto.randomUUID(),
+    ),
+    onSuccess: invalidateFeedback,
+  });
+
+  const reanalysisMutation = useMutation({
+    mutationFn: (chunk: ChunkAnalysisResult) => historyApi.createChunkReanalysis(
+      sessionId!,
+      chunk.id,
+      crypto.randomUUID(),
+    ),
+    onSuccess: async (_result, chunk) => {
+      await queryClient.invalidateQueries({
+        queryKey: ['chunk-reanalyses', sessionId, chunk.id],
+      });
+    },
+  });
+
+  const openCorrection = (chunk: ChunkAnalysisResult) => {
+    feedbackMutation.reset();
+    undoFeedbackMutation.reset();
+    setDialog({
+      targetType: 'chunk',
+      chunk,
+      existing: feedbackByChunk.get(chunk.id),
+    });
+  };
+
+  const openSessionMistake = () => {
+    feedbackMutation.reset();
+    undoFeedbackMutation.reset();
+    setDialog({ targetType: 'session', existing: sessionFeedback });
+  };
+
+  const submitFeedback = async (value: FeedbackDialogValue) => {
+    if (!dialog) return;
+    await feedbackMutation.mutateAsync({ state: dialog, value });
+    setDialog(undefined);
+  };
+
+  const undoFeedback = async (feedback: AnalysisFeedback) => {
+    if (!window.confirm('Undo this correction? The original analysis will remain unchanged.')) return;
+    try {
+      await undoFeedbackMutation.mutateAsync(feedback);
+      setDialog(undefined);
+    } catch {
+      // Mutation state keeps the error visible in the current surface.
+    }
+  };
+
+  const markSessionAccurate = async () => {
+    feedbackMutation.reset();
+    try {
+      await feedbackMutation.mutateAsync({
+        state: { targetType: 'session', existing: sessionFeedback },
+        value: {
+          category: 'session_accuracy',
+          correction: { accurate: true },
+          note: '',
+          consent_to_improve: sessionFeedback?.consent_to_improve ?? false,
+        },
+      });
+    } catch {
+      // Mutation state renders the request error next to the session controls.
+    }
+  };
+
+  const showInspector = (chunk: ChunkAnalysisResult) => {
+    setSelectedChunkId(chunk.id);
+    window.setTimeout(() => {
+      inspectorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  };
+
+  const requestReanalysis = (chunk: ChunkAnalysisResult) => {
+    showInspector(chunk);
+    const confirmed = window.confirm(
+      'Re-analyze this exact video interval with the current AI analyzer? This incurs an AI call and will not change the original result.',
+    );
+    if (confirmed) reanalysisMutation.mutate(chunk);
+  };
+
+  const openCandidateCorrection = (
+    chunk: ChunkAnalysisResult,
+    correction: FeedbackCorrection,
+    reanalysisRunId: number,
+  ) => {
+    feedbackMutation.reset();
+    setDialog({
+      targetType: 'chunk',
+      chunk,
+      existing: feedbackByChunk.get(chunk.id),
+      preset: correction,
+      reanalysisRunId,
+    });
+  };
 
   // Fetch available videos from history to know which kinds exist
   const { data: historyList } = useQuery({
@@ -55,26 +319,21 @@ export function SessionDetailPage() {
 
   const historyItem = historyList?.find((h) => h.session_id === sessionId);
   const availableVideos = (historyItem?.available_videos ?? []) as VideoKind[];
-
-  // Auto-select best available video kind
-  useEffect(() => {
-    if (availableVideos.length > 0) {
-      // Prefer hardsubbed > merged > encoded
-      if (availableVideos.includes('hardsubbed')) {
-        setSelectedKind('hardsubbed');
-      } else if (availableVideos.includes('merged')) {
-        setSelectedKind('merged');
-      } else if (availableVideos.includes('encoded')) {
-        setSelectedKind('encoded');
-      }
-    }
-  }, [availableVideos.join(',')]);
+  const effectiveVideoKind = selectedKind && availableVideos.includes(selectedKind)
+    ? selectedKind
+    : availableVideos.includes('hardsubbed')
+      ? 'hardsubbed'
+      : availableVideos.includes('merged')
+        ? 'merged'
+        : availableVideos.includes('encoded')
+          ? 'encoded'
+          : 'merged';
 
   const { data: videoUrl } = useQuery({
-    queryKey: ['video-url', sessionId, selectedKind],
+    queryKey: ['video-url', sessionId, effectiveVideoKind],
     queryFn: () =>
-      historyApi.getVideoDownloadUrl(sessionId!, profileId!, selectedKind),
-    enabled: !!sessionId && !!profileId && availableVideos.includes(selectedKind),
+      historyApi.getVideoDownloadUrl(sessionId!, profileId!, effectiveVideoKind),
+    enabled: !!sessionId && !!profileId && availableVideos.includes(effectiveVideoKind),
     staleTime: 10 * 60 * 1000, // 10 min (signed URLs expire)
   });
 
@@ -157,7 +416,7 @@ export function SessionDetailPage() {
             <div className="flex gap-2">
               {availableVideos.map((kind) => {
                 const cfg = VIDEO_KIND_LABELS[kind];
-                const isSelected = kind === selectedKind;
+                const isSelected = kind === effectiveVideoKind;
                 return (
                   <button
                     key={kind}
@@ -201,11 +460,34 @@ export function SessionDetailPage() {
                   <p className="text-text-muted">Workout Type</p>
                   <p className="text-text-primary mt-0.5 capitalize">{analysis.workout_type || '—'}</p>
                 </div>
+                {sessionAnalysis?.coverage_status && (
+                  <div>
+                    <p className="text-text-muted">Media coverage</p>
+                    <p className="text-text-primary mt-0.5 capitalize">
+                      {sessionAnalysis.coverage_status.replaceAll('_', ' ')}
+                    </p>
+                  </div>
+                )}
                 {analysis.wod_description && (
                   <div className="col-span-2 border-t border-border pt-3 mt-1">
                     <p className="text-text-muted">WOD Description</p>
                     <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
                       {analysis.wod_description}
+                    </p>
+                  </div>
+                )}
+                {sessionAnalysis?.additional_observed_movements && sessionAnalysis.additional_observed_movements.length > 0 && (
+                  <div className="col-span-2 border-t border-border pt-3 mt-1">
+                    <p className="text-text-muted">Additional observed movements</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {sessionAnalysis.additional_observed_movements.map((movement) => (
+                        <span key={movement} className="rounded-md bg-info/10 px-2 py-1 text-xs text-info">
+                          {movement}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-text-muted">
+                      Video observations are shown separately and do not change the entered WOD.
                     </p>
                   </div>
                 )}
@@ -215,7 +497,54 @@ export function SessionDetailPage() {
 
           {/* AI Analysis */}
           <div className="bg-bg-elevated border border-border rounded-xl p-5">
-            <h2 className="text-lg font-semibold text-text-primary mb-4">AI Analysis</h2>
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <h2 className="text-lg font-semibold text-text-primary">AI Analysis</h2>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void markSessionAccurate()}
+                  disabled={feedbackMutation.isPending}
+                  className="rounded-lg border border-success/30 px-3 py-1.5 text-xs font-medium text-success hover:bg-success/10 focus:outline-none focus:ring-2 focus:ring-success disabled:opacity-50"
+                >
+                  Accurate
+                </button>
+                <button
+                  type="button"
+                  onClick={openSessionMistake}
+                  disabled={feedbackMutation.isPending}
+                  className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-tertiary focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+                >
+                  Report a mistake
+                </button>
+              </div>
+            </div>
+            {hasChunkCorrections && (
+              <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning">
+                Generated before your corrections. The original session summary has not been regenerated.
+              </div>
+            )}
+            {sessionFeedback && (
+              <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-xs text-success">
+                <p>
+                  {sessionFeedback.correction?.accurate
+                    ? 'You marked this session analysis as accurate.'
+                    : 'Your session feedback was saved.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void undoFeedback(sessionFeedback)}
+                  disabled={undoFeedbackMutation.isPending}
+                  className="shrink-0 font-medium text-text-secondary hover:text-text-primary hover:underline focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-50"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+            {feedbackMutation.isError && !dialog && (
+              <p role="alert" className="mb-4 rounded-lg border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
+                {feedbackError(feedbackMutation.error)}
+              </p>
+            )}
             {parsedOutput ? (
               <div className="space-y-4">
                 {parsedOutput.overall_summary && (
@@ -286,29 +615,46 @@ export function SessionDetailPage() {
 
         {/* Right: Guidance Timeline (2/5 width) */}
         <div className="lg:col-span-2">
-          {chunks && chunks.length > 0 ? (
-            <div className="lg:sticky lg:top-4">
-              <GuidanceTimeline
-                chunks={chunks}
-                currentTime={currentTime}
-                onSeek={handleSeek}
-              />
-            </div>
-          ) : (
-            <div className="bg-bg-elevated border border-border rounded-xl p-5">
-              <h2 className="text-lg font-semibold text-text-primary mb-2">
-                Guidance Timeline
-              </h2>
-              <p className="text-sm text-text-muted">
-                No real-time coaching data available.
-              </p>
-            </div>
-          )}
+          <div className="lg:sticky lg:top-4">
+            <GuidanceTimeline
+              chunks={chunks}
+              currentTime={currentTime}
+              selectedChunkId={selectedChunk?.id}
+              feedbackByChunk={feedbackByChunk}
+              onSeek={handleSeek}
+              onInspect={showInspector}
+              onCorrect={openCorrection}
+              onReanalyze={requestReanalysis}
+            />
+          </div>
         </div>
       </div>
 
+      {selectedChunk && (
+        <div ref={inspectorRef}>
+          <ChunkInspector
+            key={selectedChunk.id}
+            sessionId={sessionId!}
+            chunk={selectedChunk}
+            feedback={feedbackByChunk.get(selectedChunk.id)}
+            runs={runs}
+            runsLoading={runsLoading}
+            creatingRun={reanalysisMutation.isPending}
+            reanalysisError={reanalysisMutation.isError
+              ? feedbackError(reanalysisMutation.error)
+              : undefined}
+            onCreateRun={() => requestReanalysis(selectedChunk)}
+            onCorrect={() => openCorrection(selectedChunk)}
+            onUndoCorrection={feedbackByChunk.has(selectedChunk.id)
+              ? () => void undoFeedback(feedbackByChunk.get(selectedChunk.id)!)
+              : undefined}
+            onUseCandidate={(correction, runId) => openCandidateCorrection(selectedChunk, correction, runId)}
+          />
+        </div>
+      )}
+
       {/* Chunk metrics chart — full width below */}
-      {chunks && chunks.length > 0 && (
+      {chunks.length > 0 && (
         <div className="mt-6">
           <ChunkMetricsChart
             chunks={chunks}
@@ -316,6 +662,29 @@ export function SessionDetailPage() {
             onSeek={handleSeek}
           />
         </div>
+      )}
+
+      {dialog && (
+        <FeedbackDialog
+          targetType={dialog.targetType}
+          chunkLabel={dialog.chunk
+            ? `chunk ${dialog.chunk.id} (${dialog.chunk.media_start_secs ?? 'unknown'}s–${dialog.chunk.media_end_secs ?? 'unknown'}s)`
+            : undefined}
+          movementSuggestions={movementSuggestions}
+          existing={dialog.existing}
+          preset={dialog.preset}
+          pending={feedbackMutation.isPending || undoFeedbackMutation.isPending}
+          error={feedbackMutation.isError
+            ? feedbackError(feedbackMutation.error)
+            : undoFeedbackMutation.isError
+              ? feedbackError(undoFeedbackMutation.error)
+              : undefined}
+          onClose={closeFeedbackDialog}
+          onSubmit={submitFeedback}
+          onUndo={dialog.existing
+            ? () => undoFeedback(dialog.existing!)
+            : undefined}
+        />
       )}
     </div>
   );

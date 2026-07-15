@@ -80,6 +80,7 @@ type Config struct {
 	NewGenerateHighlight    HighlightTaskFactory
 	NewVerifyHighlightsTask VerifyHighlightsTaskFactory
 	NewGenerateHardSub      HardSubTaskFactory
+	EnableChunkReanalysis   bool
 }
 
 type Controller struct {
@@ -98,6 +99,7 @@ type Controller struct {
 	newGenerateHighlight    HighlightTaskFactory
 	newVerifyHighlightsTask VerifyHighlightsTaskFactory
 	newGenerateHardSub      HardSubTaskFactory
+	enableChunkReanalysis   bool
 }
 
 func New(config Config) *Controller {
@@ -154,5 +156,6 @@ func New(config Config) *Controller {
 		newGenerateHighlight:    highlightTaskFactory,
 		newVerifyHighlightsTask: verifyTaskFactory,
 		newGenerateHardSub:      hardSubFactory,
+		enableChunkReanalysis:   config.EnableChunkReanalysis,
 	}
 }

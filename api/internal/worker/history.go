@@ -22,6 +22,8 @@ const ScoreOutputPrompt = `
 - **절대 기준**: 이 사용자의 피트니스 레벨(초급/중급/고급) 기준 CrossFit 표준으로 평가하세요.
 - **WOD 타입 반영**: "For Time"이면 강도(intensity)를 높게 가중합니다. EMOM·스킬 WOD이면 자세(form)를 높게 가중합니다.
 - **점수 인플레이션 금지**: 사용자가 최선을 다했다는 이유로 점수를 올리지 마세요. 기준은 항상 절대적입니다.
+- 사용자 입력 WOD/운동 후보가 아니라 영상에서 대상 인물에게 직접 관찰되고 재검증된 운동만 movements와 점수에 포함하세요.
+- 계획되었지만 보이지 않은 운동과 걷기, 휴식, 회복, 준비, 장비 세팅은 movements, 점수, 하이라이트에서 제외하세요.
 
 ` + "```score\n" + `{
   "overall": 0,
@@ -64,6 +66,11 @@ func parseSessionScore(output string) string {
 	if err := json.Unmarshal([]byte(raw), &score); err != nil {
 		return "{}"
 	}
+	for movement := range score.Movements {
+		if isNonExerciseMovement(movement) {
+			delete(score.Movements, movement)
+		}
+	}
 	// Re-marshal to ensure compact, consistent output
 	out, err := json.Marshal(score)
 	if err != nil {
@@ -78,13 +85,22 @@ func buildWODContext(wodDescription string) string {
 		return ""
 	}
 
-	if strings.HasPrefix(strings.ToLower(wodDescription), "individual movements: ") {
-		return fmt.Sprintf("\n\n## 확인된 운동 종목 (사용자 입력)\n아래 운동들은 이 세션에서 **확실히 수행되는 운동**입니다. AI 감지가 불확실할 경우 이 목록을 우선 참고하세요.\n%s", strings.TrimPrefix(wodDescription, "Individual movements: "))
+	const individualMovementsPrefix = "individual movements: "
+	if strings.HasPrefix(strings.ToLower(wodDescription), individualMovementsPrefix) {
+		movementText := strings.TrimSpace(wodDescription[len(individualMovementsPrefix):])
+		return fmt.Sprintf(`
+
+## 운동 후보 힌트 (사용자 입력, 비배타적)
+아래 목록은 영상에 등장한다는 보장이 없는 후보입니다. 목록과 다른 종목도 시각적 근거가 있으면 그대로 식별하고, 목록에 있어도 보이지 않으면 결과·점수·하이라이트에서 제외하세요.
+%s`, movementText)
 	}
 
 	var sb strings.Builder
-	sb.WriteString("\n\n## 오늘의 WOD\n")
+	sb.WriteString("\n\n## 사용자 입력 WOD 설명 (계획 컨텍스트, 시각 증거 아님)\n")
 	sb.WriteString(wodDescription)
+	sb.WriteString(`
+→ 이 설명에는 계획된 종목, 보조 운동 또는 실제 영상에 보이지 않는 항목이 포함될 수 있습니다.
+→ 종목 식별은 대상 인물의 영상 근거를 우선하고, 설명과 관찰 결과를 서로 분리하세요.`)
 
 	lowerDesc := strings.ToLower(wodDescription)
 	switch {
@@ -92,7 +108,7 @@ func buildWODContext(wodDescription string) string {
 		rounds := extractRoundsHint(wodDescription)
 		sb.WriteString(fmt.Sprintf(`
 → For Time 구성 (다중 라운드) — 강도와 라운드별 자세 일관성을 추적하세요.
-→ %s후반 라운드에서 자세 붕괴가 시작되는 시점에 주목하세요.`, rounds))
+→ %s라운드 위치만으로 피로를 가정하지 말고 영상에서 직접 확인되는 변화만 비교하세요.`, rounds))
 	case strings.Contains(lowerDesc, "for time"):
 		sb.WriteString(`
 → For Time 구성 — 강도와 페이스를 중점 평가하세요.`)

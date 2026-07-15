@@ -49,11 +49,17 @@ func (ctl *Controller) CreateSession(c *gin.Context) {
 	}
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
+	movementHints, err := movementHintsDocument(req.Movements)
+	if err != nil {
+		logger.Log.Error("Failed to encode movement hints", zap.Any("request", req), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
+		return
+	}
 
 	// WOD-{YYYYMMDDHHMM}-{ULID}
 	sessionName := "WOD-" + time.Now().Format("200601021504") + "-" + ulid.Make().String()
-	newSession := db.Session{SessionID: sessionName, ProfileID: req.ProfileID, IdempotencyKey: req.IdempotencyKey, WODDescription: wodDescription, WorkoutType: workoutType}
-	if err := gorm.G[db.Session](ctl.db).Select("SessionID", "ProfileID", "IdempotencyKey", "WODDescription", "WorkoutType").Create(c, &newSession); err != nil {
+	newSession := db.Session{SessionID: sessionName, ProfileID: req.ProfileID, IdempotencyKey: req.IdempotencyKey, WODDescription: wodDescription, MovementHints: movementHints, WorkoutType: workoutType}
+	if err := gorm.G[db.Session](ctl.db).Select("SessionID", "ProfileID", "IdempotencyKey", "WODDescription", "MovementHints", "WorkoutType").Create(c, &newSession); err != nil {
 		logger.Log.Error("Failed to create session", zap.Any("request", req), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
 		return

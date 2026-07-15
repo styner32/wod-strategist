@@ -162,6 +162,11 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workout type"})
 		return
 	}
+	if err := ctl.persistSessionMovementHints(c.Request.Context(), req.SessionID, req.ProfileID, req.Movements); err != nil {
+		logger.Log.Error("failed to persist movement hints", zap.String("session_id", req.SessionID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist movement hints"})
+		return
+	}
 
 	logger.Log.Info("Submit a video analysis request",
 		zap.String("session_id", req.SessionID),
@@ -221,6 +226,27 @@ func (ctl *Controller) Upload(c *gin.Context) {
 		return
 	}
 
+	profileID, err := ctl.resolveLegacyUploadProfile(c.Request.Context(), sessionID, c.PostForm("profile_id"))
+	if err != nil {
+		switch {
+		case errors.Is(err, errLegacyUploadProfileRequired):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		case errors.Is(err, errLegacyUploadProfileInvalid):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile_id"})
+		case errors.Is(err, errLegacyUploadProfileMissing):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "profile not found"})
+		case errors.Is(err, errLegacyUploadProfileMismatch):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id does not match session"})
+		default:
+			logger.Log.Error("failed to resolve legacy upload profile", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve profile"})
+		}
+		return
+	}
+	if !ctl.assertOwnsProfile(c, profileID) {
+		return
+	}
+
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		logger.Log.Error("file is required", zap.Error(err))
@@ -236,7 +262,8 @@ func (ctl *Controller) Upload(c *gin.Context) {
 	}
 	defer file.Close()
 
-	// Legacy multipart upload path — no profile_id available, use 0
+	// Preserve the legacy dev-tool storage path. The queued analysis task uses
+	// the resolved real profile so analysis_results never receives profile_id=0.
 	objectName := buildVideoObjectName(0, sessionID, fileHeader.Filename)
 	gcsURI, err := ctl.storageClient.UploadFile(c.Request.Context(), file, objectName)
 	if err != nil {
@@ -245,7 +272,7 @@ func (ctl *Controller) Upload(c *gin.Context) {
 		return
 	}
 
-	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, 0, false, "")
+	task, err := ctl.newVideoAnalysisTask(sessionID, gcsURI, worker.WorkoutTypeWOD, nil, nil, profileID, false, "")
 	if err != nil {
 		logger.Log.Error("failed to create task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
@@ -589,6 +616,11 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 	}
 
 	if !ctl.assertOwnsProfile(c, req.ProfileID) {
+		return
+	}
+	if err := ctl.persistSessionMovementHints(c.Request.Context(), req.SessionID, req.ProfileID, req.Movements); err != nil {
+		logger.Log.Error("failed to persist movement hints", zap.String("session_id", req.SessionID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist movement hints"})
 		return
 	}
 
@@ -956,6 +988,11 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 	}
 
 	if !ctl.assertOwnsProfile(c, req.ProfileID) {
+		return
+	}
+	if err := ctl.persistSessionMovementHints(c.Request.Context(), req.SessionID, req.ProfileID, req.Movements); err != nil {
+		logger.Log.Error("failed to persist movement hints", zap.String("session_id", req.SessionID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist movement hints"})
 		return
 	}
 

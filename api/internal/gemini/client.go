@@ -1,11 +1,15 @@
 package gemini
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,6 +55,14 @@ type Client struct {
 	sleep        func(time.Duration)
 }
 
+// Model returns the configured generation model used by AnalyzeSegment.
+func (c *Client) Model() string {
+	if c == nil {
+		return ""
+	}
+	return c.model
+}
+
 type Options struct {
 	APIKey       string
 	BaseURL      string
@@ -61,16 +73,120 @@ type Options struct {
 	Sleep        func(time.Duration)
 }
 
+type exactSegmentOffsets struct {
+	start time.Duration
+	end   time.Duration
+}
+
+type exactSegmentOffsetsContextKey struct{}
+
+// exactSegmentOffsetsTransport compensates for google.golang.org/genai's
+// VideoMetadata marshaler rounding offsets to whole seconds. Gemini accepts
+// protobuf Duration JSON with fractional seconds, so restore the exact
+// persisted interval immediately before the request is sent.
+type exactSegmentOffsetsTransport struct {
+	base http.RoundTripper
+}
+
+func (t exactSegmentOffsetsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	offsets, ok := req.Context().Value(exactSegmentOffsetsContextKey{}).(exactSegmentOffsets)
+	if !ok || req.Body == nil {
+		return t.base.RoundTrip(req)
+	}
+
+	body, err := io.ReadAll(req.Body)
+	closeErr := req.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read segment analysis request: %w", err)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close segment analysis request: %w", closeErr)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, fmt.Errorf("decode segment analysis request: %w", err)
+	}
+	if !replaceVideoMetadataOffsets(payload, offsets) {
+		return nil, fmt.Errorf("segment analysis request is missing video metadata")
+	}
+	body, err = json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode segment analysis request: %w", err)
+	}
+
+	forward := req.Clone(req.Context())
+	forward.Body = io.NopCloser(bytes.NewReader(body))
+	forward.ContentLength = int64(len(body))
+	forward.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	return t.base.RoundTrip(forward)
+}
+
+func replaceVideoMetadataOffsets(payload map[string]any, offsets exactSegmentOffsets) bool {
+	contents, _ := payload["contents"].([]any)
+	for _, rawContent := range contents {
+		content, _ := rawContent.(map[string]any)
+		parts, _ := content["parts"].([]any)
+		for _, rawPart := range parts {
+			part, _ := rawPart.(map[string]any)
+			metadata, _ := part["videoMetadata"].(map[string]any)
+			if metadata == nil {
+				continue
+			}
+			metadata["startOffset"] = protobufDurationJSON(offsets.start)
+			metadata["endOffset"] = protobufDurationJSON(offsets.end)
+			return true
+		}
+	}
+	return false
+}
+
+func protobufDurationJSON(duration time.Duration) string {
+	sign := ""
+	if duration < 0 {
+		sign = "-"
+		duration = -duration
+	}
+	seconds := duration / time.Second
+	nanos := duration % time.Second
+	if nanos == 0 {
+		return sign + strconv.FormatInt(int64(seconds), 10) + "s"
+	}
+
+	var fraction string
+	switch {
+	case nanos%time.Millisecond == 0:
+		fraction = fmt.Sprintf("%03d", nanos/time.Millisecond)
+	case nanos%time.Microsecond == 0:
+		fraction = fmt.Sprintf("%06d", nanos/time.Microsecond)
+	default:
+		fraction = fmt.Sprintf("%09d", nanos)
+	}
+	return fmt.Sprintf("%s%d.%ss", sign, seconds, fraction)
+}
+
 func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Options) (*Client, error) {
 	apiKey := strings.TrimSpace(options.APIKey)
 	if apiKey == "" {
 		return nil, fmt.Errorf("GEMINI_API_KEY is not set")
 	}
 
+	httpClient := options.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{}
+	}
+	wrappedHTTPClient := *httpClient
+	baseTransport := wrappedHTTPClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	wrappedHTTPClient.Transport = exactSegmentOffsetsTransport{base: baseTransport}
+
 	config := &genai.ClientConfig{
 		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,
-		HTTPClient: options.HTTPClient,
+		HTTPClient: &wrappedHTTPClient,
 	}
 	if options.BaseURL != "" || options.APIVersion != "" {
 		config.HTTPOptions = genai.HTTPOptions{
@@ -436,6 +552,9 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 // AnalyzeSegment performs deep biomechanical analysis on a specific time range
 // of the video using the Pro model with VideoMetadata to constrain attention.
 func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *TokenUsage, error) {
+	if start < 0 || end <= start {
+		return "", nil, fmt.Errorf("invalid segment interval: start=%s end=%s", start, end)
+	}
 	fps := float64(5)
 
 	c.logger.Info("Analyzing segment",
@@ -457,7 +576,8 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 		},
 	}
 
-	resp, err := c.client.Models.GenerateContent(ctx, c.model, []*genai.Content{{
+	exactOffsetContext := context.WithValue(ctx, exactSegmentOffsetsContextKey{}, exactSegmentOffsets{start: start, end: end})
+	resp, err := c.client.Models.GenerateContent(exactOffsetContext, c.model, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			videoPart,

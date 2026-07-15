@@ -51,6 +51,22 @@ var _ = Describe("InitServer", func() {
 		Expect(cfg.Port).To(Equal("9090"))
 	})
 
+	It("keeps chunk re-analysis disabled unless explicitly enabled", func() {
+		setEnv("ENABLE_CHUNK_REANALYSIS", "")
+
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.ChunkReanalysisEnabled).To(BeFalse())
+	})
+
+	It("enables chunk re-analysis from an explicit true value", func() {
+		setEnv("ENABLE_CHUNK_REANALYSIS", "TrUe")
+
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.ChunkReanalysisEnabled).To(BeTrue())
+	})
+
 	It("returns an error listing all missing required variables", func() {
 		setEnv("DATABASE_URL", "")
 		setEnv("REDIS_URL", "")

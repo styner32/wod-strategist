@@ -96,6 +96,44 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 		Expect(payload.WorkoutConfidence).To(Equal(0.95))
 	})
 
+	It("accepts the deployed mobile payload without newer analysis fields", func() {
+		body := fmt.Sprintf(`{
+			"session_id": "%s",
+			"gcs_uri": "gs://bucket/videos/%d/%s/chunk_0001.mp4",
+			"profile_id": %d,
+			"start_secs": 0.0,
+			"end_secs": 10.0
+		}`, sessionID, profile.ID, sessionID, profile.ID)
+
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/chunk-complete", body, &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusAccepted), w.Body.String())
+		respBody := decodeMapBody(w)
+		Expect(respBody["message"]).To(Equal("Chunk analysis started"))
+		Expect(respBody["task_id"]).To(BeAssignableToTypeOf(""))
+		Expect(respBody["task_id"]).NotTo(BeEmpty())
+		Expect(respBody["session_id"]).To(Equal(sessionID))
+
+		pending, err := inspector.ListPendingTasks("default")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pending).To(HaveLen(1))
+		Expect(pending[0].Type).To(Equal(worker.TypeChunkAnalysis))
+
+		var payload worker.VideoAnalysisPayload
+		Expect(json.Unmarshal(pending[0].Payload, &payload)).To(Succeed())
+		Expect(payload.SessionID).To(Equal(sessionID))
+		Expect(payload.ProfileID).To(Equal(profile.ID))
+		Expect(payload.StartSecs).To(Equal(0.0))
+		Expect(payload.EndSecs).To(Equal(10.0))
+		Expect(payload.WorkoutType).To(Equal(worker.WorkoutTypeWOD))
+		Expect(payload.Movements).To(BeEmpty())
+		Expect(payload.Injuries).To(BeEmpty())
+		Expect(payload.HeartRateBPM).To(BeZero())
+		Expect(payload.WorkoutConfidence).To(BeZero())
+	})
+
 	It("configures wod type from body", func() {
 		body := fmt.Sprintf(`{
 			"session_id": "session-1",
@@ -166,6 +204,7 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 		body := fmt.Sprintf(`{
 			"session_id": "%s",
 			"gcs_uri": "%s",
+			"movements": ["Back Squat"],
 			"workout_type": "wod",
 			"profile_id": %d,
 			"start_secs": 0.0,
@@ -210,6 +249,10 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 		Expect(payload.EndSecs).To(Equal(10.0))
 		Expect(payload.HeartRateBPM).To(Equal(150))
 		Expect(payload.WorkoutConfidence).To(Equal(0.95))
+
+		var updatedSession db.Session
+		Expect(dbConn.Where("session_id = ?", sessionID).First(&updatedSession).Error).NotTo(HaveOccurred())
+		Expect(string(updatedSession.MovementHints)).To(MatchJSON(`["Back Squat"]`))
 	})
 
 	DescribeTable("invalid arguments", func(body string, expectedStatusCode int, expectedErrorMessage string) {

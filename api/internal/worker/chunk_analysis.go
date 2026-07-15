@@ -33,6 +33,7 @@ const ChunkAnalysisPrompt = `
 먼저, 영상에서 수행 중인 운동 종목을 식별하세요.
 - 운동이 보이면 → 첫 줄에 반드시 [EXERCISE: 영어 운동 이름] 태그를 출력하세요.
   (예: [EXERCISE: Snatch], [EXERCISE: Back Squat], [EXERCISE: Pull-up], [EXERCISE: Burpee])
+- 대상 인물이 운동 중인 것은 분명하지만 정확한 종목 근거가 부족하면 → 첫 줄에 [EXERCISE: Unknown] 태그를 출력하세요.
 - 운동이 보이지 않으면 (휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그만 출력하세요.
 
 ## 코칭 피드백 규칙
@@ -84,19 +85,28 @@ const (
 
 ` + "```observed_signals\n" + `{
   "movement": "운동명 (영어)",
+  "activity_state": "exercise|walking|rest_setup|unknown",
   "set_duration_s": 10,
   "rep_count": 0,
   "avg_cadence_s": 0.0,
   "exertion_estimate": "low|moderate|high|failing",
-  "form_issues_seen": ["이슈1", "이슈2"]
+  "form_issues_seen": ["이슈1", "이슈2"],
+  "fatigue_visually_established": false,
+  "fatigue_evidence_types": [],
+  "fatigue_evidence": []
 }` + "\n```" + `
 
 - movement: 감지된 운동 종목 (영어)
+- activity_state: exercise, walking, rest_setup, unknown 중 하나
 - set_duration_s: 이 클립에서 운동이 수행된 대략적인 시간 (초)
 - rep_count: 이 클립에서 관찰된 대략적인 반복 횟수 (불분명하면 0)
 - avg_cadence_s: 반복당 대략적인 소요 시간 (초, 불분명하면 0)
-- exertion_estimate: 관찰된 운동 강도 (low/moderate/high/failing)
+- exertion_estimate: 관찰된 운동 강도 (low/moderate/high/failing). 이 값만으로 피로를 판정하지 마세요.
 - form_issues_seen: 관찰된 자세 문제 목록 (없으면 빈 배열)
+- fatigue_visually_established: 영상의 운동 반복에서 피로가 시각적으로 확립된 경우에만 true
+- fatigue_evidence_types: true인 경우 rep_slowdown, cadence_loss, range_of_motion_loss, form_breakdown 중 직접 관찰된 유형만 기록
+- fatigue_evidence: 위 유형을 뒷받침하는 구체적인 시각 관찰. 심박수는 여기에 기록하지 마세요.
+- walking, rest_setup, unknown이면 fatigue_visually_established는 반드시 false이고 두 fatigue_evidence 배열은 비워 두세요.
 - 운동이 감지되지 않은 경우에는 이 블록을 출력하지 마세요.`
 )
 
@@ -140,11 +150,7 @@ func parseObservedSignals(analysis string) string {
 	match := observedSignalsBlockRegex.FindStringSubmatch(analysis)
 	if len(match) > 1 {
 		raw := strings.TrimSpace(match[1])
-		// Validate it's parseable JSON
-		var check map[string]any
-		if json.Unmarshal([]byte(raw), &check) == nil {
-			return raw
-		}
+		return sanitizeObservedSignals(raw)
 	}
 	return "{}"
 }
@@ -491,21 +497,19 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 }
 
 func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
-	prompt := ChunkAnalysisPrompt
+	prompt := baseChunkAnalysisPrompt()
 
 	// Inject fitness-level-specific coaching policy
 	fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
 	prompt += levelPolicyForFitnessLevel(fitnessLevel)
 
-	// Inject WOD descriptor context so chunk feedback is aware of the WOD type
-	// (e.g. "For Time: 5 rounds" → expect fatigue in later rounds).
+	// Inject WOD descriptor as planning context, never as visual proof.
 	if wod := buildWODContext(p.WODDescription); wod != "" {
 		prompt += wod
 	}
 
-	if len(p.Movements) > 0 {
-		prompt += fmt.Sprintf("\n\n## 확인된 운동 종목 (사용자 입력)\n아래 운동들은 이 세션에서 **확실히 수행되는 운동**입니다. AI 감지가 불확실할 경우 이 목록을 우선 참고하세요.\n%s", strings.Join(p.Movements, ", "))
-	}
+	prompt += buildMovementHintsContext(p.Movements)
+	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", strings.Join(p.Injuries, ", "))
@@ -514,10 +518,7 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 	personalProfile := w.lookupProfileString(p.ProfileID)
 	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
 
-	// Add real-time heart rate context if available
-	if p.HeartRateBPM > 0 {
-		prompt += fmt.Sprintf("\n\n## 실시간 심박수 데이터\n현재 심박수: %d bpm\n(심박수가 높으면 피로도와 연관지어 코칭하세요. 단, 심박수 자체를 피드백 문장에 포함하지 마세요.)", p.HeartRateBPM)
-	}
+	prompt += buildHeartRateContext(p.HeartRateBPM)
 
 	// Add observed signals requirement
 	prompt += ObservedSignalsPrompt
@@ -526,7 +527,7 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 }
 
 func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionPayload, profile *db.Profile, session *db.Session) string {
-	prompt := ChunkAnalysisPrompt
+	prompt := baseChunkAnalysisPrompt()
 
 	// Inject fitness-level-specific coaching policy
 	fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
@@ -536,6 +537,9 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 		prompt += wod
 	}
 
+	prompt += buildMovementHintsContext(movementHintsFromDocument(session.MovementHints))
+	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
+
 	if profile.Injuries != nil && *profile.Injuries != "" {
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", *profile.Injuries)
 	}
@@ -543,10 +547,7 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 	personalProfile := w.lookupProfileString(p.ProfileID)
 	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
 
-	// Add real-time heart rate context if available
-	if p.HeartRateBPM > 0 {
-		prompt += fmt.Sprintf("\n\n## 실시간 심박수 데이터\n현재 심박수: %d bpm\n(심박수가 높으면 피로도와 연관지어 코칭하세요. 단, 심박수 자체를 피드백 문장에 포함하지 마세요.)", p.HeartRateBPM)
-	}
+	prompt += buildHeartRateContext(p.HeartRateBPM)
 
 	// Add observed signals requirement
 	prompt += ObservedSignalsPrompt

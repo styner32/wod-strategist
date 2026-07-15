@@ -62,9 +62,28 @@ Path construction:
 
 ## Backward compatibility
 - Old sessions use a flat layout: `videos/{sessionId}_{filename}` (e.g. `videos/P1-WOD-2026-04-01-14-30_chunk_001.mp4`). These files are **not migrated** — both formats are supported.
-- The legacy multipart upload handler (`POST /upload`) uses `profileID=0` as a fallback. This is intentional for the dev tool — do not remove it.
+- The legacy multipart upload handler (`POST /upload`) keeps the historical
+  `videos/0/{sessionId}/...` storage path for compatibility. Its queued
+  analysis task must still use a real profile ID resolved from the `sessions`
+  row, an optional form `profile_id`, or the exact old `P{id}-WOD-...` format.
+  Never insert `analysis_results.profile_id=0`.
 
 Rules:
 - Always pass `profile_id` when calling `buildVideoObjectName()` or any upload/download API.
 - Place new session-scoped assets under `videos/{pid}/{sid}/`, never in a separate top-level prefix.
 - Preserve both layouts unless a migration is explicitly requested.
+
+## Capture time versus media time
+
+- `chunk_analysis_results.start_secs` and `end_secs` may be mobile capture-clock
+  offsets. They are not authoritative positions in concatenated media.
+- `media_start_secs` and `media_end_secs` are media-relative offsets. Server
+  splits build a continuous source-relative timeline from cumulative probed
+  output-chunk durations; do not calculate later starts as `index * 10`.
+- Mobile merge probes the actual ordered concat inputs and stores cumulative
+  media intervals only after the merge succeeds.
+- Legacy reconstruction must mirror the deterministic concat manifest order
+  (`start_secs` ordering may choose order only) and probe retained chunk
+  durations. Never copy capture-clock values onto `merged.mp4`.
+- If reconstruction is impossible, a retained chunk object may be used as the
+  exact whole-video fallback (`0..probed duration`).

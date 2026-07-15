@@ -44,20 +44,20 @@ const (
 )
 
 type AnalysisResult struct {
-	ID                uint   `gorm:"primaryKey" json:"id"`
-	SessionID         string `gorm:"uniqueIndex;not null" json:"session_id"`
-	ProfileID         uint   `gorm:"index;not null" json:"profile_id"`
-	AnalysisType      string `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
-	Status            string `json:"status"`                           // PENDING, COMPLETED, FAILED
-	Output            string `json:"output"`
-	InjuryOutput      string     `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
-	InjuryOutputAlt   string     `json:"-"`
-	GeminiFileURI     string     `json:"-"`
-	GeminiFileName    string     `json:"-"`
-	GeminiMIMEType    string     `json:"-"`
+	ID                  uint       `gorm:"primaryKey" json:"id"`
+	SessionID           string     `gorm:"uniqueIndex;not null" json:"session_id"`
+	ProfileID           uint       `gorm:"index;not null" json:"profile_id"`
+	AnalysisType        string     `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
+	Status              string     `json:"status"`                           // PENDING, COMPLETED, FAILED
+	Output              string     `json:"output"`
+	InjuryOutput        string     `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
+	InjuryOutputAlt     string     `json:"-"`
+	GeminiFileURI       string     `json:"-"`
+	GeminiFileName      string     `json:"-"`
+	GeminiMIMEType      string     `json:"-"`
 	GeminiFileExpiresAt *time.Time `json:"-"`
-	HighlightSegments string     `json:"highlight_segments"`      // JSON array of highlight segments
-	Verified          *bool      `json:"verified,omitempty"`      // nil=unchecked, true=confirmed, false=hallucination detected
+	HighlightSegments   string     `json:"highlight_segments"` // JSON array of highlight segments
+	Verified            *bool      `json:"verified,omitempty"` // nil=unchecked, true=confirmed, false=hallucination detected
 	// WODDescription is the user-supplied workout descriptor (e.g. "Fran", "For Time: 5 rounds of...").
 	// Injected into analysis prompts to enable benchmark comparison and WOD-type-aware scoring.
 	WODDescription string `gorm:"type:text;not null;default:''" json:"wod_description,omitempty"`
@@ -94,9 +94,11 @@ type ChunkAnalysisResult struct {
 	Status            string    `json:"status"`                  // PENDING, COMPLETED, FAILED
 	Output            string    `json:"output"`
 	ObservedSignals   string    `gorm:"type:text;not null;default:'{}'" json:"observed_signals"` // JSON: estimated workout metrics for benchmarking
-	HeartRateBPM      int       `gorm:"not null;default:0" json:"heart_rate_bpm"`                // BLE heart rate at chunk capture time (0 = unavailable)
+	HeartRateBPM      int       `gorm:"not null;default:0" json:"heart_rate_bpm"`                // BLE heart rate associated with the chunk; exact sample time is unavailable (0 = unavailable)
 	StartSecs         *float64  `json:"start_secs,omitempty"`
 	EndSecs           *float64  `json:"end_secs,omitempty"`
+	MediaStartSecs    *float64  `json:"media_start_secs,omitempty"`
+	MediaEndSecs      *float64  `json:"media_end_secs,omitempty"`
 	WorkoutConfidence float64   `gorm:"not null;default:0.0" json:"workout_confidence"` // confidence if person actually workout
 	MotionScore       *float64  `json:"motion_score,omitempty"`
 	SkipReason        string    `json:"skip_reason,omitempty"`
@@ -135,6 +137,7 @@ type Session struct {
 	ProfileID      uint          `gorm:"index;not null" json:"profile_id"`
 	IdempotencyKey string        `gorm:"index;not null" json:"idempotency_key"`
 	WODDescription string        `gorm:"not null" json:"wod_description"`
+	MovementHints  JSONDocument  `json:"movement_hints"`
 	WorkoutType    string        `json:"workout_type"`
 	UpdatedAt      time.Time     `json:"updated_at"`
 	CreatedAt      time.Time     `json:"created_at"`
@@ -188,8 +191,8 @@ type PipelineStageMetric struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
 	SessionID    string    `gorm:"index;not null" json:"session_id"`
 	ProfileID    uint      `gorm:"not null;default:0" json:"profile_id"`
-	Stage        string    `gorm:"not null" json:"stage"`        // chunk_analysis | injury_analysis | verify_highlights
-	Variant      string    `gorm:"not null" json:"variant"`      // legacy | optimized
+	Stage        string    `gorm:"not null" json:"stage"`   // chunk_analysis | injury_analysis | verify_highlights
+	Variant      string    `gorm:"not null" json:"variant"` // legacy | optimized
 	APICalls     int       `gorm:"not null;default:0" json:"api_calls"`
 	SkippedCalls int       `gorm:"not null;default:0" json:"skipped_calls"`
 	UploadBytes  int64     `gorm:"not null;default:0" json:"upload_bytes"`

@@ -44,7 +44,7 @@ func DevelopmentCORS(allowedOrigins []string) gin.HandlerFunc {
 		}
 	}
 
-	allowMethods := "GET, POST, PUT, DELETE, OPTIONS"
+	allowMethods := "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 	allowHeaders := "Content-Type, X-API-Key, Authorization"
 
 	return func(c *gin.Context) {

@@ -43,7 +43,7 @@ type VideoAnalysisPayload struct {
 	ProfileID         uint
 	StartSecs         float64
 	EndSecs           float64
-	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate at chunk capture time
+	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate associated with the chunk; exact sample time is unavailable
 	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
 	WODDescription    string  `json:"wod_description,omitempty"`    // user-supplied WOD descriptor (e.g. "Fran", "For Time: 5 rounds of...")
 	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
@@ -57,7 +57,7 @@ type VideoAnalysisWithSessionPayload struct {
 	ProfileID         uint
 	StartSecs         float64
 	EndSecs           float64
-	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate at chunk capture time
+	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate associated with the chunk; exact sample time is unavailable
 	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
 	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
 }

@@ -185,7 +185,10 @@ var _ = Describe("Auth Service", func() {
 	// DeleteAccount
 	// -------------------------------------------------------------------
 	Describe("DeleteAccount", func() {
-		var userID uint
+		var (
+			userID    uint
+			profileID uint
+		)
 
 		BeforeEach(func() {
 			var err error
@@ -195,20 +198,37 @@ var _ = Describe("Auth Service", func() {
 			// Seed some analysis data so we can verify cascade
 			var profile db.Profile
 			Expect(dbConn.Where("user_id = ?", userID).First(&profile).Error).NotTo(HaveOccurred())
+			profileID = profile.ID
 
-			Expect(dbConn.Create(&db.AnalysisResult{
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
 				SessionID: "sess-delete-001",
 				ProfileID: profile.ID,
 				Status:    "COMPLETED",
 				Output:    "test",
-			}).Error).NotTo(HaveOccurred())
+			})
 
-			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+			chunk := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
 				SessionID: "sess-delete-001",
 				ProfileID: profile.ID,
 				Status:    "COMPLETED",
 				Output:    "chunk",
-			}).Error).NotTo(HaveOccurred())
+			})
+
+			testhelpers.CreateAnalysisFeedback(dbConn, &db.AnalysisFeedback{
+				ProfileID:             profile.ID,
+				SessionID:             "sess-delete-001",
+				TargetType:            db.FeedbackTargetChunk,
+				ChunkAnalysisResultID: &chunk.ID,
+				Category:              db.FeedbackCategoryMovement,
+				OriginalPrediction:    db.JSONDocument(`{"exercise_type":"Rope Climb"}`),
+				Correction:            db.JSONDocument(`{"movement_name":"Pull-up"}`),
+			})
+			testhelpers.CreateChunkReanalysisRun(dbConn, &db.ChunkReanalysisRun{
+				SessionID:             "sess-delete-001",
+				ProfileID:             profile.ID,
+				ChunkAnalysisResultID: chunk.ID,
+				Status:                db.ChunkReanalysisStatusCompleted,
+			})
 
 			Expect(dbConn.Create(&db.TokenUsage{
 				SessionID:       "sess-delete-001",
@@ -249,6 +269,14 @@ var _ = Describe("Auth Service", func() {
 			var tokenCount int64
 			dbConn.Model(&db.TokenUsage{}).Where("session_id = ?", "sess-delete-001").Count(&tokenCount)
 			Expect(tokenCount).To(BeZero())
+
+			var feedbackCount int64
+			dbConn.Model(&db.AnalysisFeedback{}).Where("profile_id = ?", profileID).Count(&feedbackCount)
+			Expect(feedbackCount).To(BeZero())
+
+			var reanalysisCount int64
+			dbConn.Model(&db.ChunkReanalysisRun{}).Where("profile_id = ?", profileID).Count(&reanalysisCount)
+			Expect(reanalysisCount).To(BeZero())
 		})
 
 		It("rejects wrong password", func() {

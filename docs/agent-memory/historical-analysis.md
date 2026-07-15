@@ -1,5 +1,12 @@
 # Historical Analysis: WOD Descriptor + Session Scoring
 
+> **Current implementation, not target design:** the active remediation plan is
+> [`docs/video-analysis-improvement/04-phase-3-accuracy-and-contracts.md`](../video-analysis-improvement/04-phase-3-accuracy-and-contracts.md),
+> especially ACC-07. The current last-segment scoring approach cannot see all
+> session evidence. New work must move scoring to a final synthesis over every
+> successful validated segment, compute the current absolute score before
+> historical comparison, and validate/recompute `overall` on the server.
+
 ## Overview
 
 Each completed session stores two new fields on `analysis_results`:

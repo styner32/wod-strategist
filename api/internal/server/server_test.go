@@ -173,6 +173,20 @@ var _ = Describe("SetupRouter", func() {
 		Expect(w.Header().Get("Access-Control-Allow-Methods")).To(ContainSubstring("DELETE"))
 	})
 
+	It("includes PATCH in allowed CORS methods", func() {
+		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:5173"}, newTestController(), nil, nil)
+		Expect(err).NotTo(HaveOccurred())
+
+		req := httptest.NewRequest(http.MethodOptions, "/api/v1/sessions/session-1/feedback/1", nil)
+		req.Header.Set("Origin", "http://localhost:5173")
+		req.Header.Set("Access-Control-Request-Method", http.MethodPatch)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusNoContent))
+		Expect(w.Header().Get("Access-Control-Allow-Methods")).To(ContainSubstring("PATCH"))
+	})
+
 	It("allows web auth login/signup WITHOUT API key", func() {
 		router, err := server.SetupRouter("test", "secret", nil, newTestController(), newTestAuthController(), nil)
 		Expect(err).NotTo(HaveOccurred())

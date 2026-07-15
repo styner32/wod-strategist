@@ -21,6 +21,16 @@ var _ = Describe("Gemini client", func() {
 			Expect(client).To(BeNil())
 			Expect(err.Error()).To(ContainSubstring("GEMINI_API_KEY is not set"))
 		})
+
+		It("exposes the configured segment-analysis model", func() {
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey: "test-api-key",
+				Model:  ModelFlash35,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(client.Model()).To(Equal(ModelFlash35))
+			Expect((*Client)(nil).Model()).To(BeEmpty())
+		})
 	})
 
 	Describe("AnalyzeVideo", func() {
@@ -109,7 +119,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
+				Post("/v1beta/models/"+ModelPro31Preview+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -177,7 +187,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelFlash35 + ":generateContent").
+				Post("/v1beta/models/"+ModelFlash35+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -441,7 +451,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelFlash35 + ":generateContent").
+				Post("/v1beta/models/"+ModelFlash35+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -500,7 +510,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
+				Post("/v1beta/models/"+ModelPro31Preview+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -521,12 +531,34 @@ var _ = Describe("Gemini client", func() {
 			result, _, err := client.AnalyzeSegment(
 				context.Background(),
 				"https://example.test/files/mock-file", "video/mp4",
-				30*time.Second, 60*time.Second,
+				30*time.Second+250*time.Millisecond, 60*time.Second+750*time.Millisecond,
 				"Analyze this segment",
 			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("deep biomechanical analysis"))
 			Expect(transport.Verify()).To(Succeed())
+			Expect(transport.Requests()).To(HaveLen(1))
+			Expect(string(transport.Requests()[0].Body)).To(ContainSubstring(`"startOffset":"30.250s"`))
+			Expect(string(transport.Requests()[0].Body)).To(ContainSubstring(`"endOffset":"60.750s"`))
+		})
+
+		It("rejects an invalid interval before sending a request", func() {
+			transport := testhelpers.NewMockTransport()
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     apiKey,
+				BaseURL:    baseURL,
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			_, _, err = client.AnalyzeSegment(
+				context.Background(),
+				"https://example.test/files/mock-file", "video/mp4",
+				10*time.Second, 10*time.Second,
+				"Analyze",
+			)
+			Expect(err).To(MatchError(ContainSubstring("invalid segment interval")))
+			Expect(transport.Requests()).To(BeEmpty())
 		})
 
 		It("returns an error on failure", func() {

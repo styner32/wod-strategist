@@ -85,21 +85,16 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 	var errCount atomic.Int32
 	var skipCount atomic.Int32
 
+	mediaCursor := 0.0
 	for i, chunkFile := range chunkFiles {
-		// Calculate time offsets before spawning goroutine
-		startSecs := float64(i * splitChunkDurationSecs)
 		chunkPath := filepath.Join(tmpDir, chunkFile)
 
-		// Probe actual chunk duration for accurate end_secs
+		// Build a continuous source-media timeline from the actual output chunk
+		// durations. Using i*segmentDuration would create overlaps or gaps when
+		// FFmpeg cuts on a nearby keyframe.
 		chunkDuration := probeVideoDuration(ctx, chunkPath)
-		endSecs := startSecs + chunkDuration
-		if chunkDuration <= 0 {
-			// Fallback: estimate from chunk index
-			endSecs = startSecs + float64(splitChunkDurationSecs)
-			if endSecs > totalDuration {
-				endSecs = totalDuration
-			}
-		}
+		startSecs, endSecs := splitChunkMediaInterval(mediaCursor, chunkDuration, totalDuration)
+		mediaCursor = endSecs
 
 		// Skip chunks that were already analyzed in a previous (partial) run
 		if w.chunkAlreadyAnalyzed(p.SessionID, startSecs) {
@@ -163,7 +158,7 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 					zap.Error(analysisErr))
 				// Still record a FAILED entry so the chunk is tracked
 				// Security: Do not expose raw internal error strings to user-facing database fields (CWE-209).
-				w.saveChunkResult(p, gcsURI, start, end, "FAILED", "", "An internal error occurred during chunk analysis.", motionScore, "")
+				w.saveChunkResult(p, gcsURI, start, end, "FAILED", "", "An internal error occurred during chunk analysis.", "{}", motionScore, "")
 				errCount.Add(1)
 			}
 
@@ -191,19 +186,38 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 	return nil
 }
 
+func splitChunkMediaInterval(cursor, probedDuration, totalDuration float64) (float64, float64) {
+	start := cursor
+	duration := probedDuration
+	if duration <= 0 {
+		duration = float64(splitChunkDurationSecs)
+	}
+	end := start + duration
+	if totalDuration > 0 && end > totalDuration {
+		end = totalDuration
+	}
+	if end < start {
+		end = start
+	}
+	return start, end
+}
+
 // analyzeChunkInline runs chunk analysis on a local file synchronously.
 // This mirrors the core logic of HandleChunkAnalysisTask but without
 // the queue/unmarshal overhead — the file is already local.
 func (w *Worker) analyzeChunkInline(ctx context.Context, localPath, gcsURI string, p VideoAnalysisPayload, startSecs, endSecs float64, motionScore *float64) error {
 	prompt := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{
-		SessionID:   p.SessionID,
-		FilePath:    gcsURI,
-		WorkoutType: p.WorkoutType,
-		Movements:   p.Movements,
-		Injuries:    p.Injuries,
-		ProfileID:   p.ProfileID,
-		StartSecs:   startSecs,
-		EndSecs:     endSecs,
+		SessionID:         p.SessionID,
+		FilePath:          gcsURI,
+		WorkoutType:       p.WorkoutType,
+		Movements:         p.Movements,
+		Injuries:          p.Injuries,
+		ProfileID:         p.ProfileID,
+		StartSecs:         startSecs,
+		EndSecs:           endSecs,
+		HeartRateBPM:      p.HeartRateBPM,
+		WODDescription:    p.WODDescription,
+		WorkoutConfidence: p.WorkoutConfidence,
 	})
 
 	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localPath, prompt, gemini.ModelFlash35)
@@ -230,9 +244,11 @@ func (w *Worker) analyzeChunkInline(ctx context.Context, localPath, gcsURI strin
 
 	// Extract exercise type and clean output (same as HandleChunkAnalysisTask)
 	detectedExercise := parseChunkExercise(analysis)
+	observedSignals := parseObservedSignals(analysis)
 	cleanOutput := stripExerciseTag(analysis)
+	cleanOutput = stripObservedSignals(cleanOutput)
 
-	w.saveChunkResult(p, gcsURI, startSecs, endSecs, "COMPLETED", detectedExercise, cleanOutput, motionScore, "")
+	w.saveChunkResult(p, gcsURI, startSecs, endSecs, "COMPLETED", detectedExercise, cleanOutput, observedSignals, motionScore, "")
 
 	w.logger.Info("Split chunk analysis completed",
 		zap.String("session_id", p.SessionID),
@@ -244,17 +260,22 @@ func (w *Worker) analyzeChunkInline(ctx context.Context, localPath, gcsURI strin
 }
 
 // saveChunkResult persists a ChunkAnalysisResult to the database.
-func (w *Worker) saveChunkResult(p VideoAnalysisPayload, gcsURI string, startSecs, endSecs float64, status, exerciseType, output string, motionScore *float64, skipReason string) {
+func (w *Worker) saveChunkResult(p VideoAnalysisPayload, gcsURI string, startSecs, endSecs float64, status, exerciseType, output, observedSignals string, motionScore *float64, skipReason string) {
 	result := &db.ChunkAnalysisResult{
-		SessionID:    p.SessionID,
-		FilePath:     gcsURI,
-		ExerciseType: exerciseType,
-		Status:       status,
-		Output:       output,
-		StartSecs:    &startSecs,
-		EndSecs:      &endSecs,
-		MotionScore:  motionScore,
-		SkipReason:   skipReason,
+		SessionID:         p.SessionID,
+		FilePath:          gcsURI,
+		ExerciseType:      exerciseType,
+		Status:            status,
+		Output:            output,
+		ObservedSignals:   observedSignals,
+		HeartRateBPM:      p.HeartRateBPM,
+		StartSecs:         &startSecs,
+		EndSecs:           &endSecs,
+		MediaStartSecs:    &startSecs,
+		MediaEndSecs:      &endSecs,
+		WorkoutConfidence: p.WorkoutConfidence,
+		MotionScore:       motionScore,
+		SkipReason:        skipReason,
 	}
 	result.ProfileID = p.ProfileID
 	w.DB.Create(result)
