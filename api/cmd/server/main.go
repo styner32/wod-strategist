@@ -81,16 +81,17 @@ func main() {
 	}
 
 	handlers := controllers.New(controllers.Config{
-		DB:                    dbConn,
-		QueueClient:           client,
-		AnalysisResults:       controllers.NewGormAnalysisResultRepository(dbConn),
-		Profiles:              controllers.NewGormProfileRepository(dbConn),
-		HighlightResults:      controllers.NewGormHighlightResultRepository(dbConn),
-		StorageClient:         storageClient,
-		ImageParser:           imageParser,
-		BucketName:            cfg.GCSBucketName,
-		GitCommit:             GitCommit,
-		EnableChunkReanalysis: cfg.ChunkReanalysisEnabled,
+		DB:                      dbConn,
+		QueueClient:             client,
+		AnalysisResults:         controllers.NewGormAnalysisResultRepository(dbConn),
+		Profiles:                controllers.NewGormProfileRepository(dbConn),
+		HighlightResults:        controllers.NewGormHighlightResultRepository(dbConn),
+		StorageClient:           storageClient,
+		ImageParser:             imageParser,
+		BucketName:              cfg.GCSBucketName,
+		GitCommit:               GitCommit,
+		EnableChunkReanalysis:   cfg.ChunkReanalysisEnabled,
+		EnableSessionReanalysis: cfg.SessionReanalysisEnabled,
 	})
 
 	// Initialize Auth Service

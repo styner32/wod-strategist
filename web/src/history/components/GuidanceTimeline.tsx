@@ -9,10 +9,15 @@ interface Props {
   currentTime: number;
   selectedChunkId?: number;
   feedbackByChunk: Map<number, AnalysisFeedback>;
+  selectedReanalysisChunkIds: ReadonlySet<number>;
+  bulkRunStatusByChunk: ReadonlyMap<number, string>;
+  reanalysisBusy: boolean;
+  reanalysisSelectionLimitReached: boolean;
   onSeek: (time: number) => void;
   onInspect: (chunk: ChunkAnalysisResult) => void;
   onCorrect: (chunk: ChunkAnalysisResult) => void;
   onReanalyze: (chunk: ChunkAnalysisResult) => void;
+  onToggleReanalysisSelection: (chunkId: number) => void;
 }
 
 function chunkStart(chunk: ChunkAnalysisResult) {
@@ -83,15 +88,28 @@ function correctedLabel(feedback: AnalysisFeedback) {
   return 'Correction saved';
 }
 
+function bulkStatusClasses(status: string) {
+  if (status === 'COMPLETED') return 'border-success/20 bg-success/5 text-success';
+  if (status === 'QUEUED' || status === 'RUNNING') {
+    return 'border-warning/20 bg-warning/5 text-warning';
+  }
+  return 'border-error/20 bg-error/5 text-error';
+}
+
 export function GuidanceTimeline({
   chunks,
   currentTime,
   selectedChunkId,
   feedbackByChunk,
+  selectedReanalysisChunkIds,
+  bulkRunStatusByChunk,
+  reanalysisBusy,
+  reanalysisSelectionLimitReached,
   onSeek,
   onInspect,
   onCorrect,
   onReanalyze,
+  onToggleReanalysisSelection,
 }: Props) {
   const sorted = [...chunks].sort((a, b) => {
     const aStart = chunkStart(a);
@@ -141,7 +159,9 @@ export function GuidanceTimeline({
           {sorted.map((chunk, index) => {
             const isActive = index === activeIndex;
             const isSelected = chunk.id === selectedChunkId;
+            const isSelectedForReanalysis = selectedReanalysisChunkIds.has(chunk.id);
             const feedback = feedbackByChunk.get(chunk.id);
+            const bulkRunStatus = bulkRunStatusByChunk.get(chunk.id);
             const movement = chunk.exercise_type
               ?? chunk.structured_inference?.observed_movement_name
               ?? null;
@@ -163,6 +183,17 @@ export function GuidanceTimeline({
                 }`}
               >
                 <div className="flex flex-wrap items-center gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-xs font-medium text-text-secondary focus-within:ring-2 focus-within:ring-accent">
+                    <input
+                      type="checkbox"
+                      checked={isSelectedForReanalysis}
+                      onChange={() => onToggleReanalysisSelection(chunk.id)}
+                      disabled={reanalysisBusy || (!isSelectedForReanalysis && reanalysisSelectionLimitReached)}
+                      className="h-3.5 w-3.5 accent-accent disabled:cursor-not-allowed"
+                    />
+                    Select
+                    <span className="sr-only">chunk {chunk.id} for bulk re-analysis</span>
+                  </label>
                   <span className="font-mono text-xs text-text-muted">
                     {formatTime(start)}–{formatTime(end)}
                   </span>
@@ -178,6 +209,12 @@ export function GuidanceTimeline({
                 {feedback && (
                   <p className="mt-2 rounded-md border border-success/20 bg-success/5 px-2 py-1.5 text-xs text-success">
                     Corrected by you: {correctedLabel(feedback)}
+                  </p>
+                )}
+
+                {bulkRunStatus && (
+                  <p className={`mt-2 rounded-md border px-2 py-1.5 text-xs ${bulkStatusClasses(bulkRunStatus)}`}>
+                    Bulk re-analysis: {bulkRunStatus.replaceAll('_', ' ').toLowerCase()}
                   </p>
                 )}
 
@@ -216,7 +253,8 @@ export function GuidanceTimeline({
                   <button
                     type="button"
                     onClick={() => onReanalyze(chunk)}
-                    className="rounded-md border border-accent/40 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent"
+                    disabled={reanalysisBusy}
+                    className="rounded-md border border-accent/40 px-2.5 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Re-analyze
                   </button>

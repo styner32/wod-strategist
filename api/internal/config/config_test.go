@@ -67,6 +67,22 @@ var _ = Describe("InitServer", func() {
 		Expect(cfg.ChunkReanalysisEnabled).To(BeTrue())
 	})
 
+	It("keeps session re-analysis disabled unless explicitly enabled", func() {
+		setEnv("ENABLE_SESSION_REANALYSIS", "")
+
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.SessionReanalysisEnabled).To(BeFalse())
+	})
+
+	It("enables session re-analysis from an explicit true value", func() {
+		setEnv("ENABLE_SESSION_REANALYSIS", "TrUe")
+
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.SessionReanalysisEnabled).To(BeTrue())
+	})
+
 	It("returns an error listing all missing required variables", func() {
 		setEnv("DATABASE_URL", "")
 		setEnv("REDIS_URL", "")

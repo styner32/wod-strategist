@@ -23,8 +23,8 @@ interface Props {
   onUseCandidate: (correction: FeedbackCorrection, runId: number) => void;
 }
 
-function runId(run: ChunkReanalysisRun) {
-  return run.id ?? run.run_id;
+function runId(run?: ChunkReanalysisRun) {
+  return run?.id ?? run?.run_id;
 }
 
 function mediaStart(chunk: ChunkAnalysisResult) {

@@ -458,22 +458,16 @@ func selectChunkDebugSessionVideo(objects []string) string {
 	bestScore := 0
 	for _, object := range objects {
 		base := strings.ToLower(filepath.Base(object))
-		if !strings.HasSuffix(base, ".mp4") || strings.HasPrefix(base, "chunk_") ||
-			strings.HasPrefix(base, "split_chunk_") || strings.HasPrefix(base, "hl_") {
-			continue
-		}
-		score := 50
+		score := 0
 		switch {
 		case base == "analysis.mp4":
 			score = 110
 		case base == "merged.mp4":
 			score = 100
-		case strings.Contains(base, "_merged_"):
+		case strings.Contains(base, "_merged_") && strings.HasSuffix(base, ".mp4"):
 			score = 95
-		case strings.Contains(base, "_encoded"):
+		case strings.Contains(base, "_encoded") && strings.HasSuffix(base, ".mp4"):
 			score = 80
-		case base == "hardsubbed.mp4" || strings.Contains(base, "_hardsubbed_"):
-			score = 40
 		}
 		if score > bestScore {
 			best = object

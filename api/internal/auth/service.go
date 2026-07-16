@@ -204,6 +204,7 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uint, password strin
 			for _, model := range []any{
 				&db.AnalysisFeedback{},
 				&db.ChunkReanalysisRun{},
+				&db.SessionReanalysisRun{},
 				&db.AnalysisResult{},
 				&db.ChunkAnalysisResult{},
 				&db.HighlightResult{},

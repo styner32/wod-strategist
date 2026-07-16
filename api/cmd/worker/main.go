@@ -83,6 +83,7 @@ func main() {
 	mux.HandleFunc(worker.TypeVerifyHighlights, w.HandleVerifyHighlightsTask)
 	mux.HandleFunc(worker.TypeGenerateHardSub, w.HandleGenerateHardSubTask)
 	mux.HandleFunc(worker.TypeChunkDebugReanalysis, w.HandleChunkDebugReanalysisTask)
+	mux.HandleFunc(worker.TypeSessionDebugReanalysis, w.HandleSessionDebugReanalysisTask)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")

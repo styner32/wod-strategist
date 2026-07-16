@@ -28,15 +28,16 @@ type Common struct {
 
 type Server struct {
 	Common
-	APISecret              string
-	JWTSigningSecret       string
-	GeminiAPIKey           string // GEMINI_API_KEY — optional; enables /parse-workout-image endpoint
-	Port                   string
-	DevAllowedOrigins      []string
-	WebOrigin              string // WEB_ORIGIN — production web app origin (e.g. https://app.wod-strategist.com)
-	CookieDomain           string // COOKIE_DOMAIN — domain for auth cookie (e.g. .wod-strategist.com); empty = origin-only
-	CookieSecure           bool   // COOKIE_SECURE — set Secure flag on cookie; default true in prod, false for local dev
-	ChunkReanalysisEnabled bool   // ENABLE_CHUNK_REANALYSIS — owner-only web debugging; default false
+	APISecret                string
+	JWTSigningSecret         string
+	GeminiAPIKey             string // GEMINI_API_KEY — optional; enables /parse-workout-image endpoint
+	Port                     string
+	DevAllowedOrigins        []string
+	WebOrigin                string // WEB_ORIGIN — production web app origin (e.g. https://app.wod-strategist.com)
+	CookieDomain             string // COOKIE_DOMAIN — domain for auth cookie (e.g. .wod-strategist.com); empty = origin-only
+	CookieSecure             bool   // COOKIE_SECURE — set Secure flag on cookie; default true in prod, false for local dev
+	ChunkReanalysisEnabled   bool   // ENABLE_CHUNK_REANALYSIS — owner-only web debugging; default false
+	SessionReanalysisEnabled bool   // ENABLE_SESSION_REANALYSIS — owner-only whole-workout debugging; default false
 }
 
 type Worker struct {
@@ -64,15 +65,16 @@ func InitServer() (Server, error) {
 			GCSBucketName: strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
 			AppEnv:        appEnv,
 		},
-		APISecret:              strings.TrimSpace(os.Getenv("API_SECRET")),
-		JWTSigningSecret:       strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
-		GeminiAPIKey:           strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
-		Port:                   strings.TrimSpace(os.Getenv("PORT")),
-		DevAllowedOrigins:      parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
-		WebOrigin:              strings.TrimSpace(os.Getenv("WEB_ORIGIN")),
-		CookieDomain:           strings.TrimSpace(os.Getenv("COOKIE_DOMAIN")),
-		CookieSecure:           !strings.EqualFold(strings.TrimSpace(os.Getenv("COOKIE_SECURE")), "false"),
-		ChunkReanalysisEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_CHUNK_REANALYSIS")), "true"),
+		APISecret:                strings.TrimSpace(os.Getenv("API_SECRET")),
+		JWTSigningSecret:         strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
+		GeminiAPIKey:             strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		Port:                     strings.TrimSpace(os.Getenv("PORT")),
+		DevAllowedOrigins:        parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
+		WebOrigin:                strings.TrimSpace(os.Getenv("WEB_ORIGIN")),
+		CookieDomain:             strings.TrimSpace(os.Getenv("COOKIE_DOMAIN")),
+		CookieSecure:             !strings.EqualFold(strings.TrimSpace(os.Getenv("COOKIE_SECURE")), "false"),
+		ChunkReanalysisEnabled:   strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_CHUNK_REANALYSIS")), "true"),
+		SessionReanalysisEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_SESSION_REANALYSIS")), "true"),
 	}
 	// Merge web origin into the CORS allowlist so the web SPA is always permitted.
 	if cfg.WebOrigin != "" {

@@ -30,6 +30,18 @@ var _ = Describe("chunk re-analysis response helpers", func() {
 		Expect(selectSessionVideoObject(objects, true)).To(Equal("videos/1/s/analysis.mp4"))
 	})
 
+	It("never treats an arbitrary retained mobile chunk or hardsub as a session video", func() {
+		objects := []string{
+			"videos/1/s/A1B2C3D4.mp4",
+			"videos/1/s/hardsubbed.mp4",
+			"videos/1/s/hl_full_abcd.mp4",
+		}
+		Expect(selectSessionVideoObject(objects, true)).To(BeEmpty())
+		Expect(selectSessionVideoObject([]string{
+			"videos/WOD-2026-01-01-12-00_encoded.mp4",
+		}, true)).To(Equal("videos/WOD-2026-01-01-12-00_encoded.mp4"))
+	})
+
 	It("renders only safe candidate and token fields", func() {
 		candidate, err := json.Marshal(ChunkReanalysisCandidateResponse{
 			ExerciseType:    "Pull-up",

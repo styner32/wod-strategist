@@ -166,6 +166,67 @@ export interface ChunkReanalysisRun {
   updated_at?: string;
 }
 
+export interface CreateChunkReanalysisResponse {
+  run_id: number;
+  task_id: string;
+  status: ReanalysisStatus;
+}
+
+export type SessionReanalysisStatus =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'VIDEO_UNAVAILABLE'
+  | 'CONTEXT_UNAVAILABLE';
+
+export interface SessionReanalysisCandidate {
+  output: string;
+  workout_type?: string;
+  session_score?: string;
+  highlight_segments?: string | unknown[];
+}
+
+export interface SessionReanalysisRun {
+  id: number;
+  session_id: string;
+  task_id?: string;
+  status: SessionReanalysisStatus;
+  candidate?: SessionReanalysisCandidate | null;
+  model?: string | null;
+  prompt_version?: string | null;
+  prompt_hash?: string | null;
+  schema_version?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  token_usage?: ReanalysisTokenUsage | null;
+  duration_ms?: number | null;
+  error?: string | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  updated_at?: string;
+}
+
+export interface SessionReanalysisReadiness {
+  can_create: boolean;
+  active_chunk_runs: number;
+  video_available: boolean;
+  active_session_run_id?: number | null;
+  blocked_reason?: string | null;
+}
+
+export interface SessionReanalysisListResponse {
+  runs: SessionReanalysisRun[];
+  readiness: SessionReanalysisReadiness;
+}
+
+export interface CreateSessionReanalysisResponse {
+  run_id: number;
+  task_id: string;
+  status: SessionReanalysisStatus;
+}
+
 export interface ChunkPlayUrlResponse {
   session_id?: string;
   chunk_id?: number;
@@ -252,7 +313,7 @@ export const historyApi = {
     sessionId: string,
     chunkId: number,
     clientRequestId: string,
-  ) => api.post<ChunkReanalysisRun>(
+  ) => api.post<CreateChunkReanalysisResponse>(
     `/sessions/${sessionId}/chunks/${chunkId}/reanalyses`,
     { client_request_id: clientRequestId },
   ),
@@ -266,6 +327,18 @@ export const historyApi = {
     api.get<ChunkReanalysisRun>(
       `/sessions/${sessionId}/chunks/${chunkId}/reanalyses/${runId}`,
     ),
+
+  createSessionReanalysis: (sessionId: string, clientRequestId: string) =>
+    api.post<CreateSessionReanalysisResponse>(
+      `/sessions/${sessionId}/reanalyses`,
+      { client_request_id: clientRequestId },
+    ),
+
+  listSessionReanalyses: (sessionId: string) =>
+    api.get<SessionReanalysisListResponse>(`/sessions/${sessionId}/reanalyses`),
+
+  getSessionReanalysis: (sessionId: string, runId: number) =>
+    api.get<SessionReanalysisRun>(`/sessions/${sessionId}/reanalyses/${runId}`),
 
   getVideoDownloadUrl: (
     sessionId: string,

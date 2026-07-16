@@ -50,6 +50,15 @@ var _ = Describe("chunk debug re-analysis helpers", func() {
 			objects := []string{"videos/P1-WOD-2026-01-01-12-00_merged_123.mp4"}
 			Expect(selectChunkDebugSessionVideo(objects)).To(Equal(objects[0]))
 		})
+
+		It("rejects arbitrary retained mobile chunks and derived hardsubs", func() {
+			objects := []string{
+				"videos/1/s/A1B2C3D4.mp4",
+				"videos/1/s/hardsubbed.mp4",
+				"videos/1/s/hl_full_abcd.mp4",
+			}
+			Expect(selectChunkDebugSessionVideo(objects)).To(BeEmpty())
+		})
 	})
 
 	Describe("parseChunkDebugCandidate", func() {

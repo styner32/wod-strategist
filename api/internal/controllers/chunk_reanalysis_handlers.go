@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
@@ -20,6 +21,7 @@ import (
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -142,6 +144,11 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "client_request_id was already used for another chunk"})
 			return
 		}
+		if err := ctl.ensureChunkReanalysisTask(c.Request.Context(), &existing); err != nil {
+			logger.Log.Error("failed to recover idempotent chunk re-analysis task", zap.Uint("run_id", existing.ID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue re-analysis"})
+			return
+		}
 		c.JSON(http.StatusAccepted, CreateChunkReanalysisResponse{
 			RunID: existing.ID, TaskID: existing.TaskID, Status: existing.Status,
 		})
@@ -150,33 +157,6 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		logger.Log.Error("failed to check re-analysis idempotency", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create re-analysis"})
-		return
-	}
-
-	var activeCount int64
-	if err := ctl.db.WithContext(c.Request.Context()).Model(&db.ChunkReanalysisRun{}).
-		Where("chunk_analysis_result_id = ? AND status IN ?", chunkID,
-			[]string{db.ChunkReanalysisStatusQueued, db.ChunkReanalysisStatusRunning}).
-		Count(&activeCount).Error; err != nil {
-		logger.Log.Error("failed to check active re-analysis", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create re-analysis"})
-		return
-	}
-	if activeCount > 0 {
-		c.JSON(http.StatusConflict, gin.H{"error": "a re-analysis is already active for this chunk"})
-		return
-	}
-
-	var recentCount int64
-	if err := ctl.db.WithContext(c.Request.Context()).Model(&db.ChunkReanalysisRun{}).
-		Where("profile_id = ? AND created_at >= ?", target.ProfileID, time.Now().Add(-chunkReanalysisWindow)).
-		Count(&recentCount).Error; err != nil {
-		logger.Log.Error("failed to check re-analysis quota", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create re-analysis"})
-		return
-	}
-	if recentCount >= chunkReanalysisDailyQuota {
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "daily re-analysis limit reached"})
 		return
 	}
 
@@ -201,55 +181,93 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 		ProfileID:                  target.ProfileID,
 		ChunkAnalysisResultID:      target.ID,
 		ClientRequestID:            req.ClientRequestID,
+		TaskID:                     uuid.NewString(),
 		Status:                     db.ChunkReanalysisStatusQueued,
 		SourceContextSnapshot:      db.JSONDocument(`{}`),
 		OriginalPredictionSnapshot: db.JSONDocument(originalSnapshot),
 		StructuredCandidate:        db.JSONDocument(`{}`),
 	}
-	if err := ctl.db.WithContext(c.Request.Context()).Create(&run).Error; err != nil {
-		if isChunkReanalysisUniqueConflict(err) {
-			var concurrent db.ChunkReanalysisRun
-			if lookupErr := ctl.db.WithContext(c.Request.Context()).
-				Where("profile_id = ? AND client_request_id = ?", target.ProfileID, req.ClientRequestID).
-				First(&concurrent).Error; lookupErr == nil &&
-				concurrent.SessionID == sessionID && concurrent.ChunkAnalysisResultID == chunkID {
-				c.JSON(http.StatusAccepted, CreateChunkReanalysisResponse{
-					RunID: concurrent.ID, TaskID: concurrent.TaskID, Status: concurrent.Status,
-				})
-				return
-			}
-			c.JSON(http.StatusConflict, gin.H{"error": "a re-analysis is already active or the request was already submitted"})
-			return
+	idempotentExisting := false
+	createErr := ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		// Serialize quota and cross-mode active-run checks with whole-session
+		// re-analysis creation for this profile.
+		var lockedProfile db.Profile
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&lockedProfile, target.ProfileID).Error; err != nil {
+			return err
 		}
-		logger.Log.Error("failed to create re-analysis run", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create re-analysis"})
+
+		var concurrent db.ChunkReanalysisRun
+		err := tx.Where("profile_id = ? AND client_request_id = ?", target.ProfileID, req.ClientRequestID).
+			First(&concurrent).Error
+		if err == nil {
+			if concurrent.SessionID != sessionID || concurrent.ChunkAnalysisResultID != chunkID {
+				return errChunkReanalysisKeyConflict
+			}
+			run = concurrent
+			idempotentExisting = true
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		var count int64
+		if err := tx.Model(&db.SessionReanalysisRun{}).
+			Where("session_id = ? AND profile_id = ? AND status IN ?", sessionID, target.ProfileID,
+				[]string{db.SessionReanalysisStatusQueued, db.SessionReanalysisStatusRunning}).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return errChunkReanalysisSessionActive
+		}
+		if err := tx.Model(&db.ChunkReanalysisRun{}).
+			Where("chunk_analysis_result_id = ? AND status IN ?", chunkID,
+				[]string{db.ChunkReanalysisStatusQueued, db.ChunkReanalysisStatusRunning}).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return errChunkReanalysisActive
+		}
+		if err := tx.Model(&db.ChunkReanalysisRun{}).
+			Where("profile_id = ? AND created_at >= ?", target.ProfileID, time.Now().Add(-chunkReanalysisWindow)).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count >= chunkReanalysisDailyQuota {
+			return errChunkReanalysisQuota
+		}
+		return tx.Create(&run).Error
+	})
+	if createErr != nil {
+		switch {
+		case errors.Is(createErr, errChunkReanalysisSessionActive):
+			c.JSON(http.StatusConflict, gin.H{"error": "whole-workout re-analysis is active for this session"})
+		case errors.Is(createErr, errChunkReanalysisActive):
+			c.JSON(http.StatusConflict, gin.H{"error": "a re-analysis is already active for this chunk"})
+		case errors.Is(createErr, errChunkReanalysisQuota):
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "daily re-analysis limit reached"})
+		case errors.Is(createErr, errChunkReanalysisKeyConflict), isChunkReanalysisUniqueConflict(createErr):
+			c.JSON(http.StatusConflict, gin.H{"error": "a re-analysis is already active or the request was already submitted"})
+		default:
+			logger.Log.Error("failed to create re-analysis run", zap.Error(createErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create re-analysis"})
+		}
 		return
 	}
 
-	task, err := worker.NewChunkDebugReanalysisTask(run.ID)
-	if err != nil {
-		ctl.markReanalysisEnqueueFailed(c.Request.Context(), run.ID)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create re-analysis task"})
-		return
-	}
-	info, err := ctl.queueClient.Enqueue(task,
-		asynq.MaxRetry(chunkReanalysisTaskMaxTry),
-		asynq.Timeout(chunkReanalysisTaskTimeout))
-	if err != nil {
-		ctl.markReanalysisEnqueueFailed(c.Request.Context(), run.ID)
+	if err := ctl.ensureChunkReanalysisTask(c.Request.Context(), &run); err != nil {
+		if !idempotentExisting {
+			ctl.markReanalysisEnqueueFailed(c.Request.Context(), run.ID)
+		}
 		logger.Log.Error("failed to enqueue chunk re-analysis", zap.Uint("run_id", run.ID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue re-analysis"})
 		return
 	}
 
-	run.TaskID = info.ID
-	if err := ctl.db.WithContext(c.Request.Context()).Model(&db.ChunkReanalysisRun{}).
-		Where("id = ?", run.ID).Update("task_id", info.ID).Error; err != nil {
-		logger.Log.Warn("failed to persist chunk re-analysis task ID", zap.Uint("run_id", run.ID), zap.Error(err))
-	}
-
 	c.JSON(http.StatusAccepted, CreateChunkReanalysisResponse{
-		RunID: run.ID, TaskID: info.ID, Status: db.ChunkReanalysisStatusQueued,
+		RunID: run.ID, TaskID: run.TaskID, Status: run.Status,
 	})
 }
 
@@ -386,8 +404,12 @@ func (ctl *Controller) loadOwnedChunkReanalysisTarget(c *gin.Context, sessionID 
 }
 
 var (
-	errChunkVideoUnavailable    = errors.New("chunk video unavailable")
-	errChunkIntervalUnavailable = errors.New("chunk interval unavailable")
+	errChunkVideoUnavailable        = errors.New("chunk video unavailable")
+	errChunkIntervalUnavailable     = errors.New("chunk interval unavailable")
+	errChunkReanalysisActive        = errors.New("chunk re-analysis active")
+	errChunkReanalysisSessionActive = errors.New("whole-session re-analysis active")
+	errChunkReanalysisQuota         = errors.New("chunk re-analysis quota reached")
+	errChunkReanalysisKeyConflict   = errors.New("chunk re-analysis idempotency key conflict")
 )
 
 func (ctl *Controller) resolveChunkPlaybackSource(ctx context.Context, target *chunkReanalysisTarget) (string, string, *float64, *float64, error) {
@@ -438,11 +460,7 @@ func selectSessionVideoObject(objects []string, preferAnalysis bool) string {
 	bestScore := 0
 	for _, object := range objects {
 		base := strings.ToLower(filepath.Base(object))
-		if !strings.HasSuffix(base, ".mp4") || strings.HasPrefix(base, "chunk_") ||
-			strings.HasPrefix(base, "split_chunk_") || strings.HasPrefix(base, "hl_") {
-			continue
-		}
-		score := 50
+		score := 0
 		switch {
 		case base == "analysis.mp4":
 			if preferAnalysis {
@@ -456,11 +474,9 @@ func selectSessionVideoObject(objects []string, preferAnalysis bool) string {
 			} else {
 				score = 110
 			}
-		case strings.Contains(base, "_merged_"):
+		case strings.Contains(base, "_merged_") && strings.HasSuffix(base, ".mp4"):
 			score = 95
-		case base == "hardsubbed.mp4" || strings.Contains(base, "_hardsubbed_"):
-			score = 40
-		case strings.Contains(base, "_encoded"):
+		case strings.Contains(base, "_encoded") && strings.HasSuffix(base, ".mp4"):
 			score = 70
 		}
 		if score > bestScore {
@@ -524,6 +540,45 @@ func chunkReanalysisRunResponse(run db.ChunkReanalysisRun) ChunkReanalysisRunRes
 		}
 	}
 	return response
+}
+
+// ensureChunkReanalysisTask makes the queued database row a recoverable
+// outbox: the task ID exists before enqueue, and an idempotent retry can safely
+// enqueue the same task after a server crash. A task-ID conflict means the
+// queue already has that exact task.
+func (ctl *Controller) ensureChunkReanalysisTask(ctx context.Context, run *db.ChunkReanalysisRun) error {
+	if run.Status != db.ChunkReanalysisStatusQueued {
+		return nil
+	}
+	if run.TaskID == "" {
+		candidate := uuid.NewString()
+		result := ctl.db.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).
+			Where("id = ? AND task_id = ''", run.ID).Update("task_id", candidate)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected > 0 {
+			run.TaskID = candidate
+		} else if err := ctl.db.WithContext(ctx).Select("task_id", "status").First(run, run.ID).Error; err != nil {
+			return err
+		}
+		if run.Status != db.ChunkReanalysisStatusQueued {
+			return nil
+		}
+	}
+
+	task, err := worker.NewChunkDebugReanalysisTask(run.ID)
+	if err != nil {
+		return err
+	}
+	_, err = ctl.queueClient.Enqueue(task,
+		asynq.TaskID(run.TaskID),
+		asynq.MaxRetry(chunkReanalysisTaskMaxTry),
+		asynq.Timeout(chunkReanalysisTaskTimeout))
+	if errors.Is(err, asynq.ErrTaskIDConflict) {
+		return nil
+	}
+	return err
 }
 
 func (ctl *Controller) markReanalysisEnqueueFailed(ctx context.Context, runID uint) {

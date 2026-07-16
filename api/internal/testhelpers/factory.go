@@ -261,3 +261,58 @@ func CreateChunkReanalysisRun(dbConn *gorm.DB, runAttr *db.ChunkReanalysisRun) d
 	g.Expect(dbConn.Create(&run).Error).NotTo(g.HaveOccurred())
 	return run
 }
+
+func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRun) db.SessionReanalysisRun {
+	run := db.SessionReanalysisRun{
+		SessionID:                runAttr.SessionID,
+		ProfileID:                runAttr.ProfileID,
+		ClientRequestID:          runAttr.ClientRequestID,
+		TaskID:                   runAttr.TaskID,
+		Status:                   runAttr.Status,
+		SourceGCSURI:             runAttr.SourceGCSURI,
+		SourceContextSnapshot:    runAttr.SourceContextSnapshot,
+		OriginalAnalysisSnapshot: runAttr.OriginalAnalysisSnapshot,
+		Output:                   runAttr.Output,
+		HighlightSegments:        runAttr.HighlightSegments,
+		SessionScore:             runAttr.SessionScore,
+		WorkoutType:              runAttr.WorkoutType,
+		Model:                    runAttr.Model,
+		PromptVersion:            runAttr.PromptVersion,
+		PromptHash:               runAttr.PromptHash,
+		SchemaVersion:            runAttr.SchemaVersion,
+		PromptTokens:             runAttr.PromptTokens,
+		CandidateTokens:          runAttr.CandidateTokens,
+		TotalTokens:              runAttr.TotalTokens,
+		DurationMs:               runAttr.DurationMs,
+		SafeError:                runAttr.SafeError,
+		GeminiFileURI:            runAttr.GeminiFileURI,
+		GeminiFileName:           runAttr.GeminiFileName,
+		GeminiMIMEType:           runAttr.GeminiMIMEType,
+		GeminiFileExpiresAt:      runAttr.GeminiFileExpiresAt,
+		StartedAt:                runAttr.StartedAt,
+		CompletedAt:              runAttr.CompletedAt,
+		CreatedAt:                runAttr.CreatedAt,
+		UpdatedAt:                runAttr.UpdatedAt,
+	}
+	if run.ClientRequestID == "" {
+		run.ClientRequestID = uuid.NewString()
+	}
+	if run.Status == "" {
+		run.Status = db.SessionReanalysisStatusQueued
+	}
+	if len(run.SourceContextSnapshot) == 0 {
+		run.SourceContextSnapshot = db.JSONDocument(`{}`)
+	}
+	if len(run.OriginalAnalysisSnapshot) == 0 {
+		run.OriginalAnalysisSnapshot = db.JSONDocument(`{}`)
+	}
+	if run.SessionScore == "" {
+		run.SessionScore = `{}`
+	}
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = time.Now().UTC()
+	}
+
+	g.Expect(dbConn.Create(&run).Error).NotTo(g.HaveOccurred())
+	return run
+}

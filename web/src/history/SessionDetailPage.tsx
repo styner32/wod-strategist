@@ -1,15 +1,18 @@
 import { useParams, Link } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   historyApi,
   type AnalysisFeedback,
   type ChunkAnalysisResult,
+  type ChunkReanalysisRun,
   type FeedbackCorrection,
   type FeedbackListResponse,
   type ReanalysisListResponse,
+  type ReanalysisStatus,
   type VideoKind,
 } from '../api/history';
+import { ApiError } from '../api/client';
 import { useAuth } from '../auth/useAuth';
 import { ChunkMetricsChart } from './components/ChunkMetricsChart';
 import { GuidanceTimeline } from './components/GuidanceTimeline';
@@ -18,6 +21,7 @@ import {
   type FeedbackDialogValue,
 } from './components/FeedbackDialog';
 import { ChunkInspector } from './components/ChunkInspector';
+import { SessionReanalysisPanel } from './components/SessionReanalysisPanel';
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -34,6 +38,26 @@ const VIDEO_KIND_LABELS: Record<VideoKind, { label: string; icon: string; desc: 
   hardsubbed: { label: 'Guided', icon: '📝', desc: 'With AI coaching overlay' },
   encoded: { label: 'Encoded', icon: '🎬', desc: 'Compressed version' },
 };
+
+const BULK_REANALYSIS_LIMIT = 20;
+
+interface BulkReanalysisFailure {
+  chunkId: number;
+  message: string;
+}
+
+interface BulkQueuedRun {
+  chunkId: number;
+  runId: number;
+  taskId: string;
+  status: ReanalysisStatus;
+}
+
+interface BulkReanalysisResult {
+  requestedChunkIds: number[];
+  queuedRuns: BulkQueuedRun[];
+  failures: BulkReanalysisFailure[];
+}
 
 interface FeedbackDialogState {
   targetType: 'session' | 'chunk';
@@ -64,6 +88,20 @@ function feedbackError(error: unknown) {
   return error instanceof Error ? error.message : 'Unable to save feedback.';
 }
 
+function isTerminalChunkReanalysisStatus(status?: ReanalysisStatus) {
+  return status != null && status !== 'QUEUED' && status !== 'RUNNING';
+}
+
+function orderChunksForTimeline(chunks: ChunkAnalysisResult[]) {
+  return [...chunks].sort((a, b) => {
+    const aStart = a.media_start_secs ?? null;
+    const bStart = b.media_start_secs ?? null;
+    if (aStart == null) return bStart == null ? a.id - b.id : 1;
+    if (bStart == null) return -1;
+    return aStart - bStart;
+  });
+}
+
 export function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const { user } = useAuth();
@@ -75,6 +113,10 @@ export function SessionDetailPage() {
   const [selectedKind, setSelectedKind] = useState<VideoKind>();
   const [showFullAnalysis, setShowFullAnalysis] = useState(false);
   const [selectedChunkId, setSelectedChunkId] = useState<number>();
+  const [selectedReanalysisChunkIds, setSelectedReanalysisChunkIds] = useState<Set<number>>(
+    () => new Set(),
+  );
+  const [bulkReanalysisResult, setBulkReanalysisResult] = useState<BulkReanalysisResult>();
   const [dialog, setDialog] = useState<FeedbackDialogState>();
   const closeFeedbackDialog = useCallback(() => setDialog(undefined), []);
 
@@ -107,6 +149,7 @@ export function SessionDetailPage() {
     }
     return [...byId.values()];
   }, [legacyChunks, sessionAnalysis?.chunks]);
+  const timelineOrderedChunks = useMemo(() => orderChunksForTimeline(chunks), [chunks]);
   const profileId = analysis?.profile_id
     ?? chunks[0]?.profile_id
     ?? user?.profiles?.[0]?.id;
@@ -167,6 +210,10 @@ export function SessionDetailPage() {
     },
   });
   const runs = normalizeRuns(runResponse);
+  const selectedChunksForReanalysis = useMemo(
+    () => timelineOrderedChunks.filter((chunk) => selectedReanalysisChunkIds.has(chunk.id)),
+    [timelineOrderedChunks, selectedReanalysisChunkIds],
+  );
 
   const invalidateFeedback = async () => {
     await Promise.all([
@@ -231,6 +278,115 @@ export function SessionDetailPage() {
     },
   });
 
+  const bulkReanalysisMutation = useMutation({
+    mutationFn: async (selectedChunks: ChunkAnalysisResult[]): Promise<BulkReanalysisResult> => {
+      const requestedChunkIds = selectedChunks.map((chunk) => chunk.id);
+      const queuedRuns: BulkQueuedRun[] = [];
+      const failures: BulkReanalysisFailure[] = [];
+
+      // Queue sequentially so the server's active-run and rolling-quota checks
+      // see each preceding request before the next one is submitted.
+      for (const [index, chunk] of selectedChunks.entries()) {
+        try {
+          const response = await historyApi.createChunkReanalysis(
+            sessionId!,
+            chunk.id,
+            crypto.randomUUID(),
+          );
+          queuedRuns.push({
+            chunkId: chunk.id,
+            runId: response.run_id,
+            taskId: response.task_id,
+            status: response.status,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Request failed.';
+          failures.push({
+            chunkId: chunk.id,
+            message,
+          });
+
+          if (error instanceof ApiError && (error.status === 429 || error.status === 503)) {
+            for (const notAttempted of selectedChunks.slice(index + 1)) {
+              failures.push({
+                chunkId: notAttempted.id,
+                message: `Not attempted: ${message}`,
+              });
+            }
+            break;
+          }
+        }
+      }
+
+      return { requestedChunkIds, queuedRuns, failures };
+    },
+    onSuccess: async (result) => {
+      await Promise.all(result.requestedChunkIds.map((chunkId) =>
+        queryClient.invalidateQueries({
+          queryKey: ['chunk-reanalyses', sessionId, chunkId],
+        }),
+      ));
+      setBulkReanalysisResult(result);
+      setSelectedReanalysisChunkIds(new Set(result.failures.map((failure) => failure.chunkId)));
+    },
+  });
+
+  const bulkRunQueries = useQueries({
+    queries: (bulkReanalysisResult?.queuedRuns ?? []).map((run) => ({
+      queryKey: ['chunk-reanalysis', sessionId, run.chunkId, run.runId],
+      queryFn: () => historyApi.getChunkReanalysis(sessionId!, run.chunkId, run.runId),
+      enabled: !!sessionId,
+      retry: false,
+      refetchInterval: (query: { state: { data?: ChunkReanalysisRun; dataUpdateCount: number } }) => {
+        const status = query.state.data?.status ?? run.status;
+        if (isTerminalChunkReanalysisStatus(status)) return false;
+        const pollCount = Math.min(query.state.dataUpdateCount, 4);
+        return Math.min(1000 * (2 ** pollCount), 8000);
+      },
+    })),
+  });
+
+  const trackedBulkRuns = (bulkReanalysisResult?.queuedRuns ?? []).map((run, index) => ({
+    ...run,
+    detail: bulkRunQueries[index]?.data,
+    pollingError: bulkRunQueries[index]?.isError ?? false,
+  }));
+  const bulkRunStatusByChunk = new Map<number, string>();
+  for (const run of trackedBulkRuns) {
+    bulkRunStatusByChunk.set(
+      run.chunkId,
+      run.pollingError ? 'STATUS UNAVAILABLE' : (run.detail?.status ?? run.status),
+    );
+  }
+  for (const failure of bulkReanalysisResult?.failures ?? []) {
+    bulkRunStatusByChunk.set(
+      failure.chunkId,
+      failure.message.startsWith('Not attempted:') ? 'NOT ATTEMPTED' : 'REQUEST FAILED',
+    );
+  }
+  const terminalBulkRunCount = trackedBulkRuns.filter((run) =>
+    isTerminalChunkReanalysisStatus(run.detail?.status ?? run.status),
+  ).length;
+  const bulkChunkRunsReady = bulkReanalysisResult != null
+    && bulkReanalysisResult.failures.length === 0
+    && trackedBulkRuns.length > 0
+    && terminalBulkRunCount === trackedBulkRuns.length
+    && trackedBulkRuns.every((run) => !run.pollingError);
+  const unconfirmedBulkCandidateCount = trackedBulkRuns.filter((run) =>
+    (run.detail?.status ?? run.status) === 'COMPLETED'
+      && !currentFeedback.some((feedback) => feedback.reanalysis_run_id === run.runId),
+  ).length;
+  const chunkBatchReadyForSessionReanalysis = bulkReanalysisResult == null || bulkChunkRunsReady;
+  const chunkBatchBlockedReason = bulkReanalysisMutation.isPending
+    ? 'Wait for the selected chunk re-analysis requests to finish queueing.'
+    : bulkReanalysisResult?.failures.length
+      ? 'Resolve or remove the chunk requests that were not queued before re-analyzing the whole workout.'
+      : trackedBulkRuns.some((run) => run.pollingError)
+        ? 'A chunk attempt status could not be refreshed. Retry when its status is available.'
+        : bulkReanalysisResult && !bulkChunkRunsReady
+          ? `Wait for all chunk attempts to finish (${terminalBulkRunCount}/${trackedBulkRuns.length} terminal).`
+          : undefined;
+
   const openCorrection = (chunk: ChunkAnalysisResult) => {
     feedbackMutation.reset();
     undoFeedbackMutation.reset();
@@ -293,6 +449,45 @@ export function SessionDetailPage() {
       'Re-analyze this exact video interval with the current AI analyzer? This incurs an AI call and will not change the original result.',
     );
     if (confirmed) reanalysisMutation.mutate(chunk);
+  };
+
+  const toggleReanalysisSelection = (chunkId: number) => {
+    if (bulkReanalysisMutation.isPending || reanalysisMutation.isPending) return;
+    setBulkReanalysisResult(undefined);
+    setSelectedReanalysisChunkIds((current) => {
+      const next = new Set(current);
+      if (next.has(chunkId)) {
+        next.delete(chunkId);
+      } else if (next.size < BULK_REANALYSIS_LIMIT) {
+        next.add(chunkId);
+      }
+      return next;
+    });
+  };
+
+  const selectAllChunksForReanalysis = () => {
+    setBulkReanalysisResult(undefined);
+    setSelectedReanalysisChunkIds(new Set(
+      timelineOrderedChunks.slice(0, BULK_REANALYSIS_LIMIT).map((chunk) => chunk.id),
+    ));
+  };
+
+  const clearReanalysisSelection = () => {
+    setBulkReanalysisResult(undefined);
+    setSelectedReanalysisChunkIds(new Set());
+  };
+
+  const requestBulkReanalysis = () => {
+    if (selectedChunksForReanalysis.length === 0) return;
+    const count = selectedChunksForReanalysis.length;
+    const confirmed = window.confirm(
+      `Queue exact-interval re-analysis for ${count} selected ${count === 1 ? 'chunk' : 'chunks'}? `
+      + `This makes ${count} separate AI ${count === 1 ? 'call' : 'calls'}, counts toward the rolling quota, and will not change the original results.`,
+    );
+    if (!confirmed) return;
+
+    setBulkReanalysisResult(undefined);
+    bulkReanalysisMutation.mutate(selectedChunksForReanalysis);
   };
 
   const openCandidateCorrection = (
@@ -615,20 +810,113 @@ export function SessionDetailPage() {
 
         {/* Right: Guidance Timeline (2/5 width) */}
         <div className="lg:col-span-2">
-          <div className="lg:sticky lg:top-4">
+          <div className="space-y-3 lg:sticky lg:top-4">
+            <section
+              className="rounded-xl border border-border bg-bg-elevated p-4"
+              aria-labelledby="bulk-reanalysis-heading"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 id="bulk-reanalysis-heading" className="text-sm font-semibold text-text-primary">
+                    Bulk re-analysis
+                  </h2>
+                  <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                    Select up to {BULK_REANALYSIS_LIMIT} chunks below. Each selected chunk uses one AI call;
+                    the server&apos;s rolling quota and active-run checks still apply.
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-md bg-bg-tertiary px-2 py-1 text-xs font-medium text-text-secondary">
+                  {selectedChunksForReanalysis.length}/{BULK_REANALYSIS_LIMIT}
+                </span>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={selectAllChunksForReanalysis}
+                  disabled={chunks.length === 0 || bulkReanalysisMutation.isPending || reanalysisMutation.isPending}
+                  className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-tertiary hover:text-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {chunks.length > BULK_REANALYSIS_LIMIT ? `Select first ${BULK_REANALYSIS_LIMIT}` : 'Select all'}
+                </button>
+                <button
+                  type="button"
+                  onClick={clearReanalysisSelection}
+                  disabled={selectedChunksForReanalysis.length === 0 || bulkReanalysisMutation.isPending}
+                  className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-tertiary hover:text-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={requestBulkReanalysis}
+                  disabled={selectedChunksForReanalysis.length === 0 || bulkReanalysisMutation.isPending || reanalysisMutation.isPending}
+                  className="rounded-md border border-accent/40 px-2.5 py-1.5 text-xs font-semibold text-accent hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {bulkReanalysisMutation.isPending
+                    ? 'Queueing…'
+                    : `Re-analyze selected (${selectedChunksForReanalysis.length})`}
+                </button>
+              </div>
+
+              <div className="mt-3 text-xs" role="status" aria-live="polite">
+                {bulkReanalysisMutation.isPending && (
+                  <p className="text-warning">
+                    Queueing {selectedChunksForReanalysis.length} selected chunks one at a time…
+                  </p>
+                )}
+                {!bulkReanalysisMutation.isPending && bulkReanalysisResult && (
+                  <p className={bulkReanalysisResult.failures.length > 0 ? 'text-warning' : 'text-success'}>
+                    Queued {bulkReanalysisResult.queuedRuns.length} of {bulkReanalysisResult.requestedChunkIds.length} chunks.
+                    {bulkReanalysisResult.failures.length > 0
+                      ? ' Chunks that failed remain selected for review or retry.'
+                      : ` ${terminalBulkRunCount} of ${bulkReanalysisResult.queuedRuns.length} attempts finished.`}
+                  </p>
+                )}
+              </div>
+
+              {bulkReanalysisResult && bulkReanalysisResult.failures.length > 0 && (
+                <details className="mt-2 rounded-md border border-warning/20 bg-warning/5 px-2.5 py-2 text-xs text-warning">
+                  <summary className="cursor-pointer font-medium">
+                    {bulkReanalysisResult.failures.length} not queued
+                  </summary>
+                  <ul className="mt-2 space-y-1 pl-4">
+                    {bulkReanalysisResult.failures.map((failure) => (
+                      <li key={failure.chunkId} className="list-disc">
+                        Chunk {failure.chunkId}: {failure.message}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </section>
+
             <GuidanceTimeline
               chunks={chunks}
               currentTime={currentTime}
               selectedChunkId={selectedChunk?.id}
               feedbackByChunk={feedbackByChunk}
+              selectedReanalysisChunkIds={selectedReanalysisChunkIds}
+              bulkRunStatusByChunk={bulkRunStatusByChunk}
+              reanalysisBusy={bulkReanalysisMutation.isPending || reanalysisMutation.isPending}
+              reanalysisSelectionLimitReached={selectedReanalysisChunkIds.size >= BULK_REANALYSIS_LIMIT}
               onSeek={handleSeek}
               onInspect={showInspector}
               onCorrect={openCorrection}
               onReanalyze={requestReanalysis}
+              onToggleReanalysisSelection={toggleReanalysisSelection}
             />
           </div>
         </div>
       </div>
+
+      <SessionReanalysisPanel
+        sessionId={sessionId!}
+        originalAnalysis={analysis}
+        chunkBatchReady={chunkBatchReadyForSessionReanalysis}
+        chunkBatchBlockedReason={chunkBatchBlockedReason}
+        unconfirmedCandidateCount={unconfirmedBulkCandidateCount}
+      />
 
       {selectedChunk && (
         <div ref={inspectorRef}>
@@ -639,7 +927,8 @@ export function SessionDetailPage() {
             feedback={feedbackByChunk.get(selectedChunk.id)}
             runs={runs}
             runsLoading={runsLoading}
-            creatingRun={reanalysisMutation.isPending}
+            creatingRun={reanalysisMutation.isPending
+              || (bulkReanalysisMutation.isPending && selectedReanalysisChunkIds.has(selectedChunk.id))}
             reanalysisError={reanalysisMutation.isError
               ? feedbackError(reanalysisMutation.error)
               : undefined}

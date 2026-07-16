@@ -122,6 +122,9 @@ var _ = Describe("SetupRouter", func() {
 			"POST /api/v1/retry-analysis",
 			"POST /api/v1/generate-hardsub",
 			"POST /api/v1/debug/telemetry",
+			"POST /api/v1/sessions/:session_id/reanalyses",
+			"GET /api/v1/sessions/:session_id/reanalyses",
+			"GET /api/v1/sessions/:session_id/reanalyses/:run_id",
 		}
 		for _, route := range expectedRoutes {
 			Expect(actualRoutes).To(HaveKey(route))

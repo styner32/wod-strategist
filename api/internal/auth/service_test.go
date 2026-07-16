@@ -229,6 +229,11 @@ var _ = Describe("Auth Service", func() {
 				ChunkAnalysisResultID: chunk.ID,
 				Status:                db.ChunkReanalysisStatusCompleted,
 			})
+			testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{
+				SessionID: "sess-delete-001",
+				ProfileID: profile.ID,
+				Status:    db.SessionReanalysisStatusCompleted,
+			})
 
 			Expect(dbConn.Create(&db.TokenUsage{
 				SessionID:       "sess-delete-001",
@@ -277,6 +282,10 @@ var _ = Describe("Auth Service", func() {
 			var reanalysisCount int64
 			dbConn.Model(&db.ChunkReanalysisRun{}).Where("profile_id = ?", profileID).Count(&reanalysisCount)
 			Expect(reanalysisCount).To(BeZero())
+
+			var sessionReanalysisCount int64
+			dbConn.Model(&db.SessionReanalysisRun{}).Where("profile_id = ?", profileID).Count(&sessionReanalysisCount)
+			Expect(sessionReanalysisCount).To(BeZero())
 		})
 
 		It("rejects wrong password", func() {
