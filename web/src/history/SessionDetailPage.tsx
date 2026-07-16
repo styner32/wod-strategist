@@ -39,6 +39,31 @@ const VIDEO_KIND_LABELS: Record<VideoKind, { label: string; icon: string; desc: 
   encoded: { label: 'Encoded', icon: '🎬', desc: 'Compressed version' },
 };
 
+const VIDEO_KINDS: VideoKind[] = ['merged', 'hardsubbed', 'encoded'];
+
+async function loadTargetVideo(
+  sessionId: string,
+  profileId: number,
+  selectedKind?: VideoKind,
+) {
+  const kinds: VideoKind[] = selectedKind ? [selectedKind] : ['merged', 'encoded'];
+  let unavailableError: ApiError | undefined;
+
+  for (const kind of kinds) {
+    try {
+      return await historyApi.getVideoDownloadUrl(sessionId, profileId, kind);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        unavailableError = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw unavailableError ?? new Error('Video not available');
+}
+
 const BULK_REANALYSIS_LIMIT = 20;
 
 interface BulkReanalysisFailure {
@@ -505,32 +530,18 @@ export function SessionDetailPage() {
     });
   };
 
-  // Fetch available videos from history to know which kinds exist
-  const { data: historyList } = useQuery({
-    queryKey: ['history', profileId],
-    queryFn: () => historyApi.list(profileId!),
-    enabled: !!profileId,
-  });
-
-  const historyItem = historyList?.find((h) => h.session_id === sessionId);
-  const availableVideos = (historyItem?.available_videos ?? []) as VideoKind[];
-  const effectiveVideoKind = selectedKind && availableVideos.includes(selectedKind)
-    ? selectedKind
-    : availableVideos.includes('hardsubbed')
-      ? 'hardsubbed'
-      : availableVideos.includes('merged')
-        ? 'merged'
-        : availableVideos.includes('encoded')
-          ? 'encoded'
-          : 'merged';
-
-  const { data: videoUrl } = useQuery({
-    queryKey: ['video-url', sessionId, effectiveVideoKind],
-    queryFn: () =>
-      historyApi.getVideoDownloadUrl(sessionId!, profileId!, effectiveVideoKind),
-    enabled: !!sessionId && !!profileId && availableVideos.includes(effectiveVideoKind),
+  const {
+    data: videoUrl,
+    error: videoError,
+    isLoading: videoLoading,
+  } = useQuery({
+    queryKey: ['video-url', sessionId, selectedKind ?? 'default'],
+    queryFn: () => loadTargetVideo(sessionId!, profileId!, selectedKind),
+    enabled: !!sessionId && !!profileId,
     staleTime: 10 * 60 * 1000, // 10 min (signed URLs expire)
+    retry: false,
   });
+  const effectiveVideoKind = selectedKind ?? videoUrl?.kind ?? 'merged';
 
   const parsedOutput = (() => {
     try {
@@ -597,9 +608,15 @@ export function SessionDetailPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
                   </svg>
                   <p className="text-text-muted text-sm">
-                    {availableVideos.length === 0
-                      ? 'Video not available'
-                      : 'Loading video...'}
+                    {videoLoading
+                      ? 'Loading video...'
+                      : videoError instanceof ApiError && videoError.status === 404
+                        ? selectedKind
+                          ? `${VIDEO_KIND_LABELS[selectedKind].label} video not available`
+                          : 'Video not available'
+                        : videoError
+                          ? 'Unable to load video'
+                          : 'Video not available'}
                   </p>
                 </div>
               </div>
@@ -607,15 +624,16 @@ export function SessionDetailPage() {
           </div>
 
           {/* Video kind selector */}
-          {availableVideos.length > 1 && (
-            <div className="flex gap-2">
-              {availableVideos.map((kind) => {
+          {!!sessionId && !!profileId && (
+            <div className="flex flex-wrap gap-2">
+              {VIDEO_KINDS.map((kind) => {
                 const cfg = VIDEO_KIND_LABELS[kind];
                 const isSelected = kind === effectiveVideoKind;
                 return (
                   <button
                     key={kind}
                     onClick={() => setSelectedKind(kind)}
+                    aria-pressed={isSelected}
                     className={`
                       flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium
                       transition-all duration-200 border

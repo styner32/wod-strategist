@@ -57,8 +57,14 @@ func newTestRouter(config controllers.Config) *gin.Engine {
 	config.AnalysisResults = controllers.NewGormAnalysisResultRepository(dbConn)
 	config.Profiles = controllers.NewGormProfileRepository(dbConn)
 	config.HighlightResults = controllers.NewGormHighlightResultRepository(dbConn)
+	if config.StorageClient == nil {
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", testhelpers.NewMockTransport())
+		Expect(err).NotTo(HaveOccurred())
+		config.StorageClient = storageClient
+	}
 
-	controller := controllers.New(config)
+	controller, err := controllers.New(config)
+	Expect(err).NotTo(HaveOccurred())
 	router, err := server.SetupRouter("test", "test-api-key", nil, controller, nil, nil)
 	Expect(err).NotTo(HaveOccurred())
 	return router
@@ -79,8 +85,14 @@ func newTestRouterWithAuthService(config controllers.Config) *gin.Engine {
 	config.AnalysisResults = controllers.NewGormAnalysisResultRepository(dbConn)
 	config.Profiles = controllers.NewGormProfileRepository(dbConn)
 	config.HighlightResults = controllers.NewGormHighlightResultRepository(dbConn)
+	if config.StorageClient == nil {
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", testhelpers.NewMockTransport())
+		Expect(err).NotTo(HaveOccurred())
+		config.StorageClient = storageClient
+	}
 
-	controller := controllers.New(config)
+	controller, err := controllers.New(config)
+	Expect(err).NotTo(HaveOccurred())
 	router, err := server.SetupRouter("test", "test-api-key", nil, controller, nil, authService)
 	Expect(err).NotTo(HaveOccurred())
 	return router
@@ -609,6 +621,36 @@ var _ = Describe("Controller handlers", func() {
 	})
 
 	Describe("GET /api/v1/history", func() {
+		It("does not list GCS objects while loading history", func() {
+			transport := testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
+			router := newTestRouter(controllers.Config{
+				StorageClient: storageClient,
+				BucketName:    "test-bucket",
+			})
+
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID: "session-with-video",
+				Status:    "COMPLETED",
+				Output:    "ok",
+				ProfileID: profileID,
+			}).Error).NotTo(HaveOccurred())
+
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=%d", profileID), nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+			Expect(transport.Requests()).To(BeEmpty())
+
+			var results []map[string]any
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(1))
+			Expect(results[0]).NotTo(HaveKey("available_videos"))
+		})
+
 		It("returns recent history and enforces the limit", func() {
 			// Seed one result so we get a non-empty response.
 			Expect(dbConn.Create(&db.AnalysisResult{
@@ -628,6 +670,46 @@ var _ = Describe("Controller handlers", func() {
 			var results []db.AnalysisResult
 			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
 			Expect(results).To(HaveLen(1))
+		})
+
+		It("supports cursor pagination using before_id and limit parameters", func() {
+			// Seed 3 results with distinct session IDs
+			for i := 1; i <= 3; i++ {
+				Expect(dbConn.Create(&db.AnalysisResult{
+					SessionID: fmt.Sprintf("paginated-session-%d", i),
+					Status:    "COMPLETED",
+					Output:    fmt.Sprintf("workout-%d", i),
+					ProfileID: profileID,
+				}).Error).NotTo(HaveOccurred())
+			}
+
+			// First request: no before_id, limit=2
+			req1 := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=2", nil)
+			req1.Header.Set("X-API-Key", "test-api-key")
+			w1 := httptest.NewRecorder()
+			router.ServeHTTP(w1, req1)
+
+			Expect(w1.Code).To(Equal(http.StatusOK))
+			var results1 []db.AnalysisResult
+			Expect(json.Unmarshal(w1.Body.Bytes(), &results1)).To(Succeed())
+			Expect(results1).To(HaveLen(2))
+			// Since results are ordered by id desc, expected results1 contains the latest two seeded
+			Expect(results1[0].SessionID).To(Equal("paginated-session-3"))
+			Expect(results1[1].SessionID).To(Equal("paginated-session-2"))
+
+			// Second request: before_id = results1[1].ID (paginated-session-2), limit=2
+			cursorID := results1[1].ID
+			req2 := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=1&before_id=%d&limit=2", cursorID), nil)
+			req2.Header.Set("X-API-Key", "test-api-key")
+			w2 := httptest.NewRecorder()
+			router.ServeHTTP(w2, req2)
+
+			Expect(w2.Code).To(Equal(http.StatusOK))
+			var results2 []db.AnalysisResult
+			Expect(json.Unmarshal(w2.Body.Bytes(), &results2)).To(Succeed())
+			// Should return paginated-session-1 (and potentially older seeded results from other tests)
+			Expect(len(results2)).To(BeNumerically(">=", 1))
+			Expect(results2[0].SessionID).To(Equal("paginated-session-1"))
 		})
 
 		It("returns bad request when profile_id is missing", func() {
@@ -689,6 +771,62 @@ var _ = Describe("Controller handlers", func() {
 
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
 			Expect(decodeMapBody(w)["error"]).To(ContainSubstring("invalid to date"))
+		})
+
+		It("clamps and normalizes the limit query parameter", func() {
+			// Seed 5 results
+			for i := 1; i <= 5; i++ {
+				Expect(dbConn.Create(&db.AnalysisResult{
+					SessionID: fmt.Sprintf("limit-session-%d", i),
+					Status:    "COMPLETED",
+					ProfileID: profileID,
+				}).Error).NotTo(HaveOccurred())
+			}
+
+			// 1. Malformed limit: fallback to default (20) which returns all 5
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=abc", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var results []db.AnalysisResult
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(5))
+
+			// 2. Negative/Zero limit: fallback to default (20) which returns all 5
+			req = httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=0", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w = httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(5))
+
+			// 3. Respected limit
+			req = httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=2", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w = httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(2))
+
+			// 4. Oversized limit: clamp to 100
+			// Let's seed 102 results in total (we already have 5, so seed 97 more)
+			for i := 6; i <= 102; i++ {
+				Expect(dbConn.Create(&db.AnalysisResult{
+					SessionID: fmt.Sprintf("limit-session-%d", i),
+					Status:    "COMPLETED",
+					ProfileID: profileID,
+				}).Error).NotTo(HaveOccurred())
+			}
+			req = httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=150", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w = httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(100))
 		})
 	})
 
@@ -1121,6 +1259,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(response.WorkoutType).To(Equal("wod"))
 		})
 	})
+
 })
 
 func repeatedJSONString(value string, count int) string {

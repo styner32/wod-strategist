@@ -105,18 +105,6 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 		Expect(decodeMapBody(w)["error"]).To(Equal("invalid request body"))
 	})
 
-	It("returns internal error when storage client is not configured", func() {
-		router := newTestRouter(controllers.Config{}) // no storage client
-
-		body := `{"sessionId": "s1", "profileId": 1, "samples": [{"ts": 0}]}`
-		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		Expect(w.Code).To(Equal(http.StatusInternalServerError))
-		Expect(decodeMapBody(w)["error"]).To(Equal("storage not configured"))
-	})
-
 	It("returns internal error when GCS upload fails", func() {
 		transport := testhelpers.NewMockTransport()
 		storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)

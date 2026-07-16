@@ -154,6 +154,37 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 		Expect(w.Body.String()).To(ContainSubstring("session not found"))
 	})
 
+	It("does not list GCS objects while loading the session aggregate", func() {
+		transport := testhelpers.NewMockTransport()
+		client, err := testhelpers.NewStorageClient("test-bucket", transport)
+		Expect(err).NotTo(HaveOccurred())
+		router = newTestRouterWithAuthService(controllers.Config{
+			StorageClient: client,
+			BucketName:    "test-bucket",
+		})
+
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:      session.SessionID,
+			ProfileID:      profile.ID,
+			Status:         "COMPLETED",
+			Output:         "Original final analysis",
+			WODDescription: session.WODDescription,
+		})
+
+		req := newAuthorizedJSONRequest(http.MethodGet, "/api/v1/sessions/"+session.SessionID+"/analysis", "", &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+		Expect(transport.Requests()).To(BeEmpty())
+
+		var response map[string]any
+		Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+		analysis, ok := response["analysis"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(analysis).NotTo(HaveKey("available_videos"))
+	})
+
 	It("keeps legacy analysis-only sessions readable", func() {
 		legacyID := "P1-WOD-2026-07-15-18-21"
 		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{

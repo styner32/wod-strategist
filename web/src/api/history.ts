@@ -10,7 +10,6 @@ export interface AnalysisResult {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
-  available_videos?: string[];
   wod_description?: string;
 }
 
@@ -256,7 +255,7 @@ export type ReanalysisListResponse =
 
 export interface VideoDownloadResponse {
   session_id: string;
-  kind: string;
+  kind: VideoKind;
   download_url: string;
   filename: string;
   expires_at: string;
@@ -265,8 +264,17 @@ export interface VideoDownloadResponse {
 export type VideoKind = 'merged' | 'hardsubbed' | 'encoded';
 
 export const historyApi = {
-  list: (profileId: number) =>
-    api.get<AnalysisResult[]>(`/history?profile_id=${profileId}`),
+  list: (profileId: number, beforeId?: number, limit?: number) => {
+    const params = new URLSearchParams();
+    params.append('profile_id', String(profileId));
+    if (beforeId !== undefined) {
+      params.append('before_id', String(beforeId));
+    }
+    if (limit !== undefined) {
+      params.append('limit', String(limit));
+    }
+    return api.get<AnalysisResult[]>(`/history?${params.toString()}`);
+  },
 
   getAnalysis: (sessionId: string) =>
     api.get<AnalysisResult[]>(`/analysis/${sessionId}`),

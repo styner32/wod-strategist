@@ -102,6 +102,14 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "APP_ENV"
         value = "production"
       }
+      env {
+        name  = "ENABLE_CHUNK_REANALYSIS"
+        value = tostring(var.enable_chunk_reanalysis)
+      }
+      env {
+        name  = "ENABLE_SESSION_REANALYSIS"
+        value = tostring(var.enable_session_reanalysis)
+      }
     }
   }
 

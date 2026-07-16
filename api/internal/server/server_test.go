@@ -11,13 +11,21 @@ import (
 	"github.com/wod-strategist/api/internal/controllers"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/server"
+	"github.com/wod-strategist/api/internal/testhelpers"
 	"go.uber.org/zap"
 )
 
-// newTestController creates a Controller with nil deps — handlers guard
-// against nil before use, so this is safe for route-level tests.
+// newTestController creates a Controller with the required storage dependency
+// and otherwise minimal config for route-level tests.
 func newTestController() *controllers.Controller {
-	return controllers.New(controllers.Config{})
+	transport := testhelpers.NewMockTransport()
+	storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+	Expect(err).NotTo(HaveOccurred())
+	controller, err := controllers.New(controllers.Config{
+		StorageClient: storageClient,
+	})
+	Expect(err).NotTo(HaveOccurred())
+	return controller
 }
 
 // newTestAuthController creates an AuthController with nil deps.

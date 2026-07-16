@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"mime/multipart"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 )
 
 const defaultGitCommit = "dev"
+
+var ErrStorageClientRequired = errors.New("storage client is required")
 
 type QueueClient interface {
 	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
@@ -28,7 +31,7 @@ type ObjectStorage interface {
 
 type AnalysisResultRepository interface {
 	FindBySessionID(ctx context.Context, sessionID string) ([]db.AnalysisResult, error)
-	ListRecent(ctx context.Context, limit int, profileID uint) ([]db.AnalysisResult, error)
+	ListRecent(ctx context.Context, limit int, profileID uint, beforeID uint) ([]db.AnalysisResult, error)
 	ListByDateRange(ctx context.Context, profileID uint, from, to time.Time) ([]db.AnalysisResult, error)
 	FindChunksBySessionID(ctx context.Context, sessionID string) ([]db.ChunkAnalysisResult, error)
 	Archive(ctx context.Context, id uint) error
@@ -104,7 +107,10 @@ type Controller struct {
 	enableSessionReanalysis bool
 }
 
-func New(config Config) *Controller {
+func New(config Config) (*Controller, error) {
+	if config.StorageClient == nil {
+		return nil, ErrStorageClientRequired
+	}
 	taskFactory := config.NewVideoAnalysisTask
 	if taskFactory == nil {
 		taskFactory = worker.NewVideoAnalysisTask
@@ -160,5 +166,5 @@ func New(config Config) *Controller {
 		newGenerateHardSub:      hardSubFactory,
 		enableChunkReanalysis:   config.EnableChunkReanalysis,
 		enableSessionReanalysis: config.EnableSessionReanalysis,
-	}
+	}, nil
 }

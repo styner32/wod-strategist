@@ -80,3 +80,15 @@ variable "pipeline_mode" {
   default     = "legacy"
 }
 
+variable "enable_chunk_reanalysis" {
+  description = "Enable exact-interval chunk re-analysis features (default false for safety and quota control)"
+  type        = bool
+  default     = false
+}
+
+variable "enable_session_reanalysis" {
+  description = "Enable session re-analysis features (default false for safety and quota control)"
+  type        = bool
+  default     = false
+}
+

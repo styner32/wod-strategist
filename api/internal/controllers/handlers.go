@@ -387,8 +387,30 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 			return
 		}
 	} else {
+		limit := 20
+		if limitStr := c.Query("limit"); limitStr != "" {
+			if l, err := strconv.Atoi(limitStr); err == nil {
+				if l <= 0 {
+					limit = 20
+				} else if l > 100 {
+					limit = 100
+				} else {
+					limit = l
+				}
+			} else {
+				limit = 20
+			}
+		}
+
+		var beforeID uint
+		if beforeIDStr := c.Query("before_id"); beforeIDStr != "" {
+			if bid, err := strconv.ParseUint(beforeIDStr, 10, 32); err == nil {
+				beforeID = uint(bid)
+			}
+		}
+
 		var err error
-		results, err = ctl.analysisResults.ListRecent(c.Request.Context(), 20, profileID)
+		results, err = ctl.analysisResults.ListRecent(c.Request.Context(), limit, profileID, beforeID)
 		if err != nil {
 			logger.Log.Error("failed to fetch history", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
@@ -396,64 +418,7 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		}
 	}
 
-	// Enrich with available video kinds per session (best-effort)
-	// TODO(perf): This does one GCS ListObjects call per unique session — O(N) RPCs.
-	// Replace with a DB column (e.g. analysis_results.available_videos TEXT[] or a
-	// session_videos table) that workers update when they produce merged/hardsubbed/encoded
-	// files. Then this becomes a single SQL query instead of N GCS list calls.
-	videoKinds := map[string][]string{} // sessionID → ["merged", "encoded", ...]
-	if ctl.storageClient != nil {
-		// Collect unique session IDs
-		seen := map[string]bool{}
-		for _, r := range results {
-			if r.SessionID != "" && !seen[r.SessionID] {
-				seen[r.SessionID] = true
-			}
-		}
-		for sessionID := range seen {
-			prefix := fmt.Sprintf("videos/%d/%s/", profileID, sessionID)
-			objectInfos, listErr := ctl.storageClient.ListObjectInfos(c.Request.Context(), prefix)
-			if listErr != nil {
-				continue
-			}
-			var kinds []string
-			for _, info := range objectInfos {
-				base := filepath.Base(info.Name)
-				switch {
-				case base == "merged.mp4" || strings.Contains(base, "_merged_"):
-					if !sliceContains(kinds, "merged") {
-						kinds = append(kinds, "merged")
-					}
-				case base == "hardsubbed.mp4" || strings.Contains(base, "_hardsubbed_"):
-					if !sliceContains(kinds, "hardsubbed") {
-						kinds = append(kinds, "hardsubbed")
-					}
-				case strings.Contains(base, "_encoded"):
-					if !sliceContains(kinds, "encoded") {
-						kinds = append(kinds, "encoded")
-					}
-				}
-			}
-			if len(kinds) > 0 {
-				videoKinds[sessionID] = kinds
-			}
-		}
-	}
-
-	// Build enriched response
-	type historyItem struct {
-		db.AnalysisResult
-		AvailableVideos []string `json:"available_videos,omitempty"`
-	}
-	enriched := make([]historyItem, len(results))
-	for i, r := range results {
-		enriched[i] = historyItem{
-			AnalysisResult:  r,
-			AvailableVideos: videoKinds[r.SessionID],
-		}
-	}
-
-	c.JSON(http.StatusOK, enriched)
+	c.JSON(http.StatusOK, results)
 }
 
 func (ctl *Controller) ArchiveHistory(c *gin.Context) {
@@ -1305,101 +1270,6 @@ func (ctl *Controller) VerifyHighlights(c *gin.Context) {
 		"message":    "Highlight verification started",
 		"task_id":    info.ID,
 		"session_id": req.SessionID,
-	})
-}
-
-// @Summary      Get Video Download URL
-// @Description  Returns a time-limited signed URL for downloading the merged or hardsubbed video
-// @Tags         video
-// @Produce      json
-// @Param        session_id path string true "Session ID"
-// @Param        kind query string false "Video kind: merged (default) or hardsubbed"
-// @Success      200 {object} VideoDownloadURLResponse
-// @Failure      400 {object} ErrorResponse
-// @Failure      404 {object} ErrorResponse
-// @Failure      500 {object} ErrorResponse
-// @Router       /video-download/:session_id [get]
-func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
-	if ctl.storageClient == nil {
-		logger.Log.Error("storage client is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage not configured"})
-		return
-	}
-
-	sessionID := sanitizeIdentifier(c.Param("session_id"))
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
-		return
-	}
-
-	profileIDStr := c.DefaultQuery("profile_id", "0")
-	var profileID uint
-	if _, err := fmt.Sscanf(profileIDStr, "%d", &profileID); err != nil || profileID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id query param is required"})
-		return
-	}
-
-	if !ctl.assertOwnsProfile(c, profileID) {
-		return
-	}
-
-	kind := strings.ToLower(strings.TrimSpace(c.DefaultQuery("kind", "merged")))
-	if kind != "merged" && kind != "hardsubbed" && kind != "encoded" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "kind must be 'merged', 'hardsubbed', or 'encoded'"})
-		return
-	}
-
-	// List all objects under the session directory: videos/{profileId}/{sessionId}/
-	prefix := fmt.Sprintf("videos/%d/%s/", profileID, sessionID)
-	objectInfos, err := ctl.storageClient.ListObjectInfos(c.Request.Context(), prefix)
-	if err != nil {
-		logger.Log.Error("failed to list session objects", zap.String("session_id", sessionID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to look up video"})
-		return
-	}
-
-	// In the new layout, files are named simply: merged.mp4, hardsubbed.mp4
-	// For "encoded", match any file containing "_encoded" (e.g. vid_xxx_encoded.mp4)
-	var bestObject string
-	var bestCreated time.Time
-	for _, info := range objectInfos {
-		base := filepath.Base(info.Name)
-		var match bool
-		switch kind {
-		case "encoded":
-			match = strings.Contains(base, "_encoded")
-		default:
-			newTarget := kind + ".mp4"
-			oldMarker := fmt.Sprintf("_%s_", kind) // backward compat: *_merged_*.mp4
-			match = base == newTarget || strings.Contains(base, oldMarker)
-		}
-		if match && (bestObject == "" || info.Created.After(bestCreated)) {
-			bestObject = info.Name
-			bestCreated = info.Created
-		}
-	}
-
-	if bestObject == "" {
-		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("no %s video found for session", kind)})
-		return
-	}
-
-	signedURL, err := ctl.storageClient.GenerateSignedURL(bestObject, http.MethodGet, 15*time.Minute)
-	if err != nil {
-		logger.Log.Error("failed to generate download signed URL",
-			zap.String("session_id", sessionID),
-			zap.String("kind", kind),
-			zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate download URL"})
-		return
-	}
-
-	c.JSON(http.StatusOK, VideoDownloadURLResponse{
-		SessionID:   sessionID,
-		Kind:        kind,
-		DownloadURL: signedURL,
-		Filename:    sessionID + "_" + kind + ".mp4",
-		ExpiresAt:   time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339),
 	})
 }
 

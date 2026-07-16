@@ -80,7 +80,7 @@ func main() {
 		}
 	}
 
-	handlers := controllers.New(controllers.Config{
+	handlers, err := controllers.New(controllers.Config{
 		DB:                      dbConn,
 		QueueClient:             client,
 		AnalysisResults:         controllers.NewGormAnalysisResultRepository(dbConn),
@@ -93,6 +93,9 @@ func main() {
 		EnableChunkReanalysis:   cfg.ChunkReanalysisEnabled,
 		EnableSessionReanalysis: cfg.SessionReanalysisEnabled,
 	})
+	if err != nil {
+		logger.Log.Fatal("Failed to create controller", zap.Error(err))
+	}
 
 	// Initialize Auth Service
 	authSvc := auth.NewService(dbConn, []byte(cfg.JWTSigningSecret))
