@@ -177,6 +177,9 @@ func IsValidWorkoutType(wt string) bool {
 // Returns a non-retryable error if the session ID contains path separators
 // or other dangerous characters.
 func validateSessionID(sessionID string) error {
+	if sessionID == "" || sessionID == "." || sessionID == ".." {
+		return fmt.Errorf("invalid session ID: contains path traversal characters: %w", asynq.SkipRetry)
+	}
 	if strings.ContainsAny(sessionID, "/\\") || sessionID != filepath.Base(sessionID) {
 		return fmt.Errorf("invalid session ID: contains path traversal characters: %w", asynq.SkipRetry)
 	}
