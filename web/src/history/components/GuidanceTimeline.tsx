@@ -225,16 +225,36 @@ export function GuidanceTimeline({
                 )}
 
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (start != null) onSeek(start);
-                    }}
-                    disabled={!canSeek}
-                    className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-tertiary hover:text-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Seek
-                  </button>
+                  {canSeek ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (start != null) onSeek(start);
+                      }}
+                      className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-tertiary hover:text-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
+                    >
+                      Seek
+                    </button>
+                  ) : chunk.start_secs != null && Number.isFinite(chunk.start_secs) && chunk.start_secs >= 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (chunk.start_secs != null) onSeek(chunk.start_secs);
+                      }}
+                      title="Jump using capture-clock start time (may be inaccurate for legacy concatenated videos)"
+                      className="rounded-md border border-warning/30 bg-warning/5 px-2.5 py-1.5 text-xs font-medium text-warning hover:bg-warning/10 focus:outline-none focus:ring-2 focus:ring-warning"
+                    >
+                      Jump
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary opacity-40 cursor-not-allowed"
+                    >
+                      Seek
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => onInspect(chunk)}

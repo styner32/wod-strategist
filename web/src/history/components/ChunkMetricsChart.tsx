@@ -141,19 +141,38 @@ export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
                     {formatTime(end)}
                   </span>
                   {onSeek && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (start != null) onSeek(start);
-                      }}
-                      disabled={!hasMediaInterval}
-                      aria-label={hasMediaInterval
-                        ? `Seek to chunk ${i + 1} at ${formatTime(start)}`
-                        : `Verified media interval unavailable for chunk ${i + 1}`}
-                      className="rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-text-secondary hover:bg-bg-tertiary focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Seek
-                    </button>
+                    hasMediaInterval ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (start != null) onSeek(start);
+                        }}
+                        aria-label={`Seek to chunk ${i + 1} at ${formatTime(start)}`}
+                        className="rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-text-secondary hover:bg-bg-tertiary focus:outline-none focus:ring-2 focus:ring-accent"
+                      >
+                        Seek
+                      </button>
+                    ) : chunk.start_secs != null && Number.isFinite(chunk.start_secs) && chunk.start_secs >= 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (chunk.start_secs != null) onSeek(chunk.start_secs);
+                        }}
+                        title="Jump using capture-clock start time (may be inaccurate)"
+                        className="rounded border border-warning/30 bg-warning/5 px-1.5 py-0.5 text-[11px] font-medium text-warning hover:bg-warning/10 focus:outline-none focus:ring-2 focus:ring-warning"
+                      >
+                        Jump
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled
+                        aria-label={`Verified media interval unavailable for chunk ${i + 1}`}
+                        className="rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-text-secondary opacity-40 cursor-not-allowed"
+                      >
+                        Seek
+                      </button>
+                    )
                   )}
                 </div>
               </div>

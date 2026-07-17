@@ -293,12 +293,17 @@ func (w *Worker) loadChunkDebugTarget(ctx context.Context, run *db.ChunkReanalys
 			chunks.heart_rate_bpm, chunks.start_secs, chunks.end_secs,
 			chunks.media_start_secs, chunks.media_end_secs, chunks.workout_confidence,
 			chunks.motion_score, chunks.skip_reason,
-			COALESCE(sessions.wod_description, '') AS wod_description,
+			CASE
+				WHEN sessions.wod_description ~ '[^[:space:]]' THEN sessions.wod_description
+				WHEN analysis_results.wod_description ~ '[^[:space:]]' THEN analysis_results.wod_description
+				ELSE ''
+			END AS wod_description,
 			COALESCE(sessions.workout_type, '') AS workout_type,
 			COALESCE(sessions.movement_hints, '[]'::jsonb) AS movement_hints,
 			profiles.injuries AS profile_injuries`).
 		Joins("JOIN profiles ON profiles.id = chunks.profile_id").
 		Joins("LEFT JOIN sessions ON sessions.session_id = chunks.session_id AND sessions.profile_id = chunks.profile_id").
+		Joins("LEFT JOIN analysis_results ON analysis_results.session_id = chunks.session_id AND analysis_results.profile_id = chunks.profile_id").
 		Where("chunks.id = ? AND chunks.session_id = ? AND chunks.profile_id = ?",
 			run.ChunkAnalysisResultID, run.SessionID, run.ProfileID).
 		Take(&target).Error

@@ -331,6 +331,98 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 		}
 	})
 
+	It("falls back to analysis_results.wod_description when the sessions row is missing (legacy session)", func() {
+		Expect(dbConn.Delete(&session).Error).To(Succeed())
+
+		start, end := 12.25, 19.75
+		chunk, run := seedRun("fallback-wod-desc", "gs://test-bucket/videos/1/chunk_001.mp4", &start, &end)
+		expires := time.Now().UTC().Add(time.Hour)
+		sourceURI := "gs://test-bucket/videos/1/" + session.SessionID + "/merged.mp4"
+		testhelpers.CreateChunkReanalysisRun(dbConn, &db.ChunkReanalysisRun{
+			SessionID:             session.SessionID,
+			ProfileID:             profile.ID,
+			ChunkAnalysisResultID: chunk.ID,
+			ClientRequestID:       "prior-fallback-wod-cache",
+			Status:                db.ChunkReanalysisStatusCompleted,
+			SourceKind:            db.ChunkReanalysisSourceSessionVideo,
+			SourceGCSURI:          sourceURI,
+			GeminiFileURI:         geminiBaseURL + "/files/cached-session",
+			GeminiFileName:        "files/cached-session",
+			GeminiMIMEType:        "video/mp4",
+			GeminiFileExpiresAt:   &expires,
+		})
+
+		originalAnalysis := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:      session.SessionID,
+			ProfileID:      profile.ID,
+			Status:         "COMPLETED",
+			Output:         "immutable final analysis",
+			WODDescription: "Legacy 3 rounds of Burpees",
+		})
+
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/1/"+session.SessionID+"/", []string{
+			"videos/1/" + session.SessionID + "/merged.mp4",
+		})
+		geminiTransport.New(geminiBaseURL).
+			Get("/v1beta/files/cached-session").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			JSON(map[string]any{"name": "files/cached-session", "state": "ACTIVE"})
+		expectSegmentAnalysis(geminiBaseURL + "/files/cached-session")
+
+		task, err := NewChunkDebugReanalysisTask(run.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(w.HandleChunkDebugReanalysisTask(context.Background(), task)).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+		Expect(geminiTransport.Verify()).To(Succeed())
+
+		var completed db.ChunkReanalysisRun
+		Expect(dbConn.First(&completed, run.ID).Error).To(Succeed())
+		var contextMap map[string]any
+		Expect(json.Unmarshal([]byte(completed.SourceContextSnapshot), &contextMap)).To(Succeed())
+		Expect(contextMap["wod_description"]).To(Equal("Legacy 3 rounds of Burpees"))
+
+		var promptBody map[string]any
+		for _, request := range geminiTransport.Requests() {
+			if strings.Contains(request.URL, ":generateContent") {
+				Expect(json.Unmarshal(request.Body, &promptBody)).To(Succeed())
+			}
+		}
+		contents, _ := promptBody["contents"].([]any)
+		Expect(contents).NotTo(BeEmpty())
+		content0, _ := contents[0].(map[string]any)
+		parts, _ := content0["parts"].([]any)
+		var promptText string
+		for _, rawPart := range parts {
+			part, _ := rawPart.(map[string]any)
+			if text, ok := part["text"].(string); ok {
+				promptText += text
+			}
+		}
+		Expect(promptText).To(ContainSubstring("Legacy 3 rounds of Burpees"))
+
+		Expect(dbConn.Delete(&originalAnalysis).Error).To(Succeed())
+	})
+
+	It("falls back to analysis_results.wod_description when the sessions value is blank", func() {
+		Expect(dbConn.Model(&db.Session{}).Where("id = ?", session.ID).
+			Update("wod_description", " \n\t ").Error).To(Succeed())
+
+		start, end := 12.25, 19.75
+		_, run := seedRun("fallback-blank-wod-desc", "gs://test-bucket/videos/1/chunk_001.mp4", &start, &end)
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:      session.SessionID,
+			ProfileID:      profile.ID,
+			Status:         "COMPLETED",
+			Output:         "immutable final analysis",
+			WODDescription: "Legacy 3 rounds of Burpees",
+		})
+
+		target, err := w.loadChunkDebugTarget(context.Background(), &run)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(target.WODDescription).To(Equal("Legacy 3 rounds of Burpees"))
+	})
+
 	It("uploads the GCS session video once and reuses that cached Files upload on the next run", func() {
 		start, end := 4.5, 9.25
 		chunk, firstRun := seedRun("upload-fallback-1", "gs://test-bucket/videos/1/chunk_001.mp4", &start, &end)
