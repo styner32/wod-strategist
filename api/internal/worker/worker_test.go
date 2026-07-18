@@ -16,6 +16,10 @@ func TestValidateSessionID(t *testing.T) {
 		{"path traversal mixed", "../Windows\\System32", true},
 		{"contains slash", "WOD/20240101", true},
 		{"contains backslash", "WOD\\20240101", true},
+		{"current dir", ".", true},
+		{"parent dir", "..", true},
+		{"empty string", "", true},
+		{"root dir", "/", true},
 	}
 
 	for _, tt := range tests {
