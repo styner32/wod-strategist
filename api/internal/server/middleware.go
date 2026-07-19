@@ -121,9 +121,15 @@ func APIKeyMiddleware(configuredKey string) gin.HandlerFunc {
 		// authenticates via httpOnly cookie, which AuthMiddleware validates
 		// downstream.  Requiring an API key on top of that would force the
 		// SPA to embed a secret in client-side JS.
-		if cookie, err := c.Cookie("jwt"); err == nil && cookie != "" {
-			c.Next()
-			return
+		// NOTE: We must not skip this check for mobile auth endpoints (/auth/login, /auth/signup)
+		// because they are not protected by AuthMiddleware, leading to an API key bypass.
+		isMobileAuthRoute := strings.HasSuffix(c.Request.URL.Path, "/auth/login") || strings.HasSuffix(c.Request.URL.Path, "/auth/signup")
+
+		if !isMobileAuthRoute {
+			if cookie, err := c.Cookie("jwt"); err == nil && cookie != "" {
+				c.Next()
+				return
+			}
 		}
 
 		apiKey := c.GetHeader("X-API-Key")
