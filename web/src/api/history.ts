@@ -7,6 +7,7 @@ export interface AnalysisResult {
   status: string;
   workout_type: string;
   output: string;
+  highlight_segments?: string;
   created_at: string;
   updated_at: string;
   archived_at: string | null;

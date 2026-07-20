@@ -639,6 +639,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		HighlightSegments:   highlightSegments,
 		WODDescription:      p.WODDescription,
 		SessionScore:        sessionScore,
+		AvailableVideos:     db.CommaStringArray{"merged"},
 		GeminiFileURI:       upload.FileURI,
 		GeminiFileName:      upload.FileName,
 		GeminiMIMEType:      upload.MIMEType,
@@ -1160,6 +1161,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		Output:            analysis,
 		AnalysisType:      db.AnalysisTypeWOD,
 		HighlightSegments: highlightSegments,
+		AvailableVideos:   db.CommaStringArray{"merged"},
 	}
 	result.ProfileID = p.ProfileID
 	if err := w.DB.WithContext(ctx).Create(result).Error; err != nil {

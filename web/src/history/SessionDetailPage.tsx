@@ -22,6 +22,7 @@ import {
 } from './components/FeedbackDialog';
 import { ChunkInspector } from './components/ChunkInspector';
 import { SessionReanalysisPanel } from './components/SessionReanalysisPanel';
+import { getHighlightSeekTime, parseHighlightSegments } from './highlights';
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -40,6 +41,14 @@ const VIDEO_KIND_LABELS: Record<VideoKind, { label: string; icon: string; desc: 
 };
 
 const VIDEO_KINDS: VideoKind[] = ['merged', 'hardsubbed', 'encoded'];
+
+const HIGHLIGHT_TYPE_LABELS: Record<string, { icon: string; label: string }> = {
+  best_form: { icon: '🏆', label: 'Best form' },
+  worst_form: { icon: '⚠️', label: 'Needs work' },
+  fatigue_point: { icon: '🫁', label: 'Fatigue point' },
+  key_moment: { icon: '⭐', label: 'Key moment' },
+};
+const SIDEBAR_HIGHLIGHT_PREVIEW_COUNT = 3;
 
 async function loadTargetVideo(
   sessionId: string,
@@ -137,6 +146,7 @@ export function SessionDetailPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [selectedKind, setSelectedKind] = useState<VideoKind>();
   const [showFullAnalysis, setShowFullAnalysis] = useState(false);
+  const [showAllHighlights, setShowAllHighlights] = useState(false);
   const [selectedChunkId, setSelectedChunkId] = useState<number>();
   const [selectedReanalysisChunkIds, setSelectedReanalysisChunkIds] = useState<Set<number>>(
     () => new Set(),
@@ -550,6 +560,13 @@ export function SessionDetailPage() {
       return null;
     }
   })();
+  const highlightSegments = useMemo(
+    () => parseHighlightSegments(analysis?.highlight_segments),
+    [analysis?.highlight_segments],
+  );
+  const visibleHighlightSegments = showAllHighlights
+    ? highlightSegments
+    : highlightSegments.slice(0, SIDEBAR_HIGHLIGHT_PREVIEW_COUNT);
 
   // Track video playback position
   const handleTimeUpdate = useCallback(() => {
@@ -565,6 +582,11 @@ export function SessionDetailPage() {
       videoRef.current.play().catch(() => {});
     }
   }, []);
+
+  const handleHighlightSeek = useCallback((startSeconds: number) => {
+    handleSeek(getHighlightSeekTime(startSeconds, videoRef.current?.duration));
+    videoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [handleSeek]);
 
   if (analysisLoading) {
     return (
@@ -924,6 +946,89 @@ export function SessionDetailPage() {
               onReanalyze={requestReanalysis}
               onToggleReanalysisSelection={toggleReanalysisSelection}
             />
+
+            {highlightSegments.length > 0 && (
+              <section
+                className="rounded-xl border border-border bg-bg-elevated p-4"
+                aria-labelledby="selected-highlights-heading"
+              >
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <h2 id="selected-highlights-heading" className="text-lg font-semibold text-text-primary">
+                      Selected Highlights
+                    </h2>
+                    <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                      Select a highlight to play it with a 5-second lead-in. The shown range is the AI-selected interval.
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-md bg-bg-tertiary px-2 py-1 text-xs font-medium text-text-secondary">
+                    {visibleHighlightSegments.length}/{highlightSegments.length}
+                  </span>
+                </div>
+
+                <div id="selected-highlights-list" className="space-y-2">
+                  {visibleHighlightSegments.map((highlight, index) => {
+                    const typeConfig = HIGHLIGHT_TYPE_LABELS[highlight.type] ?? {
+                      icon: '🎯',
+                      label: highlight.type.replaceAll('_', ' '),
+                    };
+                    const isActive = currentTime >= highlight.startSeconds
+                      && currentTime <= highlight.endSeconds;
+                    const label = highlight.movement || typeConfig.label;
+
+                    return (
+                      <button
+                        key={`${highlight.startSeconds}-${highlight.endSeconds}-${index}`}
+                        type="button"
+                        onClick={() => handleHighlightSeek(highlight.startSeconds)}
+                        disabled={!videoUrl?.download_url}
+                        aria-label={`Play ${label} highlight from ${highlight.startLabel} to ${highlight.endLabel}`}
+                        className={`w-full rounded-lg border p-3 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50 ${
+                          isActive
+                            ? 'border-accent bg-accent/10'
+                            : 'border-border bg-bg-secondary hover:border-accent/40 hover:bg-bg-tertiary'
+                        }`}
+                      >
+                        <span className="flex items-start justify-between gap-3">
+                          <span className="text-sm font-medium text-text-primary">
+                            <span aria-hidden="true" className="mr-1.5">{typeConfig.icon}</span>
+                            {label}
+                          </span>
+                          <span className="shrink-0 font-mono text-xs text-accent">
+                            {highlight.startLabel}–{highlight.endLabel}
+                          </span>
+                        </span>
+                        {highlight.movement && (
+                          <span className="mt-1 block text-xs capitalize text-text-muted">
+                            {typeConfig.label}
+                          </span>
+                        )}
+                        {highlight.reason && (
+                          <span className="mt-2 block text-xs leading-relaxed text-text-secondary">
+                            {highlight.reason}
+                          </span>
+                        )}
+                        {isActive && (
+                          <span className="mt-2 block text-xs font-medium text-accent">Playing selected range</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {highlightSegments.length > SIDEBAR_HIGHLIGHT_PREVIEW_COUNT && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllHighlights((current) => !current)}
+                    aria-expanded={showAllHighlights}
+                    aria-controls="selected-highlights-list"
+                    className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-semibold text-accent transition-colors hover:border-accent/40 hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent"
+                  >
+                    {showAllHighlights ? 'Show Less' : 'Show More'}
+                  </button>
+                )}
+              </section>
+            )}
           </div>
         </div>
       </div>

@@ -164,11 +164,12 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 		})
 
 		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
-			SessionID:      session.SessionID,
-			ProfileID:      profile.ID,
-			Status:         "COMPLETED",
-			Output:         "Original final analysis",
-			WODDescription: session.WODDescription,
+			SessionID:       session.SessionID,
+			ProfileID:       profile.ID,
+			Status:          "COMPLETED",
+			Output:          "Original final analysis",
+			WODDescription:  session.WODDescription,
+			AvailableVideos: db.CommaStringArray{"merged"},
 		})
 
 		req := newAuthorizedJSONRequest(http.MethodGet, "/api/v1/sessions/"+session.SessionID+"/analysis", "", &user)
@@ -182,7 +183,8 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 		Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 		analysis, ok := response["analysis"].(map[string]any)
 		Expect(ok).To(BeTrue())
-		Expect(analysis).NotTo(HaveKey("available_videos"))
+		Expect(analysis).To(HaveKey("available_videos"))
+		Expect(analysis["available_videos"]).To(ContainElement("merged"))
 	})
 
 	It("keeps legacy analysis-only sessions readable", func() {

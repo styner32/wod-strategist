@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,42 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
+
+type CommaStringArray []string
+
+func (a *CommaStringArray) Scan(src interface{}) error {
+	if src == nil {
+		*a = nil
+		return nil
+	}
+	switch t := src.(type) {
+	case string:
+		if t == "" {
+			*a = []string{}
+		} else {
+			*a = strings.Split(t, ",")
+		}
+		return nil
+	case []byte:
+		str := string(t)
+		if str == "" {
+			*a = []string{}
+		} else {
+			*a = strings.Split(str, ",")
+		}
+		return nil
+	default:
+		return fmt.Errorf("expected string or []byte, got %T", src)
+	}
+}
+
+func (a CommaStringArray) Value() (driver.Value, error) {
+	if len(a) == 0 {
+		return "", nil
+	}
+	return strings.Join(a, ","), nil
+}
+
 
 type User struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
@@ -64,10 +101,11 @@ type AnalysisResult struct {
 	// SessionScore is a compact JSON blob of per-dimension scores (0–100) produced at analysis time.
 	// Schema: {"overall":74,"form":68,"intensity":82,"consistency":72,"movements":{},"summary":"..."}
 	// Used to inject historical performance context into future analysis prompts.
-	SessionScore string     `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
-	ArchivedAt   *time.Time `json:"archived_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	SessionScore        string           `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
+	AvailableVideos     CommaStringArray `gorm:"column:available_videos;type:text;not null;default:'merged'" json:"available_videos"`
+	ArchivedAt          *time.Time       `json:"archived_at,omitempty"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
 }
 
 type HighlightResult struct {

@@ -631,10 +631,11 @@ var _ = Describe("Controller handlers", func() {
 			})
 
 			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: "session-with-video",
-				Status:    "COMPLETED",
-				Output:    "ok",
-				ProfileID: profileID,
+				SessionID:       "session-with-video",
+				Status:          "COMPLETED",
+				Output:          "ok",
+				ProfileID:       profileID,
+				AvailableVideos: db.CommaStringArray{"merged"},
 			}).Error).NotTo(HaveOccurred())
 
 			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=%d", profileID), nil)
@@ -648,7 +649,8 @@ var _ = Describe("Controller handlers", func() {
 			var results []map[string]any
 			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
 			Expect(results).To(HaveLen(1))
-			Expect(results[0]).NotTo(HaveKey("available_videos"))
+			Expect(results[0]).To(HaveKey("available_videos"))
+			Expect(results[0]["available_videos"]).To(ContainElement("merged"))
 		})
 
 		It("returns recent history and enforces the limit", func() {

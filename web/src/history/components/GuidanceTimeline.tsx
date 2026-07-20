@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   AnalysisFeedback,
   ChunkAnalysisResult,
@@ -19,6 +19,8 @@ interface Props {
   onReanalyze: (chunk: ChunkAnalysisResult) => void;
   onToggleReanalysisSelection: (chunkId: number) => void;
 }
+
+const CHUNK_TIMELINE_PREVIEW_COUNT = 1;
 
 function chunkStart(chunk: ChunkAnalysisResult) {
   return chunk.media_start_secs ?? null;
@@ -118,13 +120,23 @@ export function GuidanceTimeline({
     if (bStart == null) return -1;
     return aStart - bStart;
   });
-  const activeRef = useRef<HTMLLIElement | null>(null);
-  const containerRef = useRef<HTMLOListElement | null>(null);
+  const [showAllChunks, setShowAllChunks] = useState(false);
   const activeIndex = sorted.findIndex((chunk) => {
     const start = chunkStart(chunk);
     const end = chunkEnd(chunk);
     return start != null && end != null && currentTime >= start && currentTime < end;
   });
+  const activeChunkId = sorted[activeIndex]?.id;
+  const previewChunk = sorted.find((chunk) => chunk.id === activeChunkId)
+    ?? sorted.find((chunk) => chunk.id === selectedChunkId)
+    ?? sorted[0];
+  const visibleChunks = showAllChunks
+    ? sorted
+    : previewChunk
+      ? [previewChunk]
+      : [];
+  const activeRef = useRef<HTMLLIElement | null>(null);
+  const containerRef = useRef<HTMLOListElement | null>(null);
 
   useEffect(() => {
     if (!activeRef.current || !containerRef.current) return;
@@ -133,7 +145,7 @@ export function GuidanceTimeline({
     if (activeRect.top < containerRect.top || activeRect.bottom > containerRect.bottom) {
       activeRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [activeIndex]);
+  }, [activeIndex, showAllChunks]);
 
   return (
     <section className="rounded-xl border border-border bg-bg-elevated p-5" aria-labelledby="chunk-timeline-heading">
@@ -146,18 +158,24 @@ export function GuidanceTimeline({
             {sorted.length} received {sorted.length === 1 ? 'chunk' : 'chunks'}
           </p>
         </div>
+        {sorted.length > 0 && (
+          <span className="shrink-0 rounded-md bg-bg-tertiary px-2 py-1 text-xs font-medium text-text-secondary">
+            {visibleChunks.length}/{sorted.length}
+          </span>
+        )}
       </div>
 
       {sorted.length === 0 ? (
         <p className="text-sm text-text-muted">No chunk analysis data is available.</p>
       ) : (
         <ol
+          id="chunk-timeline-list"
           ref={containerRef}
           className="max-h-[620px] space-y-2 overflow-y-auto pr-1 scroll-smooth"
           style={{ scrollbarWidth: 'thin', scrollbarColor: '#3f3f46 transparent' }}
         >
-          {sorted.map((chunk, index) => {
-            const isActive = index === activeIndex;
+          {visibleChunks.map((chunk) => {
+            const isActive = chunk.id === activeChunkId;
             const isSelected = chunk.id === selectedChunkId;
             const isSelectedForReanalysis = selectedReanalysisChunkIds.has(chunk.id);
             const feedback = feedbackByChunk.get(chunk.id);
@@ -283,6 +301,18 @@ export function GuidanceTimeline({
             );
           })}
         </ol>
+      )}
+
+      {sorted.length > CHUNK_TIMELINE_PREVIEW_COUNT && (
+        <button
+          type="button"
+          onClick={() => setShowAllChunks((current) => !current)}
+          aria-expanded={showAllChunks}
+          aria-controls="chunk-timeline-list"
+          className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-semibold text-accent transition-colors hover:border-accent/40 hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent"
+        >
+          {showAllChunks ? 'Show Less' : 'Show More'}
+        </button>
       )}
     </section>
   );
