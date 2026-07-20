@@ -436,6 +436,23 @@ func (ctl *Controller) resolveChunkPlaybackSource(ctx context.Context, target *c
 	if err != nil || objectName == "" || (ctl.bucketName != "" && bucket != ctl.bucketName) {
 		return "", "", nil, nil, errChunkVideoUnavailable
 	}
+
+	allowedPrefixes := []string{
+		fmt.Sprintf("videos/%d/%s/", target.ProfileID, target.SessionID),
+		fmt.Sprintf("videos/0/%s/", target.SessionID),
+		fmt.Sprintf("videos/%s_", target.SessionID),
+	}
+	matched := false
+	for _, p := range allowedPrefixes {
+		if strings.HasPrefix(objectName, p) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return "", "", nil, nil, errChunkVideoUnavailable
+	}
+
 	start := 0.0
 	// The complete retained chunk object is authoritative. Do not convert its
 	// capture-clock timestamps into a media duration; browser playback should

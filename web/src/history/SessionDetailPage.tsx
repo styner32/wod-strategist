@@ -370,7 +370,8 @@ export function SessionDetailPage() {
       queryFn: () => historyApi.getChunkReanalysis(sessionId!, run.chunkId, run.runId),
       enabled: !!sessionId,
       retry: false,
-      refetchInterval: (query: { state: { data?: ChunkReanalysisRun; dataUpdateCount: number } }) => {
+      refetchInterval: (query: { state: { data?: ChunkReanalysisRun; error?: any; dataUpdateCount: number } }) => {
+        if (query.state.error) return false;
         const status = query.state.data?.status ?? run.status;
         if (isTerminalChunkReanalysisStatus(status)) return false;
         const pollCount = Math.min(query.state.dataUpdateCount, 4);

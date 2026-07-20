@@ -96,7 +96,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 
 	now := time.Now().UTC()
 	claim := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).
-		Where("id = ? AND status IN ?", run.ID, []string{db.SessionReanalysisStatusQueued, db.SessionReanalysisStatusRunning}).
+		Where("id = ? AND status = ?", run.ID, db.SessionReanalysisStatusQueued).
 		Updates(map[string]any{"status": db.SessionReanalysisStatusRunning, "started_at": now, "safe_error": ""})
 	if claim.Error != nil {
 		return fmt.Errorf("claim session debug re-analysis: %w", claim.Error)

@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/storage"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 var errTargetVideoNotFound = errors.New("target video not found")
@@ -55,6 +58,38 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 	kind := strings.ToLower(strings.TrimSpace(c.DefaultQuery("kind", "merged")))
 	if !isSupportedVideoKind(kind) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "kind must be 'merged', 'hardsubbed', or 'encoded'"})
+		return
+	}
+
+	// Verify session ownership
+	var session db.Session
+	dbErr := ctl.db.WithContext(c.Request.Context()).
+		Select("profile_id").
+		Where("session_id = ?", sessionID).
+		First(&session).Error
+
+	if dbErr == nil {
+		if session.ProfileID != profileID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to session"})
+			return
+		}
+	} else if errors.Is(dbErr, gorm.ErrRecordNotFound) {
+		// Fallback to parsing legacy session ID prefix
+		match := legacyUploadSessionPattern.FindStringSubmatch(sessionID)
+		if len(match) == 2 {
+			parsed, err := strconv.ParseUint(match[1], 10, 32)
+			if err != nil || uint(parsed) != profileID {
+				c.JSON(http.StatusForbidden, gin.H{"error": "access denied to session"})
+				return
+			}
+		} else {
+			// No session row and no P{profileID} prefix in legacy session ID -> cannot verify ownership
+			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to session"})
+			return
+		}
+	} else {
+		logger.Log.Error("failed to query session for ownership check", zap.Error(dbErr))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify session ownership"})
 		return
 	}
 

@@ -38,6 +38,12 @@ var _ = Describe("GET /api/v1/video-download/:session_id", func() {
 			StorageClient: storageClient,
 			BucketName:    "test-bucket",
 		})
+
+		dbConn.Create(&db.Session{
+			SessionID:   sessionID,
+			ProfileID:   profile.ID,
+			WorkoutType: "wod",
+		})
 	})
 
 	It("resolves the exact canonical target with one GCS lookup", func() {

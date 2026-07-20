@@ -442,6 +442,9 @@ func (w *Worker) listOriginalChunks(ctx context.Context, filePath string) ([]str
 		if strings.HasPrefix(base, "split_chunk_") {
 			continue
 		}
+		if strings.HasPrefix(base, "hl_") {
+			continue
+		}
 		chunks = append(chunks, fmt.Sprintf("gs://%s/%s", w.BucketName, obj))
 	}
 	sort.Strings(chunks)

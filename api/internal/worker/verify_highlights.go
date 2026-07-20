@@ -219,6 +219,12 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 			zap.String("raw_output", output))
 		return fmt.Errorf("verification results unparseable")
 	}
+	if len(results) == 0 {
+		w.logger.Warn("Verification returned empty or fully filtered results",
+			zap.String("session_id", p.SessionID),
+			zap.String("raw_output", output))
+		return fmt.Errorf("verification results inconclusive: empty verdict set")
+	}
 
 	for _, r := range results {
 		w.logger.Info("Verification result",

@@ -74,6 +74,7 @@ export function SessionReanalysisPanel({
     enabled: selectedRunId != null,
     retry: false,
     refetchInterval: (query) => {
+      if (query.state.error) return false;
       const status = (query.state.data as SessionReanalysisRun | undefined)?.status;
       if (isTerminal(status)) return false;
       const pollCount = Math.min(query.state.dataUpdateCount, 4);

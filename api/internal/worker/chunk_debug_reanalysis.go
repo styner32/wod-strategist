@@ -121,8 +121,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 
 	now := time.Now().UTC()
 	claim := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).
-		Where("id = ? AND status IN ?", run.ID,
-			[]string{db.ChunkReanalysisStatusQueued, db.ChunkReanalysisStatusRunning}).
+		Where("id = ? AND status = ?", run.ID, db.ChunkReanalysisStatusQueued).
 		Updates(map[string]any{
 			"status":     db.ChunkReanalysisStatusRunning,
 			"started_at": now,

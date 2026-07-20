@@ -17,6 +17,7 @@ import (
 	"github.com/wod-strategist/api/internal/gemini"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -316,7 +317,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				AnalysisType: db.AnalysisTypeWOD,
 			}
 			failedResult.ProfileID = p.ProfileID
-			if dbErr := w.DB.Create(failedResult).Error; dbErr != nil {
+			if dbErr := w.DB.Clauses(clause.OnConflict{UpdateAll: true}).Create(failedResult).Error; dbErr != nil {
 				w.logger.Error("Failed to write FAILED analysis result",
 					zap.String("session_id", p.SessionID),
 					zap.Error(dbErr))
@@ -664,7 +665,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		GeminiFileExpiresAt: &expiresAt,
 	}
 	result.ProfileID = p.ProfileID
-	if err := w.DB.WithContext(ctx).Create(result).Error; err != nil {
+	if err := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(result).Error; err != nil {
 		return fmt.Errorf("failed to persist completed video analysis: %w", err)
 	}
 	success = true
@@ -1161,7 +1162,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 			Output:    "An internal error occurred during analysis.",
 		}
 		failedResult.ProfileID = p.ProfileID
-		if dbErr := w.DB.WithContext(ctx).Create(failedResult).Error; dbErr != nil {
+		if dbErr := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(failedResult).Error; dbErr != nil {
 			w.logger.Error("Failed to persist legacy FAILED analysis result",
 				zap.String("session_id", p.SessionID),
 				zap.Error(dbErr))
@@ -1192,7 +1193,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		AvailableVideos:   db.CommaStringArray{"merged"},
 	}
 	result.ProfileID = p.ProfileID
-	if err := w.DB.WithContext(ctx).Create(result).Error; err != nil {
+	if err := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(result).Error; err != nil {
 		return fmt.Errorf("failed to persist completed legacy video analysis: %w", err)
 	}
 

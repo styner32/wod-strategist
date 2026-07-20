@@ -147,6 +147,12 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
+	if !isValidSessionGCSURI(req.GCSURI, req.ProfileID, req.SessionID) {
+		logger.Log.Error("GCS URI does not match session path", zap.String("uri", req.GCSURI), zap.Uint("profile_id", req.ProfileID), zap.String("session_id", req.SessionID))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "GCS URI does not match session path"})
+		return
+	}
+
 	if ok, reason := validateMovements(req.Movements); !ok {
 		logger.Log.Error("invalid movements", zap.String("reason", reason), zap.Strings("movements", req.Movements))
 		c.JSON(http.StatusBadRequest, gin.H{"error": reason})
@@ -191,15 +197,7 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	if req.PipelineMode != "" {
-		var payload worker.VideoAnalysisPayload
-		if err := json.Unmarshal(task.Payload(), &payload); err == nil {
-			payload.PipelineMode = req.PipelineMode
-			if data, err := json.Marshal(payload); err == nil {
-				task = asynq.NewTask(task.Type(), data)
-			}
-		}
-	}
+
 
 	info, err := ctl.queueClient.Enqueue(task)
 	if err != nil {
@@ -559,6 +557,28 @@ func isValidGCSURI(raw string) bool {
 	return u.Host != "" && u.Scheme == "gs"
 }
 
+func isValidSessionGCSURI(gcsURI string, profileID uint, sessionID string) bool {
+	if !strings.HasPrefix(gcsURI, "gs://") {
+		return false
+	}
+	u, err := url.Parse(gcsURI)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	objectName := strings.TrimPrefix(u.Path, "/")
+	allowedPrefixes := []string{
+		fmt.Sprintf("videos/%d/%s/", profileID, sessionID),
+		fmt.Sprintf("videos/0/%s/", sessionID),
+		fmt.Sprintf("videos/%s_", sessionID),
+	}
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(objectName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // @Summary      Chunk Complete
 // @Description  Notifies the backend that a chunk upload is complete and triggers chunk analysis
 // @Tags         upload
@@ -596,6 +616,12 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 	if !isValidGCSURI(req.GCSURI) {
 		logger.Log.Error("invalid GCS URI: must be a valid gs:// URI with a bucket", zap.String("uri", req.GCSURI))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid GCS URI"})
+		return
+	}
+
+	if !isValidSessionGCSURI(req.GCSURI, req.ProfileID, req.SessionID) {
+		logger.Log.Error("GCS URI does not match session path", zap.String("uri", req.GCSURI), zap.Uint("profile_id", req.ProfileID), zap.String("session_id", req.SessionID))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "GCS URI does not match session path"})
 		return
 	}
 
@@ -1002,15 +1028,7 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 		return
 	}
 
-	if req.PipelineMode != "" {
-		var payload worker.VideoAnalysisPayload
-		if err := json.Unmarshal(task.Payload(), &payload); err == nil {
-			payload.PipelineMode = req.PipelineMode
-			if data, err := json.Marshal(payload); err == nil {
-				task = asynq.NewTask(task.Type(), data)
-			}
-		}
-	}
+
 
 	info, err := ctl.queueClient.Enqueue(task)
 	if err != nil {
