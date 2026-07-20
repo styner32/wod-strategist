@@ -370,6 +370,27 @@ func (c *Client) FileExists(ctx context.Context, name string) (bool, error) {
 	return true, nil
 }
 
+// FileVideoDuration returns an existing Files API video's processed duration.
+// The bool is false when the file no longer exists.
+func (c *Client) FileVideoDuration(ctx context.Context, name string) (time.Duration, bool, error) {
+	file, err := c.client.Files.Get(ctx, name, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("failed to get file duration: %w", err)
+	}
+	if file.VideoMetadata == nil {
+		return 0, true, nil
+	}
+	durationText, _ := file.VideoMetadata["videoDuration"].(string)
+	duration, parseErr := time.ParseDuration(durationText)
+	if parseErr != nil {
+		return 0, true, nil
+	}
+	return duration, true, nil
+}
+
 // GenerateWorkoutMusic generates a music clip using the Lyria 3 model and writes
 // the resulting MP3 audio to outputPath.
 // Use "lyria-3-clip-preview" for a 30-second clip or "lyria-3-pro-preview" for

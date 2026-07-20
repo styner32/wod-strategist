@@ -40,7 +40,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 
 	expectAnalysis := func(fileURI string) {
 		analysisText := `교정 라벨을 영상에서 다시 확인했습니다.
-` + "```highlights\n" + `[{"start":"0:00","end":"0:01","type":"key_moment","movement":"Pull-up","reason":"visible movement"}]` + "\n```\n" +
+` + "```highlights\n" + `[{"start":"0:00","end":"0:00.5","type":"key_moment","movement":"Pull-up","reason":"visible movement"}]` + "\n```\n" +
 			"```score\n" + `{"overall":80,"form":80,"intensity":80,"consistency":80,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}` + "\n```"
 		geminiTransport.New(baseURL).
 			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").

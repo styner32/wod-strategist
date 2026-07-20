@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/hibiken/asynq"
@@ -19,6 +20,22 @@ type HighlightPayload struct {
 	SessionID   string
 	ProfileID   uint
 	MaxDuration int // max highlight duration in seconds (default 60)
+}
+
+type highlightClip struct {
+	Segment   HighlightSegment
+	StartSecs float64
+	EndSecs   float64
+}
+
+func (c highlightClip) duration() float64 {
+	return c.EndSecs - c.StartSecs
+}
+
+type highlightReelGroup struct {
+	Title   string
+	Prefix  string
+	Indices []int
 }
 
 func NewGenerateHighlightTask(sessionID string, profileID uint, maxDuration int) (*asynq.Task, error) {
@@ -63,6 +80,9 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		w.logger.Error("Max retries reached. Skipping highlight generation.")
 		return asynq.SkipRetry
 	}
+	if p.MaxDuration <= 0 {
+		p.MaxDuration = 60
+	}
 
 	// 1. Query the WOD analysis result for this session
 	var analysisResult db.AnalysisResult
@@ -80,10 +100,52 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			zap.String("session_id", p.SessionID))
 		return fmt.Errorf("no highlight segments available: %w", asynq.SkipRetry)
 	}
+	if analysisResult.ProfileID == 0 {
+		return fmt.Errorf("completed analysis has no profile_id: %w", asynq.SkipRetry)
+	}
+	if p.ProfileID != 0 && p.ProfileID != analysisResult.ProfileID {
+		w.logger.Warn("Highlight task profile differs from completed analysis; using analysis owner",
+			zap.Uint("task_profile_id", p.ProfileID),
+			zap.Uint("analysis_profile_id", analysisResult.ProfileID))
+	}
+	p.ProfileID = analysisResult.ProfileID
 
-	// 2. Parse highlight segments
-	var segments []HighlightSegment
-	if err := json.Unmarshal([]byte(analysisResult.HighlightSegments), &segments); err != nil {
+	// Validate the stored JSON before doing any storage work.
+	decodedSegments, err := decodeHighlightSegmentArray(analysisResult.HighlightSegments)
+	if err != nil {
+		w.logger.Error("Failed to parse highlight segments",
+			zap.String("session_id", p.SessionID), zap.Error(err))
+		return fmt.Errorf("invalid highlight segments JSON: %w", asynq.SkipRetry)
+	}
+	if len(decodedSegments) == 0 {
+		return fmt.Errorf("no highlight segments: %w", asynq.SkipRetry)
+	}
+
+	// 2. Download the canonical merged-media source exactly once. Parent event
+	// timestamps are media-relative and must never be mapped through legacy
+	// capture-clock chunk offsets.
+	tmpDir, err := createTempDir("highlight")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	mergedGCSURI := fmt.Sprintf("gs://%s/videos/%d/%s/merged.mp4", w.BucketName, p.ProfileID, p.SessionID)
+	mergedLocalPath := filepath.Join(tmpDir, "merged.mp4")
+	if err := w.StorageClient.DownloadFile(ctx, mergedGCSURI, mergedLocalPath); err != nil {
+		w.logger.Error("Failed to download merged video for highlights",
+			zap.String("gcs_uri", mergedGCSURI), zap.Error(err))
+		return fmt.Errorf("failed to download merged highlight source: %w", err)
+	}
+	videoDuration := probeVideoDuration(ctx, mergedLocalPath)
+
+	// 3. Normalize both legacy flat segments and v2 parent events. This is a
+	// read-time conversion only; the source analysis row is intentionally not
+	// rewritten or backfilled.
+	segments, err := NormalizeHighlightSegmentsJSON(analysisResult.HighlightSegments, HighlightNormalizeOptions{
+		VideoEndSeconds: videoDuration,
+	})
+	if err != nil {
 		w.logger.Error("Failed to parse highlight segments",
 			zap.String("session_id", p.SessionID), zap.Error(err))
 		return fmt.Errorf("invalid highlight segments JSON: %w", asynq.SkipRetry)
@@ -99,143 +161,49 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		zap.String("session_id", p.SessionID),
 		zap.Int("segment_count", len(segments)))
 
-	// 3. Query chunk analysis results to get time range → GCS file path mappings
-	var chunks []db.ChunkAnalysisResult
-	if err := w.DB.Where("session_id = ? AND status = ? AND file_path != ''",
-		p.SessionID, "COMPLETED").
-		Order("start_secs ASC").
-		Find(&chunks).Error; err != nil {
-		w.logger.Error("Failed to query chunk analysis results",
-			zap.String("session_id", p.SessionID), zap.Error(err))
-		return fmt.Errorf("failed to query chunks: %w", err)
-	}
+	clips := buildHighlightClips(segments)
+	groups := buildHighlightGroups(clips, float64(p.MaxDuration))
+	selectedIndices := selectedHighlightIndices(clips, groups)
+	normalizedSegmentsJSON := MarshalHighlightSegments(segments)
 
-	if len(chunks) == 0 {
-		w.logger.Error("No chunk records with file_path found",
-			zap.String("session_id", p.SessionID))
-		return fmt.Errorf("no chunk records found: %w", asynq.SkipRetry)
-	}
+	if len(selectedIndices) == 0 {
+		w.logger.Error("No highlight segments fit the reel duration budget",
+			zap.String("session_id", p.SessionID),
+			zap.Int("max_duration", p.MaxDuration))
 
-	w.logger.Info("Found chunk records",
-		zap.String("session_id", p.SessionID),
-		zap.Int("chunk_count", len(chunks)))
-
-	for i, ch := range chunks {
-		var start, end float64 = -1, -1
-		if ch.StartSecs != nil {
-			start = *ch.StartSecs
+		failedResult := &db.HighlightResult{
+			SessionID: p.SessionID,
+			ProfileID: p.ProfileID,
+			Status:    "FAILED",
+			Segments:  normalizedSegmentsJSON,
+			Output:    "No highlight segments fit the reel duration budget",
 		}
-		if ch.EndSecs != nil {
-			end = *ch.EndSecs
-		}
-		w.logger.Info("Chunk Mapping",
-			zap.Int("index", i),
-			zap.String("file_path", ch.FilePath),
-			zap.Float64("start_secs", start),
-			zap.Float64("end_secs", end))
+		w.DB.Create(failedResult)
+		return fmt.Errorf("no segments selected: %w", asynq.SkipRetry)
 	}
 
-	// 4. Create temp directory
-	tmpDir, err := createTempDir("highlight")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-
-	// 5. For each highlight segment, find the matching chunk, download it, trim it
-	var trimmedPaths []string
-	var trimmedDurations []float64
+	// 4. Trim each selected parent event once, even when it appears in multiple
+	// thematic reels. Exact child observations remain metadata inside the event.
+	trimmedPaths := make(map[int]string, len(selectedIndices))
 	var validSegments []HighlightSegment
-	var totalDuration float64
-
-	for i, seg := range segments {
-		segStartSecs, err := parseTimestampToSeconds(seg.Start)
-		if err != nil {
-			w.logger.Warn("Skipping segment with invalid start timestamp",
-				zap.Int("index", i), zap.String("start", seg.Start), zap.Error(err))
-			continue
-		}
-		segEndSecs, err := parseTimestampToSeconds(seg.End)
-		if err != nil {
-			w.logger.Warn("Skipping segment with invalid end timestamp",
-				zap.Int("index", i), zap.String("end", seg.End), zap.Error(err))
-			continue
-		}
-
-		segDuration := segEndSecs - segStartSecs
-		if segDuration <= 0 {
-			w.logger.Warn("Skipping segment with non-positive duration",
-				zap.Int("index", i), zap.Float64("start", segStartSecs), zap.Float64("end", segEndSecs))
-			continue
-		}
-
-		// Respect max duration
-		if totalDuration+segDuration > float64(p.MaxDuration) {
-			w.logger.Info("Max duration reached, stopping segment collection",
-				zap.Float64("total_so_far", totalDuration),
-				zap.Int("max_duration", p.MaxDuration))
-			break
-		}
-
-		// Find which chunk covers this timestamp range (uses DB records directly)
-		chunkIdx := findChunkForTimestamp(chunks, segStartSecs)
-		if chunkIdx < 0 || chunkIdx >= len(chunks) {
-			w.logger.Warn("No chunk found for highlight segment timestamp",
-				zap.Int("index", i), zap.Float64("start_secs", segStartSecs))
-			continue
-		}
-
-		chunkGCSURI := chunks[chunkIdx].FilePath
-		chunkLocalPath := filepath.Join(tmpDir, fmt.Sprintf("chunk_%03d.mp4", chunkIdx))
-
-		// Download chunk (skip if already downloaded for a previous segment)
-		if _, err := os.Stat(chunkLocalPath); os.IsNotExist(err) {
-			if err := w.StorageClient.DownloadFile(ctx, chunkGCSURI, chunkLocalPath); err != nil {
-				w.logger.Warn("Failed to download chunk for highlight",
-					zap.String("gcs_uri", chunkGCSURI), zap.Error(err))
-				continue
-			}
-		}
-
-		// Calculate the trim offset within this chunk
-		var chunkStartSecs float64
-		if chunks[chunkIdx].StartSecs != nil {
-			chunkStartSecs = *chunks[chunkIdx].StartSecs
-		}
-		trimStart := segStartSecs - chunkStartSecs
-		if trimStart < 0 {
-			trimStart = 0
-		}
-
-		w.logger.Info("Highlight segment mapping",
-			zap.Int("segment_index", i),
-			zap.Float64("seg_start_secs", segStartSecs),
-			zap.Float64("seg_end_secs", segEndSecs),
-			zap.Int("resolved_chunk_idx", chunkIdx),
-			zap.String("chunk_gcs_uri", chunkGCSURI),
-			zap.Float64("chunk_start_secs", chunkStartSecs),
-			zap.Float64("trim_start", trimStart),
-			zap.Float64("seg_duration", segDuration))
-
+	for _, i := range selectedIndices {
+		clip := clips[i]
 		trimmedPath := filepath.Join(tmpDir, fmt.Sprintf("trimmed_%03d.mp4", i))
-		if err := runFFmpegTrim(ctx, w.logger, chunkLocalPath, trimmedPath, trimStart, segDuration); err != nil {
+		if err := runFFmpegTrim(ctx, w.logger, mergedLocalPath, trimmedPath, clip.StartSecs, clip.duration()); err != nil {
 			w.logger.Warn("FFmpeg trim failed for highlight segment",
 				zap.Int("index", i), zap.Error(err))
 			continue
 		}
 
-		trimmedPaths = append(trimmedPaths, trimmedPath)
-		trimmedDurations = append(trimmedDurations, segDuration)
-		validSegments = append(validSegments, seg)
-		totalDuration += segDuration
+		trimmedPaths[i] = trimmedPath
+		validSegments = append(validSegments, clip.Segment)
 
 		w.logger.Info("Highlight segment trimmed",
 			zap.Int("index", i),
-			zap.String("type", seg.Type),
-			zap.Float64("start", segStartSecs),
-			zap.Float64("end", segEndSecs),
-			zap.Float64("trim_offset", trimStart),
-			zap.String("reason", seg.Reason))
+			zap.String("type", clip.Segment.Type),
+			zap.Float64("start", clip.StartSecs),
+			zap.Float64("end", clip.EndSecs),
+			zap.String("reason", clip.Segment.Reason))
 	}
 
 	if len(trimmedPaths) == 0 {
@@ -245,41 +213,16 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		failedResult := &db.HighlightResult{
 			SessionID: p.SessionID,
 			Status:    "FAILED",
-			Segments:  analysisResult.HighlightSegments,
-			Output:    "No highlight segments could be extracted from chunk videos",
+			Segments:  normalizedSegmentsJSON,
+			Output:    "No highlight segments could be extracted from merged video",
 		}
 		failedResult.ProfileID = p.ProfileID
 		w.DB.Create(failedResult)
 		return fmt.Errorf("no segments extracted: %w", asynq.SkipRetry)
 	}
 
-	// 7. Group segments into different versions
-	type highlightGroup struct {
-		Title   string
-		Prefix  string
-		Indices []int
-	}
-
-	groups := []highlightGroup{
-		{Title: "Highlight Reel", Prefix: "full"},
-		{Title: "Best Forms", Prefix: "best"},
-		{Title: "Areas for Improvement", Prefix: "improvement"},
-		{Title: "Key Moments", Prefix: "key"},
-	}
-
-	for i, seg := range validSegments {
-		groups[0].Indices = append(groups[0].Indices, i)
-		switch seg.Type {
-		case "best_form":
-			groups[1].Indices = append(groups[1].Indices, i)
-		case "worst_form", "fatigue_point":
-			groups[2].Indices = append(groups[2].Indices, i)
-		case "key_moment":
-			groups[3].Indices = append(groups[3].Indices, i)
-		}
-	}
-
-	// 7b. Generate workout music once for the whole session (best-effort, reused across groups)
+	// 5. Generate workout music once for the selected parent events (best-effort,
+	// reused across groups).
 	musicPath := tryGenerateMusic(ctx, w.logger, w, p, validSegments, tmpDir)
 	musicGCSURI := ""
 	if musicPath != "" {
@@ -305,9 +248,17 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		var groupDuration float64
 
 		for _, idx := range group.Indices {
-			concatEntries = append(concatEntries, fmt.Sprintf("file '%s'", trimmedPaths[idx]))
-			groupSegments = append(groupSegments, validSegments[idx])
-			groupDuration += trimmedDurations[idx]
+			trimmedPath, ok := trimmedPaths[idx]
+			if !ok {
+				continue
+			}
+			concatEntries = append(concatEntries, fmt.Sprintf("file '%s'", trimmedPath))
+			groupSegments = append(groupSegments, clips[idx].Segment)
+			groupDuration += clips[idx].duration()
+		}
+
+		if len(concatEntries) == 0 {
+			continue
 		}
 
 		if err := os.WriteFile(concatListPath, []byte(strings.Join(concatEntries, "\n")), 0o644); err != nil {
@@ -349,7 +300,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			MusicGCSURI: musicGCSURI,
 			Segments:    string(segsJSON),
 			DurationSec: groupDuration,
-			Output:      fmt.Sprintf("Generated %d highlight segments (%.1fs total) for %s", len(group.Indices), groupDuration, group.Title),
+			Output:      fmt.Sprintf("Generated %d highlight segments (%.1fs total) for %s", len(groupSegments), groupDuration, group.Title),
 			ProfileID:   p.ProfileID,
 		}
 		w.DB.Create(result)
@@ -360,7 +311,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			zap.String("title", group.Title),
 			zap.String("gcs_uri", gcsURI),
 			zap.String("music_gcs_uri", musicGCSURI),
-			zap.Int("segment_count", len(group.Indices)),
+			zap.Int("segment_count", len(groupSegments)),
 			zap.Float64("duration", groupDuration))
 	}
 
@@ -371,45 +322,126 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 	return nil
 }
 
-// findChunkForTimestamp finds the index of the chunk object that covers the given
-// timestamp in seconds. It uses chunk analysis results to map time ranges to chunks.
-// Falls back to positional mapping if chunk analysis data is incomplete.
-func findChunkForTimestamp(chunks []db.ChunkAnalysisResult, timestampSecs float64) int {
-	// Try to find by chunk analysis time ranges
-	for i, ch := range chunks {
-		if ch.StartSecs != nil && ch.EndSecs != nil {
-			if timestampSecs >= *ch.StartSecs && timestampSecs < *ch.EndSecs {
-				return i
+func buildHighlightClips(segments []HighlightSegment) []highlightClip {
+	clips := make([]highlightClip, 0, len(segments))
+	for _, segment := range segments {
+		startSecs, startErr := parseTimestampToSeconds(segment.Start)
+		endSecs, endErr := parseTimestampToSeconds(segment.End)
+		if startErr != nil || endErr != nil || endSecs <= startSecs {
+			continue
+		}
+		clips = append(clips, highlightClip{
+			Segment:   segment,
+			StartSecs: startSecs,
+			EndSecs:   endSecs,
+		})
+	}
+	return clips
+}
+
+func buildHighlightGroups(clips []highlightClip, maxDuration float64) []highlightReelGroup {
+	groups := []highlightReelGroup{
+		{Title: "Highlight Reel", Prefix: "full"},
+		{Title: "Best Forms", Prefix: "best"},
+		{Title: "Areas for Improvement", Prefix: "improvement"},
+		{Title: "Key Moments", Prefix: "key"},
+	}
+
+	for groupIndex := range groups {
+		var candidates []int
+		for clipIndex, clip := range clips {
+			if highlightBelongsToGroup(clip.Segment, groups[groupIndex].Prefix) {
+				candidates = append(candidates, clipIndex)
 			}
 		}
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return highlightEventBetter(clips[candidates[i]].Segment, clips[candidates[j]].Segment)
+		})
+		groups[groupIndex].Indices = selectHighlightGroupIndices(clips, candidates, maxDuration)
 	}
 
-	// Fallback: estimate by dividing evenly
-	if len(chunks) == 0 {
-		return -1
+	return groups
+}
+
+func highlightBelongsToGroup(segment HighlightSegment, prefix string) bool {
+	switch prefix {
+	case "full":
+		return true
+	case "best":
+		return HighlightSegmentHasObservationType(segment, HighlightObservationPositiveForm)
+	case "improvement":
+		return HighlightSegmentHasObservationType(segment, HighlightObservationFormIssue, HighlightObservationFatigueOnset)
+	case "key":
+		return segment.Type == "key_moment" ||
+			HighlightSegmentHasTag(segment, HighlightTagKeyMoment)
+	default:
+		return false
+	}
+}
+
+// selectHighlightGroupIndices applies the duration budget in candidate priority
+// order. A candidate that does not fit is skipped so a later shorter event can
+// still be selected. Only after selection are clips ordered by media time for
+// chronological concatenation.
+func selectHighlightGroupIndices(clips []highlightClip, candidates []int, maxDuration float64) []int {
+	if maxDuration <= 0 {
+		return nil
 	}
 
-	// Find the last chunk's end time to estimate total duration
-	var maxEndSecs float64
-	for _, ch := range chunks {
-		if ch.EndSecs != nil && *ch.EndSecs > maxEndSecs {
-			maxEndSecs = *ch.EndSecs
+	selected := make([]int, 0, len(candidates))
+	seen := make(map[int]struct{}, len(candidates))
+	var totalDuration float64
+	for _, index := range candidates {
+		if index < 0 || index >= len(clips) {
+			continue
+		}
+		if _, exists := seen[index]; exists {
+			continue
+		}
+
+		duration := clips[index].duration()
+		if duration <= 0 || totalDuration+duration > maxDuration {
+			continue
+		}
+
+		selected = append(selected, index)
+		seen[index] = struct{}{}
+		totalDuration += duration
+	}
+
+	sort.SliceStable(selected, func(i, j int) bool {
+		left := clips[selected[i]]
+		right := clips[selected[j]]
+		if left.StartSecs == right.StartSecs {
+			return left.EndSecs < right.EndSecs
+		}
+		return left.StartSecs < right.StartSecs
+	})
+	return selected
+}
+
+func selectedHighlightIndices(clips []highlightClip, groups []highlightReelGroup) []int {
+	seen := make(map[int]struct{})
+	var selected []int
+	for _, group := range groups {
+		for _, index := range group.Indices {
+			if _, exists := seen[index]; exists {
+				continue
+			}
+			seen[index] = struct{}{}
+			selected = append(selected, index)
 		}
 	}
-	if maxEndSecs <= 0 {
-		return -1
-	}
 
-	// Estimate which chunk by position
-	chunkDuration := maxEndSecs / float64(len(chunks))
-	idx := int(timestampSecs / chunkDuration)
-	if idx >= len(chunks) {
-		idx = len(chunks) - 1
-	}
-	if idx < 0 {
-		idx = 0
-	}
-	return idx
+	sort.SliceStable(selected, func(i, j int) bool {
+		left := clips[selected[i]]
+		right := clips[selected[j]]
+		if left.StartSecs == right.StartSecs {
+			return left.EndSecs < right.EndSecs
+		}
+		return left.StartSecs < right.StartSecs
+	})
+	return selected
 }
 
 // buildMusicPrompt constructs a Lyria 3 text prompt from this session's highlight segments.
@@ -417,14 +449,16 @@ func findChunkForTimestamp(chunks []db.ChunkAnalysisResult, timestampSecs float6
 func buildMusicPrompt(segments []HighlightSegment) string {
 	var bestCount, worstCount, fatigueCount, keyCount int
 	for _, s := range segments {
-		switch s.Type {
-		case "best_form":
+		if HighlightSegmentHasObservationType(s, HighlightObservationPositiveForm) {
 			bestCount++
-		case "worst_form":
+		}
+		if HighlightSegmentHasObservationType(s, HighlightObservationFormIssue) {
 			worstCount++
-		case "fatigue_point":
+		}
+		if HighlightSegmentHasObservationType(s, HighlightObservationFatigueOnset) {
 			fatigueCount++
-		case "key_moment":
+		}
+		if s.Type == "key_moment" || HighlightSegmentHasTag(s, HighlightTagKeyMoment) {
 			keyCount++
 		}
 	}
@@ -472,16 +506,15 @@ func tryGenerateMusic(ctx context.Context, log *zap.Logger, w *Worker, p Highlig
 
 // runFFmpegFinalPolish applies cinematic post-processing to a highlight video.
 func runFFmpegFinalPolish(ctx context.Context, log *zap.Logger, inputPath, musicPath, outputPath string, durationSecs float64) error {
-	// Slow-motion doubles the duration; adjust fade-out accordingly.
-	slowDuration := durationSecs * 2.0
-	fadeOutStart := slowDuration - 0.5
+	// Keep playback at the source rate so the selected reel stays within its
+	// duration budget. Frame interpolation is visual polish only.
+	fadeOutStart := durationSecs - 0.5
 	if fadeOutStart < 0 {
 		fadeOutStart = 0
 	}
 
 	vf := fmt.Sprintf(
-		"setpts=2.0*PTS,"+
-			"minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:vsbmc=1,"+
+		"minterpolate=fps=60:mi_mode=mci:mc_mode=aobmc:vsbmc=1,"+
 			"fade=t=in:st=0:d=0.5,"+
 			"fade=t=out:st=%.3f:d=0.5,"+
 			"eq=contrast=1.08:brightness=0.02:saturation=1.15:gamma=1.05,"+

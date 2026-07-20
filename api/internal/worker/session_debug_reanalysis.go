@@ -200,6 +200,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	wodContext := buildWODContext(target.WODDescription)
 	finalContext := w.buildHistoryContext(run.ProfileID, 5) + w.buildSessionDebugFatigueContext(ctx, run.SessionID, run.ProfileID, target.Corrections)
 	var output strings.Builder
+	var highlightCandidates []highlightCandidate
 	for i, segment := range segments {
 		start, end := convertToSeconds(segment.Start), convertToSeconds(segment.End)
 		if end <= start {
@@ -223,6 +224,9 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		if usage != nil && usage.Model != "" {
 			model = usage.Model
 		}
+		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(analysis, highlightSource{
+			Index: i, Start: start.Seconds(), End: end.Seconds(), Movement: segment.Type, HasBounds: true, HardGapBoundary: true,
+		})...)
 		output.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n%s", i+1, segment.Type, segment.Start, segment.End, analysis))
 	}
 	if strings.TrimSpace(output.String()) == "" {
@@ -234,10 +238,17 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 	}
 	analysis := output.String()
+	normalizedHighlights := consolidateHighlightCandidates(highlightCandidates, HighlightNormalizeOptions{
+		VideoEndSeconds: file.Duration.Seconds(),
+	})
+	highlightSegments := ""
+	if len(normalizedHighlights) > 0 {
+		highlightSegments = MarshalHighlightSegments(normalizedHighlights)
+	}
 	hash := sha256.Sum256([]byte(promptRecord.String()))
 	w.recordStageMetrics(run.SessionID, run.ProfileID, "session_reanalysis", "current", apiCalls, 0, uploadBytes, time.Since(started))
 	return w.completeSessionDebugRun(ctx, run.ID, db.SessionReanalysisStatusCompleted, started, map[string]any{
-		"output": analysis, "highlight_segments": ParseHighlightSegments(analysis),
+		"output": analysis, "highlight_segments": highlightSegments,
 		"session_score": parseSessionScore(analysis), "workout_type": target.WorkoutType,
 		"model": model, "prompt_hash": hex.EncodeToString(hash[:]),
 		"prompt_tokens": aggregate.PromptTokens, "candidate_tokens": aggregate.CandidateTokens,

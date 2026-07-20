@@ -20,11 +20,13 @@ type VerifyHighlightsPayload struct {
 	SessionID string
 }
 
-// VerificationResult represents the model's verdict for a single highlight segment.
+// VerificationResult represents the model's verdict for one exact observation
+// inside a parent highlight event.
 type VerificationResult struct {
-	Index    int    `json:"index"`
-	Verified bool   `json:"verified"`
-	Reason   string `json:"reason"`
+	EventIndex       int    `json:"event_index"`
+	ObservationIndex int    `json:"observation_index"`
+	Verified         bool   `json:"verified"`
+	Reason           string `json:"reason"`
 }
 
 // verifyResultBlockRegex matches fenced ```verification ... ``` blocks in model output.
@@ -84,15 +86,15 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		return fmt.Errorf("no highlight segments available: %w", asynq.SkipRetry)
 	}
 
-	// 2. Parse highlight segments
-	var segments []HighlightSegment
-	if err := json.Unmarshal([]byte(analysisResult.HighlightSegments), &segments); err != nil {
+	// Validate the stored array before doing Files API or storage work.
+	decodedSegments, err := decodeHighlightSegmentArray(analysisResult.HighlightSegments)
+	if err != nil {
 		w.logger.Error("Failed to parse highlight segments",
 			zap.String("session_id", p.SessionID), zap.Error(err))
 		return fmt.Errorf("invalid highlight segments JSON: %w", asynq.SkipRetry)
 	}
 
-	if len(segments) == 0 {
+	if len(decodedSegments) == 0 {
 		w.logger.Warn("Empty highlight segments array",
 			zap.String("session_id", p.SessionID))
 		return fmt.Errorf("no highlight segments to verify: %w", asynq.SkipRetry)
@@ -103,9 +105,11 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		analysisResult.GeminiFileExpiresAt != nil &&
 		time.Now().Before(*analysisResult.GeminiFileExpiresAt)
 
+	var videoDuration time.Duration
 	if reused {
-		// Verify if the file actually exists on Gemini Files API
-		exists, err := w.GeminiClient.FileExists(ctx, analysisResult.GeminiFileName)
+		// Verify existence and recover the authoritative media duration from the
+		// same Files object without making an extra model call.
+		duration, exists, err := w.GeminiClient.FileVideoDuration(ctx, analysisResult.GeminiFileName)
 		if err != nil {
 			if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
 				reused = false
@@ -114,6 +118,8 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 			}
 		} else if !exists {
 			reused = false
+		} else {
+			videoDuration = duration
 		}
 	}
 
@@ -131,8 +137,8 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		w.logger.Info("Gemini file not found, expired, or deleted; uploading source video",
 			zap.String("session_id", p.SessionID))
 
-		// Find the source video in GCS (prefer _merged_, fall back to _encoded)
-		videoURI, err := w.findSourceVideo(ctx, p.SessionID)
+		// Find the merged-media source on the profile-aware session timeline.
+		videoURI, err := w.findSourceVideo(ctx, analysisResult.ProfileID, p.SessionID)
 		if err != nil {
 			w.logger.Error("Failed to find source video for verification",
 				zap.String("session_id", p.SessionID), zap.Error(err))
@@ -163,6 +169,7 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		}
 		fileURI = upload.FileURI
 		mimeType = upload.MIMEType
+		videoDuration = upload.VideoDuration
 		uploadFileNameToCleanup = upload.FileName
 	}
 
@@ -174,12 +181,26 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		}
 	}()
 
-	// 5. Build verification prompt listing all highlights
+	// 4. Normalize exact observations with the processed video's media bound.
+	segments, err := NormalizeHighlightSegmentsJSON(
+		analysisResult.HighlightSegments,
+		HighlightNormalizeOptions{VideoEndSeconds: videoDuration.Seconds()},
+	)
+	if err != nil {
+		return fmt.Errorf("invalid highlight segments JSON: %w", asynq.SkipRetry)
+	}
+	if len(segments) == 0 {
+		return fmt.Errorf("no highlight segments to verify: %w", asynq.SkipRetry)
+	}
+
+	// 5. Build a verification prompt over exact observations, not padded parent clips.
 	prompt := buildVerificationPrompt(segments)
+	observationCount := countHighlightObservations(segments)
 
 	w.logger.Info("Sending verification query to Flash model",
 		zap.String("session_id", p.SessionID),
-		zap.Int("segment_count", len(segments)))
+		zap.Int("event_count", len(segments)),
+		zap.Int("observation_count", observationCount))
 
 	// 6. Query with Flash model (single call for all segments)
 	output, verifyUsage, err := w.GeminiClient.QueryVideoFlash(ctx, fileURI, mimeType, prompt)
@@ -191,44 +212,45 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 	w.saveTokenUsage(p.SessionID, profileID, "highlight:verify", verifyUsage)
 
 	// 7. Parse verification results
-	results := parseVerificationResults(output, len(segments))
-	if len(results) == 0 {
+	results, parsed := parseVerificationResults(output, segments)
+	if !parsed {
 		w.logger.Warn("Could not parse verification results from model output",
 			zap.String("session_id", p.SessionID),
 			zap.String("raw_output", output))
 		return fmt.Errorf("verification results unparseable")
 	}
 
-	// Map verified state by index to verify that all indices exist and are true
-	verifiedMap := make(map[int]bool)
 	for _, r := range results {
 		w.logger.Info("Verification result",
-			zap.Int("index", r.Index),
+			zap.Int("event_index", r.EventIndex),
+			zap.Int("observation_index", r.ObservationIndex),
 			zap.Bool("verified", r.Verified),
 			zap.String("reason", r.Reason))
-		verifiedMap[r.Index] = r.Verified
 	}
 
-	allVerified := true
-	for i := 0; i < len(segments); i++ {
-		val, found := verifiedMap[i]
-		if !found || !val {
-			allVerified = false
-			w.logger.Info("Segment not verified", zap.Int("index", i), zap.Bool("found_in_response", found))
-		}
-	}
+	verifiedSegments, allVerified := applyObservationVerification(
+		segments,
+		results,
+		HighlightNormalizeOptions{},
+	)
 
-	// 8. Update the analysis result with the verified flag
+	// 8. Persist only verified observations and rebuild their parent events. The
+	// legacy flag remains false if any original observation was rejected or omitted.
 	if err := w.DB.Model(&db.AnalysisResult{}).
 		Where("id = ?", analysisResult.ID).
-		Update("verified", allVerified).Error; err != nil {
-		return fmt.Errorf("failed to update verified flag: %w", err)
+		Updates(map[string]any{
+			"highlight_segments": MarshalHighlightSegments(verifiedSegments),
+			"verified":           allVerified,
+		}).Error; err != nil {
+		return fmt.Errorf("failed to update verified highlights: %w", err)
 	}
 
 	w.logger.Info("Highlight verification completed",
 		zap.String("session_id", p.SessionID),
 		zap.Bool("all_verified", allVerified),
-		zap.Int("total_segments", len(segments)),
+		zap.Int("total_events", len(segments)),
+		zap.Int("total_observations", observationCount),
+		zap.Int("remaining_events", len(verifiedSegments)),
 		zap.Int("results_parsed", len(results)))
 
 	apiCalls := 1
@@ -250,105 +272,242 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 	return nil
 }
 
-// findSourceVideo lists GCS objects for the session and returns the best source video URI.
-// Priority: _merged_ > _encoded > any other video file.
-func (w *Worker) findSourceVideo(ctx context.Context, sessionID string) (string, error) {
-	prefix := fmt.Sprintf("videos/%s", sessionID)
-	objects, err := w.StorageClient.ListObjects(ctx, prefix)
-	if err != nil {
-		return "", fmt.Errorf("failed to list objects: %w", err)
+// findSourceVideo resolves the exact canonical merged media first. Legacy
+// layouts are searched only after canonical absence and only known merged
+// whole-session objects are accepted.
+func (w *Worker) findSourceVideo(ctx context.Context, profileID uint, sessionID string) (string, error) {
+	if strings.TrimSpace(w.BucketName) == "" {
+		return "", fmt.Errorf("bucket name is empty")
 	}
 
-	var mergedURI, encodedURI, fallbackURI string
+	canonicalObject := fmt.Sprintf("videos/%d/%s/merged.mp4", profileID, sessionID)
+	objects, err := w.StorageClient.ListObjects(ctx, canonicalObject)
+	if err != nil {
+		return "", fmt.Errorf("failed to check canonical merged video: %w", err)
+	}
 	for _, obj := range objects {
-		base := filepath.Base(obj)
-		switch {
-		case strings.Contains(base, "_hardsubbed_"):
-			continue // skip subtitle-burned copies
-		case strings.Contains(base, "_merged_"):
-			mergedURI = obj
-		case strings.Contains(base, "_encoded"):
-			encodedURI = obj
-		default:
-			if fallbackURI == "" {
-				fallbackURI = obj
-			}
+		if obj == canonicalObject {
+			return fmt.Sprintf("gs://%s/%s", w.BucketName, obj), nil
 		}
 	}
 
-	if mergedURI != "" {
-		return mergedURI, nil
+	prefixes := []string{fmt.Sprintf("videos/%d/%s/", profileID, sessionID)}
+	if profileID != 0 {
+		prefixes = append(prefixes, fmt.Sprintf("videos/0/%s/", sessionID))
 	}
-	if encodedURI != "" {
-		return encodedURI, nil
-	}
-	if fallbackURI != "" {
-		return fallbackURI, nil
+	prefixes = append(prefixes, fmt.Sprintf("videos/%s_", sessionID))
+
+	for _, prefix := range prefixes {
+		objects, listErr := w.StorageClient.ListObjects(ctx, prefix)
+		if listErr != nil {
+			continue
+		}
+		if objectName := selectLegacyMergedVideo(objects); objectName != "" {
+			return fmt.Sprintf("gs://%s/%s", w.BucketName, objectName), nil
+		}
 	}
 
 	return "", fmt.Errorf("no video files found for session %s", sessionID)
 }
 
-// buildVerificationPrompt creates a Flash model prompt that asks the model to verify
-// each highlight segment in a single pass.
+func selectLegacyMergedVideo(objects []string) string {
+	selected := ""
+	for _, object := range objects {
+		base := strings.ToLower(filepath.Base(object))
+		if base != "merged.mp4" && !(strings.Contains(base, "_merged_") && strings.HasSuffix(base, ".mp4")) {
+			continue
+		}
+		derived := false
+		for _, marker := range []string{
+			"hardsub", "encoded", "chunk", "highlight", "_hl_", "tmp", "preview", "polished", "trimmed", "concat",
+		} {
+			if strings.Contains(base, marker) {
+				derived = true
+				break
+			}
+		}
+		if derived || strings.HasPrefix(base, "hl_") {
+			continue
+		}
+		selected = object
+	}
+	return selected
+}
+
+// buildVerificationPrompt asks the model to verify exact observations. Parent
+// event ranges include playback padding and must not be treated as evidence.
 func buildVerificationPrompt(segments []HighlightSegment) string {
 	var segList strings.Builder
-	for i, seg := range segments {
-		segList.WriteString(fmt.Sprintf("%d. [%s ~ %s] type=%s, reason=\"%s\"\n",
-			i, seg.Start, seg.End, seg.Type, seg.Reason))
+	for eventIndex, seg := range segments {
+		for observationIndex, observation := range seg.Observations {
+			segList.WriteString(fmt.Sprintf(
+				"event=%d observation=%d [%s ~ %s] type=%s movement=%q reason=%q\n",
+				eventIndex,
+				observationIndex,
+				observation.Start,
+				observation.End,
+				observation.Type,
+				seg.Movement,
+				observation.Reason,
+			))
+		}
 	}
 
 	return fmt.Sprintf(`## Task: Highlight Verification
 
-You are a sports video analyst. The following highlight segments were identified by AI analysis.
-Your job is to watch the video and verify whether each claimed observation is ACTUALLY VISIBLE at the specified timestamps.
+You are a sports video analyst. The following exact observations were identified by AI analysis.
+Your job is to watch the video and verify whether each claimed observation is ACTUALLY VISIBLE at its exact timestamp range.
 
-## Claimed Highlights
+## Claimed Observations
 %s
 ## Instructions
-1. For each highlight, go to the specified timestamp range and watch carefully.
-2. Check if the claimed type/reason matches what you actually see.
-3. A segment is "verified" if there IS meaningful exercise/movement activity at that timestamp AND the description reasonably matches.
-4. A segment is NOT verified if: the timestamp shows rest/nothing, or the described movement is completely different from what's visible.
+1. Verify every event/observation pair independently at its exact observation range.
+2. Do not judge the padded parent playback range before or after that observation.
+3. Check whether the observation type and reason match visible evidence.
+4. An observation is "verified" only when the claimed form, fatigue onset, or technique event is visible at that exact range.
+5. An observation is NOT verified when the range shows rest/nothing, a different movement, or does not visibly support the claim.
 
 ## Output Format
 Return your results as a JSON array inside a verification code block:
 
-`+"```verification\n"+`[{"index": 0, "verified": true, "reason": "Snatch movement clearly visible"}, {"index": 1, "verified": false, "reason": "Timestamp shows rest period, not squat"}]`+"\n```\n",
+`+"```verification\n"+`[{"event_index": 0, "observation_index": 0, "verified": true, "reason": "Claim is visible at the exact range"}, {"event_index": 0, "observation_index": 1, "verified": false, "reason": "Range does not support the claimed form issue"}]`+"\n```\n",
 		segList.String())
 }
 
 // parseVerificationResults extracts the verification results from the model output.
-func parseVerificationResults(output string, expectedCount int) []VerificationResult {
+func parseVerificationResults(output string, segments []HighlightSegment) ([]VerificationResult, bool) {
+	var rawJSON string
 	match := verifyResultBlockRegex.FindStringSubmatch(output)
 	if match == nil {
 		// Try plain JSON as fallback
 		re := regexp.MustCompile(`(?s)\[.*?\]`)
-		jsonMatch := re.FindString(output)
-		if jsonMatch == "" {
-			return nil
+		rawJSON = re.FindString(output)
+		if rawJSON == "" {
+			return nil, false
 		}
-		var results []VerificationResult
-		if err := json.Unmarshal([]byte(jsonMatch), &results); err != nil {
-			return nil
-		}
-		return filterValidResults(results, expectedCount)
+	} else {
+		rawJSON = match[1]
 	}
 
-	var results []VerificationResult
-	if err := json.Unmarshal([]byte(match[1]), &results); err != nil {
-		return nil
+	type rawVerificationResult struct {
+		EventIndex       *int   `json:"event_index"`
+		ObservationIndex *int   `json:"observation_index"`
+		Verified         *bool  `json:"verified"`
+		Reason           string `json:"reason"`
 	}
-	return filterValidResults(results, expectedCount)
+	var rawResults []rawVerificationResult
+	if err := json.Unmarshal([]byte(rawJSON), &rawResults); err != nil {
+		return nil, false
+	}
+	results := make([]VerificationResult, 0, len(rawResults))
+	for _, raw := range rawResults {
+		if raw.EventIndex == nil || raw.ObservationIndex == nil || raw.Verified == nil {
+			continue
+		}
+		results = append(results, VerificationResult{
+			EventIndex:       *raw.EventIndex,
+			ObservationIndex: *raw.ObservationIndex,
+			Verified:         *raw.Verified,
+			Reason:           raw.Reason,
+		})
+	}
+	return filterValidResults(results, segments), true
 }
 
 // filterValidResults removes results with out-of-range indices.
-func filterValidResults(results []VerificationResult, maxIndex int) []VerificationResult {
+func filterValidResults(results []VerificationResult, segments []HighlightSegment) []VerificationResult {
 	var valid []VerificationResult
 	for _, r := range results {
-		if r.Index >= 0 && r.Index < maxIndex {
+		if r.EventIndex >= 0 && r.EventIndex < len(segments) &&
+			r.ObservationIndex >= 0 && r.ObservationIndex < len(segments[r.EventIndex].Observations) {
 			valid = append(valid, r)
 		}
 	}
 	return valid
+}
+
+type observationVerificationKey struct {
+	eventIndex       int
+	observationIndex int
+}
+
+func applyObservationVerification(
+	segments []HighlightSegment,
+	results []VerificationResult,
+	options HighlightNormalizeOptions,
+) ([]HighlightSegment, bool) {
+	verdicts := make(map[observationVerificationKey]bool, len(results))
+	for _, result := range results {
+		key := observationVerificationKey{
+			eventIndex:       result.EventIndex,
+			observationIndex: result.ObservationIndex,
+		}
+		if existing, ok := verdicts[key]; ok {
+			// Conflicting duplicate verdicts fail closed.
+			verdicts[key] = existing && result.Verified
+			continue
+		}
+		verdicts[key] = result.Verified
+	}
+
+	allVerified := true
+	verifiedCandidates := make([]highlightCandidate, 0)
+	for eventIndex, segment := range segments {
+		hadTechniqueObservation := HighlightSegmentHasObservationType(segment, HighlightObservationTechnique)
+		preserveEvaluationKeyTag := HighlightSegmentHasTag(segment, HighlightTagKeyMoment) && !hadTechniqueObservation
+		source := highlightSource{
+			Index:           eventIndex * 2,
+			Movement:        segment.Movement,
+			HardGapBoundary: true,
+		}
+		parentStart, startErr := parseTimestampToSeconds(segment.Start)
+		parentEnd, endErr := parseTimestampToSeconds(segment.End)
+		if startErr == nil && endErr == nil && parentEnd > parentStart {
+			source.Start = parentStart
+			source.End = parentEnd
+			source.HasBounds = true
+		}
+		for observationIndex, observation := range segment.Observations {
+			verified, found := verdicts[observationVerificationKey{
+				eventIndex:       eventIndex,
+				observationIndex: observationIndex,
+			}]
+			if !found || !verified {
+				allVerified = false
+				continue
+			}
+			observation.Verified = boolPointer(true)
+			start, startErr := parseTimestampToSeconds(observation.Start)
+			end, endErr := parseTimestampToSeconds(observation.End)
+			if startErr != nil || endErr != nil || end <= start || !validObservationType(observation.Type) || !validConfidence(observation.Confidence) {
+				allVerified = false
+				continue
+			}
+			tags := []string(nil)
+			if observation.Type == HighlightObservationTechnique || preserveEvaluationKeyTag {
+				tags = append(tags, HighlightTagKeyMoment)
+			}
+			verifiedCandidates = append(verifiedCandidates, highlightCandidate{
+				Observation: observation,
+				Movement:    segment.Movement,
+				Tags:        tags,
+				Start:       start,
+				End:         end,
+				Source:      source,
+			})
+		}
+	}
+	return consolidateHighlightCandidates(verifiedCandidates, options), allVerified
+}
+
+func countHighlightObservations(segments []HighlightSegment) int {
+	count := 0
+	for _, segment := range segments {
+		count += len(segment.Observations)
+	}
+	return count
+}
+
+func boolPointer(value bool) *bool {
+	return &value
 }

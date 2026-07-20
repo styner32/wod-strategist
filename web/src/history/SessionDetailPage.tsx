@@ -22,7 +22,11 @@ import {
 } from './components/FeedbackDialog';
 import { ChunkInspector } from './components/ChunkInspector';
 import { SessionReanalysisPanel } from './components/SessionReanalysisPanel';
-import { getHighlightSeekTime, parseHighlightSegments } from './highlights';
+import { HighlightEventCard } from './components/HighlightEventCard';
+import {
+  getHighlightSeekTime,
+  parseHighlightSegments,
+} from './highlights';
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -42,12 +46,6 @@ const VIDEO_KIND_LABELS: Record<VideoKind, { label: string; icon: string; desc: 
 
 const VIDEO_KINDS: VideoKind[] = ['merged', 'hardsubbed', 'encoded'];
 
-const HIGHLIGHT_TYPE_LABELS: Record<string, { icon: string; label: string }> = {
-  best_form: { icon: '🏆', label: 'Best form' },
-  worst_form: { icon: '⚠️', label: 'Needs work' },
-  fatigue_point: { icon: '🫁', label: 'Fatigue point' },
-  key_moment: { icon: '⭐', label: 'Key moment' },
-};
 const SIDEBAR_HIGHLIGHT_PREVIEW_COUNT = 3;
 
 async function loadTargetVideo(
@@ -583,8 +581,13 @@ export function SessionDetailPage() {
     }
   }, []);
 
-  const handleHighlightSeek = useCallback((startSeconds: number) => {
-    handleSeek(getHighlightSeekTime(startSeconds, videoRef.current?.duration));
+  const handleHighlightSeek = useCallback((startSeconds: number, version?: number) => {
+    const targetSeconds = getHighlightSeekTime(
+      startSeconds,
+      videoRef.current?.duration,
+      version,
+    );
+    handleSeek(targetSeconds);
     videoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [handleSeek]);
 
@@ -958,7 +961,7 @@ export function SessionDetailPage() {
                       Selected Highlights
                     </h2>
                     <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                      Select a highlight to play it with a 5-second lead-in. The shown range is the AI-selected interval.
+                      Select an event to play its context. Legacy highlights retain their 5-second lead-in.
                     </p>
                   </div>
                   <span className="shrink-0 rounded-md bg-bg-tertiary px-2 py-1 text-xs font-medium text-text-secondary">
@@ -968,50 +971,17 @@ export function SessionDetailPage() {
 
                 <div id="selected-highlights-list" className="space-y-2">
                   {visibleHighlightSegments.map((highlight, index) => {
-                    const typeConfig = HIGHLIGHT_TYPE_LABELS[highlight.type] ?? {
-                      icon: '🎯',
-                      label: highlight.type.replaceAll('_', ' '),
-                    };
                     const isActive = currentTime >= highlight.startSeconds
                       && currentTime <= highlight.endSeconds;
-                    const label = highlight.movement || typeConfig.label;
 
                     return (
-                      <button
+                      <HighlightEventCard
                         key={`${highlight.startSeconds}-${highlight.endSeconds}-${index}`}
-                        type="button"
-                        onClick={() => handleHighlightSeek(highlight.startSeconds)}
+                        highlight={highlight}
+                        isActive={isActive}
                         disabled={!videoUrl?.download_url}
-                        aria-label={`Play ${label} highlight from ${highlight.startLabel} to ${highlight.endLabel}`}
-                        className={`w-full rounded-lg border p-3 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-50 ${
-                          isActive
-                            ? 'border-accent bg-accent/10'
-                            : 'border-border bg-bg-secondary hover:border-accent/40 hover:bg-bg-tertiary'
-                        }`}
-                      >
-                        <span className="flex items-start justify-between gap-3">
-                          <span className="text-sm font-medium text-text-primary">
-                            <span aria-hidden="true" className="mr-1.5">{typeConfig.icon}</span>
-                            {label}
-                          </span>
-                          <span className="shrink-0 font-mono text-xs text-accent">
-                            {highlight.startLabel}–{highlight.endLabel}
-                          </span>
-                        </span>
-                        {highlight.movement && (
-                          <span className="mt-1 block text-xs capitalize text-text-muted">
-                            {typeConfig.label}
-                          </span>
-                        )}
-                        {highlight.reason && (
-                          <span className="mt-2 block text-xs leading-relaxed text-text-secondary">
-                            {highlight.reason}
-                          </span>
-                        )}
-                        {isActive && (
-                          <span className="mt-2 block text-xs font-medium text-accent">Playing selected range</span>
-                        )}
-                      </button>
+                        onSelect={() => handleHighlightSeek(highlight.startSeconds, highlight.version)}
+                      />
                     );
                   })}
                 </div>

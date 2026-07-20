@@ -422,9 +422,10 @@ func sessionReanalysisRunResponse(run db.SessionReanalysisRun) SessionReanalysis
 		CreatedAt: run.CreatedAt, StartedAt: run.StartedAt, CompletedAt: run.CompletedAt, UpdatedAt: run.UpdatedAt,
 	}
 	if run.Status == db.SessionReanalysisStatusCompleted {
-		highlights := any(run.HighlightSegments)
+		normalizedHighlights := normalizeHighlightJSONForResponse(run.HighlightSegments)
+		highlights := any(normalizedHighlights)
 		var parsedHighlights any
-		if strings.TrimSpace(run.HighlightSegments) != "" && json.Unmarshal([]byte(run.HighlightSegments), &parsedHighlights) == nil {
+		if strings.TrimSpace(normalizedHighlights) != "" && json.Unmarshal([]byte(normalizedHighlights), &parsedHighlights) == nil {
 			highlights = parsedHighlights
 		}
 		response.Candidate = &SessionReanalysisCandidateResponse{

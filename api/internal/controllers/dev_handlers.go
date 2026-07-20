@@ -78,8 +78,8 @@ func (ctl *Controller) ListSessionCatalog(c *gin.Context) {
 // @Router       /dev/sessions/{session_id}/assets [get]
 func (ctl *Controller) GetSessionAssets(c *gin.Context) {
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
 		return
 	}
 
@@ -113,8 +113,8 @@ func (ctl *Controller) GetPlayURL(c *gin.Context) {
 	}
 
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
 		return
 	}
 

@@ -45,7 +45,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 			ProfileID:         profile.ID,
 			Status:            "COMPLETED",
 			Output:            "Original final analysis",
-			HighlightSegments: `[]`,
+			HighlightSegments: `[{"start":"0:05","end":"0:07","type":"best_form","movement":"Pull-up","reason":"stable kip"}]`,
 			WODDescription:    session.WODDescription,
 		})
 
@@ -120,6 +120,11 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 		Expect(response.Analysis.ID).To(Equal(analysis.ID))
 		Expect(response.Analysis.Output).To(Equal("Original final analysis"))
 		Expect(response.Analysis.WorkoutType).To(Equal("wod"))
+		var highlights []worker.HighlightSegment
+		Expect(json.Unmarshal([]byte(response.Analysis.HighlightSegments), &highlights)).To(Succeed())
+		Expect(highlights).To(HaveLen(1))
+		Expect(highlights[0].Version).To(Equal(2))
+		Expect(highlights[0].Observations).To(HaveLen(1))
 		Expect(response.MovementHints).To(Equal([]string{"Pull-up"}))
 		Expect(response.AdditionalObservedMovements).To(Equal([]string{"Rope Climb"}))
 		Expect(response.Feedback).To(HaveLen(1))

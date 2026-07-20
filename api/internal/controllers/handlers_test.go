@@ -90,6 +90,28 @@ var _ = Describe("validation helpers", func() {
 		Entry("tab character", []string{"Burpee\tExtra"}, false, "movement name contains invalid characters"),
 		Entry("all predefined movements", append([]string(nil), movements...), true, ""),
 	)
+
+	DescribeTable("isValidSessionID",
+		func(sessionID string, want bool) {
+			Expect(isValidSessionID(sessionID)).To(Equal(want))
+		},
+		Entry("valid current", "WOD-20240101-ABCD1234", true),
+		Entry("valid current with longer date", "WOD-202605221010-abcd", true),
+		Entry("valid legacy", "P12-WOD-2026-04-01-14-30", true),
+		Entry("valid legacy no profile", "WOD-2026-03-30-10-34", true),
+		Entry("valid test pattern", "session-hints", true),
+		Entry("valid test pattern split", "split-media-session", true),
+		Entry("invalid format no dashes", "WOD20240101ABCD1234", false),
+		Entry("path traversal unix", "../etc/passwd", false),
+		Entry("path traversal windows", "..\\Windows\\System32", false),
+		Entry("path traversal mixed", "../Windows\\System32", false),
+		Entry("contains slash", "WOD/20240101", false),
+		Entry("contains backslash", "WOD\\20240101", false),
+		Entry("contains dot", "WOD.20240101", false),
+		Entry("only dot", ".", false),
+		Entry("only dot-dot", "..", false),
+		Entry("empty", "", false),
+	)
 })
 
 var _ = Describe("asset helpers", func() {

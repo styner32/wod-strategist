@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"time"
@@ -41,8 +42,86 @@ var _ = Describe("NewGenerateHighlightTask", func() {
 	})
 })
 
+var _ = Describe("selectHighlightGroupIndices", func() {
+	It("skips a non-fitting candidate and chronologically orders later selections", func() {
+		clips := []highlightClip{
+			{StartSecs: 30, EndSecs: 39},
+			{StartSecs: 20, EndSecs: 25},
+			{StartSecs: 10, EndSecs: 13},
+		}
+
+		selected := selectHighlightGroupIndices(clips, []int{0, 1, 2, 1}, 8)
+
+		Expect(selected).To(Equal([]int{2, 1}))
+	})
+})
+
+var _ = Describe("buildHighlightGroups", func() {
+	It("classifies parent events by observations and key-moment metadata without duplicating trims", func() {
+		clips := []highlightClip{
+			{
+				Segment: HighlightSegment{
+					Type: "mixed_form",
+					Tags: []string{HighlightTagKeyMoment},
+					Observations: []HighlightObservation{
+						{Type: HighlightObservationPositiveForm},
+						{Type: HighlightObservationFormIssue},
+					},
+				},
+				StartSecs: 0,
+				EndSecs:   5,
+			},
+			{
+				Segment: HighlightSegment{
+					Type:         "fatigue_point",
+					Observations: []HighlightObservation{{Type: HighlightObservationFatigueOnset}},
+				},
+				StartSecs: 10,
+				EndSecs:   15,
+			},
+			{
+				Segment: HighlightSegment{
+					Type:         "key_moment",
+					Observations: []HighlightObservation{{Type: HighlightObservationTechnique}},
+				},
+				StartSecs: 20,
+				EndSecs:   25,
+			},
+		}
+
+		groups := buildHighlightGroups(clips, 60)
+
+		Expect(groups).To(HaveLen(4))
+		Expect(groups[0].Indices).To(Equal([]int{0, 1, 2}))
+		Expect(groups[1].Indices).To(Equal([]int{0}))
+		Expect(groups[2].Indices).To(Equal([]int{0, 1}))
+		Expect(groups[3].Indices).To(Equal([]int{0, 2}))
+		Expect(selectedHighlightIndices(clips, groups)).To(Equal([]int{0, 1, 2}))
+	})
+})
+
+var _ = Describe("runFFmpegFinalPolish", func() {
+	It("keeps final playback within the selected source-duration budget", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not found in PATH")
+		}
+		input := createTinyMP4(GinkgoT())
+		sourceDuration := probeVideoDuration(context.Background(), input)
+		Expect(sourceDuration).To(BeNumerically(">", 0))
+		output := GinkgoT().TempDir() + "/polished.mp4"
+
+		Expect(runFFmpegFinalPolish(
+			context.Background(), zap.NewNop(), input, "", output, sourceDuration,
+		)).To(Succeed())
+
+		finalDuration := probeVideoDuration(context.Background(), output)
+		Expect(finalDuration).To(BeNumerically(">", 0))
+		Expect(finalDuration).To(BeNumerically("<=", sourceDuration+0.25))
+	})
+})
+
 var _ = Describe("HandleGenerateHighlightTask", func() {
-	const highlightSegs = `[{"start":"0:00","end":"0:01","type":"best_form","reason":"완벽한 자세"},{"start":"0:01","end":"0:02","type":"key_moment","reason":"최고 페이스"}]`
+	const highlightSegs = `[{"start":"0:00","end":"0:00.4","type":"best_form","reason":"완벽한 자세"},{"start":"0:00.4","end":"0:00.8","type":"key_moment","reason":"최고 페이스"}]`
 
 	var (
 		dbConn    *gorm.DB
@@ -133,8 +212,7 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 		Expect(err).To(MatchError(ContainSubstring("invalid highlight segments JSON")))
 	})
 
-	It("returns SkipRetry when no chunk records with file_path are found", func() {
-		// No ChunkAnalysisResult records with file_path → returns error
+	It("uses the canonical merged video without requiring chunk records", func() {
 		Expect(dbConn.Create(&db.AnalysisResult{
 			SessionID:         "sess-hl-nochunks",
 			ProfileID:         profileID,
@@ -144,11 +222,21 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 			HighlightSegments: highlightSegs,
 		}).Error).NotTo(HaveOccurred())
 
-		task, err := NewGenerateHighlightTask("sess-hl-nochunks", 0, 60)
+		storageTransport := testhelpers.NewMockTransport()
+		storageClient, storageErr := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(storageErr).NotTo(HaveOccurred())
+		w.StorageClient = storageClient
+		storageTransport.New(testhelpers.GCSBaseURL).
+			Get("/test-bucket/videos/" + fmt.Sprint(profileID) + "/sess-hl-nochunks/merged.mp4").
+			Reply(http.StatusNotFound).
+			BodyString("not found")
+
+		task, err := NewGenerateHighlightTask("sess-hl-nochunks", profileID, 60)
 		Expect(err).NotTo(HaveOccurred())
 
 		err = w.HandleGenerateHighlightTask(context.Background(), task)
-		Expect(err).To(MatchError(ContainSubstring("no chunk records found")))
+		Expect(err).To(MatchError(ContainSubstring("failed to download merged highlight source")))
+		Expect(storageTransport.Verify()).To(Succeed())
 	})
 
 	Context("when ffmpeg is available", func() {
@@ -158,7 +246,7 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 			}
 		})
 
-		It("creates COMPLETED HighlightResult records for each theme group", func() {
+		It("normalizes legacy events and creates reels from one merged-media download", func() {
 			Expect(dbConn.Create(&db.AnalysisResult{
 				SessionID:         "sess-hl-happy",
 				ProfileID:         profileID,
@@ -168,26 +256,9 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 				HighlightSegments: highlightSegs,
 			}).Error).NotTo(HaveOccurred())
 
-			start1, end1 := 0.0, 1.0
-			start2, end2 := 1.0, 2.0
-
 			tiny := createTinyMP4(GinkgoT())
 			mp4Bytes, readErr := os.ReadFile(tiny)
 			Expect(readErr).NotTo(HaveOccurred())
-
-			chunk1URI := "gs://test-bucket/videos/sess-hl-happy/chunk_001.mp4"
-			chunk2URI := "gs://test-bucket/videos/sess-hl-happy/chunk_002.mp4"
-
-			Expect(dbConn.Create(&db.ChunkAnalysisResult{
-				SessionID: "sess-hl-happy", Status: "COMPLETED", FilePath: chunk1URI,
-				ProfileID: profileID,
-				Output:    "좋아요", StartSecs: &start1, EndSecs: &end1,
-			}).Error).NotTo(HaveOccurred())
-			Expect(dbConn.Create(&db.ChunkAnalysisResult{
-				SessionID: "sess-hl-happy", Status: "COMPLETED", FilePath: chunk2URI,
-				ProfileID: profileID,
-				Output:    "계속하세요", StartSecs: &start2, EndSecs: &end2,
-			}).Error).NotTo(HaveOccurred())
 
 			// Create a fresh transport with all GCS expectations for this test
 			ffmpegTransport := testhelpers.NewMockTransport()
@@ -195,12 +266,11 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 			Expect(sErr).NotTo(HaveOccurred())
 			w.StorageClient = ffmpegStorageClient
 
-			// MockGCSDownload for each chunk (serve real mp4 bytes so ffmpeg can process it)
-			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, chunk1URI, mp4Bytes)
-			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, chunk2URI, mp4Bytes)
-			// Uploads for each highlight group (full, best, key) + potentially music
-			// The handler makes multiple uploads; register enough mocks
-			for i := 0; i < 5; i++ {
+			mergedURI := "gs://test-bucket/videos/" + fmt.Sprint(profileID) + "/sess-hl-happy/merged.mp4"
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, mergedURI, mp4Bytes)
+			// The adjacent best/key legacy segments normalize to one parent event
+			// shared by the full, best, and key reels.
+			for i := 0; i < 3; i++ {
 				testhelpers.MockGCSUpload(ffmpegTransport, "test-bucket", "highlight")
 			}
 
@@ -228,7 +298,7 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 					}},
 				})
 
-			task, err := NewGenerateHighlightTask("sess-hl-happy", 0, 60)
+			task, err := NewGenerateHighlightTask("sess-hl-happy", profileID+999, 60)
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(w.HandleGenerateHighlightTask(context.Background(), task)).To(Succeed())
@@ -240,6 +310,21 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 			Expect(fullResult.Status).To(Equal("COMPLETED"))
 			Expect(fullResult.GCSURI).To(ContainSubstring("sess-hl-happy"))
 			Expect(fullResult.DurationSec).To(BeNumerically(">", 0))
+			Expect(fullResult.ProfileID).To(Equal(profileID))
+
+			var normalized []HighlightSegment
+			Expect(json.Unmarshal([]byte(fullResult.Segments), &normalized)).To(Succeed())
+			Expect(normalized).To(HaveLen(1))
+			Expect(normalized[0].Version).To(Equal(2))
+			Expect(normalized[0].Observations).To(HaveLen(2))
+
+			var resultCount int64
+			Expect(dbConn.Model(&db.HighlightResult{}).
+				Where("session_id = ?", "sess-hl-happy").
+				Count(&resultCount).Error).NotTo(HaveOccurred())
+			Expect(resultCount).To(Equal(int64(3)))
+			Expect(ffmpegTransport.Verify()).To(Succeed())
+			Expect(geminiTransport.Verify()).To(Succeed())
 		})
 	})
 })

@@ -36,8 +36,8 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 	}
 
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
 		return
 	}
 

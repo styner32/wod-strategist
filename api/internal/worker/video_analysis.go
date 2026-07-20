@@ -58,24 +58,23 @@ const (
 
 4. **개선 솔루션 (Actionable Feedback)**:
    - 다음에 이 운동을 할 때 즉시 적용할 수 있는 구체적인 팁을 3가지 제안해주세요.
-   - 입력된 **운동 목표**가 있다면, 그 목표 달성을 위한 전략적 조언을 포함해 주세요.
-
-5. **핵심 구간 타임스탬프 (Key Timestamps)**:
-   - 피드백과 관련된 비디오의 중요 구간(시작 시간 - 종료 시간)을 나열하고, 해당 구간을 주목해야 하는 이유를 한 문장으로 요약해 주세요.`
+   - 입력된 **운동 목표**가 있다면, 그 목표 달성을 위한 전략적 조언을 포함해 주세요.`
 
 	HighlightSelectionPrompt = `
 
-7. **하이라이트 구간 (Highlight Segments)**:
-   - 이 하이라이트는 전체 운동을 요약하는 역할입니다. 대상 인물의 영상에서 직접 확인되고 재검증된 운동 종목에 대해서만 핵심 구간을 추출하세요.
+5. **하이라이트 시각 근거 (Highlight Evidence)**:
+   - 이 응답이 분석하는 구간 안에서 대상 인물에게 직접 보이는 근거만 추출하세요.
    - 사용자 입력에만 있고 영상에서 보이지 않는 계획 종목은 포함하지 마세요. 힌트에 없는 실제 관찰 종목은 포함하세요.
    - 걷기, 휴식, 회복, 준비, 장비 세팅, Unknown은 하이라이트나 fatigue_point가 아닙니다.
-   - 각 운동 종목별로 최소 1개 이상의 하이라이트를 반드시 포함하세요. 특정 운동만 편중하지 마세요.
-   - 카테고리: best_form (가장 좋은 자세), worst_form (가장 나쁜 자세), fatigue_point (피로 시작 지점), key_moment (핵심 순간)
-   - fatigue_point는 반복 속도 저하, 케이던스 손실, 가동범위 감소 또는 자세 붕괴가 영상에서 지속적으로 보이는 경우에만 사용하세요. 심박수만으로 만들지 마세요.
-   - 각 카테고리당 가능한 한 2개 이상의 구간을 찾고, movement 필드에 해당 운동 종목명을 기입하세요.
-   - 각 구간은 3~15초 권장, 전체 시간 합계 제한은 없습니다. 자유롭게 유의미한 구간을 모두 추출하세요.
+   - 구간당 최대 3개만 출력하고, 근거가 없으면 빈 배열을 출력하세요. 카테고리별 개수 할당량은 없습니다.
+   - type: positive_form(직접 보이는 좋은 기술), form_issue(직접 보이는 교정점), fatigue_onset(지속적인 속도·가동범위·자세 저하), technique_event(평가와 별개인 구체적인 기술·전환 장면)
+	   - 동일한 연속 동작과 같은 type을 여러 조각으로 나누지 마세요. 각 start/end는 현상이 실제로 보이는 정확한 시각이어야 합니다.
+	   - confidence는 해당 시각 근거가 영상에서 직접 확인된 확신도이며 0.0~1.0 숫자로 출력하세요.
+   - 중요한 장면이면 tags에 key_moment를 추가하세요. positive_form/form_issue/fatigue_onset와 겹치는 key_moment를 별도 항목으로 중복 출력하지 마세요.
+   - fatigue_onset는 심박수만으로 만들지 말고 반복 속도 저하, 케이던스 손실, 가동범위 감소 또는 자세 붕괴가 지속적으로 보여야 합니다.
+   - movement 필드에는 실제로 관찰된 운동 종목명을 기입하세요.
    - 반드시 아래 형식의 **highlights** JSON 코드 블록으로 출력하세요 (json이 아닌 highlights 태그 사용):
-` + "```highlights\n" + `[{"start":"0:15","end":"0:28","type":"best_form","movement":"Snatch","reason":"완벽한 스내치 풀 익스텐션"},{"start":"1:10","end":"1:20","type":"key_moment","movement":"Pull-up","reason":"풀업 첫 세트에서 안정적인 킵핑"},{"start":"2:30","end":"2:45","type":"worst_form","movement":"Snatch","reason":"무릎 내전과 등 굽음 관찰"},{"start":"3:00","end":"3:12","type":"fatigue_point","movement":"Burpee","reason":"속도 현저히 감소, 호흡 불안정"}]` + "\n```"
+` + "```highlights\n" + `[{"start":"0:15","end":"0:18.5","type":"positive_form","movement":"Snatch","reason":"수직에 가까운 풀 익스텐션","confidence":0.94,"tags":["key_moment"]},{"start":"0:22","end":"0:24","type":"form_issue","movement":"Snatch","reason":"캐치 순간 무릎 내전","confidence":0.86}]` + "\n```"
 
 	InjuryTimestampPrompt = `
 
@@ -583,6 +582,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.Bool("has_fatigue_context", fatigueContext != ""))
 
 	var allAnalysis strings.Builder
+	var highlightCandidates []highlightCandidate
 	for i, seg := range segments {
 		start := convertToSeconds(seg.Start)
 		end := convertToSeconds(seg.End)
@@ -613,6 +613,14 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		}
 
 		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", segUsage)
+		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(segAnalysis, highlightSource{
+			Index:           i,
+			Start:           start.Seconds(),
+			End:             end.Seconds(),
+			Movement:        seg.Type,
+			HasBounds:       true,
+			HardGapBoundary: true,
+		})...)
 
 		allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n", i+1, seg.Type, seg.Start, seg.End))
 		allAnalysis.WriteString(segAnalysis)
@@ -623,7 +631,17 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		return fmt.Errorf("all segment analyses failed")
 	}
 
-	highlightSegments := ParseHighlightSegments(analysis)
+	normalizedHighlights := consolidateHighlightCandidates(highlightCandidates, HighlightNormalizeOptions{
+		VideoEndSeconds: upload.VideoDuration.Seconds(),
+	})
+	highlightSegments := ""
+	if len(normalizedHighlights) > 0 {
+		highlightSegments = MarshalHighlightSegments(normalizedHighlights)
+	}
+	w.logger.Info("Highlight evidence consolidated",
+		zap.String("session_id", p.SessionID),
+		zap.Int("candidate_count", len(highlightCandidates)),
+		zap.Int("event_count", len(normalizedHighlights)))
 	sessionScore := parseSessionScore(analysis)
 
 	w.logger.Info("Session score parsed",
@@ -1152,8 +1170,18 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		return err
 	}
 
-	// Parse highlight segments from analysis output
-	highlightSegments := ParseHighlightSegments(analysis)
+	// Parse and consolidate full-video highlight evidence using authoritative
+	// media bounds. Exact observation intervals remain inside padded events.
+	legacyCandidates := parseHighlightCandidates(analysis, highlightSource{
+		Index: -1, Start: 0, End: videoDuration, HasBounds: videoDuration > 0,
+	})
+	normalizedHighlights := consolidateHighlightCandidates(legacyCandidates, HighlightNormalizeOptions{
+		VideoEndSeconds: videoDuration,
+	})
+	highlightSegments := ""
+	if len(normalizedHighlights) > 0 {
+		highlightSegments = MarshalHighlightSegments(normalizedHighlights)
+	}
 
 	result := &db.AnalysisResult{
 		SessionID:         p.SessionID,
@@ -1257,51 +1285,20 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	return prompt
 }
 
-// ParseHighlightSegments extracts all JSON arrays from ```highlights``` code blocks
-// or <highlights> XML tags in the WOD analysis output. When multiple blocks exist
-// (one per segment), all highlights are merged into a single JSON array.
-// Returns the raw JSON string, or empty on failure.
+// ParseHighlightSegments is the compatibility entrypoint used by admin reparse
+// and legacy/debug paths that do not have per-segment provenance. New two-pass
+// analysis parses each response immediately and supplies authoritative bounds.
 func ParseHighlightSegments(analysisOutput string) string {
-	matches := highlightBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
-	if len(matches) == 0 {
+	candidates := parseHighlightCandidates(analysisOutput, highlightSource{Index: -1})
+	if len(candidates) == 0 {
 		return ""
 	}
-
-	var allHighlights []HighlightSegment
-	for _, match := range matches {
-		// The regex has two capture groups (backtick vs XML); pick the non-empty one.
-		jsonStr := firstNonEmpty(match[1:])
-		if jsonStr == "" {
-			continue
-		}
-		var parsed []HighlightSegment
-		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil || len(parsed) == 0 {
-			continue
-		}
-		for _, highlight := range parsed {
-			if strings.TrimSpace(highlight.Movement) != "" && isNonExerciseMovement(highlight.Movement) {
-				continue
-			}
-			if isHeartRateOnlyFatigueHighlight(highlight) {
-				continue
-			}
-			allHighlights = append(allHighlights, highlight)
-		}
-	}
-
-	if len(allHighlights) == 0 {
-		return ""
-	}
-
-	result, err := json.Marshal(allHighlights)
-	if err != nil {
-		return ""
-	}
-	return string(result)
+	return MarshalHighlightSegments(consolidateHighlightCandidates(candidates, HighlightNormalizeOptions{}))
 }
 
 func isHeartRateOnlyFatigueHighlight(highlight HighlightSegment) bool {
-	if !strings.EqualFold(strings.TrimSpace(highlight.Type), "fatigue_point") {
+	typeName := strings.ToLower(strings.TrimSpace(highlight.Type))
+	if typeName != "fatigue_point" && typeName != HighlightObservationFatigueOnset {
 		return false
 	}
 	reason := strings.ToLower(highlight.Reason)

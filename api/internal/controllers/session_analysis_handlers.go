@@ -97,6 +97,7 @@ func (ctl *Controller) GetSessionAnalysis(c *gin.Context) {
 
 	var analysisResponse *SessionAnalysisResultResponse
 	if hasAnalysis {
+		analysis.HighlightSegments = normalizeHighlightJSONForResponse(analysis.HighlightSegments)
 		analysisResponse = &SessionAnalysisResultResponse{
 			AnalysisResult: analysis,
 			WorkoutType:    workoutType,

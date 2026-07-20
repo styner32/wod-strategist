@@ -207,7 +207,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(decodeMapBody(w)["error"]).To(Equal("filename is required"))
 		})
 
-		It("sanitizes path traversal and returns a signed url", func() {
+		It("rejects invalid session_id and path traversal", func() {
 			req := newAuthorizedJSONRequest(
 				http.MethodPost,
 				"/api/v1/upload-url",
@@ -216,10 +216,9 @@ var _ = Describe("Controller handlers", func() {
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
 			body := decodeMapBody(w)
-			Expect(body["upload_url"]).NotTo(BeEmpty())
-			Expect(body["gcs_uri"]).To(Equal("gs://test-bucket/videos/0/session-1/video.mp4"))
+			Expect(body["error"]).To(Equal("invalid session_id format"))
 		})
 
 		It("returns internal error when storage fails", func() {
@@ -474,7 +473,7 @@ var _ = Describe("Controller handlers", func() {
 				Reply(http.StatusOK).
 				JSON(map[string]any{"name": "videos/0/session-1/video.mp4"})
 
-			body, contentType := multipartRequestBody("../../session-1", "..\\\\folder\\\\video.mp4", "dummy content")
+			body, contentType := multipartRequestBody("session-1", "..\\\\folder\\\\video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", contentType)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -504,6 +503,18 @@ var _ = Describe("Controller handlers", func() {
 			Expect(payload.SessionID).To(Equal("session-1"))
 			Expect(payload.FilePath).To(Equal("gs://test-bucket/videos/0/session-1/video.mp4"))
 			Expect(payload.ProfileID).To(Equal(profileID))
+		})
+
+		It("rejects legacy upload when sessionID is invalid", func() {
+			body, contentType := multipartRequestBody("../../session-1", "video.mp4", "dummy content")
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+			req.Header.Set("Content-Type", contentType)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(decodeMapBody(w)["error"]).To(Equal("invalid session_id format"))
 		})
 
 		It("resolves the profile from an old-format session ID", func() {
@@ -560,7 +571,7 @@ var _ = Describe("Controller handlers", func() {
 				ProfileID:         profile.ID,
 				Status:            "COMPLETED",
 				Output:            "output-b",
-				HighlightSegments: `[]`,
+				HighlightSegments: `[{"start":"0:10","end":"0:09","type":"best_form","movement":"Air Squat","reason":"reversed"}]`,
 			})
 		})
 
@@ -579,7 +590,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(results[0].Output).To(Equal("output-a"))
 		})
 
-		It("preserves the legacy mobile result array and field types", func() {
+		It("preserves result field types while normalizing legacy highlights", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionA, nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
@@ -602,7 +613,14 @@ var _ = Describe("Controller handlers", func() {
 			highlightSegments, ok := result["highlight_segments"].(string)
 			Expect(ok).To(BeTrue(), "highlight_segments must remain a JSON-encoded string")
 			Expect(json.Valid([]byte(highlightSegments))).To(BeTrue())
-			Expect(highlightSegments).To(MatchJSON(`[{"start_time":1.5,"end_time":4.5,"description":"Good rep"}]`))
+			var normalized []worker.HighlightSegment
+			Expect(json.Unmarshal([]byte(highlightSegments), &normalized)).To(Succeed())
+			Expect(normalized).To(HaveLen(1))
+			Expect(normalized[0].Version).To(Equal(2))
+			Expect(normalized[0].Type).To(Equal("key_moment"))
+			Expect(normalized[0].Observations).To(HaveLen(1))
+			Expect(normalized[0].Observations[0].Type).To(Equal(worker.HighlightObservationTechnique))
+			Expect(normalized[0].Observations[0].Reason).To(Equal("Good rep"))
 		})
 
 		It("GET /analysis/:session_id returns only the requested session", func() {
@@ -617,6 +635,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(results).To(HaveLen(1))
 			Expect(results[0].SessionID).To(Equal(sessionB))
 			Expect(results[0].Output).To(Equal("output-b"))
+			Expect(results[0].HighlightSegments).To(MatchJSON(`[]`))
 		})
 	})
 

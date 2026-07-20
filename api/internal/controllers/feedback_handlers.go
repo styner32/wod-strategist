@@ -472,7 +472,7 @@ func writeFeedbackAppendError(c *gin.Context, status int, err error) {
 
 func feedbackSessionID(c *gin.Context) (string, bool) {
 	sessionID := strings.TrimSpace(c.Param("session_id"))
-	if sessionID == "" || len(sessionID) > 200 {
+	if sessionID == "" || len(sessionID) > 200 || !isValidSessionID(sessionID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id"})
 		return "", false
 	}

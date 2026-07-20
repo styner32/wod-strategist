@@ -55,8 +55,12 @@ func (ctl *Controller) CreateUploadURL(c *gin.Context) {
 		return
 	}
 
-	if sanitizeObjectPart(req.SessionID, "") == "" {
+	if req.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if !isValidSessionID(req.SessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
 		return
 	}
 	if sanitizeObjectPart(req.Filename, "") == "" {
@@ -113,6 +117,10 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 
 	if req.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if !isValidSessionID(req.SessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
 		return
 	}
 	if req.GCSURI == "" {
@@ -225,6 +233,10 @@ func (ctl *Controller) Upload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
 		return
 	}
+	if !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
+		return
+	}
 
 	profileID, err := ctl.resolveLegacyUploadProfile(c.Request.Context(), sessionID, c.PostForm("profile_id"))
 	if err != nil {
@@ -297,6 +309,10 @@ func (ctl *Controller) Upload(c *gin.Context) {
 // GET /analysis/:session_id
 func (ctl *Controller) GetAnalysis(c *gin.Context) {
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
+		return
+	}
 	if !ctl.assertOwnsSession(c, sessionID) {
 		return
 	}
@@ -308,7 +324,7 @@ func (ctl *Controller) GetAnalysis(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, results)
+	c.JSON(http.StatusOK, normalizeHighlightResultsForResponse(results))
 }
 
 // @Summary      Get Chunk Analysis
@@ -325,6 +341,10 @@ func (ctl *Controller) GetChunkAnalysis(c *gin.Context) {
 	}
 
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
+		return
+	}
 	if !ctl.assertOwnsSession(c, sessionID) {
 		return
 	}
@@ -418,7 +438,7 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, results)
+	c.JSON(http.StatusOK, normalizeHighlightResultsForResponse(results))
 }
 
 func (ctl *Controller) ArchiveHistory(c *gin.Context) {
@@ -562,6 +582,10 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 
 	if req.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if !isValidSessionID(req.SessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
 		return
 	}
 	if req.GCSURI == "" {
@@ -946,6 +970,10 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
 		return
 	}
+	if !isValidSessionID(req.SessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
+		return
+	}
 
 	if req.ProfileID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
@@ -1014,6 +1042,10 @@ func (ctl *Controller) GetSubtitles(c *gin.Context) {
 	}
 
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
+		return
+	}
 
 	if !ctl.assertOwnsSession(c, sessionID) {
 		return
@@ -1061,6 +1093,10 @@ func (ctl *Controller) GenerateHighlight(c *gin.Context) {
 
 	if req.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if !isValidSessionID(req.SessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
 		return
 	}
 
@@ -1123,6 +1159,10 @@ func (ctl *Controller) GetHighlight(c *gin.Context) {
 	}
 
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
+		return
+	}
 	if !ctl.assertOwnsSession(c, sessionID) {
 		return
 	}
@@ -1244,6 +1284,10 @@ func (ctl *Controller) VerifyHighlights(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
 		return
 	}
+	if !isValidSessionID(req.SessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
+		return
+	}
 
 	if !ctl.assertOwnsSession(c, req.SessionID) {
 		return
@@ -1300,6 +1344,10 @@ func (ctl *Controller) RetryAnalysis(c *gin.Context) {
 	req.SessionID = sanitizeIdentifier(req.SessionID)
 	if req.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if !isValidSessionID(req.SessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
 		return
 	}
 	if req.ProfileID == 0 {
@@ -1402,6 +1450,10 @@ func (ctl *Controller) GenerateHardSub(c *gin.Context) {
 	req.SessionID = sanitizeIdentifier(req.SessionID)
 	if req.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if !isValidSessionID(req.SessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
 		return
 	}
 	if req.ProfileID == 0 {

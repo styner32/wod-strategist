@@ -1,11 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { t } from "@/features/i18n";
+import { t, useLocale } from "@/features/i18n";
 import {
-  ActivityIndicator,
   Animated,
   Dimensions,
   FlatList,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,18 +14,18 @@ import { useVideoPlayer, VideoView } from "expo-video";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { ChunkAnalysisResult } from "../api";
+import {
+  getHighlightSeekTime,
+  parseHighlightSegments,
+  type HighlightObservationType,
+  type HighlightSegment,
+} from "../highlights";
+
+export type { HighlightSegment } from "../highlights";
 
 // ─────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────
-
-export interface HighlightSegment {
-  start: string; // "M:SS" or "MM:SS"
-  end: string;
-  type: string; // best_form, worst_form, fatigue_point, key_moment
-  movement?: string;
-  reason: string;
-}
 
 export interface GuidanceCue {
   startSecs: number;
@@ -40,21 +38,13 @@ interface Props {
   videoUrl: string;
   sessionLabel: string;
   chunks: ChunkAnalysisResult[];
-  highlightSegments: HighlightSegment[];
+  highlightSegments: unknown;
   onClose: () => void;
 }
 
 // ─────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────
-
-function parseTimestamp(ts: string): number {
-  const parts = ts.split(":");
-  if (parts.length === 2) {
-    return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
-  }
-  return parseInt(ts, 10) || 0;
-}
 
 function formatTime(secs: number): string {
   const m = Math.floor(secs / 60);
@@ -94,10 +84,20 @@ const HIGHLIGHT_TYPE_CONFIG: Record<string, { emoji: string; color: string; labe
   best_form: { emoji: "🏆", color: "#30D158", labelKey: "player.bestForm" },
   worst_form: { emoji: "⚠️", color: "#FF9F0A", labelKey: "player.needsWork" },
   fatigue_point: { emoji: "🫁", color: "#FF453A", labelKey: "player.fatigue" },
+  mixed_form: { emoji: "⚖️", color: "#BF5AF2", labelKey: "player.mixedForm" },
   key_moment: { emoji: "⭐", color: "#64D2FF", labelKey: "player.keyMoment" },
 };
 
-const PREROLL_SECS = 5;
+const HIGHLIGHT_OBSERVATION_CONFIG: Record<
+  HighlightObservationType,
+  { color: string; labelKey: string }
+> = {
+  positive_form: { color: "#30D158", labelKey: "player.observationPositiveForm" },
+  form_issue: { color: "#FF9F0A", labelKey: "player.observationFormIssue" },
+  fatigue_onset: { color: "#FF453A", labelKey: "player.observationFatigueOnset" },
+  technique_event: { color: "#64D2FF", labelKey: "player.observationTechniqueEvent" },
+};
+
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 // Portrait video: use 9:16 aspect ratio but cap at ~50% screen height
 // so guidance panel is always visible below
@@ -114,12 +114,17 @@ export function WorkoutVideoPlayer({
   highlightSegments,
   onClose,
 }: Props) {
+  const locale = useLocale();
   const insets = useSafeAreaInsets();
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [activeHighlight, setActiveHighlight] = useState<HighlightSegment | null>(null);
   const highlightFade = useRef(new Animated.Value(0)).current;
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const normalizedHighlights = useMemo(
+    () => parseHighlightSegments(highlightSegments),
+    [highlightSegments]
+  );
 
   // Build guidance cues from chunk analysis
   const cues = useMemo(() => buildCues(chunks), [chunks]);
@@ -172,12 +177,12 @@ export function WorkoutVideoPlayer({
   // Jump to highlight
   const handleHighlightPress = useCallback(
     (hl: HighlightSegment) => {
-      const targetSecs = Math.max(0, parseTimestamp(hl.start) - PREROLL_SECS);
+      const targetSecs = getHighlightSeekTime(hl.startSeconds, duration, hl.version);
       player.currentTime = targetSecs;
       player.play();
       showHighlightOverlay(hl);
     },
-    [player, showHighlightOverlay]
+    [duration, player, showHighlightOverlay]
   );
 
   // Cleanup
@@ -192,8 +197,8 @@ export function WorkoutVideoPlayer({
       const rawCfg = HIGHLIGHT_TYPE_CONFIG[hl.type] ?? { emoji: "🎯", color: "#A0A0A0", labelKey: hl.type };
       const cfg = { ...rawCfg, label: t(rawCfg.labelKey) };
       const isActive =
-        currentTime >= parseTimestamp(hl.start) - 1 &&
-        currentTime <= parseTimestamp(hl.end) + 1;
+        currentTime >= hl.startSeconds &&
+        currentTime <= hl.endSeconds;
 
       return (
         <TouchableOpacity
@@ -210,9 +215,53 @@ export function WorkoutVideoPlayer({
             <Text style={[styles.chipLabel, { color: cfg.color }]} numberOfLines={1}>
               {hl.movement ? `${hl.movement}` : cfg.label}
             </Text>
+            {hl.movement && (
+              <Text style={styles.chipType}>{cfg.label}</Text>
+            )}
             <Text style={styles.chipTime}>
               {hl.start} – {hl.end}
             </Text>
+            {hl.type !== "key_moment" && hl.tags?.includes("key_moment") && (
+              <View style={styles.chipTag}>
+                <Text style={styles.chipTagText}>⭐ {t("player.keyMoment")}</Text>
+              </View>
+            )}
+            {hl.reason && (
+              <Text style={styles.chipReason} numberOfLines={2}>{hl.reason}</Text>
+            )}
+            {hl.observations && hl.observations.length > 0 && (
+              <View style={styles.observationList}>
+                {hl.observations.map((observation, observationIndex) => {
+                  const observationConfig = HIGHLIGHT_OBSERVATION_CONFIG[observation.type];
+                  const confidence = observation.confidence != null
+                    ? ` · ${t("player.observationConfidence", {
+                        value: Math.round(observation.confidence * 100),
+                      })}`
+                    : "";
+
+                  return (
+                    <View
+                      key={`${observation.startSeconds}-${observation.endSeconds}-${observation.type}-${observationIndex}`}
+                      style={styles.observationItem}
+                    >
+                      <Text style={[styles.observationLabel, { color: observationConfig.color }]}
+                        numberOfLines={1}
+                      >
+                        {t(observationConfig.labelKey)}{confidence}
+                      </Text>
+                      <Text style={styles.observationTime}>
+                        {observation.start} – {observation.end}
+                      </Text>
+                      {observation.reason && (
+                        <Text style={styles.observationReason} numberOfLines={2}>
+                          {observation.reason}
+                        </Text>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            )}
           </View>
         </TouchableOpacity>
       );
@@ -252,7 +301,7 @@ export function WorkoutVideoPlayer({
                 {activeHighlight.movement ? ` · ${activeHighlight.movement}` : ""}
               </Text>
               <Text style={styles.highlightOverlayReason} numberOfLines={2}>
-                {activeHighlight.reason}
+                {activeHighlight.reason ?? activeHighlight.observations?.[0]?.reason}
               </Text>
             </View>
           </View>
@@ -291,14 +340,15 @@ export function WorkoutVideoPlayer({
         </View>
 
         {/* ── Highlights Section ── */}
-        {highlightSegments.length > 0 && (
+        {normalizedHighlights.length > 0 && (
           <View style={styles.highlightsSection}>
             <Text style={styles.sectionTitle}>{t("player.highlightsSection")}</Text>
             <Text style={styles.sectionSubtitle}>
               {t("player.highlightsHint")}
             </Text>
             <FlatList
-              data={highlightSegments}
+              data={normalizedHighlights}
+              extraData={locale}
               keyExtractor={(_, i) => `hl-${i}`}
               renderItem={renderHighlightChip}
               horizontal
@@ -509,15 +559,15 @@ const styles = StyleSheet.create({
   },
   highlightChip: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 8,
     backgroundColor: "rgba(255,255,255,0.05)",
     borderRadius: 12,
     borderWidth: 1,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    minWidth: 140,
-    maxWidth: 220,
+    minWidth: 220,
+    maxWidth: 300,
   },
   chipEmoji: {
     fontSize: 20,
@@ -529,10 +579,62 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
+  chipType: {
+    fontSize: 10,
+    color: "#888",
+    marginTop: 1,
+  },
   chipTime: {
     fontSize: 11,
     color: "#888",
     marginTop: 2,
+  },
+  chipTag: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    backgroundColor: "rgba(100,210,255,0.12)",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    marginTop: 6,
+  },
+  chipTagText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#64D2FF",
+  },
+  chipReason: {
+    fontSize: 11,
+    lineHeight: 16,
+    color: "#C8C8C8",
+    marginTop: 6,
+  },
+  observationList: {
+    gap: 5,
+    marginTop: 8,
+    paddingTop: 7,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "rgba(255,255,255,0.16)",
+  },
+  observationItem: {
+    borderRadius: 7,
+    backgroundColor: "rgba(255,255,255,0.04)",
+    paddingHorizontal: 7,
+    paddingVertical: 6,
+  },
+  observationLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  observationTime: {
+    fontSize: 10,
+    color: "#888",
+    marginTop: 1,
+  },
+  observationReason: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: "#B8B8B8",
+    marginTop: 3,
   },
 
   // Timeline

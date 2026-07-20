@@ -75,7 +75,27 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		Expect(prompt).To(ContainSubstring("배경 인물"))
 		Expect(prompt).To(ContainSubstring("목록에 있어도 보이지 않으면 결과·점수·하이라이트에서 제외"))
 		Expect(prompt).To(ContainSubstring("걷기, 휴식, 회복, 준비, 장비 세팅, Unknown은 하이라이트"))
-		Expect(prompt).To(ContainSubstring("심박수만으로 만들지 마세요"))
+		Expect(prompt).To(ContainSubstring("fatigue_onset는 심박수만으로 만들지 말고"))
+	})
+
+	It("requests at most three exact evidence items without category quotas", func() {
+		prompt := w.buildAnalysisPrompt(VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD}, 60)
+
+		Expect(prompt).To(ContainSubstring("구간당 최대 3개"))
+		Expect(prompt).To(ContainSubstring("카테고리별 개수 할당량은 없습니다"))
+		Expect(prompt).To(ContainSubstring("confidence"))
+		Expect(prompt).To(ContainSubstring("0.0~1.0"))
+		for _, evidenceType := range []string{
+			HighlightObservationPositiveForm,
+			HighlightObservationFormIssue,
+			HighlightObservationFatigueOnset,
+			HighlightObservationTechnique,
+		} {
+			Expect(prompt).To(ContainSubstring(evidenceType))
+		}
+		Expect(prompt).NotTo(ContainSubstring("카테고리별 최소"))
+		Expect(prompt).NotTo(ContainSubstring("2개 이상"))
+		Expect(prompt).NotTo(ContainSubstring("무제한"))
 	})
 
 	It("uses the default profile when ProfileID is 0", func() {
@@ -239,10 +259,11 @@ var _ = Describe("ParseHighlightSegments", func() {
 		result := ParseHighlightSegments(input)
 		var segs []HighlightSegment
 		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
-		Expect(segs).To(HaveLen(3))
+		Expect(segs).To(HaveLen(2))
 		Expect(segs[0].Movement).To(Equal("Triceps Extension"))
 		Expect(segs[1].Movement).To(Equal("Box Step-up"))
-		Expect(segs[2].Movement).To(Equal("Box Step-up"))
+		Expect(segs[1].Observations).To(HaveLen(2))
+		Expect(HighlightSegmentHasTag(segs[1], HighlightTagKeyMoment)).To(BeTrue())
 	})
 
 	It("handles XML-style <highlights> tags", func() {
@@ -297,25 +318,33 @@ var _ = Describe("ParseHighlightSegments", func() {
 		var segs []HighlightSegment
 		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
 
-		// Count expected highlights per segment from the real output:
-		// Seg 1: 4, Seg 2: 3, Seg 3: 4, Seg 4: 4, Seg 5: 5, Seg 6: 4 (XML)
-		// Seg 7: 4, Seg 8: 4, Seg 9: 5, Seg 10: 4, Seg 11: 4, Seg 12: 4, Seg 13: 4
-		// One legacy fatigue_point labeled Rest and three BPM-only fatigue points
-		// are intentionally discarded. A Burpee fatigue point that also identifies
-		// visible transition-speed loss remains.
-		Expect(segs).To(HaveLen(49))
+		// The legacy flat output is consolidated into parent playback events and
+		// capped at one positive, one improvement, and one technique card per movement.
+		Expect(segs).To(HaveLen(21))
 
 		// Verify highlights from different segments are represented
 		movements := map[string]bool{}
 		starts := map[string]bool{}
+		movementCounts := map[string]int{}
 		for _, seg := range segs {
 			movements[seg.Movement] = true
 			starts[seg.Start] = true
+			movementCounts[normalizeHighlightMovementKey(seg.Movement)]++
+			Expect(seg.Version).To(Equal(2))
+			Expect(seg.Observations).NotTo(BeEmpty())
+			start, startErr := parseTimestampToSeconds(seg.Start)
+			end, endErr := parseTimestampToSeconds(seg.End)
+			Expect(startErr).NotTo(HaveOccurred())
+			Expect(endErr).NotTo(HaveOccurred())
+			Expect(end - start).To(BeNumerically(">=", 5))
+			Expect(end - start).To(BeNumerically("<=", 20))
+		}
+		for _, count := range movementCounts {
+			Expect(count).To(BeNumerically("<=", 3))
 		}
 		Expect(starts).NotTo(HaveKey("04:58.000"))
 		Expect(starts).NotTo(HaveKey("17:48"))
 		Expect(starts).NotTo(HaveKey("21:40"))
-		Expect(starts).To(HaveKey("25:50"))
 		Expect(movements).To(HaveKey("Overhead Triceps Extension"))
 		Expect(movements).To(HaveKey("Box Step-up"))
 		Expect(movements).To(HaveKey("Dumbbell Snatch"))
@@ -332,7 +361,8 @@ var _ = Describe("ParseHighlightSegments", func() {
 				toesToBarCount++
 			}
 		}
-		Expect(toesToBarCount).To(Equal(4)) // segment 6 has 4 highlights
+		Expect(toesToBarCount).To(BeNumerically(">", 0))
+		Expect(toesToBarCount).To(BeNumerically("<=", 3))
 	})
 
 	It("also merges injury timestamps from the same real-world output", func() {

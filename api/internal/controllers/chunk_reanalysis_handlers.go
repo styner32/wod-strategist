@@ -344,7 +344,7 @@ func (ctl *Controller) requireChunkReanalysisEnabled(c *gin.Context) bool {
 
 func parseChunkReanalysisPath(c *gin.Context) (string, uint, bool) {
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
-	if sessionID == "" {
+	if sessionID == "" || !isValidSessionID(sessionID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id"})
 		return "", 0, false
 	}
