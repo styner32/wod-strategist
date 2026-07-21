@@ -30,9 +30,9 @@
 
 - Prefer integration-style tests that exercise multiple layers (middleware →
   handler → DB) over isolated unit tests with mocks.
-- Use real dependencies with nil or minimal config for route-level tests.
-  Handlers guard against nil deps, so a `controllers.New(Config{})` is safe
-  for testing middleware behavior.
+- Use real dependencies with minimal config for route-level tests. Test helpers
+  must supply required constructor dependencies, such as `StorageClient`, even
+  when the route under test does not use them.
 - When the real handler returns 400 (missing body) instead of 401 (middleware
   blocked), that proves the request reached the handler — no mock needed.
 - See [backend-testing.md](backend-testing.md) for worker-specific patterns.
@@ -43,6 +43,13 @@
 - When adding a new handler, register it directly in `SetupRouter`
   (`api.GET("/path", ctl.Method)`) — no route-definition tables, no
   interface methods to declare.
+
+## Initialization errors
+
+- Constructors in reusable packages return errors for missing or invalid
+  dependencies; they do not call `panic`, `log.Fatal`, or `os.Exit`.
+- Process termination decisions belong in `cmd/server` and `cmd/worker`, after
+  constructor errors have propagated to the command boundary.
 
 ## Handler organization
 

@@ -133,6 +133,73 @@ verified legacy reconstruction.
   Keep the fractional-offset wire tests when upgrading the SDK; remove the workaround only
   after the SDK preserves fractional offsets itself.
 
+## Whole-session debug re-analysis
+
+- Feature flag: `ENABLE_SESSION_REANALYSIS=true` on the API server. It is
+  independent from `ENABLE_CHUNK_REANALYSIS` and disabled by default.
+- Queue task: `session:debug-reanalysis`; its payload contains only `run_id`.
+- Persistence: `session_reanalysis_runs`. Candidates never replace the unique
+  production `analysis_results` row and never enqueue highlights, hardsubs,
+  subtitles, injury analysis, or TTS.
+- Owner APIs are `POST /sessions/:session_id/reanalyses`,
+  `GET /sessions/:session_id/reanalyses`, and
+  `GET /sessions/:session_id/reanalyses/:run_id`. POST accepts only
+  `client_request_id`, enforces one active run per session, blocks while any
+  chunk debug run is active, and limits each profile to 5 runs per rolling 24h.
+- The API resolves and snapshots the exact GCS session source. The worker may
+  reuse a still-valid Gemini Files object only from a chunk or session debug run
+  with the same `source_gcs_uri`; an authoritative source duration is still
+  probed before reuse.
+- Only the latest active, non-retracted structured chunk corrections are
+  included. Free-text notes and unconfirmed re-analysis candidates are never
+  prompt context. Corrections carry `media_start_secs`/`media_end_secs`, remain
+  non-authoritative labels, and must be revalidated from visible evidence.
+- A saved `fatigued` value cannot create visual fatigue evidence. Saved
+  `not_fatigued`, `walking_rest`, or non-exercise activity suppresses conflicting
+  original fatigue aggregation for that debug run.
+- Status values are `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED`,
+  `VIDEO_UNAVAILABLE`, and `CONTEXT_UNAVAILABLE`.
+
+## Highlight playback-event contract (v2)
+
+- `analysis_results.highlight_segments` remains a JSON-encoded array; no schema
+  migration or bulk backfill is required. New entries set `version: 2` and keep
+  the legacy parent fields `start`, `end`, `type`, `movement`, and `reason`.
+- A parent is a playback event. Its `observations` keep exact visual-evidence
+  ranges and use `positive_form`, `form_issue`, `fatigue_onset`, or
+  `technique_event`, with an optional `confidence`. Never lengthen an exact
+  observation merely to meet the playback duration.
+- Merge observations for the same movement when they overlap or are at most
+  `1.5` seconds apart. Pad the parent symmetrically to at least `5` seconds,
+  bounded by its analyzed media segment and full video. Split a chain longer
+  than `20` seconds at the largest observation gap, recursively if necessary.
+- Rest, setup/preparation, `Unknown`, a movement change, or an intervening
+  source segment is a hard merge boundary. Different movements may share a
+  parent only when the source analysis segment explicitly names a compound
+  movement.
+- Parent type is derived from retained observations: positive only is
+  `best_form`, form issue is `worst_form`, fatigue only is `fatigue_point`,
+  positive plus issue/fatigue is `mixed_form`, and standalone technique is
+  `key_moment`. A technique observation merged with evaluation evidence adds
+  the `key_moment` tag instead of creating a duplicate card.
+- Select at most one positive, one improvement/fatigue, and one independent
+  technique event per normalized movement (maximum three parent cards).
+- Treat legacy flat arrays as input to the same deterministic normalizer at API
+  read, verification, and reel-generation boundaries. Preserve unknown legacy
+  shapes rather than silently erasing them. Normalizing v2 output must be
+  idempotent.
+- Some old API rows have no stored video duration. For those read-only responses,
+  never pad past the last exact observation; use preceding context and allow a
+  shorter parent near media start. Verification and reel generation must instead
+  use the processed/probed video duration and apply normal bounded padding.
+- Verification operates on each exact observation. After rejected or omitted
+  observations are removed, recompute the parent type, tag, summary, and padded
+  range. A parent with no retained observations is removed.
+- Reel generation cuts each selected parent once from
+  `videos/{profileId}/{sessionId}/merged.mp4`, then reuses that clip across Full,
+  Best, Improvement, and Key outputs. Use only merged-media timestamps; never
+  apply capture-clock chunk offsets to the merged video.
+
 ## Anti-hallucination rules
 1. Prefer chunk data over model indexing.
 2. Inject exact video duration.

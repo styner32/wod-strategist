@@ -60,6 +60,21 @@ Path construction:
 - `POST /chunk-complete` and `POST /merge-chunks` — required in JSON body.
 - Test script `scripts/test-chunk-upload.js` must include `profile_id` in the `/upload-url` POST body.
 
+## Targeted playback resolution
+
+- History and session-analysis aggregate endpoints must not list GCS objects to
+  discover every video variant. Those reads stay database-only.
+- `GET /video-download/:session_id?profile_id={id}&kind={kind}` resolves only
+  the requested `merged`, `hardsubbed`, or `encoded` kind.
+- Resolution checks the exact canonical object
+  `videos/{profileId}/{sessionId}/{kind}.mp4` first. Only when it is absent may
+  the handler search legacy session-directory and flat-layout prefixes.
+- Prefix-list results must be filtered to exact supported filenames or legacy
+  kind markers; objects such as `merged.mp4.tmp` are not playable matches.
+- Web session playback defaults to `merged` and tries `encoded` only after a
+  `404` for backward compatibility. Explicit user selection requests only that
+  selected kind.
+
 ## Backward compatibility
 - Old sessions use a flat layout: `videos/{sessionId}_{filename}` (e.g. `videos/P1-WOD-2026-04-01-14-30_chunk_001.mp4`). These files are **not migrated** — both formats are supported.
 - The legacy multipart upload handler (`POST /upload`) keeps the historical
