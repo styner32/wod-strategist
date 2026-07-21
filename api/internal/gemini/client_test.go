@@ -608,11 +608,11 @@ var _ = Describe("Gemini client", func() {
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:     "test-key",
 				BaseURL:    "https://example.test",
-				Model:      ModelFlash30Preview,
+				Model:      ModelFlash35Lite,
 				HTTPClient: &http.Client{Transport: transport},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(client.model).To(Equal(ModelFlash30Preview))
+			Expect(client.model).To(Equal(ModelFlash35Lite))
 		})
 	})
 })

@@ -9,10 +9,10 @@ Every change in this phase starts as a named candidate variant. Promote only one
 
 Verified on 2026-07-11; re-check before implementation because prices and model behavior change.
 
-- [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing): standard `gemini-3.5-flash` is listed at $1.50 per million input tokens and $9.00 per million output tokens including thinking; standard `gemini-3.1-flash-lite` is $0.25 input and $1.50 output/thinking.
+- [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing): standard `gemini-3.6-flash` is listed at $1.50 per million input tokens and $9.00 per million output tokens including thinking; standard `gemini-3.5-flash-lite` is $0.25 input and $1.50 output/thinking.
 - [Gemini video understanding](https://ai.google.dev/gemini-api/docs/video-understanding): default visual sampling is 1 FPS, which can miss rapid motion; default video is approximately 300 tokens/second including audio, while low resolution is about 100 tokens/second.
 - [Gemini media resolution](https://ai.google.dev/gemini-api/docs/media-resolution): low/medium general video is approximately 70 tokens/frame, high approximately 280; high is primarily recommended for text-heavy/small-detail video.
-- [Gemini thinking](https://ai.google.dev/gemini-api/docs/thinking): `gemini-3.5-flash` defaults to medium thinking and `gemini-3.1-pro-preview` defaults to high unless configured.
+- [Gemini thinking](https://ai.google.dev/gemini-api/docs/thinking): `gemini-3.6-flash` defaults to medium thinking and `gemini-3.1-pro-preview` defaults to high unless configured.
 - [Gemini Files API](https://ai.google.dev/gemini-api/docs/files): temporary files are stored for 48 hours, with a 20 GB project total and 2 GB per-file maximum.
 - [Gemini file input methods](https://ai.google.dev/gemini-api/docs/file-input-methods): GCS registration is a possible future way to avoid copying eligible GCS objects into Files API.
 
@@ -20,8 +20,8 @@ Illustrative lower-bound input cost for a 10-minute video at the documented defa
 
 ```text
 600 seconds * ~300 tokens/second = ~180,000 input tokens
-Gemini 3.5 Flash standard input: 0.18 * $1.50 = ~$0.27
-Gemini 3.1 Flash-Lite standard input: 0.18 * $0.25 = ~$0.045
+Gemini 3.6 Flash standard input: 0.18 * $1.50 = ~$0.27
+Gemini 3.5 Flash-Lite standard input: 0.18 * $0.25 = ~$0.045
 ```
 
 This excludes prompt, output, thinking, repeated segment calls, uploads, Pro calls, and follow-ups. Use actual `UsageMetadata`, not this estimate, for decisions.
@@ -102,7 +102,7 @@ Evaluate minimal/low for classification, indexing, and verification; low/medium 
 
 ### COST-02 — Flash-Lite routing
 
-Add `gemini-3.1-flash-lite` as a stage candidate, beginning with the structured real-time chunk contract.
+Add `gemini-3.5-flash-lite` as a stage candidate, beginning with the structured real-time chunk contract.
 
 Rollout sequence:
 

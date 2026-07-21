@@ -82,7 +82,7 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 	}
 
 	// 3. Optional fallback: sessions (if table exists)
-	if errors.Is(dbErr, gorm.ErrRecordNotFound) && ctl.db.Migrator().HasTable("sessions") {
+	if errors.Is(dbErr, gorm.ErrRecordNotFound) {
 		dbErr = ctl.db.WithContext(c.Request.Context()).Table("sessions").
 			Select("profile_id").
 			Where("session_id = ?", sessionID).
