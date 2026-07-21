@@ -225,12 +225,32 @@ var _ = Describe("SetupRouter", func() {
 		router.ServeHTTP(w, req)
 		Expect(w.Code).To(Equal(http.StatusUnauthorized))
 
+		// Mobile login with JWT cookie but without API key → 401 (should not bypass API key check)
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+		req.AddCookie(&http.Cookie{Name: "jwt", Value: "some-token"})
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusUnauthorized))
+
 		// Mobile login with API key → 400 (no JSON body, but past middleware)
 		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
 		req.Header.Set("X-API-Key", "secret")
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		Expect(w.Code).To(Equal(http.StatusBadRequest))
+
+		// Mobile signup without API key → 401
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/signup", nil)
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusUnauthorized))
+
+		// Mobile signup with JWT cookie but without API key → 401 (should not bypass API key check)
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/signup", nil)
+		req.AddCookie(&http.Cookie{Name: "jwt", Value: "some-token"})
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusUnauthorized))
 	})
 
 	It("allows localhost CORS on any port", func() {
