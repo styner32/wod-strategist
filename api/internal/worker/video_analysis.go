@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -15,6 +16,8 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -26,10 +29,6 @@ const (
 	PersonalProfilePrompt = `
 ## 개인 프로필
 분석의 정확도를 높이기 위해 개인 정보를 참고해주세요.`
-
-	MovementPrompt = `
-## 운동 컨텍스트
-분석의 정확도를 높이기 위해 아래 운동 정보를 참고해주세요.`
 
 	KnownInjuriesPrompt = `
 ## 알려진 부상 사항
@@ -47,33 +46,36 @@ const (
 1. **동작 분석 및 체형 평가 (Movement & Posture Analysis)**:
    - 전반적인 자세의 정확도와 가동 범위를 평가해주세요.
    - 평소 체형의 불균형이나 의심되는 증상(예: 거북목, 라운드 숄더, 일자허리, 골반 비대칭 등)이 관찰된다면 함께 짚어주세요.
-   - (입력된 운동 종목이 있다면) 해당 종목의 표준 기술(Standard)과 비교해 주세요.
+   - 영상에서 대상 인물에게 직접 확인되고 재검증된 종목의 표준 기술(Standard)과 비교해 주세요.
 
 2. **강점 및 약점 (Strengths & Weaknesses)**:
    - 동작 수행 중 잘 유지되고 있는 부분(Core 안정성, 리듬 등)은 무엇인가요?
    - 자세가 무너지거나 힘의 누수가 발생하는 약점은 무엇인가요?
 
 3. **피로도 및 페이스 분석 (Fatigue Analysis)**:
-   - 수행 속도가 눈에 띄게 느려지거나 자세가 흐트러지기 시작하는 **정확한 시점(분:초)**을 지목해주세요.
-   - 피로가 자세에 어떤 영향을 미쳤는지(예: 등이 굽음, 무릎이 모임) 설명해 주세요.
+   - 반복 속도, 케이던스, 가동범위 또는 자세의 지속적인 저하가 직접 보이는 경우에만 **정확한 시점(분:초)**을 지목해주세요.
+   - 허용되는 시각 근거가 없으면 피로 이벤트나 피로 시작 시점을 만들지 마세요.
+   - 피로가 자세에 어떤 영향을 미쳤는지(예: 등이 굽음, 무릎이 모임) 영상 근거와 함께 설명해 주세요.
 
 4. **개선 솔루션 (Actionable Feedback)**:
    - 다음에 이 운동을 할 때 즉시 적용할 수 있는 구체적인 팁을 3가지 제안해주세요.
-   - 입력된 **운동 목표**가 있다면, 그 목표 달성을 위한 전략적 조언을 포함해 주세요.
-
-5. **핵심 구간 타임스탬프 (Key Timestamps)**:
-   - 피드백과 관련된 비디오의 중요 구간(시작 시간 - 종료 시간)을 나열하고, 해당 구간을 주목해야 하는 이유를 한 문장으로 요약해 주세요.`
+   - 입력된 **운동 목표**가 있다면, 그 목표 달성을 위한 전략적 조언을 포함해 주세요.`
 
 	HighlightSelectionPrompt = `
 
-7. **하이라이트 구간 (Highlight Segments)**:
-   - 이 하이라이트는 전체 운동을 요약하는 역할입니다. 영상에서 감지된 **모든 운동 종목에 대해** 핵심 구간을 추출하세요.
-   - 각 운동 종목별로 최소 1개 이상의 하이라이트를 반드시 포함하세요. 특정 운동만 편중하지 마세요.
-   - 카테고리: best_form (가장 좋은 자세), worst_form (가장 나쁜 자세), fatigue_point (피로 시작 지점), key_moment (핵심 순간)
-   - 각 카테고리당 가능한 한 2개 이상의 구간을 찾고, movement 필드에 해당 운동 종목명을 기입하세요.
-   - 각 구간은 3~15초 권장, 전체 시간 합계 제한은 없습니다. 자유롭게 유의미한 구간을 모두 추출하세요.
+5. **하이라이트 시각 근거 (Highlight Evidence)**:
+   - 이 응답이 분석하는 구간 안에서 대상 인물에게 직접 보이는 근거만 추출하세요.
+   - 사용자 입력에만 있고 영상에서 보이지 않는 계획 종목은 포함하지 마세요. 힌트에 없는 실제 관찰 종목은 포함하세요.
+   - 걷기, 휴식, 회복, 준비, 장비 세팅, Unknown은 하이라이트나 fatigue_point가 아닙니다.
+   - 구간당 최대 3개만 출력하고, 근거가 없으면 빈 배열을 출력하세요. 카테고리별 개수 할당량은 없습니다.
+   - type: positive_form(직접 보이는 좋은 기술), form_issue(직접 보이는 교정점), fatigue_onset(지속적인 속도·가동범위·자세 저하), technique_event(평가와 별개인 구체적인 기술·전환 장면)
+	   - 동일한 연속 동작과 같은 type을 여러 조각으로 나누지 마세요. 각 start/end는 현상이 실제로 보이는 정확한 시각이어야 합니다.
+	   - confidence는 해당 시각 근거가 영상에서 직접 확인된 확신도이며 0.0~1.0 숫자로 출력하세요.
+   - 중요한 장면이면 tags에 key_moment를 추가하세요. positive_form/form_issue/fatigue_onset와 겹치는 key_moment를 별도 항목으로 중복 출력하지 마세요.
+   - fatigue_onset는 심박수만으로 만들지 말고 반복 속도 저하, 케이던스 손실, 가동범위 감소 또는 자세 붕괴가 지속적으로 보여야 합니다.
+   - movement 필드에는 실제로 관찰된 운동 종목명을 기입하세요.
    - 반드시 아래 형식의 **highlights** JSON 코드 블록으로 출력하세요 (json이 아닌 highlights 태그 사용):
-` + "```highlights\n" + `[{"start":"0:15","end":"0:28","type":"best_form","movement":"Snatch","reason":"완벽한 스내치 풀 익스텐션"},{"start":"1:10","end":"1:20","type":"key_moment","movement":"Pull-up","reason":"풀업 첫 세트에서 안정적인 킵핑"},{"start":"2:30","end":"2:45","type":"worst_form","movement":"Snatch","reason":"무릎 내전과 등 굽음 관찰"},{"start":"3:00","end":"3:12","type":"fatigue_point","movement":"Burpee","reason":"속도 현저히 감소, 호흡 불안정"}]` + "\n```"
+` + "```highlights\n" + `[{"start":"0:15","end":"0:18.5","type":"positive_form","movement":"Snatch","reason":"수직에 가까운 풀 익스텐션","confidence":0.94,"tags":["key_moment"]},{"start":"0:22","end":"0:24","type":"form_issue","movement":"Snatch","reason":"캐치 순간 무릎 내전","confidence":0.86}]` + "\n```"
 
 	InjuryTimestampPrompt = `
 
@@ -142,12 +144,85 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return err
 	}
 
-	if w.UseCache {
-		w.logger.Info("Using two-pass analysis for video", zap.String("session_id", p.SessionID))
+	profileID, err := w.resolveVideoAnalysisProfile(ctx, p.SessionID, p.ProfileID)
+	if err != nil {
+		w.logger.Error("Invalid video analysis profile",
+			zap.String("session_id", p.SessionID),
+			zap.Uint("profile_id", p.ProfileID),
+			zap.Error(err))
+		return err
+	}
+	p.ProfileID = profileID
+
+	pMode := p.PipelineMode
+	if pMode == "" {
+		pMode = string(w.PipelineMode)
+	}
+	if pMode == "" && w.UseCache {
+		pMode = string(PipelineModeOptimized)
+	}
+
+	if pMode == string(PipelineModeOptimized) || pMode == string(PipelineModeCompare) {
+		w.logger.Info("Using two-pass analysis for video (optimized)", zap.String("session_id", p.SessionID), zap.String("mode", pMode))
 		return w.handleVideoAnalysisTwoPass(ctx, p)
 	}
 
+	w.logger.Info("Using legacy analysis for video", zap.String("session_id", p.SessionID), zap.String("mode", pMode))
 	return w.handleVideoAnalysisLegacy(ctx, p)
+}
+
+var legacySessionProfilePattern = regexp.MustCompile(`^P([1-9][0-9]*)-WOD-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$`)
+
+// resolveVideoAnalysisProfile prevents an analysis row from being written for
+// a missing profile, while still recovering legacy queued tasks that carried
+// profile_id=0. Current session IDs never encode a profile ID; only the old
+// P{id}-... format is parsed as a final compatibility fallback.
+func (w *Worker) resolveVideoAnalysisProfile(ctx context.Context, sessionID string, payloadProfileID uint) (uint, error) {
+	if w.DB == nil {
+		return 0, fmt.Errorf("database is not configured")
+	}
+
+	var session db.Session
+	sessionErr := w.DB.WithContext(ctx).
+		Select("session_id", "profile_id").
+		Where("session_id = ?", sessionID).
+		First(&session).Error
+	if sessionErr != nil && !errors.Is(sessionErr, gorm.ErrRecordNotFound) {
+		return 0, fmt.Errorf("failed to resolve session profile: %w", sessionErr)
+	}
+
+	profileID := payloadProfileID
+	if sessionErr == nil {
+		if profileID == 0 {
+			profileID = session.ProfileID
+		} else if session.ProfileID != profileID {
+			return 0, fmt.Errorf("session profile does not match task profile: %w", asynq.SkipRetry)
+		}
+	}
+
+	if profileID == 0 {
+		match := legacySessionProfilePattern.FindStringSubmatch(sessionID)
+		if len(match) == 2 {
+			parsed, parseErr := strconv.ParseUint(match[1], 10, 32)
+			if parseErr == nil {
+				profileID = uint(parsed)
+			}
+		}
+	}
+
+	if profileID == 0 {
+		return 0, fmt.Errorf("profile_id is required for video analysis: %w", asynq.SkipRetry)
+	}
+
+	var profile db.Profile
+	if err := w.DB.WithContext(ctx).Select("id").First(&profile, profileID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, fmt.Errorf("profile %d no longer exists: %w", profileID, asynq.SkipRetry)
+		}
+		return 0, fmt.Errorf("failed to validate analysis profile: %w", err)
+	}
+
+	return profileID, nil
 }
 
 // Segment represents an identified exercise set within a larger video.
@@ -182,20 +257,24 @@ Focus ONLY on this person's movements. Ignore other people in the background.
 
 	if len(p.Movements) > 0 {
 		prompt += fmt.Sprintf(`
-## Expected Exercises
-The workout is expected to include: %s
-Use these as a hint for identifying segments, but also capture any other exercises performed.
+## Non-exclusive Movement Hints
+The user supplied these possible movements: %s
+They are suggestions, not confirmation and not a closed list. Omit any hint not visibly performed by the target person, and preserve any different movement that is visibly supported.
 `, strings.Join(p.Movements, ", "))
 	}
+	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
 
 	prompt += `
 ## Instructions
 1. First, scrub through the entire video frame by frame and create a brief text timeline.
-2. For EACH segment you identify, describe the specific visual evidence you see (equipment, body position, movement pattern).
-3. Only report exercises you can visually confirm — do NOT guess or infer exercises from context.
-4. Output a strictly formatted JSON array of the segments.
-5. Use "MM:SS" format for timestamps.
-6. Each segment should be at least 10 seconds long.
+2. For EACH segment, require target-person evidence for apparatus contact (when applicable), body position, and the continuous motion pattern.
+3. Nearby equipment is not evidence. A rope beside a pull-up bar does not make a target person's pull-up a rope climb.
+4. Background athletes and their equipment are not target-person evidence.
+5. If target exercise is visible but the exact movement is unclear, use type "Unknown"; do not force a hint. Omit walking, rest, recovery, setup, and no-exercise intervals.
+6. Only report exercises you can visually confirm — do NOT guess or infer exercises from context.
+7. Output a strictly formatted JSON array of the segments.
+8. Use "MM:SS" format for timestamps.
+9. Each segment should be at least 10 seconds long.
 
 ## Output JSON Schema
 ` + "```json\n[\n  {\n    \"start\": \"MM:SS\",\n    \"end\": \"MM:SS\",\n    \"type\": \"Exercise Name\",\n    \"description\": \"What you visually observe the target person doing — describe the equipment, stance, and movement.\"\n  }\n]\n```"
@@ -216,6 +295,8 @@ func formatDuration(d time.Duration) string {
 //  2. Index video with Flash model → find exercise segments
 //  3. Analyze each segment with Pro model + VideoMetadata → deep analysis
 func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysisPayload) (retErr error) {
+	started := time.Now()
+	apiCalls := 0
 	// Deferred error handler: write FAILED analysis result to DB on any error
 	// so the user always sees something in history instead of silent nothingness.
 	defer func() {
@@ -236,7 +317,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				AnalysisType: db.AnalysisTypeWOD,
 			}
 			failedResult.ProfileID = p.ProfileID
-			if dbErr := w.DB.Create(failedResult).Error; dbErr != nil {
+			if dbErr := w.DB.Clauses(clause.OnConflict{UpdateAll: true}).Create(failedResult).Error; dbErr != nil {
 				w.logger.Error("Failed to write FAILED analysis result",
 					zap.String("session_id", p.SessionID),
 					zap.Error(dbErr))
@@ -357,21 +438,24 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	}
 
 	// Upload to Gemini Files API (uses re-encoded path if available)
+	uploadTime := time.Now()
 	upload, err := w.GeminiClient.UploadVideo(ctx, geminiInputPath)
 	if err != nil {
 		return fmt.Errorf("failed to upload video: %w", err)
 	}
-	// Delete the Gemini file unless injury analysis successfully takes ownership.
-	// injuryTaskEnqueued is set to true only after a successful Enqueue call below.
-	hasInjuries := len(p.Injuries) > 0
-	injuryTaskEnqueued := false
+
+	success := false
 	defer func() {
-		if !injuryTaskEnqueued {
-			if err := w.GeminiClient.DeleteFile(ctx, upload.FileName); err != nil {
-				w.logger.Error("Failed to delete file from Gemini", zap.Error(err))
+		if !success {
+			w.logger.Info("Deleting Gemini file after two-pass analysis failure to prevent leak",
+				zap.String("session_id", p.SessionID),
+				zap.String("file_name", upload.FileName))
+			if delErr := w.GeminiClient.DeleteFile(context.Background(), upload.FileName); delErr != nil {
+				w.logger.Error("Failed to delete Gemini file after failure", zap.Error(delErr))
 			}
 		}
 	}()
+	hasInjuries := len(p.Injuries) > 0
 
 	// ── Pass 1: Build segment index ──
 	// Prefer chunk analysis data from DB (app-recorded, accurate timestamps).
@@ -427,6 +511,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.String("session_id", p.SessionID),
 			zap.String("file_uri", upload.FileURI))
 
+		apiCalls++
 		indexOutput, indexUsage, indexErr := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, w.buildIndexPrompt(p, upload.VideoDuration))
 		if indexErr != nil {
 			return fmt.Errorf("failed to index video: %w", indexErr)
@@ -466,6 +551,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("total_segments", len(segments)),
 			zap.Int("max_segments", maxSegs))
 
+		apiCalls++
 		triagedSegments, triageUsage, triageErr := w.triageSegments(ctx, upload, segments, maxSegs)
 		if triageErr != nil {
 			w.logger.Warn("Segment triage failed, using first N segments",
@@ -483,16 +569,21 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	}
 
 	// ── Pass 2: Analyze each segment with Pro ──
-	// Build shared context once: WOD descriptor and historical scores.
+	// Build shared context once. The final segment receives history plus an
+	// aggregate derived from every completed structured chunk.
 	wodContext := buildWODContext(p.WODDescription)
 	historyContext := w.buildHistoryContext(p.ProfileID, 5)
+	fatigueContext := w.buildSessionFatigueEvidenceContext(p.SessionID)
+	finalContext := historyContext + fatigueContext
 
 	w.logger.Info("Pass 2 context prepared",
 		zap.String("session_id", p.SessionID),
 		zap.Bool("has_wod_context", wodContext != ""),
-		zap.Bool("has_history", historyContext != ""))
+		zap.Bool("has_history", historyContext != ""),
+		zap.Bool("has_fatigue_context", fatigueContext != ""))
 
 	var allAnalysis strings.Builder
+	var highlightCandidates []highlightCandidate
 	for i, seg := range segments {
 		start := convertToSeconds(seg.Start)
 		end := convertToSeconds(seg.End)
@@ -500,7 +591,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		// Inject score prompt and history only into the last segment to avoid
 		// asking every segment for a session-wide score.
 		isLast := i == len(segments)-1
-		segPrompt := w.buildSegmentAnalysisPrompt(p, seg, wodContext, historyContext, isLast)
+		segPrompt := w.buildSegmentAnalysisPrompt(p, seg, wodContext, finalContext, isLast)
 
 		w.logger.Info("Pass 2: Analyzing segment",
 			zap.Int("segment", i+1),
@@ -510,6 +601,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Duration("end", end),
 			zap.Bool("score_prompt", isLast))
 
+		apiCalls++
 		segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
 			ctx, upload.FileURI, upload.MIMEType, start, end, segPrompt,
 		)
@@ -522,6 +614,14 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		}
 
 		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", segUsage)
+		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(segAnalysis, highlightSource{
+			Index:           i,
+			Start:           start.Seconds(),
+			End:             end.Seconds(),
+			Movement:        seg.Type,
+			HasBounds:       true,
+			HardGapBoundary: true,
+		})...)
 
 		allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n", i+1, seg.Type, seg.Start, seg.End))
 		allAnalysis.WriteString(segAnalysis)
@@ -532,24 +632,43 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		return fmt.Errorf("all segment analyses failed")
 	}
 
-	highlightSegments := ParseHighlightSegments(analysis)
+	normalizedHighlights := consolidateHighlightCandidates(highlightCandidates, HighlightNormalizeOptions{
+		VideoEndSeconds: upload.VideoDuration.Seconds(),
+	})
+	highlightSegments := ""
+	if len(normalizedHighlights) > 0 {
+		highlightSegments = MarshalHighlightSegments(normalizedHighlights)
+	}
+	w.logger.Info("Highlight evidence consolidated",
+		zap.String("session_id", p.SessionID),
+		zap.Int("candidate_count", len(highlightCandidates)),
+		zap.Int("event_count", len(normalizedHighlights)))
 	sessionScore := parseSessionScore(analysis)
 
 	w.logger.Info("Session score parsed",
 		zap.String("session_id", p.SessionID),
 		zap.String("session_score", sessionScore))
 
+	expiresAt := uploadTime.Add(47 * time.Hour)
 	result := &db.AnalysisResult{
-		SessionID:         p.SessionID,
-		Status:            "COMPLETED",
-		Output:            analysis,
-		AnalysisType:      db.AnalysisTypeWOD,
-		HighlightSegments: highlightSegments,
-		WODDescription:    p.WODDescription,
-		SessionScore:      sessionScore,
+		SessionID:           p.SessionID,
+		Status:              "COMPLETED",
+		Output:              analysis,
+		AnalysisType:        db.AnalysisTypeWOD,
+		HighlightSegments:   highlightSegments,
+		WODDescription:      p.WODDescription,
+		SessionScore:        sessionScore,
+		AvailableVideos:     db.CommaStringArray{"merged"},
+		GeminiFileURI:       upload.FileURI,
+		GeminiFileName:      upload.FileName,
+		GeminiMIMEType:      upload.MIMEType,
+		GeminiFileExpiresAt: &expiresAt,
 	}
 	result.ProfileID = p.ProfileID
-	w.DB.Create(result)
+	if err := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(result).Error; err != nil {
+		return fmt.Errorf("failed to persist completed video analysis: %w", err)
+	}
+	success = true
 
 	w.logger.Info("Two-pass analysis completed",
 		zap.String("session_id", p.SessionID),
@@ -572,13 +691,19 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			injPayload.GeminiFileURI = upload.FileURI
 			injPayload.GeminiFileName = upload.FileName
 			injPayload.GeminiMIMEType = upload.MIMEType
+
+			pMode := p.PipelineMode
+			if pMode == "" {
+				pMode = string(w.PipelineMode)
+			}
+			injPayload.PipelineMode = pMode
+
 			data, _ := json.Marshal(injPayload)
 			injuryTask = asynq.NewTask(TypeInjuryAnalysis, data)
 
 			if _, enqErr := w.QueueClient.Enqueue(injuryTask); enqErr != nil {
 				w.logger.Error("Failed to enqueue injury analysis task", zap.Error(enqErr))
 			} else {
-				injuryTaskEnqueued = true
 				w.logger.Info("Injury analysis enqueued with file URI",
 					zap.String("session_id", p.SessionID),
 					zap.String("file_uri", upload.FileURI),
@@ -587,6 +712,11 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		}
 	}
 
+	pMode := p.PipelineMode
+	if pMode == "" {
+		pMode = string(w.PipelineMode)
+	}
+	w.recordStageMetrics(p.SessionID, p.ProfileID, "video_analysis", pMode, apiCalls, 0, fileSizeBytes, time.Since(started))
 	return nil
 }
 
@@ -598,11 +728,14 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 	personalProfile := w.lookupProfileString(p.ProfileID)
 
 	prompt := fmt.Sprintf(`# 운동 영상 분석 요청
-전문 스포츠 생체역학 전문가로서 이 '%s' 운동 구간(%s ~ %s)을 분석해 주세요.
+전문 스포츠 생체역학 전문가로서 이 운동 구간(%s ~ %s)을 분석해 주세요.
+
+## 중간 종목 라벨 (확정 아님)
+이 구간의 이전 청크 라벨은 '%s'입니다. 현재 구간의 대상 인물 영상 근거로 다시 식별하고, 근거가 모순되면 라벨을 교정하거나 Unknown으로 판단하세요.
 
 ## 개인 프로필
 %s
-`, seg.Type, seg.Start, seg.End, personalProfile)
+`, seg.Start, seg.End, seg.Type, personalProfile)
 
 	// WOD context (type-specific analysis guidance)
 	if wodContext != "" {
@@ -610,6 +743,8 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 	}
 
 	prompt += AnalysisPrompt
+	prompt += MovementEvidenceRulesPrompt
+	prompt += FatigueEvidenceRulesPrompt
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n   - 부상 부위: %s", InjuryTimestampPrompt, strings.Join(p.Injuries, ", "))
@@ -617,9 +752,8 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 
 	prompt += HighlightSelectionPrompt
 
-	if len(p.Movements) > 0 {
-		prompt += fmt.Sprintf("%s\n## 운동 종목: %s", MovementPrompt, strings.Join(p.Movements, ", "))
-	}
+	prompt += buildMovementHintsContext(p.Movements)
+	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
@@ -676,9 +810,10 @@ func (w *Worker) queryMaxChunkEndSecs(sessionID string) float64 {
 }
 
 // buildSegmentsFromChunks queries completed chunk analysis records from the DB
-// and converts them to Segment structs. Since chunks have app-recorded start/end
-// timestamps, this is far more reliable than asking a model to index a long video.
-// Chunks with no detected exercise (rest periods) are filtered out.
+// and converts them to Segment structs. Only verified offsets in the merged media
+// timeline are safe here; capture-clock timestamps must never be applied to the
+// session video. Chunks with no detected exercise are filtered out, while Unknown
+// is retained so the deeper analyzer can revalidate it from the video.
 func (w *Worker) buildSegmentsFromChunks(sessionID string) []Segment {
 	if w.DB == nil {
 		return nil
@@ -686,7 +821,7 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string) []Segment {
 
 	var chunks []db.ChunkAnalysisResult
 	err := w.DB.Where("session_id = ? AND status = ?", sessionID, "COMPLETED").
-		Order("start_secs ASC").
+		Order("media_start_secs ASC NULLS LAST, id ASC").
 		Find(&chunks).Error
 	if err != nil || len(chunks) == 0 {
 		return nil
@@ -694,19 +829,13 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string) []Segment {
 
 	var segments []Segment
 	for _, chunk := range chunks {
-		if chunk.StartSecs == nil || chunk.EndSecs == nil {
+		if !debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
 			continue
 		}
 
-		// Skip chunks with no detected exercise (rest, walking, setup, etc.)
-		if chunk.ExerciseType == "" {
+		if !includeChunkInDeepAnalysis(chunk) {
 			continue
 		}
-
-		startMM := int(*chunk.StartSecs) / 60
-		startSS := int(*chunk.StartSecs) % 60
-		endMM := int(*chunk.EndSecs) / 60
-		endSS := int(*chunk.EndSecs) % 60
 
 		// Use the chunk output (1-2 sentence coaching feedback) as the description.
 		desc := chunk.Output
@@ -715,8 +844,8 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string) []Segment {
 		}
 
 		segments = append(segments, Segment{
-			Start:       fmt.Sprintf("%d:%02d", startMM, startSS),
-			End:         fmt.Sprintf("%d:%02d", endMM, endSS),
+			Start:       formatSegmentTimestamp(*chunk.MediaStartSecs),
+			End:         formatSegmentTimestamp(*chunk.MediaEndSecs),
 			Type:        chunk.ExerciseType,
 			Description: desc,
 		})
@@ -727,10 +856,42 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string) []Segment {
 	return mergeSegmentsByMovement(segments)
 }
 
-// mergeSegmentsByMovement combines consecutive segments that have the same exercise
-// type (case-insensitive) into single larger segments. Unlike time-based merging,
-// this correctly handles 10s chunks that are always contiguous — it splits when the
-// movement changes, not by time gap.
+func includeChunkInDeepAnalysis(chunk db.ChunkAnalysisResult) bool {
+	movement := strings.TrimSpace(chunk.ExerciseType)
+	if movement == "" {
+		return false
+	}
+
+	var signals struct {
+		ActivityState string `json:"activity_state"`
+	}
+	if json.Unmarshal([]byte(chunk.ObservedSignals), &signals) == nil &&
+		isExplicitNonExerciseActivity(signals.ActivityState) {
+		return false
+	}
+
+	if strings.EqualFold(movement, "unknown") {
+		return true
+	}
+	return !isNonExerciseMovement(movement)
+}
+
+func formatSegmentTimestamp(seconds float64) string {
+	duration := secondsDuration(seconds)
+	minutes := duration / time.Minute
+	remainder := duration % time.Minute
+	wholeSeconds := remainder / time.Second
+	nanoseconds := remainder % time.Second
+	if nanoseconds == 0 {
+		return fmt.Sprintf("%d:%02d", minutes, wholeSeconds)
+	}
+	fraction := strings.TrimRight(fmt.Sprintf("%09d", nanoseconds), "0")
+	return fmt.Sprintf("%d:%02d.%s", minutes, wholeSeconds, fraction)
+}
+
+// mergeSegmentsByMovement combines adjacent segments that have the same exercise
+// type (case-insensitive). A timeline gap is kept so an omitted rest/setup interval
+// cannot be pulled into a movement segment.
 func mergeSegmentsByMovement(segments []Segment) []Segment {
 	if len(segments) <= 1 {
 		return segments
@@ -740,8 +901,10 @@ func mergeSegmentsByMovement(segments []Segment) []Segment {
 	current := segments[0]
 
 	for i := 1; i < len(segments); i++ {
-		// Merge if the exercise type is the same (case-insensitive)
-		if strings.EqualFold(current.Type, segments[i].Type) {
+		// Preserve filtered rest/setup gaps even when the movement before and after
+		// the gap has the same label.
+		if strings.EqualFold(current.Type, segments[i].Type) &&
+			segmentBoundariesTouch(current.End, segments[i].Start) {
 			current.End = segments[i].End
 			if segments[i].Description != "" {
 				current.Description = current.Description + " | " + segments[i].Description
@@ -753,6 +916,16 @@ func mergeSegmentsByMovement(segments []Segment) []Segment {
 	}
 	merged = append(merged, current)
 	return merged
+}
+
+func segmentBoundariesTouch(end, start string) bool {
+	endDuration, endOK := parseSegmentTimestamp(end)
+	startDuration, startOK := parseSegmentTimestamp(start)
+	if !endOK || !startOK {
+		return false
+	}
+	difference := endDuration - startDuration
+	return difference >= -time.Millisecond && difference <= time.Millisecond
 }
 
 // maxSegmentsForDuration calculates the maximum number of segments to analyze
@@ -814,7 +987,7 @@ Your job is to select the **top %d segments** that would benefit most from detai
 %s
 ## Selection Criteria (in priority order)
 1. **Form issues visible** - segments where posture problems, compensations, or technique errors are noted
-2. **Fatigue indicators** - segments where the athlete shows signs of fatigue (slower reps, form breakdown)
+2. **Visually established fatigue indicators** - sustained rep slowdown, cadence loss, range loss, or form breakdown during exercise; heart rate, walking, rest, recovery, and setup are not fatigue evidence
 3. **High-technique movements** - complex movements (Olympic lifts, gymnastics) over simple ones (running, jumping jacks)
 4. **Diversity** - try to cover different movement types rather than redundantly analyzing the same exercise
 5. **Skip low-value** - rest periods, setup, transitions, or very short clips with no meaningful movement
@@ -869,22 +1042,44 @@ func parseTriagedSegments(output string, allSegments []Segment, maxSegs int) []S
 	return selected
 }
 
-// convertToSeconds parses "MM:SS" format to time.Duration.
+// convertToSeconds parses fractional or whole "MM:SS", "H:MM:SS", and plain
+// seconds formats to time.Duration.
 func convertToSeconds(input string) time.Duration {
+	duration, ok := parseSegmentTimestamp(input)
+	if !ok {
+		return 0
+	}
+	return duration
+}
+
+func parseSegmentTimestamp(input string) (time.Duration, bool) {
 	input = strings.TrimSpace(input)
 	if strings.Contains(input, ":") {
 		parts := strings.Split(input, ":")
-		if len(parts) == 2 {
-			mins, _ := strconv.Atoi(parts[0])
-			secs, _ := strconv.Atoi(parts[1])
-			return time.Duration((mins*60)+secs) * time.Second
+		if len(parts) == 3 {
+			hours, hoursErr := strconv.Atoi(parts[0])
+			mins, minsErr := strconv.Atoi(parts[1])
+			secs, secsErr := strconv.ParseFloat(parts[2], 64)
+			if hoursErr != nil || minsErr != nil || secsErr != nil || hours < 0 || mins < 0 || secs < 0 {
+				return 0, false
+			}
+			return secondsDuration(float64(hours*3600+mins*60) + secs), true
 		}
+		if len(parts) == 2 {
+			mins, minsErr := strconv.Atoi(parts[0])
+			secs, secsErr := strconv.ParseFloat(parts[1], 64)
+			if minsErr != nil || secsErr != nil || mins < 0 || secs < 0 {
+				return 0, false
+			}
+			return secondsDuration(float64(mins*60) + secs), true
+		}
+		return 0, false
 	}
 	clean := strings.TrimSuffix(input, "s")
-	if n, err := strconv.Atoi(clean); err == nil {
-		return time.Duration(n) * time.Second
+	if seconds, err := strconv.ParseFloat(clean, 64); err == nil && seconds >= 0 {
+		return secondsDuration(seconds), true
 	}
-	return 0
+	return 0, false
 }
 
 // filterSegments removes segments whose start or end timestamps exceed the
@@ -904,6 +1099,7 @@ func filterSegments(segments []Segment, videoDuration time.Duration) []Segment {
 
 // handleVideoAnalysisLegacy is the original file-upload based path.
 func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisPayload) error {
+	started := time.Now()
 	localFilePath, err := createTempFile("legacy-analysis", ".mp4")
 	if err != nil {
 		return err
@@ -912,6 +1108,12 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	w.logger.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
 	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
 		return fmt.Errorf("failed to download file from GCS: %w", err)
+	}
+
+	fi, _ := os.Stat(localFilePath)
+	var fileSizeBytes int64
+	if fi != nil {
+		fileSizeBytes = fi.Size()
 	}
 
 	videoDuration := probeVideoDuration(ctx, localFilePath)
@@ -960,13 +1162,27 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 			Output:    "An internal error occurred during analysis.",
 		}
 		failedResult.ProfileID = p.ProfileID
-		w.DB.Create(failedResult)
+		if dbErr := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(failedResult).Error; dbErr != nil {
+			w.logger.Error("Failed to persist legacy FAILED analysis result",
+				zap.String("session_id", p.SessionID),
+				zap.Error(dbErr))
+		}
 
 		return err
 	}
 
-	// Parse highlight segments from analysis output
-	highlightSegments := ParseHighlightSegments(analysis)
+	// Parse and consolidate full-video highlight evidence using authoritative
+	// media bounds. Exact observation intervals remain inside padded events.
+	legacyCandidates := parseHighlightCandidates(analysis, highlightSource{
+		Index: -1, Start: 0, End: videoDuration, HasBounds: videoDuration > 0,
+	})
+	normalizedHighlights := consolidateHighlightCandidates(legacyCandidates, HighlightNormalizeOptions{
+		VideoEndSeconds: videoDuration,
+	})
+	highlightSegments := ""
+	if len(normalizedHighlights) > 0 {
+		highlightSegments = MarshalHighlightSegments(normalizedHighlights)
+	}
 
 	result := &db.AnalysisResult{
 		SessionID:         p.SessionID,
@@ -974,9 +1190,12 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		Output:            analysis,
 		AnalysisType:      db.AnalysisTypeWOD,
 		HighlightSegments: highlightSegments,
+		AvailableVideos:   db.CommaStringArray{"merged"},
 	}
 	result.ProfileID = p.ProfileID
-	w.DB.Create(result)
+	if err := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(result).Error; err != nil {
+		return fmt.Errorf("failed to persist completed legacy video analysis: %w", err)
+	}
 
 	w.logger.Info("Analysis completed", zap.String("session_id", p.SessionID), zap.String("analysis", analysis))
 
@@ -989,21 +1208,44 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		injuryTask, taskErr := NewInjuryAnalysisTask(p.SessionID, p.FilePath, p.Injuries, p.ProfileID, focusTimestamps)
 		if taskErr != nil {
 			w.logger.Error("Failed to create injury analysis task", zap.Error(taskErr))
-		} else if _, enqErr := w.QueueClient.Enqueue(injuryTask); enqErr != nil {
-			w.logger.Error("Failed to enqueue injury analysis task", zap.Error(enqErr))
 		} else {
-			w.logger.Info("Injury analysis enqueued",
-				zap.String("session_id", p.SessionID),
-				zap.Strings("injuries", p.Injuries),
-				zap.String("focus_timestamps", focusTimestamps))
+			pMode := p.PipelineMode
+			if pMode == "" {
+				pMode = string(w.PipelineMode)
+			}
+			var injPayload InjuryAnalysisPayload
+			if err := json.Unmarshal(injuryTask.Payload(), &injPayload); err == nil {
+				injPayload.PipelineMode = pMode
+				if data, err := json.Marshal(injPayload); err == nil {
+					injuryTask = asynq.NewTask(injuryTask.Type(), data)
+				}
+			}
+
+			if _, enqErr := w.QueueClient.Enqueue(injuryTask); enqErr != nil {
+				w.logger.Error("Failed to enqueue injury analysis task", zap.Error(enqErr))
+			} else {
+				w.logger.Info("Injury analysis enqueued",
+					zap.String("session_id", p.SessionID),
+					zap.Strings("injuries", p.Injuries),
+					zap.String("focus_timestamps", focusTimestamps))
+			}
 		}
 	}
 
+	pMode := p.PipelineMode
+	if pMode == "" {
+		pMode = string(w.PipelineMode)
+	}
+	w.recordStageMetrics(p.SessionID, p.ProfileID, "video_analysis", pMode, 1, 0, fileSizeBytes, time.Since(started))
 	return nil
 }
 
 func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs float64) string {
-	prompt := AnalysisPrompt
+	prompt := AnalysisPrompt + MovementEvidenceRulesPrompt + FatigueEvidenceRulesPrompt
+
+	if wod := buildWODContext(p.WODDescription); wod != "" {
+		prompt += wod
+	}
 
 	// When injuries are present, add a section requesting structured injury timestamps
 	if len(p.Injuries) > 0 {
@@ -1013,9 +1255,8 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	// Always request highlight segments for short-form video generation
 	prompt += HighlightSelectionPrompt
 
-	if len(p.Movements) > 0 {
-		prompt += fmt.Sprintf("%s\n## 운동 종목: %s", MovementPrompt, strings.Join(p.Movements, ", "))
-	}
+	prompt += buildMovementHintsContext(p.Movements)
+	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
@@ -1026,6 +1267,7 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	w.logger.Info("Personal Profile", zap.Uint("profile_id", p.ProfileID), zap.String("personal_profile", personalProfile))
 
 	prompt += fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
+	prompt += w.buildSessionFatigueEvidenceContext(p.SessionID)
 
 	// Ground timestamps with actual video duration to prevent hallucinated timestamps.
 	if videoDurationSecs > 0 {
@@ -1044,39 +1286,39 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	return prompt
 }
 
-// ParseHighlightSegments extracts all JSON arrays from ```highlights``` code blocks
-// or <highlights> XML tags in the WOD analysis output. When multiple blocks exist
-// (one per segment), all highlights are merged into a single JSON array.
-// Returns the raw JSON string, or empty on failure.
+// ParseHighlightSegments is the compatibility entrypoint used by admin reparse
+// and legacy/debug paths that do not have per-segment provenance. New two-pass
+// analysis parses each response immediately and supplies authoritative bounds.
 func ParseHighlightSegments(analysisOutput string) string {
-	matches := highlightBlockRegex.FindAllStringSubmatch(analysisOutput, -1)
-	if len(matches) == 0 {
+	candidates := parseHighlightCandidates(analysisOutput, highlightSource{Index: -1})
+	if len(candidates) == 0 {
 		return ""
 	}
+	return MarshalHighlightSegments(consolidateHighlightCandidates(candidates, HighlightNormalizeOptions{}))
+}
 
-	var allHighlights []HighlightSegment
-	for _, match := range matches {
-		// The regex has two capture groups (backtick vs XML); pick the non-empty one.
-		jsonStr := firstNonEmpty(match[1:])
-		if jsonStr == "" {
-			continue
+func isHeartRateOnlyFatigueHighlight(highlight HighlightSegment) bool {
+	typeName := strings.ToLower(strings.TrimSpace(highlight.Type))
+	if typeName != "fatigue_point" && typeName != HighlightObservationFatigueOnset {
+		return false
+	}
+	reason := strings.ToLower(highlight.Reason)
+	hasHeartRate := strings.Contains(reason, "bpm") ||
+		strings.Contains(reason, "heart rate") ||
+		strings.Contains(reason, "heartrate") ||
+		strings.Contains(reason, "심박")
+	if !hasHeartRate {
+		return false
+	}
+	for _, visualCue := range []string{
+		"slow", "cadence", "tempo", "range of motion", "form", "posture", "rep", "breakdown",
+		"느려", "속도", "케이던스", "템포", "가동범위", "자세", "반복", "무너", "락아웃", "감소", "손실",
+	} {
+		if strings.Contains(reason, visualCue) {
+			return false
 		}
-		var parsed []HighlightSegment
-		if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil || len(parsed) == 0 {
-			continue
-		}
-		allHighlights = append(allHighlights, parsed...)
 	}
-
-	if len(allHighlights) == 0 {
-		return ""
-	}
-
-	result, err := json.Marshal(allHighlights)
-	if err != nil {
-		return ""
-	}
-	return string(result)
+	return true
 }
 
 // parseInjuryTimestamps extracts all JSON arrays from ```injury_timestamps``` code blocks

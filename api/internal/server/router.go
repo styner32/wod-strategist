@@ -107,6 +107,18 @@ func SetupRouter(appEnv string, apiKey string, allowedOrigins []string,
 	api.POST("/debug/telemetry", ctl.UploadDebugTelemetry)
 	api.POST("/parse-workout-image", ctl.ParseWorkoutImage)
 	api.POST("/sessions", ctl.CreateSession)
+	api.GET("/sessions/:session_id/analysis", ctl.GetSessionAnalysis)
+	api.GET("/sessions/:session_id/chunks/:chunk_id/play-url", ctl.GetChunkPlayURL)
+	api.POST("/sessions/:session_id/chunks/:chunk_id/reanalyses", ctl.CreateChunkReanalysis)
+	api.GET("/sessions/:session_id/chunks/:chunk_id/reanalyses", ctl.ListChunkReanalyses)
+	api.GET("/sessions/:session_id/chunks/:chunk_id/reanalyses/:run_id", ctl.GetChunkReanalysis)
+	api.POST("/sessions/:session_id/reanalyses", ctl.CreateSessionReanalysis)
+	api.GET("/sessions/:session_id/reanalyses", ctl.ListSessionReanalyses)
+	api.GET("/sessions/:session_id/reanalyses/:run_id", ctl.GetSessionReanalysis)
+	api.POST("/sessions/:session_id/feedback", ctl.CreateFeedback)
+	api.GET("/sessions/:session_id/feedback", ctl.ListFeedback)
+	api.PATCH("/sessions/:session_id/feedback/:feedback_id", ctl.UpdateFeedback)
+	api.DELETE("/sessions/:session_id/feedback/:feedback_id", ctl.DeleteFeedback)
 
 	return r, nil
 }

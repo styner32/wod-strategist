@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
@@ -43,6 +44,7 @@ type InjuryAnalysisPayload struct {
 	GeminiFileURI  string `json:"gemini_file_uri,omitempty"`
 	GeminiFileName string `json:"gemini_file_name,omitempty"`
 	GeminiMIMEType string `json:"gemini_mime_type,omitempty"`
+	PipelineMode   string `json:"pipeline_mode,omitempty"`
 }
 
 func NewInjuryAnalysisTask(sessionID, filePath string, injuries []string, profileID uint, focusTimestamps string) (*asynq.Task, error) {
@@ -102,101 +104,218 @@ func (w *Worker) HandleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) er
 }
 
 // handleInjuryAnalysisWithFile reuses the Gemini file from video analysis.
-// It analyzes each focus timestamp segment individually using AnalyzeSegment,
-// then deletes the file since it's the last consumer.
+// It analyzes each focus timestamp segment individually using AnalyzeSegment.
 func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnalysisPayload) error {
-	// Always clean up the Gemini file since we are the last consumer.
-	defer func() {
-		if err := w.GeminiClient.DeleteFile(ctx, p.GeminiFileName); err != nil {
-			w.logger.Error("Failed to delete Gemini file after injury analysis", zap.Error(err))
-		}
-	}()
-
 	prompt := w.buildInjuryAnalysisPrompt(p)
 
 	// Parse focus timestamps to get segment ranges
-	type focusEntry struct {
-		Start  string `json:"start"`
-		End    string `json:"end"`
-		Reason string `json:"reason"`
-	}
-	var focusEntries []focusEntry
+	var focusEntries []FocusEntry
 	if p.FocusTimestamps != "" {
 		_ = json.Unmarshal([]byte(p.FocusTimestamps), &focusEntries)
 	}
 
-	var allAnalysis strings.Builder
+	pMode := p.PipelineMode
+	if pMode == "" {
+		pMode = string(w.PipelineMode)
+	}
+	if pMode == "" && w.UseCache {
+		pMode = string(PipelineModeOptimized)
+	}
 
-	if len(focusEntries) > 0 {
-		// Analyze each injury focus segment individually
-		for i, entry := range focusEntries {
-			start := convertToSeconds(entry.Start)
-			end := convertToSeconds(entry.End)
+	var legacyIntervals []mergedInterval
+	if PipelineMode(pMode) == PipelineModeLegacy || PipelineMode(pMode) == PipelineModeCompare {
+		legacyIntervals = toIntervals(focusEntries)
+	}
 
-			segPrompt := fmt.Sprintf("%s\n\n## 분석 구간: %s ~ %s\n사유: %s", prompt, entry.Start, entry.End, entry.Reason)
+	var optIntervals []mergedInterval
+	var skippedCalls int
+	if PipelineMode(pMode) == PipelineModeOptimized || PipelineMode(pMode) == PipelineModeCompare {
+		mergedIntervals := mergeFocusIntervals(focusEntries)
+		optIntervals = capFocusIntervals(mergedIntervals, maxInjuryFocusSegments)
 
-			w.logger.Info("Analyzing injury segment",
-				zap.Int("segment", i+1),
-				zap.String("start", entry.Start),
-				zap.String("end", entry.End),
-				zap.String("reason", entry.Reason))
-
-			segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
-				ctx, p.GeminiFileURI, p.GeminiMIMEType, start, end, segPrompt,
-			)
-			if err != nil {
-				w.logger.Error("Injury segment analysis failed", zap.Error(err))
-				continue
+		if len(mergedIntervals) > 0 {
+			skippedCalls = len(mergedIntervals) - len(optIntervals)
+			var unionDuration float64
+			for _, iv := range mergedIntervals {
+				unionDuration += (iv.EndSecs - iv.StartSecs)
 			}
-
-			w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment", segUsage)
-
-			allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 부상 분석 구간 %d: %s ~ %s (%s)\n\n", i+1, entry.Start, entry.End, entry.Reason))
-			allAnalysis.WriteString(segAnalysis)
-		}
-	} else {
-		// No specific timestamps — analyze full video with the injury prompt
-		analysis, fullUsage, err := w.GeminiClient.AnalyzeSegment(
-			ctx, p.GeminiFileURI, p.GeminiMIMEType, 0, 0, prompt,
-		)
-		if err != nil {
-			w.logger.Error("Full injury analysis failed", zap.Error(err))
-		} else {
-			w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment", fullUsage)
-			allAnalysis.WriteString(analysis)
+			var keptDuration float64
+			for _, iv := range optIntervals {
+				keptDuration += (iv.EndSecs - iv.StartSecs)
+			}
+			var coverage float64 = 1.0
+			if unionDuration > 0 {
+				coverage = keptDuration / unionDuration
+			}
+			w.logger.Info("Injury coverage calculated",
+				zap.Float64("coverage", coverage),
+				zap.Int("merged_count", len(mergedIntervals)),
+				zap.Int("capped_count", len(optIntervals)),
+				zap.Int("skipped_calls", skippedCalls))
 		}
 	}
 
-	analysis := allAnalysis.String()
+	var legacyOut, optOut string
+	switch PipelineMode(pMode) {
+	case PipelineModeLegacy:
+		legacyOut = w.runInjuryVariant(ctx, p, prompt, "legacy", legacyIntervals, 0)
+	case PipelineModeOptimized:
+		optOut = w.runInjuryVariant(ctx, p, prompt, "optimized", optIntervals, skippedCalls)
+	case PipelineModeCompare:
+		if len(legacyIntervals) == 0 && len(optIntervals) == 0 {
+			// With no focus entries, both variants run the identical full-video call.
+			// Run once and share the output to save 2x Gemini API cost.
+			legacyOut = w.runInjuryVariant(ctx, p, prompt, "legacy", legacyIntervals, 0)
+			optOut = legacyOut
+		} else {
+			legacyOut = w.runInjuryVariant(ctx, p, prompt, "legacy", legacyIntervals, 0)
+			optOut = w.runInjuryVariant(ctx, p, prompt, "optimized", optIntervals, skippedCalls)
+		}
+	default:
+		legacyOut = w.runInjuryVariant(ctx, p, prompt, "legacy", legacyIntervals, 0)
+	}
 
-	if analysis == "" {
-		w.logger.Warn("Injury analysis returned empty. Retrying...")
-		return fmt.Errorf("injury analysis is empty")
+	// Determine what goes to main output vs alt output
+	var mainOutput, altOutput string
+	switch PipelineMode(pMode) {
+	case PipelineModeLegacy:
+		mainOutput = legacyOut
+	case PipelineModeOptimized:
+		mainOutput = optOut
+	case PipelineModeCompare:
+		mainOutput = legacyOut
+		altOutput = optOut
+	default:
+		mainOutput = legacyOut
+	}
+
+	// Validate retry conditions: compare mode requires both outputs to be non-empty
+	retry := false
+	switch PipelineMode(pMode) {
+	case PipelineModeLegacy:
+		retry = mainOutput == ""
+	case PipelineModeOptimized:
+		retry = mainOutput == ""
+	case PipelineModeCompare:
+		retry = mainOutput == "" || altOutput == ""
+	default:
+		retry = mainOutput == ""
+	}
+
+	if retry {
+		w.logger.Warn("Injury analysis variant returned empty. Retrying...",
+			zap.String("mode", pMode),
+			zap.Bool("legacy_empty", legacyOut == ""),
+			zap.Bool("opt_empty", optOut == ""))
+		return fmt.Errorf("injury analysis failed for one or more variants")
 	}
 
 	// Persist — append to existing result if present
 	var existing db.AnalysisResult
 	if findErr := w.DB.Where("session_id = ? AND analysis_type = ?", p.SessionID, db.AnalysisTypeWOD).First(&existing).Error; findErr == nil {
-		newInjuryOutput := analysis
-		if existing.InjuryOutput != "" {
-			newInjuryOutput = existing.InjuryOutput + "\n\n---\n\n" + analysis
+		updates := map[string]any{}
+		if mainOutput != "" {
+			newInjuryOutput := mainOutput
+			if existing.InjuryOutput != "" {
+				// Prevent duplicate appends if this is a retry/redelivery
+				if !strings.Contains(existing.InjuryOutput, mainOutput) {
+					newInjuryOutput = existing.InjuryOutput + "\n\n---\n\n" + mainOutput
+				} else {
+					newInjuryOutput = existing.InjuryOutput
+				}
+			}
+			updates["injury_output"] = newInjuryOutput
 		}
-		w.DB.Model(&existing).Update("injury_output", newInjuryOutput)
+		if altOutput != "" {
+			newInjuryOutputAlt := altOutput
+			if existing.InjuryOutputAlt != "" {
+				// Prevent duplicate appends if this is a retry/redelivery
+				if !strings.Contains(existing.InjuryOutputAlt, altOutput) {
+					newInjuryOutputAlt = existing.InjuryOutputAlt + "\n\n---\n\n" + altOutput
+				} else {
+					newInjuryOutputAlt = existing.InjuryOutputAlt
+				}
+			}
+			updates["injury_output_alt"] = newInjuryOutputAlt
+		}
+		if len(updates) > 0 {
+			if err := w.DB.Model(&existing).Updates(updates).Error; err != nil {
+				return fmt.Errorf("failed to update existing injury result: %w", err)
+			}
+		}
 	} else {
 		result := &db.AnalysisResult{
-			SessionID:    p.SessionID,
-			AnalysisType: db.AnalysisTypeInjurySupplement,
-			Status:       "COMPLETED",
-			Output:       analysis,
+			SessionID:       p.SessionID,
+			AnalysisType:    db.AnalysisTypeInjurySupplement,
+			Status:          "COMPLETED",
+			Output:          mainOutput,
+			InjuryOutputAlt: altOutput,
 		}
 		result.ProfileID = p.ProfileID
-		w.DB.Create(result)
+		if err := w.DB.Create(result).Error; err != nil {
+			return fmt.Errorf("failed to create standalone injury result: %w", err)
+		}
 	}
 
 	w.logger.Info("Injury analysis with file completed",
 		zap.String("session_id", p.SessionID),
 		zap.String("file_name", p.GeminiFileName))
 	return nil
+}
+
+// runInjuryVariant analyzes the given intervals and returns concatenated output.
+// variant is appended to the token-usage task type for cost comparison.
+func (w *Worker) runInjuryVariant(ctx context.Context, p InjuryAnalysisPayload,
+	basePrompt, variant string, intervals []mergedInterval, skippedCalls int) string {
+
+	started := time.Now()
+	var sb strings.Builder
+
+	if len(intervals) == 0 {
+		w.logger.Info("No specific injury segments, running full injury analysis",
+			zap.String("variant", variant),
+			zap.String("session_id", p.SessionID))
+
+		analysis, usage, err := w.GeminiClient.AnalyzeSegment(
+			ctx, p.GeminiFileURI, p.GeminiMIMEType, 0, 0, basePrompt)
+		if err != nil {
+			w.logger.Error("Full injury analysis failed", zap.String("variant", variant), zap.Error(err))
+			return ""
+		}
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment:"+variant, usage)
+		w.recordStageMetrics(p.SessionID, p.ProfileID, "injury_analysis", variant, 1, 0, 0, time.Since(started))
+		return analysis
+	}
+
+	for i, iv := range intervals {
+		startStr := formatDuration(time.Duration(iv.StartSecs) * time.Second)
+		endStr := formatDuration(time.Duration(iv.EndSecs) * time.Second)
+		segPrompt := fmt.Sprintf("%s\n\n## 분석 구간: %s ~ %s\n관찰된 사유:\n- %s",
+			basePrompt, startStr, endStr,
+			strings.Join(iv.Reasons, "\n- "))
+
+		w.logger.Info("Analyzing injury segment",
+			zap.String("variant", variant),
+			zap.Int("segment", i+1),
+			zap.String("start", startStr),
+			zap.String("end", endStr))
+
+		segAnalysis, usage, err := w.GeminiClient.AnalyzeSegment(
+			ctx, p.GeminiFileURI, p.GeminiMIMEType,
+			time.Duration(iv.StartSecs)*time.Second, time.Duration(iv.EndSecs)*time.Second, segPrompt)
+		if err != nil {
+			w.logger.Error("Injury segment analysis failed",
+				zap.String("variant", variant), zap.Error(err))
+			continue
+		}
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment:"+variant, usage)
+		sb.WriteString(fmt.Sprintf("\n\n---\n## 부상 분석 구간 %d: %s ~ %s\n\n%s",
+			i+1, startStr, endStr, segAnalysis))
+	}
+
+	w.recordStageMetrics(p.SessionID, p.ProfileID, "injury_analysis", variant,
+		len(intervals), skippedCalls, 0, time.Since(started))
+	return sb.String()
 }
 
 // handleInjuryAnalysisLegacy is the original file-upload based path.

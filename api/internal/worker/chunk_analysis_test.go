@@ -24,15 +24,22 @@ var _ = Describe("buildChunkAnalysisPrompt", func() {
 		w = &Worker{logger: zap.NewNop()}
 	})
 
-	It("includes movements, injuries, and profile in the chunk prompt", func() {
+	It("treats movement input as non-exclusive hints and requires target-person evidence", func() {
 		prompt := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{
 			Movements: []string{"Deadlift"},
 			Injuries:  []string{"Knee"},
 		})
 
 		Expect(prompt).To(ContainSubstring("실시간 피드백"))
-		Expect(prompt).To(ContainSubstring("확인된 운동 종목"))
-		Expect(prompt).To(ContainSubstring("확실히 수행되는 운동"))
+		Expect(prompt).To(ContainSubstring("운동 후보 힌트"))
+		Expect(prompt).To(ContainSubstring("비배타적"))
+		Expect(prompt).To(ContainSubstring("기구 접촉"))
+		Expect(prompt).To(ContainSubstring("몸의 위치"))
+		Expect(prompt).To(ContainSubstring("연속된 동작 패턴"))
+		Expect(prompt).To(ContainSubstring("배경 인물"))
+		Expect(prompt).To(ContainSubstring("근처에 로프"))
+		Expect(prompt).To(ContainSubstring("[EXERCISE: Unknown]"))
+		Expect(prompt).NotTo(ContainSubstring("확실히 수행되는 운동"))
 		Expect(prompt).To(ContainSubstring("Deadlift"))
 		Expect(prompt).To(ContainSubstring("## 알려진 부상 사항"))
 		Expect(prompt).To(ContainSubstring("Knee"))
@@ -40,11 +47,37 @@ var _ = Describe("buildChunkAnalysisPrompt", func() {
 		Expect(prompt).To(ContainSubstring("## 개인 프로필"))
 	})
 
+	It("uses BPM only after visually established fatigue and never for walking or rest", func() {
+		prompt := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{HeartRateBPM: 168})
+
+		Expect(prompt).To(ContainSubstring("168 bpm"))
+		Expect(prompt).To(ContainSubstring("정확한 측정 시점은 알 수 없습니다"))
+		Expect(prompt).To(ContainSubstring("심박수만으로 피로를 판정하거나 피로 구간을 선택하지"))
+		Expect(prompt).To(ContainSubstring("걷기, 휴식, 회복, 준비 또는 장비 세팅"))
+		Expect(prompt).NotTo(ContainSubstring("심박수가 높으면 피로도와 연관"))
+	})
+
+	It("keeps persisted movement hints separate from an explicit WOD description", func() {
+		prompt := w.buildChunkAnalysisWithSessionPrompt(
+			VideoAnalysisWithSessionPayload{},
+			&db.Profile{},
+			&db.Session{
+				WODDescription: "For Time: 5 Pull-ups, then accessory work",
+				MovementHints:  db.JSONDocument(`["Pull-up","Rope Climb"]`),
+			},
+		)
+
+		Expect(prompt).To(ContainSubstring("사용자 입력 WOD 설명 (계획 컨텍스트, 시각 증거 아님)"))
+		Expect(prompt).To(ContainSubstring("운동 후보 힌트 (사용자 입력, 비배타적)"))
+		Expect(prompt).To(ContainSubstring("Pull-up, Rope Climb"))
+		Expect(prompt).To(ContainSubstring("목록에 있어도 보이지 않으면 결과·점수·하이라이트에서 제외"))
+	})
+
 	It("still includes profile even without movements/injuries", func() {
 		prompt := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{})
 
 		Expect(prompt).To(ContainSubstring("## 개인 프로필"))
-		Expect(prompt).NotTo(ContainSubstring("확인된 운동 종목"))
+		Expect(prompt).NotTo(ContainSubstring("운동 후보 힌트"))
 		Expect(prompt).NotTo(ContainSubstring("## 알려진 부상 사항"))
 	})
 })
@@ -78,6 +111,17 @@ var _ = Describe("parseObservedSignals", func() {
 		input := "```observed_signals\n{invalid json\n```"
 		result := parseObservedSignals(input)
 		Expect(result).To(Equal("{}"))
+	})
+
+	It("clears fatigue from a walking signal", func() {
+		input := "```observed_signals\n" +
+			`{"movement":"Walking","activity_state":"walking","fatigue_visually_established":true,"fatigue_evidence_types":["rep_slowdown"],"fatigue_evidence":["slow walking"]}` +
+			"\n```"
+		result := parseObservedSignals(input)
+
+		var signals map[string]any
+		Expect(json.Unmarshal([]byte(result), &signals)).To(Succeed())
+		Expect(signals["fatigue_visually_established"]).To(BeFalse())
 	})
 })
 

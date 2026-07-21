@@ -82,7 +82,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 		task, err := NewMergeChunksTask(
 			"sess-merge-baduri",
 			"/not/a/gcs/uri",
-			WorkoutTypeWOD, nil, nil, 0,
+			WorkoutTypeWOD, nil, nil, profileID,
 			false,
 			"",
 		)
@@ -96,12 +96,12 @@ var _ = Describe("HandleMergeChunksTask", func() {
 	})
 
 	It("returns SkipRetry when no chunk objects are found", func() {
-		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-merge-nochunks", nil)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-merge-nochunks/", nil)
 
 		task, err := NewMergeChunksTask(
 			"sess-merge-nochunks",
 			"gs://test-bucket/videos/sess-merge-nochunks",
-			WorkoutTypeWOD, nil, nil, 0,
+			WorkoutTypeWOD, nil, nil, profileID,
 			false,
 			"",
 		)
@@ -115,7 +115,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 	})
 
 	It("skips merged/hardsubbed objects when filtering", func() {
-		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-filter-001", []string{
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-filter-001/", []string{
 			"videos/sess-filter-001/file_merged_abc.mp4",
 			"videos/sess-filter-001/file_hardsubbed_abc.mp4",
 		})
@@ -123,7 +123,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 		task, err := NewMergeChunksTask(
 			"sess-filter-001",
 			"gs://test-bucket/videos/sess-filter-001",
-			WorkoutTypeWOD, nil, nil, 0,
+			WorkoutTypeWOD, nil, nil, profileID,
 			false,
 			"",
 		)
@@ -131,6 +131,40 @@ var _ = Describe("HandleMergeChunksTask", func() {
 
 		err = w.HandleMergeChunksTask(context.Background(), task)
 		Expect(err).To(MatchError(ContainSubstring("no chunks found")))
+	})
+
+	It("persists concat-relative media offsets instead of capture-clock timestamps", func() {
+		captureStart0, captureEnd0 := 1_000.0, 1_010.0
+		captureStart1, captureEnd1 := 2_000.0, 2_010.0
+		first := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID: "sess-media-map", ProfileID: profileID,
+			FilePath: "gs://test-bucket/videos/sess-media-map/chunk_001.mp4",
+			Status:   "COMPLETED", StartSecs: &captureStart0, EndSecs: &captureEnd0,
+		})
+		second := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID: "sess-media-map", ProfileID: profileID,
+			FilePath: "gs://test-bucket/videos/sess-media-map/chunk_002.mp4",
+			Status:   "COMPLETED", StartSecs: &captureStart1, EndSecs: &captureEnd1,
+		})
+
+		err := w.persistConcatMediaIntervals(context.Background(), "sess-media-map", profileID, []concatMediaInterval{
+			{FilePath: first.FilePath, Start: 0, End: 1.25},
+			{FilePath: second.FilePath, Start: 1.25, End: 3.0},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		var rows []db.ChunkAnalysisResult
+		Expect(dbConn.Where("session_id = ?", "sess-media-map").Order("id").Find(&rows).Error).To(Succeed())
+		Expect(rows).To(HaveLen(2))
+		Expect(rows[0].MediaStartSecs).NotTo(BeNil())
+		Expect(rows[0].MediaEndSecs).NotTo(BeNil())
+		Expect(rows[1].MediaStartSecs).NotTo(BeNil())
+		Expect(rows[1].MediaEndSecs).NotTo(BeNil())
+		Expect(*rows[0].MediaStartSecs).To(Equal(0.0))
+		Expect(*rows[0].MediaEndSecs).To(Equal(1.25))
+		Expect(*rows[1].MediaStartSecs).To(Equal(1.25))
+		Expect(*rows[1].MediaEndSecs).To(Equal(3.0))
+		Expect(*rows[0].StartSecs).To(Equal(1_000.0))
 	})
 
 	Context("when ffmpeg is available", func() {
@@ -157,6 +191,16 @@ var _ = Describe("HandleMergeChunksTask", func() {
 				StartSecs: &start0,
 				EndSecs:   &end0,
 			}).Error).NotTo(HaveOccurred())
+			missingStart := 2.0
+			missingEnd := 3.0
+			missingChunk := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+				SessionID: "sess-merge-001",
+				ProfileID: profileID,
+				FilePath:  "gs://test-bucket/videos/sess-merge-001/chunk_missing.mp4",
+				Status:    "COMPLETED",
+				StartSecs: &missingStart,
+				EndSecs:   &missingEnd,
+			})
 
 			// Create a fresh transport for this test with all the GCS expectations
 			ffmpegTransport := testhelpers.NewMockTransport()
@@ -164,6 +208,10 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			Expect(sErr).NotTo(HaveOccurred())
 			w.StorageClient = ffmpegStorageClient
 
+			// Mock GCS ListObjects for original chunks lookup
+			testhelpers.MockGCSListObjects(ffmpegTransport, "test-bucket", "videos/sess-merge-001/", []string{
+				"videos/sess-merge-001/chunk_001.mp4",
+			})
 			// DownloadFile for the chunk (serve real mp4 bytes so ffmpeg can process it)
 			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/sess-merge-001/chunk_001.mp4", mp4Bytes)
 			// UploadFromFile for the merged video
@@ -176,7 +224,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 				"gs://test-bucket/videos/sess-merge-001",
 				WorkoutTypeWOD,
 				[]string{"Deadlift"},
-				nil, 0,
+				nil, profileID,
 				false,
 				"",
 			)
@@ -196,6 +244,16 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			Expect(enqueued.WorkoutType).To(Equal(WorkoutTypeWOD))
 			Expect(enqueued.Movements).To(Equal([]string{"Deadlift"}))
 			Expect(enqueued.FilePath).To(ContainSubstring("sess-merge-001"))
+
+			var mapped db.ChunkAnalysisResult
+			Expect(dbConn.Where("session_id = ?", "sess-merge-001").First(&mapped).Error).To(Succeed())
+			Expect(mapped.MediaStartSecs).NotTo(BeNil())
+			Expect(*mapped.MediaStartSecs).To(Equal(0.0))
+			Expect(mapped.MediaEndSecs).NotTo(BeNil())
+			Expect(*mapped.MediaEndSecs).To(BeNumerically(">", 0.0))
+			var absent db.ChunkAnalysisResult
+			Expect(dbConn.First(&absent, missingChunk.ID).Error).To(Succeed())
+			Expect(absent.MediaStartSecs).To(BeNil(), "a DB row absent from the GCS concat manifest must not be mapped")
 		})
 
 		It("excludes split_chunk records from merge to prevent doubled content", func() {
@@ -257,6 +315,12 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			Expect(sErr).NotTo(HaveOccurred())
 			w.StorageClient = ffmpegStorageClient
 
+			testhelpers.MockGCSListObjects(ffmpegTransport, "test-bucket", "videos/"+sessionID+"/", []string{
+				"videos/" + sessionID + "/camera_chunk_001.mp4",
+				"videos/" + sessionID + "/camera_chunk_002.mp4",
+				"videos/" + sessionID + "/split_chunk_000.mp4",
+				"videos/" + sessionID + "/split_chunk_001.mp4",
+			})
 			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/"+sessionID+"/camera_chunk_001.mp4", mp4Bytes)
 			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/"+sessionID+"/camera_chunk_002.mp4", mp4Bytes)
 			testhelpers.MockGCSUpload(ffmpegTransport, "test-bucket", "merged")
@@ -266,7 +330,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 				"gs://test-bucket/videos/"+sessionID,
 				WorkoutTypeWOD,
 				[]string{"Snatch"},
-				nil, 1,
+				nil, profileID,
 				false,
 				"",
 			)

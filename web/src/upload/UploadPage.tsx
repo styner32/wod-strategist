@@ -20,6 +20,8 @@ export function UploadPage() {
   );
   const [file, setFile] = useState<File | null>(null);
   const [workoutType, setWorkoutType] = useState('wod');
+  const [wodDescription, setWodDescription] = useState('');
+  const [pipelineMode, setPipelineMode] = useState('compare');
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState('');
@@ -72,6 +74,8 @@ export function UploadPage() {
         workout_type: workoutType,
         movements: [],
         injuries: [],
+        wod_description: wodDescription || undefined,
+        pipeline_mode: pipelineMode,
       });
 
       // 4. Navigate to session detail
@@ -188,6 +192,38 @@ export function UploadPage() {
             <option value="weight_training">Weight Training</option>
             <option value="surfing">Surfing</option>
             <option value="yoga">Yoga</option>
+          </select>
+        </div>
+
+        {/* WOD / Workout Description */}
+        <div>
+          <label htmlFor="upload-wod-description" className="block text-sm font-medium text-text-secondary mb-1.5">
+            Workout Description (WOD)
+          </label>
+          <textarea
+            id="upload-wod-description"
+            value={wodDescription}
+            onChange={(e) => setWodDescription(e.target.value)}
+            placeholder="e.g. AMRAP 20: 5 Pull-ups, 10 Push-ups, 15 Squats"
+            rows={3}
+            className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2.5 text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y"
+          />
+        </div>
+
+        {/* Pipeline Mode */}
+        <div>
+          <label htmlFor="upload-pipeline-mode" className="block text-sm font-medium text-text-secondary mb-1.5">
+            Pipeline Mode (Analysis Version)
+          </label>
+          <select
+            id="upload-pipeline-mode"
+            value={pipelineMode}
+            onChange={(e) => setPipelineMode(e.target.value)}
+            className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2.5 text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/50"
+          >
+            <option value="compare">Compare (Legacy & Optimized in parallel)</option>
+            <option value="optimized">Optimized (Two-Pass + Pro model)</option>
+            <option value="legacy">Legacy (Single-Pass)</option>
           </select>
         </div>
 

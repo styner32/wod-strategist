@@ -7,14 +7,25 @@ interface Props {
 }
 
 export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
-  const sorted = [...chunks].sort((a, b) => a.start_secs - b.start_secs);
+  const chunkStart = (chunk: ChunkAnalysisResult) => chunk.media_start_secs ?? null;
+  const chunkEnd = (chunk: ChunkAnalysisResult) => chunk.media_end_secs ?? null;
+  const sorted = [...chunks].sort((a, b) => {
+    const aStart = chunkStart(a);
+    const bStart = chunkStart(b);
+    if (aStart == null) return bStart == null ? a.id - b.id : 1;
+    if (bStart == null) return -1;
+    return aStart - bStart;
+  });
   const maxHR = Math.max(...sorted.map((c) => c.heart_rate_bpm || 0), 200);
-  const maxTime = sorted.length > 0 ? sorted[sorted.length - 1].end_secs : 0;
+  const maxTime = sorted.reduce(
+    (maximum, chunk) => Math.max(maximum, chunkEnd(chunk) ?? 0),
+    0,
+  );
 
   const hasHeartRate = sorted.some((c) => c.heart_rate_bpm > 0);
-  const isInteractive = onSeek != null;
 
-  function formatTime(secs: number) {
+  function formatTime(secs: number | null) {
+    if (secs == null || !Number.isFinite(secs)) return '—';
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
@@ -32,26 +43,27 @@ export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
       {/* Simple bar chart of chunks */}
       <div className="space-y-2">
         {sorted.map((chunk, i) => {
-          const widthPercent = maxTime > 0
-            ? ((chunk.end_secs - chunk.start_secs) / maxTime) * 100
+          const start = chunkStart(chunk);
+          const end = chunkEnd(chunk);
+          const hasMediaInterval = start != null && end != null && end > start;
+          const widthPercent = maxTime > 0 && hasMediaInterval
+            ? ((end! - start!) / maxTime) * 100
             : 100 / sorted.length;
           const hrPercent = maxHR > 0 ? (chunk.heart_rate_bpm / maxHR) * 100 : 0;
 
           const isActive =
+            hasMediaInterval &&
             currentTime != null &&
-            currentTime >= chunk.start_secs &&
-            currentTime < chunk.end_secs;
+            currentTime >= start! &&
+            currentTime < end!;
 
-          let parsedOutput: { exercise_type?: string } = {};
-          try {
-            parsedOutput = JSON.parse(chunk.output || '{}');
-          } catch { /* skip */ }
+          const movement = chunk.exercise_type
+            ?? chunk.structured_inference?.observed_movement_name;
 
           return (
             <div
               key={chunk.id}
-              className={`group ${isInteractive ? 'cursor-pointer' : ''}`}
-              onClick={() => onSeek?.(chunk.start_secs)}
+              className="group w-full"
             >
               <div className="flex items-center gap-3">
                 <span
@@ -59,7 +71,7 @@ export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
                     isActive ? 'text-accent font-semibold' : 'text-text-muted'
                   }`}
                 >
-                  {formatTime(chunk.start_secs)}
+                  {formatTime(start)}
                 </span>
 
                 <div className="flex-1 relative">
@@ -73,7 +85,7 @@ export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
                       style={{ width: `${Math.max(widthPercent, 10)}%` }}
                     >
                       <span className="text-xs text-text-secondary truncate">
-                        {parsedOutput.exercise_type || `Chunk ${i + 1}`}
+                        {movement || `Chunk ${i + 1}`}
                       </span>
                     </div>
 
@@ -83,8 +95,8 @@ export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
                         className="absolute top-0 bottom-0 w-0.5 bg-accent z-10"
                         style={{
                           left: `${
-                            ((currentTime - chunk.start_secs) /
-                              (chunk.end_secs - chunk.start_secs)) *
+                            ((currentTime - start!) /
+                              (end! - start!)) *
                             Math.max(widthPercent, 10)
                           }%`,
                         }}
@@ -124,9 +136,45 @@ export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
                   )}
                 </div>
 
-                <span className="text-xs text-text-muted w-14 font-mono shrink-0">
-                  {formatTime(chunk.end_secs)}
-                </span>
+                <div className="flex w-16 shrink-0 flex-col items-end gap-1">
+                  <span className="text-xs text-text-muted font-mono">
+                    {formatTime(end)}
+                  </span>
+                  {onSeek && (
+                    hasMediaInterval ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (start != null) onSeek(start);
+                        }}
+                        aria-label={`Seek to chunk ${i + 1} at ${formatTime(start)}`}
+                        className="rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-text-secondary hover:bg-bg-tertiary focus:outline-none focus:ring-2 focus:ring-accent"
+                      >
+                        Seek
+                      </button>
+                    ) : chunk.start_secs != null && Number.isFinite(chunk.start_secs) && chunk.start_secs >= 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (chunk.start_secs != null) onSeek(chunk.start_secs);
+                        }}
+                        title="Jump using capture-clock start time (may be inaccurate)"
+                        className="rounded border border-warning/30 bg-warning/5 px-1.5 py-0.5 text-[11px] font-medium text-warning hover:bg-warning/10 focus:outline-none focus:ring-2 focus:ring-warning"
+                      >
+                        Jump
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled
+                        aria-label={`Verified media interval unavailable for chunk ${i + 1}`}
+                        className="rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-text-secondary opacity-40 cursor-not-allowed"
+                      >
+                        Seek
+                      </button>
+                    )
+                  )}
+                </div>
               </div>
             </div>
           );

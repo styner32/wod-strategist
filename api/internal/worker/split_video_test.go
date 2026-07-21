@@ -1,106 +1,53 @@
 package worker
 
 import (
-	"context"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"testing"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/testhelpers"
 	"go.uber.org/zap"
 )
 
-// ---------------------------------------------------------------------------
-// Unit tests for split_video.go
-// ---------------------------------------------------------------------------
+var _ = Describe("server-split media mapping", func() {
+	It("uses cumulative probed durations without keyframe overlaps or gaps", func() {
+		start0, end0 := splitChunkMediaInterval(0, 10.4, 30)
+		start1, end1 := splitChunkMediaInterval(end0, 9.6, 30)
+		start2, end2 := splitChunkMediaInterval(end1, 12, 30)
 
-var _ = Describe("discoverChunkFiles", func() {
-	It("returns sorted chunk files matching chunk_*.mp4 pattern", func() {
-		tmpDir := GinkgoT().TempDir()
-
-		// Create files in unsorted order
-		for _, name := range []string{"chunk_002.mp4", "chunk_000.mp4", "chunk_001.mp4", "other.txt"} {
-			Expect(os.WriteFile(filepath.Join(tmpDir, name), []byte("test"), 0o644)).To(Succeed())
-		}
-
-		files, err := discoverChunkFiles(tmpDir)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(files).To(Equal([]string{"chunk_000.mp4", "chunk_001.mp4", "chunk_002.mp4"}))
+		Expect([]float64{start0, end0}).To(Equal([]float64{0, 10.4}))
+		Expect([]float64{start1, end1}).To(Equal([]float64{10.4, 20}))
+		Expect([]float64{start2, end2}).To(Equal([]float64{20, 30}))
 	})
 
-	It("returns empty when no chunk files exist", func() {
-		tmpDir := GinkgoT().TempDir()
-		Expect(os.WriteFile(filepath.Join(tmpDir, "other.mp4"), []byte("test"), 0o644)).To(Succeed())
-
-		files, err := discoverChunkFiles(tmpDir)
+	It("persists the source-video-relative interval separately from capture timestamps", func() {
+		database, err := testhelpers.InitDB()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(files).To(BeEmpty())
-	})
+		testhelpers.CleanupDB(database)
+		profile := testhelpers.CreateProfile(database, &db.Profile{})
+		w := &Worker{DB: database, logger: zap.NewNop()}
 
-	It("ignores directories", func() {
-		tmpDir := GinkgoT().TempDir()
-		Expect(os.Mkdir(filepath.Join(tmpDir, "chunk_000.mp4"), 0o755)).To(Succeed())
+		w.saveChunkResult(
+			VideoAnalysisPayload{SessionID: "split-media-session", ProfileID: profile.ID},
+			"gs://test-bucket/videos/1/split-media-session/split_chunk_000.mp4",
+			30.25,
+			60.5,
+			"COMPLETED",
+			"Pull-up",
+			"coaching",
+			"{}",
+			nil,
+			"",
+		)
 
-		files, err := discoverChunkFiles(tmpDir)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(files).To(BeEmpty())
+		var result db.ChunkAnalysisResult
+		Expect(database.Where("session_id = ?", "split-media-session").First(&result).Error).To(Succeed())
+		Expect(result.StartSecs).NotTo(BeNil())
+		Expect(result.EndSecs).NotTo(BeNil())
+		Expect(result.MediaStartSecs).NotTo(BeNil())
+		Expect(result.MediaEndSecs).NotTo(BeNil())
+		Expect(*result.StartSecs).To(Equal(30.25))
+		Expect(*result.EndSecs).To(Equal(60.5))
+		Expect(*result.MediaStartSecs).To(Equal(30.25))
+		Expect(*result.MediaEndSecs).To(Equal(60.5))
 	})
 })
-
-// TestSplitFFmpegDirect is a standalone Go test for FFmpeg splitting.
-// Run in isolation with: go test -run TestSplitFFmpegDirect -v
-func TestSplitFFmpegDirect(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available")
-	}
-
-	// Create a 25-second test video
-	inputPath := filepath.Join(t.TempDir(), "input.mp4")
-	cmd := exec.Command("ffmpeg",
-		"-f", "lavfi", "-i", "color=c=black:size=64x64:rate=30",
-		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-		"-t", "25",
-		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "51",
-		"-c:a", "aac", "-b:a", "32k",
-		"-y", inputPath,
-	)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Skipf("Failed to create test video: %s", output)
-	}
-
-	// Split into chunks using our wrapper
-	outDir := t.TempDir()
-	pattern := filepath.Join(outDir, "chunk_%03d.mp4")
-
-	if err := runFFmpegSplit(context.Background(), zap.NewNop(), inputPath, pattern, 10); err != nil {
-		t.Fatalf("runFFmpegSplit failed: %v", err)
-	}
-
-	// Verify chunks
-	chunks, err := discoverChunkFiles(outDir)
-	if err != nil {
-		t.Fatalf("discoverChunkFiles: %v", err)
-	}
-
-	// 25s at ~10s keyframe boundaries → should produce 2-4 chunks
-	if len(chunks) < 2 || len(chunks) > 4 {
-		t.Errorf("expected 2-4 chunks, got %d: %v", len(chunks), chunks)
-	}
-
-	t.Logf("Produced %d chunks: %v", len(chunks), chunks)
-
-	// Verify each chunk is a valid file with non-zero size
-	for _, name := range chunks {
-		fi, err := os.Stat(filepath.Join(outDir, name))
-		if err != nil {
-			t.Errorf("chunk %s: stat failed: %v", name, err)
-			continue
-		}
-		if fi.Size() == 0 {
-			t.Errorf("chunk %s: file is empty", name)
-		}
-		t.Logf("  %s: %d bytes", name, fi.Size())
-	}
-}

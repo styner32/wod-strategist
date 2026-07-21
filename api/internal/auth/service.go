@@ -199,8 +199,12 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uint, password strin
 		}
 
 		if len(profileIDs) > 0 {
-			// 2. Delete leaf data (analysis results, chunks, highlights, token usage)
+			// 2. Delete leaf data. Feedback is deleted before the production rows
+			// whose immutable snapshots it references.
 			for _, model := range []any{
+				&db.AnalysisFeedback{},
+				&db.ChunkReanalysisRun{},
+				&db.SessionReanalysisRun{},
 				&db.AnalysisResult{},
 				&db.ChunkAnalysisResult{},
 				&db.HighlightResult{},

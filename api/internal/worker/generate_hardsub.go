@@ -201,6 +201,26 @@ func (w *Worker) HandleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 		return fmt.Errorf("failed to upload hardsubbed video: %w", err)
 	}
 
+	// 8.5. Update AnalysisResult in database to append "hardsubbed" to available_videos.
+	var analysis db.AnalysisResult
+	if err := w.DB.WithContext(ctx).Where("session_id = ? AND analysis_type = ?", p.SessionID, db.AnalysisTypeWOD).First(&analysis).Error; err == nil {
+		hasHardsubbed := false
+		for _, v := range analysis.AvailableVideos {
+			if v == "hardsubbed" {
+				hasHardsubbed = true
+				break
+			}
+		}
+		if !hasHardsubbed {
+			analysis.AvailableVideos = append(analysis.AvailableVideos, "hardsubbed")
+			if dbErr := w.DB.WithContext(ctx).Model(&analysis).Update("available_videos", analysis.AvailableVideos).Error; dbErr != nil {
+				w.logger.Error("Failed to update available_videos in DB",
+					zap.String("session_id", p.SessionID),
+					zap.Error(dbErr))
+			}
+		}
+	}
+
 	w.logger.Info("Hardsub generation completed",
 		zap.String("session_id", p.SessionID),
 		zap.String("gcs_uri", hardSubGCSURI),

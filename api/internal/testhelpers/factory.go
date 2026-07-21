@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	g "github.com/onsi/gomega"
@@ -105,13 +106,213 @@ func CreateSession(dbConn *gorm.DB, sessionAttr *db.Session) db.Session {
 		Status:         sessionAttr.Status,
 		IdempotencyKey: sessionAttr.IdempotencyKey,
 		WODDescription: sessionAttr.WODDescription,
+		MovementHints:  sessionAttr.MovementHints,
 		WorkoutType:    sessionAttr.WorkoutType,
 	}
 
 	if s.IdempotencyKey == "" {
 		s.IdempotencyKey = uuid.NewString()
 	}
+	if len(s.MovementHints) == 0 {
+		s.MovementHints = db.JSONDocument(`[]`)
+	}
 
 	g.Expect(dbConn.Create(&s).Error).NotTo(g.HaveOccurred())
 	return s
+}
+
+func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.AnalysisResult {
+	result := db.AnalysisResult{
+		SessionID:           resultAttr.SessionID,
+		ProfileID:           resultAttr.ProfileID,
+		AnalysisType:        resultAttr.AnalysisType,
+		Status:              resultAttr.Status,
+		Output:              resultAttr.Output,
+		GeminiFileURI:       resultAttr.GeminiFileURI,
+		GeminiFileName:      resultAttr.GeminiFileName,
+		GeminiMIMEType:      resultAttr.GeminiMIMEType,
+		GeminiFileExpiresAt: resultAttr.GeminiFileExpiresAt,
+		HighlightSegments:   resultAttr.HighlightSegments,
+		WODDescription:      resultAttr.WODDescription,
+		SessionScore:        resultAttr.SessionScore,
+	}
+	if result.AnalysisType == "" {
+		result.AnalysisType = db.AnalysisTypeWOD
+	}
+
+	g.Expect(dbConn.Create(&result).Error).NotTo(g.HaveOccurred())
+	return result
+}
+
+func CreateChunkAnalysisResult(dbConn *gorm.DB, resultAttr *db.ChunkAnalysisResult) db.ChunkAnalysisResult {
+	result := db.ChunkAnalysisResult{
+		SessionID:         resultAttr.SessionID,
+		ProfileID:         resultAttr.ProfileID,
+		FilePath:          resultAttr.FilePath,
+		ExerciseType:      resultAttr.ExerciseType,
+		Status:            resultAttr.Status,
+		Output:            resultAttr.Output,
+		ObservedSignals:   resultAttr.ObservedSignals,
+		HeartRateBPM:      resultAttr.HeartRateBPM,
+		StartSecs:         resultAttr.StartSecs,
+		EndSecs:           resultAttr.EndSecs,
+		MediaStartSecs:    resultAttr.MediaStartSecs,
+		MediaEndSecs:      resultAttr.MediaEndSecs,
+		WorkoutConfidence: resultAttr.WorkoutConfidence,
+		MotionScore:       resultAttr.MotionScore,
+		SkipReason:        resultAttr.SkipReason,
+	}
+
+	g.Expect(dbConn.Create(&result).Error).NotTo(g.HaveOccurred())
+	return result
+}
+
+func CreateAnalysisFeedback(dbConn *gorm.DB, feedbackAttr *db.AnalysisFeedback) db.AnalysisFeedback {
+	feedback := db.AnalysisFeedback{
+		FeedbackKey:           feedbackAttr.FeedbackKey,
+		ProfileID:             feedbackAttr.ProfileID,
+		SessionID:             feedbackAttr.SessionID,
+		TargetType:            feedbackAttr.TargetType,
+		ChunkAnalysisResultID: feedbackAttr.ChunkAnalysisResultID,
+		Category:              feedbackAttr.Category,
+		OriginalPrediction:    feedbackAttr.OriginalPrediction,
+		Correction:            feedbackAttr.Correction,
+		Note:                  feedbackAttr.Note,
+		ConsentToImprove:      feedbackAttr.ConsentToImprove,
+		ClientRequestID:       feedbackAttr.ClientRequestID,
+		Revision:              feedbackAttr.Revision,
+		SupersedesFeedbackID:  feedbackAttr.SupersedesFeedbackID,
+		Retracted:             feedbackAttr.Retracted,
+		ReanalysisRunID:       feedbackAttr.ReanalysisRunID,
+	}
+	if feedback.FeedbackKey == "" {
+		feedback.FeedbackKey = uuid.NewString()
+	}
+	if feedback.ClientRequestID == "" {
+		feedback.ClientRequestID = uuid.NewString()
+	}
+	if feedback.Revision == 0 {
+		feedback.Revision = 1
+	}
+	if len(feedback.OriginalPrediction) == 0 {
+		feedback.OriginalPrediction = db.JSONDocument(`{}`)
+	}
+	if len(feedback.Correction) == 0 {
+		feedback.Correction = db.JSONDocument(`{}`)
+	}
+
+	g.Expect(dbConn.Create(&feedback).Error).NotTo(g.HaveOccurred())
+	return feedback
+}
+
+func CreateChunkReanalysisRun(dbConn *gorm.DB, runAttr *db.ChunkReanalysisRun) db.ChunkReanalysisRun {
+	run := db.ChunkReanalysisRun{
+		SessionID:                  runAttr.SessionID,
+		ProfileID:                  runAttr.ProfileID,
+		ChunkAnalysisResultID:      runAttr.ChunkAnalysisResultID,
+		ClientRequestID:            runAttr.ClientRequestID,
+		TaskID:                     runAttr.TaskID,
+		Status:                     runAttr.Status,
+		SourceKind:                 runAttr.SourceKind,
+		SourceGCSURI:               runAttr.SourceGCSURI,
+		SourceContextSnapshot:      runAttr.SourceContextSnapshot,
+		OriginalPredictionSnapshot: runAttr.OriginalPredictionSnapshot,
+		MediaStartSecs:             runAttr.MediaStartSecs,
+		MediaEndSecs:               runAttr.MediaEndSecs,
+		Model:                      runAttr.Model,
+		PromptVersion:              runAttr.PromptVersion,
+		PromptHash:                 runAttr.PromptHash,
+		SchemaVersion:              runAttr.SchemaVersion,
+		RawOutput:                  runAttr.RawOutput,
+		StructuredCandidate:        runAttr.StructuredCandidate,
+		PromptTokens:               runAttr.PromptTokens,
+		CandidateTokens:            runAttr.CandidateTokens,
+		TotalTokens:                runAttr.TotalTokens,
+		DurationMs:                 runAttr.DurationMs,
+		SafeError:                  runAttr.SafeError,
+		GeminiFileURI:              runAttr.GeminiFileURI,
+		GeminiFileName:             runAttr.GeminiFileName,
+		GeminiMIMEType:             runAttr.GeminiMIMEType,
+		GeminiFileExpiresAt:        runAttr.GeminiFileExpiresAt,
+		StartedAt:                  runAttr.StartedAt,
+		CompletedAt:                runAttr.CompletedAt,
+		CreatedAt:                  runAttr.CreatedAt,
+		UpdatedAt:                  runAttr.UpdatedAt,
+	}
+	if run.ClientRequestID == "" {
+		run.ClientRequestID = uuid.NewString()
+	}
+	if run.Status == "" {
+		run.Status = db.ChunkReanalysisStatusQueued
+	}
+	if len(run.SourceContextSnapshot) == 0 {
+		run.SourceContextSnapshot = db.JSONDocument(`{}`)
+	}
+	if len(run.OriginalPredictionSnapshot) == 0 {
+		run.OriginalPredictionSnapshot = db.JSONDocument(`{}`)
+	}
+	if len(run.StructuredCandidate) == 0 {
+		run.StructuredCandidate = db.JSONDocument(`{}`)
+	}
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = time.Now().UTC()
+	}
+
+	g.Expect(dbConn.Create(&run).Error).NotTo(g.HaveOccurred())
+	return run
+}
+
+func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRun) db.SessionReanalysisRun {
+	run := db.SessionReanalysisRun{
+		SessionID:                runAttr.SessionID,
+		ProfileID:                runAttr.ProfileID,
+		ClientRequestID:          runAttr.ClientRequestID,
+		TaskID:                   runAttr.TaskID,
+		Status:                   runAttr.Status,
+		SourceGCSURI:             runAttr.SourceGCSURI,
+		SourceContextSnapshot:    runAttr.SourceContextSnapshot,
+		OriginalAnalysisSnapshot: runAttr.OriginalAnalysisSnapshot,
+		Output:                   runAttr.Output,
+		HighlightSegments:        runAttr.HighlightSegments,
+		SessionScore:             runAttr.SessionScore,
+		WorkoutType:              runAttr.WorkoutType,
+		Model:                    runAttr.Model,
+		PromptVersion:            runAttr.PromptVersion,
+		PromptHash:               runAttr.PromptHash,
+		SchemaVersion:            runAttr.SchemaVersion,
+		PromptTokens:             runAttr.PromptTokens,
+		CandidateTokens:          runAttr.CandidateTokens,
+		TotalTokens:              runAttr.TotalTokens,
+		DurationMs:               runAttr.DurationMs,
+		SafeError:                runAttr.SafeError,
+		GeminiFileURI:            runAttr.GeminiFileURI,
+		GeminiFileName:           runAttr.GeminiFileName,
+		GeminiMIMEType:           runAttr.GeminiMIMEType,
+		GeminiFileExpiresAt:      runAttr.GeminiFileExpiresAt,
+		StartedAt:                runAttr.StartedAt,
+		CompletedAt:              runAttr.CompletedAt,
+		CreatedAt:                runAttr.CreatedAt,
+		UpdatedAt:                runAttr.UpdatedAt,
+	}
+	if run.ClientRequestID == "" {
+		run.ClientRequestID = uuid.NewString()
+	}
+	if run.Status == "" {
+		run.Status = db.SessionReanalysisStatusQueued
+	}
+	if len(run.SourceContextSnapshot) == 0 {
+		run.SourceContextSnapshot = db.JSONDocument(`{}`)
+	}
+	if len(run.OriginalAnalysisSnapshot) == 0 {
+		run.OriginalAnalysisSnapshot = db.JSONDocument(`{}`)
+	}
+	if run.SessionScore == "" {
+		run.SessionScore = `{}`
+	}
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = time.Now().UTC()
+	}
+
+	g.Expect(dbConn.Create(&run).Error).NotTo(g.HaveOccurred())
+	return run
 }

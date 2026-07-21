@@ -71,15 +71,19 @@ func main() {
 
 	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient, logger.Log)
 	w.UseCache = cfg.UseCache
+	w.PipelineMode = worker.PipelineMode(cfg.PipelineMode)
 
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)
 	mux.HandleFunc(worker.TypeChunkAnalysis, w.HandleChunkAnalysisTask)
+	mux.HandleFunc(worker.TypeChunkAnalysisWithSession, w.HandleChunkAnalysisWithSessionTask)
 	mux.HandleFunc(worker.TypeMergeChunks, w.HandleMergeChunksTask)
 	mux.HandleFunc(worker.TypeInjuryAnalysis, w.HandleInjuryAnalysisTask)
 	mux.HandleFunc(worker.TypeGenerateHighlight, w.HandleGenerateHighlightTask)
 	mux.HandleFunc(worker.TypeVerifyHighlights, w.HandleVerifyHighlightsTask)
 	mux.HandleFunc(worker.TypeGenerateHardSub, w.HandleGenerateHardSubTask)
+	mux.HandleFunc(worker.TypeChunkDebugReanalysis, w.HandleChunkDebugReanalysisTask)
+	mux.HandleFunc(worker.TypeSessionDebugReanalysis, w.HandleSessionDebugReanalysisTask)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")

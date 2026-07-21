@@ -32,15 +32,18 @@ func (r *GormAnalysisResultRepository) FindBySessionID(ctx context.Context, sess
 	return results, nil
 }
 
-func (r *GormAnalysisResultRepository) ListRecent(ctx context.Context, limit int, profileID uint) ([]db.AnalysisResult, error) {
+func (r *GormAnalysisResultRepository) ListRecent(ctx context.Context, limit int, profileID uint, beforeID uint) ([]db.AnalysisResult, error) {
 	if r.db == nil {
 		return nil, errRepositoryNotConfigured
 	}
 
 	var results []db.AnalysisResult
-	q := r.db.WithContext(ctx).Where("archived_at IS NULL").Order("created_at desc").Limit(limit)
+	q := r.db.WithContext(ctx).Where("archived_at IS NULL").Order("id desc").Limit(limit)
 	if profileID > 0 {
 		q = q.Where("profile_id = ?", profileID)
+	}
+	if beforeID > 0 {
+		q = q.Where("id < ?", beforeID)
 	}
 	if err := q.Find(&results).Error; err != nil {
 		return nil, err

@@ -78,6 +78,10 @@ resource "google_cloud_run_v2_service" "api" {
         value = "gemini-3.1-pro-preview"
       }
       env {
+        name  = "PIPELINE_MODE"
+        value = var.pipeline_mode
+      }
+      env {
         name = "JWT_SIGNING_SECRET"
         value_source {
           secret_key_ref {
@@ -97,6 +101,14 @@ resource "google_cloud_run_v2_service" "api" {
       env {
         name  = "APP_ENV"
         value = "production"
+      }
+      env {
+        name  = "ENABLE_CHUNK_REANALYSIS"
+        value = tostring(var.enable_chunk_reanalysis)
+      }
+      env {
+        name  = "ENABLE_SESSION_REANALYSIS"
+        value = tostring(var.enable_session_reanalysis)
       }
     }
   }
@@ -160,6 +172,10 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       env {
         name = "GEMINI_MODEL"
         value = "gemini-3.1-pro-preview"
+      }
+      env {
+        name  = "PIPELINE_MODE"
+        value = var.pipeline_mode
       }
     }
   }

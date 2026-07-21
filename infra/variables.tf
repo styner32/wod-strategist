@@ -73,3 +73,22 @@ variable "admin_cidr" {
   type        = string
   default     = "49.172.61.41/32"
 }
+
+variable "pipeline_mode" {
+  description = "The pipeline mode for video analysis (legacy, optimized, compare)"
+  type        = string
+  default     = "legacy"
+}
+
+variable "enable_chunk_reanalysis" {
+  description = "Enable exact-interval chunk re-analysis features (default false for safety and quota control)"
+  type        = bool
+  default     = false
+}
+
+variable "enable_session_reanalysis" {
+  description = "Enable session re-analysis features (default false for safety and quota control)"
+  type        = bool
+  default     = false
+}
+

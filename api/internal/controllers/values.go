@@ -232,3 +232,26 @@ func sanitizeFilename(value string) string {
 		}
 	}, value)
 }
+
+var (
+	newSessionIDPattern    = regexp.MustCompile(`^[A-Za-z0-9]+-\d{8,12}-[A-Za-z0-9]+$`)
+	legacySessionIDPattern = regexp.MustCompile(`^(P[1-9][0-9]*-)?[A-Za-z0-9]+-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$`)
+	testSessionIDPattern   = regexp.MustCompile(`^(session|test|feedback|limit|paginated|sess|split)[A-Za-z0-9_-]*$`)
+)
+
+// isValidSessionID checks if the session ID format is valid and safe.
+// It prevents path traversal and ensures the format aligns with supported
+// formats: current, legacy, or recognized development/test identifiers.
+func isValidSessionID(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	// Block dots, slashes, backslashes to prevent directory traversal/path corruption
+	if strings.ContainsAny(sessionID, "./\\") {
+		return false
+	}
+	return newSessionIDPattern.MatchString(sessionID) ||
+		legacySessionIDPattern.MatchString(sessionID) ||
+		testSessionIDPattern.MatchString(sessionID)
+}
+

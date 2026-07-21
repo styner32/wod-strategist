@@ -1,8 +1,33 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { historyApi, type AnalysisResult } from '../api/history';
 import { useAuth } from '../auth/useAuth';
+
+function HistoryCardSkeleton() {
+  return (
+    <div className="bg-bg-elevated border border-border rounded-xl p-5 animate-pulse">
+      <div className="flex items-start justify-between mb-4">
+        <div className="flex items-center gap-3 w-full">
+          <div className="w-10 h-10 rounded-lg bg-bg-tertiary" />
+          <div className="flex-1">
+            <div className="h-4 bg-bg-tertiary rounded w-2/3 mb-2" />
+            <div className="h-3 bg-bg-tertiary rounded w-1/3" />
+          </div>
+        </div>
+        <div className="w-16 h-5 bg-bg-tertiary rounded-full" />
+      </div>
+      <div className="flex gap-2 mb-3">
+        <div className="h-5 bg-bg-tertiary rounded w-16" />
+        <div className="h-5 bg-bg-tertiary rounded w-16" />
+      </div>
+      <div className="space-y-2">
+        <div className="h-3.5 bg-bg-tertiary rounded w-full" />
+        <div className="h-3.5 bg-bg-tertiary rounded w-5/6" />
+      </div>
+    </div>
+  );
+}
 
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
@@ -43,7 +68,6 @@ function parseAnalysisOutput(output: string): { summary?: string; workoutType?: 
 
 function HistoryCard({ result }: { result: AnalysisResult }) {
   const parsed = parseAnalysisOutput(result.output || '{}');
-  const videos = result.available_videos ?? [];
   return (
     <Link
       to={`/sessions/${result.session_id}`}
@@ -72,16 +96,6 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
             {parsed.workoutType}
           </span>
         )}
-        {videos.includes('hardsubbed') && (
-          <span className="inline-flex items-center gap-1 text-xs bg-success/10 text-success px-2 py-0.5 rounded-md">
-            📝 Guided
-          </span>
-        )}
-        {videos.includes('merged') && !videos.includes('hardsubbed') && (
-          <span className="inline-flex items-center gap-1 text-xs bg-info/10 text-info px-2 py-0.5 rounded-md">
-            📹 Video
-          </span>
-        )}
       </div>
 
       {parsed.summary && (
@@ -98,11 +112,55 @@ export function HistoryListPage() {
     profiles.length > 0 ? profiles[0].id : null,
   );
 
-  const { data: results, isLoading, error } = useQuery({
-    queryKey: ['history', selectedProfileId],
-    queryFn: () => historyApi.list(selectedProfileId!),
+  const {
+    data,
+    isLoading,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetching,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ['history-infinite', selectedProfileId],
+    queryFn: ({ pageParam }) => historyApi.list(selectedProfileId!, pageParam),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (lastPage) => {
+      if (!lastPage || lastPage.length < 20) return undefined;
+      return lastPage[lastPage.length - 1].id;
+    },
     enabled: !!selectedProfileId,
   });
+
+  const observerTarget = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const target = observerTarget.current;
+    if (!target || !hasNextPage || isFetchingNextPage || isFetching || error) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !isFetchingNextPage && !isFetching) {
+          fetchNextPage();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(target);
+
+    return () => {
+      if (target) {
+        observer.unobserve(target);
+      }
+    };
+  }, [hasNextPage, isFetchingNextPage, isFetching, fetchNextPage, error]);
+
+  const results = data ? data.pages.flatMap((page) => page) : [];
+
+  // De-duplicate results by unique result.id to guarantee no duplicate items are ever rendered
+  const uniqueResults = results.filter(
+    (item, index, self) => self.findIndex((r) => r.id === item.id) === index
+  );
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -128,18 +186,20 @@ export function HistoryListPage() {
       </div>
 
       {isLoading && (
-        <div className="flex items-center justify-center py-20">
-          <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <HistoryCardSkeleton />
+          <HistoryCardSkeleton />
+          <HistoryCardSkeleton />
         </div>
       )}
 
-      {error && (
-        <div className="bg-error/10 border border-error/30 text-error rounded-lg px-4 py-3 text-sm">
+      {error && uniqueResults.length === 0 && (
+        <div className="bg-error/10 border border-error/30 text-error rounded-lg px-4 py-3 text-sm mb-6">
           Failed to load history. Please try again.
         </div>
       )}
 
-      {results && results.length === 0 && (
+      {!isLoading && !error && uniqueResults.length === 0 && (
         <div className="text-center py-20">
           <div className="w-16 h-16 rounded-full bg-bg-tertiary flex items-center justify-center mx-auto mb-4">
             <svg className="w-8 h-8 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -159,12 +219,38 @@ export function HistoryListPage() {
         </div>
       )}
 
-      {results && results.length > 0 && (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {results.map((result) => (
-            <HistoryCard key={result.id} result={result} />
-          ))}
-        </div>
+      {uniqueResults.length > 0 && (
+        <>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {uniqueResults.map((result) => (
+              <HistoryCard key={result.id} result={result} />
+            ))}
+          </div>
+
+          {/* Observer Target & Infinite Scroll Loading Indicator */}
+          <div ref={observerTarget} className="mt-8 flex justify-center min-h-[50px]">
+            {isFetchingNextPage && (
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 w-full">
+                <HistoryCardSkeleton />
+                <HistoryCardSkeleton />
+                <HistoryCardSkeleton />
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div className="mt-8 flex flex-col items-center justify-center py-6 bg-error/5 border border-error/10 rounded-lg">
+              <p className="text-error text-sm font-medium mb-2">Failed to load more history</p>
+              <button
+                type="button"
+                onClick={() => fetchNextPage()}
+                className="px-4 py-2 bg-bg-secondary hover:bg-bg-tertiary text-text-primary border border-border rounded-lg text-sm font-medium transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

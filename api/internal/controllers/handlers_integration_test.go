@@ -57,8 +57,14 @@ func newTestRouter(config controllers.Config) *gin.Engine {
 	config.AnalysisResults = controllers.NewGormAnalysisResultRepository(dbConn)
 	config.Profiles = controllers.NewGormProfileRepository(dbConn)
 	config.HighlightResults = controllers.NewGormHighlightResultRepository(dbConn)
+	if config.StorageClient == nil {
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", testhelpers.NewMockTransport())
+		Expect(err).NotTo(HaveOccurred())
+		config.StorageClient = storageClient
+	}
 
-	controller := controllers.New(config)
+	controller, err := controllers.New(config)
+	Expect(err).NotTo(HaveOccurred())
 	router, err := server.SetupRouter("test", "test-api-key", nil, controller, nil, nil)
 	Expect(err).NotTo(HaveOccurred())
 	return router
@@ -79,8 +85,14 @@ func newTestRouterWithAuthService(config controllers.Config) *gin.Engine {
 	config.AnalysisResults = controllers.NewGormAnalysisResultRepository(dbConn)
 	config.Profiles = controllers.NewGormProfileRepository(dbConn)
 	config.HighlightResults = controllers.NewGormHighlightResultRepository(dbConn)
+	if config.StorageClient == nil {
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", testhelpers.NewMockTransport())
+		Expect(err).NotTo(HaveOccurred())
+		config.StorageClient = storageClient
+	}
 
-	controller := controllers.New(config)
+	controller, err := controllers.New(config)
+	Expect(err).NotTo(HaveOccurred())
 	router, err := server.SetupRouter("test", "test-api-key", nil, controller, nil, authService)
 	Expect(err).NotTo(HaveOccurred())
 	return router
@@ -195,7 +207,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(decodeMapBody(w)["error"]).To(Equal("filename is required"))
 		})
 
-		It("sanitizes path traversal and returns a signed url", func() {
+		It("rejects invalid session_id and path traversal", func() {
 			req := newAuthorizedJSONRequest(
 				http.MethodPost,
 				"/api/v1/upload-url",
@@ -204,10 +216,9 @@ var _ = Describe("Controller handlers", func() {
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
 			body := decodeMapBody(w)
-			Expect(body["upload_url"]).NotTo(BeEmpty())
-			Expect(body["gcs_uri"]).To(Equal("gs://test-bucket/videos/0/session-1/video.mp4"))
+			Expect(body["error"]).To(Equal("invalid session_id format"))
 		})
 
 		It("returns internal error when storage fails", func() {
@@ -316,6 +327,24 @@ var _ = Describe("Controller handlers", func() {
 			Expect(payload.WorkoutType).To(Equal(worker.WorkoutTypeWOD))
 			Expect(payload.Movements).To(BeEmpty())
 		})
+
+		It("updates movement hints for an existing matching session", func() {
+			testhelpers.CreateSession(dbConn, &db.Session{
+				SessionID:     "session-hints",
+				ProfileID:     profileID,
+				MovementHints: db.JSONDocument(`["Old hint"]`),
+			})
+
+			body := fmt.Sprintf(`{"session_id":"session-hints","gcs_uri":"gs://bucket/video.mp4","movements":["Pull-up","Sandbag Over Shoulder"],"profile_id":%d}`, profileID)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", body)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusAccepted), w.Body.String())
+			var session db.Session
+			Expect(dbConn.Where("session_id = ?", "session-hints").First(&session).Error).NotTo(HaveOccurred())
+			Expect(string(session.MovementHints)).To(MatchJSON(`["Pull-up","Sandbag Over Shoulder"]`))
+		})
 	})
 
 	Describe("POST /api/v1/upload", func() {
@@ -333,6 +362,10 @@ var _ = Describe("Controller handlers", func() {
 				StorageClient:        storageClient,
 				BucketName:           "test-bucket",
 				NewVideoAnalysisTask: worker.NewVideoAnalysisTask,
+			})
+			testhelpers.CreateSession(dbConn, &db.Session{
+				SessionID: "session-1",
+				ProfileID: profileID,
 			})
 		})
 
@@ -366,6 +399,19 @@ var _ = Describe("Controller handlers", func() {
 
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
 			Expect(decodeMapBody(w)["error"]).To(Equal("file is required"))
+		})
+
+		It("rejects a current session that has no resolvable profile", func() {
+			body, contentType := multipartRequestBody("WOD-20260715-01J00000000000000000000000", "video.mp4", "dummy content")
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+			req.Header.Set("Content-Type", contentType)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(decodeMapBody(w)["error"]).To(Equal("profile_id is required"))
+			Expect(transport.Requests()).To(BeEmpty())
 		})
 
 		It("returns internal error when upload fails", func() {
@@ -427,7 +473,7 @@ var _ = Describe("Controller handlers", func() {
 				Reply(http.StatusOK).
 				JSON(map[string]any{"name": "videos/0/session-1/video.mp4"})
 
-			body, contentType := multipartRequestBody("../../session-1", "..\\\\folder\\\\video.mp4", "dummy content")
+			body, contentType := multipartRequestBody("session-1", "..\\\\folder\\\\video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", contentType)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -456,6 +502,44 @@ var _ = Describe("Controller handlers", func() {
 			Expect(json.Unmarshal(pending[0].Payload, &payload)).To(Succeed())
 			Expect(payload.SessionID).To(Equal("session-1"))
 			Expect(payload.FilePath).To(Equal("gs://test-bucket/videos/0/session-1/video.mp4"))
+			Expect(payload.ProfileID).To(Equal(profileID))
+		})
+
+		It("rejects legacy upload when sessionID is invalid", func() {
+			body, contentType := multipartRequestBody("../../session-1", "video.mp4", "dummy content")
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+			req.Header.Set("Content-Type", contentType)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(decodeMapBody(w)["error"]).To(Equal("invalid session_id format"))
+		})
+
+		It("resolves the profile from an old-format session ID", func() {
+			sessionID := fmt.Sprintf("P%d-WOD-2026-07-15-18-21", profileID)
+			objectName := "videos/0/" + sessionID + "/video.mp4"
+			transport.New("https://storage.googleapis.com").
+				Post(gcsUploadURL("test-bucket", objectName)).
+				Reply(http.StatusOK).
+				JSON(map[string]any{"name": objectName})
+
+			body, contentType := multipartRequestBody(sessionID, "video.mp4", "dummy content")
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
+			req.Header.Set("Content-Type", contentType)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusAccepted))
+			pending, err := inspector.ListPendingTasks("default")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pending).To(HaveLen(1))
+
+			var payload worker.VideoAnalysisPayload
+			Expect(json.Unmarshal(pending[0].Payload, &payload)).To(Succeed())
+			Expect(payload.ProfileID).To(Equal(profileID))
 		})
 	})
 
@@ -475,12 +559,20 @@ var _ = Describe("Controller handlers", func() {
 				FitnessLevel: "intermediate",
 			})
 
-			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: sessionA, ProfileID: profile.ID, Status: "COMPLETED", Output: "output-a",
-			}).Error).NotTo(HaveOccurred())
-			Expect(dbConn.Create(&db.AnalysisResult{
-				SessionID: sessionB, ProfileID: profile.ID, Status: "COMPLETED", Output: "output-b",
-			}).Error).NotTo(HaveOccurred())
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				SessionID:         sessionA,
+				ProfileID:         profile.ID,
+				Status:            "COMPLETED",
+				Output:            "output-a",
+				HighlightSegments: `[{"start_time":1.5,"end_time":4.5,"description":"Good rep"}]`,
+			})
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				SessionID:         sessionB,
+				ProfileID:         profile.ID,
+				Status:            "COMPLETED",
+				Output:            "output-b",
+				HighlightSegments: `[{"start":"0:10","end":"0:09","type":"best_form","movement":"Air Squat","reason":"reversed"}]`,
+			})
 		})
 
 		It("returns repository results for the requested session", func() {
@@ -498,6 +590,39 @@ var _ = Describe("Controller handlers", func() {
 			Expect(results[0].Output).To(Equal("output-a"))
 		})
 
+		It("preserves result field types while normalizing legacy highlights", func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionA, nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var results []map[string]any
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(1))
+
+			result := results[0]
+			Expect(result["id"]).To(BeAssignableToTypeOf(float64(0)))
+			Expect(result["session_id"]).To(Equal(sessionA))
+			Expect(result["profile_id"]).To(BeAssignableToTypeOf(float64(0)))
+			Expect(result["status"]).To(Equal("COMPLETED"))
+			Expect(result["output"]).To(Equal("output-a"))
+			Expect(result["created_at"]).To(BeAssignableToTypeOf(""))
+			Expect(result["updated_at"]).To(BeAssignableToTypeOf(""))
+
+			highlightSegments, ok := result["highlight_segments"].(string)
+			Expect(ok).To(BeTrue(), "highlight_segments must remain a JSON-encoded string")
+			Expect(json.Valid([]byte(highlightSegments))).To(BeTrue())
+			var normalized []worker.HighlightSegment
+			Expect(json.Unmarshal([]byte(highlightSegments), &normalized)).To(Succeed())
+			Expect(normalized).To(HaveLen(1))
+			Expect(normalized[0].Version).To(Equal(2))
+			Expect(normalized[0].Type).To(Equal("key_moment"))
+			Expect(normalized[0].Observations).To(HaveLen(1))
+			Expect(normalized[0].Observations[0].Type).To(Equal(worker.HighlightObservationTechnique))
+			Expect(normalized[0].Observations[0].Reason).To(Equal("Good rep"))
+		})
+
 		It("GET /analysis/:session_id returns only the requested session", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionB, nil)
 			req.Header.Set("X-API-Key", "test-api-key")
@@ -510,10 +635,43 @@ var _ = Describe("Controller handlers", func() {
 			Expect(results).To(HaveLen(1))
 			Expect(results[0].SessionID).To(Equal(sessionB))
 			Expect(results[0].Output).To(Equal("output-b"))
+			Expect(results[0].HighlightSegments).To(MatchJSON(`[]`))
 		})
 	})
 
 	Describe("GET /api/v1/history", func() {
+		It("does not list GCS objects while loading history", func() {
+			transport := testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
+			router := newTestRouter(controllers.Config{
+				StorageClient: storageClient,
+				BucketName:    "test-bucket",
+			})
+
+			Expect(dbConn.Create(&db.AnalysisResult{
+				SessionID:       "session-with-video",
+				Status:          "COMPLETED",
+				Output:          "ok",
+				ProfileID:       profileID,
+				AvailableVideos: db.CommaStringArray{"merged"},
+			}).Error).NotTo(HaveOccurred())
+
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=%d", profileID), nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+			Expect(transport.Requests()).To(BeEmpty())
+
+			var results []map[string]any
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(1))
+			Expect(results[0]).To(HaveKey("available_videos"))
+			Expect(results[0]["available_videos"]).To(ContainElement("merged"))
+		})
+
 		It("returns recent history and enforces the limit", func() {
 			// Seed one result so we get a non-empty response.
 			Expect(dbConn.Create(&db.AnalysisResult{
@@ -533,6 +691,46 @@ var _ = Describe("Controller handlers", func() {
 			var results []db.AnalysisResult
 			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
 			Expect(results).To(HaveLen(1))
+		})
+
+		It("supports cursor pagination using before_id and limit parameters", func() {
+			// Seed 3 results with distinct session IDs
+			for i := 1; i <= 3; i++ {
+				Expect(dbConn.Create(&db.AnalysisResult{
+					SessionID: fmt.Sprintf("paginated-session-%d", i),
+					Status:    "COMPLETED",
+					Output:    fmt.Sprintf("workout-%d", i),
+					ProfileID: profileID,
+				}).Error).NotTo(HaveOccurred())
+			}
+
+			// First request: no before_id, limit=2
+			req1 := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=2", nil)
+			req1.Header.Set("X-API-Key", "test-api-key")
+			w1 := httptest.NewRecorder()
+			router.ServeHTTP(w1, req1)
+
+			Expect(w1.Code).To(Equal(http.StatusOK))
+			var results1 []db.AnalysisResult
+			Expect(json.Unmarshal(w1.Body.Bytes(), &results1)).To(Succeed())
+			Expect(results1).To(HaveLen(2))
+			// Since results are ordered by id desc, expected results1 contains the latest two seeded
+			Expect(results1[0].SessionID).To(Equal("paginated-session-3"))
+			Expect(results1[1].SessionID).To(Equal("paginated-session-2"))
+
+			// Second request: before_id = results1[1].ID (paginated-session-2), limit=2
+			cursorID := results1[1].ID
+			req2 := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=1&before_id=%d&limit=2", cursorID), nil)
+			req2.Header.Set("X-API-Key", "test-api-key")
+			w2 := httptest.NewRecorder()
+			router.ServeHTTP(w2, req2)
+
+			Expect(w2.Code).To(Equal(http.StatusOK))
+			var results2 []db.AnalysisResult
+			Expect(json.Unmarshal(w2.Body.Bytes(), &results2)).To(Succeed())
+			// Should return paginated-session-1 (and potentially older seeded results from other tests)
+			Expect(len(results2)).To(BeNumerically(">=", 1))
+			Expect(results2[0].SessionID).To(Equal("paginated-session-1"))
 		})
 
 		It("returns bad request when profile_id is missing", func() {
@@ -595,6 +793,62 @@ var _ = Describe("Controller handlers", func() {
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
 			Expect(decodeMapBody(w)["error"]).To(ContainSubstring("invalid to date"))
 		})
+
+		It("clamps and normalizes the limit query parameter", func() {
+			// Seed 5 results
+			for i := 1; i <= 5; i++ {
+				Expect(dbConn.Create(&db.AnalysisResult{
+					SessionID: fmt.Sprintf("limit-session-%d", i),
+					Status:    "COMPLETED",
+					ProfileID: profileID,
+				}).Error).NotTo(HaveOccurred())
+			}
+
+			// 1. Malformed limit: fallback to default (20) which returns all 5
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=abc", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var results []db.AnalysisResult
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(5))
+
+			// 2. Negative/Zero limit: fallback to default (20) which returns all 5
+			req = httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=0", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w = httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(5))
+
+			// 3. Respected limit
+			req = httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=2", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w = httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(2))
+
+			// 4. Oversized limit: clamp to 100
+			// Let's seed 102 results in total (we already have 5, so seed 97 more)
+			for i := 6; i <= 102; i++ {
+				Expect(dbConn.Create(&db.AnalysisResult{
+					SessionID: fmt.Sprintf("limit-session-%d", i),
+					Status:    "COMPLETED",
+					ProfileID: profileID,
+				}).Error).NotTo(HaveOccurred())
+			}
+			req = httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=150", nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w = httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			Expect(w.Code).To(Equal(http.StatusOK))
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(100))
+		})
 	})
 
 	Describe("GET /api/v1/movements and /api/v1/injuries", func() {
@@ -604,7 +858,7 @@ var _ = Describe("Controller handlers", func() {
 			router = newTestRouter(controllers.Config{})
 		})
 
-		It("returns movements", func() {
+		It("keeps the legacy top-level movement string-array shape", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
@@ -617,7 +871,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(got[0]).NotTo(BeEmpty())
 		})
 
-		It("returns movement groups", func() {
+		It("keeps the legacy top-level movement-group array shape", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/movement-groups", nil)
 			req.Header.Set("X-API-Key", "test-api-key")
 			w := httptest.NewRecorder()
@@ -810,15 +1064,22 @@ var _ = Describe("Controller handlers", func() {
 		const sessionA = "session-sanitize-a"
 
 		BeforeEach(func() {
-			Expect(dbConn.Create(&db.AnalysisResult{
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
 				SessionID: sessionA, ProfileID: profileID, Status: "COMPLETED", Output: "output-a",
-			}).Error).NotTo(HaveOccurred())
+			})
 
 			start, end := 0.0, 10.0
-			Expect(dbConn.Create(&db.ChunkAnalysisResult{
-				SessionID: sessionA, ProfileID: profileID, Status: "COMPLETED", Output: "chunk-a",
-				StartSecs: &start, EndSecs: &end,
-			}).Error).NotTo(HaveOccurred())
+			testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+				SessionID:       sessionA,
+				ProfileID:       profileID,
+				FilePath:        "gs://bucket/videos/1/session-sanitize-a/chunk_0001.mp4",
+				ExerciseType:    "Pull-up",
+				Status:          "COMPLETED",
+				Output:          "chunk-a",
+				ObservedSignals: `{"movement":"Pull-up"}`,
+				StartSecs:       &start,
+				EndSecs:         &end,
+			})
 		})
 
 		It("GET /chunk-analysis/:session_id returns only the requested session", func() {
@@ -832,6 +1093,58 @@ var _ = Describe("Controller handlers", func() {
 			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
 			Expect(results).To(HaveLen(1))
 			Expect(results[0].SessionID).To(Equal(sessionA))
+		})
+
+		It("preserves the legacy chunk array, free-form movement, and created-at ordering", func() {
+			olderCreatedAt := time.Now().UTC().Add(-time.Hour)
+			Expect(dbConn.Model(&db.ChunkAnalysisResult{}).
+				Where("session_id = ?", sessionA).
+				UpdateColumn("created_at", olderCreatedAt).Error).NotTo(HaveOccurred())
+
+			start, end := 10.0, 20.0
+			testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+				SessionID:         sessionA,
+				ProfileID:         profileID,
+				FilePath:          "gs://bucket/videos/1/session-sanitize-a/chunk_0002.mp4",
+				ExerciseType:      "Atlas Stone Complex",
+				Status:            "COMPLETED",
+				Output:            "Keep the legacy coaching output as text.",
+				ObservedSignals:   `{"movement":"Atlas Stone Complex"}`,
+				HeartRateBPM:      142,
+				StartSecs:         &start,
+				EndSecs:           &end,
+				WorkoutConfidence: 0.91,
+			})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/chunk-analysis/"+sessionA, nil)
+			req.Header.Set("X-API-Key", "test-api-key")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK))
+			var results []map[string]any
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			Expect(results).To(HaveLen(2))
+
+			newer := results[0]
+			older := results[1]
+			Expect(newer["exercise_type"]).To(Equal("Atlas Stone Complex"))
+			Expect(newer["status"]).To(Equal("COMPLETED"))
+			Expect(newer["output"]).To(Equal("Keep the legacy coaching output as text."))
+			Expect(newer["id"]).To(BeAssignableToTypeOf(float64(0)))
+			Expect(newer["session_id"]).To(Equal(sessionA))
+			Expect(newer["profile_id"]).To(BeAssignableToTypeOf(float64(0)))
+			Expect(newer["file_path"]).To(BeAssignableToTypeOf(""))
+			Expect(newer["heart_rate_bpm"]).To(BeAssignableToTypeOf(float64(0)))
+			Expect(newer["start_secs"]).To(BeAssignableToTypeOf(float64(0)))
+			Expect(newer["end_secs"]).To(BeAssignableToTypeOf(float64(0)))
+			Expect(newer["workout_confidence"]).To(BeAssignableToTypeOf(float64(0)))
+
+			newerTime, err := time.Parse(time.RFC3339Nano, newer["created_at"].(string))
+			Expect(err).NotTo(HaveOccurred())
+			olderTime, err := time.Parse(time.RFC3339Nano, older["created_at"].(string))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(newerTime).To(BeTemporally(">", olderTime))
 		})
 	})
 
@@ -874,7 +1187,7 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("creates a session", func() {
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d}`, profile.ID), &user)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d, "movements": ["Pull-up", "Sandbag Over Shoulder"]}`, profile.ID), &user)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -884,6 +1197,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(dbConn.Where("profile_id = ?", profile.ID).First(&newSession).Error).To(BeNil())
 			Expect(newSession.SessionID).NotTo(BeEmpty())
 			Expect(newSession.Status).To(Equal(db.SessionStatus("started")))
+			Expect(string(newSession.MovementHints)).To(MatchJSON(`["Pull-up", "Sandbag Over Shoulder"]`))
 
 			formattedTime := "WOD-" + time.Now().Format("200601021504")
 			Expect(newSession.SessionID).To(HavePrefix(formattedTime))
@@ -966,6 +1280,7 @@ var _ = Describe("Controller handlers", func() {
 			Expect(response.WorkoutType).To(Equal("wod"))
 		})
 	})
+
 })
 
 func repeatedJSONString(value string, count int) string {

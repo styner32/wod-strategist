@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -43,10 +43,11 @@ type VideoAnalysisPayload struct {
 	ProfileID         uint
 	StartSecs         float64
 	EndSecs           float64
-	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate at chunk capture time
+	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate associated with the chunk; exact sample time is unavailable
 	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
 	WODDescription    string  `json:"wod_description,omitempty"`    // user-supplied WOD descriptor (e.g. "Fran", "For Time: 5 rounds of...")
 	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
+	PipelineMode      string  `json:"pipeline_mode,omitempty"`
 }
 
 // VideoAnalysisWithSessionPayload is used when session_id is available (when user has selected a session to upload)
@@ -56,18 +57,36 @@ type VideoAnalysisWithSessionPayload struct {
 	ProfileID         uint
 	StartSecs         float64
 	EndSecs           float64
-	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate at chunk capture time
+	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate associated with the chunk; exact sample time is unavailable
 	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
 	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
 }
 
-// HighlightSegment is shared between video analysis (parsing) and highlight generation (processing).
+// HighlightObservation is an exact, evidence-backed moment inside a padded
+// playback event. Observation ranges are never expanded merely to satisfy the
+// playback-duration contract.
+type HighlightObservation struct {
+	Start      string   `json:"start"`
+	End        string   `json:"end"`
+	Type       string   `json:"type"` // positive_form, form_issue, fatigue_onset, technique_event
+	Reason     string   `json:"reason"`
+	Confidence *float64 `json:"confidence,omitempty"`
+	Verified   *bool    `json:"verified,omitempty"`
+}
+
+// HighlightSegment is the backward-compatible playback event shared between
+// video analysis, verification, reel generation, and clients. The legacy flat
+// fields remain populated while v2 events also preserve exact observations.
 type HighlightSegment struct {
-	Start    string `json:"start"`              // e.g. "0:15" or "1:30"
-	End      string `json:"end"`                // e.g. "0:28" or "1:45"
-	Type     string `json:"type"`               // best_form, worst_form, fatigue_point, key_moment
-	Movement string `json:"movement,omitempty"` // which exercise (e.g. "Snatch", "Pull-up")
-	Reason   string `json:"reason"`             // human-readable reason
+	Version      int                    `json:"version,omitempty"`
+	Start        string                 `json:"start"`                // padded playback start, e.g. "0:15"
+	End          string                 `json:"end"`                  // padded playback end, e.g. "0:28"
+	Type         string                 `json:"type"`                 // best_form, worst_form, fatigue_point, mixed_form, key_moment
+	Movement     string                 `json:"movement,omitempty"`   // which exercise (e.g. "Snatch", "Pull-up")
+	Reason       string                 `json:"reason"`               // backward-compatible event summary
+	Confidence   *float64               `json:"confidence,omitempty"` // flat evidence input only; v2 keeps this per observation
+	Tags         []string               `json:"tags,omitempty"`
+	Observations []HighlightObservation `json:"observations,omitempty"`
 }
 
 // StorageClient is the minimal interface over storage.Client used by handlers.
@@ -83,6 +102,8 @@ type GeminiClient interface {
 	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, *gemini.TokenUsage, error)
 	AnalyzeVideoWithModel(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
 	DeleteFile(ctx context.Context, name string) error
+	FileExists(ctx context.Context, name string) (bool, error)
+	FileVideoDuration(ctx context.Context, name string) (time.Duration, bool, error)
 	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error
 
 	// Two-pass analysis: upload → index (Flash) → per-segment analysis (Pro)
@@ -103,6 +124,14 @@ type QueueClient interface {
 	Enqueue(task *asynq.Task, opts ...asynq.Option) (*asynq.TaskInfo, error)
 }
 
+type PipelineMode string
+
+const (
+	PipelineModeLegacy    PipelineMode = "legacy"    // 기존 동작 그대로
+	PipelineModeOptimized PipelineMode = "optimized" // 개선 경로만
+	PipelineModeCompare   PipelineMode = "compare"   // 둘 다 실행, 결과·메트릭 별도 저장
+)
+
 // Worker holds all dependencies shared across task handlers.
 type Worker struct {
 	DB            *gorm.DB
@@ -111,6 +140,7 @@ type Worker struct {
 	GeminiClient  GeminiClient
 	QueueClient   QueueClient
 	UseCache      bool // enable context caching for long video analysis
+	PipelineMode  PipelineMode
 	logger        *zap.Logger
 }
 
@@ -173,12 +203,26 @@ func IsValidWorkoutType(wt string) bool {
 	}
 }
 
+var (
+	newSessionIDPattern    = regexp.MustCompile(`^[A-Za-z0-9]+-\d{8,12}-[A-Za-z0-9]+$`)
+	legacySessionIDPattern = regexp.MustCompile(`^(P[1-9][0-9]*-)?[A-Za-z0-9]+-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$`)
+	testSessionIDPattern   = regexp.MustCompile(`^(session|test|feedback|limit|paginated|sess|split)[A-Za-z0-9_-]*$`)
+)
+
 // validateSessionID checks that a session ID is safe to use in file paths.
-// Returns a non-retryable error if the session ID contains path separators
-// or other dangerous characters.
+// Returns a non-retryable error if the session ID contains path separators,
+// dots, or other dangerous/invalid characters.
 func validateSessionID(sessionID string) error {
-	if strings.ContainsAny(sessionID, "/\\") || sessionID != filepath.Base(sessionID) {
-		return fmt.Errorf("invalid session ID: contains path traversal characters: %w", asynq.SkipRetry)
+	if sessionID == "" {
+		return fmt.Errorf("session ID is empty: %w", asynq.SkipRetry)
+	}
+	if strings.ContainsAny(sessionID, "./\\") {
+		return fmt.Errorf("invalid session ID: contains path traversal or dot characters: %w", asynq.SkipRetry)
+	}
+	if !newSessionIDPattern.MatchString(sessionID) &&
+		!legacySessionIDPattern.MatchString(sessionID) &&
+		!testSessionIDPattern.MatchString(sessionID) {
+		return fmt.Errorf("invalid session ID format: %w", asynq.SkipRetry)
 	}
 	return nil
 }
@@ -254,20 +298,14 @@ func (w *Worker) lookupFitnessLevel(profileID uint) string {
 	return "intermediate"
 }
 
-// parseTimestampToSeconds converts a "M:SS" or "MM:SS" timestamp string to seconds.
+// parseTimestampToSeconds accepts the media-timeline formats used by analysis
+// output: H:MM:SS, M:SS, and plain seconds, with optional fractions.
 func parseTimestampToSeconds(ts string) (float64, error) {
-	parts := strings.SplitN(ts, ":", 2)
-	if len(parts) != 2 {
+	duration, ok := parseSegmentTimestamp(ts)
+	if !ok {
 		return 0, fmt.Errorf("invalid timestamp format: %s", ts)
 	}
-	var minutes, seconds float64
-	if _, err := fmt.Sscanf(parts[0], "%f", &minutes); err != nil {
-		return 0, fmt.Errorf("invalid minutes in timestamp %s: %w", ts, err)
-	}
-	if _, err := fmt.Sscanf(parts[1], "%f", &seconds); err != nil {
-		return 0, fmt.Errorf("invalid seconds in timestamp %s: %w", ts, err)
-	}
-	return minutes*60 + seconds, nil
+	return duration.Seconds(), nil
 }
 
 // randomHex returns a cryptographically random hex string of n bytes (2n hex chars).
@@ -345,4 +383,26 @@ func runFFmpegAnalysisEncode(ctx context.Context, log *zap.Logger, inputPath, ou
 
 	log.Info("FFmpeg analysis re-encode completed", zap.String("output_path", outputPath))
 	return nil
+}
+
+// recordStageMetrics persists per-stage pipeline metrics for variant comparison.
+// Never blocks the main workflow (saveTokenUsage와 동일 정책).
+func (w *Worker) recordStageMetrics(sessionID string, profileID uint,
+	stage, variant string, apiCalls, skippedCalls int, uploadBytes int64, elapsed time.Duration) {
+	if w.DB == nil {
+		return
+	}
+	rec := &db.PipelineStageMetric{
+		SessionID:    sessionID,
+		ProfileID:    profileID,
+		Stage:        stage,
+		Variant:      variant,
+		APICalls:     apiCalls,
+		SkippedCalls: skippedCalls,
+		UploadBytes:  uploadBytes,
+		DurationMs:   elapsed.Milliseconds(),
+	}
+	if err := w.DB.Create(rec).Error; err != nil {
+		w.logger.Error("Failed to save stage metrics", zap.Error(err))
+	}
 }

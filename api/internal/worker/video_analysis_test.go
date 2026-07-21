@@ -3,7 +3,9 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -35,7 +37,9 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		}, 0)
 
 		Expect(prompt).To(ContainSubstring("# 운동 영상 분석 요청"))
-		Expect(prompt).To(ContainSubstring("## 운동 종목: Burpee"))
+		Expect(prompt).To(ContainSubstring("운동 후보 힌트"))
+		Expect(prompt).To(ContainSubstring("Burpee"))
+		Expect(prompt).To(ContainSubstring("영상에 등장한다는 보장이 없습니다"))
 		Expect(prompt).To(ContainSubstring("## 알려진 부상 사항: Shoulder"))
 	})
 
@@ -58,6 +62,40 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		}, 0)
 
 		Expect(prompt).NotTo(ContainSubstring("부상 관련 타임스탬프"))
+	})
+
+	It("requires visible target evidence and excludes unseen planned movements and non-exercise fatigue", func() {
+		prompt := w.buildAnalysisPrompt(VideoAnalysisPayload{
+			SessionID:      "session-evidence",
+			WODDescription: "For Time: Pull-up, Rope Climb, then accessory work",
+			Movements:      []string{"Pull-up", "Rope Climb"},
+		}, 60)
+
+		Expect(prompt).To(ContainSubstring("기구 접촉"))
+		Expect(prompt).To(ContainSubstring("배경 인물"))
+		Expect(prompt).To(ContainSubstring("목록에 있어도 보이지 않으면 결과·점수·하이라이트에서 제외"))
+		Expect(prompt).To(ContainSubstring("걷기, 휴식, 회복, 준비, 장비 세팅, Unknown은 하이라이트"))
+		Expect(prompt).To(ContainSubstring("fatigue_onset는 심박수만으로 만들지 말고"))
+	})
+
+	It("requests at most three exact evidence items without category quotas", func() {
+		prompt := w.buildAnalysisPrompt(VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD}, 60)
+
+		Expect(prompt).To(ContainSubstring("구간당 최대 3개"))
+		Expect(prompt).To(ContainSubstring("카테고리별 개수 할당량은 없습니다"))
+		Expect(prompt).To(ContainSubstring("confidence"))
+		Expect(prompt).To(ContainSubstring("0.0~1.0"))
+		for _, evidenceType := range []string{
+			HighlightObservationPositiveForm,
+			HighlightObservationFormIssue,
+			HighlightObservationFatigueOnset,
+			HighlightObservationTechnique,
+		} {
+			Expect(prompt).To(ContainSubstring(evidenceType))
+		}
+		Expect(prompt).NotTo(ContainSubstring("카테고리별 최소"))
+		Expect(prompt).NotTo(ContainSubstring("2개 이상"))
+		Expect(prompt).NotTo(ContainSubstring("무제한"))
 	})
 
 	It("uses the default profile when ProfileID is 0", func() {
@@ -90,6 +128,53 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		Expect(IsValidWorkoutType("rehab")).To(BeFalse())
 		Expect(IsValidWorkoutType("anything")).To(BeFalse())
 		Expect(IsValidWorkoutType("")).To(BeFalse())
+	})
+})
+
+var _ = Describe("open-set movement prompts", func() {
+	var w *Worker
+
+	BeforeEach(func() {
+		w = &Worker{logger: zap.NewNop()}
+	})
+
+	It("does not let nearby equipment or background athletes override target motion", func() {
+		prompt := w.buildIndexPrompt(VideoAnalysisPayload{
+			Movements: []string{"Rope Climb"},
+		}, 2*time.Minute)
+
+		Expect(prompt).To(ContainSubstring("suggestions, not confirmation and not a closed list"))
+		Expect(prompt).To(ContainSubstring("apparatus contact"))
+		Expect(prompt).To(ContainSubstring("body position"))
+		Expect(prompt).To(ContainSubstring("continuous motion pattern"))
+		Expect(prompt).To(ContainSubstring("A rope beside a pull-up bar does not make a target person's pull-up a rope climb"))
+		Expect(prompt).To(ContainSubstring("Background athletes"))
+		Expect(prompt).To(ContainSubstring(`use type "Unknown"`))
+	})
+
+	It("revalidates a preliminary chunk label during deep analysis", func() {
+		prompt := w.buildSegmentAnalysisPrompt(
+			VideoAnalysisPayload{Movements: []string{"Rope Climb"}},
+			Segment{Start: "0:10", End: "0:20", Type: "Rope Climb"},
+			"",
+			"",
+			false,
+		)
+
+		Expect(prompt).To(ContainSubstring("중간 종목 라벨 (확정 아님)"))
+		Expect(prompt).To(ContainSubstring("현재 구간의 대상 인물 영상 근거로 다시 식별"))
+		Expect(prompt).To(ContainSubstring("라벨을 교정하거나 Unknown"))
+		Expect(prompt).To(ContainSubstring("힌트에 없는 종목이라도 시각적 근거가 충분"))
+	})
+
+	It("adds the all-chunk fatigue aggregate only to the final segment conclusion", func() {
+		context := "\n\n## 세션 전체 구조화 피로 근거 (모든 수신 청크 집계)\n- 구조화 청크: 4"
+		first := w.buildSegmentAnalysisPrompt(VideoAnalysisPayload{}, Segment{Start: "0:00", End: "0:10", Type: "Snatch"}, "", context, false)
+		last := w.buildSegmentAnalysisPrompt(VideoAnalysisPayload{}, Segment{Start: "0:10", End: "0:20", Type: "Snatch"}, "", context, true)
+
+		Expect(first).NotTo(ContainSubstring("모든 수신 청크 집계"))
+		Expect(last).To(ContainSubstring("모든 수신 청크 집계"))
+		Expect(last).To(ContainSubstring("구조화 청크: 4"))
 	})
 })
 
@@ -174,10 +259,11 @@ var _ = Describe("ParseHighlightSegments", func() {
 		result := ParseHighlightSegments(input)
 		var segs []HighlightSegment
 		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
-		Expect(segs).To(HaveLen(3))
+		Expect(segs).To(HaveLen(2))
 		Expect(segs[0].Movement).To(Equal("Triceps Extension"))
 		Expect(segs[1].Movement).To(Equal("Box Step-up"))
-		Expect(segs[2].Movement).To(Equal("Box Step-up"))
+		Expect(segs[1].Observations).To(HaveLen(2))
+		Expect(HighlightSegmentHasTag(segs[1], HighlightTagKeyMoment)).To(BeTrue())
 	})
 
 	It("handles XML-style <highlights> tags", func() {
@@ -208,6 +294,20 @@ var _ = Describe("ParseHighlightSegments", func() {
 		Expect(segs[1].Movement).To(Equal("Toes to Bar"))
 	})
 
+	It("drops walking, rest, setup, recovery, and unknown highlights", func() {
+		input := "```highlights\n" +
+			`[{"start":"0:00","end":"0:05","type":"fatigue_point","movement":"Walking","reason":"high bpm"},{"start":"0:05","end":"0:10","type":"fatigue_point","movement":"Rest","reason":"resting"},{"start":"0:10","end":"0:15","type":"key_moment","movement":"Unknown","reason":"unclear"},{"start":"0:15","end":"0:20","type":"best_form","movement":"Pull-up","reason":"visible reps"},{"start":"0:20","end":"0:25","type":"fatigue_point","movement":"Burpee","reason":"heart rate reached 170 bpm"},{"start":"0:25","end":"0:30","type":"fatigue_point","movement":"Burpee","reason":"rep cadence slowed for several reps while heart rate stayed high"}]` +
+			"\n```"
+
+		result := ParseHighlightSegments(input)
+		var segs []HighlightSegment
+		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
+		Expect(segs).To(HaveLen(2))
+		Expect(segs[0].Movement).To(Equal("Pull-up"))
+		Expect(segs[1].Movement).To(Equal("Burpee"))
+		Expect(segs[1].Reason).To(ContainSubstring("rep cadence slowed"))
+	})
+
 	It("parses the full 13-segment real-world Gemini output", func() {
 		// This test uses the exact output format from a real 13-segment workout analysis.
 		// Segments use mostly ```highlights blocks but segment 6 uses <highlights> XML tags.
@@ -218,16 +318,33 @@ var _ = Describe("ParseHighlightSegments", func() {
 		var segs []HighlightSegment
 		Expect(json.Unmarshal([]byte(result), &segs)).To(Succeed())
 
-		// Count expected highlights per segment from the real output:
-		// Seg 1: 4, Seg 2: 3, Seg 3: 4, Seg 4: 4, Seg 5: 5, Seg 6: 4 (XML)
-		// Seg 7: 4, Seg 8: 4, Seg 9: 5, Seg 10: 4, Seg 11: 4, Seg 12: 4, Seg 13: 4
-		Expect(segs).To(HaveLen(53))
+		// The legacy flat output is consolidated into parent playback events and
+		// capped at one positive, one improvement, and one technique card per movement.
+		Expect(segs).To(HaveLen(21))
 
 		// Verify highlights from different segments are represented
 		movements := map[string]bool{}
+		starts := map[string]bool{}
+		movementCounts := map[string]int{}
 		for _, seg := range segs {
 			movements[seg.Movement] = true
+			starts[seg.Start] = true
+			movementCounts[normalizeHighlightMovementKey(seg.Movement)]++
+			Expect(seg.Version).To(Equal(2))
+			Expect(seg.Observations).NotTo(BeEmpty())
+			start, startErr := parseTimestampToSeconds(seg.Start)
+			end, endErr := parseTimestampToSeconds(seg.End)
+			Expect(startErr).NotTo(HaveOccurred())
+			Expect(endErr).NotTo(HaveOccurred())
+			Expect(end - start).To(BeNumerically(">=", 5))
+			Expect(end - start).To(BeNumerically("<=", 20))
 		}
+		for _, count := range movementCounts {
+			Expect(count).To(BeNumerically("<=", 3))
+		}
+		Expect(starts).NotTo(HaveKey("04:58.000"))
+		Expect(starts).NotTo(HaveKey("17:48"))
+		Expect(starts).NotTo(HaveKey("21:40"))
 		Expect(movements).To(HaveKey("Overhead Triceps Extension"))
 		Expect(movements).To(HaveKey("Box Step-up"))
 		Expect(movements).To(HaveKey("Dumbbell Snatch"))
@@ -244,7 +361,8 @@ var _ = Describe("ParseHighlightSegments", func() {
 				toesToBarCount++
 			}
 		}
-		Expect(toesToBarCount).To(Equal(4)) // segment 6 has 4 highlights
+		Expect(toesToBarCount).To(BeNumerically(">", 0))
+		Expect(toesToBarCount).To(BeNumerically("<=", 3))
 	})
 
 	It("also merges injury timestamps from the same real-world output", func() {
@@ -349,9 +467,12 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 			Reply(http.StatusOK).
 			JSON(map[string]any{"name": "files/mock-file", "state": "ACTIVE"})
 
+		// The generateContent body must reference the file URI returned by the
+		// upload chain — a client that drops or mangles it fails here, not in prod.
 		transport.New(geminiBaseURL).
 			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			MatchBodyContains(`"fileUri":"` + geminiBaseURL + `/files/mock-file"`).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
 				"candidates": []map[string]any{{
@@ -398,6 +519,61 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		profileID = p.ID
 	})
 
+	It("rejects a task with no resolvable profile before accessing video services", func() {
+		task := makeVideoAnalysisTask(VideoAnalysisPayload{
+			SessionID: "WOD-20260715-01J00000000000000000000000",
+			FilePath:  "gs://test-bucket/videos/0/unowned/video.mp4",
+		})
+
+		err := w.HandleVideoAnalysisTask(context.Background(), task)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
+		Expect(storageTransport.Requests()).To(BeEmpty())
+
+		var count int64
+		Expect(dbConn.Model(&db.AnalysisResult{}).Count(&count).Error).To(Succeed())
+		Expect(count).To(BeZero())
+	})
+
+	It("rejects a task whose profile does not own the persisted session", func() {
+		other := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID: "WOD-20260715-01J00000000000000000000001",
+			ProfileID: profileID,
+		})
+		task := makeVideoAnalysisTask(VideoAnalysisPayload{
+			SessionID: "WOD-20260715-01J00000000000000000000001",
+			ProfileID: other.ID,
+			FilePath:  "gs://test-bucket/videos/mismatch/video.mp4",
+		})
+
+		err := w.HandleVideoAnalysisTask(context.Background(), task)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
+		Expect(storageTransport.Requests()).To(BeEmpty())
+	})
+
+	It("recovers profile_id=0 for a queued task from its persisted session", func() {
+		const sessionID = "WOD-20260715-01J00000000000000000000002"
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID: sessionID,
+			ProfileID: profileID,
+		})
+		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/0/"+sessionID+"/video.mp4")
+		setupGeminiTransport(analysisWithHighlights)
+
+		task := makeVideoAnalysisTask(VideoAnalysisPayload{
+			SessionID: sessionID,
+			ProfileID: 0,
+			FilePath:  "gs://test-bucket/videos/0/" + sessionID + "/video.mp4",
+		})
+		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
+
+		var result db.AnalysisResult
+		Expect(dbConn.Where("session_id = ?", sessionID).First(&result).Error).To(Succeed())
+		Expect(result.ProfileID).To(Equal(profileID))
+	})
+
 	It("persists a COMPLETED AnalysisResult with parsed highlight segments", func() {
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-happy-001/chunk_001.mp4")
 		transport := setupGeminiTransport(analysisWithHighlights)
@@ -412,7 +588,18 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
 
 		Expect(transport.Verify()).To(Succeed())
-		Expect(transport.Requests()).To(HaveLen(5))
+
+		// Wire-level body check: the analyze request must carry the prompt built
+		// for this payload's movements. Unmatched extra requests already fail in
+		// RoundTrip, so no exact request-count assertion is needed.
+		var genBody string
+		for _, r := range transport.Requests() {
+			if strings.Contains(r.URL, ":generateContent") {
+				genBody = string(r.Body)
+			}
+		}
+		Expect(genBody).To(ContainSubstring("운동 후보 힌트"))
+		Expect(genBody).To(ContainSubstring("Burpee, Pull-up"))
 
 		var result db.AnalysisResult
 		Expect(dbConn.Where("session_id = ?", "sess-happy-001").First(&result).Error).
@@ -471,6 +658,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
 			SessionID: "sess-injury-001",
 			FilePath:  "gs://test-bucket/videos/sess-injury-001/chunk_001.mp4",
+			ProfileID: profileID,
 			Injuries:  []string{"Knee"},
 		})
 
@@ -480,11 +668,20 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		// Give asynq a moment to flush to Redis, then inspect.
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(pending).To(HaveLen(1))
-		Expect(pending[0].Type).To(Equal(TypeInjuryAnalysis))
+		Expect(pending).To(HaveLen(2))
+		var injuryTask *asynq.TaskInfo
+		var taskTypes []string
+		for _, info := range pending {
+			taskTypes = append(taskTypes, info.Type)
+			if info.Type == TypeInjuryAnalysis {
+				injuryTask = info
+			}
+		}
+		Expect(taskTypes).To(ConsistOf(TypeInjuryAnalysis, TypeGenerateHardSub))
+		Expect(injuryTask).NotTo(BeNil())
 
 		var injPayload InjuryAnalysisPayload
-		Expect(json.Unmarshal(pending[0].Payload, &injPayload)).To(Succeed())
+		Expect(json.Unmarshal(injuryTask.Payload, &injPayload)).To(Succeed())
 		Expect(injPayload.SessionID).To(Equal("sess-injury-001"))
 		Expect(injPayload.Injuries).To(Equal([]string{"Knee"}))
 		Expect(injPayload.FocusTimestamps).To(ContainSubstring("0:32"))
@@ -497,15 +694,17 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
 			SessionID: "sess-no-injury-001",
 			FilePath:  "gs://test-bucket/videos/sess-no-injury-001/chunk_001.mp4",
+			ProfileID: profileID,
 		})
 
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
 		Expect(transport.Verify()).To(Succeed())
 
-		// No tasks should be enqueued for injury follow-up.
+		// Hardsub is enqueued, but no injury follow-up is created.
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(pending).To(BeEmpty())
+		Expect(pending).To(HaveLen(1))
+		Expect(pending[0].Type).To(Equal(TypeGenerateHardSub))
 	})
 
 	It("returns an error and saves no record when Gemini returns empty analysis", func() {
@@ -560,6 +759,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
 			SessionID: "sess-empty-001",
 			FilePath:  "gs://test-bucket/videos/sess-empty-001/chunk.mp4",
+			ProfileID: profileID,
 		})
 
 		err = w.HandleVideoAnalysisTask(context.Background(), task)
@@ -664,14 +864,6 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 				}},
 			})
 
-		if !hasInjuries {
-			transport.New(geminiBaseURL).
-				Delete("/v1beta/files/mock-two-pass").
-				MatchHeader("X-Goog-Api-Key", geminiAPIKey).
-				Reply(http.StatusOK).
-				JSON(map[string]any{})
-		}
-
 		return transport
 	}
 
@@ -680,25 +872,35 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		end0 := 45.0
 		start1 := 50.0
 		end1 := 90.0
+		mediaStart0 := 0.0
+		mediaEnd0 := 45.0
+		mediaStart1 := 50.0
+		mediaEnd1 := 90.0
 		Expect(dbConn.Create(&db.ChunkAnalysisResult{
-			SessionID:    sessionID,
-			ProfileID:    profileID,
-			FilePath:     "gs://test-bucket/videos/" + sessionID + "/chunk_0.mp4",
-			Status:       "COMPLETED",
-			ExerciseType: "Snatch",
-			Output:       "좋은 스내치 자세입니다",
-			StartSecs:    &start0,
-			EndSecs:      &end0,
+			SessionID:       sessionID,
+			ProfileID:       profileID,
+			FilePath:        "gs://test-bucket/videos/" + sessionID + "/chunk_0.mp4",
+			Status:          "COMPLETED",
+			ExerciseType:    "Snatch",
+			Output:          "좋은 스내치 자세입니다",
+			ObservedSignals: `{"movement":"Snatch","activity_state":"exercise","fatigue_visually_established":true,"fatigue_evidence_types":["rep_slowdown"],"fatigue_evidence":["반복 속도가 지속적으로 감소함"]}`,
+			StartSecs:       &start0,
+			EndSecs:         &end0,
+			MediaStartSecs:  &mediaStart0,
+			MediaEndSecs:    &mediaEnd0,
 		}).Error).NotTo(HaveOccurred())
 		Expect(dbConn.Create(&db.ChunkAnalysisResult{
-			SessionID:    sessionID,
-			ProfileID:    profileID,
-			FilePath:     "gs://test-bucket/videos/" + sessionID + "/chunk_1.mp4",
-			Status:       "COMPLETED",
-			ExerciseType: "Pull-up",
-			Output:       "풀업 킵핑 동작이 안정적입니다",
-			StartSecs:    &start1,
-			EndSecs:      &end1,
+			SessionID:       sessionID,
+			ProfileID:       profileID,
+			FilePath:        "gs://test-bucket/videos/" + sessionID + "/chunk_1.mp4",
+			Status:          "COMPLETED",
+			ExerciseType:    "Pull-up",
+			Output:          "풀업 킵핑 동작이 안정적입니다",
+			ObservedSignals: `{"movement":"Pull-up","activity_state":"exercise","fatigue_visually_established":false,"fatigue_evidence_types":[],"fatigue_evidence":[]}`,
+			StartSecs:       &start1,
+			EndSecs:         &end1,
+			MediaStartSecs:  &mediaStart1,
+			MediaEndSecs:    &mediaEnd1,
 		}).Error).NotTo(HaveOccurred())
 	}
 
@@ -730,6 +932,58 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		profileID = p.ID
 	})
 
+	It("builds deep-analysis segments only from verified media offsets", func() {
+		captureStart := 900.0
+		captureEnd := 910.0
+		mediaStart := 12.25
+		mediaEnd := 22.75
+		Expect(dbConn.Create(&db.ChunkAnalysisResult{
+			SessionID:         "sess-media-timeline-001",
+			ProfileID:         profileID,
+			Status:            "COMPLETED",
+			ExerciseType:      "Unknown",
+			Output:            "movement requires deeper revalidation",
+			ObservedSignals:   `{"movement":"Unknown","activity_state":"unknown"}`,
+			StartSecs:         &captureStart,
+			EndSecs:           &captureEnd,
+			MediaStartSecs:    &mediaStart,
+			MediaEndSecs:      &mediaEnd,
+			WorkoutConfidence: 0.5,
+		}).Error).NotTo(HaveOccurred())
+
+		missingMediaStart := 1000.0
+		missingMediaEnd := 1010.0
+		Expect(dbConn.Create(&db.ChunkAnalysisResult{
+			SessionID:       "sess-media-timeline-001",
+			ProfileID:       profileID,
+			Status:          "COMPLETED",
+			ExerciseType:    "Snatch",
+			ObservedSignals: `{}`,
+			StartSecs:       &missingMediaStart,
+			EndSecs:         &missingMediaEnd,
+		}).Error).NotTo(HaveOccurred())
+
+		walkingStart := 22.75
+		walkingEnd := 30.0
+		Expect(dbConn.Create(&db.ChunkAnalysisResult{
+			SessionID:       "sess-media-timeline-001",
+			ProfileID:       profileID,
+			Status:          "COMPLETED",
+			ExerciseType:    "Walking",
+			ObservedSignals: `{"movement":"Walking","activity_state":"walking"}`,
+			MediaStartSecs:  &walkingStart,
+			MediaEndSecs:    &walkingEnd,
+		}).Error).NotTo(HaveOccurred())
+
+		segments := w.buildSegmentsFromChunks("sess-media-timeline-001")
+		Expect(segments).To(Equal([]Segment{{
+			Start:       "0:12.25",
+			End:         "0:22.75",
+			Type:        "Unknown",
+			Description: "movement requires deeper revalidation",
+		}}))
+	})
+
 	It("persists COMPLETED result using chunk-based segments (no injuries)", func() {
 		seedChunks("sess-twopass-001", profileID)
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-twopass-001/merged.mp4")
@@ -745,14 +999,24 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
 
 		Expect(transport.Verify()).To(Succeed())
-		// 6 requests: upload + finalize + poll + analyzeSegment x2 + deleteFile
-		Expect(transport.Requests()).To(HaveLen(6))
+		// 5 requests: upload + finalize + poll + analyzeSegment x2 (no deleteFile)
+		Expect(transport.Requests()).To(HaveLen(5))
 
 		var result db.AnalysisResult
 		Expect(dbConn.Where("session_id = ?", "sess-twopass-001").First(&result).Error).
 			NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal("COMPLETED"))
 		Expect(result.Output).To(ContainSubstring("훌륭한 운동이었습니다"))
+
+		fatigueContextBodies := 0
+		for _, request := range transport.Requests() {
+			if strings.Contains(string(request.Body), "모든 수신 청크 집계") {
+				fatigueContextBodies++
+				Expect(string(request.Body)).To(ContainSubstring("구조화 청크: 2"))
+				Expect(string(request.Body)).To(ContainSubstring("시각적으로 피로가 확립된 운동 청크: 1"))
+			}
+		}
+		Expect(fatigueContextBodies).To(Equal(1))
 
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
@@ -772,6 +1036,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
 			SessionID: "sess-twopass-inj-001",
 			FilePath:  "gs://test-bucket/videos/sess-twopass-inj-001/merged.mp4",
+			ProfileID: profileID,
 			Injuries:  []string{"Knee"},
 		})
 
@@ -782,11 +1047,20 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(pending).To(HaveLen(1))
-		Expect(pending[0].Type).To(Equal(TypeInjuryAnalysis))
+		Expect(pending).To(HaveLen(2))
+		var injuryTask *asynq.TaskInfo
+		var taskTypes []string
+		for _, info := range pending {
+			taskTypes = append(taskTypes, info.Type)
+			if info.Type == TypeInjuryAnalysis {
+				injuryTask = info
+			}
+		}
+		Expect(taskTypes).To(ConsistOf(TypeInjuryAnalysis, TypeGenerateHardSub))
+		Expect(injuryTask).NotTo(BeNil())
 
 		var injPayload InjuryAnalysisPayload
-		Expect(json.Unmarshal(pending[0].Payload, &injPayload)).To(Succeed())
+		Expect(json.Unmarshal(injuryTask.Payload, &injPayload)).To(Succeed())
 		Expect(injPayload.GeminiFileURI).To(ContainSubstring("/files/mock-two-pass"))
 		Expect(injPayload.GeminiFileName).To(Equal("files/mock-two-pass"))
 		Expect(injPayload.FocusTimestamps).To(ContainSubstring("0:32"))
@@ -818,6 +1092,13 @@ var _ = Describe("convertToSeconds", func() {
 	It("handles plain seconds", func() {
 		Expect(convertToSeconds("30s")).To(Equal(30 * time.Second))
 		Expect(convertToSeconds("60")).To(Equal(60 * time.Second))
+	})
+
+	It("preserves fractional media timestamps", func() {
+		Expect(convertToSeconds("0:12.250")).To(Equal(12250 * time.Millisecond))
+		Expect(convertToSeconds("1:02.5")).To(Equal(62500 * time.Millisecond))
+		Expect(convertToSeconds("1:00:00.125")).To(Equal(3600125 * time.Millisecond))
+		Expect(convertToSeconds("12.25s")).To(Equal(12250 * time.Millisecond))
 	})
 
 	It("returns 0 for unparseable input", func() {
@@ -911,6 +1192,15 @@ var _ = Describe("mergeSegmentsByMovement", func() {
 		merged := mergeSegmentsByMovement(segments)
 		Expect(merged).To(HaveLen(1))
 		Expect(merged[0].End).To(Equal("0:20"))
+	})
+
+	It("preserves a rest gap between repeated movement labels", func() {
+		segments := []Segment{
+			{Start: "0:00", End: "0:10", Type: "Snatch"},
+			{Start: "0:20", End: "0:30", Type: "Snatch"},
+		}
+
+		Expect(mergeSegmentsByMovement(segments)).To(HaveLen(2))
 	})
 
 	It("returns empty for empty input", func() {

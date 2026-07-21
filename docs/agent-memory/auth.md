@@ -45,7 +45,7 @@
 
 ## Account deletion
 1. Handler requires password re-confirmation
-2. Transaction deletes: `analysis_results`, `chunk_analysis_results`, `highlight_results`, `token_usages` (by profile_id), then profiles, then soft-deletes user (`deleted_at`, scrubs `password_hash`, bumps `token_version`)
+2. Transaction deletes: feedback, chunk/session re-analysis runs, `analysis_results`, `chunk_analysis_results`, `highlight_results`, `token_usages` (by profile_id), then profiles, then soft-deletes user (`deleted_at`, scrubs `password_hash`, bumps `token_version`)
 3. Returns `gcsPrefixes` for async GCS cleanup — **currently not wired up** (see TODO)
 
 ## 401 handling (mobile)

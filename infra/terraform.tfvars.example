@@ -7,3 +7,9 @@ api_secret           = "your-api-secret"
 jwt_secret           = "your-jwt-secret"
 cloudflare_api_token = "your-cloudflare-api-token"
 cloudflare_zone_id   = "your-cloudflare-zone-id"
+pipeline_mode        = "legacy"
+
+# Rollout of AI-consuming re-analysis feature flags
+# Set to false to avoid exposing AI-consuming operations unless explicitly needed/quota has been approved.
+enable_chunk_reanalysis   = false
+enable_session_reanalysis = false

@@ -21,6 +21,7 @@ type Expectation struct {
 	Headers    http.Header
 
 	RequestHeaders http.Header
+	BodySubstrings []string
 
 	isMatched      bool
 	MismatchReason string
@@ -30,6 +31,7 @@ type CapturedRequest struct {
 	Method  string
 	URL     string
 	Headers http.Header
+	Body    []byte
 }
 
 type MockTransport struct {
@@ -118,6 +120,13 @@ func (e *Expectation) MatchHeader(key, value string) *Expectation {
 	return e
 }
 
+// MatchBodyContains requires the request body to contain the given substring.
+// JSON bodies escape newlines and quotes, so keep substrings single-line.
+func (e *Expectation) MatchBodyContains(substr string) *Expectation {
+	e.BodySubstrings = append(e.BodySubstrings, substr)
+	return e
+}
+
 func (e *Expectation) setPath(path string) {
 	u, err := url.Parse(path)
 	if err != nil {
@@ -156,6 +165,7 @@ func (t *MockTransport) Requests() []CapturedRequest {
 			Method:  req.Method,
 			URL:     req.URL,
 			Headers: req.Headers.Clone(),
+			Body:    append([]byte(nil), req.Body...),
 		}
 	}
 
@@ -196,14 +206,26 @@ func (t *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 
+	var body []byte
+	if req.Body != nil {
+		var err error
+		body, err = io.ReadAll(req.Body)
+		req.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("mock transport: read request body: %w", err)
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+	}
+
 	t.requests = append(t.requests, CapturedRequest{
 		Method:  req.Method,
 		URL:     req.URL.String(),
 		Headers: req.Header.Clone(),
+		Body:    body,
 	})
 
 	for _, exp := range t.Expectations {
-		if !exp.isMatched && t.matches(exp, req) {
+		if !exp.isMatched && t.matches(exp, req, body) {
 			exp.isMatched = true
 			return t.buildResponse(exp, req), nil
 		}
@@ -224,7 +246,7 @@ func (t *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("mock transport: no match found for request %s %s%s", req.Method, req.URL, extra)
 }
 
-func (t *MockTransport) matches(exp *Expectation, req *http.Request) bool {
+func (t *MockTransport) matches(exp *Expectation, req *http.Request, body []byte) bool {
 	exp.MismatchReason = ""
 
 	if exp.URL == nil {
@@ -272,6 +294,13 @@ func (t *MockTransport) matches(exp *Expectation, req *http.Request) bool {
 				exp.MismatchReason = fmt.Sprintf("query mismatch for %s: expected %s got %s", key, value, actualValues[i])
 				return false
 			}
+		}
+	}
+
+	for _, substr := range exp.BodySubstrings {
+		if !bytes.Contains(body, []byte(substr)) {
+			exp.MismatchReason = fmt.Sprintf("body does not contain %q", substr)
+			return false
 		}
 	}
 
