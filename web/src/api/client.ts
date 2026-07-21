@@ -19,12 +19,6 @@ async function request<T>(
     ...(options.headers as Record<string, string>),
   };
 
-  // X-API-Key from env (vite exposes VITE_ prefixed vars)
-  const apiKey = import.meta.env.VITE_API_KEY;
-  if (apiKey) {
-    headers['X-API-Key'] = apiKey;
-  }
-
   const res = await fetch(url, {
     ...options,
     headers,

@@ -50,7 +50,7 @@ describe("API Client Methods", () => {
     it("should fetch movements successfully", async () => {
       server.use(
         http.get(`${API_BASE_URL}/movements`, ({ request }) => {
-          expect(request.headers.get("X-API-Key")).toBe("");
+          expect(request.headers.get("X-API-Key")).toBeNull();
           return HttpResponse.json(["Squat", "Deadlift"]);
         })
       );

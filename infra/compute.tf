@@ -62,10 +62,6 @@ resource "google_cloud_run_v2_service" "api" {
         value = var.gemini_api_key
       }
       env {
-        name  = "API_SECRET"
-        value = var.api_secret
-      }
-      env {
         name  = "GCS_BUCKET_NAME"
         value = google_storage_bucket.uploads.name
       }

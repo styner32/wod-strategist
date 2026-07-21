@@ -39,7 +39,7 @@ var _ = Describe("GET /api/v1/video-download/:session_id", func() {
 			BucketName:    "test-bucket",
 		})
 
-		dbConn.Create(&db.Session{
+		testhelpers.CreateSession(dbConn, &db.Session{
 			SessionID:   sessionID,
 			ProfileID:   profile.ID,
 			WorkoutType: "wod",

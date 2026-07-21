@@ -22,27 +22,16 @@
    npx expo run:ios --device
    ```
 
-3. Test uploading video to API
+3. Test uploading video to API (requires a valid JWT after login)
 
    ```bash
-   curl -X POST http://localhost:8088/api/v1/upload -F "session_id=workout-session-002" -F "file=@./tmp/wod_1.MP4"
+   curl -X POST http://localhost:8088/api/v1/upload \
+     -H "Authorization: Bearer <jwt>" \
+     -F "session_id=workout-session-002" \
+     -F "file=@./tmp/wod_1.MP4"
    ```
 
-## Local Video QA Workbench
-
-Run the API locally, then start the browser QA page from the repo root:
-
-```bash
-npm run qa:video
-```
-
-Open [http://localhost:3000/video.html](http://localhost:3000/video.html) and enter:
-
-- `API Base URL`: usually `http://localhost:8088/api/v1`
-- `API Key`: your local `API_SECRET`
-- `Profile ID`: an existing profile ID used for chunk upload, merge, and highlight actions
-
-The page can upload chunk files, trigger `merge-chunks`, trigger `generate-highlight`, inspect session assets, and cache playable videos in the browser for side-by-side comparison.
+Note: `scripts/test-upload.js` / `scripts/test-chunk-upload.js` still send a legacy `X-API-Key` and do not obtain a JWT, so they cannot call protected routes against the current API until they are updated or retired. Session upload, merge, highlight, and playback QA is covered by the web app under `web/`.
 
 ## Cloud SQL (Dev)
 

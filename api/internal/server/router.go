@@ -13,12 +13,18 @@ import (
 
 const APIRoutePrefix = "/api/v1"
 
-var ErrHandlersRequired = errors.New("handlers are required")
+var (
+	ErrHandlersRequired    = errors.New("handlers are required")
+	ErrAuthServiceRequired = errors.New("auth service is required")
+)
 
-func SetupRouter(appEnv string, apiKey string, allowedOrigins []string,
+func SetupRouter(appEnv string, allowedOrigins []string,
 	ctl *controllers.Controller, authCtl *controllers.AuthController, authSvc *auth.Service) (*gin.Engine, error) {
 	if ctl == nil {
 		return nil, ErrHandlersRequired
+	}
+	if authSvc == nil {
+		return nil, ErrAuthServiceRequired
 	}
 
 	r := gin.New()
@@ -26,7 +32,7 @@ func SetupRouter(appEnv string, apiKey string, allowedOrigins []string,
 	r.Use(RequestLogger())
 	r.Use(DevelopmentCORS(allowedOrigins))
 
-	// Public routes (no API key, no auth)
+	// Public routes (no auth)
 	r.GET("/health", ctl.Health)
 
 	// Mount Swagger UI only in non-production environments
@@ -36,89 +42,70 @@ func SetupRouter(appEnv string, apiKey string, allowedOrigins []string,
 
 	api := r.Group(APIRoutePrefix)
 
-	// Web auth routes — no API key required.
-	// Web SPAs cannot securely embed an API key in client-side JS.
-	// These are protected by rate limiting + CORS + password auth instead.
+	// Public credential routes — rate-limited; no JWT required.
 	if authCtl != nil {
 		authRL := RateLimitMiddleware(NewRateLimiter(10, 15*time.Minute))
 		api.POST("/auth/web/signup", authRL, authCtl.WebSignup)
 		api.POST("/auth/web/login", authRL, authCtl.WebLogin)
-	}
-
-	// All routes registered after this point require X-API-Key header.
-	api.Use(APIKeyMiddleware(apiKey))
-
-	// Mobile auth routes (signup, login) — API key required, rate-limited.
-	if authCtl != nil {
-		authRL := RateLimitMiddleware(NewRateLimiter(10, 15*time.Minute))
 		api.POST("/auth/signup", authRL, authCtl.Signup)
 		api.POST("/auth/login", authRL, authCtl.Login)
 	}
 
-	// Web-authenticated routes — JWT required, no API key.
-	if authCtl != nil && authSvc != nil {
-		webAuth := r.Group(APIRoutePrefix, AuthMiddleware(authSvc))
-		webAuth.POST("/auth/web/logout", authCtl.WebLogout)
-		webAuth.GET("/auth/me", authCtl.GetMe)
-	}
+	// All subsequent routes require a valid JWT (Bearer header or jwt cookie).
+	protected := api.Group("", AuthMiddleware(authSvc))
 
-	// Apply auth middleware for all subsequent routes (API key + JWT)
-	if authSvc != nil {
-		api.Use(AuthMiddleware(authSvc))
-	}
-
-	// Protected auth routes (mobile — API key + JWT required)
 	if authCtl != nil {
-		api.POST("/auth/logout", authCtl.Logout)
-		api.DELETE("/auth/account", authCtl.DeleteAccount)
+		protected.POST("/auth/web/logout", authCtl.WebLogout)
+		protected.GET("/auth/me", authCtl.GetMe)
+		protected.POST("/auth/logout", authCtl.Logout)
+		protected.DELETE("/auth/account", authCtl.DeleteAccount)
 	}
 
-	// Protected data routes (API key + JWT required)
-	api.POST("/upload-url", ctl.CreateUploadURL)
-	api.POST("/upload-complete", ctl.CompleteUpload)
-	api.POST("/upload", ctl.Upload)
-	api.GET("/analysis/:session_id", ctl.GetAnalysis)
-	api.GET("/history", ctl.GetHistory)
-	api.POST("/history/:id/archive", ctl.ArchiveHistory)
-	api.POST("/history/:id/unarchive", ctl.UnarchiveHistory)
-	api.GET("/movements", ctl.ListMovements)
-	api.GET("/movement-groups", ctl.ListMovementGroups)
-	api.GET("/injuries", ctl.ListInjuries)
-	api.POST("/chunk-complete", ctl.ChunkComplete)
-	api.GET("/chunk-analysis/:session_id", ctl.GetChunkAnalysis)
-	api.POST("/profiles", ctl.CreateProfile)
-	api.GET("/profiles/:id", ctl.GetProfile)
-	api.GET("/profiles", ctl.ListProfiles)
-	api.PUT("/profiles/:id", ctl.UpdateProfile)
-	api.POST("/profiles/:id/archive", ctl.ArchiveProfile)
-	api.POST("/profiles/:id/unarchive", ctl.UnarchiveProfile)
-	api.POST("/merge-chunks", ctl.MergeChunks)
-	api.GET("/dev/sessions", ctl.ListSessionCatalog)
-	api.GET("/dev/sessions/:session_id/assets", ctl.GetSessionAssets)
-	api.GET("/dev/sessions/:session_id/play-url", ctl.GetPlayURL)
-	api.GET("/subtitles/:session_id", ctl.GetSubtitles)
-	api.POST("/generate-highlight", ctl.GenerateHighlight)
-	api.GET("/highlight/:session_id", ctl.GetHighlight)
-	api.GET("/highlight-download/:id", ctl.GetHighlightDownloadURL)
-	api.POST("/verify-highlights", ctl.VerifyHighlights)
-	api.GET("/video-download/:session_id", ctl.GetVideoDownloadURL)
-	api.POST("/retry-analysis", ctl.RetryAnalysis)
-	api.POST("/generate-hardsub", ctl.GenerateHardSub)
-	api.POST("/debug/telemetry", ctl.UploadDebugTelemetry)
-	api.POST("/parse-workout-image", ctl.ParseWorkoutImage)
-	api.POST("/sessions", ctl.CreateSession)
-	api.GET("/sessions/:session_id/analysis", ctl.GetSessionAnalysis)
-	api.GET("/sessions/:session_id/chunks/:chunk_id/play-url", ctl.GetChunkPlayURL)
-	api.POST("/sessions/:session_id/chunks/:chunk_id/reanalyses", ctl.CreateChunkReanalysis)
-	api.GET("/sessions/:session_id/chunks/:chunk_id/reanalyses", ctl.ListChunkReanalyses)
-	api.GET("/sessions/:session_id/chunks/:chunk_id/reanalyses/:run_id", ctl.GetChunkReanalysis)
-	api.POST("/sessions/:session_id/reanalyses", ctl.CreateSessionReanalysis)
-	api.GET("/sessions/:session_id/reanalyses", ctl.ListSessionReanalyses)
-	api.GET("/sessions/:session_id/reanalyses/:run_id", ctl.GetSessionReanalysis)
-	api.POST("/sessions/:session_id/feedback", ctl.CreateFeedback)
-	api.GET("/sessions/:session_id/feedback", ctl.ListFeedback)
-	api.PATCH("/sessions/:session_id/feedback/:feedback_id", ctl.UpdateFeedback)
-	api.DELETE("/sessions/:session_id/feedback/:feedback_id", ctl.DeleteFeedback)
+	protected.POST("/upload-url", ctl.CreateUploadURL)
+	protected.POST("/upload-complete", ctl.CompleteUpload)
+	protected.POST("/upload", ctl.Upload)
+	protected.GET("/analysis/:session_id", ctl.GetAnalysis)
+	protected.GET("/history", ctl.GetHistory)
+	protected.POST("/history/:id/archive", ctl.ArchiveHistory)
+	protected.POST("/history/:id/unarchive", ctl.UnarchiveHistory)
+	protected.GET("/movements", ctl.ListMovements)
+	protected.GET("/movement-groups", ctl.ListMovementGroups)
+	protected.GET("/injuries", ctl.ListInjuries)
+	protected.POST("/chunk-complete", ctl.ChunkComplete)
+	protected.GET("/chunk-analysis/:session_id", ctl.GetChunkAnalysis)
+	protected.POST("/profiles", ctl.CreateProfile)
+	protected.GET("/profiles/:id", ctl.GetProfile)
+	protected.GET("/profiles", ctl.ListProfiles)
+	protected.PUT("/profiles/:id", ctl.UpdateProfile)
+	protected.POST("/profiles/:id/archive", ctl.ArchiveProfile)
+	protected.POST("/profiles/:id/unarchive", ctl.UnarchiveProfile)
+	protected.POST("/merge-chunks", ctl.MergeChunks)
+	protected.GET("/dev/sessions", ctl.ListSessionCatalog)
+	protected.GET("/dev/sessions/:session_id/assets", ctl.GetSessionAssets)
+	protected.GET("/dev/sessions/:session_id/play-url", ctl.GetPlayURL)
+	protected.GET("/subtitles/:session_id", ctl.GetSubtitles)
+	protected.POST("/generate-highlight", ctl.GenerateHighlight)
+	protected.GET("/highlight/:session_id", ctl.GetHighlight)
+	protected.GET("/highlight-download/:id", ctl.GetHighlightDownloadURL)
+	protected.POST("/verify-highlights", ctl.VerifyHighlights)
+	protected.GET("/video-download/:session_id", ctl.GetVideoDownloadURL)
+	protected.POST("/retry-analysis", ctl.RetryAnalysis)
+	protected.POST("/generate-hardsub", ctl.GenerateHardSub)
+	protected.POST("/debug/telemetry", ctl.UploadDebugTelemetry)
+	protected.POST("/parse-workout-image", ctl.ParseWorkoutImage)
+	protected.POST("/sessions", ctl.CreateSession)
+	protected.GET("/sessions/:session_id/analysis", ctl.GetSessionAnalysis)
+	protected.GET("/sessions/:session_id/chunks/:chunk_id/play-url", ctl.GetChunkPlayURL)
+	protected.POST("/sessions/:session_id/chunks/:chunk_id/reanalyses", ctl.CreateChunkReanalysis)
+	protected.GET("/sessions/:session_id/chunks/:chunk_id/reanalyses", ctl.ListChunkReanalyses)
+	protected.GET("/sessions/:session_id/chunks/:chunk_id/reanalyses/:run_id", ctl.GetChunkReanalysis)
+	protected.POST("/sessions/:session_id/reanalyses", ctl.CreateSessionReanalysis)
+	protected.GET("/sessions/:session_id/reanalyses", ctl.ListSessionReanalyses)
+	protected.GET("/sessions/:session_id/reanalyses/:run_id", ctl.GetSessionReanalysis)
+	protected.POST("/sessions/:session_id/feedback", ctl.CreateFeedback)
+	protected.GET("/sessions/:session_id/feedback", ctl.ListFeedback)
+	protected.PATCH("/sessions/:session_id/feedback/:feedback_id", ctl.UpdateFeedback)
+	protected.DELETE("/sessions/:session_id/feedback/:feedback_id", ctl.DeleteFeedback)
 
 	return r, nil
 }

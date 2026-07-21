@@ -110,10 +110,6 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 	if !ctl.requireChunkReanalysisEnabled(c) {
 		return
 	}
-	if ctl.db == nil || ctl.queueClient == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "re-analysis service is not configured"})
-		return
-	}
 
 	sessionID, chunkID, ok := parseChunkReanalysisPath(c)
 	if !ok {
@@ -357,11 +353,6 @@ func parseChunkReanalysisPath(c *gin.Context) (string, uint, bool) {
 }
 
 func (ctl *Controller) loadOwnedChunkReanalysisTarget(c *gin.Context, sessionID string, chunkID uint) (*chunkReanalysisTarget, bool) {
-	if ctl.db == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database is not configured"})
-		return nil, false
-	}
-
 	query := ctl.db.WithContext(c.Request.Context()).Table("chunk_analysis_results AS chunks").
 		Select(`chunks.id, chunks.session_id, chunks.profile_id, chunks.file_path,
 			chunks.exercise_type, chunks.status, chunks.output, chunks.observed_signals,

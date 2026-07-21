@@ -26,10 +26,6 @@ var (
 // not encode profile ownership, so they must resolve through the sessions row
 // or an explicitly supplied profile_id.
 func (ctl *Controller) resolveLegacyUploadProfile(ctx context.Context, sessionID, rawProfileID string) (uint, error) {
-	if ctl.db == nil {
-		return 0, fmt.Errorf("database is not configured")
-	}
-
 	var requestedProfileID uint
 	if raw := strings.TrimSpace(rawProfileID); raw != "" {
 		parsed, err := strconv.ParseUint(raw, 10, 32)

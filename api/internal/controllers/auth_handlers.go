@@ -30,11 +30,6 @@ func NewAuthController(authSvc *auth.Service, database *gorm.DB, cookieCfg Cooki
 	return &AuthController{authSvc: authSvc, database: database, cookieCfg: cookieCfg}
 }
 
-type signupRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
-}
-
 type loginRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`

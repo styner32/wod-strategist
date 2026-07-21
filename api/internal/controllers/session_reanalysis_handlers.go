@@ -45,11 +45,6 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 	if !ctl.requireSessionReanalysisEnabled(c) {
 		return
 	}
-	if ctl.db == nil || ctl.queueClient == nil || ctl.storageClient == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session re-analysis service is not configured"})
-		return
-	}
-
 	sessionID, ok := feedbackSessionID(c)
 	if !ok {
 		return
@@ -219,10 +214,6 @@ func (ctl *Controller) ListSessionReanalyses(c *gin.Context) {
 	if !ctl.requireSessionReanalysisEnabled(c) {
 		return
 	}
-	if ctl.db == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database is not configured"})
-		return
-	}
 	sessionID, ok := feedbackSessionID(c)
 	if !ok {
 		return
@@ -256,10 +247,6 @@ func (ctl *Controller) ListSessionReanalyses(c *gin.Context) {
 
 func (ctl *Controller) GetSessionReanalysis(c *gin.Context) {
 	if !ctl.requireSessionReanalysisEnabled(c) {
-		return
-	}
-	if ctl.db == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database is not configured"})
 		return
 	}
 	sessionID, ok := feedbackSessionID(c)

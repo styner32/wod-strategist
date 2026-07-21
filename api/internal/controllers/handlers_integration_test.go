@@ -29,9 +29,10 @@ import (
 )
 
 var (
-	dbConn      *gorm.DB
-	inspector   *asynq.Inspector
-	authService *auth.Service
+	dbConn          *gorm.DB
+	inspector       *asynq.Inspector
+	authService     *auth.Service
+	defaultTestUser db.User
 )
 
 var _ = BeforeSuite(func() {
@@ -51,26 +52,6 @@ var _ = BeforeSuite(func() {
 // ---------------------------------------------------------------------------
 
 func newTestRouter(config controllers.Config) *gin.Engine {
-	gin.SetMode(gin.TestMode)
-
-	config.DB = dbConn
-	config.AnalysisResults = controllers.NewGormAnalysisResultRepository(dbConn)
-	config.Profiles = controllers.NewGormProfileRepository(dbConn)
-	config.HighlightResults = controllers.NewGormHighlightResultRepository(dbConn)
-	if config.StorageClient == nil {
-		storageClient, err := testhelpers.NewStorageClient("test-bucket", testhelpers.NewMockTransport())
-		Expect(err).NotTo(HaveOccurred())
-		config.StorageClient = storageClient
-	}
-
-	controller, err := controllers.New(config)
-	Expect(err).NotTo(HaveOccurred())
-	router, err := server.SetupRouter("test", "test-api-key", nil, controller, nil, nil)
-	Expect(err).NotTo(HaveOccurred())
-	return router
-}
-
-func newTestRouterWithAuthService(config controllers.Config) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	if os.Getenv("SHOW_LOG") == "true" {
 		loggerConfig := zap.NewDevelopmentConfig()
@@ -93,22 +74,31 @@ func newTestRouterWithAuthService(config controllers.Config) *gin.Engine {
 
 	controller, err := controllers.New(config)
 	Expect(err).NotTo(HaveOccurred())
-	router, err := server.SetupRouter("test", "test-api-key", nil, controller, nil, authService)
+	router, err := server.SetupRouter("test", nil, controller, nil, authService)
 	Expect(err).NotTo(HaveOccurred())
 	return router
+}
+
+// newTestRouterWithAuthService is an alias retained for older call sites.
+// Production SetupRouter always requires an auth service.
+func newTestRouterWithAuthService(config controllers.Config) *gin.Engine {
+	return newTestRouter(config)
+}
+
+func authorizeRequest(req *http.Request, user ...*db.User) {
+	u := &defaultTestUser
+	if len(user) > 0 {
+		u = user[0]
+	}
+	token, err := authService.IssueTokenByUser(u)
+	Expect(err).NotTo(HaveOccurred())
+	req.Header.Set("Authorization", "Bearer "+token)
 }
 
 func newAuthorizedJSONRequest(method string, path string, body string, user ...*db.User) *http.Request {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", "test-api-key")
-
-	if len(user) > 0 {
-		token, err := authService.IssueTokenByUser(user[0])
-		Expect(err).NotTo(HaveOccurred())
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-
+	authorizeRequest(req, user...)
 	return req
 }
 
@@ -151,6 +141,7 @@ var _ = Describe("Controller handlers", func() {
 
 		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		profileID = p.ID
+		Expect(dbConn.First(&defaultTestUser, p.UserID).Error).NotTo(HaveOccurred())
 	})
 
 	Describe("Health", func() {
@@ -264,16 +255,16 @@ var _ = Describe("Controller handlers", func() {
 				Expect(decodeMapBody(w)["error"]).To(Equal(wantError))
 			},
 			Entry("malformed json", `{"session_id":`, http.StatusBadRequest, "invalid request body"),
-			Entry("missing session id", `{"gcs_uri":"gs://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "session_id is required"),
+			Entry("missing session id", `{"gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[]}`, http.StatusBadRequest, "session_id is required"),
 			Entry("missing gcs uri", `{"session_id":"session-1","movements":[]}`, http.StatusBadRequest, "gcs_uri is required"),
-			Entry("missing movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4"}`, http.StatusBadRequest, "movements is required"),
-			Entry("missing profile id", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[]}`, http.StatusBadRequest, "profile_id is required"),
-			Entry("invalid gcs scheme", `{"session_id":"session-1","gcs_uri":"https://bucket/video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
-			Entry("missing gcs bucket", `{"session_id":"session-1","gcs_uri":"gs:///video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
-			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":`+repeatedJSONString("Burpee", 101)+`,"profile_id":1}`, http.StatusBadRequest, "too many movements"),
-			Entry("empty movement name", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[""],"profile_id":1}`, http.StatusBadRequest, "movement name cannot be empty"),
-			Entry("invalid injury", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":["Head"],"profile_id":1}`, http.StatusBadRequest, "invalid injuries"),
-			Entry("too many injuries", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"injuries":`+repeatedJSONString("Left Knee", 100)+`,"profile_id":1}`, http.StatusBadRequest, "too many injuries"),
+			Entry("missing movements", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4"}`, http.StatusBadRequest, "movements is required"),
+			Entry("missing profile id", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[]}`, http.StatusBadRequest, "profile_id is required"),
+			Entry("invalid gcs scheme", `{"session_id":"session-1","gcs_uri":"https://test-bucket-name/videos/1/session-1/video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
+			Entry("missing gcs bucket", `{"session_id":"session-1","gcs_uri":"gs:///videos/1/session-1/video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
+			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":`+repeatedJSONString("Burpee", 101)+`,"profile_id":1}`, http.StatusBadRequest, "too many movements"),
+			Entry("empty movement name", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[""],"profile_id":1}`, http.StatusBadRequest, "movement name cannot be empty"),
+			Entry("invalid injury", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[],"injuries":["Head"],"profile_id":1}`, http.StatusBadRequest, "invalid injuries"),
+			Entry("too many injuries", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[],"injuries":`+repeatedJSONString("Left Knee", 100)+`,"profile_id":1}`, http.StatusBadRequest, "too many injuries"),
 		)
 
 		It("returns internal error when enqueue fails", func() {
@@ -284,7 +275,7 @@ var _ = Describe("Controller handlers", func() {
 				NewVideoAnalysisTask: worker.NewVideoAnalysisTask,
 			})
 
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":["Burpee"],"injuries":["Left Knee"],"workout_type":"wod","profile_id":1}`)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":["Burpee"],"injuries":["Left Knee"],"workout_type":"wod","profile_id":1}`)
 			w := httptest.NewRecorder()
 			failRouter.ServeHTTP(w, req)
 
@@ -293,7 +284,7 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("accepts empty movements and normalizes the default workout type", func() {
-			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","movements":[],"profile_id":1}`)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[],"profile_id":1}`)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -335,7 +326,7 @@ var _ = Describe("Controller handlers", func() {
 				MovementHints: db.JSONDocument(`["Old hint"]`),
 			})
 
-			body := fmt.Sprintf(`{"session_id":"session-hints","gcs_uri":"gs://bucket/video.mp4","movements":["Pull-up","Sandbag Over Shoulder"],"profile_id":%d}`, profileID)
+			body := fmt.Sprintf(`{"session_id":"session-hints","gcs_uri":"gs://test-bucket-name/videos/%d/session-hints/video.mp4","movements":["Pull-up","Sandbag Over Shoulder"],"profile_id":%d}`, profileID, profileID)
 			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", body)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
@@ -377,7 +368,7 @@ var _ = Describe("Controller handlers", func() {
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -393,7 +384,7 @@ var _ = Describe("Controller handlers", func() {
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", writer.FormDataContentType())
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -405,7 +396,7 @@ var _ = Describe("Controller handlers", func() {
 			body, contentType := multipartRequestBody("WOD-20260715-01J00000000000000000000000", "video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", contentType)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -424,7 +415,7 @@ var _ = Describe("Controller handlers", func() {
 			body, contentType := multipartRequestBody("session-1", "../../video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", contentType)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -458,7 +449,7 @@ var _ = Describe("Controller handlers", func() {
 			body, contentType := multipartRequestBody("session-1", "video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", contentType)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			failRouter.ServeHTTP(w, req)
 
@@ -476,7 +467,7 @@ var _ = Describe("Controller handlers", func() {
 			body, contentType := multipartRequestBody("session-1", "..\\\\folder\\\\video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", contentType)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -509,12 +500,13 @@ var _ = Describe("Controller handlers", func() {
 			body, contentType := multipartRequestBody("../../session-1", "video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", contentType)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
 			Expect(decodeMapBody(w)["error"]).To(Equal("invalid session_id format"))
+			Expect(transport.Requests()).To(BeEmpty())
 		})
 
 		It("resolves the profile from an old-format session ID", func() {
@@ -528,7 +520,7 @@ var _ = Describe("Controller handlers", func() {
 			body, contentType := multipartRequestBody(sessionID, "video.mp4", "dummy content")
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/upload", body)
 			req.Header.Set("Content-Type", contentType)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -547,15 +539,17 @@ var _ = Describe("Controller handlers", func() {
 		const sessionA = "session-sanitize-a"
 		const sessionB = "session-sanitize-b"
 
+		var analysisUser db.User
+
 		BeforeEach(func() {
 			router = newTestRouter(controllers.Config{})
 
-			user := testhelpers.CreateUser(dbConn, &db.User{
+			analysisUser = testhelpers.CreateUser(dbConn, &db.User{
 				Username: "test-user",
 			})
 
 			profile := testhelpers.CreateProfile(dbConn, &db.Profile{
-				UserID:       user.ID,
+				UserID:       analysisUser.ID,
 				FitnessLevel: "intermediate",
 			})
 
@@ -577,7 +571,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("returns repository results for the requested session", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionA, nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req, &analysisUser)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -592,7 +586,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("preserves result field types while normalizing legacy highlights", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionA, nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req, &analysisUser)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -625,7 +619,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("GET /analysis/:session_id returns only the requested session", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/analysis/"+sessionB, nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req, &analysisUser)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -658,7 +652,7 @@ var _ = Describe("Controller handlers", func() {
 			}).Error).NotTo(HaveOccurred())
 
 			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=%d", profileID), nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -682,7 +676,7 @@ var _ = Describe("Controller handlers", func() {
 			}).Error).NotTo(HaveOccurred())
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -706,7 +700,7 @@ var _ = Describe("Controller handlers", func() {
 
 			// First request: no before_id, limit=2
 			req1 := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=2", nil)
-			req1.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req1)
 			w1 := httptest.NewRecorder()
 			router.ServeHTTP(w1, req1)
 
@@ -721,7 +715,7 @@ var _ = Describe("Controller handlers", func() {
 			// Second request: before_id = results1[1].ID (paginated-session-2), limit=2
 			cursorID := results1[1].ID
 			req2 := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=1&before_id=%d&limit=2", cursorID), nil)
-			req2.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req2)
 			w2 := httptest.NewRecorder()
 			router.ServeHTTP(w2, req2)
 
@@ -737,7 +731,7 @@ var _ = Describe("Controller handlers", func() {
 			router := newTestRouter(controllers.Config{AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/history", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -763,7 +757,7 @@ var _ = Describe("Controller handlers", func() {
 			from := now.AddDate(0, 0, -2).Format("2006-01-02")
 			to := now.Format("2006-01-02")
 			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=1&from=%s&to=%s", from, to), nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -776,7 +770,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("returns bad request for invalid from date", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&from=bad-date&to=2026-06-01", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -786,7 +780,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("returns bad request for invalid to date", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&from=2026-06-01&to=bad-date", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -806,7 +800,7 @@ var _ = Describe("Controller handlers", func() {
 
 			// 1. Malformed limit: fallback to default (20) which returns all 5
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=abc", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 			Expect(w.Code).To(Equal(http.StatusOK))
@@ -816,7 +810,7 @@ var _ = Describe("Controller handlers", func() {
 
 			// 2. Negative/Zero limit: fallback to default (20) which returns all 5
 			req = httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=0", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w = httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 			Expect(w.Code).To(Equal(http.StatusOK))
@@ -825,7 +819,7 @@ var _ = Describe("Controller handlers", func() {
 
 			// 3. Respected limit
 			req = httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=2", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w = httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 			Expect(w.Code).To(Equal(http.StatusOK))
@@ -842,7 +836,7 @@ var _ = Describe("Controller handlers", func() {
 				}).Error).NotTo(HaveOccurred())
 			}
 			req = httptest.NewRequest(http.MethodGet, "/api/v1/history?profile_id=1&limit=150", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w = httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 			Expect(w.Code).To(Equal(http.StatusOK))
@@ -860,7 +854,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("keeps the legacy top-level movement string-array shape", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -873,7 +867,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("keeps the legacy top-level movement-group array shape", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/movement-groups", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -887,7 +881,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("returns injuries", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/injuries", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -917,7 +911,7 @@ var _ = Describe("Controller handlers", func() {
 			router := newTestRouter(controllers.Config{AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -941,7 +935,7 @@ var _ = Describe("Controller handlers", func() {
 			router := newTestRouter(controllers.Config{AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -964,7 +958,7 @@ var _ = Describe("Controller handlers", func() {
 			router := newTestRouter(controllers.Config{AnalysisResults: controllers.NewGormAnalysisResultRepository(dbConn)})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/subtitles/session-1", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -1008,7 +1002,7 @@ var _ = Describe("Controller handlers", func() {
 			router := newTestRouter(controllers.Config{StorageClient: storageClient, BucketName: "test-bucket"})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/dev/sessions", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -1051,7 +1045,7 @@ var _ = Describe("Controller handlers", func() {
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/dev/sessions", nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -1084,7 +1078,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("GET /chunk-analysis/:session_id returns only the requested session", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/chunk-analysis/"+sessionA, nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -1117,7 +1111,7 @@ var _ = Describe("Controller handlers", func() {
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/chunk-analysis/"+sessionA, nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -1163,7 +1157,7 @@ var _ = Describe("Controller handlers", func() {
 
 		It("GET /highlight/:session_id returns only the requested session", func() {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/highlight/"+sessionA, nil)
-			req.Header.Set("X-API-Key", "test-api-key")
+			authorizeRequest(req)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
@@ -1180,7 +1174,7 @@ var _ = Describe("Controller handlers", func() {
 		var user db.User
 
 		BeforeEach(func() {
-			router = newTestRouterWithAuthService(controllers.Config{})
+			router = newTestRouter(controllers.Config{})
 			profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
 			err := dbConn.Where("id = ?", profile.UserID).First(&user).Error
 			Expect(err).To(BeNil())

@@ -264,10 +264,10 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 		Expect(decodeMapBody(w)["error"]).To(Equal(expectedErrorMessage))
 	},
 		Entry("malformed json", `{"session_id":`, http.StatusBadRequest, "invalid request body"),
-		Entry("missing sesssion id", fmt.Sprintf(`{"gcs_uri":"gs://bucket/video.mp4","profile_id":%d}`, profile.ID), http.StatusBadRequest, "session_id is required"),
-		Entry("gcs_uri is missing", fmt.Sprintf(`{"session_id":"session-1","profile_id":%d}`, profile.ID), http.StatusBadRequest, "gcs_uri is required"),
-		Entry("profile_id is missing", `{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4"}`, http.StatusBadRequest, "profile_id is required"),
-		Entry("invalid GCS URI", fmt.Sprintf(`{"session_id":"session-1","gcs_uri":"https://bucket/video.mp4","profile_id":%d}`, profile.ID), http.StatusBadRequest, "invalid GCS URI"),
+		Entry("missing sesssion id", fmt.Sprintf(`{"gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","profile_id":%d}`, uint(1)), http.StatusBadRequest, "session_id is required"),
+		Entry("gcs_uri is missing", fmt.Sprintf(`{"session_id":"session-1","profile_id":%d}`, uint(1)), http.StatusBadRequest, "gcs_uri is required"),
+		Entry("profile_id is missing", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4"}`, http.StatusBadRequest, "profile_id is required"),
+		Entry("invalid GCS URI", fmt.Sprintf(`{"session_id":"session-1","gcs_uri":"https://test-bucket-name/videos/0/session-1/video.mp4/video.mp4","profile_id":%d}`, uint(1)), http.StatusBadRequest, "invalid GCS URI"),
 	)
 
 	It("returns forbidden when profile does not belong to current user", func() {
@@ -277,7 +277,7 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 		Expect(err).To(BeNil())
 
 		// otherUser tries to use profile (owned by user)
-		body := fmt.Sprintf(`{"session_id":"session-1","gcs_uri":"gs://bucket/video.mp4","profile_id":%d}`, profile.ID)
+		body := fmt.Sprintf(`{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","profile_id":%d}`, profile.ID)
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/chunk-complete", body, &otherUser)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -293,7 +293,7 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 
 		body := fmt.Sprintf(`{
 			"session_id": "session-1",
-			"gcs_uri": "gs://bucket/video.mp4",
+			"gcs_uri": "gs://test-bucket-name/videos/1/session-1/video.mp4",
 			"profile_id": %d,
 			"start_secs": 0,
 			"end_secs": 10

@@ -6,10 +6,7 @@ resource "google_storage_bucket" "uploads" {
   uniform_bucket_level_access = true
 
   cors {
-    origin = concat(
-      var.local_static_origins,
-      ["https://${var.domain_name}"]
-    )
+    origin = ["https://${var.domain_name}"]
     method          = ["GET", "HEAD", "PUT", "OPTIONS"]
     response_header = ["Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "x-goog-resumable"]
     max_age_seconds = 3600

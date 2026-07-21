@@ -53,7 +53,7 @@ func decodeMovementHints(document db.JSONDocument) ([]string, error) {
 // leaves existing hints untouched. Legacy sessions without a sessions row are
 // intentionally left unchanged.
 func (ctl *Controller) persistSessionMovementHints(ctx context.Context, sessionID string, profileID uint, movements []string) error {
-	if movements == nil || ctl.db == nil {
+	if movements == nil {
 		return nil
 	}
 
