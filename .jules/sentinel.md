@@ -38,7 +38,6 @@
 **Learning:** Even though ORMs like GORM provide some injection protection, unvalidated strings read directly from HTTP paths can lead to path traversal if they are subsequently used to fetch or construct storage URIs (e.g., interacting with local disk or GCS).
 **Prevention:** Always wrap path or query parameters that function as identifiers with a dedicated sanitization function (like `sanitizeIdentifier`) before using them in further logic.
 
-<<<<<<< HEAD
 ## 2024-05-27 - Path Traversal in File Paths
 **Vulnerability:** The `validateSessionID` function merely checks for `filepath.Separator` (e.g. `/` or `\` depending on OS) to prevent path traversal issues. However, if paths are built using simple concatenation or other means, `filepath.Base` is recommended per memory guidelines: "Do not trust payloads from the Asynq task queue implicitly; always re-sanitize and validate inputs (e.g., applying `filepath.Base` to identifiers) within background workers, as the queue could potentially be manipulated or bypass API validation."
 **Learning:** Checking for separators is insufficient, especially when components like `..` can be manipulated and bypass simple checks. Using `filepath.Base` ensures that only the final element of the path is used, inherently preventing directory traversal attacks.

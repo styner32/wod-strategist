@@ -123,7 +123,7 @@ func APIKeyMiddleware(configuredKey string) gin.HandlerFunc {
 		// SPA to embed a secret in client-side JS.
 		// NOTE: We must not skip this check for mobile auth endpoints (/auth/login, /auth/signup)
 		// because they are not protected by AuthMiddleware, leading to an API key bypass.
-		isMobileAuthRoute := strings.HasSuffix(c.Request.URL.Path, "/auth/login") || strings.HasSuffix(c.Request.URL.Path, "/auth/signup")
+		isMobileAuthRoute := c.FullPath() == APIRoutePrefix+"/auth/login" || c.FullPath() == APIRoutePrefix+"/auth/signup"
 
 		if !isMobileAuthRoute {
 			if cookie, err := c.Cookie("jwt"); err == nil && cookie != "" {
