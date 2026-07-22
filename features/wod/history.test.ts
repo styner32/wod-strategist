@@ -34,14 +34,14 @@ afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 
 describe("fetchAnalysisHistory", () => {
-  it("should send GET request to /history with X-API-Key header", async () => {
+  it("should send GET request to /history", async () => {
     let capturedMethod: string | undefined;
-    let capturedApiKey: string | null | undefined;
+    let capturedAuth: string | null | undefined;
 
     server.use(
       http.get(`${API_BASE_URL}/history`, ({ request }) => {
         capturedMethod = request.method;
-        capturedApiKey = request.headers.get("X-API-Key");
+        capturedAuth = request.headers.get("Authorization");
         return HttpResponse.json(mockData);
       })
     );
@@ -49,8 +49,8 @@ describe("fetchAnalysisHistory", () => {
     await fetchAnalysisHistory(1);
 
     expect(capturedMethod).toBe("GET");
-    // API_KEY defaults to "" when EXPO_PUBLIC_API_KEY is not set
-    expect(capturedApiKey).toBe("");
+    // No token in SecureStore during unit tests — Authorization is omitted
+    expect(capturedAuth).toBeNull();
   });
 
   it("should return the parsed JSON response body", async () => {
@@ -86,7 +86,7 @@ describe("fetchAnalysisHistory", () => {
     );
 
     await expect(fetchAnalysisHistory(1)).rejects.toThrow(
-      /Failed to fetch history/
+      /API Error \[503\]/
     );
   });
 
@@ -98,7 +98,7 @@ describe("fetchAnalysisHistory", () => {
     );
 
     await expect(fetchAnalysisHistory(1)).rejects.toThrow(
-      /Failed to fetch history/
+      /API Error \[404\]/
     );
   });
 });

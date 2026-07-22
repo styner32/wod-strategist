@@ -40,9 +40,13 @@ func extractTokenUsage(resp *genai.GenerateContentResponse, model string) *Token
 
 const (
 	ModelPro31Preview      = "gemini-3.1-pro-preview"
-	ModelFlash30Preview    = "gemini-3-flash-preview"
-	ModelFlash35           = "gemini-3.5-flash"
+	ModelFlash35Lite       = "gemini-3.5-flash-lite"
+	ModelFlash36           = "gemini-3.6-flash"
 	ModelFlashTTS31Preview = "gemini-3.1-flash-tts-preview"
+
+	// Retained for backward compatibility
+	ModelFlash30Preview = ModelFlash35Lite
+	ModelFlash35        = ModelFlash36
 )
 
 const defaultModel = ModelPro31Preview
@@ -68,7 +72,7 @@ type Options struct {
 	BaseURL      string
 	APIVersion   string
 	HTTPClient   *http.Client
-	Model        string // e.g. "gemini-3.1-pro-preview", "gemini-3-flash-preview"
+	Model        string // e.g. "gemini-3.1-pro-preview", "gemini-3.5-flash-lite", "gemini-3.6-flash"
 	PollInterval time.Duration
 	Sleep        func(time.Duration)
 }
@@ -432,7 +436,7 @@ func (c *Client) GenerateWorkoutMusic(ctx context.Context, model, prompt, output
 	return nil
 }
 
-const flashModel = ModelFlash35
+const flashModel = ModelFlash36
 
 // UploadResult holds info about an uploaded file for use across multiple passes.
 type UploadResult struct {

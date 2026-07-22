@@ -38,11 +38,6 @@ var allowedFatigueCorrections = map[string]struct{}{
 // model's current prediction on the server and writes the first immutable event
 // in a feedback revision chain.
 func (ctl *Controller) CreateFeedback(c *gin.Context) {
-	if ctl.db == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-
 	sessionID, ok := feedbackSessionID(c)
 	if !ok {
 		return
@@ -143,11 +138,6 @@ func (ctl *Controller) CreateFeedback(c *gin.Context) {
 // only the latest non-retracted event from each chain; History contains the
 // complete append-only audit trail, newest first.
 func (ctl *Controller) ListFeedback(c *gin.Context) {
-	if ctl.db == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-
 	sessionID, ok := feedbackSessionID(c)
 	if !ok {
 		return
@@ -178,11 +168,6 @@ func (ctl *Controller) ListFeedback(c *gin.Context) {
 // UpdateFeedback handles PATCH /sessions/:session_id/feedback/:feedback_id by
 // appending a new event. expected_revision prevents lost updates.
 func (ctl *Controller) UpdateFeedback(c *gin.Context) {
-	if ctl.db == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-
 	sessionID, ok := feedbackSessionID(c)
 	if !ok {
 		return
@@ -239,11 +224,6 @@ func (ctl *Controller) UpdateFeedback(c *gin.Context) {
 // DeleteFeedback handles DELETE /sessions/:session_id/feedback/:feedback_id.
 // Deletion is a retraction event; no historical feedback row is removed.
 func (ctl *Controller) DeleteFeedback(c *gin.Context) {
-	if ctl.db == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-
 	sessionID, ok := feedbackSessionID(c)
 	if !ok {
 		return

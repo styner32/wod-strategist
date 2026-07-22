@@ -106,7 +106,7 @@ func main() {
 	})
 
 	// Setup Router
-	r, err := server.SetupRouter(cfg.AppEnv, cfg.APISecret, cfg.DevAllowedOrigins, handlers, authHandlers, authSvc)
+	r, err := server.SetupRouter(cfg.AppEnv, cfg.DevAllowedOrigins, handlers, authHandlers, authSvc)
 	if err != nil {
 		logger.Log.Fatal("Failed to setup router", zap.Error(err))
 	}

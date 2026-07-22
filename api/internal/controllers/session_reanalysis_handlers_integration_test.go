@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,12 +70,10 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 	}
 
 	It("requires authentication and exact session ownership", func() {
+		unauthenticatedReq := httptest.NewRequest(http.MethodPost, requestPath(), strings.NewReader(`{"client_request_id":"unauthenticated"}`))
+		unauthenticatedReq.Header.Set("Content-Type", "application/json")
 		unauthenticated := httptest.NewRecorder()
-		router.ServeHTTP(unauthenticated, newAuthorizedJSONRequest(
-			http.MethodPost,
-			requestPath(),
-			`{"client_request_id":"unauthenticated"}`,
-		))
+		router.ServeHTTP(unauthenticated, unauthenticatedReq)
 		Expect(unauthenticated.Code).To(Equal(http.StatusUnauthorized))
 
 		otherProfile := testhelpers.CreateProfile(dbConn, &db.Profile{})

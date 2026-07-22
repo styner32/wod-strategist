@@ -5,7 +5,7 @@
 - **Single token** — no refresh token. Revocation is instant via `token_version` bump.
 - **Password hashing:** bcrypt (`DefaultCost`).
 - **User ID:** auto-increment `uint` (SERIAL). Originally planned as petname TEXT, migrated in `000026`.
-- **API key gate:** `X-API-Key` remains in front of all routes including `/auth/*`.
+- **No application API-key gate.** Authorization is JWT only (`Authorization: Bearer` for mobile, `jwt` httpOnly cookie for web). Gemini uses a separate `GEMINI_API_KEY` / `X-Goog-Api-Key` unrelated to app auth.
 - **Data scoping:** `users` → `profiles` (1:N), all leaf data scoped via `profile_id` ownership join.
 
 ## Key files
@@ -15,11 +15,12 @@
 | Auth handlers | `api/internal/controllers/auth_handlers.go` |
 | Ownership checks | `api/internal/controllers/ownership.go` |
 | JWT middleware | `api/internal/server/middleware.go` → `AuthMiddleware` |
-| Route wiring | `api/internal/server/router.go` → `SetupRouter` |
+| Route wiring | `api/internal/server/router.go` → `SetupRouter` (fails closed if `authSvc == nil`) |
 | Mobile auth store | `features/auth/useAuthStore.ts` |
 | Mobile auth API | `features/auth/api.ts` |
 | Token storage | `features/auth/storage.ts` (expo-secure-store) |
 | Config | `api/internal/config/config.go` → `JWTSigningSecret` |
+| Infra | `infra/compute.tf` → `JWT_SIGNING_SECRET` from Secret Manager |
 
 ## Migrations (auth-related)
 - `000020` — `profile_id` NOT NULL on all leaf tables
@@ -34,7 +35,12 @@
 - `assertOwnsSession(c, sessionID)` — joins through `analysis_results` / `chunk_analysis_results` → `profiles`
 - `assertOwnsAnalysis(c, analysisID)` — joins `analysis_results` → `profiles`
 - All return `403 Forbidden` on failure (not 404)
-- When `userID == 0` (no auth context), ownership checks pass through — allows running without auth middleware during dev
+- When `userID == 0` (no auth context), ownership checks pass through — only relevant if AuthMiddleware is not applied (production router always applies it)
+
+## Public vs protected routes
+- **Public (rate-limited):** `/auth/login`, `/auth/signup`, `/auth/web/login`, `/auth/web/signup`, plus `/health`
+- **Protected (JWT required):** all other `/api/v1/*` routes including logout, account deletion, and data APIs
+- Login limiter is in-memory / per-instance (distributed limiter is a separate hardening task)
 
 ## Signup flow
 1. Server validates username (`^[a-z0-9_]{3,20}$`) and password (≥8 chars)
@@ -42,6 +48,7 @@
 3. Server returns `{ token, user_id }`
 4. Mobile stores token + user_id in SecureStore
 - **Do NOT** create a profile client-side after signup — the server already does it
+- Self-service signup endpoints currently reject with `403` (invite-only)
 
 ## Account deletion
 1. Handler requires password re-confirmation
@@ -55,14 +62,13 @@
 
 ## Gotchas
 - Username unique index is partial: `WHERE deleted_at IS NULL` — deleted usernames are NOT freed for reuse (username is not scrubbed on delete)
-- CORS `allowMethods` does not include `DELETE` — browser-based `DELETE /auth/account` will fail (mobile-only for now)
-- No rate limiting exists on `/auth/login` or `/auth/signup`
+- CORS `allowMethods` includes `DELETE` and `PATCH`; `allowHeaders` is `Content-Type, Authorization` (no `X-API-Key`)
 - Workers do not check `deleted_at` — in-flight tasks continue after account deletion
+- Old mobile clients may still send an ignored `X-API-Key` header; that is harmless after server removal
+- Legacy CLI scripts (`scripts/test-upload.js` / `scripts/test-chunk-upload.js`) still send only an API key and will fail JWT middleware until they gain a real login flow or are retired (the browser QA page was removed in favor of the web app)
 
 ## Remaining hardening TODO
-- [ ] Implement rate limiting on `/auth/login` and `/auth/signup` (5 req/IP/15min)
-- [ ] Wire up GCS cleanup on account deletion (resolve TODO in `auth_handlers.go:113`)
-- [ ] Add `DELETE` to CORS `allowMethods` or document as mobile-only
+- [ ] Replace in-memory login rate limiter with a distributed limiter
+- [ ] Wire up GCS cleanup on account deletion (resolve TODO in `auth_handlers.go`)
 - [ ] Decide username scrub-on-delete policy (currently blocks reuse)
 - [ ] Add worker-side `deleted_at` check before processing tasks
-- [ ] Add `JWT_SIGNING_SECRET` to infra/deployment configs

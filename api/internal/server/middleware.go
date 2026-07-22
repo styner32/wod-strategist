@@ -2,7 +2,6 @@ package server
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
 	"strings"
@@ -45,7 +44,7 @@ func DevelopmentCORS(allowedOrigins []string) gin.HandlerFunc {
 	}
 
 	allowMethods := "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-	allowHeaders := "Content-Type, X-API-Key, Authorization"
+	allowHeaders := "Content-Type, Authorization"
 
 	return func(c *gin.Context) {
 		origin := strings.TrimSpace(c.GetHeader("Origin"))
@@ -110,41 +109,6 @@ func extractHost(origin string) string {
 		after = after[:idx]
 	}
 	return after
-}
-
-func APIKeyMiddleware(configuredKey string) gin.HandlerFunc {
-	apiSecret := strings.TrimSpace(configuredKey)
-	apiSecretHash := sha256.Sum256([]byte(apiSecret))
-
-	return func(c *gin.Context) {
-		// Skip API key check if a jwt cookie is present — the web SPA
-		// authenticates via httpOnly cookie, which AuthMiddleware validates
-		// downstream.  Requiring an API key on top of that would force the
-		// SPA to embed a secret in client-side JS.
-		// NOTE: We must not skip this check for mobile auth endpoints (/auth/login, /auth/signup)
-		// because they are not protected by AuthMiddleware, leading to an API key bypass.
-		isMobileAuthRoute := c.FullPath() == APIRoutePrefix+"/auth/login" || c.FullPath() == APIRoutePrefix+"/auth/signup"
-
-		if !isMobileAuthRoute {
-			if cookie, err := c.Cookie("jwt"); err == nil && cookie != "" {
-				c.Next()
-				return
-			}
-		}
-
-		apiKey := c.GetHeader("X-API-Key")
-		apiKeyHash := sha256.Sum256([]byte(apiKey))
-		if subtle.ConstantTimeCompare(apiKeyHash[:], apiSecretHash[:]) != 1 {
-			logger.Log.Warn("APIKeyMiddleware: rejected",
-				zap.String("path", c.Request.URL.Path),
-				zap.String("method", c.Request.Method),
-				zap.Bool("key_present", apiKey != ""))
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
-			return
-		}
-
-		c.Next()
-	}
 }
 
 // AuthMiddleware validates a JWT from either the Authorization header (mobile)

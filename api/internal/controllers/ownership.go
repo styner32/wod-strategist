@@ -51,12 +51,6 @@ func (ctl *Controller) assertOwnsSession(c *gin.Context, sessionID string) bool 
 		return true
 	}
 
-	if ctl.db == nil {
-		logger.Log.Error("db not configured for ownership check")
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return false
-	}
-
 	// One query per table: total rows for the session, and how many of those
 	// belong to a profile owned by this user. Errors propagate as 500.
 	type counts struct {
@@ -122,12 +116,6 @@ func (ctl *Controller) assertOwnsAnalysis(c *gin.Context, analysisID uint) bool 
 	userID := UserIDFromContext(c)
 	if userID == 0 {
 		return true
-	}
-
-	if ctl.db == nil {
-		logger.Log.Error("db not configured for ownership check")
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return false
 	}
 
 	var count int64

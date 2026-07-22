@@ -10,7 +10,6 @@ import type { WorkoutType } from "./workoutType";
 
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
-const API_SECRET_KEY = process.env.EXPO_PUBLIC_API_KEY || "";
 
 // ==========================================
 // Core API Client
@@ -21,7 +20,7 @@ export interface ApiRequestOptions extends RequestInit {
 }
 
 /**
- * A tiny fetch wrapper that injects the base URL and API Key header,
+ * A tiny fetch wrapper that injects the base URL and Authorization header,
  * and automatically parses JSON or throws on errors.
  */
 export async function apiClient<T = any>(
@@ -33,7 +32,6 @@ export async function apiClient<T = any>(
   const url = `${API_BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
   
   const headers = new Headers(customHeaders);
-  headers.set("X-API-Key", API_SECRET_KEY);
 
   // Inject auth token if available
   const token = await getToken();
@@ -646,9 +644,7 @@ export async function parseWorkoutImage(
     type: mimeType,
   } as any);
 
-  const headers: Record<string, string> = {
-    "X-API-Key": API_SECRET_KEY,
-  };
+  const headers: Record<string, string> = {};
 
   const token = await getToken();
   if (token) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -58,7 +59,8 @@ var _ = Describe("POST /api/v1/sessions/:session_id/chunks/:chunk_id/reanalyses"
 	}
 
 	It("requires authentication and exact chunk ownership", func() {
-		unauthenticated := newAuthorizedJSONRequest(http.MethodPost, requestPath(), `{"client_request_id":"unauthenticated"}`)
+		unauthenticated := httptest.NewRequest(http.MethodPost, requestPath(), strings.NewReader(`{"client_request_id":"unauthenticated"}`))
+		unauthenticated.Header.Set("Content-Type", "application/json")
 		unauthenticatedResponse := httptest.NewRecorder()
 		router.ServeHTTP(unauthenticatedResponse, unauthenticated)
 		Expect(unauthenticatedResponse.Code).To(Equal(http.StatusUnauthorized))

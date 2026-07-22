@@ -3,6 +3,7 @@ package server_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/onsi/ginkgo/v2"
@@ -33,6 +34,10 @@ func newTestAuthController() *controllers.AuthController {
 	return controllers.NewAuthController(nil, nil, controllers.CookieConfig{})
 }
 
+func newTestAuthService() *auth.Service {
+	return auth.NewService(nil, []byte("test-jwt-signing-secret-for-router"))
+}
+
 var _ = Describe("SetupRouter", func() {
 	BeforeEach(func() {
 		gin.SetMode(gin.TestMode)
@@ -40,12 +45,17 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("returns an error when controller is nil", func() {
-		_, err := server.SetupRouter("test", "secret", nil, nil, nil, nil)
+		_, err := server.SetupRouter("test", nil, nil, nil, newTestAuthService())
 		Expect(err).To(MatchError(server.ErrHandlersRequired))
 	})
 
-	It("allows /health without an API key", func() {
-		router, err := server.SetupRouter("test", "secret", nil, newTestController(), nil, nil)
+	It("returns an error when auth service is nil", func() {
+		_, err := server.SetupRouter("test", nil, newTestController(), nil, nil)
+		Expect(err).To(MatchError(server.ErrAuthServiceRequired))
+	})
+
+	It("allows /health without a JWT", func() {
+		router, err := server.SetupRouter("test", nil, newTestController(), nil, newTestAuthService())
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -55,8 +65,8 @@ var _ = Describe("SetupRouter", func() {
 		Expect(w.Code).To(Equal(http.StatusOK))
 	})
 
-	It("rejects protected routes without API key", func() {
-		router, err := server.SetupRouter("test", "secret", nil, newTestController(), nil, nil)
+	It("rejects protected routes without a JWT", func() {
+		router, err := server.SetupRouter("test", nil, newTestController(), nil, newTestAuthService())
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
@@ -66,22 +76,21 @@ var _ = Describe("SetupRouter", func() {
 		Expect(w.Code).To(Equal(http.StatusUnauthorized))
 	})
 
-	It("accepts protected routes with valid API key (no auth middleware)", func() {
-		// No authSvc → AuthMiddleware is skipped, so API key alone is enough
-		router, err := server.SetupRouter("test", "secret", nil, newTestController(), nil, nil)
+	It("rejects protected routes with an invalid JWT", func() {
+		router, err := server.SetupRouter("test", nil, newTestController(), nil, newTestAuthService())
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
-		req.Header.Set("X-API-Key", "secret")
+		req.Header.Set("Authorization", "Bearer not-a-valid-token")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(w.Code).To(Equal(http.StatusUnauthorized))
 	})
 
 	It("registers all expected routes", func() {
-		authSvc := auth.NewService(nil, nil)
-		router, err := server.SetupRouter("test", "secret", nil, newTestController(), newTestAuthController(), authSvc)
+		authSvc := newTestAuthService()
+		router, err := server.SetupRouter("test", nil, newTestController(), newTestAuthController(), authSvc)
 		Expect(err).NotTo(HaveOccurred())
 
 		actualRoutes := make(map[string]struct{}, len(router.Routes()))
@@ -91,14 +100,14 @@ var _ = Describe("SetupRouter", func() {
 
 		expectedRoutes := []string{
 			"GET /health",
-			// Web auth (no API key)
+			// Public credential routes
 			"POST /api/v1/auth/web/signup",
 			"POST /api/v1/auth/web/login",
-			"POST /api/v1/auth/web/logout",
-			"GET /api/v1/auth/me",
-			// Mobile auth (API key required)
 			"POST /api/v1/auth/signup",
 			"POST /api/v1/auth/login",
+			// Protected auth routes
+			"POST /api/v1/auth/web/logout",
+			"GET /api/v1/auth/me",
 			"POST /api/v1/auth/logout",
 			"DELETE /api/v1/auth/account",
 			// Data routes
@@ -139,25 +148,26 @@ var _ = Describe("SetupRouter", func() {
 		}
 	})
 
-	It("handles development CORS preflight before API key auth", func() {
-		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:3000"}, newTestController(), nil, nil)
+	It("handles development CORS preflight without advertising X-API-Key", func() {
+		router, err := server.SetupRouter("development", []string{"http://localhost:3000"}, newTestController(), nil, newTestAuthService())
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodOptions, "/api/v1/history", nil)
 		req.Header.Set("Origin", "http://localhost:3000")
 		req.Header.Set("Access-Control-Request-Method", http.MethodGet)
-		req.Header.Set("Access-Control-Request-Headers", "X-API-Key")
+		req.Header.Set("Access-Control-Request-Headers", "Authorization")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		Expect(w.Code).To(Equal(http.StatusNoContent))
 		Expect(w.Header().Get("Access-Control-Allow-Origin")).To(Equal("http://localhost:3000"))
 		Expect(w.Header().Get("Access-Control-Allow-Methods")).To(ContainSubstring(http.MethodGet))
-		Expect(w.Header().Get("Access-Control-Allow-Headers")).To(ContainSubstring("X-API-Key"))
+		Expect(w.Header().Get("Access-Control-Allow-Headers")).To(ContainSubstring("Authorization"))
+		Expect(w.Header().Get("Access-Control-Allow-Headers")).NotTo(ContainSubstring("X-API-Key"))
 	})
 
 	It("includes Access-Control-Allow-Credentials in CORS responses", func() {
-		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:5173"}, newTestController(), nil, nil)
+		router, err := server.SetupRouter("development", []string{"http://localhost:5173"}, newTestController(), nil, newTestAuthService())
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodOptions, "/api/v1/history", nil)
@@ -171,7 +181,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("includes DELETE in allowed CORS methods", func() {
-		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:5173"}, newTestController(), nil, nil)
+		router, err := server.SetupRouter("development", []string{"http://localhost:5173"}, newTestController(), nil, newTestAuthService())
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/account", nil)
@@ -185,7 +195,7 @@ var _ = Describe("SetupRouter", func() {
 	})
 
 	It("includes PATCH in allowed CORS methods", func() {
-		router, err := server.SetupRouter("development", "secret", []string{"http://localhost:5173"}, newTestController(), nil, nil)
+		router, err := server.SetupRouter("development", []string{"http://localhost:5173"}, newTestController(), nil, newTestAuthService())
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodOptions, "/api/v1/sessions/session-1/feedback/1", nil)
@@ -198,63 +208,38 @@ var _ = Describe("SetupRouter", func() {
 		Expect(w.Header().Get("Access-Control-Allow-Methods")).To(ContainSubstring("PATCH"))
 	})
 
-	It("allows web auth login/signup WITHOUT API key", func() {
-		router, err := server.SetupRouter("test", "secret", nil, newTestController(), newTestAuthController(), nil)
+	It("allows mobile and web login without a JWT", func() {
+		router, err := server.SetupRouter("test", nil, newTestController(), newTestAuthController(), newTestAuthService())
 		Expect(err).NotTo(HaveOccurred())
 
-		// Web login — no X-API-Key header, expect 400 (no JSON body) not 401
+		// Web login — expect 400 (no JSON body), not 401
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/web/login", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusBadRequest), "web login should not require API key")
+		Expect(w.Code).To(Equal(http.StatusBadRequest), "web login should not require JWT")
 
-		// Web signup — disabled, returns 403 (not 401 which would mean API key rejection)
+		// Web signup — disabled, returns 403
 		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/web/signup", nil)
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusForbidden), "web signup should not require API key")
-	})
+		Expect(w.Code).To(Equal(http.StatusForbidden), "web signup should not require JWT")
 
-	It("requires API key for mobile auth login/signup", func() {
-		router, err := server.SetupRouter("test", "secret", nil, newTestController(), newTestAuthController(), nil)
-		Expect(err).NotTo(HaveOccurred())
-
-		// Mobile login without API key → 401
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusUnauthorized))
-
-		// Mobile login with JWT cookie but without API key → 401 (should not bypass API key check)
+		// Mobile login — expect 400 (no JSON body), not 401
 		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
-		req.AddCookie(&http.Cookie{Name: "jwt", Value: "some-token"})
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusUnauthorized))
+		Expect(w.Code).To(Equal(http.StatusBadRequest), "mobile login should not require JWT")
 
-		// Mobile login with API key → 400 (no JSON body, but past middleware)
-		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
-		req.Header.Set("X-API-Key", "secret")
+		// Mobile signup — disabled, returns 403
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/signup", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
 		w = httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusBadRequest))
-
-		// Mobile signup without API key → 401
-		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/signup", nil)
-		w = httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusUnauthorized))
-
-		// Mobile signup with JWT cookie but without API key → 401 (should not bypass API key check)
-		req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/signup", nil)
-		req.AddCookie(&http.Cookie{Name: "jwt", Value: "some-token"})
-		w = httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusUnauthorized))
+		Expect(w.Code).To(Equal(http.StatusForbidden), "mobile signup should not require JWT")
 	})
 
 	It("allows localhost CORS on any port", func() {
-		router, err := server.SetupRouter("development", "secret", nil, newTestController(), nil, nil)
+		router, err := server.SetupRouter("development", nil, newTestController(), nil, newTestAuthService())
 		Expect(err).NotTo(HaveOccurred())
 
 		req := httptest.NewRequest(http.MethodOptions, "/api/v1/history", nil)
@@ -265,25 +250,5 @@ var _ = Describe("SetupRouter", func() {
 
 		Expect(w.Code).To(Equal(http.StatusNoContent))
 		Expect(w.Header().Get("Access-Control-Allow-Origin")).To(Equal("http://localhost:9999"))
-	})
-
-	It("skips API key check when jwt cookie is present", func() {
-		// No authSvc → AuthMiddleware is not applied, so the jwt cookie
-		// only needs to bypass APIKeyMiddleware (not actually validate).
-		router, err := server.SetupRouter("test", "secret", nil, newTestController(), nil, nil)
-		Expect(err).NotTo(HaveOccurred())
-
-		// Without cookie or API key → 401
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusUnauthorized))
-
-		// With jwt cookie (no API key) → passes through to handler
-		req = httptest.NewRequest(http.MethodGet, "/api/v1/movements", nil)
-		req.AddCookie(&http.Cookie{Name: "jwt", Value: "some-token"})
-		w = httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-		Expect(w.Code).To(Equal(http.StatusOK))
 	})
 })

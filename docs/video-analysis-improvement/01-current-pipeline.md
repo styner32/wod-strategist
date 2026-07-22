@@ -103,7 +103,7 @@ The generic handler:
 1. Downloads the chunk from GCS.
 2. Runs the FFmpeg motion probe concurrently with the model call.
 3. Builds profile, WOD, movement, injury, and heart-rate prompt context.
-4. Uploads the clip to Gemini Files, waits for ACTIVE, and generates with `gemini-3.5-flash`.
+4. Uploads the clip to Gemini Files, waits for ACTIVE, and generates with `gemini-3.6-flash`.
 5. Deletes the Gemini file.
 6. Parses an exercise tag and optional observed-signals block from free-form text.
 7. Inserts a `chunk_analysis_results` row.
@@ -212,11 +212,11 @@ The Gemini client polls Files API state without an explicit maximum poll duratio
 
 ## Current external cost drivers
 
-- One Files upload and one `gemini-3.5-flash` generation per real-time chunk.
+- One Files upload and one `gemini-3.6-flash` generation per real-time chunk.
 - For a direct upload, potentially one Files/Gemini lifecycle per synthetic 10-second chunk in addition to the full-video upload.
 - Full-video high-resolution indexing/triage or verification calls.
 - Up to 20 Pro segment calls with repeated long prompt/output contracts.
-- Default thinking is not explicitly configured (`gemini-3.5-flash` currently defaults to medium; `gemini-3.1-pro-preview` to high).
+- Default thinking is not explicitly configured (`gemini-3.6-flash` currently defaults to medium; `gemini-3.1-pro-preview` to high).
 - Automatic hardsub full-video re-encode.
 - Persistent raw, split, merged, analysis, hardsub, and highlight objects without lifecycle cleanup.
 - Full Gemini responses and some profile/analysis content logged at information level.

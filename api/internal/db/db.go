@@ -149,7 +149,7 @@ type TokenUsage struct {
 	SessionID       string    `gorm:"index;not null" json:"session_id"`
 	ProfileID       uint      `gorm:"index;not null" json:"profile_id"`
 	TaskType        string    `gorm:"not null" json:"task_type"` // chunk:analysis, video:index, video:segment, etc.
-	Model           string    `gorm:"not null" json:"model"`     // gemini-3.1-pro-preview, gemini-3-flash-preview
+	Model           string    `gorm:"not null" json:"model"`     // gemini-3.1-pro-preview, gemini-3.5-flash-lite, gemini-3.6-flash
 	PromptTokens    int32     `gorm:"not null;default:0" json:"prompt_tokens"`
 	CandidateTokens int32     `gorm:"not null;default:0" json:"candidate_tokens"`
 	TotalTokens     int32     `gorm:"not null;default:0" json:"total_tokens"`

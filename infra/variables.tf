@@ -33,18 +33,6 @@ variable "gemini_api_key" {
   sensitive   = true
 }
 
-variable "api_secret" {
-  description = "Secret key for securing API endpoints"
-  type        = string
-  sensitive   = true
-}
-
-variable "local_static_origins" {
-  description = "Origins allowed to access the uploads bucket directly for local QA tooling"
-  type        = list(string)
-  default     = ["http://localhost:3000", "http://127.0.0.1:3000"]
-}
-
 variable "jwt_secret" {
   description = "Secret key for signing JWT tokens"
   type        = string

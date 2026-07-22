@@ -17,11 +17,6 @@ import (
 // every production chunk and the user's currently active corrections. It is a
 // web-only aggregate and does not change the legacy array-shaped endpoints.
 func (ctl *Controller) GetSessionAnalysis(c *gin.Context) {
-	if ctl.db == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
-	}
-
 	sessionID, ok := feedbackSessionID(c)
 	if !ok {
 		return

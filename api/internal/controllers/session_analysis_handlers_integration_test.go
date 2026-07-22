@@ -151,7 +151,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 	})
 
 	It("returns not found instead of treating an unknown session as owned", func() {
-		req := newAuthorizedJSONRequest(http.MethodGet, "/api/v1/sessions/missing-session/analysis", "", &user)
+		req := newAuthorizedJSONRequest(http.MethodGet, "/api/v1/sessions/wod-20201010-1234567890invalid/analysis", "", &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -219,6 +219,7 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 	var (
 		router  *gin.Engine
 		profile db.Profile
+		user    db.User
 		session db.Session
 	)
 
@@ -226,6 +227,8 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
+		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())
+		defaultTestUser = user
 		session = testhelpers.CreateSession(dbConn, &db.Session{
 			SessionID:     "session-merge-hints",
 			ProfileID:     profile.ID,
@@ -240,7 +243,7 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 
 	It("updates movement hints for the exact existing session", func() {
 		body := fmt.Sprintf(`{"session_id":"%s","profile_id":%d,"movements":["Power Snatch","Custom Carry"],"workout_type":"wod"}`, session.SessionID, profile.ID)
-		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", body)
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 

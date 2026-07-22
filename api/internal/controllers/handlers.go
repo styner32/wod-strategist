@@ -197,8 +197,6 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-
-
 	info, err := ctl.queueClient.Enqueue(task)
 	if err != nil {
 		logger.Log.Error("failed to enqueue task", zap.Error(err))
@@ -225,7 +223,7 @@ func (ctl *Controller) Upload(c *gin.Context) {
 		return
 	}
 
-	sessionID := sanitizeIdentifier(c.PostForm("session_id"))
+	sessionID := trimRequiredString(c.PostForm("session_id"))
 	if sessionID == "" {
 		logger.Log.Error("session_id is required")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
@@ -540,15 +538,6 @@ func trimRequiredString(value string) string {
 	return strings.TrimSpace(value)
 }
 
-func sliceContains(s []string, v string) bool {
-	for _, item := range s {
-		if item == v {
-			return true
-		}
-	}
-	return false
-}
-
 func isValidGCSURI(raw string) bool {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -619,14 +608,14 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		return
 	}
 
-	if !isValidSessionGCSURI(req.GCSURI, req.ProfileID, req.SessionID) {
-		logger.Log.Error("GCS URI does not match session path", zap.String("uri", req.GCSURI), zap.Uint("profile_id", req.ProfileID), zap.String("session_id", req.SessionID))
-		c.JSON(http.StatusBadRequest, gin.H{"error": "GCS URI does not match session path"})
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
 		return
 	}
 
-	if req.ProfileID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+	if !isValidSessionGCSURI(req.GCSURI, req.ProfileID, req.SessionID) {
+		logger.Log.Error("GCS URI does not match session path", zap.String("uri", req.GCSURI), zap.Uint("profile_id", req.ProfileID), zap.String("session_id", req.SessionID))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "GCS URI does not match session path"})
 		return
 	}
 
@@ -1027,8 +1016,6 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
 		return
 	}
-
-
 
 	info, err := ctl.queueClient.Enqueue(task)
 	if err != nil {

@@ -1,6 +1,7 @@
 package controllers_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,29 +9,42 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/controllers"
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/testhelpers"
 )
 
 var _ = Describe("POST /api/v1/debug/telemetry", func() {
+	var (
+		profile db.Profile
+		user    db.User
+	)
+
+	BeforeEach(func() {
+		testhelpers.CleanupDB(dbConn)
+		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
+		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())
+		defaultTestUser = user
+	})
+
 	It("stores telemetry JSON in GCS and returns gcs_uri", func() {
 		transport := testhelpers.NewMockTransport()
 		storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
 		Expect(err).NotTo(HaveOccurred())
 
-		// Mock GCS upload for the telemetry JSON
+		objectName := fmt.Sprintf("debug/telemetry/%d/session-tel-1.json", profile.ID)
 		transport.New("https://storage.googleapis.com").
-			Post(gcsUploadURL("test-bucket", "debug/telemetry/42/session-tel-1.json")).
+			Post(gcsUploadURL("test-bucket", objectName)).
 			Reply(http.StatusOK).
-			JSON(map[string]any{"name": "debug/telemetry/42/session-tel-1.json"})
+			JSON(map[string]any{"name": objectName})
 
 		router := newTestRouter(controllers.Config{
 			StorageClient: storageClient,
 			BucketName:    "test-bucket",
 		})
 
-		body := `{
+		body := fmt.Sprintf(`{
 			"sessionId": "session-tel-1",
-			"profileId": 42,
+			"profileId": %d,
 			"startedAt": 1714303200000,
 			"endedAt": 1714303800000,
 			"samples": [
@@ -40,23 +54,23 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 			"appVersion": "1.4.2",
 			"platform": "ios",
 			"deviceModel": "iPhone15,3"
-		}`
+		}`, profile.ID)
 
-		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body)
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
 		Expect(w.Code).To(Equal(http.StatusOK))
 		result := decodeMapBody(w)
 		Expect(result["ok"]).To(BeTrue())
-		Expect(result["gcs_uri"]).To(Equal("gs://test-bucket/debug/telemetry/42/session-tel-1.json"))
+		Expect(result["gcs_uri"]).To(Equal("gs://test-bucket/" + objectName))
 	})
 
 	It("returns bad request for missing sessionId", func() {
 		router := newTestRouter(controllers.Config{})
 
-		body := `{"profileId": 42, "samples": []}`
-		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body)
+		body := fmt.Sprintf(`{"profileId": %d, "samples": []}`, profile.ID)
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -68,7 +82,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 		router := newTestRouter(controllers.Config{})
 
 		body := `{"sessionId": "s1", "samples": []}`
-		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body)
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -84,9 +98,9 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 		for i := 0; i <= 7200; i++ {
 			sampleEntries = append(sampleEntries, `{"ts": 0}`)
 		}
-		body := `{"sessionId": "s1", "profileId": 1, "samples": [` + strings.Join(sampleEntries, ",") + `]}`
+		body := fmt.Sprintf(`{"sessionId": "s1", "profileId": %d, "samples": [%s]}`, profile.ID, strings.Join(sampleEntries, ","))
 
-		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body)
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -97,7 +111,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 	It("returns bad request for malformed JSON", func() {
 		router := newTestRouter(controllers.Config{})
 
-		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", `{broken`)
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", `{broken`, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -110,9 +124,9 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 		storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
 		Expect(err).NotTo(HaveOccurred())
 
-		// Mock GCS upload failure
+		objectName := fmt.Sprintf("debug/telemetry/%d/s1.json", profile.ID)
 		transport.New("https://storage.googleapis.com").
-			Post(gcsUploadURL("test-bucket", "debug/telemetry/1/s1.json")).
+			Post(gcsUploadURL("test-bucket", objectName)).
 			Reply(http.StatusInternalServerError).
 			JSON(map[string]any{"error": map[string]any{"message": "boom"}})
 
@@ -121,8 +135,8 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 			BucketName:    "test-bucket",
 		})
 
-		body := `{"sessionId": "s1", "profileId": 1, "samples": [{"ts": 0}]}`
-		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body)
+		body := fmt.Sprintf(`{"sessionId": "s1", "profileId": %d, "samples": [{"ts": 0}]}`, profile.ID)
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 

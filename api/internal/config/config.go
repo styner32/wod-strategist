@@ -28,7 +28,6 @@ type Common struct {
 
 type Server struct {
 	Common
-	APISecret                string
 	JWTSigningSecret         string
 	GeminiAPIKey             string // GEMINI_API_KEY — optional; enables /parse-workout-image endpoint
 	Port                     string
@@ -65,7 +64,6 @@ func InitServer() (Server, error) {
 			GCSBucketName: strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
 			AppEnv:        appEnv,
 		},
-		APISecret:                strings.TrimSpace(os.Getenv("API_SECRET")),
 		JWTSigningSecret:         strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
 		GeminiAPIKey:             strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		Port:                     strings.TrimSpace(os.Getenv("PORT")),
@@ -88,7 +86,6 @@ func InitServer() (Server, error) {
 		requiredEnv("DATABASE_URL", cfg.DatabaseURL),
 		requiredEnv("REDIS_URL", cfg.RedisURL),
 		requiredEnv("GCS_BUCKET_NAME", cfg.GCSBucketName),
-		requiredEnv("API_SECRET", cfg.APISecret),
 		requiredEnv("JWT_SIGNING_SECRET", cfg.JWTSigningSecret),
 	); err != nil {
 		return Server{}, err

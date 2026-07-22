@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/storage"
 	"go.uber.org/zap"
@@ -61,34 +60,71 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 		return
 	}
 
-	// Verify session ownership
-	var session db.Session
-	dbErr := ctl.db.WithContext(c.Request.Context()).
+	// Verify session ownership: use analysis_results as main table,
+	// then chunk_analysis_results, and optional sessions table fallback.
+	type sessionOwner struct {
+		ProfileID uint
+	}
+	var owner sessionOwner
+
+	// 1. Main table: analysis_results
+	dbErr := ctl.db.WithContext(c.Request.Context()).Table("analysis_results").
 		Select("profile_id").
 		Where("session_id = ?", sessionID).
-		First(&session).Error
+		First(&owner).Error
+
+	// 2. Fallback: chunk_analysis_results
+	if errors.Is(dbErr, gorm.ErrRecordNotFound) {
+		dbErr = ctl.db.WithContext(c.Request.Context()).Table("chunk_analysis_results").
+			Select("profile_id").
+			Where("session_id = ?", sessionID).
+			First(&owner).Error
+	}
+
+	// 3. Optional fallback: sessions (if table exists)
+	if errors.Is(dbErr, gorm.ErrRecordNotFound) {
+		dbErr = ctl.db.WithContext(c.Request.Context()).Table("sessions").
+			Select("profile_id").
+			Where("session_id = ?", sessionID).
+			First(&owner).Error
+	}
 
 	if dbErr == nil {
-		if session.ProfileID != profileID {
+		if owner.ProfileID != profileID {
+			logger.Log.Warn("video_download: profile id mismatch",
+				zap.String("session_id", sessionID),
+				zap.Uint("session_profile_id", owner.ProfileID),
+				zap.Uint("requested_profile_id", profileID),
+				zap.Uint("user_id", UserIDFromContext(c)))
 			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to session"})
 			return
 		}
 	} else if errors.Is(dbErr, gorm.ErrRecordNotFound) {
-		// Fallback to parsing legacy session ID prefix
+		// Fallback to parsing legacy session ID prefix if present
 		match := legacyUploadSessionPattern.FindStringSubmatch(sessionID)
 		if len(match) == 2 {
 			parsed, err := strconv.ParseUint(match[1], 10, 32)
 			if err != nil || uint(parsed) != profileID {
-				c.JSON(http.StatusForbidden, gin.H{"error": "access denied to session"})
+				logger.Log.Warn("video_download: legacy profile id mismatch",
+					zap.String("session_id", sessionID),
+					zap.Uint64("parsed_profile_id", parsed),
+					zap.Uint("requested_profile_id", profileID),
+					zap.Uint("user_id", UserIDFromContext(c)))
+				c.JSON(http.StatusForbidden, gin.H{"error": "access denied to session for legacy"})
 				return
 			}
 		} else {
-			// No session row and no P{profileID} prefix in legacy session ID -> cannot verify ownership
-			c.JSON(http.StatusForbidden, gin.H{"error": "access denied to session"})
-			return
+			// DB record absent: profile ownership is already confirmed via assertOwnsProfile.
+			// Proceed to GCS resolution which checks under videos/{profileID}/{sessionID}/...
+			logger.Log.Info("video_download: session DB record absent, proceeding with GCS resolution for owned profile",
+				zap.String("session_id", sessionID),
+				zap.Uint("requested_profile_id", profileID),
+				zap.Uint("user_id", UserIDFromContext(c)))
 		}
 	} else {
-		logger.Log.Error("failed to query session for ownership check", zap.Error(dbErr))
+		logger.Log.Error("video_download: failed to query session for ownership check",
+			zap.String("session_id", sessionID),
+			zap.Error(dbErr))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to verify session ownership"})
 		return
 	}

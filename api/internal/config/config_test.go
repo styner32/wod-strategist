@@ -26,7 +26,6 @@ var _ = Describe("InitServer", func() {
 		setEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/wod_dev?sslmode=disable")
 		setEnv("REDIS_URL", "localhost:6379")
 		setEnv("GCS_BUCKET_NAME", "uploads-bucket")
-		setEnv("API_SECRET", "secret-key")
 		setEnv("JWT_SIGNING_SECRET", "test-jwt-siging-secret")
 	})
 
@@ -38,7 +37,6 @@ var _ = Describe("InitServer", func() {
 		Expect(cfg.DatabaseURL).To(Equal("postgresql://user:pass@localhost:5432/wod_dev?sslmode=disable"))
 		Expect(cfg.RedisURL).To(Equal("localhost:6379"))
 		Expect(cfg.GCSBucketName).To(Equal("uploads-bucket"))
-		Expect(cfg.APISecret).To(Equal("secret-key"))
 		Expect(cfg.Port).To(Equal("8080"))
 		Expect(cfg.DevAllowedOrigins).To(ContainElements("http://localhost:3000", "http://127.0.0.1:3000"))
 	})
@@ -87,10 +85,10 @@ var _ = Describe("InitServer", func() {
 		setEnv("DATABASE_URL", "")
 		setEnv("REDIS_URL", "")
 		setEnv("GCS_BUCKET_NAME", "")
-		setEnv("API_SECRET", "")
+		setEnv("JWT_SIGNING_SECRET", "")
 
 		_, err := config.InitServer()
-		Expect(err).To(MatchError("missing required environment variables: DATABASE_URL, REDIS_URL, GCS_BUCKET_NAME, API_SECRET"))
+		Expect(err).To(MatchError("missing required environment variables: DATABASE_URL, REDIS_URL, GCS_BUCKET_NAME, JWT_SIGNING_SECRET"))
 	})
 
 	Context("value validation", func() {
