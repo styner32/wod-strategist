@@ -110,7 +110,20 @@
     "invalidGender": "Please select your gender.",
     "invalidHeight": "Please enter a valid height in cm.",
     "invalidWeight": "Please enter a valid weight in kg.",
-    "saveFailed": "Failed to save profile. Please try again."
+    "saveFailed": "Failed to save profile. Please try again.",
+    "appearance": "Visual Appearance (Optional)",
+    "appearanceHint": "Specify distinct visual features for identification in multi-person gym videos.",
+    "appearancePlaceholder": "e.g. Black t-shirt, grey shorts, red shoes, knee sleeves",
+    "fillFromPhoto": "📷 Fill from Photo",
+    "shoesLabel": "Shoes",
+    "shoesPlaceholder": "e.g. White Nike",
+    "hairLabel": "Hair Style/Color",
+    "hairPlaceholder": "e.g. Short dark hair",
+    "buildLabel": "Build",
+    "buildPlaceholder": "e.g. Slim build",
+    "removableGear": "Frequently Worn Gear",
+    "appearanceFilled": "Appearance features extracted. Please review the populated values.",
+    "parseImageFailed": "Failed to extract appearance from photo."
   },
   "profiles": {
     "title": "Profiles",

@@ -83,8 +83,16 @@ export function SessionReanalysisPanel({
   });
 
   const selectedRun = runDetail ?? selectedListRun;
+  const [appearanceHints, setAppearanceHints] = useState('');
+
   const createMutation = useMutation({
-    mutationFn: () => historyApi.createSessionReanalysis(sessionId, crypto.randomUUID()),
+    mutationFn: () => {
+      return historyApi.createSessionReanalysis(
+        sessionId,
+        crypto.randomUUID(),
+        appearanceHints.trim() || undefined,
+      );
+    },
     onSuccess: async (response) => {
       setExplicitRunId(response.run_id);
       await queryClient.invalidateQueries({ queryKey: ['session-reanalyses', sessionId] });
@@ -120,6 +128,15 @@ export function SessionReanalysisPanel({
             Run the current analyzer against the complete server-stored workout video. The original result remains immutable,
             and no highlights, subtitles, hardsubs, injury analysis, or TTS are regenerated. One job may make multiple model calls.
           </p>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            <input
+              type="text"
+              placeholder="Target appearance (e.g., black t-shirt, grey shorts, red shoes)"
+              value={appearanceHints}
+              onChange={(e) => setAppearanceHints(e.target.value)}
+              className="w-80 rounded border border-border bg-bg-surface px-2.5 py-1 text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+          </div>
         </div>
         <button
           type="button"

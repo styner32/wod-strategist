@@ -201,6 +201,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 		"session_id":       target.SessionID,
 		"profile_id":       target.ProfileID,
 		"profile_context":  w.lookupProfileString(target.ProfileID),
+		"appearance":       w.buildTargetPersonContext(target.ProfileID, target.SessionID),
 		"profile_injuries": target.ProfileInjuries,
 		"wod_description":  target.WODDescription,
 		"workout_type":     target.WorkoutType,
@@ -226,8 +227,9 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 			db.ChunkReanalysisStatusFailed, "The re-analysis state could not be saved.", err)
 	}
 
-	analysis, usage, err := w.GeminiClient.AnalyzeSegment(
-		ctx, file.URI, chunkDebugMIMEType(file.MIMEType), media.Start, media.End, prompt,
+	selectedModel := resolveReanalysisModel(run.Model)
+	analysis, usage, err := w.GeminiClient.AnalyzeSegmentWithModel(
+		ctx, file.URI, chunkDebugMIMEType(file.MIMEType), media.Start, media.End, prompt, selectedModel,
 	)
 	if err != nil || strings.TrimSpace(analysis) == "" {
 		if err == nil {
@@ -244,10 +246,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 			db.ChunkReanalysisStatusFailed, "The analyzer candidate could not be saved.", err)
 	}
 
-	model := ""
-	if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
-		model = provider.Model()
-	}
+	model := selectedModel
 	promptTokens := int32(0)
 	candidateTokens := int32(0)
 	totalTokens := int32(0)
@@ -571,6 +570,7 @@ func (w *Worker) buildChunkDebugReanalysisPrompt(target *chunkDebugTarget) strin
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(영상에서 해당 부위의 위험한 자세가 직접 보일 때만 경고하세요.)", *target.ProfileInjuries)
 	}
 	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", w.lookupProfileString(target.ProfileID))
+	prompt += w.buildTargetPersonContext(target.ProfileID, target.SessionID)
 	if target.HeartRateBPM > 0 {
 		prompt += fmt.Sprintf(`
 

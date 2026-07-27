@@ -69,10 +69,11 @@ type Profile struct {
 	HeightCm     *int       `json:"height_cm,omitempty"`
 	WeightKg     *float64   `json:"weight_kg,omitempty"`
 	FitnessLevel string     `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
-	Injuries     *string    `gorm:"type:text;not null;default:'[]'" json:"injuries"`                // JSON array of injury strings
-	ArchivedAt   *time.Time `json:"archived_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	Injuries     *string      `gorm:"type:text;not null;default:'[]'" json:"injuries"`                // JSON array of injury strings
+	Appearance   JSONDocument `json:"appearance"`
+	ArchivedAt   *time.Time   `json:"archived_at,omitempty"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
 }
 
 const (
@@ -138,6 +139,8 @@ type ChunkAnalysisResult struct {
 	MediaStartSecs    *float64  `json:"media_start_secs,omitempty"`
 	MediaEndSecs      *float64  `json:"media_end_secs,omitempty"`
 	WorkoutConfidence float64   `gorm:"not null;default:0.0" json:"workout_confidence"` // confidence if person actually workout
+	TargetConfidence  float64   `gorm:"not null;default:0.0" json:"target_confidence"`
+	TargetCues        string    `gorm:"type:text;not null;default:'{}'" json:"target_cues"`
 	MotionScore       *float64  `json:"motion_score,omitempty"`
 	SkipReason        string    `json:"skip_reason,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
@@ -179,6 +182,15 @@ type Session struct {
 	WorkoutType    string        `json:"workout_type"`
 	UpdatedAt      time.Time     `json:"updated_at"`
 	CreatedAt      time.Time     `json:"created_at"`
+}
+
+type SessionAppearanceHint struct {
+	ID        uint         `gorm:"primaryKey" json:"id"`
+	SessionID string       `json:"session_id"`
+	ProfileID uint         `json:"profile_id"`
+	Hints     JSONDocument `json:"hints"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
 }
 
 func Connect(databaseURL string) (*gorm.DB, error) {

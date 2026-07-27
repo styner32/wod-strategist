@@ -110,6 +110,7 @@ type GeminiClient interface {
 	UploadVideo(ctx context.Context, filePath string) (*gemini.UploadResult, error)
 	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *gemini.TokenUsage, error)
+	AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *gemini.TokenUsage, error)
 
 	// Lightweight Flash model query (e.g. verification)
 	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)

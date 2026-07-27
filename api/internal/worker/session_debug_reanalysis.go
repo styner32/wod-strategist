@@ -182,6 +182,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	contextSnapshot, _ := json.Marshal(map[string]any{
 		"session_id": run.SessionID, "profile_id": run.ProfileID,
 		"profile_context": w.lookupProfileString(run.ProfileID),
+		"appearance":      w.buildTargetPersonContext(run.ProfileID, run.SessionID),
 		"wod_description": target.WODDescription, "workout_type": target.WorkoutType,
 		"movement_hints": movementHintsFromDocument(target.MovementHints),
 		"injuries":       target.Injuries, "confirmed_corrections": target.Corrections,
@@ -209,7 +210,8 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, finalContext, i == len(segments)-1)
 		prompt += correctionContext
 		promptRecord.WriteString(prompt)
-		analysis, usage, callErr := w.GeminiClient.AnalyzeSegment(ctx, file.URI, chunkDebugMIMEType(file.MIMEType), start, end, prompt)
+		selectedModel := resolveReanalysisModel(run.Model)
+		analysis, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(ctx, file.URI, chunkDebugMIMEType(file.MIMEType), start, end, prompt, selectedModel)
 		apiCalls++
 		if callErr != nil || strings.TrimSpace(analysis) == "" {
 			if callErr == nil {

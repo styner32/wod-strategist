@@ -8,6 +8,7 @@ import {
   type ProfileResponse,
   type CreateProfileRequest,
   type UpdateProfileRequest,
+  type AppearanceInput,
 } from "@/features/wod/api";
 
 // ==========================================
@@ -28,6 +29,7 @@ export interface Profile {
   weightKg: number;
   fitnessLevel: FitnessLevel;
   injuries: string[];
+  appearance?: string;
 }
 
 interface ProfileState {
@@ -80,6 +82,7 @@ function toProfile(res: ProfileResponse): Profile {
     weightKg: res.weight_kg,
     fitnessLevel: (res.fitness_level as FitnessLevel) || 'intermediate',
     injuries: res.injuries ?? [],
+    appearance: res.appearance,
   };
 }
 

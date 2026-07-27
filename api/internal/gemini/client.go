@@ -575,8 +575,17 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 }
 
 // AnalyzeSegment performs deep biomechanical analysis on a specific time range
-// of the video using the Pro model with VideoMetadata to constrain attention.
+// of the video using the default model with VideoMetadata to constrain attention.
 func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *TokenUsage, error) {
+	return c.AnalyzeSegmentWithModel(ctx, fileURI, mimeType, start, end, prompt, c.model)
+}
+
+// AnalyzeSegmentWithModel performs deep biomechanical analysis on a specific time range
+// of the video using a specified model (e.g. ModelFlash36 or ModelPro31Preview).
+func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *TokenUsage, error) {
+	if model == "" {
+		model = c.model
+	}
 	if start < 0 || end <= start {
 		return "", nil, fmt.Errorf("invalid segment interval: start=%s end=%s", start, end)
 	}
@@ -584,7 +593,7 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 
 	c.logger.Info("Analyzing segment",
 		zap.String("file_uri", fileURI),
-		zap.String("model", c.model),
+		zap.String("model", model),
 		zap.Duration("start", start),
 		zap.Duration("end", end),
 		zap.Float64("fps", fps))
@@ -602,7 +611,7 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 	}
 
 	exactOffsetContext := context.WithValue(ctx, exactSegmentOffsetsContextKey{}, exactSegmentOffsets{start: start, end: end})
-	resp, err := c.client.Models.GenerateContent(exactOffsetContext, c.model, []*genai.Content{{
+	resp, err := c.client.Models.GenerateContent(exactOffsetContext, model, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			videoPart,
@@ -619,7 +628,7 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 		return "", nil, fmt.Errorf("no content from segment analysis")
 	}
 
-	usage := extractTokenUsage(resp, c.model)
+	usage := extractTokenUsage(resp, model)
 
 	var result string
 	for _, part := range resp.Candidates[0].Content.Parts {

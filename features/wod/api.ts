@@ -94,6 +94,7 @@ export interface ProcessWorkoutVideoOptions {
   endSecs?: number;
   heartRateBpm?: number;
   workoutConfidence?: number;
+  appearanceHints?: string;
 }
 
 export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
@@ -273,7 +274,8 @@ export async function notifyUploadComplete(
   movements: string[],
   injuries: string[],
   workoutType: string,
-  profileId: number
+  profileId: number,
+  appearanceHints?: string
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/upload-complete", {
     method: "POST",
@@ -284,6 +286,7 @@ export async function notifyUploadComplete(
       injuries,
       workout_type: workoutType,
       profile_id: profileId,
+      ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
     },
   });
 }
@@ -298,7 +301,8 @@ export async function notifyChunkUploadComplete(
   startSecs?: number,
   endSecs?: number,
   heartRateBpm?: number,
-  workoutConfidence?: number
+  workoutConfidence?: number,
+  appearanceHints?: string
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
@@ -313,6 +317,7 @@ export async function notifyChunkUploadComplete(
       ...(endSecs !== undefined ? { end_secs: endSecs } : {}),
       ...(heartRateBpm !== undefined && heartRateBpm > 0 ? { heart_rate_bpm: heartRateBpm } : {}),
       ...(workoutConfidence !== undefined ? { workout_confidence: workoutConfidence } : {}),
+      ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
     },
   });
 }
@@ -379,6 +384,7 @@ export async function processWorkoutChunk(
     endSecs,
     heartRateBpm,
     workoutConfidence,
+    appearanceHints,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
 
@@ -403,7 +409,8 @@ export async function processWorkoutChunk(
     startSecs,
     endSecs,
     heartRateBpm,
-    workoutConfidence
+    workoutConfidence,
+    appearanceHints
   );
 
   return {
@@ -432,6 +439,7 @@ export async function mergeChunks(
     profileId: number;
     enableTts?: boolean;
     wodDescription?: string;
+    appearanceHints?: string;
   }
 ): Promise<MergeChunksResult> {
   const {
@@ -441,6 +449,7 @@ export async function mergeChunks(
     profileId,
     enableTts = false,
     wodDescription,
+    appearanceHints,
   } = options;
 
   const result = await apiClient<{
@@ -457,6 +466,7 @@ export async function mergeChunks(
       profile_id: profileId,
       enable_tts: enableTts,
       ...(wodDescription ? { wod_description: wodDescription } : {}),
+      ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
     },
   });
 
@@ -672,6 +682,62 @@ export async function parseWorkoutImage(
   }
 
   return res.json() as Promise<ParseWorkoutImageResponse>;
+}
+
+// ==========================================
+// Parse Appearance Image
+// ==========================================
+
+/**
+ * Sends a person photo to the backend for Gemini-based appearance parsing.
+ * Returns structured appearance cues (persistent, session, removable).
+ *
+ * @param imageUri - Local file URI of the image (camera or gallery)
+ */
+export async function parseAppearanceImage(
+  imageUri: string
+): Promise<{ appearance: string }> {
+  const url = `${API_BASE_URL}/appearance-from-image`;
+
+  const formData = new FormData();
+  const filename = imageUri.split("/").pop() || "person.jpg";
+  const ext = filename.split(".").pop()?.toLowerCase();
+  const mimeType = ext === "png" ? "image/png" : "image/jpeg";
+
+  formData.append("image", {
+    uri: imageUri,
+    name: filename,
+    type: mimeType,
+  } as any);
+
+  const headers: Record<string, string> = {};
+
+  const token = await getToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    const { useAuthStore } = await import("@/features/auth/useAuthStore");
+    useAuthStore.getState().handleUnauthorized();
+    throw new Error("Unauthorized");
+  }
+
+  if (!res.ok) {
+    let errorText = res.statusText;
+    try {
+      errorText = await res.text();
+    } catch {}
+    throw new Error(`API Error [${res.status}]: ${errorText || res.statusText}`);
+  }
+
+  return res.json() as Promise<{ appearance: string }>;
 }
 
 // ==========================================

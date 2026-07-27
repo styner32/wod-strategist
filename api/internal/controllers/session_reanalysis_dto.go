@@ -4,6 +4,8 @@ import "time"
 
 type CreateSessionReanalysisRequest struct {
 	ClientRequestID string `json:"client_request_id"`
+	AppearanceHints string `json:"appearance_hints,omitempty"`
+	Model           string `json:"model,omitempty"`
 }
 
 type CreateSessionReanalysisResponse struct {

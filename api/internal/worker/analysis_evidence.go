@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 )
 
 const MovementEvidenceRulesPrompt = `
@@ -126,6 +127,129 @@ func buildHeartRateContext(heartRateBPM int) string {
 이 청크와 함께 수신된 심박수는 %d bpm입니다. 정확한 측정 시점은 알 수 없습니다.
 영상에서 반복 속도, 케이던스, 가동범위 또는 자세의 지속적인 저하가 먼저 확인된 경우에만 보조 근거로 사용하세요.
 심박수만으로 피로를 판정하거나 피로 구간을 선택하지 말고, 심박수 수치를 코칭 문장에 포함하지 마세요.`, heartRateBPM)
+}
+
+type legacyAppearanceDoc struct {
+	Appearance string            `json:"appearance,omitempty"`
+	Persistent map[string]string `json:"persistent,omitempty"`
+	Session    map[string]string `json:"session,omitempty"`
+	Removable  []string          `json:"removable,omitempty"`
+}
+
+func extractAppearanceText(raw []byte) string {
+	if len(raw) == 0 || string(raw) == "{}" || string(raw) == "null" {
+		return ""
+	}
+
+	var doc legacyAppearanceDoc
+	if err := json.Unmarshal(raw, &doc); err == nil {
+		if strings.TrimSpace(doc.Appearance) != "" {
+			return strings.TrimSpace(doc.Appearance)
+		}
+
+		var parts []string
+		for _, key := range []string{"top", "bottom"} {
+			if v, ok := doc.Session[key]; ok && strings.TrimSpace(v) != "" {
+				parts = append(parts, strings.TrimSpace(v))
+			}
+		}
+		for _, key := range []string{"shoes", "hair", "build"} {
+			if v, ok := doc.Persistent[key]; ok && strings.TrimSpace(v) != "" {
+				parts = append(parts, strings.TrimSpace(v))
+			}
+		}
+		for _, item := range doc.Removable {
+			if strings.TrimSpace(item) != "" {
+				parts = append(parts, strings.TrimSpace(item))
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, ", ")
+		}
+	}
+
+	var strVal string
+	if err := json.Unmarshal(raw, &strVal); err == nil && strings.TrimSpace(strVal) != "" {
+		return strings.TrimSpace(strVal)
+	}
+
+	s := strings.TrimSpace(string(raw))
+	if !strings.HasPrefix(s, "{") && !strings.HasPrefix(s, "[") && !strings.HasPrefix(s, "\"") && s != "" {
+		return s
+	}
+
+	return ""
+}
+
+func (w *Worker) buildTargetPersonContext(profileID uint, sessionID string) string {
+	if w == nil || w.DB == nil {
+		return ""
+	}
+
+	if profileID == 0 && sessionID != "" {
+		var sess db.Session
+		if err := w.DB.Where("session_id = ?", sessionID).First(&sess).Error; err == nil {
+			profileID = sess.ProfileID
+		}
+	}
+
+	var parts []string
+
+	if profileID != 0 {
+		var profile db.Profile
+		if err := w.DB.First(&profile, profileID).Error; err == nil {
+			if len(profile.Appearance) > 0 {
+				if text := extractAppearanceText(profile.Appearance); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+	}
+
+	if sessionID != "" {
+		var hint db.SessionAppearanceHint
+		if err := w.DB.Where("session_id = ?", sessionID).First(&hint).Error; err == nil {
+			if len(hint.Hints) > 0 {
+				if text := extractAppearanceText(hint.Hints); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+	}
+
+	merged := strings.Join(parts, ", ")
+	return formatTargetPersonContext(merged)
+}
+
+func formatTargetPersonContext(merged string) string {
+	merged = strings.TrimSpace(merged)
+
+	var sb strings.Builder
+	sb.WriteString("\n\n## 대상 인물 확정\n")
+	if merged != "" {
+		sb.WriteString("[시각 특징] — 대상 확정의 근거로 사용하세요.\n")
+		sb.WriteString(fmt.Sprintf("- %s\n\n", merged))
+
+		sb.WriteString(`식별 규칙:
+- 특징이 일치하는 인물이 정확히 1명이면 그 사람만 분석하세요.
+- 여러 명이거나 불명확하면 화면 중앙에 가장 크게, 지속적으로 잡히는 인물로 판단하되 그 사실을 밝히세요.
+- 가방, 수건, 겉옷 등 탈착 가능 장비는 벗거나 위치가 바뀌었을 가능성을 염두에 두세요.`)
+	} else {
+		sb.WriteString(`[시각 특징] — 별도로 지정된 외형 특징이 없습니다.
+- 카메라 전면 또는 화면 중앙에서 주요 운동을 수행하는 인물을 대상 인물로 식별하세요.
+- 주변 보조자나 배경에서 지나가는 인물의 동작은 분석 대상에 포함하지 마세요.`)
+	}
+
+	return sb.String()
+}
+
+func resolveReanalysisModel(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "flash", "flash36", "flash35", "gemini-3.6-flash", "gemini-3.5-flash":
+		return gemini.ModelFlash36
+	default:
+		return gemini.ModelPro31Preview
+	}
 }
 
 func isNonExerciseMovement(value string) bool {

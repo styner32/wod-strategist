@@ -93,7 +93,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 		Expect(count).To(BeZero())
 	})
 
-	It("accepts only client_request_id in the request body", func() {
+	It("accepts only valid fields in the request body", func() {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, newAuthorizedJSONRequest(
 			http.MethodPost,
@@ -103,7 +103,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 		))
 
 		Expect(response.Code).To(Equal(http.StatusBadRequest))
-		Expect(response.Body.String()).To(ContainSubstring("only client_request_id is allowed"))
+		Expect(response.Body.String()).To(ContainSubstring("invalid request body"))
 		var count int64
 		Expect(dbConn.Model(&db.SessionReanalysisRun{}).Count(&count).Error).To(Succeed())
 		Expect(count).To(BeZero())

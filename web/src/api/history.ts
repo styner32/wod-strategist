@@ -322,10 +322,17 @@ export const historyApi = {
     sessionId: string,
     chunkId: number,
     clientRequestId: string,
-  ) => api.post<CreateChunkReanalysisResponse>(
-    `/sessions/${sessionId}/chunks/${chunkId}/reanalyses`,
-    { client_request_id: clientRequestId },
-  ),
+    appearanceHints?: string,
+    model?: string,
+  ) =>
+    api.post<CreateChunkReanalysisResponse>(
+      `/sessions/${sessionId}/chunks/${chunkId}/reanalyses`,
+      {
+        client_request_id: clientRequestId,
+        ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
+        ...(model ? { model } : {}),
+      },
+    ),
 
   listChunkReanalyses: (sessionId: string, chunkId: number) =>
     api.get<ReanalysisListResponse>(
@@ -337,10 +344,19 @@ export const historyApi = {
       `/sessions/${sessionId}/chunks/${chunkId}/reanalyses/${runId}`,
     ),
 
-  createSessionReanalysis: (sessionId: string, clientRequestId: string) =>
+  createSessionReanalysis: (
+    sessionId: string,
+    clientRequestId: string,
+    appearanceHints?: string,
+    model?: string,
+  ) =>
     api.post<CreateSessionReanalysisResponse>(
       `/sessions/${sessionId}/reanalyses`,
-      { client_request_id: clientRequestId },
+      {
+        client_request_id: clientRequestId,
+        ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
+        ...(model ? { model } : {}),
+      },
     ),
 
   listSessionReanalyses: (sessionId: string) =>

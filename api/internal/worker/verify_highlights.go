@@ -189,6 +189,7 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 	if err != nil {
 		return fmt.Errorf("invalid highlight segments JSON: %w", asynq.SkipRetry)
 	}
+	segments = w.filterLowTargetConfidenceObservations(p.SessionID, segments)
 	if len(segments) == 0 {
 		return fmt.Errorf("no highlight segments to verify: %w", asynq.SkipRetry)
 	}
@@ -516,4 +517,51 @@ func countHighlightObservations(segments []HighlightSegment) int {
 
 func boolPointer(value bool) *bool {
 	return &value
+}
+
+const minTargetConfidenceThreshold = 0.4
+
+func (w *Worker) filterLowTargetConfidenceObservations(sessionID string, segments []HighlightSegment) []HighlightSegment {
+	if w == nil || w.DB == nil || sessionID == "" {
+		return segments
+	}
+	var lowConfChunks []db.ChunkAnalysisResult
+	if err := w.DB.Where("session_id = ? AND status = ? AND target_confidence > 0 AND target_confidence < ?",
+		sessionID, "COMPLETED", minTargetConfidenceThreshold).Find(&lowConfChunks).Error; err != nil || len(lowConfChunks) == 0 {
+		return segments
+	}
+
+	filteredSegments := make([]HighlightSegment, 0, len(segments))
+	for _, seg := range segments {
+		filteredObs := make([]HighlightObservation, 0, len(seg.Observations))
+		for _, obs := range seg.Observations {
+			obsStart, sErr := parseTimestampToSeconds(obs.Start)
+			obsEnd, eErr := parseTimestampToSeconds(obs.End)
+			isLowConf := false
+			if sErr == nil && eErr == nil {
+				for _, chunk := range lowConfChunks {
+					cStart := 0.0
+					cEnd := 0.0
+					if chunk.StartSecs != nil {
+						cStart = *chunk.StartSecs
+					}
+					if chunk.EndSecs != nil {
+						cEnd = *chunk.EndSecs
+					}
+					if cEnd > cStart && obsStart < cEnd && obsEnd > cStart {
+						isLowConf = true
+						break
+					}
+				}
+			}
+			if !isLowConf {
+				filteredObs = append(filteredObs, obs)
+			}
+		}
+		if len(filteredObs) > 0 {
+			seg.Observations = filteredObs
+			filteredSegments = append(filteredSegments, seg)
+		}
+	}
+	return filteredSegments
 }

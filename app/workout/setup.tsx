@@ -239,6 +239,8 @@ export default function WorkoutSetup() {
 
   const handleNext = () => setCurrentStep('confirm');
 
+  const [sessionAppearance, setSessionAppearance] = useState('');
+
   const handleStart = async () => {
     try {
       await AsyncStorage.setItem(VIDEO_PREFS_KEY, JSON.stringify(videoPrefs));
@@ -246,6 +248,8 @@ export default function WorkoutSetup() {
       console.warn('Failed to persist video prefs:', e);
     }
     const injuries = activeProfile?.injuries ?? [];
+    const appearanceHints = sessionAppearance.trim();
+
     router.push({
       pathname: '/workout/visionTestPage',
       params: {
@@ -254,6 +258,7 @@ export default function WorkoutSetup() {
         movements: selectedMovements.join(', '),
         injuries: injuries.join(', '),
         wodDescription: wodDescription.trim(),
+        ...(appearanceHints ? { appearanceHints } : {}),
         autoRecord: videoPrefs.autoRecord ? 'true' : 'false',
         showSkeleton: videoPrefs.showSkeleton ? 'true' : 'false',
         lowFps: videoPrefs.lowFps ? 'true' : 'false',
@@ -404,6 +409,18 @@ export default function WorkoutSetup() {
               <Text style={styles.chevron}>›</Text>
             </TouchableOpacity>
           )}
+          {/* Today's Outfit & Identification Cues */}
+          <View style={{ marginTop: 20, backgroundColor: '#141A22', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#222' }}>
+            <Text style={[styles.sectionLabel, { marginTop: 0 }]}>오늘의 착장 / 외형 (선택)</Text>
+            <Text style={{ color: '#888', fontSize: 12, marginBottom: 10 }}>실시간 인물 식별 보조 정보</Text>
+            <TextInput
+              style={{ backgroundColor: '#1A222D', color: '#fff', padding: 10, borderRadius: 8, fontSize: 14 }}
+              placeholder="예: 검은 반팔, 회색 반바지, 무릎보호대"
+              placeholderTextColor="#555"
+              value={sessionAppearance}
+              onChangeText={setSessionAppearance}
+            />
+          </View>
           <TouchableOpacity style={styles.advancedHeader} onPress={() => setAdvancedExpanded(!advancedExpanded)}><Text style={styles.advancedHeaderText}>{t('setup.advancedOptions')}</Text><Text style={styles.advancedChevron}>{advancedExpanded ? '▼' : '▶'}</Text></TouchableOpacity>
           {advancedExpanded && (
             <View style={styles.advancedSection}>

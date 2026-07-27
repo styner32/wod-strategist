@@ -181,6 +181,13 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist movement hints"})
 		return
 	}
+	if strings.TrimSpace(req.AppearanceHints) != "" {
+		if err := persistSessionAppearanceHints(c.Request.Context(), ctl.db, req.SessionID, req.ProfileID, &AppearanceInput{Appearance: req.AppearanceHints}); err != nil {
+			logger.Log.Error("failed to persist appearance hints", zap.String("session_id", req.SessionID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist appearance hints"})
+			return
+		}
+	}
 
 	logger.Log.Info("Submit a video analysis request",
 		zap.String("session_id", req.SessionID),
@@ -627,6 +634,13 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist movement hints"})
 		return
 	}
+	if strings.TrimSpace(req.AppearanceHints) != "" {
+		if err := persistSessionAppearanceHints(c.Request.Context(), ctl.db, req.SessionID, req.ProfileID, &AppearanceInput{Appearance: req.AppearanceHints}); err != nil {
+			logger.Log.Error("failed to persist appearance hints", zap.String("session_id", req.SessionID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist appearance hints"})
+			return
+		}
+	}
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 
@@ -717,6 +731,16 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 		fitnessLevel = "intermediate"
 	}
 
+	var appearanceDoc db.JSONDocument
+	if strings.TrimSpace(req.Appearance) != "" {
+		doc, err := appearanceDocument(&AppearanceInput{Appearance: req.Appearance})
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		appearanceDoc = doc
+	}
+
 	profile := &db.Profile{
 		UserID:       UserIDFromContext(c),
 		Name:         req.Name,
@@ -728,6 +752,7 @@ func (ctl *Controller) CreateProfile(c *gin.Context) {
 		WeightKg:     req.WeightKg,
 		FitnessLevel: fitnessLevel,
 		Injuries:     injuriesPtr,
+		Appearance:   appearanceDoc,
 	}
 
 	if err := ctl.profiles.Create(c.Request.Context(), profile); err != nil {
@@ -861,6 +886,14 @@ func (ctl *Controller) UpdateProfile(c *gin.Context) {
 		s := string(injuriesJSON)
 		profile.Injuries = &s
 	}
+	if req.Appearance != nil {
+		doc, err := appearanceDocument(&AppearanceInput{Appearance: *req.Appearance})
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		profile.Appearance = doc
+	}
 
 	if err := ctl.profiles.Update(c.Request.Context(), profile); err != nil {
 		logger.Log.Error("failed to update profile", zap.Error(err))
@@ -945,6 +978,7 @@ func toProfileResponse(p *db.Profile) ProfileResponse {
 		WeightKg:     p.WeightKg,
 		FitnessLevel: p.FitnessLevel,
 		Injuries:     injuryList,
+		Appearance:   decodeAppearance(p.Appearance),
 	}
 	if p.ArchivedAt != nil {
 		ts := p.ArchivedAt.Format(time.RFC3339)
@@ -1002,6 +1036,13 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 		logger.Log.Error("failed to persist movement hints", zap.String("session_id", req.SessionID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist movement hints"})
 		return
+	}
+	if strings.TrimSpace(req.AppearanceHints) != "" {
+		if err := persistSessionAppearanceHints(c.Request.Context(), ctl.db, req.SessionID, req.ProfileID, &AppearanceInput{Appearance: req.AppearanceHints}); err != nil {
+			logger.Log.Error("failed to persist appearance hints", zap.String("session_id", req.SessionID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist appearance hints"})
+			return
+		}
 	}
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
@@ -1629,4 +1670,109 @@ func (ctl *Controller) ParseWorkoutImage(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+const appearanceParsePrompt = `이 사진에 있는 사람의 외형 특징(상의, 하의, 신발, 머리 스타일, 착용 장비 등)을 식별용으로 요약 기술하세요.
+
+규칙:
+- 한국어로 100자 이내의 짧은 명사구/문구로 기술하세요 (예: "검은 반팔, 회색 반바지, 빨간 신발, 무릎보호대").
+- 얼굴 생김새, 인종, 나이 추정은 출력하지 마세요.
+
+반드시 아래 형식의 appearance JSON 코드 블록으로만 출력하세요:
+` + "```appearance" + `
+{"appearance": "검은 반팔, 회색 반바지, 빨간 신발"}
+` + "```"
+
+var appearanceBlockRegex = regexp.MustCompile(
+	"(?is)```(?:appearance|json)?\\s*\\n?(\\{[^`]*?\\})\\s*\\n?```")
+
+func parseAppearanceBlock(output string) (AppearanceInput, error) {
+	matches := appearanceBlockRegex.FindStringSubmatch(output)
+	if len(matches) < 2 {
+		start := strings.Index(output, "{")
+		end := strings.LastIndex(output, "}")
+		if start != -1 && end > start {
+			matches = []string{output, output[start : end+1]}
+		} else {
+			return AppearanceInput{}, fmt.Errorf("no appearance JSON block found in output")
+		}
+	}
+	var raw AppearanceInput
+	if err := json.Unmarshal([]byte(matches[1]), &raw); err != nil {
+		return AppearanceInput{}, fmt.Errorf("unmarshal appearance block: %w", err)
+	}
+	return normalizeAppearance(&raw), nil
+}
+
+// @Summary      Parse Appearance Image
+// @Description  Extracts person visual appearance cues from a photo
+// @Tags         workout
+// @Accept       multipart/form-data
+// @Produce      json
+// @Param        image formData file true "Person photo (JPEG/PNG, max 10MB)"
+// @Success      200 {object} AppearanceInput
+// @Failure      400 {object} ErrorResponse
+// @Failure      422 {object} ErrorResponse
+// @Failure      503 {object} ErrorResponse
+// @Router       /appearance-from-image [post]
+func (ctl *Controller) ParseAppearanceImage(c *gin.Context) {
+	if ctl.imageParser == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "image parsing is not configured"})
+		return
+	}
+
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxImageUploadSize)
+
+	file, header, err := c.Request.FormFile("image")
+	if err != nil {
+		logger.Log.Warn("failed to read image from form", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "image file is required"})
+		return
+	}
+	defer file.Close()
+
+	logger.Log.Info("Received appearance image",
+		zap.String("filename", header.Filename),
+		zap.Int64("size_bytes", header.Size))
+
+	imageBytes := make([]byte, header.Size)
+	if _, err := file.Read(imageBytes); err != nil {
+		logger.Log.Error("failed to read image bytes", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to read image"})
+		return
+	}
+
+	mimeType := geminiPkg.DetectImageMIME(imageBytes)
+	if mimeType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported image format; use JPEG or PNG"})
+		return
+	}
+
+	normalized, normalizedMIME, err := geminiPkg.NormalizeImage(imageBytes, mimeType)
+	if err != nil {
+		logger.Log.Error("failed to normalize image", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to process image"})
+		return
+	}
+
+	output, _, err := ctl.imageParser.ParseImage(c.Request.Context(), normalized, normalizedMIME, appearanceParsePrompt)
+	if err != nil {
+		logger.Log.Error("Gemini ParseAppearanceImage failed", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to analyze image"})
+		return
+	}
+
+	res, err := parseAppearanceBlock(output)
+	if err != nil {
+		logger.Log.Warn("failed to parse appearance block from Gemini output",
+			zap.Error(err),
+			zap.String("raw_output", output))
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error":      "could not extract appearance from image",
+			"raw_output": output,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, res)
 }

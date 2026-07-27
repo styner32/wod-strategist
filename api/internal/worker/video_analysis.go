@@ -253,6 +253,7 @@ Any timestamp exceeding this duration means you are hallucinating — discard it
 The person to track has the following profile:
 - %s
 Focus ONLY on this person's movements. Ignore other people in the background.
+If visual appearance cues are provided in the Target Person Confirmation section below, use persistent features (shoes, hair, build) as primary identification and session outfit as secondary identification. Removable gear (knee sleeves, belts) may be taken off during workout — do not re-assign identity just because removable gear is absent.
 `, durationStr, durationStr, personalProfile)
 
 	if len(p.Movements) > 0 {
@@ -263,6 +264,7 @@ They are suggestions, not confirmation and not a closed list. Omit any hint not 
 `, strings.Join(p.Movements, ", "))
 	}
 	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
+	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 
 	prompt += `
 ## Instructions
@@ -736,6 +738,7 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 ## 개인 프로필
 %s
 `, seg.Start, seg.End, seg.Type, personalProfile)
+	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 
 	// WOD context (type-specific analysis guidance)
 	if wodContext != "" {
@@ -1267,6 +1270,7 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	w.logger.Info("Personal Profile", zap.Uint("profile_id", p.ProfileID), zap.String("personal_profile", personalProfile))
 
 	prompt += fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
+	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 	prompt += w.buildSessionFatigueEvidenceContext(p.SessionID)
 
 	// Ground timestamps with actual video duration to prevent hallucinated timestamps.

@@ -110,7 +110,20 @@
     "invalidGender": "성별을 선택하세요.",
     "invalidHeight": "유효한 키(cm)를 입력하세요.",
     "invalidWeight": "유효한 체중(kg)을 입력하세요.",
-    "saveFailed": "프로필 저장에 실패했습니다. 다시 시도해주세요."
+    "saveFailed": "프로필 저장에 실패했습니다. 다시 시도해주세요.",
+    "appearance": "외형 특징 (선택)",
+    "appearanceHint": "다중 인물 촬영 시 본인 식별을 위해 눈에 띄는 시각 특징을 지정하세요.",
+    "appearancePlaceholder": "예: 검은 반팔, 회색 반바지, 빨간 나이키 신발, 무릎보호대",
+    "fillFromPhoto": "📷 사진으로 채우기",
+    "shoesLabel": "신발",
+    "shoesPlaceholder": "예: 흰색 나이키",
+    "hairLabel": "헤어 스타일/색",
+    "hairPlaceholder": "예: 짧은 검은 머리",
+    "buildLabel": "체형",
+    "buildPlaceholder": "예: 마른 체형",
+    "removableGear": "자주 착용하는 장비",
+    "appearanceFilled": "사진에서 외형 특징을 추출했습니다. 입력값을 확인해주세요.",
+    "parseImageFailed": "사진에서 외형 특징을 추출하지 못했습니다."
   },
   "profiles": {
     "title": "프로필",

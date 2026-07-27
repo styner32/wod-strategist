@@ -4,6 +4,8 @@ import "time"
 
 type CreateChunkReanalysisRequest struct {
 	ClientRequestID string `json:"client_request_id" binding:"required"`
+	AppearanceHints string `json:"appearance_hints,omitempty"`
+	Model           string `json:"model,omitempty"`
 }
 
 type CreateChunkReanalysisResponse struct {

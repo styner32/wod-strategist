@@ -21,6 +21,7 @@ export function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [workoutType, setWorkoutType] = useState('wod');
   const [wodDescription, setWodDescription] = useState('');
+  const [targetAppearance, setTargetAppearance] = useState('');
   const [pipelineMode, setPipelineMode] = useState('compare');
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -76,6 +77,7 @@ export function UploadPage() {
         injuries: [],
         wod_description: wodDescription || undefined,
         pipeline_mode: pipelineMode,
+        ...(targetAppearance.trim() ? { appearance_hints: targetAppearance.trim() } : {}),
       });
 
       // 4. Navigate to session detail
@@ -207,6 +209,21 @@ export function UploadPage() {
             placeholder="e.g. AMRAP 20: 5 Pull-ups, 10 Push-ups, 15 Squats"
             rows={3}
             className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2.5 text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y"
+          />
+        </div>
+
+        {/* Target Person Outfit / Appearance (Optional) */}
+        <div>
+          <label htmlFor="upload-target-appearance" className="block text-sm font-medium text-text-secondary mb-1.5">
+            Target Person Appearance (Optional)
+          </label>
+          <input
+            type="text"
+            id="upload-target-appearance"
+            value={targetAppearance}
+            onChange={(e) => setTargetAppearance(e.target.value)}
+            placeholder="e.g. Black t-shirt, grey shorts, red shoes, knee sleeves"
+            className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2.5 text-text-primary placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50"
           />
         </div>
 

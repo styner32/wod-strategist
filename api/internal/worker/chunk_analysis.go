@@ -29,6 +29,11 @@ const ChunkAnalysisPrompt = `
 - 한 번에 하나의 큐만 제시하세요.
 - 모든 피드백은 **존댓말** (~요, ~세요, ~습니다)로 작성하세요. 반말(~해, ~다, ~함)을 절대 사용하지 마세요.
 
+## 대상 인물
+이 영상에는 대상 인물 외의 사람이 함께 찍힐 수 있습니다.
+아래 컨텍스트에 지정된 대상 인물의 동작만 분석하세요.
+대상 인물을 특정할 수 없으면 배경 인물의 동작을 대신 보고하지 말고 [NO_EXERCISE]를 출력하세요.
+
 ## 필수: 운동 종목 식별
 먼저, 영상에서 수행 중인 운동 종목을 식별하세요.
 - 운동이 보이면 → 첫 줄에 반드시 [EXERCISE: 영어 운동 이름] 태그를 출력하세요.
@@ -108,6 +113,18 @@ const (
 - fatigue_evidence: 위 유형을 뒷받침하는 구체적인 시각 관찰. 심박수는 여기에 기록하지 마세요.
 - walking, rest_setup, unknown이면 fatigue_visually_established는 반드시 false이고 두 fatigue_evidence 배열은 비워 두세요.
 - 운동이 감지되지 않은 경우에는 이 블록을 출력하지 마세요.`
+
+	TargetPersonPrompt = `
+
+## 대상 인물 식별 근거 (Target Person)
+운동이 감지된 경우, 아래 형식의 JSON 블록을 반드시 추가하세요.
+
+` + "```target_person\n" + `{"matched_cues":["흰색 나이키","짧은 검은 머리"],"ambiguous":false,"confidence":0.9}` + "\n```\n" + `
+- matched_cues: 위 대상 인물 컨텍스트 항목 중 이 영상에서 **실제로 눈으로 확인한 것만** 나열하세요.
+  컨텍스트에 있다는 이유로 나열하지 마세요. 확인한 것이 없으면 빈 배열입니다.
+- ambiguous: 조건에 맞는 인물이 여러 명이거나 대상을 확신할 수 없으면 true.
+- confidence: 대상 인물 식별에 대한 확신도 0.0~1.0.
+- 대상 인물 컨텍스트가 제공되지 않았다면 matched_cues는 빈 배열, confidence는 0.5로 두세요.`
 )
 
 // observedSignalsBlockRegex matches ```observed_signals ... ``` blocks in Gemini output.
@@ -159,6 +176,50 @@ func parseObservedSignals(analysis string) string {
 // leaving just the coaching feedback.
 func stripObservedSignals(analysis string) string {
 	return strings.TrimSpace(observedSignalsBlockRegex.ReplaceAllString(analysis, ""))
+}
+
+var targetPersonBlockRegex = regexp.MustCompile(
+	"(?is)```(?:target_person|json)?\\s*\\n?(\\{[^`]*?\"matched_cues\"[^`]*?\\})\\s*\\n?```")
+
+type targetPersonOutput struct {
+	MatchedCues []string `json:"matched_cues"`
+	Ambiguous   bool     `json:"ambiguous"`
+	Confidence  float64  `json:"confidence"`
+}
+
+func parseTargetPerson(analysis string) (string, float64) {
+	matches := targetPersonBlockRegex.FindStringSubmatch(analysis)
+	if len(matches) < 2 {
+		return "{}", 0.5
+	}
+
+	var tp targetPersonOutput
+	if err := json.Unmarshal([]byte(matches[1]), &tp); err != nil {
+		return "{}", 0.5
+	}
+
+	conf := tp.Confidence
+	if conf < 0.0 {
+		conf = 0.0
+	}
+	if conf > 1.0 {
+		conf = 1.0
+	}
+
+	if tp.Ambiguous && conf > 0.5 {
+		conf = 0.5
+	}
+
+	tp.Confidence = conf
+	cleanedJSON, err := json.Marshal(tp)
+	if err != nil {
+		return "{}", conf
+	}
+	return string(cleanedJSON), conf
+}
+
+func stripTargetPerson(analysis string) string {
+	return strings.TrimSpace(targetPersonBlockRegex.ReplaceAllString(analysis, ""))
 }
 
 // levelPolicyForFitnessLevel returns the coaching policy prompt for the given fitness level.
@@ -317,9 +378,11 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	detectedExercise := parseChunkExercise(analysis)
 	// Extract observed signals JSON for benchmarking
 	observedSignals := parseObservedSignals(analysis)
-	// Strip tags and signals block from the output, leaving just coaching feedback
+	targetCues, targetConfidence := parseTargetPerson(analysis)
+	// Strip tags, signals block, and target person block from the output, leaving just coaching feedback
 	cleanOutput := stripExerciseTag(analysis)
 	cleanOutput = stripObservedSignals(cleanOutput)
+	cleanOutput = stripTargetPerson(cleanOutput)
 
 	chunkResult := &db.ChunkAnalysisResult{
 		SessionID:         p.SessionID,
@@ -330,6 +393,8 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		ObservedSignals:   observedSignals,
 		HeartRateBPM:      p.HeartRateBPM,
 		WorkoutConfidence: p.WorkoutConfidence,
+		TargetConfidence:  targetConfidence,
+		TargetCues:        targetCues,
 		MotionScore:       motionScore,
 		SkipReason:        "",
 	}
@@ -466,9 +531,11 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	detectedExercise := parseChunkExercise(analysis)
 	// Extract observed signals JSON for benchmarking
 	observedSignals := parseObservedSignals(analysis)
-	// Strip tags and signals block from the output, leaving just coaching feedback
+	targetCues, targetConfidence := parseTargetPerson(analysis)
+	// Strip tags, signals block, and target person block from the output, leaving just coaching feedback
 	cleanOutput := stripExerciseTag(analysis)
 	cleanOutput = stripObservedSignals(cleanOutput)
+	cleanOutput = stripTargetPerson(cleanOutput)
 
 	chunkResult := &db.ChunkAnalysisResult{
 		SessionID:         p.SessionID,
@@ -479,6 +546,8 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		ObservedSignals:   observedSignals,
 		HeartRateBPM:      p.HeartRateBPM,
 		WorkoutConfidence: p.WorkoutConfidence,
+		TargetConfidence:  targetConfidence,
+		TargetCues:        targetCues,
 		MotionScore:       motionScoreWithSession,
 		SkipReason:        "",
 	}
@@ -517,11 +586,13 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 
 	personalProfile := w.lookupProfileString(p.ProfileID)
 	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
+	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 
 	prompt += buildHeartRateContext(p.HeartRateBPM)
 
-	// Add observed signals requirement
+	// Add observed signals & target person requirement
 	prompt += ObservedSignalsPrompt
+	prompt += TargetPersonPrompt
 
 	return prompt
 }
@@ -546,11 +617,13 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 
 	personalProfile := w.lookupProfileString(p.ProfileID)
 	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
+	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 
 	prompt += buildHeartRateContext(p.HeartRateBPM)
 
-	// Add observed signals requirement
+	// Add observed signals & target person requirement
 	prompt += ObservedSignalsPrompt
+	prompt += TargetPersonPrompt
 
 	return prompt
 }

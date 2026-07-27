@@ -89,6 +89,7 @@ export default function VisionTestPage() {
     zoomMode?: string;
     aspectRatio?: string;
     wodDescription?: string;
+    appearanceHints?: string;
   }>();
 
   const landscapeMode = landscapeModeParam === 'true';
@@ -96,6 +97,7 @@ export default function VisionTestPage() {
   const zoomMode = zoomModeParam === 'true';
   const aspectRatio = (aspectRatioParam === '4:3' ? '4:3' : '16:9') as '4:3' | '16:9';
   const wodDescription = wodDescriptionParam || '';
+  const appearanceHints = searchParams.appearanceHints || undefined;
 
   // Performance flags — default to power-saving on Android, full quality on iOS
   const showSkeleton = showSkeletonParam !== undefined
@@ -404,6 +406,7 @@ export default function VisionTestPage() {
                     endSecs,
                     heartRateBpm: bpmRef.current > 0 ? bpmRef.current : undefined,
                     workoutConfidence,
+                    appearanceHints,
                   });
                   console.log("✅ Chunk uploaded to backend");
                 } catch (err) {
@@ -689,6 +692,7 @@ export default function VisionTestPage() {
               injuries: injuriesArray,
               profileId: profileId!,
               wodDescription: wodDescription || undefined,
+              appearanceHints,
             });
             console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
           } catch (e) {

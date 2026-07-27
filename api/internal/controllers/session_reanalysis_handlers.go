@@ -56,13 +56,22 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 
 	req, err := decodeCreateSessionReanalysisRequest(c.Request.Body)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body; only client_request_id is allowed"})
+		logger.Log.Error("failed to parse request body", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body; unexpected or invalid fields"})
 		return
 	}
 	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
 	if req.ClientRequestID == "" || len(req.ClientRequestID) > 128 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "client_request_id must be between 1 and 128 characters"})
 		return
+	}
+
+	if strings.TrimSpace(req.AppearanceHints) != "" {
+		if err := persistSessionAppearanceHints(c.Request.Context(), ctl.db, sessionID, profileID, &AppearanceInput{Appearance: req.AppearanceHints}); err != nil {
+			logger.Log.Error("failed to persist appearance hints for reanalysis", zap.String("session_id", sessionID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist appearance hints"})
+			return
+		}
 	}
 
 	var existing db.SessionReanalysisRun
@@ -130,6 +139,7 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		SourceContextSnapshot:    db.JSONDocument(`{}`),
 		OriginalAnalysisSnapshot: originalSnapshot,
 		SessionScore:             `{}`,
+		Model:                    strings.TrimSpace(req.Model),
 	}
 	idempotentExisting := false
 	createErr := ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
