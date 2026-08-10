@@ -137,6 +137,16 @@ export async function fetchInjuries(): Promise<string[]> {
 // Profile API
 // ==========================================
 
+export interface AppearanceInput {
+  top?: string;
+  bottom?: string;
+  shoes?: string;
+  hair?: string;
+  build?: string;
+  gear?: string[];
+  notes?: string;
+}
+
 export interface ProfileResponse {
   id: number;
   name: string;
@@ -148,6 +158,7 @@ export interface ProfileResponse {
   weight_kg: number;
   fitness_level: string;
   injuries: string[];
+  appearance?: string | AppearanceInput;
   archived_at?: string;
 }
 
@@ -161,6 +172,7 @@ export interface CreateProfileRequest {
   weight_kg?: number;
   fitness_level?: string;
   injuries?: string[];
+  appearance?: string | AppearanceInput;
 }
 
 export interface UpdateProfileRequest {
@@ -173,6 +185,7 @@ export interface UpdateProfileRequest {
   weight_kg?: number;
   fitness_level?: string;
   injuries?: string[];
+  appearance?: string | AppearanceInput;
 }
 
 export async function createProfile(
@@ -758,3 +771,33 @@ export async function uploadDebugTelemetry(
     bodyPayload: session,
   });
 }
+
+// ==========================================
+// Related WODs
+// ==========================================
+
+export type RelatedWODsResponse = components["schemas"]["controllers.RelatedWODsResponse"];
+
+export interface FetchRelatedWodsParams {
+  profileId: number;
+  movement?: string;
+  weightKg?: number;
+  sessionId?: string;
+  limit?: number;
+}
+
+export async function fetchRelatedWods(
+  params: FetchRelatedWodsParams
+): Promise<RelatedWODsResponse> {
+  const query = new URLSearchParams();
+  query.append("profile_id", params.profileId.toString());
+  if (params.movement) query.append("movement", params.movement);
+  if (params.weightKg !== undefined && !isNaN(params.weightKg)) {
+    query.append("weight_kg", params.weightKg.toString());
+  }
+  if (params.sessionId) query.append("session_id", params.sessionId);
+  if (params.limit !== undefined) query.append("limit", params.limit.toString());
+
+  return apiClient<RelatedWODsResponse>(`/related-wods?${query.toString()}`);
+}
+

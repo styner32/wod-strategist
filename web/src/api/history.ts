@@ -373,4 +373,41 @@ export const historyApi = {
     api.get<VideoDownloadResponse>(
       `/video-download/${sessionId}?profile_id=${profileId}&kind=${kind}`,
     ),
+
+  getRelatedWods: (sessionId: string, profileId: number) =>
+    api.get<RelatedWODsResponse>(
+      `/related-wods?session_id=${encodeURIComponent(sessionId)}&profile_id=${profileId}`,
+    ),
 };
+
+export interface NormalizedMovement {
+  movement: string;
+  weight_raw?: string;
+  weight_kg?: number | null;
+  reps?: string;
+  is_main: boolean;
+}
+
+export interface RelatedWODItem {
+  session_id: string;
+  analysis_id: number;
+  created_at: string;
+  wod_description: string;
+  movement: NormalizedMovement;
+  session_score?: string;
+  score: number;
+  score_parts?: {
+    recency: number;
+    weight: number;
+    main: number;
+  };
+}
+
+export interface RelatedWODsResponse {
+  query: {
+    movement: string;
+    weight_kg?: number | null;
+    source_session_id: string;
+  };
+  related: RelatedWODItem[];
+}

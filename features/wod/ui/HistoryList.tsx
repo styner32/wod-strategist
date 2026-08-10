@@ -27,9 +27,11 @@ import {
   retryAnalysis,
   generateHardSub,
   archiveHistory,
+  fetchRelatedWods,
 } from "../api";
 import { AnalysisResult, HighlightResult, fetchAnalysisHistory } from "../history";
 import { HighlightVideoPlayer } from "./HighlightVideoPlayer";
+import { RelatedWodsCard } from "./RelatedWodsCard";
 
 /**
  * Extracts a human-readable label from session_id.
@@ -164,6 +166,27 @@ function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (i
         .catch(() => {});
     }
   }, [item.session_id, isCompleted, item.analysis_type]);
+
+  // Related WODs lazy fetch on first expansion
+  const [relatedWods, setRelatedWods] = useState<any[]>([]);
+  const [relatedFetched, setRelatedFetched] = useState(false);
+
+  useEffect(() => {
+    if (expanded && isCompleted && item.analysis_type === "wod" && !relatedFetched) {
+      setRelatedFetched(true);
+      fetchRelatedWods({
+        profileId: item.profile_id,
+        sessionId: item.session_id,
+        limit: 5,
+      })
+        .then((res) => {
+          if (res?.related) {
+            setRelatedWods(res.related);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [expanded, isCompleted, item.analysis_type, item.profile_id, item.session_id, relatedFetched]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -441,6 +464,8 @@ function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (i
                   </MarkdownText>
                 </View>
               )}
+
+              <RelatedWodsCard related={relatedWods} />
             </View>
           ) : (
             <Text style={[styles.previewText, { color: previewColor }]} numberOfLines={4}>

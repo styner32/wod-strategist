@@ -6,6 +6,8 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
+  AppStateStatus,
   Linking,
   Platform,
   StyleSheet,
@@ -22,6 +24,7 @@ import {
 } from "react-native-vision-camera";
 import { Video } from "react-native-compressor";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
+import { useIsFocused } from "@react-navigation/native";
 
 import { useBleHeartRate } from "@/features/health/useBleHeartRate";
 import {
@@ -74,6 +77,7 @@ export default function VisionTestPage() {
     zoomMode: zoomModeParam,
     aspectRatio: aspectRatioParam,
     wodDescription: wodDescriptionParam,
+    appearanceHints: appearanceHintsParam,
   } = useLocalSearchParams<{
     resolution?: string;
     movements?: string;
@@ -97,7 +101,7 @@ export default function VisionTestPage() {
   const zoomMode = zoomModeParam === 'true';
   const aspectRatio = (aspectRatioParam === '4:3' ? '4:3' : '16:9') as '4:3' | '16:9';
   const wodDescription = wodDescriptionParam || '';
-  const appearanceHints = searchParams.appearanceHints || undefined;
+  const appearanceHints = appearanceHintsParam || undefined;
 
   // Performance flags — default to power-saving on Android, full quality on iOS
   const showSkeleton = showSkeletonParam !== undefined
@@ -131,6 +135,10 @@ export default function VisionTestPage() {
   // FPS: honor lowFps toggle
   const targetFps = lowFps ? 24 : 30;
 
+  const isFocused = useIsFocused();
+  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+  const isCameraActive = isFocused && appState === 'active';
+
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
   const { width, height } = useWindowDimensions();
@@ -143,6 +151,7 @@ export default function VisionTestPage() {
   // Use a ref to track if we should continue recording chunks,
   // preventing stale state in closures/timeouts.
   const isRecordingChunks = useRef(false);
+  const isStartingRecording = useRef(false);
   const chunkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isChunkRecordingActive = useRef(false);
 
@@ -214,6 +223,7 @@ export default function VisionTestPage() {
     MediaLibrary.usePermissions();
 
   const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isMerging, setIsMerging] = useState(false);
   const [mergeChunkTotal, setMergeChunkTotal] = useState(0);
@@ -222,8 +232,32 @@ export default function VisionTestPage() {
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [chunkCount, setChunkCount] = useState(0);
 
-  // Elapsed timer for recording
+  // Elapsed timer for recording with Pause/Resume support
   const [elapsedMs, setElapsedMs] = useState(0);
+  const accumulatedMs = useRef(0);
+  const segmentStartTime = useRef(0);
+
+  // AppState change listener — auto-pause recording on background / app switch
+  const isRecordingRef = useRef(isRecording);
+  const isPausedRef = useRef(isPaused);
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+    isPausedRef.current = isPaused;
+  }, [isRecording, isPaused]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      console.log(`📱 AppState changed: ${nextAppState}`);
+      if (nextAppState === 'background' || nextAppState === 'inactive') {
+        if (isRecordingRef.current && !isPausedRef.current) {
+          console.log("📱 App backgrounded while recording — auto-pausing");
+          handlePauseRecording();
+        }
+      }
+      setAppState(nextAppState);
+    });
+    return () => subscription.remove();
+  }, []);
 
   const profileId = useProfileStore((s) => s.activeProfileId);
 
@@ -263,17 +297,17 @@ export default function VisionTestPage() {
     };
   }, [isRecording]);
 
-  // Elapsed timer — ticks every second during recording
+  // Elapsed timer — ticks every second during recording (only when active and not paused)
   useEffect(() => {
-    if (!isRecording) {
-      setElapsedMs(0);
+    if (!isRecording || isPaused) {
       return;
     }
     const tick = setInterval(() => {
-      setElapsedMs(Date.now() - recordingStartTime.current);
+      const currentSegment = segmentStartTime.current > 0 ? (Date.now() - segmentStartTime.current) : 0;
+      setElapsedMs(accumulatedMs.current + currentSegment);
     }, 1000);
     return () => clearInterval(tick);
-  }, [isRecording]);
+  }, [isRecording, isPaused]);
 
   // Shimmer animation for merging progress bar
   useEffect(() => {
@@ -605,7 +639,11 @@ export default function VisionTestPage() {
   // --- Main Recording Logic ---
 
   const handleStartRecording = async () => {
+    if (isRecording || isStartingRecording.current) return;
+    isStartingRecording.current = true;
+
     if (!profileId) {
+      isStartingRecording.current = false;
       Alert.alert(
         "Profile Required",
         "Please select a profile before recording.",
@@ -615,9 +653,16 @@ export default function VisionTestPage() {
     }
 
     try {
-      if (!camera.current) return;
+      if (!camera.current) {
+        isStartingRecording.current = false;
+        return;
+      }
 
       setIsRecording(true);
+      setIsPaused(false);
+      accumulatedMs.current = 0;
+      segmentStartTime.current = Date.now();
+      setElapsedMs(0);
       console.log("✅ Recording Started (Chunk Streaming)");
 
       // Compute session ID once for the entire recording session
@@ -641,7 +686,33 @@ export default function VisionTestPage() {
     } catch (error) {
       console.error("Recording Start Error:", error);
       Alert.alert("녹화 시작 실패", "녹화를 시작할 수 없습니다.");
+    } finally {
+      isStartingRecording.current = false;
     }
+  };
+
+  const handlePauseRecording = async () => {
+    if (!isRecording || isPaused) return;
+    console.log("⏸️ Pausing recording...");
+
+    if (segmentStartTime.current > 0) {
+      accumulatedMs.current += Date.now() - segmentStartTime.current;
+      segmentStartTime.current = 0;
+    }
+
+    setIsPaused(true);
+    await stopChunkRecording();
+    console.log("⏸️ Recording paused safely");
+  };
+
+  const handleResumeRecording = () => {
+    if (!isRecording || !isPaused) return;
+    console.log("▶️ Resuming recording...");
+
+    segmentStartTime.current = Date.now();
+    setIsPaused(false);
+    startChunkRecording();
+    console.log("▶️ Recording resumed");
   };
 
   const handleStopRecording = async () => {
@@ -650,10 +721,24 @@ export default function VisionTestPage() {
     try {
       setIsSaving(true);
 
-      // Stop chunk recording and wait for last chunk to arrive
-      await stopChunkRecording();
+      if (!isPaused && segmentStartTime.current > 0) {
+        accumulatedMs.current += Date.now() - segmentStartTime.current;
+      }
+      segmentStartTime.current = 0;
+
+      // Stop chunk recording if active and wait for last chunk to arrive
+      if (!isPaused) {
+        await stopChunkRecording();
+      } else {
+        isRecordingChunks.current = false;
+        if (chunkTimer.current) {
+          clearTimeout(chunkTimer.current);
+          chunkTimer.current = null;
+        }
+      }
 
       setIsRecording(false);
+      setIsPaused(false);
 
       // Stop debug telemetry and enqueue upload
       try {
@@ -856,7 +941,7 @@ export default function VisionTestPage() {
         ref={camera}
         style={StyleSheet.absoluteFill}
         device={device}
-        isActive={true}
+        isActive={isCameraActive}
         format={format}
         fps={targetFps}
         frameProcessor={frameProcessor}
@@ -914,7 +999,9 @@ export default function VisionTestPage() {
 
       <View style={[styles.dashboard, applyLandscapeStyles && styles.dashboardLandscape]}>
           <Text style={styles.dashTitle}>
-            {isRecording ? `${workoutTypeLabel} LIVE` : `${workoutTypeLabel} SETUP`}
+            {isRecording
+              ? (isPaused ? `${workoutTypeLabel} PAUSED` : `${workoutTypeLabel} LIVE`)
+              : `${workoutTypeLabel} SETUP`}
           </Text>
           <View style={styles.row}>
             <Text style={styles.label}>TYPE:</Text>
@@ -1053,22 +1140,57 @@ export default function VisionTestPage() {
             </View>
           </View>
         ) : (
-          /* Compact pill recording bar */
+          /* Compact pill recording bar with Pause / Resume / Stop */
           <View style={styles.pillBar}>
-            <TouchableOpacity
-              onPress={isRecording ? handleStopRecording : handleStartRecording}
-              style={[styles.pillRecordBtn, isRecording && styles.pillRecordBtnActive]}
-            >
-              <View
-                style={[styles.pillRecordInner, isRecording && styles.pillRecordInnerActive]}
-              />
-            </TouchableOpacity>
-            {isRecording && !applyLandscapeStyles && (
+            {!isRecording ? (
+              <TouchableOpacity
+                onPress={handleStartRecording}
+                style={styles.pillRecordBtn}
+              >
+                <View style={styles.pillRecordInner} />
+              </TouchableOpacity>
+            ) : (
               <>
+                {/* Pause / Resume Button */}
+                <TouchableOpacity
+                  onPress={isPaused ? handleResumeRecording : handlePauseRecording}
+                  style={[styles.pillActionBtn, isPaused ? styles.pillResumeBtn : styles.pillPauseBtn]}
+                >
+                  <IconSymbol
+                    name={isPaused ? "play.fill" : "pause.fill"}
+                    size={20}
+                    color="#fff"
+                  />
+                </TouchableOpacity>
+
                 <View style={styles.pillDivider} />
-                <Text style={styles.pillTimer}>{formatElapsed(elapsedMs)}</Text>
+
+                {/* Timer Display */}
+                <View style={styles.pillTimerContainer}>
+                  <Text style={[styles.pillTimer, isPaused && styles.pillTimerPaused]}>
+                    {formatElapsed(elapsedMs)}
+                  </Text>
+                  {isPaused && (
+                    <Text style={styles.pillPausedBadge}>PAUSED</Text>
+                  )}
+                </View>
+
+                {!applyLandscapeStyles && (
+                  <>
+                    <View style={styles.pillDivider} />
+                    <Text style={styles.pillChunks}>▌▌ {chunkCount}</Text>
+                  </>
+                )}
+
                 <View style={styles.pillDivider} />
-                <Text style={styles.pillChunks}>▌▌ {chunkCount}</Text>
+
+                {/* Stop Button */}
+                <TouchableOpacity
+                  onPress={handleStopRecording}
+                  style={styles.pillStopBtn}
+                >
+                  <IconSymbol name="square.fill" size={18} color="#FF453A" />
+                </TouchableOpacity>
               </>
             )}
           </View>
@@ -1237,33 +1359,62 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  pillRecordBtnActive: {
-    borderColor: '#FF453A',
-  },
   pillRecordInner: {
     width: 36,
     height: 36,
     borderRadius: 18,
     backgroundColor: '#FF453A',
   },
-  pillRecordInnerActive: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
+  pillActionBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pillPauseBtn: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  pillResumeBtn: {
+    backgroundColor: '#30D158',
+  },
+  pillStopBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(255, 69, 58, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FF453A',
   },
   pillDivider: {
     width: 1,
     height: 24,
     backgroundColor: '#444',
-    marginHorizontal: 10,
+    marginHorizontal: 8,
+  },
+  pillTimerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 60,
   },
   pillTimer: {
     color: '#fff',
     fontSize: 18,
     fontWeight: '700',
     fontFamily: 'monospace',
-    minWidth: 52,
     textAlign: 'center',
+  },
+  pillTimerPaused: {
+    color: '#FFD60A',
+  },
+  pillPausedBadge: {
+    color: '#FFD60A',
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 1,
+    marginTop: -2,
   },
   pillChunks: {
     color: '#888',

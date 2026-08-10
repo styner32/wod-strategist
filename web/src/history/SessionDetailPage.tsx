@@ -200,6 +200,13 @@ export function SessionDetailPage() {
     retry: false,
   });
 
+  const { data: relatedWodsData } = useQuery({
+    queryKey: ['related-wods', sessionId, analysis?.profile_id],
+    queryFn: () => historyApi.getRelatedWods(sessionId!, analysis!.profile_id),
+    enabled: !!sessionId && !!analysis?.profile_id && analysis?.status === 'COMPLETED',
+    retry: false,
+  });
+
   const currentFeedback = useMemo(() => {
     if (feedbackResponse !== undefined) return normalizeFeedback(feedbackResponse);
     return (sessionAnalysis?.feedback ?? []).filter(
@@ -998,6 +1005,34 @@ export function SessionDetailPage() {
                     {showAllHighlights ? 'Show Less' : 'Show More'}
                   </button>
                 )}
+              </section>
+            )}
+
+            {relatedWodsData?.related && relatedWodsData.related.length > 0 && (
+              <section className="rounded-xl border border-border bg-bg-elevated p-4">
+                <h2 className="text-lg font-semibold text-text-primary mb-3">Related Past WODs</h2>
+                <div className="space-y-2">
+                  {relatedWodsData.related.map((item) => (
+                    <Link
+                      key={item.session_id}
+                      to={`/sessions/${item.session_id}`}
+                      className="block rounded-lg border border-border bg-bg-secondary p-3 transition-colors hover:border-accent/40 hover:bg-bg-tertiary"
+                    >
+                      <div className="flex items-center justify-between text-xs text-text-muted mb-1">
+                        <span>{new Date(item.created_at).toLocaleDateString()}</span>
+                        <span className="font-semibold text-accent">
+                          {item.movement.movement}
+                          {item.movement.weight_raw ? ` · ${item.movement.weight_raw}` : ''}
+                        </span>
+                      </div>
+                      {item.wod_description && (
+                        <p className="text-xs text-text-secondary line-clamp-2 leading-relaxed">
+                          {item.wod_description}
+                        </p>
+                      )}
+                    </Link>
+                  ))}
+                </div>
               </section>
             )}
           </div>

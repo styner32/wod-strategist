@@ -82,7 +82,7 @@ function toProfile(res: ProfileResponse): Profile {
     weightKg: res.weight_kg,
     fitnessLevel: (res.fitness_level as FitnessLevel) || 'intermediate',
     injuries: res.injuries ?? [],
-    appearance: res.appearance,
+    appearance: typeof res.appearance === "string" ? res.appearance : (res.appearance ? JSON.stringify(res.appearance) : undefined),
   };
 }
 

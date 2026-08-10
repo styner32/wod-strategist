@@ -35,6 +35,9 @@ const MAPPING = {
   'dumbbell.fill': 'fitness-center',
   'camera.fill': 'camera-alt',
   'photo.fill': 'photo-library',
+  'play.fill': 'play-arrow',
+  'pause.fill': 'pause',
+  'square.fill': 'stop',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**

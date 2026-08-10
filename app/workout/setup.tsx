@@ -1,6 +1,7 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { t } from '@/features/i18n';
-import { fetchMovementGroups, parseWorkoutImage, type MovementGroup } from '@/features/wod/api';
+import { fetchMovementGroups, parseWorkoutImage, fetchRelatedWods, type MovementGroup } from '@/features/wod/api';
+import { RelatedWodsCard } from '@/features/wod/ui/RelatedWodsCard';
 import { WORKOUT_TYPES, type WorkoutType } from '@/features/wod/workoutType';
 import { useActiveProfile } from '@/store/useProfileStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -123,6 +124,68 @@ export default function WorkoutSetup() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Related WODs anchor derivation & fetch
+  const anchorInfo = useMemo(() => {
+    if (selectedMovements.length > 0) {
+      return { movement: selectedMovements[0], weightKg: undefined };
+    }
+    if (wodDescription) {
+      const catalogMovements = movementGroups.flatMap((g) => g.movements);
+      const descLower = wodDescription.toLowerCase();
+      const matches = catalogMovements.filter((m) =>
+        descLower.includes(m.toLowerCase())
+      );
+      if (matches.length > 0) {
+        matches.sort((a, b) => b.length - a.length);
+        const chosen = matches[0];
+        let weightKg: number | undefined;
+        const weightRegex = /(\d+(?:\.\d+)?)\s*(kg|lb)/i;
+        const weightMatch = wodDescription.match(weightRegex);
+        if (weightMatch) {
+          const val = parseFloat(weightMatch[1]);
+          const unit = weightMatch[2].toLowerCase();
+          if (unit === "lb") {
+            weightKg = Math.round(val * 0.45359237 * 10) / 10;
+          } else {
+            weightKg = val;
+          }
+        }
+        return { movement: chosen, weightKg };
+      }
+    }
+    return null;
+  }, [selectedMovements, wodDescription, movementGroups]);
+
+  const [relatedWods, setRelatedWods] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (currentStep !== "confirm" || !activeProfile || !anchorInfo?.movement) {
+      setRelatedWods([]);
+      return;
+    }
+
+    let isMounted = true;
+    fetchRelatedWods({
+      profileId: activeProfile.id,
+      movement: anchorInfo.movement,
+      weightKg: anchorInfo.weightKg,
+      limit: 5,
+    })
+      .then((res) => {
+        if (isMounted && res?.related) {
+          setRelatedWods(res.related);
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to fetch related WODs:", err);
+        if (isMounted) setRelatedWods([]);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentStep, activeProfile?.id, anchorInfo]);
+
   // Derive category filter tabs (include "Custom" when custom movements exist)
   const categoryTabs = useMemo(() => {
     const cats = movementGroups.map(g => g.category);
@@ -240,35 +303,42 @@ export default function WorkoutSetup() {
   const handleNext = () => setCurrentStep('confirm');
 
   const [sessionAppearance, setSessionAppearance] = useState('');
+  const [isStarting, setIsStarting] = useState(false);
 
   const handleStart = async () => {
+    if (isStarting) return;
+    setIsStarting(true);
     try {
-      await AsyncStorage.setItem(VIDEO_PREFS_KEY, JSON.stringify(videoPrefs));
-    } catch (e) {
-      console.warn('Failed to persist video prefs:', e);
-    }
-    const injuries = activeProfile?.injuries ?? [];
-    const appearanceHints = sessionAppearance.trim();
+      try {
+        await AsyncStorage.setItem(VIDEO_PREFS_KEY, JSON.stringify(videoPrefs));
+      } catch (e) {
+        console.warn('Failed to persist video prefs:', e);
+      }
+      const injuries = activeProfile?.injuries ?? [];
+      const appearanceHints = sessionAppearance.trim();
 
-    router.push({
-      pathname: '/workout/visionTestPage',
-      params: {
-        resolution: videoPrefs.resolution,
-        workoutType,
-        movements: selectedMovements.join(', '),
-        injuries: injuries.join(', '),
-        wodDescription: wodDescription.trim(),
-        ...(appearanceHints ? { appearanceHints } : {}),
-        autoRecord: videoPrefs.autoRecord ? 'true' : 'false',
-        showSkeleton: videoPrefs.showSkeleton ? 'true' : 'false',
-        lowFps: videoPrefs.lowFps ? 'true' : 'false',
-        skipCompression: videoPrefs.skipCompression ? 'true' : 'false',
-        serialUpload: videoPrefs.serialUpload ? 'true' : 'false',
-        landscapeMode: videoPrefs.landscapeMode ? 'true' : 'false',
-        zoomMode: videoPrefs.zoomMode ? 'true' : 'false',
-        aspectRatio: videoPrefs.aspectRatio,
-      },
-    });
+      router.push({
+        pathname: '/workout/visionTestPage',
+        params: {
+          resolution: videoPrefs.resolution,
+          workoutType,
+          movements: selectedMovements.join(', '),
+          injuries: injuries.join(', '),
+          wodDescription: wodDescription.trim(),
+          ...(appearanceHints ? { appearanceHints } : {}),
+          autoRecord: videoPrefs.autoRecord ? 'true' : 'false',
+          showSkeleton: videoPrefs.showSkeleton ? 'true' : 'false',
+          lowFps: videoPrefs.lowFps ? 'true' : 'false',
+          skipCompression: videoPrefs.skipCompression ? 'true' : 'false',
+          serialUpload: videoPrefs.serialUpload ? 'true' : 'false',
+          landscapeMode: videoPrefs.landscapeMode ? 'true' : 'false',
+          zoomMode: videoPrefs.zoomMode ? 'true' : 'false',
+          aspectRatio: videoPrefs.aspectRatio,
+        },
+      });
+    } finally {
+      setTimeout(() => setIsStarting(false), 1500);
+    }
   };
 
   const handlePreview = () => {
@@ -421,6 +491,7 @@ export default function WorkoutSetup() {
               onChangeText={setSessionAppearance}
             />
           </View>
+          <RelatedWodsCard related={relatedWods} />
           <TouchableOpacity style={styles.advancedHeader} onPress={() => setAdvancedExpanded(!advancedExpanded)}><Text style={styles.advancedHeaderText}>{t('setup.advancedOptions')}</Text><Text style={styles.advancedChevron}>{advancedExpanded ? '▼' : '▶'}</Text></TouchableOpacity>
           {advancedExpanded && (
             <View style={styles.advancedSection}>
@@ -431,7 +502,7 @@ export default function WorkoutSetup() {
           )}
         </ScrollView>
         <View style={styles.bottomBar}>
-          <TouchableOpacity style={styles.startBtn} onPress={handleStart}><Text style={styles.startText}>{t('setup.startWorkout')}</Text></TouchableOpacity>
+          <TouchableOpacity style={[styles.startBtn, isStarting && { opacity: 0.6 }]} onPress={handleStart} disabled={isStarting}><Text style={styles.startText}>{t('setup.startWorkout')}</Text></TouchableOpacity>
           <TouchableOpacity style={styles.previewBtn} onPress={handlePreview}><IconSymbol name="eye" size={18} color="#00E5FF" /><Text style={styles.previewBtnText}>{t('setup.previewCamera')}</Text></TouchableOpacity>
         </View>
       </>)}

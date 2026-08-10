@@ -352,5 +352,11 @@
     "loggingOut": "Logging out...",
     "noAccount": "Don't have an account?",
     "haveAccount": "Already have an account?"
+  },
+  "relatedWods": {
+    "title": "Related Past WODs",
+    "mainBadge": "MAIN",
+    "noHistory": "No previous analysis records found for this movement.",
+    "score": "Score"
   }
 }
