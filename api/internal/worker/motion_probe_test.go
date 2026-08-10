@@ -9,7 +9,7 @@ import (
 
 func TestProbeMotionScoreDirect(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available")
+		t.Fatalf("ffmpeg is required for motion probe tests but was not found in PATH: %v", err)
 	}
 
 	// 1. Create a static video (pure black)
@@ -21,7 +21,7 @@ func TestProbeMotionScoreDirect(t *testing.T) {
 		"-y", staticPath,
 	)
 	if output, err := cmdStatic.CombinedOutput(); err != nil {
-		t.Fatalf("Failed to create static video: %s: %v", output, err)
+		t.Fatalf("Failed to create static video with ffmpeg: %s: %v", string(output), err)
 	}
 
 	// 2. Create a dynamic video (testsrc with moving patterns)
@@ -33,7 +33,7 @@ func TestProbeMotionScoreDirect(t *testing.T) {
 		"-y", dynamicPath,
 	)
 	if output, err := cmdDynamic.CombinedOutput(); err != nil {
-		t.Fatalf("Failed to create dynamic video: %s: %v", output, err)
+		t.Fatalf("Failed to create dynamic video with ffmpeg: %s: %v", string(output), err)
 	}
 
 	// 3. Probe motion scores

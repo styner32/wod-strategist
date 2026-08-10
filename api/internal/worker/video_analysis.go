@@ -651,6 +651,11 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.String("session_id", p.SessionID),
 		zap.String("session_score", sessionScore))
 
+	normalizedWorkout := ""
+	if (p.WorkoutType == "" || p.WorkoutType == WorkoutTypeWOD) && strings.TrimSpace(p.WODDescription) != "" {
+		normalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements)
+	}
+
 	expiresAt := uploadTime.Add(47 * time.Hour)
 	result := &db.AnalysisResult{
 		SessionID:           p.SessionID,
@@ -660,6 +665,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		HighlightSegments:   highlightSegments,
 		WODDescription:      p.WODDescription,
 		SessionScore:        sessionScore,
+		NormalizedWorkout:   normalizedWorkout,
 		AvailableVideos:     db.CommaStringArray{"merged"},
 		GeminiFileURI:       upload.FileURI,
 		GeminiFileName:      upload.FileName,
@@ -1187,12 +1193,19 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		highlightSegments = MarshalHighlightSegments(normalizedHighlights)
 	}
 
+	legacyNormalizedWorkout := ""
+	if (p.WorkoutType == "" || p.WorkoutType == WorkoutTypeWOD) && strings.TrimSpace(p.WODDescription) != "" {
+		legacyNormalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements)
+	}
+
 	result := &db.AnalysisResult{
 		SessionID:         p.SessionID,
 		Status:            "COMPLETED",
 		Output:            analysis,
 		AnalysisType:      db.AnalysisTypeWOD,
 		HighlightSegments: highlightSegments,
+		WODDescription:    p.WODDescription,
+		NormalizedWorkout: legacyNormalizedWorkout,
 		AvailableVideos:   db.CommaStringArray{"merged"},
 	}
 	result.ProfileID = p.ProfileID

@@ -25,6 +25,12 @@ type Expectation struct {
 
 	isMatched      bool
 	MismatchReason string
+	Optional       bool
+}
+
+func (e *Expectation) SetOptional() *Expectation {
+	e.Optional = true
+	return e
 }
 
 type CapturedRequest struct {
@@ -178,7 +184,7 @@ func (t *MockTransport) Verify() error {
 
 	var unmatched []string
 	for _, exp := range t.Expectations {
-		if exp.isMatched {
+		if exp.isMatched || exp.Optional {
 			continue
 		}
 

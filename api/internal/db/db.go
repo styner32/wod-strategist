@@ -103,10 +103,19 @@ type AnalysisResult struct {
 	// Schema: {"overall":74,"form":68,"intensity":82,"consistency":72,"movements":{},"summary":"..."}
 	// Used to inject historical performance context into future analysis prompts.
 	SessionScore        string           `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
+	NormalizedWorkout   string           `json:"normalized_workout,omitempty"`
 	AvailableVideos     CommaStringArray `gorm:"column:available_videos;type:text;not null;default:'merged'" json:"available_videos"`
 	ArchivedAt          *time.Time       `json:"archived_at,omitempty"`
 	CreatedAt           time.Time        `json:"created_at"`
 	UpdatedAt           time.Time        `json:"updated_at"`
+}
+
+type NormalizedMovement struct {
+	Movement string   `json:"movement"`
+	WeightRaw string   `json:"weight_raw,omitempty"`
+	WeightKG *float64 `json:"weight_kg,omitempty"`
+	Reps     string   `json:"reps,omitempty"`
+	IsMain   bool     `json:"is_main"`
 }
 
 type HighlightResult struct {

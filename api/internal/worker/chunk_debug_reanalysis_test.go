@@ -288,7 +288,7 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 
 		var analyzeBody map[string]any
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(request.URL, ":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
 				Expect(json.Unmarshal(request.Body, &analyzeBody)).To(Succeed())
 			}
 		}
@@ -384,7 +384,7 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 
 		var promptBody map[string]any
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(request.URL, ":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
 				Expect(json.Unmarshal(request.Body, &promptBody)).To(Succeed())
 			}
 		}
@@ -548,7 +548,7 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 
 		var analyzeBody map[string]any
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(request.URL, ":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
 				Expect(json.Unmarshal(request.Body, &analyzeBody)).To(Succeed())
 			}
 		}

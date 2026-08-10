@@ -84,7 +84,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/chunks/:chunk_id/reanalyses"
 		router.ServeHTTP(response, req)
 
 		Expect(response.Code).To(Equal(http.StatusBadRequest))
-		Expect(response.Body.String()).To(ContainSubstring("only client_request_id is allowed"))
+		Expect(response.Body.String()).To(ContainSubstring("invalid request body"))
 		var count int64
 		Expect(dbConn.Model(&db.ChunkReanalysisRun{}).Count(&count).Error).To(Succeed())
 		Expect(count).To(BeZero())

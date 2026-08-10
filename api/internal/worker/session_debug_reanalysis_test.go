@@ -152,7 +152,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 
 		var prompt string
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(request.URL, ":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
 				prompt = string(request.Body)
 			}
 		}

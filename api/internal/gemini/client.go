@@ -829,3 +829,35 @@ func (c *Client) ParseImage(ctx context.Context, imageBytes []byte, mimeType str
 	c.logger.Info("Image parsed", zap.Int("response_length", len(result)))
 	return result, usage, nil
 }
+
+// ParseText sends a text prompt to the Flash model and returns the raw text response.
+func (c *Client) ParseText(ctx context.Context, prompt string) (string, *TokenUsage, error) {
+	c.logger.Info("Parsing text with Flash",
+		zap.String("model", flashModel),
+		zap.Int("prompt_length", len(prompt)))
+
+	resp, err := c.client.Models.GenerateContent(ctx, flashModel, []*genai.Content{{
+		Role: genai.RoleUser,
+		Parts: []*genai.Part{
+			genai.NewPartFromText(prompt),
+		},
+	}}, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to parse text: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", nil, fmt.Errorf("no content from text parsing")
+	}
+
+	usage := extractTokenUsage(resp, flashModel)
+
+	var result string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		result += part.Text
+	}
+
+	c.logger.Info("Text parsed", zap.Int("response_length", len(result)))
+	return result, usage, nil
+}
+

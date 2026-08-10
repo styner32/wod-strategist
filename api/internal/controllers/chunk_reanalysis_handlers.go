@@ -190,7 +190,6 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 		SourceContextSnapshot:      db.JSONDocument(`{}`),
 		OriginalPredictionSnapshot: db.JSONDocument(originalSnapshot),
 		StructuredCandidate:        db.JSONDocument(`{}`),
-		Model:                      strings.TrimSpace(req.Model),
 	}
 	idempotentExisting := false
 	createErr := ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {

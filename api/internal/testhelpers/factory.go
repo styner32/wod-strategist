@@ -13,6 +13,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func InitDB() (*gorm.DB, error) {
@@ -21,7 +22,14 @@ func InitDB() (*gorm.DB, error) {
 		dsn = "postgresql://sunjinlee@localhost:5432/wod_test?sslmode=disable"
 	}
 
-	gdb, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	gormConfig := &gorm.Config{}
+	if os.Getenv("SHOW_LOG") == "true" || os.Getenv("SHOW_SQL_LOG") == "true" {
+		gormConfig.Logger = gormlogger.Default.LogMode(gormlogger.Info)
+	} else {
+		gormConfig.Logger = gormlogger.Discard
+	}
+
+	gdb, err := gorm.Open(postgres.Open(dsn), gormConfig)
 	if err != nil {
 		return nil, fmt.Errorf("testDB: open: %w", err)
 	}
@@ -135,12 +143,20 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 		HighlightSegments:   resultAttr.HighlightSegments,
 		WODDescription:      resultAttr.WODDescription,
 		SessionScore:        resultAttr.SessionScore,
+		NormalizedWorkout:   resultAttr.NormalizedWorkout,
+		ArchivedAt:          resultAttr.ArchivedAt,
 	}
 	if result.AnalysisType == "" {
 		result.AnalysisType = db.AnalysisTypeWOD
 	}
 
 	g.Expect(dbConn.Create(&result).Error).NotTo(g.HaveOccurred())
+
+	if !resultAttr.CreatedAt.IsZero() {
+		g.Expect(dbConn.Model(&result).UpdateColumn("created_at", resultAttr.CreatedAt).Error).NotTo(g.HaveOccurred())
+		result.CreatedAt = resultAttr.CreatedAt
+	}
+
 	return result
 }
 

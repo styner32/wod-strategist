@@ -93,6 +93,7 @@ func SetupRouter(appEnv string, allowedOrigins []string,
 	protected.POST("/generate-hardsub", ctl.GenerateHardSub)
 	protected.POST("/debug/telemetry", ctl.UploadDebugTelemetry)
 	protected.POST("/parse-workout-image", ctl.ParseWorkoutImage)
+	protected.GET("/related-wods", ctl.GetRelatedWODs)
 	protected.POST("/appearance-from-image", ctl.ParseAppearanceImage)
 	protected.POST("/sessions", ctl.CreateSession)
 	protected.GET("/sessions/:session_id/analysis", ctl.GetSessionAnalysis)

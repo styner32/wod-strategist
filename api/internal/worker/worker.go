@@ -115,6 +115,9 @@ type GeminiClient interface {
 	// Lightweight Flash model query (e.g. verification)
 	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 
+	// Text parsing
+	ParseText(ctx context.Context, prompt string) (string, *gemini.TokenUsage, error)
+
 	// TTS: generate speech audio from text using gemini-3.1-flash-tts-preview.
 	// Writes a WAV file (24kHz, 16-bit mono) to outputPath.
 	GenerateSpeech(ctx context.Context, text, voiceName, outputPath string) (*gemini.TokenUsage, error)
