@@ -21,6 +21,7 @@ import {
   useCameraDevice,
   useCameraFormat,
   useCameraPermission,
+  useMicrophonePermission,
 } from "react-native-vision-camera";
 import { Video } from "react-native-compressor";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
@@ -141,6 +142,8 @@ export default function VisionTestPage() {
 
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
+  const { hasPermission: hasMicPermission, requestPermission: requestMicPermission } =
+    useMicrophonePermission();
   const { width, height } = useWindowDimensions();
   const isLandscapeLayout = width > height;
   // On Android, landscape mode keeps portrait but user mounts phone sideways.
@@ -357,8 +360,9 @@ export default function VisionTestPage() {
 
   useEffect(() => {
     if (!hasPermission) requestPermission();
+    if (!hasMicPermission) requestMicPermission();
     if (!mediaPermission?.granted) requestMediaPermission();
-  }, [hasPermission, mediaPermission, requestMediaPermission, requestPermission]);
+  }, [hasPermission, hasMicPermission, mediaPermission, requestMediaPermission, requestMicPermission, requestPermission]);
 
   // Auto-start recording when navigated from setup with autoRecord
   const hasAutoStarted = useRef(false);
@@ -886,20 +890,27 @@ export default function VisionTestPage() {
     }
   };
 
-  if (!hasPermission) {
+  if (!hasPermission || !hasMicPermission) {
     return (
       <View style={styles.center}>
         <Text style={{ color: "#fff", fontSize: 18, marginBottom: 16 }}>
-          Camera Permission Required
+          Camera & Microphone Permission Required
         </Text>
         <TouchableOpacity
           onPress={async () => {
-            const result = await requestPermission();
-            if (!result) {
+            let cameraRes = hasPermission;
+            if (!hasPermission) {
+              cameraRes = await requestPermission();
+            }
+            let micRes = hasMicPermission;
+            if (!hasMicPermission) {
+              micRes = await requestMicPermission();
+            }
+            if (!cameraRes || !micRes) {
               // Permission permanently denied — direct to settings
               Alert.alert(
                 "Permission Denied",
-                "Camera permission was permanently denied. Please enable it in Settings.",
+                "Camera or Microphone permission was permanently denied. Please enable them in Settings.",
                 [
                   { text: "Cancel", style: "cancel" },
                   { text: "Open Settings", onPress: () => Linking.openSettings() },
@@ -915,7 +926,7 @@ export default function VisionTestPage() {
           }}
         >
           <Text style={{ color: "#000", fontWeight: "bold", fontSize: 16 }}>
-            Grant Camera Access
+            Grant Camera & Microphone Access
           </Text>
         </TouchableOpacity>
       </View>
@@ -947,7 +958,7 @@ export default function VisionTestPage() {
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
         video={true}
-        audio={false}
+        audio={hasMicPermission}
         zoom={zoomMode ? 0.1 : 0}
         onInitialized={() => setIsCameraReady(true)}
         onError={(error) => {

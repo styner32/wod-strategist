@@ -10,6 +10,7 @@ import {
   type FeedbackListResponse,
   type ReanalysisListResponse,
   type ReanalysisStatus,
+  type StretchRecommendation,
   type VideoKind,
 } from '../api/history';
 import { ApiError } from '../api/client';
@@ -167,6 +168,18 @@ export function SessionDetailPage() {
   });
 
   const analysis = sessionAnalysis?.analysis ?? analyses?.[0];
+
+  const stretchRecommendations = useMemo<StretchRecommendation[]>(() => {
+    if (!analysis?.stretch_recommendations) return [];
+    try {
+      const parsed = typeof analysis.stretch_recommendations === 'string'
+        ? JSON.parse(analysis.stretch_recommendations)
+        : analysis.stretch_recommendations;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [analysis?.stretch_recommendations]);
 
   const { data: legacyChunks } = useQuery({
     queryKey: ['chunks', sessionId],
@@ -1005,6 +1018,48 @@ export function SessionDetailPage() {
                     {showAllHighlights ? 'Show Less' : 'Show More'}
                   </button>
                 )}
+              </section>
+            )}
+
+            {stretchRecommendations.length > 0 && (
+              <section className="rounded-xl border border-border bg-bg-elevated p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-lg font-semibold text-text-primary">Stretch Recommendations</h2>
+                  <span className="text-xs text-text-muted">Flexibility & Recovery</span>
+                </div>
+                <div className="space-y-3">
+                  {stretchRecommendations.map((rec, idx) => (
+                    <div
+                      key={`${rec.stretch}-${idx}`}
+                      className="rounded-lg border border-border bg-bg-secondary p-3 transition-colors"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-accent text-sm">{rec.stretch}</span>
+                          <span className="rounded bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
+                            {rec.target_area}
+                          </span>
+                        </div>
+                        {rec.provisional && (
+                          <span className="rounded bg-yellow-500/20 text-yellow-400 px-2 py-0.5 text-[10px] font-medium">
+                            Provisional
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-text-primary leading-relaxed mt-1">{rec.reason}</p>
+                      {rec.duration_hint && (
+                        <p className="text-[11px] text-text-muted mt-1.5 flex items-center gap-1">
+                          <span>⏱️</span> {rec.duration_hint}
+                        </p>
+                      )}
+                      {rec.caution && (
+                        <p className="text-[11px] text-amber-400 mt-1 flex items-center gap-1">
+                          <span>⚠️</span> {rec.caution}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </section>
             )}
 

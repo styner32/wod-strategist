@@ -358,5 +358,9 @@
     "mainBadge": "MAIN",
     "noHistory": "No previous analysis records found for this movement.",
     "score": "Score"
+  },
+  "stretchRecs": {
+    "title": "Stretch Recommendations",
+    "provisional": "Provisional"
   }
 }

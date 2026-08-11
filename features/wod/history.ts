@@ -9,6 +9,8 @@ export interface AnalysisResult {
   output: string;
   injury_output?: string;
   highlight_segments?: string;
+  mobility_observations?: string;
+  stretch_recommendations?: string;
   available_videos?: string[]; // ["merged", "hardsubbed", "encoded"]
   created_at: string;
   updated_at: string;

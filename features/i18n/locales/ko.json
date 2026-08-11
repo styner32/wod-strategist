@@ -358,5 +358,9 @@
     "mainBadge": "MAIN",
     "noHistory": "동일 동작의 이전 분석 기록이 없습니다.",
     "score": "점수"
+  },
+  "stretchRecs": {
+    "title": "맞춤 스트레칭 추천",
+    "provisional": "임시 (추이 관찰)"
   }
 }

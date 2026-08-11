@@ -32,6 +32,7 @@ import {
 import { AnalysisResult, HighlightResult, fetchAnalysisHistory } from "../history";
 import { HighlightVideoPlayer } from "./HighlightVideoPlayer";
 import { RelatedWodsCard } from "./RelatedWodsCard";
+import { StretchRecommendationsCard, StretchRecommendationItem } from "./StretchRecommendationsCard";
 
 /**
  * Extracts a human-readable label from session_id.
@@ -187,6 +188,18 @@ function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (i
         .catch(() => {});
     }
   }, [expanded, isCompleted, item.analysis_type, item.profile_id, item.session_id, relatedFetched]);
+
+  const stretchRecommendations = useMemo<StretchRecommendationItem[]>(() => {
+    if (!item.stretch_recommendations) return [];
+    try {
+      const parsed = typeof item.stretch_recommendations === "string"
+        ? JSON.parse(item.stretch_recommendations)
+        : item.stretch_recommendations;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [item.stretch_recommendations]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -465,6 +478,7 @@ function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (i
                 </View>
               )}
 
+              <StretchRecommendationsCard recommendations={stretchRecommendations} />
               <RelatedWodsCard related={relatedWods} />
             </View>
           ) : (

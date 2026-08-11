@@ -1,5 +1,14 @@
 import { api } from './client';
 
+export interface StretchRecommendation {
+  stretch: string;
+  target_area: string;
+  reason: string;
+  duration_hint?: string;
+  caution?: string;
+  provisional?: boolean;
+}
+
 export interface AnalysisResult {
   id: number;
   session_id: string;
@@ -8,6 +17,8 @@ export interface AnalysisResult {
   workout_type: string;
   output: string;
   highlight_segments?: string;
+  mobility_observations?: string;
+  stretch_recommendations?: string;
   created_at: string;
   updated_at: string;
   archived_at: string | null;

@@ -18,6 +18,7 @@
       "infoPlist": {
         "NSCameraUsageDescription": "AI 코칭을 위해 사용자의 움직임을 분석합니다.",
         "NSMicrophoneUsageDescription": "운동 영상 녹화를 위해 마이크를 사용합니다.",
+        "NSLocationWhenInUseUsageDescription": "주변 블루투스 기기(심박계) 검색 및 연결을 위해 위치 권한이 필요합니다.",
         "NSHealthShareUsageDescription": "운동 중 심박수를 모니터링하기 위해 건강 데이터에 접근합니다.",
         "NSHealthUpdateUsageDescription": "운동 데이터를 건강 앱에 저장합니다.",
         "NSPhotoLibraryUsageDescription": "사용자가 사진을 선택할 수 있도록 갤러리 접근이 필요합니다.",
@@ -33,7 +34,8 @@
     "android": {
       "package": "com.sunjinlee.wodstrategist",
       "permissions": [
-        "CAMERA"
+        "CAMERA",
+        "RECORD_AUDIO"
       ],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -118,8 +120,7 @@
         {
           "photosPermission": "운동 영상을 저장하기 위해 사진 라이브러리에 접근합니다.",
           "cameraPermission": "AI 코칭을 위해 사용자의 움직임을 분석합니다.",
-          "//": "Disables the microphone permission",
-          "microphonePermission": false
+          "microphonePermission": "운동 영상 녹화를 위해 마이크를 사용합니다."
         }
       ],
       "expo-font",
