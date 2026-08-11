@@ -142,12 +142,20 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 		GeminiFileExpiresAt: resultAttr.GeminiFileExpiresAt,
 		HighlightSegments:   resultAttr.HighlightSegments,
 		WODDescription:      resultAttr.WODDescription,
-		SessionScore:        resultAttr.SessionScore,
-		NormalizedWorkout:   resultAttr.NormalizedWorkout,
-		ArchivedAt:          resultAttr.ArchivedAt,
+		SessionScore:           resultAttr.SessionScore,
+		NormalizedWorkout:      resultAttr.NormalizedWorkout,
+		MobilityObservations:   resultAttr.MobilityObservations,
+		StretchRecommendations: resultAttr.StretchRecommendations,
+		ArchivedAt:              resultAttr.ArchivedAt,
 	}
 	if result.AnalysisType == "" {
 		result.AnalysisType = db.AnalysisTypeWOD
+	}
+	if result.MobilityObservations == "" {
+		result.MobilityObservations = "[]"
+	}
+	if result.StretchRecommendations == "" {
+		result.StretchRecommendations = "[]"
 	}
 
 	g.Expect(dbConn.Create(&result).Error).NotTo(g.HaveOccurred())

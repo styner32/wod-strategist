@@ -154,7 +154,7 @@ type recentScoreRow struct {
 	wodDesc     string
 	overall     int
 	form        int
-	intensity   int
+	intensity   string
 	consistency int
 }
 
@@ -166,13 +166,20 @@ func (w *Worker) buildHistoryContext(profileID uint, limit int) string {
 		return ""
 	}
 
-	var results []db.AnalysisResult
-	err := w.DB.
-		Where("profile_id = ? AND status = ? AND archived_at IS NULL AND session_score != '{}'",
+	type historyQueryRow struct {
+		db.AnalysisResult
+		WorkoutType string `gorm:"column:workout_type"`
+	}
+
+	var results []historyQueryRow
+	err := w.DB.Table("analysis_results").
+		Select("analysis_results.*, sessions.workout_type").
+		Joins("LEFT JOIN sessions ON analysis_results.session_id = sessions.session_id").
+		Where("analysis_results.profile_id = ? AND analysis_results.status = ? AND analysis_results.archived_at IS NULL AND analysis_results.session_score != '{}'",
 			profileID, "COMPLETED").
-		Order("created_at DESC").
+		Order("analysis_results.created_at DESC").
 		Limit(limit).
-		Find(&results).Error
+		Scan(&results).Error
 	if err != nil || len(results) == 0 {
 		return ""
 	}
@@ -191,15 +198,25 @@ func (w *Worker) buildHistoryContext(profileID uint, limit int) string {
 		if wod == "" {
 			wod = "WOD"
 		}
+		normType := NormalizeWorkoutType(r.WorkoutType)
+		if normType == WorkoutTypeWarmup {
+			wod = "[웜업] " + wod
+		} else if normType == WorkoutTypeCooldown {
+			wod = "[쿨다운] " + wod
+		}
 		if len(wod) > 20 {
 			wod = wod[:20] + "…"
+		}
+		intensityStr := fmt.Sprintf("%d", score.Intensity)
+		if IsRecoveryWorkoutType(r.WorkoutType) {
+			intensityStr = "-"
 		}
 		rows = append(rows, recentScoreRow{
 			date:        date,
 			wodDesc:     wod,
 			overall:     score.Overall,
 			form:        score.Form,
-			intensity:   score.Intensity,
+			intensity:   intensityStr,
 			consistency: score.Consistency,
 		})
 	}
@@ -213,7 +230,7 @@ func (w *Worker) buildHistoryContext(profileID uint, limit int) string {
 	sb.WriteString("| 날짜 | WOD | 종합 | 자세 | 강도 | 일관성 |\n")
 	sb.WriteString("|------|-----|:----:|:----:|:----:|:------:|\n")
 	for _, row := range rows {
-		sb.WriteString(fmt.Sprintf("| %s | %s | %d | %d | %d | %d |\n",
+		sb.WriteString(fmt.Sprintf("| %s | %s | %d | %d | %s | %d |\n",
 			row.date, row.wodDesc, row.overall, row.form, row.intensity, row.consistency))
 	}
 	sb.WriteString("\n이 점수들을 참고하여 오늘 세션과 비교 분석하세요. 단, 오늘 점수는 절대 기준으로 새로 산정하세요.\n")

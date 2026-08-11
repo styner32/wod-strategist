@@ -988,7 +988,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			MediaEndSecs:    &walkingEnd,
 		}).Error).NotTo(HaveOccurred())
 
-		segments := w.buildSegmentsFromChunks("sess-media-timeline-001")
+		segments := w.buildSegmentsFromChunks("sess-media-timeline-001", WorkoutTypeWOD)
 		Expect(segments).To(Equal([]Segment{{
 			Start:       "0:12.25",
 			End:         "0:22.75",

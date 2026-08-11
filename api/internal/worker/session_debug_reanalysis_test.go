@@ -280,7 +280,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 
 		segments, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, []sessionDebugCorrection{{
 			ChunkID: chunk.ID, MovementName: "Unknown",
-		}})
+		}}, WorkoutTypeWOD)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(segments).To(HaveLen(1))
 		Expect(segments[0].Type).To(Equal("Unknown"))

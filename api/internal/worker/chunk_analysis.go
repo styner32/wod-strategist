@@ -568,9 +568,12 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 	prompt := baseChunkAnalysisPrompt()
 
-	// Inject fitness-level-specific coaching policy
-	fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
-	prompt += levelPolicyForFitnessLevel(fitnessLevel)
+	if IsRecoveryWorkoutType(p.WorkoutType) {
+		prompt += RecoveryChunkPolicyPrompt
+	} else {
+		fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
+		prompt += levelPolicyForFitnessLevel(fitnessLevel)
+	}
 
 	// Inject WOD descriptor as planning context, never as visual proof.
 	if wod := buildWODContext(p.WODDescription); wod != "" {
@@ -600,9 +603,12 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionPayload, profile *db.Profile, session *db.Session) string {
 	prompt := baseChunkAnalysisPrompt()
 
-	// Inject fitness-level-specific coaching policy
-	fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
-	prompt += levelPolicyForFitnessLevel(fitnessLevel)
+	if session != nil && IsRecoveryWorkoutType(session.WorkoutType) {
+		prompt += RecoveryChunkPolicyPrompt
+	} else {
+		fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
+		prompt += levelPolicyForFitnessLevel(fitnessLevel)
+	}
 
 	if wod := buildWODContext(session.WODDescription); wod != "" {
 		prompt += wod

@@ -102,9 +102,11 @@ type AnalysisResult struct {
 	// SessionScore is a compact JSON blob of per-dimension scores (0–100) produced at analysis time.
 	// Schema: {"overall":74,"form":68,"intensity":82,"consistency":72,"movements":{},"summary":"..."}
 	// Used to inject historical performance context into future analysis prompts.
-	SessionScore        string           `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
-	NormalizedWorkout   string           `json:"normalized_workout,omitempty"`
-	AvailableVideos     CommaStringArray `gorm:"column:available_videos;type:text;not null;default:'merged'" json:"available_videos"`
+	SessionScore           string           `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
+	NormalizedWorkout      string           `json:"normalized_workout,omitempty"`
+	MobilityObservations   string           `gorm:"type:text;not null;default:'[]'" json:"mobility_observations,omitempty"`
+	StretchRecommendations string           `gorm:"type:text;not null;default:'[]'" json:"stretch_recommendations,omitempty"`
+	AvailableVideos        CommaStringArray `gorm:"column:available_videos;type:text;not null;default:'merged'" json:"available_videos"`
 	ArchivedAt          *time.Time       `json:"archived_at,omitempty"`
 	CreatedAt           time.Time        `json:"created_at"`
 	UpdatedAt           time.Time        `json:"updated_at"`

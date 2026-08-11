@@ -207,6 +207,21 @@ func IsValidWorkoutType(wt string) bool {
 	}
 }
 
+func IsRecoveryWorkoutType(wt string) bool {
+	norm := NormalizeWorkoutType(wt)
+	return norm == WorkoutTypeWarmup || norm == WorkoutTypeCooldown
+}
+
+func (w *Worker) resolveSessionWorkoutType(ctx context.Context, sessionID, payloadType string) string {
+	if w.DB != nil && strings.TrimSpace(sessionID) != "" {
+		var s db.Session
+		if err := w.DB.WithContext(ctx).Select("workout_type").Where("session_id = ?", sessionID).First(&s).Error; err == nil && s.WorkoutType != "" {
+			return NormalizeWorkoutType(s.WorkoutType)
+		}
+	}
+	return NormalizeWorkoutType(payloadType)
+}
+
 var (
 	newSessionIDPattern    = regexp.MustCompile(`^[A-Za-z0-9]+-\d{8,12}-[A-Za-z0-9]+$`)
 	legacySessionIDPattern = regexp.MustCompile(`^(P[1-9][0-9]*-)?[A-Za-z0-9]+-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}$`)
