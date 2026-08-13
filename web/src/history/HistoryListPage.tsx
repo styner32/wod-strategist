@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
 import { useInfiniteQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { historyApi, type AnalysisResult } from '../api/history';
 import { useAuth } from '../auth/useAuth';
 
@@ -68,9 +68,21 @@ function parseAnalysisOutput(output: string): { summary?: string; workoutType?: 
 
 function HistoryCard({ result }: { result: AnalysisResult }) {
   const parsed = parseAnalysisOutput(result.output || '{}');
+  const stretchCount = useMemo(() => {
+    if (!result.stretch_recommendations) return 0;
+    try {
+      const p = typeof result.stretch_recommendations === 'string'
+        ? JSON.parse(result.stretch_recommendations)
+        : result.stretch_recommendations;
+      return Array.isArray(p) ? p.length : 0;
+    } catch {
+      return 0;
+    }
+  }, [result.stretch_recommendations]);
+
   return (
     <Link
-      to={`/sessions/${result.session_id}`}
+      to={`/sessions/${result.session_id}?profile_id=${result.profile_id}`}
       className="block bg-bg-elevated border border-border rounded-xl p-5 hover:border-accent/40 hover:bg-bg-elevated/80 transition-all duration-200 group"
     >
       <div className="flex items-start justify-between mb-3">
@@ -94,6 +106,11 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
         {parsed.workoutType && (
           <span className="inline-block text-xs bg-bg-secondary text-text-secondary px-2 py-0.5 rounded-md">
             {parsed.workoutType}
+          </span>
+        )}
+        {stretchCount > 0 && (
+          <span className="inline-flex items-center gap-1 text-xs bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md font-medium">
+            <span>🧘</span> {stretchCount} Stretches
           </span>
         )}
       </div>

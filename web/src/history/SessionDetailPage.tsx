@@ -1,4 +1,4 @@
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
@@ -13,6 +13,7 @@ import {
   type StretchRecommendation,
   type VideoKind,
 } from '../api/history';
+import { stretchesApi, buildStretchLookup, normalizeStretchKey } from '../api/stretches';
 import { ApiError } from '../api/client';
 import { useAuth } from '../auth/useAuth';
 import { ChunkMetricsChart } from './components/ChunkMetricsChart';
@@ -137,6 +138,10 @@ function orderChunksForTimeline(chunks: ChunkAnalysisResult[]) {
 
 export function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const [searchParams] = useSearchParams();
+  const searchProfileId = searchParams.get('profile_id')
+    ? Number(searchParams.get('profile_id'))
+    : undefined;
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
@@ -154,13 +159,21 @@ export function SessionDetailPage() {
   const [dialog, setDialog] = useState<FeedbackDialogState>();
   const closeFeedbackDialog = useCallback(() => setDialog(undefined), []);
 
+  const { data: dbCatalog = [] } = useQuery({
+    queryKey: ['stretches'],
+    queryFn: stretchesApi.list,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const stretchLookup = useMemo(() => buildStretchLookup(dbCatalog), [dbCatalog]);
+
   const { data: analyses, isLoading: analysisLoading } = useQuery({
     queryKey: ['analysis', sessionId],
     queryFn: () => historyApi.getAnalysis(sessionId!),
     enabled: !!sessionId,
   });
 
-  const { data: sessionAnalysis } = useQuery({
+  const { data: sessionAnalysis, isLoading: sessionAnalysisLoading } = useQuery({
     queryKey: ['session-analysis', sessionId],
     queryFn: () => historyApi.getSessionAnalysis(sessionId!),
     enabled: !!sessionId,
@@ -181,7 +194,7 @@ export function SessionDetailPage() {
     }
   }, [analysis?.stretch_recommendations]);
 
-  const { data: legacyChunks } = useQuery({
+  const { data: legacyChunks, isLoading: legacyChunksLoading } = useQuery({
     queryKey: ['chunks', sessionId],
     queryFn: () => historyApi.getChunkAnalysis(sessionId!),
     enabled: !!sessionId,
@@ -196,9 +209,11 @@ export function SessionDetailPage() {
     return [...byId.values()];
   }, [legacyChunks, sessionAnalysis?.chunks]);
   const timelineOrderedChunks = useMemo(() => orderChunksForTimeline(chunks), [chunks]);
-  const profileId = analysis?.profile_id
+  const isMetadataLoading = (sessionAnalysisLoading || analysisLoading) && legacyChunksLoading;
+  const profileId = searchProfileId
+    ?? analysis?.profile_id
     ?? chunks[0]?.profile_id
-    ?? user?.profiles?.[0]?.id;
+    ?? (!isMetadataLoading ? user?.profiles?.[0]?.id : undefined);
 
   const { data: feedbackResponse } = useQuery({
     queryKey: ['session-feedback', sessionId],
@@ -214,9 +229,9 @@ export function SessionDetailPage() {
   });
 
   const { data: relatedWodsData } = useQuery({
-    queryKey: ['related-wods', sessionId, analysis?.profile_id],
-    queryFn: () => historyApi.getRelatedWods(sessionId!, analysis!.profile_id),
-    enabled: !!sessionId && !!analysis?.profile_id && analysis?.status === 'COMPLETED',
+    queryKey: ['related-wods', sessionId, profileId],
+    queryFn: () => historyApi.getRelatedWods(sessionId!, profileId!),
+    enabled: !!sessionId && !!profileId && analysis?.status === 'COMPLETED',
     retry: false,
   });
 
@@ -564,7 +579,7 @@ export function SessionDetailPage() {
     error: videoError,
     isLoading: videoLoading,
   } = useQuery({
-    queryKey: ['video-url', sessionId, selectedKind ?? 'default'],
+    queryKey: ['video-url', sessionId, profileId, selectedKind ?? 'default'],
     queryFn: () => loadTargetVideo(sessionId!, profileId!, selectedKind),
     enabled: !!sessionId && !!profileId,
     staleTime: 10 * 60 * 1000, // 10 min (signed URLs expire)
@@ -1024,41 +1039,82 @@ export function SessionDetailPage() {
             {stretchRecommendations.length > 0 && (
               <section className="rounded-xl border border-border bg-bg-elevated p-4">
                 <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-lg font-semibold text-text-primary">Stretch Recommendations</h2>
-                  <span className="text-xs text-text-muted">Flexibility & Recovery</span>
+                  <div className="flex items-center gap-2">
+                    <span>🧘</span>
+                    <h2 className="text-lg font-semibold text-text-primary">Stretch Recommendations</h2>
+                  </div>
+                  <Link
+                    to="/stretches"
+                    className="text-xs text-accent hover:text-accent-hover font-semibold transition-colors flex items-center gap-1"
+                  >
+                    <span>View All</span>
+                    <span>→</span>
+                  </Link>
                 </div>
                 <div className="space-y-3">
-                  {stretchRecommendations.map((rec, idx) => (
-                    <div
-                      key={`${rec.stretch}-${idx}`}
-                      className="rounded-lg border border-border bg-bg-secondary p-3 transition-colors"
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-accent text-sm">{rec.stretch}</span>
-                          <span className="rounded bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
-                            {rec.target_area}
-                          </span>
+                  {stretchRecommendations.map((rec, idx) => {
+                    const resolved = stretchLookup.get(normalizeStretchKey(rec.stretch));
+                    return (
+                      <div
+                        key={`${rec.stretch}-${idx}`}
+                        className="rounded-xl border border-border bg-bg-secondary p-3.5 transition-colors hover:border-accent/40"
+                      >
+                        {resolved && (resolved.image_url || resolved.video_url) ? (
+                          <div className="mb-3 grid gap-2">
+                            {resolved.image_url && (
+                              <div className="overflow-hidden rounded-lg border border-border bg-black max-h-40 flex items-center justify-center">
+                                <img
+                                  src={resolved.image_url}
+                                  alt={rec.stretch}
+                                  className="w-full h-40 object-cover rounded-lg"
+                                />
+                              </div>
+                            )}
+                            {resolved.video_url && (
+                              <div className="overflow-hidden rounded-lg border border-border bg-black max-h-40 flex items-center justify-center">
+                                <video
+                                  src={resolved.video_url}
+                                  controls
+                                  preload="metadata"
+                                  className="w-full h-40 object-contain rounded-lg"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-text-primary text-sm">{rec.stretch}</span>
+                            <span className="rounded-md bg-accent/10 text-accent border border-accent/20 px-2 py-0.5 text-[10px] font-semibold">
+                              {rec.target_area}
+                            </span>
+                          </div>
+                          {rec.provisional && (
+                            <span className="rounded bg-amber-500/20 text-amber-400 px-2 py-0.5 text-[10px] font-semibold">
+                              Provisional
+                            </span>
+                          )}
                         </div>
-                        {rec.provisional && (
-                          <span className="rounded bg-yellow-500/20 text-yellow-400 px-2 py-0.5 text-[10px] font-medium">
-                            Provisional
-                          </span>
+                        <p className="text-xs text-text-secondary leading-relaxed">{rec.reason}</p>
+                        {resolved?.description && resolved.description !== rec.reason && (
+                          <p className="text-[11px] text-text-muted mt-1.5 leading-relaxed border-t border-border-subtle pt-1.5">
+                            {resolved.description}
+                          </p>
+                        )}
+                        {(rec.duration_hint || resolved?.duration_hint) && (
+                          <p className="text-[11px] text-text-muted mt-2 flex items-center gap-1 font-medium">
+                            <span>⏱️</span> {rec.duration_hint || resolved?.duration_hint}
+                          </p>
+                        )}
+                        {(rec.caution || resolved?.caution) && (
+                          <div className="text-[11px] text-amber-400 mt-2 p-2 rounded bg-amber-500/10 border border-amber-500/20 flex items-start gap-1.5">
+                            <span className="shrink-0">⚠️</span>
+                            <span>{rec.caution || resolved?.caution}</span>
+                          </div>
                         )}
                       </div>
-                      <p className="text-xs text-text-primary leading-relaxed mt-1">{rec.reason}</p>
-                      {rec.duration_hint && (
-                        <p className="text-[11px] text-text-muted mt-1.5 flex items-center gap-1">
-                          <span>⏱️</span> {rec.duration_hint}
-                        </p>
-                      )}
-                      {rec.caution && (
-                        <p className="text-[11px] text-amber-400 mt-1 flex items-center gap-1">
-                          <span>⚠️</span> {rec.caution}
-                        </p>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             )}
@@ -1070,7 +1126,7 @@ export function SessionDetailPage() {
                   {relatedWodsData.related.map((item) => (
                     <Link
                       key={item.session_id}
-                      to={`/sessions/${item.session_id}`}
+                      to={`/sessions/${item.session_id}?profile_id=${profileId}`}
                       className="block rounded-lg border border-border bg-bg-secondary p-3 transition-colors hover:border-accent/40 hover:bg-bg-tertiary"
                     >
                       <div className="flex items-center justify-between text-xs text-text-muted mb-1">

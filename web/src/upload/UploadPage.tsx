@@ -81,7 +81,7 @@ export function UploadPage() {
       });
 
       // 4. Navigate to session detail
-      navigate(`/sessions/${sessionId}`);
+      navigate(`/sessions/${sessionId}?profile_id=${selectedProfileId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed');
       setPhase('idle');
