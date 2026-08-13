@@ -31,12 +31,6 @@ var errTargetVideoNotFound = errors.New("target video not found")
 // @Failure      500 {object} ErrorResponse
 // @Router       /video-download/:session_id [get]
 func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
-	if ctl.storageClient == nil {
-		logger.Log.Error("storage client is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage not configured"})
-		return
-	}
-
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
 	if sessionID == "" || !isValidSessionID(sessionID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})

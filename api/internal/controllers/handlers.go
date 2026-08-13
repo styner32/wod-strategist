@@ -42,12 +42,6 @@ func (ctl *Controller) Health(c *gin.Context) {
 // @Failure      500 {object} ErrorResponse
 // @Router       /upload-url [post]
 func (ctl *Controller) CreateUploadURL(c *gin.Context) {
-	if ctl.storageClient == nil {
-		logger.Log.Error("storage client is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate upload URL"})
-		return
-	}
-
 	var req CreateUploadURLRequest
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -219,11 +213,6 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 }
 
 func (ctl *Controller) Upload(c *gin.Context) {
-	if ctl.storageClient == nil {
-		logger.Log.Error("storage client is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload file"})
-		return
-	}
 	if ctl.queueClient == nil {
 		logger.Log.Error("queue client is not configured")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
@@ -1234,8 +1223,8 @@ func (ctl *Controller) GetHighlight(c *gin.Context) {
 // @Failure      500 {object} ErrorResponse
 // @Router       /highlight-download/:id [get]
 func (ctl *Controller) GetHighlightDownloadURL(c *gin.Context) {
-	if ctl.highlightResults == nil || ctl.storageClient == nil {
-		logger.Log.Error("highlight results or storage client not configured")
+	if ctl.highlightResults == nil {
+		logger.Log.Error("highlight results repository is not configured")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "service not configured"})
 		return
 	}
@@ -1375,8 +1364,8 @@ func (ctl *Controller) VerifyHighlights(c *gin.Context) {
 // @Failure      500 {object} ErrorResponse
 // @Router       /retry-analysis [post]
 func (ctl *Controller) RetryAnalysis(c *gin.Context) {
-	if ctl.queueClient == nil || ctl.storageClient == nil {
-		logger.Log.Error("queue or storage client is not configured")
+	if ctl.queueClient == nil {
+		logger.Log.Error("queue client is not configured")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "service not configured"})
 		return
 	}

@@ -198,15 +198,14 @@ func (w *Worker) buildHistoryContext(profileID uint, limit int) string {
 		if wod == "" {
 			wod = "WOD"
 		}
+
 		normType := NormalizeWorkoutType(r.WorkoutType)
 		if normType == WorkoutTypeWarmup {
 			wod = "[웜업] " + wod
 		} else if normType == WorkoutTypeCooldown {
 			wod = "[쿨다운] " + wod
 		}
-		if len(wod) > 20 {
-			wod = wod[:20] + "…"
-		}
+
 		intensityStr := fmt.Sprintf("%d", score.Intensity)
 		if IsRecoveryWorkoutType(r.WorkoutType) {
 			intensityStr = "-"

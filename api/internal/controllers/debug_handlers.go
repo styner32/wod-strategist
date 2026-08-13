@@ -83,12 +83,6 @@ func (ctl *Controller) UploadDebugTelemetry(c *gin.Context) {
 		return
 	}
 
-	if ctl.storageClient == nil {
-		logger.Log.Error("storage client is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "storage not configured"})
-		return
-	}
-
 	// Marshal back to JSON for GCS upload
 	data, err := json.Marshal(req)
 	if err != nil {

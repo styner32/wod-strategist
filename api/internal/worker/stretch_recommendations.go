@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/wod-strategist/api/internal/db"
 	"go.uber.org/zap"
@@ -42,7 +44,64 @@ type StretchRecommendation struct {
 
 var stretchesBlockRegex = regexp.MustCompile("(?is)(?:```stretches\\s*(\\[.*?\\])\\s*```|```json\\s*(\\[.*?\\])\\s*```|<stretches>\\s*(\\[.*?\\])\\s*</stretches>)")
 
-func BuildStretchRecommendationPrompt(current []MobilityObservation, history []db.MobilityRestriction, injuries []string) string {
+func (w *Worker) loadStretchCatalog(ctx context.Context) (names []string, resolver map[string]string) {
+	resolver = make(map[string]string)
+	nameSet := make(map[string]struct{})
+
+	for _, s := range stretchCatalog {
+		key := db.NormalizeStretchKey(s)
+		if key != "" {
+			resolver[key] = s
+		}
+		if _, exists := nameSet[s]; !exists {
+			names = append(names, s)
+			nameSet[s] = struct{}{}
+		}
+	}
+
+	if w.DB == nil {
+		return names, resolver
+	}
+
+	stretches, err := db.ListStretches(ctx, w.DB)
+	if err != nil {
+		if w.logger != nil {
+			w.logger.Warn("Failed to load stretch catalog from DB, using fallback catalog", zap.Error(err))
+		}
+		return names, resolver
+	}
+
+	stretchNameByID := make(map[uint64]string)
+	for _, s := range stretches {
+		if _, exists := nameSet[s.Name]; !exists {
+			names = append(names, s.Name)
+			nameSet[s.Name] = struct{}{}
+		}
+		stretchNameByID[s.ID] = s.Name
+		key := db.NormalizeStretchKey(s.Name)
+		if key != "" {
+			resolver[key] = s.Name
+		}
+	}
+
+	aliases, err := db.ListStretchAliases(ctx, w.DB)
+	if err != nil && w.logger != nil {
+		w.logger.Warn("Failed to load stretch aliases from DB, continuing with stretches only", zap.Error(err))
+	}
+
+	for _, a := range aliases {
+		key := db.NormalizeStretchKey(a.Alias)
+		if key != "" {
+			if canonicalName, found := stretchNameByID[a.StretchID]; found {
+				resolver[key] = canonicalName
+			}
+		}
+	}
+
+	return names, resolver
+}
+
+func BuildStretchRecommendationPrompt(current []MobilityObservation, history []db.MobilityRestriction, injuries []string, catalogNames []string) string {
 	var evidenceSb strings.Builder
 	evidenceSb.WriteString("## 관찰된 가동성 증거 데이터\n")
 
@@ -67,6 +126,11 @@ func BuildStretchRecommendationPrompt(current []MobilityObservation, history []d
 		injuryText = strings.Join(injuries, ", ")
 	}
 
+	var catalogSb strings.Builder
+	for _, name := range catalogNames {
+		catalogSb.WriteString(fmt.Sprintf("   - %s\n", name))
+	}
+
 	return fmt.Sprintf(`
 # 맞춤 스트레칭 추천 생성 요청
 
@@ -80,24 +144,11 @@ func BuildStretchRecommendationPrompt(current []MobilityObservation, history []d
 
 ## 추천 규칙:
 1. **엄격한 근거 기반**: 오직 위에 제시된 관찰 증거에 있는 joint/observation에 대해서만 스트레칭을 추천하세요. 증거 없는 부위 추천은 엄격히 금지됩니다.
-2. **스트레칭 카탈로그 제한**: stretch 필드는 아래 지원 목록 중 하나여야 합니다:
-   - Pigeon Pose
-   - Couch Stretch
-   - Samson (Hip Flexor Lunge) Stretch
-   - Cossack Squat Hold
-   - Ankle Dorsiflexion Rock
-   - Calf Stretch
-   - Standing Forward Fold
-   - Hamstring Floss
-   - Child's Pose
-   - Downward Dog
-   - Thread the Needle
-   - Cat-Cow
-   - Thoracic Extension over Foam Roller
-   - Doorway Pec Stretch
-   - Wall Slide
-   - Wrist Flexor/Extensor Stretch
-   - Neck Lateral Stretch
+2. **스트레칭 카탈로그 우선 및 명명 규칙**:
+   - 가급적 아래 카탈로그 목록에 있는 기존 스트레칭 명칭을 우선하여 똑같이 사용하세요:
+%s   - 기존 카탈로그에 해당 관절/제한에 적합한 스트레칭이 없는 경우에만 **새로운 스트레칭**을 제안할 수 있습니다.
+   - 새로운 스트레칭 명칭은 반드시 **영문 Title Case** 및 **간결한 표준 Naming Convention**을 따르세요:
+     (예: [Target/Joint] [Type] Stretch 또는 [Movement] Hold/Rock/Pose — `+"`Hip 90/90 Stretch`"+`, `+"`Adductor Groin Stretch`"+`, `+"`Lat Doorframe Stretch`"+`). 길거나 서술적인 명칭, 한국어 포함 명칭은 금지됩니다.
 3. **이유(reason) 및 임시(provisional) 기입 규칙**:
    - 누적 관찰 이력(SessionCount >= 2)에 기반한 경우: "최근 N개 세션의 [운동명]에서 [관절/제한]이 반복 관찰됨"과 같이 관찰 세션 수를 명시하고, provisional: false 로 기입하세요.
    - 오늘 처음 관찰되었거나 단일 세션(SessionCount == 1)인 경우: "오늘 세션에서 처음 관찰됨 — 추이를 지켜보세요" 등의 문구를 포함하고, provisional: true 로 기입하세요.
@@ -116,7 +167,7 @@ func BuildStretchRecommendationPrompt(current []MobilityObservation, history []d
     "caution": "",
     "provisional": false
   }
-]`+"\n```\n", evidenceSb.String(), injuryText)
+]`+"\n```\n", evidenceSb.String(), injuryText, catalogSb.String())
 }
 
 func parseStretchRecommendations(text string) []StretchRecommendation {
@@ -149,7 +200,169 @@ func parseStretchRecommendations(text string) []StretchRecommendation {
 	return all
 }
 
-func sanitizeStretchRecommendations(items []StretchRecommendation, current []MobilityObservation, history []db.MobilityRestriction) []StretchRecommendation {
+// significantTokens splits normalized key into significant matching tokens
+func significantTokens(key string) []string {
+	words := strings.Fields(key)
+	var tokens []string
+	for _, w := range words {
+		w = strings.Trim(w, "(),/-")
+		if w == "" || w == "stretch" || w == "pose" || w == "hold" || w == "exercise" || w == "over" {
+			continue
+		}
+		if len(w) > 4 && strings.HasSuffix(w, "s") && !strings.HasSuffix(w, "ss") {
+			w = strings.TrimSuffix(w, "s")
+		}
+		tokens = append(tokens, w)
+	}
+	return tokens
+}
+
+// resolveStretchName matches rawStretch against resolver using exact match, alias match, or fuzzy token similarity.
+func resolveStretchName(rawStretch string, resolver map[string]string) (string, bool) {
+	key := db.NormalizeStretchKey(rawStretch)
+	if key == "" {
+		return "", false
+	}
+
+	// 1. Exact normalized match
+	if canonical, ok := resolver[key]; ok {
+		return canonical, true
+	}
+
+	// 2. Fuzzy / similarity token overlap match
+	rawTokens := significantTokens(key)
+	if len(rawTokens) == 0 {
+		return "", false
+	}
+
+	var bestCanonical string
+	var bestScore float64
+
+	for catKey, canonical := range resolver {
+		catTokens := significantTokens(catKey)
+		if len(catTokens) == 0 {
+			continue
+		}
+
+		matchCount := 0
+		for _, rt := range rawTokens {
+			for _, ct := range catTokens {
+				if rt == ct || (len(rt) >= 4 && len(ct) >= 4 && (strings.HasPrefix(rt, ct) || strings.HasPrefix(ct, rt))) {
+					matchCount++
+					break
+				}
+			}
+		}
+
+		if matchCount == 0 {
+			continue
+		}
+
+		minLen := len(rawTokens)
+		if len(catTokens) < minLen {
+			minLen = len(catTokens)
+		}
+		score := float64(matchCount) / float64(minLen)
+
+		if score > bestScore && (matchCount == minLen || score >= 0.75) {
+			bestScore = score
+			bestCanonical = canonical
+		}
+	}
+
+	if bestCanonical != "" && bestScore >= 0.75 {
+		return bestCanonical, true
+	}
+
+	return "", false
+}
+
+// formatStretchName formats a raw stretch name to Title Case following standard naming conventions.
+func formatStretchName(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	words := strings.Fields(trimmed)
+	for i, w := range words {
+		if len(w) == 0 {
+			continue
+		}
+		lower := strings.ToLower(w)
+		if lower == "of" || lower == "in" || lower == "on" || lower == "at" || lower == "by" || lower == "for" || lower == "to" || lower == "over" || lower == "with" {
+			if i > 0 {
+				words[i] = lower
+				continue
+			}
+		}
+		words[i] = capitalizeWord(w)
+	}
+
+	return strings.Join(words, " ")
+}
+
+func capitalizeWord(w string) string {
+	if len(w) == 0 {
+		return ""
+	}
+	if strings.Contains(w, "-") {
+		parts := strings.Split(w, "-")
+		for i, p := range parts {
+			parts[i] = capitalizeWord(p)
+		}
+		return strings.Join(parts, "-")
+	}
+	if strings.Contains(w, "/") {
+		parts := strings.Split(w, "/")
+		for i, p := range parts {
+			parts[i] = capitalizeWord(p)
+		}
+		return strings.Join(parts, "/")
+	}
+
+	prefix := ""
+	suffix := ""
+	if strings.HasPrefix(w, "(") {
+		prefix = "("
+		w = w[1:]
+	}
+	if strings.HasSuffix(w, ")") {
+		suffix = ")"
+		w = w[:len(w)-1]
+	}
+
+	if len(w) == 0 {
+		return prefix + suffix
+	}
+
+	runes := []rune(strings.ToLower(w))
+	runes[0] = unicode.ToUpper(runes[0])
+	return prefix + string(runes) + suffix
+}
+
+func isValidNewStretchName(name string) bool {
+	runeCount := utf8.RuneCountInString(name)
+	if runeCount < 3 || runeCount > 120 {
+		return false
+	}
+
+	// Reject non-Latin characters (e.g. Korean Hangul)
+	for _, r := range name {
+		if r > 0x024F && !(r >= 0x2000 && r <= 0x206F) {
+			return false
+		}
+	}
+
+	words := strings.Fields(name)
+	if len(words) > 8 {
+		return false
+	}
+
+	return true
+}
+
+func (w *Worker) sanitizeAndPersistStretchRecommendations(ctx context.Context, items []StretchRecommendation, current []MobilityObservation, history []db.MobilityRestriction, resolver map[string]string) []StretchRecommendation {
 	if len(items) == 0 {
 		return nil
 	}
@@ -166,11 +379,6 @@ func sanitizeStretchRecommendations(items []StretchRecommendation, current []Mob
 		}
 	}
 
-	catalogSet := make(map[string]string)
-	for _, s := range stretchCatalog {
-		catalogSet[strings.ToLower(s)] = s
-	}
-
 	var sanitized []StretchRecommendation
 	for _, item := range items {
 		targetKey := strings.ToLower(strings.TrimSpace(item.TargetArea))
@@ -178,15 +386,31 @@ func sanitizeStretchRecommendations(items []StretchRecommendation, current []Mob
 			continue
 		}
 
-		stretchKey := strings.ToLower(strings.TrimSpace(item.Stretch))
-		canonicalStretch, ok := catalogSet[stretchKey]
-		if !ok {
-			continue
-		}
-
 		reason := strings.TrimSpace(item.Reason)
 		if reason == "" {
 			continue
+		}
+
+		canonicalStretch, matched := resolveStretchName(item.Stretch, resolver)
+		if !matched {
+			formattedNewName := formatStretchName(item.Stretch)
+			if !isValidNewStretchName(formattedNewName) {
+				continue
+			}
+			canonicalStretch = formattedNewName
+
+			// Auto-persist valid new stretch into DB catalog
+			if w != nil && w.DB != nil {
+				newKey := db.NormalizeStretchKey(canonicalStretch)
+				if newKey != "" {
+					_ = w.DB.WithContext(ctx).Exec(`
+						INSERT INTO stretches (name, normalized_key, target_area, description, duration_hint, caution, image_object, video_object)
+						VALUES (?, ?, ?, ?, ?, ?, '', '')
+						ON CONFLICT (normalized_key) DO NOTHING
+					`, canonicalStretch, newKey, item.TargetArea, item.Reason, item.DurationHint, item.Caution)
+					resolver[newKey] = canonicalStretch
+				}
+			}
 		}
 
 		sanitized = append(sanitized, StretchRecommendation{
@@ -203,6 +427,11 @@ func sanitizeStretchRecommendations(items []StretchRecommendation, current []Mob
 		}
 	}
 	return sanitized
+}
+
+func sanitizeStretchRecommendations(items []StretchRecommendation, current []MobilityObservation, history []db.MobilityRestriction, resolver map[string]string) []StretchRecommendation {
+	w := &Worker{}
+	return w.sanitizeAndPersistStretchRecommendations(context.Background(), items, current, history, resolver)
 }
 
 func (w *Worker) recommendStretches(ctx context.Context, profileID uint, sessionID string, current []MobilityObservation, injuries []string) string {
@@ -224,7 +453,9 @@ func (w *Worker) recommendStretches(ctx context.Context, profileID uint, session
 		return "[]"
 	}
 
-	prompt := BuildStretchRecommendationPrompt(current, history, injuries)
+	catalogNames, resolver := w.loadStretchCatalog(ctx)
+
+	prompt := BuildStretchRecommendationPrompt(current, history, injuries, catalogNames)
 	output, usage, parseErr := w.GeminiClient.ParseText(ctx, prompt)
 	if parseErr != nil {
 		w.logger.Error("Gemini parseText failed for stretch recommendations", zap.Error(parseErr))
@@ -234,7 +465,7 @@ func (w *Worker) recommendStretches(ctx context.Context, profileID uint, session
 	w.saveTokenUsage(sessionID, profileID, "session:stretch-recommendations", usage)
 
 	parsed := parseStretchRecommendations(output)
-	sanitized := sanitizeStretchRecommendations(parsed, current, history)
+	sanitized := w.sanitizeAndPersistStretchRecommendations(ctx, parsed, current, history, resolver)
 	if len(sanitized) == 0 {
 		return "[]"
 	}

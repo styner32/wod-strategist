@@ -109,5 +109,13 @@ func SetupRouter(appEnv string, allowedOrigins []string,
 	protected.PATCH("/sessions/:session_id/feedback/:feedback_id", ctl.UpdateFeedback)
 	protected.DELETE("/sessions/:session_id/feedback/:feedback_id", ctl.DeleteFeedback)
 
+	protected.GET("/stretches", ctl.ListStretches)
+	protected.POST("/stretches", ctl.CreateStretch)
+	protected.PUT("/stretches/:id", ctl.UpdateStretch)
+	protected.DELETE("/stretches/:id", ctl.DeleteStretch)
+	protected.POST("/stretches/:id/media-upload-url", ctl.CreateStretchMediaUploadURL)
+	protected.POST("/stretches/:id/media", ctl.SetStretchMedia)
+	protected.DELETE("/stretches/:id/media", ctl.ClearStretchMedia)
+
 	return r, nil
 }

@@ -316,7 +316,7 @@ func (ctl *Controller) loadSessionReanalysisReadiness(ctx context.Context, sessi
 	}
 
 	sourceURI := ""
-	if ctl.storageClient != nil && strings.TrimSpace(ctl.bucketName) != "" {
+	if strings.TrimSpace(ctl.bucketName) != "" {
 		objects, listErr := ctl.listSessionReanalysisVideoObjects(ctx, profileID, sessionID)
 		if listErr != nil {
 			logger.Log.Warn("failed to list session video for re-analysis readiness",

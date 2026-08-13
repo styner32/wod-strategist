@@ -340,3 +340,49 @@ func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRu
 	g.Expect(dbConn.Create(&run).Error).NotTo(g.HaveOccurred())
 	return run
 }
+
+var stretchCounter uint64
+
+func CreateStretch(dbConn *gorm.DB, stretchAttr *db.Stretch) db.Stretch {
+	val := atomic.AddUint64(&stretchCounter, 1)
+	s := db.Stretch{
+		Name:         stretchAttr.Name,
+		TargetArea:   stretchAttr.TargetArea,
+		Description:  stretchAttr.Description,
+		DurationHint: stretchAttr.DurationHint,
+		Caution:      stretchAttr.Caution,
+		ImageObject:  stretchAttr.ImageObject,
+		VideoObject:  stretchAttr.VideoObject,
+	}
+
+	if s.Name == "" {
+		s.Name = fmt.Sprintf("Test Stretch %d", val)
+	}
+	s.NormalizedKey = db.NormalizeStretchKey(s.Name)
+	if s.TargetArea == "" {
+		s.TargetArea = "Hips & Glutes"
+	}
+
+	g.Expect(dbConn.Create(&s).Error).NotTo(g.HaveOccurred())
+	return s
+}
+
+var stretchAliasCounter uint64
+
+func CreateStretchAlias(dbConn *gorm.DB, aliasAttr *db.StretchAlias) db.StretchAlias {
+	val := atomic.AddUint64(&stretchAliasCounter, 1)
+	a := db.StretchAlias{
+		StretchID: aliasAttr.StretchID,
+		Alias:     aliasAttr.Alias,
+	}
+
+	g.Expect(a.StretchID).NotTo(g.BeZero(), "StretchID is required for CreateStretchAlias")
+	if a.Alias == "" {
+		a.Alias = fmt.Sprintf("Test Alias %d", val)
+	}
+	a.NormalizedKey = db.NormalizeStretchKey(a.Alias)
+
+	g.Expect(dbConn.Create(&a).Error).NotTo(g.HaveOccurred())
+	return a
+}
+

@@ -54,11 +54,6 @@ type chunkReanalysisTarget struct {
 // GetChunkPlayURL signs the server-resolved video source for one owned chunk.
 // It never accepts a storage URI from the caller.
 func (ctl *Controller) GetChunkPlayURL(c *gin.Context) {
-	if ctl.storageClient == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "storage is not configured"})
-		return
-	}
-
 	sessionID, chunkID, ok := parseChunkReanalysisPath(c)
 	if !ok {
 		return

@@ -159,24 +159,63 @@ var _ = Describe("Recovery Workout Analysis & Stretch Recommendations", func() {
 			Expect(transport.Requests()).To(BeEmpty())
 		})
 
-		It("sanitizes recommendations by dropping non-catalog stretches and non-evidenced joints", func() {
+		It("sanitizes recommendations by resolving existing/similar DB stretches and formatting new valid stretches", func() {
 			current := []MobilityObservation{
 				{Joint: "Hip", Side: "both", Observation: "limited_hip_flexion", Movement: "Squat", Evidence: "스쿼트 하단 깊이 제한", Confidence: 0.9, Assessable: true},
+				{Joint: "Wrist", Side: "right", Observation: "limited_wrist_extension", Movement: "Clean", Evidence: "프론트렉 손목 목통증", Confidence: 0.8, Assessable: true},
 			}
 			history := []db.MobilityRestriction{
 				{Joint: "Hip", Side: "both", Observation: "limited_hip_flexion", SessionCount: 3, Movements: []string{"Squat"}},
 			}
 
+			// Seed a custom stretch & alias in DB
+			s := testhelpers.CreateStretch(dbConn, &db.Stretch{Name: "Samson (Hip Flexor Lunge) Stretch", TargetArea: "Hip"})
+			testhelpers.CreateStretchAlias(dbConn, &db.StretchAlias{StretchID: s.ID, Alias: "Hip Flexor Stretch"})
+
+			dbNames, dbResolver := w.loadStretchCatalog(context.Background())
+			Expect(dbNames).To(ContainElement("Samson (Hip Flexor Lunge) Stretch"))
+			Expect(dbResolver["hip flexor stretch"]).To(Equal("Samson (Hip Flexor Lunge) Stretch"))
+
 			recs := []StretchRecommendation{
-				{Stretch: "Pigeon Pose", TargetArea: "Hip", Reason: "최근 3개 세션의 스쿼트에서 고관절 굴곡 제한 관찰됨", Provisional: false},
-				{Stretch: "Unsupported MadeUp Stretch", TargetArea: "Hip", Reason: "카탈로그에 없는 스트레칭", Provisional: false},
-				{Stretch: "Doorway Pec Stretch", TargetArea: "Chest", Reason: "증거 없는 타겟 부위", Provisional: false},
+				// 1. Exact match
+				{Stretch: "Pigeon Pose", TargetArea: "Hip", Reason: "스쿼트 고관절 굴곡 제한", Provisional: false},
+				// 2. Alias match
+				{Stretch: "Hip Flexor Stretch", TargetArea: "Hip", Reason: "고관절 굴곡근 타이트함", Provisional: false},
+				// 3. Similar / fuzzy match ("Wrist Flexor Stretch" matches catalog "Wrist Flexor/Extensor Stretch")
+				{Stretch: "Wrist Flexor Stretch", TargetArea: "Wrist", Reason: "프론트렉 손목 신전 제한", Provisional: true},
+				// 4. Valid new stretch (not in DB catalog) formatted to Title Case
+				{Stretch: "hip 90/90 stretch", TargetArea: "Hip", Reason: "고관절 회전 모빌리티", Provisional: true},
+				// 5. Invalid non-English / sentence new stretch (should be dropped)
+				{Stretch: "스쿼트 하단 고관절 스트레칭", TargetArea: "Hip", Reason: "서술적 명칭", Provisional: true},
 			}
 
-			sanitized := sanitizeStretchRecommendations(recs, current, history)
-			Expect(sanitized).To(HaveLen(1))
+			sanitized := w.sanitizeAndPersistStretchRecommendations(context.Background(), recs, current, history, dbResolver)
+			Expect(sanitized).To(HaveLen(3)) // capped at 3
 			Expect(sanitized[0].Stretch).To(Equal("Pigeon Pose"))
-			Expect(sanitized[0].TargetArea).To(Equal("Hip"))
+			Expect(sanitized[1].Stretch).To(Equal("Samson (Hip Flexor Lunge) Stretch"))
+			Expect(sanitized[2].Stretch).To(Equal("Wrist Flexor/Extensor Stretch")) // resolved similar match!
+		})
+
+		It("formats and auto-persists a new valid stretch to DB catalog when no similar stretch exists", func() {
+			current := []MobilityObservation{
+				{Joint: "Hip", Side: "both", Observation: "limited_hip_flexion", Movement: "Squat", Evidence: "스쿼트 깊이 부족", Confidence: 0.9, Assessable: true},
+			}
+
+			_, dbResolver := w.loadStretchCatalog(context.Background())
+
+			recs := []StretchRecommendation{
+				{Stretch: "adductor groin stretch", TargetArea: "Hip", Reason: "내전근 가동성 향상", DurationHint: "60s", Caution: "과도한 자극 피함", Provisional: true},
+			}
+
+			sanitized := w.sanitizeAndPersistStretchRecommendations(context.Background(), recs, current, nil, dbResolver)
+			Expect(sanitized).To(HaveLen(1))
+			Expect(sanitized[0].Stretch).To(Equal("Adductor Groin Stretch")) // Formatted Title Case
+
+			// Verify it was auto-inserted into DB stretches table
+			var newDbStretch db.Stretch
+			Expect(dbConn.Where("normalized_key = ?", "adductor groin stretch").First(&newDbStretch).Error).NotTo(HaveOccurred())
+			Expect(newDbStretch.Name).To(Equal("Adductor Groin Stretch"))
+			Expect(newDbStretch.TargetArea).To(Equal("Hip"))
 		})
 	})
 })
