@@ -70,13 +70,13 @@ func main() {
 	if cfg.GeminiAPIKey != "" {
 		geminiClient, geminiErr := gemini.NewClientWithOptions(context.Background(), logger.Log, gemini.Options{
 			APIKey: cfg.GeminiAPIKey,
-			Model:  gemini.ModelFlash35,
+			Model:  gemini.ModelFlash37,
 		})
 		if geminiErr != nil {
 			logger.Log.Warn("Failed to create Gemini client for image parsing; endpoint disabled", zap.Error(geminiErr))
 		} else {
 			imageParser = geminiClient
-			logger.Log.Info("Gemini image parser initialized (" + gemini.ModelFlash35 + ")")
+			logger.Log.Info("Gemini image parser initialized (" + gemini.ModelFlash37 + ")")
 		}
 	}
 

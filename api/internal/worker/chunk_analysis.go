@@ -326,7 +326,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 
 	prompt := w.buildChunkAnalysisPrompt(p)
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash35)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash37)
 
 	// Wait for motion probe to finish
 	var motionScore *float64
@@ -479,7 +479,7 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 
 	prompt := w.buildChunkAnalysisWithSessionPrompt(p, &profile, &session)
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash35)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localFilePath, prompt, gemini.ModelFlash37)
 
 	// Wait for motion probe to finish
 	var motionScoreWithSession *float64

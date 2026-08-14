@@ -245,8 +245,8 @@ func formatTargetPersonContext(merged string) string {
 
 func resolveReanalysisModel(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "flash", "flash36", "flash35", "gemini-3.6-flash", "gemini-3.5-flash":
-		return gemini.ModelFlash36
+	case "flash", "flash36", "flash35", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash":
+		return gemini.ModelFlash37
 	default:
 		return gemini.ModelPro31Preview
 	}

@@ -25,10 +25,10 @@ var _ = Describe("Gemini client", func() {
 		It("exposes the configured segment-analysis model", func() {
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey: "test-api-key",
-				Model:  ModelFlash35,
+				Model:  ModelFlash37,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(client.Model()).To(Equal(ModelFlash35))
+			Expect(client.Model()).To(Equal(ModelFlash37))
 			Expect((*Client)(nil).Model()).To(BeEmpty())
 		})
 	})
@@ -187,7 +187,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash35+":generateContent").
+				Post("/v1beta/models/"+ModelFlash37+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -203,7 +203,7 @@ var _ = Describe("Gemini client", func() {
 					},
 				})
 
-			result, geminiFile, _, err := client.AnalyzeVideoWithModel(context.Background(), videoPath, "analyze this", ModelFlash35)
+			result, geminiFile, _, err := client.AnalyzeVideoWithModel(context.Background(), videoPath, "analyze this", ModelFlash37)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("flash 3.5 response"))
 			Expect(geminiFile).To(Equal("files/mock-file"))
@@ -451,7 +451,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash35+":generateContent").
+				Post("/v1beta/models/"+ModelFlash37+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -479,7 +479,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelFlash35 + ":generateContent").
+				Post("/v1beta/models/" + ModelFlash37 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{"message": "indexing failed"},

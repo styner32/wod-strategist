@@ -376,7 +376,7 @@ var _ = Describe("HandleVerifyHighlightsTask", func() {
 				"videoMetadata": map[string]any{"videoDuration": "20s"},
 			})
 		geminiTransport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelFlash35+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelFlash37+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			MatchBodyContains("event=0 observation=0").
 			MatchBodyContains("visible-positive").

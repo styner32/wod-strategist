@@ -226,7 +226,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			JSON(map[string]any{"name": "files/mock-chunk", "state": "ACTIVE"})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelFlash35+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelFlash37+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -385,7 +385,7 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 			JSON(map[string]any{"name": "files/mock-chunk", "state": "ACTIVE"})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/" + gemini.ModelFlash35 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelFlash37 + ":generateContent").
 			Reply(http.StatusOK).
 			JSON(map[string]any{"candidates": []map[string]any{}})
 

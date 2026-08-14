@@ -220,7 +220,7 @@ func (w *Worker) analyzeChunkInline(ctx context.Context, localPath, gcsURI strin
 		WorkoutConfidence: p.WorkoutConfidence,
 	})
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localPath, prompt, gemini.ModelFlash35)
+	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideoWithModel(ctx, localPath, prompt, gemini.ModelFlash37)
 
 	// Clean up Gemini file if uploaded
 	if geminiFile != "" {

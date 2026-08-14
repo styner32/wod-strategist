@@ -47,7 +47,6 @@ func (a CommaStringArray) Value() (driver.Value, error) {
 	return strings.Join(a, ","), nil
 }
 
-
 type User struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
 	Username     string     `gorm:"not null" json:"username"`
@@ -59,16 +58,16 @@ type User struct {
 }
 
 type Profile struct {
-	ID           uint       `gorm:"primaryKey" json:"id"`
-	UserID       uint       `gorm:"index;not null" json:"user_id"`
-	Name         string     `gorm:"not null" json:"name"`
-	BirthYear    *int       `json:"birth_year,omitempty"`
-	BirthMonth   *int       `json:"birth_month,omitempty"`
-	BirthDay     *int       `json:"birth_day,omitempty"`
-	Gender       *string    `json:"gender,omitempty"` // male, female, other
-	HeightCm     *int       `json:"height_cm,omitempty"`
-	WeightKg     *float64   `json:"weight_kg,omitempty"`
-	FitnessLevel string     `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
+	ID           uint         `gorm:"primaryKey" json:"id"`
+	UserID       uint         `gorm:"index;not null" json:"user_id"`
+	Name         string       `gorm:"not null" json:"name"`
+	BirthYear    *int         `json:"birth_year,omitempty"`
+	BirthMonth   *int         `json:"birth_month,omitempty"`
+	BirthDay     *int         `json:"birth_day,omitempty"`
+	Gender       *string      `json:"gender,omitempty"` // male, female, other
+	HeightCm     *int         `json:"height_cm,omitempty"`
+	WeightKg     *float64     `json:"weight_kg,omitempty"`
+	FitnessLevel string       `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
 	Injuries     *string      `gorm:"type:text;not null;default:'[]'" json:"injuries"`                // JSON array of injury strings
 	Appearance   JSONDocument `json:"appearance"`
 	ArchivedAt   *time.Time   `json:"archived_at,omitempty"`
@@ -107,17 +106,17 @@ type AnalysisResult struct {
 	MobilityObservations   string           `gorm:"type:text;not null;default:'[]'" json:"mobility_observations,omitempty"`
 	StretchRecommendations string           `gorm:"type:text;not null;default:'[]'" json:"stretch_recommendations,omitempty"`
 	AvailableVideos        CommaStringArray `gorm:"column:available_videos;type:text;not null;default:'merged'" json:"available_videos"`
-	ArchivedAt          *time.Time       `json:"archived_at,omitempty"`
-	CreatedAt           time.Time        `json:"created_at"`
-	UpdatedAt           time.Time        `json:"updated_at"`
+	ArchivedAt             *time.Time       `json:"archived_at,omitempty"`
+	CreatedAt              time.Time        `json:"created_at"`
+	UpdatedAt              time.Time        `json:"updated_at"`
 }
 
 type NormalizedMovement struct {
-	Movement string   `json:"movement"`
+	Movement  string   `json:"movement"`
 	WeightRaw string   `json:"weight_raw,omitempty"`
-	WeightKG *float64 `json:"weight_kg,omitempty"`
-	Reps     string   `json:"reps,omitempty"`
-	IsMain   bool     `json:"is_main"`
+	WeightKG  *float64 `json:"weight_kg,omitempty"`
+	Reps      string   `json:"reps,omitempty"`
+	IsMain    bool     `json:"is_main"`
 }
 
 type HighlightResult struct {
@@ -163,7 +162,7 @@ type TokenUsage struct {
 	SessionID       string    `gorm:"index;not null" json:"session_id"`
 	ProfileID       uint      `gorm:"index;not null" json:"profile_id"`
 	TaskType        string    `gorm:"not null" json:"task_type"` // chunk:analysis, video:index, video:segment, etc.
-	Model           string    `gorm:"not null" json:"model"`     // gemini-3.1-pro-preview, gemini-3.5-flash-lite, gemini-3.6-flash
+	Model           string    `gorm:"not null" json:"model"`     // gemini-3.1-pro-preview, gemini-3.5-flash-lite, gemini-3.7-flash
 	PromptTokens    int32     `gorm:"not null;default:0" json:"prompt_tokens"`
 	CandidateTokens int32     `gorm:"not null;default:0" json:"candidate_tokens"`
 	TotalTokens     int32     `gorm:"not null;default:0" json:"total_tokens"`
