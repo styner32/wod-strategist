@@ -108,6 +108,8 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 	if err := s.db.WithContext(ctx).
 		Where("LOWER(username) = LOWER(?) AND deleted_at IS NULL", username).
 		First(&user).Error; err != nil {
+		// Perform a dummy bcrypt comparison to mitigate timing attacks.
+		VerifyPassword(password, dummyHash)
 		return "", 0, ErrInvalidCredentials
 	}
 
@@ -182,6 +184,8 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uint, password strin
 	if err := s.db.WithContext(ctx).
 		Where("id = ? AND deleted_at IS NULL", userID).
 		First(&user).Error; err != nil {
+		// Perform a dummy bcrypt comparison to mitigate timing attacks.
+		VerifyPassword(password, dummyHash)
 		return nil, ErrInvalidCredentials
 	}
 
