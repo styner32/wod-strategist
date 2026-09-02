@@ -19,6 +19,7 @@ const MAPPING = {
   'chevron.right': 'chevron-right',
   'clock.fill': 'schedule',
   'figure.run': 'directions-run',
+  'figure.flexibility': 'self-improvement',
   'chevron.left': 'chevron-left',
   'xmark.circle.fill': 'close',
   'xmark.circle': 'cancel',

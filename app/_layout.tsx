@@ -91,6 +91,10 @@ export default function RootLayout() {
           name="settings/deleteAccount"
           options={{ title: t("auth.deleteAccount"), presentation: "modal" }}
         />
+        <Stack.Screen
+          name="stretch/[key]"
+          options={{ title: t("stretches.detailTitle") }}
+        />
       </Stack>
 
       {/* Redirect to login when not authenticated */}

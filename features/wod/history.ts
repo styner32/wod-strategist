@@ -16,8 +16,12 @@ export interface AnalysisResult {
   updated_at: string;
 }
 
-export async function fetchAnalysisHistory(profileId: number): Promise<AnalysisResult[]> {
-  return apiClient<AnalysisResult[]>(`/history?profile_id=${profileId}`);
+export async function fetchAnalysisHistory(profileId: number, limit?: number): Promise<AnalysisResult[]> {
+  const params = new URLSearchParams({ profile_id: String(profileId) });
+  if (limit) {
+    params.set("limit", String(limit));
+  }
+  return apiClient<AnalysisResult[]>(`/history?${params.toString()}`);
 }
 
 export interface HighlightResult {

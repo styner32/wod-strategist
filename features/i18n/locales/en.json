@@ -27,6 +27,7 @@
     "home": "Home",
     "train": "Train",
     "history": "History",
+    "stretches": "Stretches",
     "profile": "Profile"
   },
   "home": {
@@ -351,7 +352,15 @@
     "accountDeleted": "Account deleted.",
     "loggingOut": "Logging out...",
     "noAccount": "Don't have an account?",
-    "haveAccount": "Already have an account?"
+    "haveAccount": "Already have an account?",
+    "sessionExpiredTitle": "Session Expired",
+    "sessionExpiredMessage": "Your login session has expired. Please log in again before starting your workout.",
+    "tokenExpiringSoonTitle": "Session Expiring Soon",
+    "tokenExpiringSoonMessage": "Your login session will expire in less than 24 hours. Would you like to log in again now to prevent interruptions during recording?",
+    "sessionExpiredDuringWorkoutTitle": "Session Expired",
+    "sessionExpiredDuringWorkoutMessage": "Your workout video was safely merged and saved locally. Please log in again to upload and analyze your recording.",
+    "relogin": "Re-login",
+    "continueWorkout": "Continue"
   },
   "relatedWods": {
     "title": "Related Past WODs",
@@ -361,6 +370,20 @@
   },
   "stretchRecs": {
     "title": "Stretch Recommendations",
-    "provisional": "Provisional"
+    "provisional": "Provisional",
+    "tapForDetail": "Tap for details →"
+  },
+  "stretches": {
+    "detailTitle": "Stretch Details",
+    "empty": "No recommended stretches yet",
+    "emptyDesc": "Stretches recommended by AI analysis will be collected here.",
+    "loadFailed": "Failed to load stretches",
+    "sessionCount": "%{count} sessions",
+    "lastRecommended": "Last recommended: %{date}",
+    "noDescription": "No catalog description available for this stretch.",
+    "sessionsTitle": "Recommended in %{count} sessions",
+    "notFound": "Stretch not found",
+    "viewSession": "View in History",
+    "video": "Demo Video"
   }
 }

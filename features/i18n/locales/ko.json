@@ -27,6 +27,7 @@
     "home": "홈",
     "train": "훈련",
     "history": "기록",
+    "stretches": "스트레칭",
     "profile": "프로필"
   },
   "home": {
@@ -351,7 +352,15 @@
     "accountDeleted": "계정이 삭제되었습니다.",
     "loggingOut": "로그아웃 중...",
     "noAccount": "계정이 없으신가요?",
-    "haveAccount": "이미 계정이 있으신가요?"
+    "haveAccount": "이미 계정이 있으신가요?",
+    "sessionExpiredTitle": "세션 만료",
+    "sessionExpiredMessage": "로그인 세션이 만료되었습니다. 운동을 시작하기 전에 다시 로그인해 주세요.",
+    "tokenExpiringSoonTitle": "세션 만료 임박",
+    "tokenExpiringSoonMessage": "로그인 세션이 24시간 이내에 만료됩니다. 운동 중단 방지를 위해 지금 다시 로그인하시겠습니까?",
+    "sessionExpiredDuringWorkoutTitle": "세션 만료",
+    "sessionExpiredDuringWorkoutMessage": "운동 영상이 로컬에 안전하게 병합 및 저장되었습니다. 영상을 업로드하고 분석하려면 다시 로그인해 주세요.",
+    "relogin": "다시 로그인",
+    "continueWorkout": "계속 진행"
   },
   "relatedWods": {
     "title": "동일 동작 이전 기록",
@@ -361,6 +370,20 @@
   },
   "stretchRecs": {
     "title": "맞춤 스트레칭 추천",
-    "provisional": "임시 (추이 관찰)"
+    "provisional": "임시 (추이 관찰)",
+    "tapForDetail": "상세보기 →"
+  },
+  "stretches": {
+    "detailTitle": "스트레칭 상세",
+    "empty": "추천된 스트레칭이 없습니다",
+    "emptyDesc": "AI 분석에서 추천된 맞춤 스트레칭이 여기에 모입니다.",
+    "loadFailed": "스트레칭 정보를 불러오지 못했습니다",
+    "sessionCount": "%{count}개 세션",
+    "lastRecommended": "최근 추천: %{date}",
+    "noDescription": "등록된 스트레칭 설명이 없습니다.",
+    "sessionsTitle": "추천된 세션 (%{count}개)",
+    "notFound": "스트레칭을 찾을 수 없습니다",
+    "viewSession": "기록에서 보기",
+    "video": "동작 영상"
   }
 }

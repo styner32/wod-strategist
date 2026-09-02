@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
+  ScrollView,
   SectionList,
   StyleSheet,
   Text,
@@ -33,42 +34,10 @@ import { AnalysisResult, HighlightResult, fetchAnalysisHistory } from "../histor
 import { HighlightVideoPlayer } from "./HighlightVideoPlayer";
 import { RelatedWodsCard } from "./RelatedWodsCard";
 import { StretchRecommendationsCard, StretchRecommendationItem } from "./StretchRecommendationsCard";
+import { formatSessionLabel } from "../sessionLabel";
+import { normalizeStretchKey } from "@/features/stretch/normalize";
 
-/**
- * Extracts a human-readable label from session_id.
- * New format: "WOD-20260401-01JQXYZ..." → "WOD"
- * Old format: "P1-WOD-2026-04-01-14-30" → "WOD"
- */
-function formatSessionLabel(sessionId: string): string {
-  const parts = sessionId.split("-");
-  if (parts.length === 0) return t("common.workout");
-  // First segment is the workout type (WOD, WARMUP, ACCESSORY, COOLDOWN, etc.)
-  const type = parts[0].toUpperCase();
-  switch (type) {
-    case "WOD":
-      return "WOD";
-    case "WARMUP":
-      return "Warm-up";
-    case "ACCESSORY":
-      return "Accessory";
-    case "COOLDOWN":
-      return "Cooldown";
-    case "STRENGTH":
-      return "Strength";
-    case "CARDIO":
-      return "Cardio";
-    case "FLEXIBILITY":
-      return "Flexibility";
-    case "HIIT":
-      return "HIIT";
-    default:
-      // Old format with P{id} prefix: skip to second part
-      if (type.startsWith("P") && parts.length > 1) {
-        return parts[1].toUpperCase();
-      }
-      return type;
-  }
-}
+export { formatSessionLabel };
 
 /** Badge config for analysis status */
 function getStatusConfig(status: string) {
@@ -131,8 +100,51 @@ const HIGHLIGHT_VARIANT_CONFIG: Record<string, { emoji: string; color: string }>
 const HIGHLIGHT_POLL_INTERVAL_MS = 5_000;
 const HIGHLIGHT_POLL_TIMEOUT_MS = 5 * 60 * 1_000;
 
-function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (id: number) => void }) {
-  const [expanded, setExpanded] = useState(false);
+function HistoryCard({
+  item,
+  onArchive,
+  focusSessionId,
+  scrollViewRef,
+  currentOffsetRef,
+}: {
+  item: AnalysisResult;
+  onArchive?: (id: number) => void;
+  focusSessionId?: string;
+  scrollViewRef?: React.RefObject<ScrollView | null>;
+  currentOffsetRef?: React.MutableRefObject<number>;
+}) {
+  const isFocused = Boolean(focusSessionId && item.session_id === focusSessionId);
+  const [expanded, setExpanded] = useState(isFocused);
+  const [highlighted, setHighlighted] = useState(false);
+  const cardRef = useRef<View>(null);
+
+  useEffect(() => {
+    if (isFocused) {
+      setExpanded(true);
+      setHighlighted(true);
+      const timer = setTimeout(() => {
+        setHighlighted(false);
+      }, 2500);
+
+      router.setParams({ focusSessionId: undefined });
+      return () => clearTimeout(timer);
+    }
+  }, [isFocused]);
+
+  const handleCardLayout = useCallback(() => {
+    if (!isFocused || !cardRef.current || !scrollViewRef?.current) return;
+    cardRef.current.measureInWindow((_cardX: number, cardY: number) => {
+      const scrollNode = scrollViewRef.current as any;
+      if (typeof scrollNode?.measureInWindow === "function") {
+        scrollNode.measureInWindow((_scrollX: number, scrollY: number) => {
+          const currentOffset = currentOffsetRef?.current ?? 0;
+          const targetY = currentOffset + cardY - scrollY - 24;
+          scrollViewRef.current?.scrollTo({ y: Math.max(0, targetY), animated: true });
+        });
+      }
+    });
+  }, [isFocused, scrollViewRef, currentOffsetRef]);
+
   const [downloading, setDownloading] = useState<string | null>(null); // 'merged' | 'hardsubbed' | 'encoded'
   const [retrying, setRetrying] = useState(false);
   const [generatingHardsub, setGeneratingHardsub] = useState(false);
@@ -173,7 +185,7 @@ function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (i
   const [relatedFetched, setRelatedFetched] = useState(false);
 
   useEffect(() => {
-    if (expanded && isCompleted && item.analysis_type === "wod" && !relatedFetched) {
+    if (expanded && isCompleted && item.analysis_type === "wod" && !relatedFetched && item.profile_id) {
       setRelatedFetched(true);
       fetchRelatedWods({
         profileId: item.profile_id,
@@ -426,72 +438,88 @@ function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (i
   };
 
   return (
-    <TouchableOpacity
-      activeOpacity={1}
-      onLongPress={handleArchive}
-      delayLongPress={600}
-      style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}
-    >
-      {/* Header Row */}
-      <View style={styles.cardHeader}>
-        <View style={styles.headerLeft}>
-          <Text style={[styles.sessionLabel, { color: sessionColor }]}>
-            {formatSessionLabel(item.session_id)}
-          </Text>
-          <View style={[styles.badge, { backgroundColor: typeBadge.bgColor }]}>
-            <Text style={[styles.badgeText, { color: typeBadge.color }]}>
-              {typeBadge.label}
+    <View ref={cardRef} onLayout={handleCardLayout}>
+      <TouchableOpacity
+        activeOpacity={1}
+        onLongPress={handleArchive}
+        delayLongPress={600}
+        style={[
+          styles.card,
+          { backgroundColor: cardBg, borderColor: cardBorder },
+          highlighted && styles.focusedCard,
+        ]}
+      >
+        {/* Header Row */}
+        <View style={styles.cardHeader}>
+          <View style={styles.headerLeft}>
+            <Text style={[styles.sessionLabel, { color: sessionColor }]}>
+              {formatSessionLabel(item.session_id)}
+            </Text>
+            <View style={[styles.badge, { backgroundColor: typeBadge.bgColor }]}>
+              <Text style={[styles.badgeText, { color: typeBadge.color }]}>
+                {typeBadge.label}
+              </Text>
+            </View>
+          </View>
+          <View style={[styles.badge, { backgroundColor: statusConfig.bgColor }]}>
+            <Text style={[styles.badgeText, { color: statusConfig.color }]}>
+              {statusConfig.label}
             </Text>
           </View>
         </View>
-        <View style={[styles.badge, { backgroundColor: statusConfig.bgColor }]}>
-          <Text style={[styles.badgeText, { color: statusConfig.color }]}>
-            {statusConfig.label}
-          </Text>
-        </View>
-      </View>
 
-      {/* Date */}
-      <Text style={[styles.date, { color: dateColor }]}>{formatDate(item.created_at)}</Text>
+        {/* Date */}
+        <Text style={[styles.date, { color: dateColor }]}>{formatDate(item.created_at)}</Text>
 
-      {/* Content */}
-      {hasOutput && (
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={() => setExpanded((p) => !p)}
-        >
-          {expanded ? (
-            <View style={styles.contentBody}>
-              <MarkdownText>{item.output}</MarkdownText>
+        {/* Content */}
+        {hasOutput && (
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => setExpanded((p) => !p)}
+          >
+            {expanded ? (
+              <View style={styles.contentBody}>
+                <MarkdownText>{item.output}</MarkdownText>
 
-              {/* Injury supplement output */}
-              {hasInjuryOutput && (
-               <View style={[styles.injurySection, { borderTopColor: hrDividerColor }]}>
-                  <View style={styles.injurySectionHeader}>
-                    <Text style={styles.injurySectionLabel}>
-                      {t("historyList.injuryAnalysis")}
-                    </Text>
+                {/* Injury supplement output */}
+                {hasInjuryOutput && (
+                 <View style={[styles.injurySection, { borderTopColor: hrDividerColor }]}>
+                    <View style={styles.injurySectionHeader}>
+                      <Text style={styles.injurySectionLabel}>
+                        {t("historyList.injuryAnalysis")}
+                      </Text>
+                    </View>
+                    <MarkdownText color="#FFB4B4">
+                      {item.injury_output!}
+                    </MarkdownText>
                   </View>
-                  <MarkdownText color="#FFB4B4">
-                    {item.injury_output!}
-                  </MarkdownText>
-                </View>
-              )}
+                )}
 
-              <StretchRecommendationsCard recommendations={stretchRecommendations} />
-              <RelatedWodsCard related={relatedWods} />
-            </View>
-          ) : (
-            <Text style={[styles.previewText, { color: previewColor }]} numberOfLines={4}>
-              {stripMarkdown(item.output)}
+                <StretchRecommendationsCard
+                  recommendations={stretchRecommendations}
+                  onPressItem={(rec) => {
+                    router.push({
+                      pathname: "/stretch/[key]" as any,
+                      params: {
+                        key: normalizeStretchKey(rec.stretch),
+                        name: rec.stretch,
+                      },
+                    });
+                  }}
+                />
+                <RelatedWodsCard related={relatedWods} />
+              </View>
+            ) : (
+              <Text style={[styles.previewText, { color: previewColor }]} numberOfLines={4}>
+                {stripMarkdown(item.output)}
+              </Text>
+            )}
+
+            <Text style={[styles.expandHint, { color: expandColor }]}>
+              {expanded ? t("historyList.showLess") : t("historyList.showMore")}
             </Text>
-          )}
-
-          <Text style={[styles.expandHint, { color: expandColor }]}>
-            {expanded ? t("historyList.showLess") : t("historyList.showMore")}
-          </Text>
-        </TouchableOpacity>
-      )}
+          </TouchableOpacity>
+        )}
 
       {/* Failed/Pending states */}
       {!hasOutput && item.status === "FAILED" && (
@@ -746,7 +774,8 @@ function HistoryCard({ item, onArchive }: { item: AnalysisResult; onArchive?: (i
           <Text style={styles.pendingText}>{t("historyList.analysisInProgress")}</Text>
         </View>
       )}
-    </TouchableOpacity>
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -772,7 +801,7 @@ function stripMarkdown(text: string): string {
  */
 const PENDING_POLL_INTERVAL_MS = 10_000;
 
-export function useHistoryData() {
+export function useHistoryData(options?: { limit?: number }) {
   const profileId = useProfileId();
   const [data, setData] = useState<AnalysisResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -787,7 +816,7 @@ export function useHistoryData() {
       return;
     }
     try {
-      const history = await fetchAnalysisHistory(profileId);
+      const history = await fetchAnalysisHistory(profileId, options?.limit);
       setData(history);
     } catch (e) {
       console.error(e);
@@ -795,7 +824,7 @@ export function useHistoryData() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [profileId]);
+  }, [profileId, options?.limit]);
 
   useEffect(() => {
     setLoading(true);
@@ -1072,6 +1101,9 @@ interface HistoryListProps {
   data: AnalysisResult[];
   loading: boolean;
   onArchive?: (id: number) => void;
+  focusSessionId?: string;
+  scrollViewRef?: React.RefObject<any>;
+  currentOffsetRef?: React.MutableRefObject<number>;
 }
 
 /** Extract date key (YYYY-MM-DD) from a created_at timestamp */
@@ -1084,8 +1116,7 @@ function getDateKey(dateStr: string): string {
 function formatSectionTitle(dateKey: string): string {
   const now = new Date();
   const todayKey = getDateKey(now.toISOString());
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterday = new Date(now.getTime() - 86_400_000);
   const yesterdayKey = getDateKey(yesterday.toISOString());
 
   if (dateKey === todayKey) return t("history.today");
@@ -1129,7 +1160,14 @@ function groupByDate(items: AnalysisResult[]): DateSection[] {
   return sections;
 }
 
-export function HistoryList({ data, loading, onArchive }: HistoryListProps) {
+export function HistoryList({
+  data,
+  loading,
+  onArchive,
+  focusSessionId,
+  scrollViewRef,
+  currentOffsetRef,
+}: HistoryListProps) {
   // Split pending items into processing section vs completed list
   const pendingItems = data.filter((item) => item.status === "PENDING");
   const nonPendingItems = data.filter((item) => item.status !== "PENDING");
@@ -1155,10 +1193,19 @@ export function HistoryList({ data, loading, onArchive }: HistoryListProps) {
         }
       }
 
-      nodes.push(<HistoryCard key={item.id} item={item} onArchive={onArchive} />);
+      nodes.push(
+        <HistoryCard
+          key={item.id}
+          item={item}
+          onArchive={onArchive}
+          focusSessionId={focusSessionId}
+          scrollViewRef={scrollViewRef}
+          currentOffsetRef={currentOffsetRef}
+        />
+      );
       return <>{nodes}</>;
     },
-    [onArchive]
+    [onArchive, focusSessionId, scrollViewRef, currentOffsetRef]
   );
 
   const renderSectionHeader = useCallback(
@@ -1250,6 +1297,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
+  },
+  focusedCard: {
+    borderColor: "#64D2FF",
+    borderWidth: 2,
   },
   cardHeader: {
     flexDirection: "row",

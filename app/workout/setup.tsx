@@ -1,5 +1,7 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { t } from '@/features/i18n';
+import { validateStoredToken } from '@/features/auth/jwt';
+import { useAuthStore } from '@/features/auth/useAuthStore';
 import { fetchMovementGroups, parseWorkoutImage, fetchRelatedWods, type MovementGroup } from '@/features/wod/api';
 import { RelatedWodsCard } from '@/features/wod/ui/RelatedWodsCard';
 import { WORKOUT_TYPES, type WorkoutType } from '@/features/wod/workoutType';
@@ -305,37 +307,82 @@ export default function WorkoutSetup() {
   const [sessionAppearance, setSessionAppearance] = useState('');
   const [isStarting, setIsStarting] = useState(false);
 
+  const navigateToVisionTest = async () => {
+    try {
+      await AsyncStorage.setItem(VIDEO_PREFS_KEY, JSON.stringify(videoPrefs));
+    } catch (e) {
+      console.warn('Failed to persist video prefs:', e);
+    }
+    const injuries = activeProfile?.injuries ?? [];
+    const appearanceHints = sessionAppearance.trim();
+
+    router.push({
+      pathname: '/workout/visionTestPage',
+      params: {
+        resolution: videoPrefs.resolution,
+        workoutType,
+        movements: selectedMovements.join(', '),
+        injuries: injuries.join(', '),
+        wodDescription: wodDescription.trim(),
+        ...(appearanceHints ? { appearanceHints } : {}),
+        autoRecord: videoPrefs.autoRecord ? 'true' : 'false',
+        showSkeleton: videoPrefs.showSkeleton ? 'true' : 'false',
+        lowFps: videoPrefs.lowFps ? 'true' : 'false',
+        skipCompression: videoPrefs.skipCompression ? 'true' : 'false',
+        serialUpload: videoPrefs.serialUpload ? 'true' : 'false',
+        landscapeMode: videoPrefs.landscapeMode ? 'true' : 'false',
+        zoomMode: videoPrefs.zoomMode ? 'true' : 'false',
+        aspectRatio: videoPrefs.aspectRatio,
+      },
+    });
+  };
+
   const handleStart = async () => {
     if (isStarting) return;
     setIsStarting(true);
     try {
-      try {
-        await AsyncStorage.setItem(VIDEO_PREFS_KEY, JSON.stringify(videoPrefs));
-      } catch (e) {
-        console.warn('Failed to persist video prefs:', e);
+      // Validate JWT token expiry before launching workout
+      const tokenStatus = await validateStoredToken();
+      if (!tokenStatus.valid) {
+        Alert.alert(
+          t("auth.sessionExpiredTitle"),
+          t("auth.sessionExpiredMessage"),
+          [
+            {
+              text: t("auth.login"),
+              onPress: () => {
+                useAuthStore.getState().handleUnauthorized();
+              },
+            },
+          ]
+        );
+        return;
       }
-      const injuries = activeProfile?.injuries ?? [];
-      const appearanceHints = sessionAppearance.trim();
 
-      router.push({
-        pathname: '/workout/visionTestPage',
-        params: {
-          resolution: videoPrefs.resolution,
-          workoutType,
-          movements: selectedMovements.join(', '),
-          injuries: injuries.join(', '),
-          wodDescription: wodDescription.trim(),
-          ...(appearanceHints ? { appearanceHints } : {}),
-          autoRecord: videoPrefs.autoRecord ? 'true' : 'false',
-          showSkeleton: videoPrefs.showSkeleton ? 'true' : 'false',
-          lowFps: videoPrefs.lowFps ? 'true' : 'false',
-          skipCompression: videoPrefs.skipCompression ? 'true' : 'false',
-          serialUpload: videoPrefs.serialUpload ? 'true' : 'false',
-          landscapeMode: videoPrefs.landscapeMode ? 'true' : 'false',
-          zoomMode: videoPrefs.zoomMode ? 'true' : 'false',
-          aspectRatio: videoPrefs.aspectRatio,
-        },
-      });
+      if (tokenStatus.expiringSoon) {
+        Alert.alert(
+          t("auth.tokenExpiringSoonTitle"),
+          t("auth.tokenExpiringSoonMessage"),
+          [
+            {
+              text: t("auth.relogin"),
+              style: "destructive",
+              onPress: () => {
+                useAuthStore.getState().handleUnauthorized();
+              },
+            },
+            {
+              text: t("auth.continueWorkout"),
+              onPress: () => {
+                navigateToVisionTest();
+              },
+            },
+          ]
+        );
+        return;
+      }
+
+      await navigateToVisionTest();
     } finally {
       setTimeout(() => setIsStarting(false), 1500);
     }

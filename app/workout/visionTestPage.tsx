@@ -44,6 +44,8 @@ import { enqueueUpload as enqueueDebugUpload, flushPendingUploads } from '../../
 
 import { useProfileStore } from "@/store/useProfileStore";
 import { useMergeStatus } from "@/store/useMergeStatus";
+import { t } from "@/features/i18n";
+import { useAuthStore } from "@/features/auth/useAuthStore";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 const IS_ANDROID = Platform.OS === 'android';
@@ -259,7 +261,10 @@ export default function VisionTestPage() {
       }
       setAppState(nextAppState);
     });
-    return () => subscription.remove();
+    return () => {
+      subscription.remove();
+      useAuthStore.getState().setRecordingActive(false);
+    };
   }, []);
 
   const profileId = useProfileStore((s) => s.activeProfileId);
@@ -664,6 +669,7 @@ export default function VisionTestPage() {
 
       setIsRecording(true);
       setIsPaused(false);
+      useAuthStore.getState().setRecordingActive(true);
       accumulatedMs.current = 0;
       segmentStartTime.current = Date.now();
       setElapsedMs(0);
@@ -811,6 +817,27 @@ export default function VisionTestPage() {
         setMergeChunkTotal(localChunks.length);
         setIsMerging(true);
 
+        const handlePostWorkoutAuthCheck = () => {
+          const { sessionExpiredDuringRecording, finishDeferredUnauthorized, setRecordingActive } = useAuthStore.getState();
+          setRecordingActive(false);
+          if (sessionExpiredDuringRecording) {
+            Alert.alert(
+              t("auth.sessionExpiredDuringWorkoutTitle"),
+              t("auth.sessionExpiredDuringWorkoutMessage"),
+              [
+                {
+                  text: t("common.ok"),
+                  onPress: () => {
+                    finishDeferredUnauthorized();
+                  },
+                },
+              ]
+            );
+          } else {
+            router.replace("/history" as any);
+          }
+        };
+
         // Show the gallery save alert after merge completes.
         // The alert is shown BEFORE navigating so it stays visible.
         const performMergeAndPrompt = async () => {
@@ -833,7 +860,7 @@ export default function VisionTestPage() {
                     // for later access — only clean up raw chunk files.
                     cleanupLocalChunkFiles(localChunks);
                     chunkPaths.current = [];
-                    router.replace("/history" as any);
+                    handlePostWorkoutAuthCheck();
                   },
                 },
                 {
@@ -844,7 +871,7 @@ export default function VisionTestPage() {
                         console.log("📱 Saved merged video to gallery");
                         // Safe to delete both merged and chunks since it's fully saved in gallery
                         cleanupMergedAndChunks(outPath, localChunks);
-                        router.replace("/history" as any);
+                        handlePostWorkoutAuthCheck();
                       })
                       .catch((e) => {
                         console.warn("⚠️ Gallery save failed:", e);
@@ -854,7 +881,7 @@ export default function VisionTestPage() {
                         Alert.alert(
                           "저장 실패",
                           "갤러리에 저장하지 못했습니다. 하지만 병합된 파일은 안전하게 보관되어 있습니다. Files 앱에서 직접 가져오실 수 있습니다.",
-                          [{ text: "확인", onPress: () => router.replace("/history" as any) }]
+                          [{ text: "확인", onPress: () => handlePostWorkoutAuthCheck() }]
                         );
                       });
                   },
@@ -870,7 +897,7 @@ export default function VisionTestPage() {
             Alert.alert(
               "로컬 병합 실패",
               "비디오 조각 병합에 실패했습니다. 하지만 촬영된 원본 비디오 조각들은 삭제되지 않고 안전하게 보관되었습니다. 디버그 메뉴에서 PC로 내보낼 수 있습니다.",
-              [{ text: "확인", onPress: () => router.replace("/history" as any) }]
+              [{ text: "확인", onPress: () => handlePostWorkoutAuthCheck() }]
             );
           }
         };
@@ -879,8 +906,24 @@ export default function VisionTestPage() {
         performMergeAndPrompt();
       } else {
         console.log("📦 No local chunks — skipping gallery save");
-        // No chunks to merge — just navigate
-        router.replace("/history" as any);
+        const { sessionExpiredDuringRecording, finishDeferredUnauthorized, setRecordingActive } = useAuthStore.getState();
+        setRecordingActive(false);
+        if (sessionExpiredDuringRecording) {
+          Alert.alert(
+            t("auth.sessionExpiredDuringWorkoutTitle"),
+            t("auth.sessionExpiredDuringWorkoutMessage"),
+            [
+              {
+                text: t("common.ok"),
+                onPress: () => {
+                  finishDeferredUnauthorized();
+                },
+              },
+            ]
+          );
+        } else {
+          router.replace("/history" as any);
+        }
       }
     } catch (error) {
       console.error("Recording Stop Error:", error);
