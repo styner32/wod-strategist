@@ -55,10 +55,12 @@
 2. Transaction deletes: feedback, chunk/session re-analysis runs, `analysis_results`, `chunk_analysis_results`, `highlight_results`, `token_usages` (by profile_id), then profiles, then soft-deletes user (`deleted_at`, scrubs `password_hash`, bumps `token_version`)
 3. Returns `gcsPrefixes` for async GCS cleanup — **currently not wired up** (see TODO)
 
-## 401 handling (mobile)
-- `apiClient` in `features/wod/api.ts` intercepts 401 responses
-- Calls `useAuthStore.getState().handleUnauthorized()` which clears SecureStore + resets state
-- `_layout.tsx` redirects to `/auth/login` when `isLoggedIn` is false
+## 401 handling & token validation (mobile)
+- `apiClient` in `features/wod/api.ts` intercepts 401 responses and calls `useAuthStore.getState().handleUnauthorized()`.
+- **Deferred logout during recording:** If a workout recording is active (`isRecordingActive: true`), `handleUnauthorized()` sets `sessionExpiredDuringRecording: true` and defers clearing credentials and redirecting until after the session finishes and the local video is merged and saved.
+- `_layout.tsx` redirects to `/auth/login` when `isLoggedIn` is false.
+- **Pre-workout token validation:** `setup.tsx` calls `validateStoredToken()` (`features/auth/jwt.ts`). If the token is expired, it blocks starting and prompts login. If the token expires in < 24h, it prompts the user to re-login or continue.
+- **Hydration token check:** `useAuthStore.hydrate()` decodes the JWT and clears expired tokens on launch.
 
 ## Gotchas
 - Username unique index is partial: `WHERE deleted_at IS NULL` — deleted usernames are NOT freed for reuse (username is not scrubbed on delete)

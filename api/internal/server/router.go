@@ -110,6 +110,7 @@ func SetupRouter(appEnv string, allowedOrigins []string,
 	protected.DELETE("/sessions/:session_id/feedback/:feedback_id", ctl.DeleteFeedback)
 
 	protected.GET("/stretches", ctl.ListStretches)
+	protected.GET("/stretches/recommended", ctl.ListRecommendedStretches)
 	protected.POST("/stretches", ctl.CreateStretch)
 	protected.PUT("/stretches/:id", ctl.UpdateStretch)
 	protected.DELETE("/stretches/:id", ctl.DeleteStretch)

@@ -41,7 +41,6 @@ func extractTokenUsage(resp *genai.GenerateContentResponse, model string) *Token
 const (
 	ModelPro31Preview      = "gemini-3.1-pro-preview"
 	ModelFlash35Lite       = "gemini-3.5-flash-lite"
-	ModelFlash36           = "gemini-3.6-flash"
 	ModelFlash37           = "gemini-3.7-flash"
 	ModelFlashTTS31Preview = "gemini-3.1-flash-tts-preview"
 
