@@ -394,6 +394,7 @@ func runFFmpegHardSub(ctx context.Context, log *zap.Logger, inputPath, srtPath, 
 		"-vf", fmt.Sprintf("subtitles=%s:force_style='%s'", srtPath, forceStyle),
 		"-preset", "ultrafast",
 		"-c:a", "copy",
+		"-movflags", "+faststart",
 		"-y",
 		outputPath,
 	}

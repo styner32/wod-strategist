@@ -1278,6 +1278,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	legacyMobilityObs := sanitizeMobilityObservations(parseMobilityObservations(analysis))
 	legacyMobilityJSON := marshalMobilityObservations(legacyMobilityObs)
 	legacyStretchRecsJSON := w.recommendStretches(ctx, p.ProfileID, p.SessionID, legacyMobilityObs, p.Injuries)
+	legacySessionScore := parseSessionScore(analysis)
 
 	result := &db.AnalysisResult{
 		SessionID:              p.SessionID,
@@ -1286,6 +1287,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		AnalysisType:           db.AnalysisTypeWOD,
 		HighlightSegments:      highlightSegments,
 		WODDescription:         p.WODDescription,
+		SessionScore:           legacySessionScore,
 		NormalizedWorkout:      legacyNormalizedWorkout,
 		MobilityObservations:   legacyMobilityJSON,
 		StretchRecommendations: legacyStretchRecsJSON,

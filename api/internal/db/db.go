@@ -102,6 +102,7 @@ type AnalysisResult struct {
 	// Schema: {"overall":74,"form":68,"intensity":82,"consistency":72,"movements":{},"summary":"..."}
 	// Used to inject historical performance context into future analysis prompts.
 	SessionScore           string           `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
+	SessionFatigue         *SessionFatigue  `gorm:"-" json:"session_fatigue,omitempty"`
 	NormalizedWorkout      string           `json:"normalized_workout,omitempty"`
 	MobilityObservations   string           `gorm:"type:text;not null;default:'[]'" json:"mobility_observations,omitempty"`
 	StretchRecommendations string           `gorm:"type:text;not null;default:'[]'" json:"stretch_recommendations,omitempty"`
@@ -109,6 +110,13 @@ type AnalysisResult struct {
 	ArchivedAt             *time.Time       `json:"archived_at,omitempty"`
 	CreatedAt              time.Time        `json:"created_at"`
 	UpdatedAt              time.Time        `json:"updated_at"`
+}
+
+type SessionFatigue struct {
+	OverallScore int            `json:"overall_score"`
+	State        string         `json:"state"`
+	StateKO      string         `json:"state_ko"`
+	Muscles      map[string]int `json:"muscles"`
 }
 
 type NormalizedMovement struct {

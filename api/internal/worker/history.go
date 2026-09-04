@@ -53,9 +53,9 @@ type SessionScore struct {
 	Summary     string                    `json:"summary"`
 }
 
-// parseSessionScore extracts the ```score {...} ``` JSON block from model output.
+// ParseSessionScore extracts the ```score {...} ``` JSON block from model output.
 // Returns "{}" if no block is found or the JSON is malformed.
-func parseSessionScore(output string) string {
+func ParseSessionScore(output string) string {
 	match := scoreBlockRegex.FindStringSubmatch(output)
 	if len(match) < 2 {
 		return "{}"
@@ -77,6 +77,10 @@ func parseSessionScore(output string) string {
 		return "{}"
 	}
 	return string(out)
+}
+
+func parseSessionScore(output string) string {
+	return ParseSessionScore(output)
 }
 
 // buildWODContext returns a Korean prompt section describing the WOD if wod_description is set.
