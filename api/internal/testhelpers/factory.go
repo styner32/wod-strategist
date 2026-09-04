@@ -131,22 +131,22 @@ func CreateSession(dbConn *gorm.DB, sessionAttr *db.Session) db.Session {
 
 func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.AnalysisResult {
 	result := db.AnalysisResult{
-		SessionID:           resultAttr.SessionID,
-		ProfileID:           resultAttr.ProfileID,
-		AnalysisType:        resultAttr.AnalysisType,
-		Status:              resultAttr.Status,
-		Output:              resultAttr.Output,
-		GeminiFileURI:       resultAttr.GeminiFileURI,
-		GeminiFileName:      resultAttr.GeminiFileName,
-		GeminiMIMEType:      resultAttr.GeminiMIMEType,
-		GeminiFileExpiresAt: resultAttr.GeminiFileExpiresAt,
-		HighlightSegments:   resultAttr.HighlightSegments,
-		WODDescription:      resultAttr.WODDescription,
+		SessionID:              resultAttr.SessionID,
+		ProfileID:              resultAttr.ProfileID,
+		AnalysisType:           resultAttr.AnalysisType,
+		Status:                 resultAttr.Status,
+		Output:                 resultAttr.Output,
+		GeminiFileURI:          resultAttr.GeminiFileURI,
+		GeminiFileName:         resultAttr.GeminiFileName,
+		GeminiMIMEType:         resultAttr.GeminiMIMEType,
+		GeminiFileExpiresAt:    resultAttr.GeminiFileExpiresAt,
+		HighlightSegments:      resultAttr.HighlightSegments,
+		WODDescription:         resultAttr.WODDescription,
 		SessionScore:           resultAttr.SessionScore,
 		NormalizedWorkout:      resultAttr.NormalizedWorkout,
 		MobilityObservations:   resultAttr.MobilityObservations,
 		StretchRecommendations: resultAttr.StretchRecommendations,
-		ArchivedAt:              resultAttr.ArchivedAt,
+		ArchivedAt:             resultAttr.ArchivedAt,
 	}
 	if result.AnalysisType == "" {
 		result.AnalysisType = db.AnalysisTypeWOD
@@ -385,4 +385,3 @@ func CreateStretchAlias(dbConn *gorm.DB, aliasAttr *db.StretchAlias) db.StretchA
 	g.Expect(dbConn.Create(&a).Error).NotTo(g.HaveOccurred())
 	return a
 }
-

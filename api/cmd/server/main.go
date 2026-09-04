@@ -64,19 +64,21 @@ func main() {
 		logger.Log.Fatal("Failed to create storage client", zap.Error(err))
 	}
 
-	// Initialize optional Gemini client for image parsing (parse-workout-image).
-	// If GEMINI_API_KEY is not set, the endpoint returns 503.
+	// Initialize optional Gemini client for image & text parsing (parse-workout-image, pre-wod-advice).
+	// If GEMINI_API_KEY is not set, endpoints fall back to deterministic handling or 503.
 	var imageParser controllers.ImageParser
+	var textParser controllers.TextParser
 	if cfg.GeminiAPIKey != "" {
 		geminiClient, geminiErr := gemini.NewClientWithOptions(context.Background(), logger.Log, gemini.Options{
 			APIKey: cfg.GeminiAPIKey,
-			Model:  gemini.ModelFlash37,
+			Model:  gemini.ModelFlash38,
 		})
 		if geminiErr != nil {
-			logger.Log.Warn("Failed to create Gemini client for image parsing; endpoint disabled", zap.Error(geminiErr))
+			logger.Log.Warn("Failed to create Gemini client for image/text parsing", zap.Error(geminiErr))
 		} else {
 			imageParser = geminiClient
-			logger.Log.Info("Gemini image parser initialized (" + gemini.ModelFlash37 + ")")
+			textParser = geminiClient
+			logger.Log.Info("Gemini image/text parser initialized (" + gemini.ModelFlash38 + ")")
 		}
 	}
 
@@ -88,6 +90,7 @@ func main() {
 		HighlightResults:        controllers.NewGormHighlightResultRepository(dbConn),
 		StorageClient:           storageClient,
 		ImageParser:             imageParser,
+		TextParser:              textParser,
 		BucketName:              cfg.GCSBucketName,
 		GitCommit:               GitCommit,
 		EnableChunkReanalysis:   cfg.ChunkReanalysisEnabled,

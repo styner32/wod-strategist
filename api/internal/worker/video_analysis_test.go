@@ -489,7 +489,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 			JSON(map[string]any{})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelFlash37+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			SetOptional().
 			Reply(http.StatusOK).

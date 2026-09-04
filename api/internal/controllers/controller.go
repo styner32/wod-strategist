@@ -57,6 +57,11 @@ type ImageParser interface {
 	ParseImage(ctx context.Context, imageBytes []byte, mimeType string, prompt string) (string, *gemini.TokenUsage, error)
 }
 
+// TextParser is the minimal interface for synchronous text generation/coaching.
+type TextParser interface {
+	ParseText(ctx context.Context, prompt string) (string, *gemini.TokenUsage, error)
+}
+
 type VideoAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool, wodDescription string) (*asynq.Task, error)
 
 type ChunkAnalysisTaskFactory func(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, startSecs, endSecs float64, heartRateBPM int, wodDescription string, workoutConfidence float64) (*asynq.Task, error)
@@ -75,6 +80,7 @@ type Config struct {
 	HighlightResults        HighlightResultRepository
 	StorageClient           ObjectStorage
 	ImageParser             ImageParser // optional — enables /parse-workout-image
+	TextParser              TextParser  // optional — enables /strategies/pre-wod-advice
 	BucketName              string
 	GitCommit               string
 	NewVideoAnalysisTask    VideoAnalysisTaskFactory
@@ -95,6 +101,7 @@ type Controller struct {
 	highlightResults        HighlightResultRepository
 	storageClient           ObjectStorage
 	imageParser             ImageParser
+	textParser              TextParser
 	bucketName              string
 	gitCommit               string
 	newVideoAnalysisTask    VideoAnalysisTaskFactory
@@ -156,6 +163,7 @@ func New(config Config) (*Controller, error) {
 		highlightResults:        config.HighlightResults,
 		storageClient:           config.StorageClient,
 		imageParser:             config.ImageParser,
+		textParser:              config.TextParser,
 		bucketName:              config.BucketName,
 		gitCommit:               commit,
 		newVideoAnalysisTask:    taskFactory,
