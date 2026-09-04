@@ -80,7 +80,16 @@
     "createProfile": "Create Profile",
     "switchProfile": "Switch Profile",
     "signOut": "Sign Out",
-    "signOutConfirm": "Are you sure you want to sign out?"
+    "signOutConfirm": "Are you sure you want to sign out?",
+    "videoCacheTitle": "Video Cache Management",
+    "videoCacheDesc": "Cached video data for smooth playback and offline viewing.",
+    "videoCacheAutoPolicy": "Automatically caches up to 1.5 GB; oldest videos are pruned when limit is exceeded.",
+    "videoCacheEmpty": "No cached videos.",
+    "videoCacheCount": "%{size} (%{count} videos)",
+    "videoCacheClear": "Clear All Video Cache",
+    "videoCacheClearConfirm": "Delete all cached workout videos? Originals remain safe on the server.",
+    "videoCacheCleared": "All video cache cleared successfully.",
+    "videoCacheClearing": "Clearing cache..."
   },
   "profileEdit": {
     "editProfile": "Edit Profile",
@@ -297,7 +306,16 @@
     "archiveConfirm": "This will hide the record from your history. You can still find it later.",
     "archive": "Archive",
     "archiveFailed": "Failed to archive. Please try again.",
-    "mergePreparing": "Preparing merge... Your session will appear shortly."
+    "mergePreparing": "Preparing merge... Your session will appear shortly.",
+    "fatigueBadge": "⚡ Fatigue %{score}%",
+    "fatigueSummary": "Fatigue %{score}% (%{state})",
+    "fatigueCardTitle": "Muscle Fatigue & Strain",
+    "overallStrain": "Overall Strain",
+    "topLoadedMuscles": "Main Strain: %{muscles}",
+    "fresh": "Fresh",
+    "moderate": "Moderate",
+    "fatigued": "High Fatigue",
+    "exhausted": "Exhausted"
   },
   "player": {
     "loadingVideo": "Loading workout video...",
@@ -323,7 +341,8 @@
     "observationFatigueOnset": "Fatigue Onset",
     "observationTechniqueEvent": "Technique Event",
     "observationConfidence": "%{value}% confidence",
-    "saveToGallery": "💾 Save to Gallery"
+    "saveToGallery": "💾 Save to Gallery",
+    "cachedOffline": "Cached"
   },
   "overlay": {
     "encoding": "Encoding... %{percent}%",
@@ -384,6 +403,22 @@
     "sessionsTitle": "Recommended in %{count} sessions",
     "notFound": "Stretch not found",
     "viewSession": "View in History",
-    "video": "Demo Video"
+    "video": "Movement Video"
+  },
+  "preWod": {
+    "title": "Today's Custom WOD Strategy & Fatigue",
+    "analyzingFatigue": "Analyzing muscle group fatigue & strategy...",
+    "pacingStrategy": "Pacing Strategy",
+    "muscleReadiness": "6-Muscle Group Fatigue Analysis",
+    "scalingAdvice": "Scaling & Movement Recommendations",
+    "recommendedMobility": "Pre-WOD Essential Mobility & Warm-up"
+  },
+  "muscleGroups": {
+    "shoulders_push": "Shoulders & Push",
+    "upper_pull_grip": "Back, Pull & Grip",
+    "posterior_chain": "Posterior Chain",
+    "quads_squat": "Quads & Squat",
+    "core_midline": "Core & Midline",
+    "cardio_metabolic": "Cardio & Metabolic"
   }
 }

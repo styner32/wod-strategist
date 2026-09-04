@@ -1,5 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t, useLocale } from "@/features/i18n";
+import { useVideoPlayer, VideoView } from "expo-video";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
   Dimensions,
@@ -10,7 +17,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useVideoPlayer, VideoView } from "expo-video";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { ChunkAnalysisResult } from "../api";
@@ -39,6 +45,7 @@ interface Props {
   sessionLabel: string;
   chunks: ChunkAnalysisResult[];
   highlightSegments: unknown;
+  isCached?: boolean;
   onClose: () => void;
 }
 
@@ -59,7 +66,13 @@ function stripCodeBlocks(text: string): string {
 
 function buildCues(chunks: ChunkAnalysisResult[]): GuidanceCue[] {
   return chunks
-    .filter((c) => c.status === "COMPLETED" && c.start_secs != null && c.end_secs != null && c.output)
+    .filter(
+      (c) =>
+        c.status === "COMPLETED" &&
+        c.start_secs != null &&
+        c.end_secs != null &&
+        c.output,
+    )
     .sort((a, b) => (a.start_secs ?? 0) - (b.start_secs ?? 0))
     .map((c) => ({
       startSecs: c.start_secs!,
@@ -71,7 +84,10 @@ function buildCues(chunks: ChunkAnalysisResult[]): GuidanceCue[] {
 }
 
 /** Find the active cue for a given playback position */
-function findActiveCue(cues: GuidanceCue[], timeSecs: number): GuidanceCue | null {
+function findActiveCue(
+  cues: GuidanceCue[],
+  timeSecs: number,
+): GuidanceCue | null {
   for (const cue of cues) {
     if (timeSecs >= cue.startSecs && timeSecs < cue.endSecs) {
       return cue;
@@ -80,7 +96,10 @@ function findActiveCue(cues: GuidanceCue[], timeSecs: number): GuidanceCue | nul
   return null;
 }
 
-const HIGHLIGHT_TYPE_CONFIG: Record<string, { emoji: string; color: string; labelKey: string }> = {
+const HIGHLIGHT_TYPE_CONFIG: Record<
+  string,
+  { emoji: string; color: string; labelKey: string }
+> = {
   best_form: { emoji: "🏆", color: "#30D158", labelKey: "player.bestForm" },
   worst_form: { emoji: "⚠️", color: "#FF9F0A", labelKey: "player.needsWork" },
   fatigue_point: { emoji: "🫁", color: "#FF453A", labelKey: "player.fatigue" },
@@ -92,10 +111,19 @@ const HIGHLIGHT_OBSERVATION_CONFIG: Record<
   HighlightObservationType,
   { color: string; labelKey: string }
 > = {
-  positive_form: { color: "#30D158", labelKey: "player.observationPositiveForm" },
+  positive_form: {
+    color: "#30D158",
+    labelKey: "player.observationPositiveForm",
+  },
   form_issue: { color: "#FF9F0A", labelKey: "player.observationFormIssue" },
-  fatigue_onset: { color: "#FF453A", labelKey: "player.observationFatigueOnset" },
-  technique_event: { color: "#64D2FF", labelKey: "player.observationTechniqueEvent" },
+  fatigue_onset: {
+    color: "#FF453A",
+    labelKey: "player.observationFatigueOnset",
+  },
+  technique_event: {
+    color: "#64D2FF",
+    labelKey: "player.observationTechniqueEvent",
+  },
 };
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
@@ -112,23 +140,28 @@ export function WorkoutVideoPlayer({
   sessionLabel,
   chunks,
   highlightSegments,
+  isCached = false,
   onClose,
 }: Props) {
   const locale = useLocale();
   const insets = useSafeAreaInsets();
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [activeHighlight, setActiveHighlight] = useState<HighlightSegment | null>(null);
+  const [activeHighlight, setActiveHighlight] =
+    useState<HighlightSegment | null>(null);
   const highlightFade = useRef(new Animated.Value(0)).current;
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const normalizedHighlights = useMemo(
     () => parseHighlightSegments(highlightSegments),
-    [highlightSegments]
+    [highlightSegments],
   );
 
   // Build guidance cues from chunk analysis
   const cues = useMemo(() => buildCues(chunks), [chunks]);
-  const activeCue = useMemo(() => findActiveCue(cues, currentTime), [cues, currentTime]);
+  const activeCue = useMemo(
+    () => findActiveCue(cues, currentTime),
+    [cues, currentTime],
+  );
 
   // Video player
   const player = useVideoPlayer(videoUrl, (p) => {
@@ -171,18 +204,22 @@ export function WorkoutVideoPlayer({
         }).start(() => setActiveHighlight(null));
       }, 4000);
     },
-    [highlightFade]
+    [highlightFade],
   );
 
   // Jump to highlight
   const handleHighlightPress = useCallback(
     (hl: HighlightSegment) => {
-      const targetSecs = getHighlightSeekTime(hl.startSeconds, duration, hl.version);
+      const targetSecs = getHighlightSeekTime(
+        hl.startSeconds,
+        duration,
+        hl.version,
+      );
       player.currentTime = targetSecs;
       player.play();
       showHighlightOverlay(hl);
     },
-    [duration, player, showHighlightOverlay]
+    [duration, player, showHighlightOverlay],
   );
 
   // Cleanup
@@ -194,66 +231,87 @@ export function WorkoutVideoPlayer({
 
   const renderHighlightChip = useCallback(
     ({ item: hl }: { item: HighlightSegment }) => {
-      const rawCfg = HIGHLIGHT_TYPE_CONFIG[hl.type] ?? { emoji: "🎯", color: "#A0A0A0", labelKey: hl.type };
+      const rawCfg = HIGHLIGHT_TYPE_CONFIG[hl.type] ?? {
+        emoji: "🎯",
+        color: "#A0A0A0",
+        labelKey: hl.type,
+      };
       const cfg = { ...rawCfg, label: t(rawCfg.labelKey) };
       const isActive =
-        currentTime >= hl.startSeconds &&
-        currentTime <= hl.endSeconds;
+        currentTime >= hl.startSeconds && currentTime <= hl.endSeconds;
 
       return (
         <TouchableOpacity
           style={[
             styles.highlightChip,
             { borderColor: cfg.color + "60" },
-            isActive && { borderColor: cfg.color, backgroundColor: cfg.color + "25" },
+            isActive && {
+              borderColor: cfg.color,
+              backgroundColor: cfg.color + "25",
+            },
           ]}
           onPress={() => handleHighlightPress(hl)}
           activeOpacity={0.7}
         >
           <Text style={styles.chipEmoji}>{cfg.emoji}</Text>
           <View style={styles.chipTextCol}>
-            <Text style={[styles.chipLabel, { color: cfg.color }]} numberOfLines={1}>
+            <Text
+              style={[styles.chipLabel, { color: cfg.color }]}
+              numberOfLines={1}
+            >
               {hl.movement ? `${hl.movement}` : cfg.label}
             </Text>
-            {hl.movement && (
-              <Text style={styles.chipType}>{cfg.label}</Text>
-            )}
+            {hl.movement && <Text style={styles.chipType}>{cfg.label}</Text>}
             <Text style={styles.chipTime}>
               {hl.start} – {hl.end}
             </Text>
             {hl.type !== "key_moment" && hl.tags?.includes("key_moment") && (
               <View style={styles.chipTag}>
-                <Text style={styles.chipTagText}>⭐ {t("player.keyMoment")}</Text>
+                <Text style={styles.chipTagText}>
+                  ⭐ {t("player.keyMoment")}
+                </Text>
               </View>
             )}
             {hl.reason && (
-              <Text style={styles.chipReason} numberOfLines={2}>{hl.reason}</Text>
+              <Text style={styles.chipReason} numberOfLines={2}>
+                {hl.reason}
+              </Text>
             )}
             {hl.observations && hl.observations.length > 0 && (
               <View style={styles.observationList}>
                 {hl.observations.map((observation, observationIndex) => {
-                  const observationConfig = HIGHLIGHT_OBSERVATION_CONFIG[observation.type];
-                  const confidence = observation.confidence != null
-                    ? ` · ${t("player.observationConfidence", {
-                        value: Math.round(observation.confidence * 100),
-                      })}`
-                    : "";
+                  const observationConfig =
+                    HIGHLIGHT_OBSERVATION_CONFIG[observation.type];
+                  const confidence =
+                    observation.confidence != null
+                      ? ` · ${t("player.observationConfidence", {
+                          value: Math.round(observation.confidence * 100),
+                        })}`
+                      : "";
 
                   return (
                     <View
                       key={`${observation.startSeconds}-${observation.endSeconds}-${observation.type}-${observationIndex}`}
                       style={styles.observationItem}
                     >
-                      <Text style={[styles.observationLabel, { color: observationConfig.color }]}
+                      <Text
+                        style={[
+                          styles.observationLabel,
+                          { color: observationConfig.color },
+                        ]}
                         numberOfLines={1}
                       >
-                        {t(observationConfig.labelKey)}{confidence}
+                        {t(observationConfig.labelKey)}
+                        {confidence}
                       </Text>
                       <Text style={styles.observationTime}>
                         {observation.start} – {observation.end}
                       </Text>
                       {observation.reason && (
-                        <Text style={styles.observationReason} numberOfLines={2}>
+                        <Text
+                          style={styles.observationReason}
+                          numberOfLines={2}
+                        >
                           {observation.reason}
                         </Text>
                       )}
@@ -266,7 +324,7 @@ export function WorkoutVideoPlayer({
         </TouchableOpacity>
       );
     },
-    [currentTime, handleHighlightPress]
+    [currentTime, handleHighlightPress],
   );
 
   return (
@@ -276,8 +334,20 @@ export function WorkoutVideoPlayer({
         <TouchableOpacity onPress={onClose} hitSlop={12} style={styles.backBtn}>
           <Text style={styles.backText}>{t("player.backBtn")}</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{sessionLabel}</Text>
-        <View style={styles.headerSpacer} />
+        <Text style={styles.headerTitle} numberOfLines={1}>
+          {sessionLabel}
+        </Text>
+        <View style={styles.headerRight}>
+          {isCached ? (
+            <View style={styles.cachedBadge}>
+              <Text style={styles.cachedBadgeText}>
+                ⚡ {t("player.cachedOffline")}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.headerSpacer} />
+          )}
+        </View>
       </View>
 
       {/* ── Video ── */}
@@ -290,18 +360,25 @@ export function WorkoutVideoPlayer({
 
       {/* ── Highlight Overlay Card ── */}
       {activeHighlight && (
-        <Animated.View style={[styles.highlightOverlay, { opacity: highlightFade }]}>
+        <Animated.View
+          style={[styles.highlightOverlay, { opacity: highlightFade }]}
+        >
           <View style={styles.highlightOverlayInner}>
             <Text style={styles.highlightOverlayEmoji}>
-              {(HIGHLIGHT_TYPE_CONFIG[activeHighlight.type]?.emoji) ?? "🎯"}
+              {HIGHLIGHT_TYPE_CONFIG[activeHighlight.type]?.emoji ?? "🎯"}
             </Text>
             <View style={styles.highlightOverlayTextCol}>
               <Text style={styles.highlightOverlayLabel}>
-                {HIGHLIGHT_TYPE_CONFIG[activeHighlight.type] ? t(HIGHLIGHT_TYPE_CONFIG[activeHighlight.type].labelKey) : activeHighlight.type}
-                {activeHighlight.movement ? ` · ${activeHighlight.movement}` : ""}
+                {HIGHLIGHT_TYPE_CONFIG[activeHighlight.type]
+                  ? t(HIGHLIGHT_TYPE_CONFIG[activeHighlight.type].labelKey)
+                  : activeHighlight.type}
+                {activeHighlight.movement
+                  ? ` · ${activeHighlight.movement}`
+                  : ""}
               </Text>
               <Text style={styles.highlightOverlayReason} numberOfLines={2}>
-                {activeHighlight.reason ?? activeHighlight.observations?.[0]?.reason}
+                {activeHighlight.reason ??
+                  activeHighlight.observations?.[0]?.reason}
               </Text>
             </View>
           </View>
@@ -310,22 +387,30 @@ export function WorkoutVideoPlayer({
 
       <ScrollView
         style={styles.bottomPanel}
-        contentContainerStyle={[styles.bottomContent, { paddingBottom: insets.bottom + 20 }]}
+        contentContainerStyle={[
+          styles.bottomContent,
+          { paddingBottom: insets.bottom + 20 },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* ── Guidance Strip ── */}
         <View style={styles.guidanceSection}>
-          <Text style={styles.sectionTitle}>{t("player.coachingGuidance")}</Text>
+          <Text style={styles.sectionTitle}>
+            {t("player.coachingGuidance")}
+          </Text>
           {activeCue ? (
             <View style={styles.guidanceBubble}>
               {activeCue.exerciseType && (
                 <View style={styles.exerciseBadge}>
-                  <Text style={styles.exerciseBadgeText}>🏋️ {activeCue.exerciseType}</Text>
+                  <Text style={styles.exerciseBadgeText}>
+                    🏋️ {activeCue.exerciseType}
+                  </Text>
                 </View>
               )}
               <Text style={styles.guidanceText}>{activeCue.text}</Text>
               <Text style={styles.guidanceTime}>
-                {formatTime(activeCue.startSecs)} – {formatTime(activeCue.endSecs)}
+                {formatTime(activeCue.startSecs)} –{" "}
+                {formatTime(activeCue.endSecs)}
               </Text>
             </View>
           ) : (
@@ -342,7 +427,9 @@ export function WorkoutVideoPlayer({
         {/* ── Highlights Section ── */}
         {normalizedHighlights.length > 0 && (
           <View style={styles.highlightsSection}>
-            <Text style={styles.sectionTitle}>{t("player.highlightsSection")}</Text>
+            <Text style={styles.sectionTitle}>
+              {t("player.highlightsSection")}
+            </Text>
             <Text style={styles.sectionSubtitle}>
               {t("player.highlightsHint")}
             </Text>
@@ -378,7 +465,12 @@ export function WorkoutVideoPlayer({
                   }}
                   activeOpacity={0.7}
                 >
-                  <Text style={[styles.timelineCueTime, isActive && styles.timelineCueTimeActive]}>
+                  <Text
+                    style={[
+                      styles.timelineCueTime,
+                      isActive && styles.timelineCueTimeActive,
+                    ]}
+                  >
                     {formatTime(cue.startSecs)}
                   </Text>
                   <View style={styles.timelineCueTextCol}>
@@ -388,7 +480,10 @@ export function WorkoutVideoPlayer({
                       </Text>
                     )}
                     <Text
-                      style={[styles.timelineCueText, isActive && styles.timelineCueTextActive]}
+                      style={[
+                        styles.timelineCueText,
+                        isActive && styles.timelineCueTextActive,
+                      ]}
                       numberOfLines={3}
                     >
                       {cue.text}
@@ -439,6 +534,23 @@ const styles = StyleSheet.create({
   },
   headerSpacer: {
     width: 60,
+  },
+  headerRight: {
+    minWidth: 60,
+    alignItems: "flex-end",
+  },
+  cachedBadge: {
+    backgroundColor: "rgba(48, 209, 88, 0.15)",
+    borderColor: "rgba(48, 209, 88, 0.3)",
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  cachedBadgeText: {
+    color: "#30D158",
+    fontSize: 11,
+    fontWeight: "600",
   },
 
   // Video

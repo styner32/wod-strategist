@@ -1,6 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@/features/i18n";
+import * as FileSystem from "expo-file-system/legacy";
+import * as MediaLibrary from "expo-media-library";
 import { router } from "expo-router";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -11,31 +19,37 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import * as FileSystem from "expo-file-system/legacy";
-import * as MediaLibrary from "expo-media-library";
 
 import { MarkdownText } from "@/components/ui/MarkdownText";
+import { normalizeStretchKey } from "@/features/stretch/normalize";
 import { useColorScheme } from "@/hooks/use-color-scheme";
+import { useHasPendingMerge } from "@/store/useMergeStatus";
 import { useProfileId } from "@/store/useProfileStore";
 import { useVideoQueue } from "@/store/useVideoQueue";
-import { useHasPendingMerge } from "@/store/useMergeStatus";
 import { useShallow } from "zustand/shallow";
 import {
-  fetchVideoDownloadURL,
-  generateHighlight,
-  fetchHighlightResults,
-  fetchHighlightDownloadURL,
-  retryAnalysis,
-  generateHardSub,
   archiveHistory,
+  fetchHighlightDownloadURL,
+  fetchHighlightResults,
   fetchRelatedWods,
+  fetchVideoDownloadURL,
+  generateHardSub,
+  generateHighlight,
+  retryAnalysis,
 } from "../api";
-import { AnalysisResult, HighlightResult, fetchAnalysisHistory } from "../history";
+import {
+  AnalysisResult,
+  HighlightResult,
+  fetchAnalysisHistory,
+} from "../history";
+import { formatSessionLabel } from "../sessionLabel";
 import { HighlightVideoPlayer } from "./HighlightVideoPlayer";
 import { RelatedWodsCard } from "./RelatedWodsCard";
-import { StretchRecommendationsCard, StretchRecommendationItem } from "./StretchRecommendationsCard";
-import { formatSessionLabel } from "../sessionLabel";
-import { normalizeStretchKey } from "@/features/stretch/normalize";
+import {
+  StretchRecommendationItem,
+  StretchRecommendationsCard,
+} from "./StretchRecommendationsCard";
+import { WorkoutFatigueCard, getFatigueColor } from "./WorkoutFatigueCard";
 
 export { formatSessionLabel };
 
@@ -43,13 +57,29 @@ export { formatSessionLabel };
 function getStatusConfig(status: string) {
   switch (status) {
     case "COMPLETED":
-      return { label: t("historyList.statusComplete"), color: "#30D158", bgColor: "rgba(48,209,88,0.15)" };
+      return {
+        label: t("historyList.statusComplete"),
+        color: "#30D158",
+        bgColor: "rgba(48,209,88,0.15)",
+      };
     case "FAILED":
-      return { label: t("historyList.statusFailed"), color: "#FF453A", bgColor: "rgba(255,69,58,0.15)" };
+      return {
+        label: t("historyList.statusFailed"),
+        color: "#FF453A",
+        bgColor: "rgba(255,69,58,0.15)",
+      };
     case "PENDING":
-      return { label: t("historyList.statusPending"), color: "#FFD60A", bgColor: "rgba(255,214,10,0.15)" };
+      return {
+        label: t("historyList.statusPending"),
+        color: "#FFD60A",
+        bgColor: "rgba(255,214,10,0.15)",
+      };
     default:
-      return { label: status, color: "#A0A0A0", bgColor: "rgba(160,160,160,0.15)" };
+      return {
+        label: status,
+        color: "#A0A0A0",
+        bgColor: "rgba(160,160,160,0.15)",
+      };
   }
 }
 
@@ -57,10 +87,18 @@ function getStatusConfig(status: string) {
 function getTypeBadge(type: string) {
   switch (type) {
     case "injury_supplement":
-      return { label: t("historyList.typeInjury"), color: "#FF6B6B", bgColor: "rgba(255,107,107,0.12)" };
+      return {
+        label: t("historyList.typeInjury"),
+        color: "#FF6B6B",
+        bgColor: "rgba(255,107,107,0.12)",
+      };
     case "wod":
     default:
-      return { label: t("historyList.typeWod"), color: "#64D2FF", bgColor: "rgba(100,210,255,0.12)" };
+      return {
+        label: t("historyList.typeWod"),
+        color: "#64D2FF",
+        bgColor: "rgba(100,210,255,0.12)",
+      };
   }
 }
 
@@ -90,7 +128,10 @@ function formatDate(dateStr: string): string {
 }
 
 /** Emoji + label for each highlight variant title */
-const HIGHLIGHT_VARIANT_CONFIG: Record<string, { emoji: string; color: string }> = {
+const HIGHLIGHT_VARIANT_CONFIG: Record<
+  string,
+  { emoji: string; color: string }
+> = {
   "Highlight Reel": { emoji: "🎬", color: "#BF5AF2" },
   "Best Forms": { emoji: "🏆", color: "#30D158" },
   "Areas for Improvement": { emoji: "📈", color: "#FF9F0A" },
@@ -113,7 +154,9 @@ function HistoryCard({
   scrollViewRef?: React.RefObject<ScrollView | null>;
   currentOffsetRef?: React.MutableRefObject<number>;
 }) {
-  const isFocused = Boolean(focusSessionId && item.session_id === focusSessionId);
+  const isFocused = Boolean(
+    focusSessionId && item.session_id === focusSessionId,
+  );
   const [expanded, setExpanded] = useState(isFocused);
   const [highlighted, setHighlighted] = useState(false);
   const cardRef = useRef<View>(null);
@@ -139,7 +182,10 @@ function HistoryCard({
         scrollNode.measureInWindow((_scrollX: number, scrollY: number) => {
           const currentOffset = currentOffsetRef?.current ?? 0;
           const targetY = currentOffset + cardY - scrollY - 24;
-          scrollViewRef.current?.scrollTo({ y: Math.max(0, targetY), animated: true });
+          scrollViewRef.current?.scrollTo({
+            y: Math.max(0, targetY),
+            animated: true,
+          });
         });
       }
     });
@@ -154,10 +200,13 @@ function HistoryCard({
   const typeBadge = getTypeBadge(item.analysis_type);
 
   const hasOutput = item.output && item.output.trim().length > 0;
-  const hasInjuryOutput = item.injury_output && item.injury_output.trim().length > 0;
+  const hasInjuryOutput =
+    item.injury_output && item.injury_output.trim().length > 0;
   const isCompleted = item.status === "COMPLETED";
   const availableVideos = item.available_videos ?? [];
-  const hasHighlightSegments = !!(item.highlight_segments && item.highlight_segments.trim().length > 0);
+  const hasHighlightSegments = !!(
+    item.highlight_segments && item.highlight_segments.trim().length > 0
+  );
 
   // ---------------------
   // Highlight state
@@ -165,8 +214,13 @@ function HistoryCard({
   const [highlights, setHighlights] = useState<HighlightResult[]>([]);
   const [highlightLoading, setHighlightLoading] = useState(false);
   const [highlightPolling, setHighlightPolling] = useState(false);
-  const [highlightDownloading, setHighlightDownloading] = useState<number | null>(null);
-  const [playingHighlight, setPlayingHighlight] = useState<{ hl: HighlightResult; url: string } | null>(null);
+  const [highlightDownloading, setHighlightDownloading] = useState<
+    number | null
+  >(null);
+  const [playingHighlight, setPlayingHighlight] = useState<{
+    hl: HighlightResult;
+    url: string;
+  } | null>(null);
   const [loadingPlayId, setLoadingPlayId] = useState<number | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
@@ -175,7 +229,9 @@ function HistoryCard({
   useEffect(() => {
     if (isCompleted && item.analysis_type === "wod") {
       fetchHighlightResults(item.session_id)
-        .then((results) => setHighlights(results.filter((r) => r.status === "COMPLETED")))
+        .then((results) =>
+          setHighlights(results.filter((r) => r.status === "COMPLETED")),
+        )
         .catch(() => {});
     }
   }, [item.session_id, isCompleted, item.analysis_type]);
@@ -185,7 +241,13 @@ function HistoryCard({
   const [relatedFetched, setRelatedFetched] = useState(false);
 
   useEffect(() => {
-    if (expanded && isCompleted && item.analysis_type === "wod" && !relatedFetched && item.profile_id) {
+    if (
+      expanded &&
+      isCompleted &&
+      item.analysis_type === "wod" &&
+      !relatedFetched &&
+      item.profile_id
+    ) {
       setRelatedFetched(true);
       fetchRelatedWods({
         profileId: item.profile_id,
@@ -199,14 +261,22 @@ function HistoryCard({
         })
         .catch(() => {});
     }
-  }, [expanded, isCompleted, item.analysis_type, item.profile_id, item.session_id, relatedFetched]);
+  }, [
+    expanded,
+    isCompleted,
+    item.analysis_type,
+    item.profile_id,
+    item.session_id,
+    relatedFetched,
+  ]);
 
   const stretchRecommendations = useMemo<StretchRecommendationItem[]>(() => {
     if (!item.stretch_recommendations) return [];
     try {
-      const parsed = typeof item.stretch_recommendations === "string"
-        ? JSON.parse(item.stretch_recommendations)
-        : item.stretch_recommendations;
+      const parsed =
+        typeof item.stretch_recommendations === "string"
+          ? JSON.parse(item.stretch_recommendations)
+          : item.stretch_recommendations;
       return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
@@ -235,8 +305,13 @@ function HistoryCard({
         }
 
         // Stop polling if all results are terminal or timeout
-        const allTerminal = results.length > 0 && results.every((r) => r.status === "COMPLETED" || r.status === "FAILED");
-        const timedOut = Date.now() - pollStartRef.current > HIGHLIGHT_POLL_TIMEOUT_MS;
+        const allTerminal =
+          results.length > 0 &&
+          results.every(
+            (r) => r.status === "COMPLETED" || r.status === "FAILED",
+          );
+        const timedOut =
+          Date.now() - pollStartRef.current > HIGHLIGHT_POLL_TIMEOUT_MS;
 
         if (allTerminal || timedOut) {
           if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -245,7 +320,10 @@ function HistoryCard({
             Alert.alert(t("historyList.timeout"), t("historyList.timeoutDesc"));
           }
           if (failed.length > 0 && completed.length === 0) {
-            Alert.alert(t("historyList.generationFailed"), t("historyList.generationFailedDesc"));
+            Alert.alert(
+              t("historyList.generationFailed"),
+              t("historyList.generationFailedDesc"),
+            );
           }
         }
       } catch {
@@ -260,7 +338,10 @@ function HistoryCard({
       await generateHighlight(item.session_id, item.profile_id ?? 0);
       startPolling();
     } catch (e: any) {
-      Alert.alert(t("common.error"), e?.message || t("historyList.generationFailedDesc"));
+      Alert.alert(
+        t("common.error"),
+        e?.message || t("historyList.generationFailedDesc"),
+      );
     } finally {
       setHighlightLoading(false);
     }
@@ -275,7 +356,10 @@ function HistoryCard({
 
       Alert.alert(
         t("historyList.highlightDownloaded"),
-        t("historyList.highlightReady", { title: hl.title, duration: Math.round(hl.duration_sec) }),
+        t("historyList.highlightReady", {
+          title: hl.title,
+          duration: Math.round(hl.duration_sec),
+        }),
         [
           {
             text: t("historyList.saveToGallery"),
@@ -283,15 +367,23 @@ function HistoryCard({
               try {
                 const { status } = await MediaLibrary.requestPermissionsAsync();
                 if (status !== "granted") {
-                  Alert.alert(t("common.permissionRequired"), t("common.galleryPermission"));
+                  Alert.alert(
+                    t("common.permissionRequired"),
+                    t("common.galleryPermission"),
+                  );
                   return;
                 }
                 await MediaLibrary.saveToLibraryAsync(uri);
-                Alert.alert(t("common.saved"), t("historyList.highlightSaved", { title: hl.title }));
+                Alert.alert(
+                  t("common.saved"),
+                  t("historyList.highlightSaved", { title: hl.title }),
+                );
               } catch {
                 Alert.alert(t("common.error"), t("common.failedSaveGallery"));
               } finally {
-                try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+                try {
+                  await FileSystem.deleteAsync(uri, { idempotent: true });
+                } catch {}
               }
             },
           },
@@ -299,14 +391,18 @@ function HistoryCard({
             text: t("common.delete"),
             style: "destructive",
             onPress: async () => {
-              try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+              try {
+                await FileSystem.deleteAsync(uri, { idempotent: true });
+              } catch {}
             },
           },
           { text: t("common.keep"), style: "cancel" },
-        ]
+        ],
       );
     } catch (e: any) {
-      const msg = e?.message?.includes("404") ? t("historyList.highlightNotFound") : String(e);
+      const msg = e?.message?.includes("404")
+        ? t("historyList.highlightNotFound")
+        : String(e);
       Alert.alert(t("historyList.downloadFailed"), msg);
     } finally {
       setHighlightDownloading(null);
@@ -316,7 +412,10 @@ function HistoryCard({
   const handleSaveAllHighlights = async () => {
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert(t("common.permissionRequired"), t("common.galleryPermission"));
+      Alert.alert(
+        t("common.permissionRequired"),
+        t("common.galleryPermission"),
+      );
       return;
     }
 
@@ -324,18 +423,28 @@ function HistoryCard({
     let savedCount = 0;
     for (const hl of highlights) {
       try {
-        const { download_url, filename } = await fetchHighlightDownloadURL(hl.id);
+        const { download_url, filename } = await fetchHighlightDownloadURL(
+          hl.id,
+        );
         const localUri = FileSystem.cacheDirectory + filename;
         const { uri } = await FileSystem.downloadAsync(download_url, localUri);
         await MediaLibrary.saveToLibraryAsync(uri);
-        try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+        try {
+          await FileSystem.deleteAsync(uri, { idempotent: true });
+        } catch {}
         savedCount++;
       } catch {
         // Continue saving remaining highlights
       }
     }
     setHighlightDownloading(null);
-    Alert.alert(t("common.saved"), t("historyList.savedCount", { saved: savedCount, total: highlights.length }));
+    Alert.alert(
+      t("common.saved"),
+      t("historyList.savedCount", {
+        saved: savedCount,
+        total: highlights.length,
+      }),
+    );
   };
 
   const handlePlayHighlight = async (hl: HighlightResult) => {
@@ -349,7 +458,9 @@ function HistoryCard({
       const { download_url } = await fetchHighlightDownloadURL(hl.id);
       setPlayingHighlight({ hl, url: download_url });
     } catch (e: any) {
-      const msg = e?.message?.includes("404") ? t("historyList.highlightNotFound") : String(e);
+      const msg = e?.message?.includes("404")
+        ? t("historyList.highlightNotFound")
+        : String(e);
       Alert.alert(t("historyList.playbackFailed"), msg);
     } finally {
       setLoadingPlayId(null);
@@ -359,12 +470,21 @@ function HistoryCard({
   const handleDownload = async (kind: "merged" | "hardsubbed" | "encoded") => {
     try {
       setDownloading(kind);
-      const { download_url, filename } = await fetchVideoDownloadURL(item.session_id, item.profile_id ?? 0, kind);
+      const { download_url, filename } = await fetchVideoDownloadURL(
+        item.session_id,
+        item.profile_id ?? 0,
+        kind,
+      );
 
       const localUri = FileSystem.cacheDirectory + filename;
       const { uri } = await FileSystem.downloadAsync(download_url, localUri);
 
-      const kindLabel = kind === "hardsubbed" ? t("historyList.videoKindGuided") : kind === "encoded" ? t("historyList.videoKindEncoded") : t("historyList.videoKindOriginal");
+      const kindLabel =
+        kind === "hardsubbed"
+          ? t("historyList.videoKindGuided")
+          : kind === "encoded"
+            ? t("historyList.videoKindEncoded")
+            : t("historyList.videoKindOriginal");
       Alert.alert(
         t("historyList.downloadComplete"),
         t("historyList.videoSaved", { kind: kindLabel }),
@@ -375,7 +495,10 @@ function HistoryCard({
               try {
                 const { status } = await MediaLibrary.requestPermissionsAsync();
                 if (status !== "granted") {
-                  Alert.alert(t("common.permissionRequired"), t("common.galleryPermission"));
+                  Alert.alert(
+                    t("common.permissionRequired"),
+                    t("common.galleryPermission"),
+                  );
                   return;
                 }
                 await MediaLibrary.saveToLibraryAsync(uri);
@@ -384,7 +507,9 @@ function HistoryCard({
                 Alert.alert(t("common.error"), t("common.failedSaveGallery"));
               } finally {
                 // Clean up temp file
-                try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+                try {
+                  await FileSystem.deleteAsync(uri, { idempotent: true });
+                } catch {}
               }
             },
           },
@@ -392,14 +517,18 @@ function HistoryCard({
             text: t("common.delete"),
             style: "destructive",
             onPress: async () => {
-              try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+              try {
+                await FileSystem.deleteAsync(uri, { idempotent: true });
+              } catch {}
             },
           },
           { text: t("common.keep"), style: "cancel" },
-        ]
+        ],
       );
     } catch (e: any) {
-      const msg = e?.message?.includes("404") ? t("historyList.videoNotFound") : String(e);
+      const msg = e?.message?.includes("404")
+        ? t("historyList.videoNotFound")
+        : String(e);
       Alert.alert(t("historyList.downloadFailed"), msg);
     } finally {
       setDownloading(null);
@@ -412,8 +541,12 @@ function HistoryCard({
   const dateColor = isDark ? "#D4D4D4" : "#6B6B6B";
   const previewColor = isDark ? "#FFFFFF" : "#333333";
   const expandColor = isDark ? "#64D2FF" : "#0A84FF";
-  const hrDividerColor = isDark ? "rgba(255,107,107,0.2)" : "rgba(255,107,107,0.3)";
-  const highlightSectionBg = isDark ? "rgba(191,90,242,0.08)" : "rgba(191,90,242,0.05)";
+  const hrDividerColor = isDark
+    ? "rgba(255,107,107,0.2)"
+    : "rgba(255,107,107,0.3)";
+  const highlightSectionBg = isDark
+    ? "rgba(191,90,242,0.08)"
+    : "rgba(191,90,242,0.05)";
 
   const handleArchive = () => {
     Alert.alert(
@@ -433,7 +566,7 @@ function HistoryCard({
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -455,21 +588,54 @@ function HistoryCard({
             <Text style={[styles.sessionLabel, { color: sessionColor }]}>
               {formatSessionLabel(item.session_id)}
             </Text>
-            <View style={[styles.badge, { backgroundColor: typeBadge.bgColor }]}>
+            <View
+              style={[styles.badge, { backgroundColor: typeBadge.bgColor }]}
+            >
               <Text style={[styles.badgeText, { color: typeBadge.color }]}>
                 {typeBadge.label}
               </Text>
             </View>
           </View>
-          <View style={[styles.badge, { backgroundColor: statusConfig.bgColor }]}>
+          <View
+            style={[styles.badge, { backgroundColor: statusConfig.bgColor }]}
+          >
             <Text style={[styles.badgeText, { color: statusConfig.color }]}>
               {statusConfig.label}
             </Text>
           </View>
         </View>
 
-        {/* Date */}
-        <Text style={[styles.date, { color: dateColor }]}>{formatDate(item.created_at)}</Text>
+        {/* Date and Fatigue Pill */}
+        <View style={styles.dateAndFatigueRow}>
+          <Text style={[styles.date, { color: dateColor }]}>
+            {formatDate(item.created_at)}
+          </Text>
+          {item.session_fatigue && (
+            <View
+              style={[
+                styles.fatiguePill,
+                {
+                  backgroundColor:
+                    getFatigueColor(item.session_fatigue.overall_score) + "18",
+                  borderColor:
+                    getFatigueColor(item.session_fatigue.overall_score) + "40",
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.fatiguePillText,
+                  {
+                    color: getFatigueColor(item.session_fatigue.overall_score),
+                  },
+                ]}
+              >
+                ⚡ {item.session_fatigue.state_ko || item.session_fatigue.state}{" "}
+                {item.session_fatigue.overall_score}%
+              </Text>
+            </View>
+          )}
+        </View>
 
         {/* Content */}
         {hasOutput && (
@@ -481,9 +647,19 @@ function HistoryCard({
               <View style={styles.contentBody}>
                 <MarkdownText>{item.output}</MarkdownText>
 
+                {/* Workout Fatigue Breakdown */}
+                {item.session_fatigue && (
+                  <WorkoutFatigueCard fatigue={item.session_fatigue} />
+                )}
+
                 {/* Injury supplement output */}
                 {hasInjuryOutput && (
-                 <View style={[styles.injurySection, { borderTopColor: hrDividerColor }]}>
+                  <View
+                    style={[
+                      styles.injurySection,
+                      { borderTopColor: hrDividerColor },
+                    ]}
+                  >
                     <View style={styles.injurySectionHeader}>
                       <Text style={styles.injurySectionLabel}>
                         {t("historyList.injuryAnalysis")}
@@ -510,7 +686,10 @@ function HistoryCard({
                 <RelatedWodsCard related={relatedWods} />
               </View>
             ) : (
-              <Text style={[styles.previewText, { color: previewColor }]} numberOfLines={4}>
+              <Text
+                style={[styles.previewText, { color: previewColor }]}
+                numberOfLines={4}
+              >
                 {stripMarkdown(item.output)}
               </Text>
             )}
@@ -521,259 +700,329 @@ function HistoryCard({
           </TouchableOpacity>
         )}
 
-      {/* Failed/Pending states */}
-      {!hasOutput && item.status === "FAILED" && (
-        <View style={styles.failedBanner}>
-          <Text style={styles.failedText}>
-            {t("historyList.analysisFailed")}
-          </Text>
-        </View>
-      )}
+        {/* Failed/Pending states */}
+        {!hasOutput && item.status === "FAILED" && (
+          <View style={styles.failedBanner}>
+            <Text style={styles.failedText}>
+              {t("historyList.analysisFailed")}
+            </Text>
+          </View>
+        )}
 
-      {/* Retry button for failed analysis */}
-      {item.status === "FAILED" && item.profile_id && (
-        <TouchableOpacity
-          style={[styles.retryBtn, retrying && { opacity: 0.5 }]}
-          disabled={retrying}
-          onPress={async () => {
-            try {
-              setRetrying(true);
-              await retryAnalysis(item.session_id, item.profile_id!);
-              Alert.alert(t("upload.success"), t("historyList.retryStarted"));
-            } catch (err) {
-              Alert.alert(t("common.error"), t("historyList.retryFailed"));
-            } finally {
-              setRetrying(false);
-            }
-          }}
-          activeOpacity={0.8}
-        >
-          {retrying ? (
-            <ActivityIndicator size="small" color="#FF9F0A" />
-          ) : (
-            <Text style={styles.retryBtnText}>{t("historyList.retryAnalysis")}</Text>
-          )}
-        </TouchableOpacity>
-      )}
+        {/* Retry button for failed analysis */}
+        {item.status === "FAILED" && item.profile_id && (
+          <TouchableOpacity
+            style={[styles.retryBtn, retrying && { opacity: 0.5 }]}
+            disabled={retrying}
+            onPress={async () => {
+              try {
+                setRetrying(true);
+                await retryAnalysis(item.session_id, item.profile_id!);
+                Alert.alert(t("upload.success"), t("historyList.retryStarted"));
+              } catch (err) {
+                Alert.alert(t("common.error"), t("historyList.retryFailed"));
+              } finally {
+                setRetrying(false);
+              }
+            }}
+            activeOpacity={0.8}
+          >
+            {retrying ? (
+              <ActivityIndicator size="small" color="#FF9F0A" />
+            ) : (
+              <Text style={styles.retryBtnText}>
+                {t("historyList.retryAnalysis")}
+              </Text>
+            )}
+          </TouchableOpacity>
+        )}
 
-      {/* Watch button — opens full workout player */}
-      {isCompleted && item.analysis_type !== "injury_supplement" && (availableVideos.includes("merged") || availableVideos.includes("hardsubbed") || availableVideos.includes("encoded")) && (
-        <TouchableOpacity
-          style={styles.watchBtn}
-          onPress={() => {
-            // Prefer hardsubbed (has guidance overlay) > merged > encoded
-            const videoKind = availableVideos.includes("hardsubbed")
-              ? "hardsubbed"
-              : availableVideos.includes("merged")
-                ? "merged"
-                : "encoded";
-            router.push({
-              pathname: "/workout/player",
-              params: {
-                sessionId: item.session_id,
-                profileId: String(item.profile_id ?? 0),
-                videoKind,
-              },
-            });
-          }}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.watchBtnText}>{t("historyList.watchWorkout")}</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Download buttons */}
-      {isCompleted && item.analysis_type !== "injury_supplement" && availableVideos.length > 0 && (
-        <View style={styles.downloadRow}>
-          {availableVideos.includes("merged") && (
+        {/* Watch button — opens full workout player */}
+        {isCompleted &&
+          item.analysis_type !== "injury_supplement" &&
+          (availableVideos.includes("merged") ||
+            availableVideos.includes("hardsubbed") ||
+            availableVideos.includes("encoded")) && (
             <TouchableOpacity
-              style={styles.downloadBtn}
-              onPress={() => handleDownload("merged")}
-              disabled={downloading !== null}
+              style={styles.watchBtn}
+              onPress={() => {
+                // Prefer hardsubbed (has guidance overlay) > merged > encoded
+                const videoKind = availableVideos.includes("hardsubbed")
+                  ? "hardsubbed"
+                  : availableVideos.includes("merged")
+                    ? "merged"
+                    : "encoded";
+                router.push({
+                  pathname: "/workout/player",
+                  params: {
+                    sessionId: item.session_id,
+                    profileId: String(item.profile_id ?? 0),
+                    videoKind,
+                  },
+                });
+              }}
+              activeOpacity={0.8}
             >
-              {downloading === "merged" ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={styles.downloadBtnText}>{t("historyList.videoBtn")}</Text>
-              )}
+              <Text style={styles.watchBtnText}>
+                {t("historyList.watchWorkout")}
+              </Text>
             </TouchableOpacity>
           )}
-          {availableVideos.includes("hardsubbed") && (
-            <TouchableOpacity
-              style={[styles.downloadBtn, styles.downloadBtnGuided]}
-              onPress={() => handleDownload("hardsubbed")}
-              disabled={downloading !== null}
-            >
-              {downloading === "hardsubbed" ? (
-                <ActivityIndicator size="small" color="#000" />
-              ) : (
-                <Text style={[styles.downloadBtnText, styles.downloadBtnGuidedText]}>{t("historyList.guidedBtn")}</Text>
-              )}
-            </TouchableOpacity>
-          )}
-          {availableVideos.includes("encoded") && (
-            <TouchableOpacity
-              style={[styles.downloadBtn, styles.downloadBtnEncoded]}
-              onPress={() => handleDownload("encoded")}
-              disabled={downloading !== null}
-            >
-              {downloading === "encoded" ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <Text style={[styles.downloadBtnText, styles.downloadBtnEncodedText]}>{t("historyList.encodedBtn")}</Text>
-              )}
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
 
-      {/* Create Guided Video button — when completed but no hardsubbed version */}
-      {isCompleted && item.profile_id && !availableVideos.includes("hardsubbed") && availableVideos.includes("merged") && (
-        <TouchableOpacity
-          style={[styles.hardsubBtn, generatingHardsub && { opacity: 0.5 }]}
-          disabled={generatingHardsub}
-          onPress={async () => {
-            try {
-              setGeneratingHardsub(true);
-              await generateHardSub(item.session_id, item.profile_id!);
-              Alert.alert(t("upload.success"), t("historyList.hardsubStarted"));
-            } catch (err) {
-              Alert.alert(t("common.error"), t("historyList.hardsubFailed"));
-            } finally {
-              setGeneratingHardsub(false);
-            }
-          }}
-          activeOpacity={0.8}
-        >
-          {generatingHardsub ? (
-            <ActivityIndicator size="small" color="#FFD60A" />
-          ) : (
-            <Text style={styles.hardsubBtnText}>{t("historyList.createHardsub")}</Text>
-          )}
-        </TouchableOpacity>
-      )}
-
-      {/* ==================== Highlights Section ==================== */}
-      {isCompleted && item.analysis_type === "wod" && hasHighlightSegments && (
-        <View style={[styles.highlightSection, { backgroundColor: highlightSectionBg }]}>
-          <Text style={styles.highlightSectionTitle}>{t("historyList.highlights")}</Text>
-
-          {/* Show existing completed highlights */}
-          {highlights.length > 0 && (
-            <>
-              <View style={styles.highlightVariantList}>
-                {highlights.map((hl) => {
-                  const variantCfg = HIGHLIGHT_VARIANT_CONFIG[hl.title] ?? { emoji: "🎥", color: "#A0A0A0" };
-                  const isLoadingPlay = loadingPlayId === hl.id;
-                  const isPlaying = playingHighlight?.hl.id === hl.id;
-                  return (
-                    <TouchableOpacity
-                      key={hl.id}
-                      style={[
-                        styles.highlightVariantBtn,
-                        { borderColor: variantCfg.color + "40" },
-                        isPlaying && { borderColor: variantCfg.color, backgroundColor: variantCfg.color + "20" },
-                      ]}
-                      onPress={() => handlePlayHighlight(hl)}
-                      onLongPress={() => handleHighlightDownload(hl)}
-                      disabled={loadingPlayId !== null && loadingPlayId !== hl.id}
-                    >
-                      {isLoadingPlay ? (
-                        <ActivityIndicator size="small" color={variantCfg.color} />
-                      ) : (
-                        <>
-                          <Text style={styles.highlightVariantEmoji}>
-                            {isPlaying ? "⏸" : "▶"}
-                          </Text>
-                          <Text style={[styles.highlightVariantLabel, { color: variantCfg.color }]}>
-                            {hl.title}
-                          </Text>
-                          <Text style={styles.highlightVariantDuration}>
-                            {Math.round(hl.duration_sec)}s
-                          </Text>
-                        </>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Inline Video Player */}
-              {playingHighlight && (
-                <HighlightVideoPlayer
-                  highlight={playingHighlight.hl}
-                  videoUrl={playingHighlight.url}
-                  onClose={() => setPlayingHighlight(null)}
-                />
-              )}
-
-              {/* Save All button */}
-              {highlights.length > 1 && (
+        {/* Download buttons */}
+        {isCompleted &&
+          item.analysis_type !== "injury_supplement" &&
+          availableVideos.length > 0 && (
+            <View style={styles.downloadRow}>
+              {availableVideos.includes("merged") && (
                 <TouchableOpacity
-                  style={styles.saveAllBtn}
-                  onPress={handleSaveAllHighlights}
-                  disabled={highlightDownloading !== null}
+                  style={styles.downloadBtn}
+                  onPress={() => handleDownload("merged")}
+                  disabled={downloading !== null}
                 >
-                  {highlightDownloading === -1 ? (
-                    <ActivityIndicator size="small" color="#BF5AF2" />
+                  {downloading === "merged" ? (
+                    <ActivityIndicator size="small" color="#fff" />
                   ) : (
-                    <Text style={styles.saveAllBtnText}>
-                      {t("historyList.saveAllGallery", { count: highlights.length })}
+                    <Text style={styles.downloadBtnText}>
+                      {t("historyList.videoBtn")}
                     </Text>
                   )}
                 </TouchableOpacity>
               )}
-            </>
-          )}
-
-          {/* Polling indicator */}
-          {highlightPolling && highlights.length === 0 && (
-            <View style={styles.highlightPollingBanner}>
-              <ActivityIndicator size="small" color="#BF5AF2" />
-              <Text style={styles.highlightPollingText}>
-                {t("historyList.generatingHighlights")}
-              </Text>
+              {availableVideos.includes("hardsubbed") && (
+                <TouchableOpacity
+                  style={[styles.downloadBtn, styles.downloadBtnGuided]}
+                  onPress={() => handleDownload("hardsubbed")}
+                  disabled={downloading !== null}
+                >
+                  {downloading === "hardsubbed" ? (
+                    <ActivityIndicator size="small" color="#000" />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.downloadBtnText,
+                        styles.downloadBtnGuidedText,
+                      ]}
+                    >
+                      {t("historyList.guidedBtn")}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
+              {availableVideos.includes("encoded") && (
+                <TouchableOpacity
+                  style={[styles.downloadBtn, styles.downloadBtnEncoded]}
+                  onPress={() => handleDownload("encoded")}
+                  disabled={downloading !== null}
+                >
+                  {downloading === "encoded" ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.downloadBtnText,
+                        styles.downloadBtnEncodedText,
+                      ]}
+                    >
+                      {t("historyList.encodedBtn")}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
-          {/* Create button (shown when no highlights and not polling) */}
-          {highlights.length === 0 && !highlightPolling && (
+        {/* Create Guided Video button — when completed but no hardsubbed version */}
+        {isCompleted &&
+          item.profile_id &&
+          !availableVideos.includes("hardsubbed") &&
+          availableVideos.includes("merged") && (
             <TouchableOpacity
-              style={styles.createHighlightBtn}
-              onPress={handleCreateHighlights}
-              disabled={highlightLoading}
+              style={[styles.hardsubBtn, generatingHardsub && { opacity: 0.5 }]}
+              disabled={generatingHardsub}
+              onPress={async () => {
+                try {
+                  setGeneratingHardsub(true);
+                  await generateHardSub(item.session_id, item.profile_id!);
+                  Alert.alert(
+                    t("upload.success"),
+                    t("historyList.hardsubStarted"),
+                  );
+                } catch (err) {
+                  Alert.alert(
+                    t("common.error"),
+                    t("historyList.hardsubFailed"),
+                  );
+                } finally {
+                  setGeneratingHardsub(false);
+                }
+              }}
+              activeOpacity={0.8}
             >
-              {highlightLoading ? (
-                <ActivityIndicator size="small" color="#FFF" />
+              {generatingHardsub ? (
+                <ActivityIndicator size="small" color="#FFD60A" />
               ) : (
-                <Text style={styles.createHighlightBtnText}>{t("historyList.createHighlights")}</Text>
+                <Text style={styles.hardsubBtnText}>
+                  {t("historyList.createHardsub")}
+                </Text>
               )}
             </TouchableOpacity>
           )}
 
-          {/* Regenerate button (shown when highlights already exist) */}
-          {highlights.length > 0 && !highlightPolling && (
-            <TouchableOpacity
-              style={styles.regenerateBtn}
-              onPress={handleCreateHighlights}
-              disabled={highlightLoading}
+        {/* ==================== Highlights Section ==================== */}
+        {isCompleted &&
+          item.analysis_type === "wod" &&
+          hasHighlightSegments && (
+            <View
+              style={[
+                styles.highlightSection,
+                { backgroundColor: highlightSectionBg },
+              ]}
             >
-              {highlightLoading ? (
-                <ActivityIndicator size="small" color="#BF5AF2" />
-              ) : (
-                <Text style={styles.regenerateBtnText}>{t("historyList.regenerate")}</Text>
-              )}
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
+              <Text style={styles.highlightSectionTitle}>
+                {t("historyList.highlights")}
+              </Text>
 
-      {!hasOutput && item.status === "PENDING" && (
-        <View style={styles.pendingBanner}>
-          <ActivityIndicator size="small" color="#FFD60A" />
-          <Text style={styles.pendingText}>{t("historyList.analysisInProgress")}</Text>
-        </View>
-      )}
+              {/* Show existing completed highlights */}
+              {highlights.length > 0 && (
+                <>
+                  <View style={styles.highlightVariantList}>
+                    {highlights.map((hl) => {
+                      const variantCfg = HIGHLIGHT_VARIANT_CONFIG[hl.title] ?? {
+                        emoji: "🎥",
+                        color: "#A0A0A0",
+                      };
+                      const isLoadingPlay = loadingPlayId === hl.id;
+                      const isPlaying = playingHighlight?.hl.id === hl.id;
+                      return (
+                        <TouchableOpacity
+                          key={hl.id}
+                          style={[
+                            styles.highlightVariantBtn,
+                            { borderColor: variantCfg.color + "40" },
+                            isPlaying && {
+                              borderColor: variantCfg.color,
+                              backgroundColor: variantCfg.color + "20",
+                            },
+                          ]}
+                          onPress={() => handlePlayHighlight(hl)}
+                          onLongPress={() => handleHighlightDownload(hl)}
+                          disabled={
+                            loadingPlayId !== null && loadingPlayId !== hl.id
+                          }
+                        >
+                          {isLoadingPlay ? (
+                            <ActivityIndicator
+                              size="small"
+                              color={variantCfg.color}
+                            />
+                          ) : (
+                            <>
+                              <Text style={styles.highlightVariantEmoji}>
+                                {isPlaying ? "⏸" : "▶"}
+                              </Text>
+                              <Text
+                                style={[
+                                  styles.highlightVariantLabel,
+                                  { color: variantCfg.color },
+                                ]}
+                              >
+                                {hl.title}
+                              </Text>
+                              <Text style={styles.highlightVariantDuration}>
+                                {Math.round(hl.duration_sec)}s
+                              </Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  {/* Inline Video Player */}
+                  {playingHighlight && (
+                    <HighlightVideoPlayer
+                      highlight={playingHighlight.hl}
+                      videoUrl={playingHighlight.url}
+                      onClose={() => setPlayingHighlight(null)}
+                    />
+                  )}
+
+                  {/* Save All button */}
+                  {highlights.length > 1 && (
+                    <TouchableOpacity
+                      style={styles.saveAllBtn}
+                      onPress={handleSaveAllHighlights}
+                      disabled={highlightDownloading !== null}
+                    >
+                      {highlightDownloading === -1 ? (
+                        <ActivityIndicator size="small" color="#BF5AF2" />
+                      ) : (
+                        <Text style={styles.saveAllBtnText}>
+                          {t("historyList.saveAllGallery", {
+                            count: highlights.length,
+                          })}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  )}
+                </>
+              )}
+
+              {/* Polling indicator */}
+              {highlightPolling && highlights.length === 0 && (
+                <View style={styles.highlightPollingBanner}>
+                  <ActivityIndicator size="small" color="#BF5AF2" />
+                  <Text style={styles.highlightPollingText}>
+                    {t("historyList.generatingHighlights")}
+                  </Text>
+                </View>
+              )}
+
+              {/* Create button (shown when no highlights and not polling) */}
+              {highlights.length === 0 && !highlightPolling && (
+                <TouchableOpacity
+                  style={styles.createHighlightBtn}
+                  onPress={handleCreateHighlights}
+                  disabled={highlightLoading}
+                >
+                  {highlightLoading ? (
+                    <ActivityIndicator size="small" color="#FFF" />
+                  ) : (
+                    <Text style={styles.createHighlightBtnText}>
+                      {t("historyList.createHighlights")}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
+
+              {/* Regenerate button (shown when highlights already exist) */}
+              {highlights.length > 0 && !highlightPolling && (
+                <TouchableOpacity
+                  style={styles.regenerateBtn}
+                  onPress={handleCreateHighlights}
+                  disabled={highlightLoading}
+                >
+                  {highlightLoading ? (
+                    <ActivityIndicator size="small" color="#BF5AF2" />
+                  ) : (
+                    <Text style={styles.regenerateBtnText}>
+                      {t("historyList.regenerate")}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+        {!hasOutput && item.status === "PENDING" && (
+          <View style={styles.pendingBanner}>
+            <ActivityIndicator size="small" color="#FFD60A" />
+            <Text style={styles.pendingText}>
+              {t("historyList.analysisInProgress")}
+            </Text>
+          </View>
+        )}
       </TouchableOpacity>
     </View>
   );
@@ -877,15 +1126,17 @@ function ProcessingSection({ items }: { items: AnalysisResult[] }) {
   // Pull ALL non-completed items from the local video queue
   // useShallow prevents infinite re-renders from .filter() creating new array refs
   const queueItems = useVideoQueue(
-    useShallow((s) =>
-      s.items.filter((i) => i.status !== "UPLOADED")
-    )
+    useShallow((s) => s.items.filter((i) => i.status !== "UPLOADED")),
   );
 
   if (items.length === 0 && queueItems.length === 0) return null;
 
-  const processingBg = isDark ? "rgba(255,214,10,0.06)" : "rgba(255,214,10,0.08)";
-  const processingBorder = isDark ? "rgba(255,214,10,0.15)" : "rgba(255,214,10,0.2)";
+  const processingBg = isDark
+    ? "rgba(255,214,10,0.06)"
+    : "rgba(255,214,10,0.08)";
+  const processingBorder = isDark
+    ? "rgba(255,214,10,0.15)"
+    : "rgba(255,214,10,0.2)";
   const textColor = isDark ? "#FFD60A" : "#B8960A";
   const subtextColor = isDark ? "#AAA" : "#777";
 
@@ -902,19 +1153,34 @@ function ProcessingSection({ items }: { items: AnalysisResult[] }) {
       {items.map((item) => (
         <View
           key={item.id}
-          style={[processingStyles.card, { backgroundColor: processingBg, borderColor: processingBorder }]}
+          style={[
+            processingStyles.card,
+            { backgroundColor: processingBg, borderColor: processingBorder },
+          ]}
         >
           <View style={processingStyles.cardRow}>
             <Text style={processingStyles.icon}>🔬</Text>
             <View style={processingStyles.cardContent}>
-              <Text style={[processingStyles.cardTitle, { color: isDark ? "#FFF" : "#1C1C1E" }]}>
+              <Text
+                style={[
+                  processingStyles.cardTitle,
+                  { color: isDark ? "#FFF" : "#1C1C1E" },
+                ]}
+              >
                 {formatSessionLabel(item.session_id)}
               </Text>
-              <Text style={[processingStyles.cardSubtitle, { color: subtextColor }]}>
+              <Text
+                style={[processingStyles.cardSubtitle, { color: subtextColor }]}
+              >
                 {t("historyList.aiAnalyzing")}
               </Text>
             </View>
-            <View style={[processingStyles.statusDot, { backgroundColor: "#FFD60A" }]} />
+            <View
+              style={[
+                processingStyles.statusDot,
+                { backgroundColor: "#FFD60A" },
+              ]}
+            />
           </View>
           <Text style={[processingStyles.cardDate, { color: subtextColor }]}>
             {formatDate(item.created_at)}
@@ -925,7 +1191,8 @@ function ProcessingSection({ items }: { items: AnalysisResult[] }) {
       {/* Local video queue items (all stages) */}
       {queueItems.map((item) => {
         const pct = Math.round(item.progress * 100);
-        const hasProgress = item.status === "ENCODING" || item.status === "UPLOADING";
+        const hasProgress =
+          item.status === "ENCODING" || item.status === "UPLOADING";
 
         // Icon and label per status
         let icon = "📹";
@@ -957,19 +1224,37 @@ function ProcessingSection({ items }: { items: AnalysisResult[] }) {
         return (
           <View
             key={item.id}
-            style={[processingStyles.card, { backgroundColor: processingBg, borderColor: processingBorder }]}
+            style={[
+              processingStyles.card,
+              { backgroundColor: processingBg, borderColor: processingBorder },
+            ]}
           >
             <View style={processingStyles.cardRow}>
               <Text style={processingStyles.icon}>{icon}</Text>
               <View style={processingStyles.cardContent}>
-                <Text style={[processingStyles.cardTitle, { color: isDark ? "#FFF" : "#1C1C1E" }]}>
+                <Text
+                  style={[
+                    processingStyles.cardTitle,
+                    { color: isDark ? "#FFF" : "#1C1C1E" },
+                  ]}
+                >
                   {formatSessionLabel(item.sessionId)}
                 </Text>
-                <Text style={[processingStyles.cardSubtitle, { color: subtextColor }]}>
+                <Text
+                  style={[
+                    processingStyles.cardSubtitle,
+                    { color: subtextColor },
+                  ]}
+                >
                   {subtitle}
                 </Text>
               </View>
-              <View style={[processingStyles.statusDot, { backgroundColor: dotColor }]} />
+              <View
+                style={[
+                  processingStyles.statusDot,
+                  { backgroundColor: dotColor },
+                ]}
+              />
             </View>
             {/* Progress bar — only for encoding/uploading */}
             {hasProgress && (
@@ -1172,10 +1457,21 @@ export function HistoryList({
   const pendingItems = data.filter((item) => item.status === "PENDING");
   const nonPendingItems = data.filter((item) => item.status !== "PENDING");
 
-  const sections = useMemo(() => groupByDate(nonPendingItems), [nonPendingItems]);
+  const sections = useMemo(
+    () => groupByDate(nonPendingItems),
+    [nonPendingItems],
+  );
 
   const renderItem = useCallback(
-    ({ item, index, section }: { item: AnalysisResult; index: number; section: DateSection }) => {
+    ({
+      item,
+      index,
+      section,
+    }: {
+      item: AnalysisResult;
+      index: number;
+      section: DateSection;
+    }) => {
       const nodes: React.ReactNode[] = [];
 
       // Time gap between consecutive items in the same section
@@ -1186,9 +1482,11 @@ export function HistoryList({
           nodes.push(
             <View key={`gap-${item.id}`} style={styles.timeGapContainer}>
               <View style={styles.timeGapLine} />
-              <Text style={styles.timeGapText}>{t("history.timeGap", { minutes: Math.abs(gap) })}</Text>
+              <Text style={styles.timeGapText}>
+                {t("history.timeGap", { minutes: Math.abs(gap) })}
+              </Text>
               <View style={styles.timeGapLine} />
-            </View>
+            </View>,
           );
         }
       }
@@ -1201,11 +1499,11 @@ export function HistoryList({
           focusSessionId={focusSessionId}
           scrollViewRef={scrollViewRef}
           currentOffsetRef={currentOffsetRef}
-        />
+        />,
       );
       return <>{nodes}</>;
     },
-    [onArchive, focusSessionId, scrollViewRef, currentOffsetRef]
+    [onArchive, focusSessionId, scrollViewRef, currentOffsetRef],
   );
 
   const renderSectionHeader = useCallback(
@@ -1214,14 +1512,16 @@ export function HistoryList({
         <Text style={styles.sectionHeaderText}>{section.title}</Text>
       </View>
     ),
-    []
+    [],
   );
 
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#64D2FF" />
-        <Text style={styles.loadingText}>{t("historyList.loadingHistory")}</Text>
+        <Text style={styles.loadingText}>
+          {t("historyList.loadingHistory")}
+        </Text>
       </View>
     );
   }
@@ -1240,7 +1540,9 @@ export function HistoryList({
           pendingItems.length === 0 ? (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyIcon}>📋</Text>
-              <Text style={styles.emptyTitle}>{t("historyList.noHistory")}</Text>
+              <Text style={styles.emptyTitle}>
+                {t("historyList.noHistory")}
+              </Text>
               <Text style={styles.emptySubtitle}>
                 {t("historyList.noHistoryDesc")}
               </Text>
@@ -1331,10 +1633,25 @@ const styles = StyleSheet.create({
   },
 
   // Date
+  dateAndFatigueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+    marginTop: 2,
+  },
   date: {
     fontSize: 12,
-    marginBottom: 12,
-    marginTop: 2,
+  },
+  fatiguePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  fatiguePillText: {
+    fontSize: 11,
+    fontWeight: "700",
   },
 
   // Preview text (collapsed)

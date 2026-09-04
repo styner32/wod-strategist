@@ -1,8 +1,8 @@
-import { useInfiniteQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { historyApi, type AnalysisResult } from '../api/history';
-import { useAuth } from '../auth/useAuth';
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { historyApi, type AnalysisResult } from "../api/history";
+import { useAuth } from "../auth/useAuth";
 
 function HistoryCardSkeleton() {
   return (
@@ -31,30 +31,35 @@ function HistoryCardSkeleton() {
 
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
-    completed: 'bg-success/10 text-success border-success/20',
-    processing: 'bg-warning/10 text-warning border-warning/20',
-    failed: 'bg-error/10 text-error border-error/20',
-    pending: 'bg-info/10 text-info border-info/20',
+    completed: "bg-success/10 text-success border-success/20",
+    processing: "bg-warning/10 text-warning border-warning/20",
+    failed: "bg-error/10 text-error border-error/20",
+    pending: "bg-info/10 text-info border-info/20",
   };
   const style = styles[status.toLowerCase()] || styles.pending;
   return (
-    <span className={`text-xs font-medium px-2.5 py-0.5 rounded-full border ${style}`}>
+    <span
+      className={`text-xs font-medium px-2.5 py-0.5 rounded-full border ${style}`}
+    >
       {status}
     </span>
   );
 }
 
 function formatDate(dateStr: string) {
-  return new Date(dateStr).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+  return new Date(dateStr).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
-function parseAnalysisOutput(output: string): { summary?: string; workoutType?: string } {
+function parseAnalysisOutput(output: string): {
+  summary?: string;
+  workoutType?: string;
+} {
   try {
     const parsed = JSON.parse(output);
     return {
@@ -67,13 +72,14 @@ function parseAnalysisOutput(output: string): { summary?: string; workoutType?: 
 }
 
 function HistoryCard({ result }: { result: AnalysisResult }) {
-  const parsed = parseAnalysisOutput(result.output || '{}');
+  const parsed = parseAnalysisOutput(result.output || "{}");
   const stretchCount = useMemo(() => {
     if (!result.stretch_recommendations) return 0;
     try {
-      const p = typeof result.stretch_recommendations === 'string'
-        ? JSON.parse(result.stretch_recommendations)
-        : result.stretch_recommendations;
+      const p =
+        typeof result.stretch_recommendations === "string"
+          ? JSON.parse(result.stretch_recommendations)
+          : result.stretch_recommendations;
       return Array.isArray(p) ? p.length : 0;
     } catch {
       return 0;
@@ -88,15 +94,27 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-accent/10 flex items-center justify-center">
-            <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+            <svg
+              className="w-5 h-5 text-accent"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"
+              />
             </svg>
           </div>
           <div>
             <p className="font-medium text-text-primary group-hover:text-accent transition-colors">
               {result.session_id.slice(0, 20)}...
             </p>
-            <p className="text-xs text-text-muted">{formatDate(result.created_at)}</p>
+            <p className="text-xs text-text-muted">
+              {formatDate(result.created_at)}
+            </p>
           </div>
         </div>
         <StatusBadge status={result.status} />
@@ -108,6 +126,13 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
             {parsed.workoutType}
           </span>
         )}
+        {result.session_fatigue && (
+          <span className="inline-flex items-center gap-1 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-md font-medium">
+            <span>⚡</span>{" "}
+            {result.session_fatigue.state_ko || result.session_fatigue.state}{" "}
+            {result.session_fatigue.overall_score}%
+          </span>
+        )}
         {stretchCount > 0 && (
           <span className="inline-flex items-center gap-1 text-xs bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md font-medium">
             <span>🧘</span> {stretchCount} Stretches
@@ -116,7 +141,9 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
       </div>
 
       {parsed.summary && (
-        <p className="text-sm text-text-secondary line-clamp-2">{parsed.summary}</p>
+        <p className="text-sm text-text-secondary line-clamp-2">
+          {parsed.summary}
+        </p>
       )}
     </Link>
   );
@@ -138,7 +165,7 @@ export function HistoryListPage() {
     isFetching,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ['history-infinite', selectedProfileId],
+    queryKey: ["history-infinite", selectedProfileId],
     queryFn: ({ pageParam }) => historyApi.list(selectedProfileId!, pageParam),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (lastPage) => {
@@ -152,7 +179,8 @@ export function HistoryListPage() {
 
   useEffect(() => {
     const target = observerTarget.current;
-    if (!target || !hasNextPage || isFetchingNextPage || isFetching || error) return;
+    if (!target || !hasNextPage || isFetchingNextPage || isFetching || error)
+      return;
 
     const observer = new IntersectionObserver(
       (entries) => {
@@ -160,7 +188,7 @@ export function HistoryListPage() {
           fetchNextPage();
         }
       },
-      { threshold: 0.1 }
+      { threshold: 0.1 },
     );
 
     observer.observe(target);
@@ -176,20 +204,24 @@ export function HistoryListPage() {
 
   // De-duplicate results by unique result.id to guarantee no duplicate items are ever rendered
   const uniqueResults = results.filter(
-    (item, index, self) => self.findIndex((r) => r.id === item.id) === index
+    (item, index, self) => self.findIndex((r) => r.id === item.id) === index,
   );
 
   return (
     <div className="max-w-5xl mx-auto">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-text-primary">Workout History</h1>
-          <p className="text-text-secondary mt-1">Review your past workout sessions</p>
+          <h1 className="text-2xl font-bold text-text-primary">
+            Workout History
+          </h1>
+          <p className="text-text-secondary mt-1">
+            Review your past workout sessions
+          </p>
         </div>
 
         {profiles.length > 1 && (
           <select
-            value={selectedProfileId ?? ''}
+            value={selectedProfileId ?? ""}
             onChange={(e) => setSelectedProfileId(Number(e.target.value))}
             className="bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/50"
           >
@@ -219,11 +251,23 @@ export function HistoryListPage() {
       {!isLoading && !error && uniqueResults.length === 0 && (
         <div className="text-center py-20">
           <div className="w-16 h-16 rounded-full bg-bg-tertiary flex items-center justify-center mx-auto mb-4">
-            <svg className="w-8 h-8 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+            <svg
+              className="w-8 h-8 text-text-muted"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={1.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+              />
             </svg>
           </div>
-          <h3 className="text-lg font-medium text-text-primary mb-1">No workouts yet</h3>
+          <h3 className="text-lg font-medium text-text-primary mb-1">
+            No workouts yet
+          </h3>
           <p className="text-text-secondary text-sm">
             Upload a workout video to get started.
           </p>
@@ -245,7 +289,10 @@ export function HistoryListPage() {
           </div>
 
           {/* Observer Target & Infinite Scroll Loading Indicator */}
-          <div ref={observerTarget} className="mt-8 flex justify-center min-h-[50px]">
+          <div
+            ref={observerTarget}
+            className="mt-8 flex justify-center min-h-[50px]"
+          >
             {isFetchingNextPage && (
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 w-full">
                 <HistoryCardSkeleton />
@@ -257,7 +304,9 @@ export function HistoryListPage() {
 
           {error && (
             <div className="mt-8 flex flex-col items-center justify-center py-6 bg-error/5 border border-error/10 rounded-lg">
-              <p className="text-error text-sm font-medium mb-2">Failed to load more history</p>
+              <p className="text-error text-sm font-medium mb-2">
+                Failed to load more history
+              </p>
               <button
                 type="button"
                 onClick={() => fetchNextPage()}
