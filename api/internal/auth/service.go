@@ -105,11 +105,18 @@ func (s *Service) IssueTokenByUser(u *db.User) (token string, err error) {
 // Login authenticates a user and returns a JWT.
 func (s *Service) Login(ctx context.Context, username, password string) (token string, userID uint, err error) {
 	var user db.User
+	userFound := true
+
 	if err := s.db.WithContext(ctx).
 		Where("LOWER(username) = LOWER(?) AND deleted_at IS NULL", username).
 		First(&user).Error; err != nil {
 		// Perform a dummy bcrypt comparison to mitigate timing attacks.
 		VerifyPassword(password, dummyHash)
+		userFound = false
+	}
+
+	if !userFound {
+		DummyVerifyPassword(password)
 		return "", 0, ErrInvalidCredentials
 	}
 
@@ -181,11 +188,18 @@ func (s *Service) Logout(ctx context.Context, userID uint) error {
 // Returns the list of GCS prefixes that should be cleaned up asynchronously.
 func (s *Service) DeleteAccount(ctx context.Context, userID uint, password string) (gcsPrefixes []string, err error) {
 	var user db.User
+	userFound := true
+
 	if err := s.db.WithContext(ctx).
 		Where("id = ? AND deleted_at IS NULL", userID).
 		First(&user).Error; err != nil {
 		// Perform a dummy bcrypt comparison to mitigate timing attacks.
 		VerifyPassword(password, dummyHash)
+		userFound = false
+	}
+
+	if !userFound {
+		DummyVerifyPassword(password)
 		return nil, ErrInvalidCredentials
 	}
 
