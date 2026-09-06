@@ -350,7 +350,14 @@
     "needAttention": "%{count}개 확인 필요",
     "readyToUpload": "%{count}개 업로드 준비 완료",
     "awaitingEncode": "%{count}개 인코딩 대기 중",
-    "uploaded": "%{count}개 업로드 완료"
+    "uploaded": "%{count}개 업로드 완료",
+    "sensor": {
+      "heartRate": "심박수",
+      "state": "상태: %{status}",
+      "strapBattery": "스트랩: %{level}%",
+      "strapBatteryUnknown": "스트랩: --",
+      "liveStatus": "수집 %{accSamples} pts · %{dropped} drop"
+    }
   },
   "auth": {
     "login": "로그인",

@@ -1,12 +1,14 @@
 # Test Matrix and Rollout Rules
 
+> Target plan. Read the [2026-09-06 source reconciliation](README.md#current-status-versus-target-work) first; existing implementation must be preserved and extended. Checkboxes are release gates, not a live code inventory.
+
 This document applies to every implementation phase. Passing unit tests alone is not enough for changes involving cameras, FFmpeg, queues, model behavior, or cost.
 
 ## Test layers
 
 | Layer | Required coverage | Repository pattern |
 |---|---|---|
-| Pure unit | Timestamp interval union, manifest validation, canonicalization, schema semantics, score formula, deterministic triage, cost math. | Table-driven Go tests or Jest; no mocks needed. |
+| Pure unit | Timestamp interval union, manifest validation, canonicalization, schema semantics, score formula, deterministic triage, cost math. | Table-driven Ginkgo/Gomega or Jest; no mocks needed. |
 | Migration | Up/down pair, existing-row backfill/dedupe, unique constraints, partial indexes, additive compatibility. | `golang-migrate`; never `AutoMigrate`. |
 | Controller integration | Auth/ownership, request compatibility, PENDING upsert, duplicate notification, merge count validation. | Router `ServeHTTP`, real test PostgreSQL, one Ginkgo `Describe` per route. |
 | Worker integration | GCS, Gemini upload/generation/delete, DB state, queue follow-ups, retries. | Existing four-layer real-client + `MockTransport` strategy. |
@@ -49,7 +51,7 @@ Backend test invocations must not run concurrently: the suites share `wod_test` 
 | MED-07 | Zero/corrupt chunk | No concat/full enqueue; final state follows retry policy. |
 | MED-08 | Variable/high frame rate chunks | Merged playback speed and duration are correct. |
 | MED-09 | Direct upload already has merged video | No redundant copy/upload. |
-| MED-10 | Current and legacy session ID formats | Both validate and keep profile only in path. |
+| MED-10 | Current and legacy session ID formats | New IDs keep profile only in the path; legacy `P{id}-WOD-...` IDs remain readable without rewriting their embedded prefix. |
 
 ### Task state/retries
 
@@ -123,14 +125,13 @@ From `api/`:
 
 ```bash
 make migrate-test-up
-make migrate-test-redo
 make test TEST_DIR=./internal/controllers
 make test TEST_DIR=./internal/worker
 make test TEST_DIR=./cmd/worker
 make test
 ```
 
-Use `make migrate-test-up` for a fresh test database. `make migrate-test-redo` only replays the latest migration and is appropriate while iterating on that new pair.
+Use `make migrate-test-up` for a fresh test database. `make migrate-test-up` also handles later pending migrations. Run `make migrate-test-redo` separately only for deliberate down/up testing; it rolls back one applied migration before applying pending migrations.
 
 For FFmpeg work, record `ffmpeg -version` and run the relevant worker package on a machine with FFmpeg. A skipped FFmpeg test is not evidence that media behavior passes.
 
@@ -161,7 +162,7 @@ Recommended switches:
 | Switch | Control behavior |
 |---|---|
 | `VIDEO_REQUIRE_EXPECTED_CHUNKS` | false during compatibility, then true. |
-| `VIDEO_USE_MEDIA_TIMELINE` | enabled after timeline verification; legacy fallback remains observable. |
+| `VIDEO_USE_MEDIA_TIMELINE` | verified media only; observable legacy reconstruction or exact-source fallback. Never roll back to capture offsets on merged media. |
 | `VIDEO_STRUCTURED_OUTPUT` | control regex path until candidate passes, then structured. |
 | `VIDEO_FINAL_SYNTHESIS` | off/control concatenation until evaluation passes. |
 | `VIDEO_DIRECT_UPLOAD_INDEX_MODE` | `split_upload_control`, candidate `full_index_once`/`range_scan_reuse`. |

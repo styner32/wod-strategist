@@ -18,7 +18,7 @@ For detailed patterns see:
 
 ## Session ID Generation
 * Generated client-side in `features/wod/workoutType.ts` via `buildWorkoutSessionId(type)` using the `ulid` npm package.
-* Format: `WOD-YYYYMMDD-{ULID}`. Never embed `profile_id` in the session ID — it goes in the GCS path prefix only.
+* Format: `{TYPE}-YYYYMMDD-{ULID}` where `TYPE` is `WOD`, `WARMUP`, `ACCESSORY`, or `COOLDOWN`. Never embed `profile_id` in the session ID — it goes in the GCS path prefix only.
 
 ## Internationalization (i18n)
 * Setup lives in `features/i18n/` with locale files at `features/i18n/locales/{en,ko}.json`.

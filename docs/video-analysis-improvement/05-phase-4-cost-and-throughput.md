@@ -1,13 +1,15 @@
 # Phase 4: Cost, Throughput, and Resource Efficiency
 
+> Target plan. Read the [2026-09-06 source reconciliation](README.md#current-status-versus-target-work) first; existing implementation must be preserved and extended. Checkboxes are release gates, not a live code inventory.
+
 Priority: P1 after baseline
 Goal: reduce model, upload, compute, storage, and polling cost while preserving the Phase 3 evidence/safety contract.
 
 Every change in this phase starts as a named candidate variant. Promote only one major variable at a time unless the experiment is explicitly factorial and budgeted.
 
-## Current external reference points
+## Historical external reference points — revalidation required
 
-Verified on 2026-07-11; re-check before implementation because prices and model behavior change.
+The original plan labels these references 2026-07-11, but model names were subsequently edited. The documentation reconciliation did not revalidate vendor pages or deployed settings. Treat the numerical examples below as planning assumptions, not verified current pricing, quotas, or defaults. Current repository cost constants are recorded in [video-analysis.md](../agent-memory/video-analysis.md#ai-cost--token-tracking).
 
 - [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing): standard `gemini-3.8-flash` is listed at $1.50 per million input tokens and $9.00 per million output tokens including thinking; standard `gemini-3.5-flash-lite` is $0.25 input and $1.50 output/thinking.
 - [Gemini video understanding](https://ai.google.dev/gemini-api/docs/video-understanding): default visual sampling is 1 FPS, which can miss rapid motion; default video is approximately 300 tokens/second including audio, while low resolution is about 100 tokens/second.
@@ -20,8 +22,8 @@ Illustrative lower-bound input cost for a 10-minute video at the documented defa
 
 ```text
 600 seconds * ~300 tokens/second = ~180,000 input tokens
-Gemini 3.6 Flash standard input: 0.18 * $1.50 = ~$0.27
-Gemini 3.5 Flash-Lite standard input: 0.18 * $0.25 = ~$0.045
+Gemini 3.8 Flash assumed standard input: 0.18 * $1.50 = ~$0.27
+Gemini 3.5 Flash-Lite assumed standard input: 0.18 * $0.25 = ~$0.045
 ```
 
 This excludes prompt, output, thinking, repeated segment calls, uploads, Pro calls, and follow-ups. Use actual `UsageMetadata`, not this estimate, for decisions.
@@ -40,7 +42,7 @@ Work items: COST-01, COST-02
 
 ### COST-01 — Make stage settings explicit
 
-Replace the single implicit Flash constant and one global Pro model with validated stage configuration. Suggested names:
+Extend the existing global `GEMINI_MODEL` / `GEMINI_THINKING_LEVEL` / `GEMINI_THINKING_BUDGET` settings and fixed Flash stage constant with validated stage configuration. Suggested names:
 
 ```text
 GEMINI_MODEL_CHUNK
@@ -143,7 +145,7 @@ Keep the current path as `split_upload_control`. Evaluate in this order:
 
 Add a Gemini client method that accepts existing file URI, model, range, FPS, media resolution, thinking level, and schema. Do not re-upload when an active full-file URI exists.
 
-Synthetic evidence rows should use `chunk_source='synthetic_range'`, share the original source URI, and remain unique by `(profile_id, session_id, chunk_index)`. The recorded-chunk file-path unique index from Phase 1 must be partial to `chunk_source='recorded'`; never invent nonexistent split GCS URIs.
+Synthetic evidence rows should use `chunk_source='synthetic_range'`, share the original source URI, and remain unique by `(profile_id, session_id, chunk_source, chunk_index)`. The recorded-chunk file-path unique index from Phase 1 must be partial to `chunk_source='recorded'`; never invent nonexistent split GCS URIs.
 
 Compare:
 
@@ -204,7 +206,7 @@ Work item: COST-05
 
 ### Current issue
 
-The deployed worker is configured for 2 vCPU and 8 GiB in `infra/compute.tf`. One Asynq server has concurrency 10. A full-analysis task can additionally run 10 split goroutines, so multiple tasks can create roughly 100 concurrent probes/uploads/generations without a process-wide limit. Merge, FFmpeg, real-time, full analysis, and hardsub compete in the same pool.
+The repository infrastructure configuration describes a worker configured for 2 vCPU and 8 GiB in `infra/compute.tf`. One Asynq server has concurrency 10. A full-analysis task can additionally run 10 split goroutines, so multiple tasks can create roughly 100 concurrent probes/uploads/generations without a process-wide limit. Merge, FFmpeg, real-time, full analysis, and hardsub compete in the same pool.
 
 ### Target queues
 
@@ -281,7 +283,7 @@ Classify objects without violating the required session prefix:
 - user/policy assets: `merged.mp4`, delivered highlights, explicitly retained hardsub;
 - recoverable intermediates: recorded chunks, `analysis.mp4`, synthetic split chunks, temporary audio/subtitle artifacts.
 
-Add application cleanup only after the required downstream stages have reached terminal states and the product-approved recovery window has elapsed. Add `DeleteObject` to the narrow storage client interface and test through the existing GCS mock transport.
+Add application cleanup only after the required downstream stages have reached terminal states and the product-approved recovery window has elapsed. Use or extend the concrete storage client's deletion method and test through the existing GCS mock transport. Do not introduce a storage interface solely for this work; follow the repository's Go conventions.
 
 Do not add a bucket-wide age rule that can delete user videos. If using GCS lifecycle as a safety net, tag temporary objects with metadata/custom time and confirm the rule can distinguish them. Keep all paths under `videos/{profileId}/{sessionId}/`; a subdirectory inside that prefix is allowed, a new top-level prefix is not.
 

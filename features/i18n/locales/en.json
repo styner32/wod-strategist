@@ -350,7 +350,14 @@
     "needAttention": "%{count} need attention",
     "readyToUpload": "%{count} ready to upload",
     "awaitingEncode": "%{count} awaiting encode",
-    "uploaded": "%{count} uploaded"
+    "uploaded": "%{count} uploaded",
+    "sensor": {
+      "heartRate": "HEART RATE",
+      "state": "State: %{status}",
+      "strapBattery": "Strap: %{level}%",
+      "strapBatteryUnknown": "Strap: --",
+      "liveStatus": "REC %{accSamples} pts · %{dropped} drop"
+    }
   },
   "auth": {
     "login": "Log In",

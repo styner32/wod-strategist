@@ -38,4 +38,5 @@ export interface PendingUpload {
   filePath: string;
   attempts: number;
   lastAttemptAt?: number;
+  profileId?: number;
 }

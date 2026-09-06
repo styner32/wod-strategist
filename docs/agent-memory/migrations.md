@@ -13,7 +13,8 @@
 | `make migrate-up` | Apply all pending migrations against `DATABASE_URL` |
 | `make migrate-down` | Roll back one step against `DATABASE_URL` |
 | `make migrate-up-remote` | Execute the Cloud Run Jobs migrate service |
-| `make migrate-test-redo` | Down-1 then up against `TEST_DATABASE_URL` (used by worker tests) |
+| `make migrate-test-up` | Apply all pending migrations against `TEST_DATABASE_URL` |
+| `make migrate-test-redo` | Down one applied migration, then up; use for deliberate rollback/reapply validation |
 
 ## Authoring rules
 - When adding or modifying a column on a model in `internal/db/`, always create a matching migration pair.
@@ -30,4 +31,4 @@ The migration SQL is the **single source of truth** for schema constraints. Do n
 
 ## Migration vs. code order
 - The migration must be authored before or alongside the Go model change — running code against a pre-migration schema will fail at startup.
-- For worker tests, `make migrate-test-redo` must be run after adding a migration, otherwise `wod_test` will be out of date.
+- Before worker tests, run `make migrate-test-up` after adding a migration. Use `make migrate-test-redo` only to test rollback/reapply of the latest pair; it can roll back the previously applied migration if the new pair has not yet been applied.

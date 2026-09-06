@@ -22,7 +22,7 @@
 }
 ```
 - Values are rough AI estimates, not accurate sensor data
-- Only emitted when exercise is detected (NO_EXERCISE chunks have `"{}"`)
+- Missing or malformed observed-signals blocks produce `"{}"`. Do not infer the stored value from `[NO_EXERCISE]` alone: exercise-tag and signals parsing are separate. Optional activity/fatigue fields and sanitization rules are defined in [movement-fatigue-evidence.md](movement-fatigue-evidence.md).
 
 ## Prompt Injection
 - `buildChunkAnalysisPrompt()` in `chunk_analysis.go`:

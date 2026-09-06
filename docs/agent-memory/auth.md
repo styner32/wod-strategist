@@ -2,7 +2,7 @@
 
 ## Architecture overview
 - **Scheme:** JWT (HS256) with DB-side `token_version` check on every request (via 30s in-memory cache).
-- **Single token** — no refresh token. Revocation is instant via `token_version` bump.
+- **Single token** — no refresh token. Revocation bumps `token_version` and invalidates the local service cache; other instances may accept the old version until their 30-second cache TTL expires.
 - **Password hashing:** bcrypt (`DefaultCost`).
 - **User ID:** auto-increment `uint` (SERIAL). Originally planned as petname TEXT, migrated in `000026`.
 - **No application API-key gate.** Authorization is JWT only (`Authorization: Bearer` for mobile, `jwt` httpOnly cookie for web). Gemini uses a separate `GEMINI_API_KEY` / `X-Goog-Api-Key` unrelated to app auth.
@@ -63,7 +63,7 @@
 - **Hydration token check:** `useAuthStore.hydrate()` decodes the JWT and clears expired tokens on launch.
 
 ## Gotchas
-- Username unique index is partial: `WHERE deleted_at IS NULL` — deleted usernames are NOT freed for reuse (username is not scrubbed on delete)
+- Username unique index is partial: `WHERE deleted_at IS NULL` — soft-deleted rows do not block username reuse at the DB layer. Self-service signup is currently disabled.
 - CORS `allowMethods` includes `DELETE` and `PATCH`; `allowHeaders` is `Content-Type, Authorization` (no `X-API-Key`)
 - Workers do not check `deleted_at` — in-flight tasks continue after account deletion
 - Old mobile clients may still send an ignored `X-API-Key` header; that is harmless after server removal
@@ -72,5 +72,5 @@
 ## Remaining hardening TODO
 - [ ] Replace in-memory login rate limiter with a distributed limiter
 - [ ] Wire up GCS cleanup on account deletion (resolve TODO in `auth_handlers.go`)
-- [ ] Decide username scrub-on-delete policy (currently blocks reuse)
+- [ ] Decide username scrub-on-delete policy for retained deleted-user data (the partial index already permits reuse)
 - [ ] Add worker-side `deleted_at` check before processing tasks

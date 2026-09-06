@@ -1,0 +1,21 @@
+{
+  "description": "Polar H10 PMD Start Measurement responses (success and error) SYNTHETIC fixture \u2014 hand-authored to the Polar PMD spec, not captured from hardware. Replace with a real H10 dump before trusting ACC values.",
+  "success": {
+    "hex": "f0020200",
+    "base64": "8AICAA==",
+    "status": 0,
+    "measurementType": 2
+  },
+  "errorUnsupported": {
+    "hex": "f0020203",
+    "base64": "8AICAw==",
+    "status": 3,
+    "measurementType": 2
+  },
+  "errorInvalidParameter": {
+    "hex": "f0020205",
+    "base64": "8AICBQ==",
+    "status": 5,
+    "measurementType": 2
+  }
+}

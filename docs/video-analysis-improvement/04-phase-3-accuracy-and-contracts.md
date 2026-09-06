@@ -1,5 +1,7 @@
 # Phase 3: Accuracy, Evidence, and Output Contracts
 
+> Target plan. Read the [2026-09-06 source reconciliation](README.md#current-status-versus-target-work) first; existing implementation must be preserved and extended. Checkboxes are release gates, not a live code inventory.
+
 Priority: P0 for target/safety issues; P1 for broader quality
 Depends on: trustworthy media timeline and the Phase 2 baseline
 
@@ -153,7 +155,7 @@ Work items: ACC-02, ACC-03
 
 ### ACC-02 — Remove fabricated profile defaults
 
-`lookupProfileString` in `api/internal/worker/worker.go` currently returns a fictional birth year, gender, height, weight, and other attributes when data is absent. Delete that behavior.
+`lookupProfileString` in `api/internal/worker/worker.go` still returns a fixed birth date, gender, height, and weight when profile data is absent or incomplete (confirmed 2026-09-06). Remove that fallback. New appearance/target-person context does not by itself resolve this separate formatter defect.
 
 Required formatter behavior:
 
@@ -248,7 +250,7 @@ Work items: ACC-05, ACC-06
 
 ### ACC-05 — Canonical movement registry
 
-Create one narrow registry/helper for:
+Reuse and extend the existing `api/internal/movement` normalization where suitable, keeping one source of truth for:
 
 - stable canonical ID;
 - display name/localization key;
@@ -310,6 +312,7 @@ No single segment call receives responsibility for whole-session scoring.
 - Validate every component in `[0,100]` and require sufficient evidence for consistency/intensity; otherwise mark the dimension not assessable rather than returning a confident zero.
 - Recompute `overall` on the server from validated components and reject/overwrite a mismatching model total.
 - For the existing standard formula use `form*0.5 + intensity*0.3 + consistency*0.2` with documented rounding.
+- Recovery workouts (`warmup`, `cooldown`) already use `form*0.7 + consistency*0.3` with intensity omitted from the total; preserve that separate rule.
 - The current skill-WOD prompt says `form*0.7 + remaining 0.3` but does not define the split. Before implementation, confirm the product rule; recommended default is `form*0.7 + intensity*0.15 + consistency*0.15`.
 - Canonicalize movement keys and validate movement sub-scores.
 
@@ -317,7 +320,8 @@ Historical comparison should consume the already validated current score plus pr
 
 ### ACC-08 — Highlight validation and selective verification
 
-Change highlight output to numeric media seconds with:
+Extend the current [highlight playback-event v2 contract](../agent-memory/video-analysis.md#highlight-playback-event-contract-v2). Preserve parent playback windows and exact child `observations`; do not flatten them into one interval or use padded playback context as evidence. Add numeric media seconds and evidence metadata with compatibility rendering:
+
 
 - type enum;
 - canonical movement ID;
@@ -336,7 +340,7 @@ Before clipping:
 
 Verification must return a result per highlight. Remove or downgrade failed claims instead of setting only one all-or-none session boolean. High-risk/low-confidence candidates can be verified; do not automatically resend the full video for every obvious evidence-backed item.
 
-Fix the fallback storage path in `verify_highlights.go` so it uses `videos/{profileId}/{sessionId}/...` and returns a valid `gs://` URI. Add a test using a nontrivial profile ID to prevent regression.
+The canonical/legacy source resolver in `verify_highlights.go` already uses `videos/{profileId}/{sessionId}/merged.mp4` and valid `gs://` URIs. Preserve `findSourceVideo` and its nontrivial-profile/legacy regression tests when extending verification.
 
 ## Phase 3 release gate
 

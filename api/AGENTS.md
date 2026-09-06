@@ -25,7 +25,7 @@ For detailed patterns see:
 ## Worker Task Integration Testing (`internal/worker/*_test.go`)
 Follow the **4-layer real-client strategy** (see [backend-testing.md](../docs/agent-memory/backend-testing.md)):
 1. **Database:** Use real PostgreSQL (`wod_test`) via `testhelpers.InitDB()`. Truncate in `BeforeEach`.
-2. **Gemini API:** Use real client + `MockTransport` (verify the 5-request chain).
+2. **Gemini API:** Use real client + `MockTransport` (verify the upload/poll/generation/cleanup behavior of the specific path, not a universal request count).
 3. **GCS Storage:** Use real client + `testhelpers.NewStorageClient` and `MockGCS*` helpers.
 4. **Queue:** Use real asynq client (Redis DB 15) + `QueueInspector`.
 * *Note: Wrap ffmpeg-dependent tests with `if !hasFfmpeg() { Skip(...) }`.*
@@ -36,9 +36,9 @@ Follow the **4-layer real-client strategy** (see [backend-testing.md](../docs/ag
 * When adding or modifying a column, always create a matching migration pair. Use `ALTER TABLE ... ADD COLUMN ... DEFAULT`; `down.sql` must use `DROP COLUMN IF EXISTS`.
 
 ## Video Analysis Architecture (Two-Pass)
-* **Pass 1 (Indexing):** Prefer `start_secs` and `end_secs` from `chunk_analysis_results`. If no chunks exist, fallback to `IndexVideo` with strict video duration constraints.
+* **Pass 1 (Indexing):** Prefer verified `media_start_secs` and `media_end_secs` from `chunk_analysis_results`. Never apply capture-clock `start_secs`/`end_secs` to merged media. If no usable verified segments remain, fallback to `IndexVideo` with strict video duration constraints.
 * **Pass 2 (Deep Analysis):** Analyze segments independently using `VideoMetadata` (Start/End offset) to prevent hallucination.
-* **File Lifecycle:** `UploadVideo` is called once. The analysis handler defers `DeleteFile` unless injuries exist, in which case the Injury handler calls `DeleteFile` at the end.
+* **File Lifecycle:** Two-pass analysis uploads once and reuses the file URI. Current success paths retain file metadata for reuse; explicit cleanup is not guaranteed on every success/injury path. Follow the current lifecycle and remaining COST-07 work in [video-analysis.md](../docs/agent-memory/video-analysis.md#file-lifecycle).
 
 ## Error Handling & Initialization
 * Validate runtime environment variables in `internal/config` during startup, NOT lazily.

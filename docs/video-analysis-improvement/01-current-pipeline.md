@@ -1,6 +1,6 @@
-# Current Video Analysis Pipeline
+# Video Analysis Pipeline — Original Review Baseline
 
-This is a source-level map of the implementation as reviewed on 2026-07-11. It describes behavior that exists now, including defects. It is not the target architecture.
+This is the source-level review baseline dated 2026-07-11, including defects identified then. The descriptions and diagram below are retained as historical context, not current behavior. Later edits have also changed model names, so this is not an immutable Git snapshot. See the [2026-09-06 status reconciliation](README.md#current-status-versus-target-work) and [current video-analysis memory](../agent-memory/video-analysis.md) before implementing a fix.
 
 ## Entry points and core files
 

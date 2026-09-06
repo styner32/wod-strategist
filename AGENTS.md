@@ -17,7 +17,7 @@
   - risks or follow-up work
 
 ## Session ID format
-- **Current:** `WOD-YYYYMMDD-{ULID}` (e.g., `WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF`)
+- **Current:** `{TYPE}-YYYYMMDD-{ULID}` (`TYPE`: `WOD`, `WARMUP`, `ACCESSORY`, `COOLDOWN`) (e.g., `WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF`)
 - **Generation:** Client-side using the `ulid` npm package.
 - **Backward compatibility:** Must always handle the old format (`P{id}-WOD-YYYY-MM-DD-HH-MM`).
 
@@ -42,6 +42,12 @@ Never do these unless explicitly requested:
 ## Scoped rules
 - [api/AGENTS.md](api/AGENTS.md) — Backend Go rules (testing, migrations, error handling, video analysis)
 - [app/AGENTS.md](app/AGENTS.md) — Frontend React Native rules (Android perf, BLE, pose detection, i18n)
+
+## Documentation scope
+- [docs/documentation-review.md](docs/documentation-review.md) records the documentation reconciliation and remaining decisions.
+- `docs/agent-memory/` describes current implementation and constraints; `docs/video-analysis-improvement/` describes target work, with a dated baseline in `01-current-pipeline.md`.
+- `.agent/skills/` contains generic examples, not repository architecture or an instruction to add dependencies, repository interfaces, or CI. Apply the scoped repository rules when using those examples.
+- `.jules/sentinel.md` is a historical incident journal; its old API-key and path-sanitization notes do not override current auth or validation code.
 
 ## Project memory docs
 When introducing a new integration, architectural pattern, non-obvious gotcha, or platform-specific workaround, create or update a memory doc in [docs/agent-memory/](docs/agent-memory/). Each doc should be concise and rule-oriented — include exact param names, default values, schema columns, and constraints that a future agent would need to make correct edits.

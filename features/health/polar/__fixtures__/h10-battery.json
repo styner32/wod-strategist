@@ -1,0 +1,25 @@
+{
+  "description": "Polar H10 Battery Level (0x2A19) notifications SYNTHETIC fixture \u2014 hand-authored to the Polar PMD spec, not captured from hardware. Replace with a real H10 dump before trusting ACC values.",
+  "samples": [
+    {
+      "hex": "5c",
+      "base64": "XA==",
+      "expectedPercent": 92
+    },
+    {
+      "hex": "55",
+      "base64": "VQ==",
+      "expectedPercent": 85
+    },
+    {
+      "hex": "64",
+      "base64": "ZA==",
+      "expectedPercent": 100
+    },
+    {
+      "hex": "14",
+      "base64": "FA==",
+      "expectedPercent": 20
+    }
+  ]
+}

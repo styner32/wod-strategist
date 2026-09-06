@@ -17,118 +17,123 @@ import {
 import { uploadDebugTelemetry } from '../wod/api';
 import type { PendingUpload, TelemetrySession } from './types';
 
-// ---------------------------------------------------------------------------
-// Queue persistence
-// ---------------------------------------------------------------------------
+export const MAX_ATTEMPTS = 5;
 
-const MAX_ATTEMPTS = 5;
-
-function queuePath(): string {
-  return `${documentDirectory}debug/_pending.json`;
+export interface UploadQueueOptions {
+  subDir: string;
+  logTag?: string;
+  uploadFn: (pending: PendingUpload) => Promise<void>;
 }
 
-async function loadQueue(): Promise<PendingUpload[]> {
-  try {
-    const raw = await readAsStringAsync(queuePath());
-    return JSON.parse(raw) as PendingUpload[];
-  } catch {
-    // File missing, corrupt, or unparseable — start fresh
-    return [];
+export function createUploadQueue(options: UploadQueueOptions) {
+  const { subDir, uploadFn, logTag = '📊' } = options;
+
+  function queuePath(): string {
+    return `${documentDirectory}${subDir}/_pending.json`;
   }
-}
 
-async function saveQueue(queue: PendingUpload[]): Promise<void> {
-  try {
-    // Ensure debug dir exists
-    const dir = `${documentDirectory}debug/`;
-    const info = await getInfoAsync(dir);
-    if (!info.exists) {
-      await makeDirectoryAsync(dir, { intermediates: true });
+  async function loadQueue(): Promise<PendingUpload[]> {
+    try {
+      const raw = await readAsStringAsync(queuePath());
+      return JSON.parse(raw) as PendingUpload[];
+    } catch {
+      // File missing, corrupt, or unparseable — start fresh
+      return [];
     }
-    await writeAsStringAsync(queuePath(), JSON.stringify(queue));
-  } catch (e) {
-    console.warn('📊 Failed to persist telemetry queue:', e);
   }
+
+  async function saveQueue(queue: PendingUpload[]): Promise<void> {
+    try {
+      const dir = `${documentDirectory}${subDir}/`;
+      const info = await getInfoAsync(dir);
+      if (!info.exists) {
+        await makeDirectoryAsync(dir, { intermediates: true });
+      }
+      await writeAsStringAsync(queuePath(), JSON.stringify(queue));
+    } catch (e) {
+      console.warn(`${logTag} Failed to persist queue:`, e);
+    }
+  }
+
+  async function enqueueUpload(
+    sessionId: string,
+    filePath: string,
+    profileId?: number,
+  ): Promise<void> {
+    const queue = await loadQueue();
+    queue.push({ sessionId, filePath, attempts: 0, profileId });
+    await saveQueue(queue);
+  }
+
+  async function uploadOne(pending: PendingUpload): Promise<boolean> {
+    try {
+      await uploadFn(pending);
+
+      // Success — delete the local file
+      try {
+        await deleteAsync(pending.filePath, { idempotent: true });
+      } catch {
+        // Non-fatal — file already gone or inaccessible
+      }
+
+      console.log(`${logTag} uploaded for ${pending.sessionId}`);
+      return true;
+    } catch (e) {
+      pending.attempts += 1;
+      pending.lastAttemptAt = Date.now();
+      console.warn(
+        `${logTag} upload failed for ${pending.sessionId} (attempt ${pending.attempts}):`,
+        e,
+      );
+      return false;
+    }
+  }
+
+  async function flushPendingUploads(): Promise<void> {
+    const queue = await loadQueue();
+    if (queue.length === 0) return;
+
+    const remaining: PendingUpload[] = [];
+
+    for (const entry of queue) {
+      if (entry.attempts >= MAX_ATTEMPTS) {
+        console.warn(
+          `${logTag} Giving up on upload for ${entry.sessionId} after ${entry.attempts} attempts`,
+        );
+        continue;
+      }
+
+      const ok = await uploadOne(entry);
+      if (!ok) {
+        remaining.push(entry);
+      }
+    }
+
+    await saveQueue(remaining);
+  }
+
+  return {
+    enqueueUpload,
+    flushPendingUploads,
+    loadQueue,
+    saveQueue,
+    uploadOne,
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Default Debug Telemetry Queue (maintains backward compatibility)
 // ---------------------------------------------------------------------------
 
-/**
- * Add a telemetry file to the retry queue and persist.
- */
-export async function enqueueUpload(
-  sessionId: string,
-  filePath: string,
-): Promise<void> {
-  const queue = await loadQueue();
-  queue.push({ sessionId, filePath, attempts: 0 });
-  await saveQueue(queue);
-}
-
-/**
- * Attempt to upload a single pending entry.
- * On success: deletes the local JSON file, returns true.
- * On failure: increments attempts, returns false.
- */
-async function uploadOne(pending: PendingUpload): Promise<boolean> {
-  try {
+const debugQueue = createUploadQueue({
+  subDir: 'debug',
+  logTag: '📊 Telemetry',
+  uploadFn: async (pending) => {
     const raw = await readAsStringAsync(pending.filePath);
     const session: TelemetrySession = JSON.parse(raw);
-
     await uploadDebugTelemetry(session);
+  },
+});
 
-    // Success — delete the local file
-    try {
-      await deleteAsync(pending.filePath, { idempotent: true });
-    } catch {
-      // Non-fatal — file already gone or inaccessible
-    }
-
-    console.log(`📊 Telemetry uploaded for ${pending.sessionId}`);
-    return true;
-  } catch (e) {
-    pending.attempts += 1;
-    pending.lastAttemptAt = Date.now();
-    console.warn(
-      `📊 Telemetry upload failed for ${pending.sessionId} (attempt ${pending.attempts}):`,
-      e,
-    );
-    return false;
-  }
-}
-
-/**
- * Best-effort flush of all pending uploads. Caller should fire-and-forget:
- *
- *   flushPendingUploads().catch(() => {});
- *
- * - Skips entries with attempts >= MAX_ATTEMPTS
- * - Processes sequentially (network-friendly)
- * - Persists updated queue after each attempt
- */
-export async function flushPendingUploads(): Promise<void> {
-  const queue = await loadQueue();
-  if (queue.length === 0) return;
-
-  const remaining: PendingUpload[] = [];
-
-  for (const entry of queue) {
-    if (entry.attempts >= MAX_ATTEMPTS) {
-      // Give up on this one — keep file for manual inspection, drop from queue
-      console.warn(
-        `📊 Giving up on telemetry upload for ${entry.sessionId} after ${entry.attempts} attempts`,
-      );
-      continue;
-    }
-
-    const ok = await uploadOne(entry);
-    if (!ok) {
-      remaining.push(entry);
-    }
-    // On success: entry is NOT pushed to remaining → removed from queue
-  }
-
-  await saveQueue(remaining);
-}
+export const enqueueUpload = debugQueue.enqueueUpload;
+export const flushPendingUploads = debugQueue.flushPendingUploads;

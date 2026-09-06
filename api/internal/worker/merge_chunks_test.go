@@ -42,6 +42,84 @@ var _ = Describe("NewMergeChunksTask", func() {
 	})
 })
 
+var _ = Describe("listOriginalChunks", func() {
+	It("skips non-video session artifacts and retains only .mp4 and .mov files", func() {
+		storageTransport := testhelpers.NewMockTransport()
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(err).NotTo(HaveOccurred())
+
+		w := &Worker{
+			StorageClient: storageClient,
+			BucketName:    "test-bucket",
+		}
+
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-filter-pure/", []string{
+			"videos/sess-filter-pure/sensor_telemetry.ndjson",
+			"videos/sess-filter-pure/metrics.json",
+			"videos/sess-filter-pure/chunk_001.mp4",
+			"videos/sess-filter-pure/chunk_002.MOV",
+			"videos/sess-filter-pure/merged.mp4",
+			"videos/sess-filter-pure/split_chunk_001.mp4",
+		})
+
+		chunks, err := w.listOriginalChunks(context.Background(), "gs://test-bucket/videos/sess-filter-pure")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(chunks).To(Equal([]string{
+			"gs://test-bucket/videos/sess-filter-pure/chunk_001.mp4",
+			"gs://test-bucket/videos/sess-filter-pure/chunk_002.MOV",
+		}))
+	})
+
+	It("returns empty slice when only non-video artifacts exist", func() {
+		storageTransport := testhelpers.NewMockTransport()
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(err).NotTo(HaveOccurred())
+
+		w := &Worker{
+			StorageClient: storageClient,
+			BucketName:    "test-bucket",
+		}
+
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-only-sensor/", []string{
+			"videos/sess-only-sensor/sensor_telemetry.ndjson",
+			"videos/sess-only-sensor/summary.json",
+			"videos/sess-only-sensor/notes.txt",
+			"videos/sess-only-sensor/unsupported.avi",
+			"videos/sess-only-sensor/noextension",
+		})
+
+		chunks, err := w.listOriginalChunks(context.Background(), "gs://test-bucket/videos/sess-only-sensor")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(chunks).To(BeEmpty())
+	})
+
+	It("handles mixed-case extensions and excludes previous merge outputs", func() {
+		storageTransport := testhelpers.NewMockTransport()
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(err).NotTo(HaveOccurred())
+
+		w := &Worker{
+			StorageClient: storageClient,
+			BucketName:    "test-bucket",
+		}
+
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-mixed/", []string{
+			"videos/sess-mixed/chunk_001.Mp4",
+			"videos/sess-mixed/chunk_002.mOv",
+			"videos/sess-mixed/chunk_001_merged_output.mp4",
+			"videos/sess-mixed/chunk_001_hardsubbed_output.mp4",
+			"videos/sess-mixed/chunk_001_encoded_output.mp4",
+		})
+
+		chunks, err := w.listOriginalChunks(context.Background(), "gs://test-bucket/videos/sess-mixed")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(chunks).To(Equal([]string{
+			"gs://test-bucket/videos/sess-mixed/chunk_001.Mp4",
+			"gs://test-bucket/videos/sess-mixed/chunk_002.mOv",
+		}))
+	})
+})
+
 var _ = Describe("HandleMergeChunksTask", func() {
 	var (
 		dbConn           *gorm.DB
@@ -131,6 +209,19 @@ var _ = Describe("HandleMergeChunksTask", func() {
 
 		err = w.HandleMergeChunksTask(context.Background(), task)
 		Expect(err).To(MatchError(ContainSubstring("no chunks found")))
+	})
+
+	It("skips non-video session artifacts when filtering", func() {
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-filter-002/", []string{
+			"videos/sess-filter-002/sensor_telemetry.ndjson",
+			"videos/sess-filter-002/chunk_001.mp4",
+		})
+
+		chunks, err := w.listOriginalChunks(context.Background(), "gs://test-bucket/videos/sess-filter-002")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(chunks).To(Equal([]string{
+			"gs://test-bucket/videos/sess-filter-002/chunk_001.mp4",
+		}))
 	})
 
 	It("persists concat-relative media offsets instead of capture-clock timestamps", func() {

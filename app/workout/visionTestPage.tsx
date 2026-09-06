@@ -42,6 +42,11 @@ import {
   enqueueUpload as enqueueDebugUpload,
   flushPendingUploads,
 } from "../../features/debug/telemetryUpload";
+import { PolarSensorRecorder } from "@/features/health/polar/polarSensorRecorder";
+import {
+  enqueueSensorUpload,
+  flushSensorUploads,
+} from "@/features/health/polar/sensorTelemetryUpload";
 import {
   fetchChunkAnalysis,
   mergeChunks,
@@ -188,11 +193,18 @@ export default function VisionTestPage() {
 
   // Session ID computed once at recording start, reused for all chunks + merge
   const sessionIdRef = useRef<string>("");
+  const capturedProfileIdRef = useRef<number | null>(null);
 
   // Track recording session start time for chunk timing
   const recordingStartTime = useRef<number>(0);
   // Track individual chunk start time
   const chunkStartTime = useRef<number>(0);
+
+  // Polar sensor live collection stats (polled at 1Hz during recording)
+  const [sensorLiveStatus, setSensorLiveStatus] = useState<{
+    accSamples: number;
+    dropped: number | null;
+  }>({ accSamples: 0, dropped: null });
 
   // --- Upload monitoring ---
   const [pendingUploads, setPendingUploads] = useState(0);
@@ -381,8 +393,23 @@ export default function VisionTestPage() {
     getWorkoutConfidence,
     getLatestMotion,
   } = usePoseDetection(isRecording);
-  const { bpm, status: hrStatus } = useBleHeartRate();
+  const { bpm, status: hrStatus, batteryLevel } = useBleHeartRate({
+    sink: PolarSensorRecorder,
+  });
   // const { bpm, status: hrStatus } = useHeartRate();
+
+  // Poll Polar sensor live status at 1Hz during recording (avoids 50Hz re-renders)
+  useEffect(() => {
+    if (!isRecording) return;
+    const interval = setInterval(() => {
+      const stats = PolarSensorRecorder.getLiveStatus();
+      setSensorLiveStatus({
+        accSamples: stats.accSamples,
+        dropped: stats.dropped,
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isRecording]);
 
   // Refs that mirror render-state for sampling outside the render cycle.
   // TelemetryRecorder polls these at 1Hz via registered providers.
@@ -742,6 +769,8 @@ export default function VisionTestPage() {
       // Compute session ID once for the entire recording session
       sessionIdRef.current = buildWorkoutSessionId(workoutType);
       recordingStartTime.current = Date.now();
+      capturedProfileIdRef.current = profileId!;
+      setSensorLiveStatus({ accSamples: 0, dropped: null });
 
       // Start debug telemetry recording (1Hz sampling)
       TelemetryRecorder.start(sessionIdRef.current, profileId!);
@@ -755,6 +784,13 @@ export default function VisionTestPage() {
       TelemetryRecorder.registerProvider("motion", () => ({
         motion: getLatestMotion(),
       }));
+
+      // Start Polar H10 time-series sensor recording
+      PolarSensorRecorder.start({
+        sessionId: sessionIdRef.current,
+        profileId: profileId!,
+        baseEpochMs: recordingStartTime.current,
+      });
 
       // Record sequential chunks: each is uploaded for real-time analysis,
       // and raw chunk files are kept locally for gallery-save merge.
@@ -777,6 +813,7 @@ export default function VisionTestPage() {
     }
 
     setIsPaused(true);
+    PolarSensorRecorder.pause();
     await stopChunkRecording();
     console.log("⏸️ Recording paused safely");
   };
@@ -787,6 +824,7 @@ export default function VisionTestPage() {
 
     segmentStartTime.current = Date.now();
     setIsPaused(false);
+    PolarSensorRecorder.resume();
     startChunkRecording();
     console.log("▶️ Recording resumed");
   };
@@ -828,6 +866,21 @@ export default function VisionTestPage() {
         }
       } catch (e) {
         console.warn("telemetry stop failed", e);
+      }
+
+      // Stop Polar H10 sensor recording and enqueue upload
+      try {
+        const sensorResult = await PolarSensorRecorder.stop();
+        if (sensorResult && capturedProfileIdRef.current !== null) {
+          await enqueueSensorUpload(
+            sensorResult.sessionId,
+            capturedProfileIdRef.current,
+            sensorResult.filePath,
+          );
+          flushSensorUploads().catch(() => {}); // fire and forget
+        }
+      } catch (e) {
+        console.warn("sensor recorder stop failed", e);
       }
 
       // Snapshot session ID for both server merge and local merge
@@ -1150,14 +1203,29 @@ export default function VisionTestPage() {
           applyLandscapeStyles && styles.hrPanelLandscape,
         ]}
       >
-        <Text style={styles.hrLabel}>HEART RATE</Text>
+        <Text style={styles.hrLabel}>{t("overlay.sensor.heartRate")}</Text>
         <View style={styles.hrValueContainer}>
           <Text style={[styles.hrValue, { color: bpm > 0 ? "#0f0" : "#888" }]}>
             {bpm > 0 ? bpm : "--"}
           </Text>
           <Text style={styles.hrUnit}> BPM</Text>
         </View>
-        <Text style={styles.hrStatus}>State: {hrStatus}</Text>
+        <Text style={styles.hrStatus}>
+          {t("overlay.sensor.state", { status: hrStatus })}
+        </Text>
+        <Text style={styles.hrStatus}>
+          {batteryLevel != null
+            ? t("overlay.sensor.strapBattery", { level: batteryLevel })
+            : t("overlay.sensor.strapBatteryUnknown")}
+        </Text>
+        {isRecording && (
+          <Text style={styles.hrStatus}>
+            {t("overlay.sensor.liveStatus", {
+              accSamples: sensorLiveStatus.accSamples,
+              dropped: sensorLiveStatus.dropped ?? "--",
+            })}
+          </Text>
+        )}
       </View>
 
       <View
