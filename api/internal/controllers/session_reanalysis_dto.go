@@ -6,6 +6,7 @@ type CreateSessionReanalysisRequest struct {
 	ClientRequestID string `json:"client_request_id"`
 	AppearanceHints string `json:"appearance_hints,omitempty"`
 	Model           string `json:"model,omitempty"`
+	WODDescription  string `json:"wod_description,omitempty"`
 }
 
 type CreateSessionReanalysisResponse struct {
@@ -27,6 +28,7 @@ type SessionReanalysisRunResponse struct {
 	TaskID        string                              `json:"task_id,omitempty"`
 	Status        string                              `json:"status"`
 	Candidate     *SessionReanalysisCandidateResponse `json:"candidate,omitempty"`
+	WODDescription string                             `json:"wod_description,omitempty"`
 	Model         string                              `json:"model,omitempty"`
 	PromptVersion string                              `json:"prompt_version,omitempty"`
 	PromptHash    string                              `json:"prompt_hash,omitempty"`
@@ -53,4 +55,10 @@ type SessionReanalysisReadinessResponse struct {
 type ListSessionReanalysesResponse struct {
 	Runs      []SessionReanalysisRunResponse     `json:"runs"`
 	Readiness SessionReanalysisReadinessResponse `json:"readiness"`
+}
+
+type ApplySessionReanalysisResponse struct {
+	SessionID string    `json:"session_id"`
+	RunID     uint      `json:"run_id"`
+	AppliedAt time.Time `json:"applied_at"`
 }

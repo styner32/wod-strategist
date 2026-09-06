@@ -41,10 +41,12 @@ type Server struct {
 
 type Worker struct {
 	Common
-	GeminiAPIKey string
-	GeminiModel  string // GEMINI_MODEL — default "gemini-3.1-pro-preview"
-	UseCache     bool   // GEMINI_USE_CACHE — enable context caching for long videos
-	PipelineMode string // PIPELINE_MODE — legacy, optimized, compare
+	GeminiAPIKey         string
+	GeminiModel          string // GEMINI_MODEL — default "gemini-3.8-flash"
+	GeminiThinkingLevel  string // GEMINI_THINKING_LEVEL — default "HIGH"
+	GeminiThinkingBudget *int32 // GEMINI_THINKING_BUDGET — optional token count
+	UseCache             bool   // GEMINI_USE_CACHE — enable context caching for long videos
+	PipelineMode         string // PIPELINE_MODE — legacy, optimized, compare
 }
 
 var loadEnvOnce sync.Once
@@ -121,6 +123,24 @@ func InitWorker() (Worker, error) {
 		pMode = "legacy"
 	}
 
+	model := strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
+	if model == "" {
+		model = gemini.ModelFlash38
+	}
+
+	thinkingLevel := strings.TrimSpace(os.Getenv("GEMINI_THINKING_LEVEL"))
+	if thinkingLevel == "" {
+		thinkingLevel = "HIGH"
+	}
+
+	var thinkingBudget *int32
+	if rawBudget := strings.TrimSpace(os.Getenv("GEMINI_THINKING_BUDGET")); rawBudget != "" {
+		if b, err := strconv.ParseInt(rawBudget, 10, 32); err == nil && (b >= 0 || b == -1) {
+			val := int32(b)
+			thinkingBudget = &val
+		}
+	}
+
 	cfg := Worker{
 		Common: Common{
 			DatabaseURL:   strings.TrimSpace(os.Getenv("DATABASE_URL")),
@@ -128,13 +148,12 @@ func InitWorker() (Worker, error) {
 			GCSBucketName: strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
 			AppEnv:        appEnv,
 		},
-		GeminiAPIKey: strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
-		GeminiModel:  strings.TrimSpace(os.Getenv("GEMINI_MODEL")),
-		UseCache:     strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_USE_CACHE")), "true"),
-		PipelineMode: pMode,
-	}
-	if cfg.GeminiModel == "" {
-		cfg.GeminiModel = gemini.ModelPro31Preview
+		GeminiAPIKey:         strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		GeminiModel:          model,
+		GeminiThinkingLevel:  thinkingLevel,
+		GeminiThinkingBudget: thinkingBudget,
+		UseCache:             strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_USE_CACHE")), "true"),
+		PipelineMode:         pMode,
 	}
 
 	if err := validateRequired(

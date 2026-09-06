@@ -129,6 +129,16 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session re-analysis"})
 		return
 	}
+	wodDescription := strings.TrimSpace(req.WODDescription)
+	if wodDescription == "" {
+		var existingSession db.Session
+		if err := ctl.db.WithContext(c.Request.Context()).Select("wod_description").
+			Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+			First(&existingSession).Error; err == nil && existingSession.WODDescription != "" {
+			wodDescription = existingSession.WODDescription
+		}
+	}
+
 	run := db.SessionReanalysisRun{
 		SessionID:                sessionID,
 		ProfileID:                profileID,
@@ -140,6 +150,7 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		OriginalAnalysisSnapshot: originalSnapshot,
 		SessionScore:             `{}`,
 		Model:                    strings.TrimSpace(req.Model),
+		WODDescription:           wodDescription,
 	}
 	idempotentExisting := false
 	createErr := ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
@@ -288,6 +299,112 @@ func (ctl *Controller) GetSessionReanalysis(c *gin.Context) {
 	c.JSON(http.StatusOK, sessionReanalysisRunResponse(run))
 }
 
+func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
+	if !ctl.requireSessionReanalysisEnabled(c) {
+		return
+	}
+	sessionID, ok := feedbackSessionID(c)
+	if !ok {
+		return
+	}
+	profileID, ok := ctl.resolveFeedbackSession(c, sessionID)
+	if !ok {
+		return
+	}
+	runID, err := strconv.ParseUint(strings.TrimSpace(c.Param("run_id")), 10, 64)
+	if err != nil || runID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid run_id"})
+		return
+	}
+
+	var run db.SessionReanalysisRun
+	if err := ctl.db.WithContext(c.Request.Context()).Where(
+		"id = ? AND session_id = ? AND profile_id = ?", uint(runID), sessionID, profileID,
+	).First(&run).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session re-analysis not found"})
+			return
+		}
+		logger.Log.Error("failed to load session re-analysis run for apply", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load session re-analysis"})
+		return
+	}
+
+	if run.Status != db.SessionReanalysisStatusCompleted {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("cannot apply run with status %s; only COMPLETED runs can be applied", run.Status)})
+		return
+	}
+
+	now := time.Now().UTC()
+	err = ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		var analysis db.AnalysisResult
+		err := tx.Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+			Order("created_at DESC, id DESC").First(&analysis).Error
+		if err == nil {
+			updates := map[string]any{
+				"output":             run.Output,
+				"highlight_segments": run.HighlightSegments,
+				"session_score":      run.SessionScore,
+				"status":             "COMPLETED",
+				"updated_at":         now,
+			}
+			if run.WODDescription != "" {
+				updates["wod_description"] = run.WODDescription
+			}
+			if err := tx.Model(&analysis).Updates(updates).Error; err != nil {
+				return err
+			}
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			analysis = db.AnalysisResult{
+				SessionID:         sessionID,
+				ProfileID:         profileID,
+				AnalysisType:      db.AnalysisTypeWOD,
+				Status:            "COMPLETED",
+				Output:            run.Output,
+				HighlightSegments: run.HighlightSegments,
+				SessionScore:      run.SessionScore,
+				WODDescription:    run.WODDescription,
+				CreatedAt:         now,
+				UpdatedAt:         now,
+			}
+			if err := tx.Create(&analysis).Error; err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+
+		sessionUpdates := map[string]any{
+			"updated_at": now,
+		}
+		if run.WODDescription != "" {
+			sessionUpdates["wod_description"] = run.WODDescription
+		}
+		if run.WorkoutType != "" {
+			sessionUpdates["workout_type"] = run.WorkoutType
+		}
+		if err := tx.Model(&db.Session{}).
+			Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+			Updates(sessionUpdates).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		logger.Log.Error("failed to apply session re-analysis", zap.Uint("run_id", run.ID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to apply session re-analysis"})
+		return
+	}
+
+	c.JSON(http.StatusOK, ApplySessionReanalysisResponse{
+		SessionID: sessionID,
+		RunID:     run.ID,
+		AppliedAt: now,
+	})
+}
+
 func (ctl *Controller) loadSessionReanalysisReadiness(ctx context.Context, sessionID string, profileID uint) (SessionReanalysisReadinessResponse, string, error) {
 	readiness := SessionReanalysisReadinessResponse{}
 	if err := ctl.db.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).
@@ -413,7 +530,7 @@ func (ctl *Controller) captureOriginalSessionAnalysis(ctx context.Context, sessi
 func sessionReanalysisRunResponse(run db.SessionReanalysisRun) SessionReanalysisRunResponse {
 	response := SessionReanalysisRunResponse{
 		ID: run.ID, SessionID: run.SessionID, TaskID: run.TaskID, Status: run.Status,
-		Model: run.Model, PromptVersion: run.PromptVersion, PromptHash: run.PromptHash,
+		Model: run.Model, WODDescription: run.WODDescription, PromptVersion: run.PromptVersion, PromptHash: run.PromptHash,
 		SchemaVersion: run.SchemaVersion, InputTokens: run.PromptTokens,
 		OutputTokens: run.CandidateTokens, DurationMs: run.DurationMs, Error: run.SafeError,
 		CreatedAt: run.CreatedAt, StartedAt: run.StartedAt, CompletedAt: run.CompletedAt, UpdatedAt: run.UpdatedAt,

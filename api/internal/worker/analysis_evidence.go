@@ -245,11 +245,20 @@ func formatTargetPersonContext(merged string) string {
 
 func resolveReanalysisModel(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "flash", "flash36", "flash35", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash":
+	case "flash", "flash38", "flash37", "flash36", "flash35", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash":
 		return gemini.ModelFlash38
-	default:
+	case "pro", "pro31", "gemini-3.1-pro-preview", "gemini-pro":
 		return gemini.ModelPro31Preview
+	default:
+		return gemini.ModelFlash38
 	}
+}
+
+func resolveReanalysisModelWithDefault(raw string, defaultModel string) string {
+	if strings.TrimSpace(raw) == "" && strings.TrimSpace(defaultModel) != "" {
+		return defaultModel
+	}
+	return resolveReanalysisModel(raw)
 }
 
 func isNonExerciseMovement(value string) bool {

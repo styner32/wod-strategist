@@ -227,7 +227,11 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 			db.ChunkReanalysisStatusFailed, "The re-analysis state could not be saved.", err)
 	}
 
-	selectedModel := resolveReanalysisModel(run.Model)
+	defaultClientModel := ""
+	if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
+		defaultClientModel = provider.Model()
+	}
+	selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
 	analysis, usage, err := w.GeminiClient.AnalyzeSegmentWithModel(
 		ctx, file.URI, chunkDebugMIMEType(file.MIMEType), media.Start, media.End, prompt, selectedModel,
 	)

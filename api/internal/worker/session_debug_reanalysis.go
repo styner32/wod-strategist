@@ -118,6 +118,10 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		return w.failSessionDebugRun(ctx, run.ID, retryCount, started, "The workout context could not be loaded.", err)
 	}
 
+	if strings.TrimSpace(run.WODDescription) != "" {
+		target.WODDescription = strings.TrimSpace(run.WODDescription)
+	}
+
 	file, uploadBytes, err := w.prepareSessionDebugGeminiFile(ctx, &run)
 	if err != nil {
 		return w.failSessionDebugRun(ctx, run.ID, retryCount, started, "The session video could not be prepared.", err)
@@ -209,8 +213,11 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, finalContext, i == len(segments)-1)
 		prompt += correctionContext
-		promptRecord.WriteString(prompt)
-		selectedModel := resolveReanalysisModel(run.Model)
+		defaultClientModel := ""
+		if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
+			defaultClientModel = provider.Model()
+		}
+		selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
 		analysis, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(ctx, file.URI, chunkDebugMIMEType(file.MIMEType), start, end, prompt, selectedModel)
 		apiCalls++
 		if callErr != nil || strings.TrimSpace(analysis) == "" {

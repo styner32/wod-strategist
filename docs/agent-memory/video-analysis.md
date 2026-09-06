@@ -228,3 +228,26 @@ Chunks are processed in parallel with bounded concurrency.
 - `chunkAlreadyAnalyzed(sessionID, startSecs)` checks for existing `COMPLETED` records.
 - On retry after a partial run, already-analyzed chunks are skipped, so only the remaining chunks are processed.
 - This makes the entire split flow resumable across task retries/worker restarts.
+
+## Gemini Model & Thinking Configuration
+- Default model: `gemini-3.8-flash` (replaces legacy `gemini-3.1-pro-preview`).
+- Config env vars:
+  - `GEMINI_MODEL`: Model name (default `gemini-3.8-flash`).
+  - `GEMINI_THINKING_LEVEL`: Thinking level (default `HIGH`).
+  - `GEMINI_THINKING_BUDGET`: Optional integer thinking budget in tokens.
+- Thinking config is applied via SDK `ThinkingConfig` on models that support it (`gemini-3.8-*` and `gemini-2.5-*`). Older preview models (`gemini-3.1-pro-preview`) omit `ThinkingConfig` to prevent API errors.
+
+## Whole-Workout Re-Analysis & Apply Workflow
+- **Re-analysis with custom WOD description**: When an athlete updates their workout description or appearance hints in the web app, a new `session_reanalysis_runs` record is created with `wod_description`.
+- **Worker Execution**: `session_debug_reanalysis.go` overrides the target WOD description with the run's `wod_description` for both indexing and segment prompts.
+- **Candidate Apply**: `POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply` atomically updates `analysis_results` (output, session_score, highlight_segments, wod_description, status) and `sessions` (`wod_description`, `workout_type`) using an atomic DB transaction.
+
+## AI Cost & Token Tracking
+- Pinned token pricing in `internal/cost/cost.go`:
+  - `gemini-3.8-flash`: $1.50 / 1M prompt tokens, $9.00 / 1M candidate tokens.
+  - `gemini-3.5-flash-lite`: $0.25 / 1M prompt tokens, $1.50 / 1M candidate tokens.
+  - `gemini-3.1-pro-preview`: $1.25 / 1M prompt tokens, $5.00 / 1M candidate tokens.
+  - Exchange rate: 1,380 KRW / USD.
+- Endpoints:
+  - `GET /api/v1/sessions/:session_id/cost`: Cost breakdown for a single session.
+  - `GET /api/v1/analytics/cost`: Cumulative cost aggregated by task type and model.

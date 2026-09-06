@@ -59,8 +59,10 @@ func main() {
 	}
 
 	geminiClient, err := gemini.NewClientWithOptions(context.Background(), logger.Log, gemini.Options{
-		APIKey: cfg.GeminiAPIKey,
-		Model:  cfg.GeminiModel,
+		APIKey:         cfg.GeminiAPIKey,
+		Model:          cfg.GeminiModel,
+		ThinkingLevel:  cfg.GeminiThinkingLevel,
+		ThinkingBudget: cfg.GeminiThinkingBudget,
 	})
 	if err != nil {
 		logger.Log.Fatal("Failed to create gemini client", zap.Error(err))

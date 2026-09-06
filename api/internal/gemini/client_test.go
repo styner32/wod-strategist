@@ -31,6 +31,27 @@ var _ = Describe("Gemini client", func() {
 			Expect(client.Model()).To(Equal(ModelFlash38))
 			Expect((*Client)(nil).Model()).To(BeEmpty())
 		})
+
+		It("configures thinking level and budget for supported models", func() {
+			budget := int32(4096)
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:         "test-api-key",
+				Model:          ModelFlash38,
+				ThinkingLevel:  "HIGH",
+				ThinkingBudget: &budget,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Flash 3.8 supports thinking
+			tc := client.thinkingConfigForModel(ModelFlash38)
+			Expect(tc).NotTo(BeNil())
+			Expect(string(tc.ThinkingLevel)).To(Equal("HIGH"))
+			Expect(tc.ThinkingBudget).To(Equal(&budget))
+
+			// Pro 3.1 preview does not support thinking config
+			tcPro := client.thinkingConfigForModel(ModelPro31Preview)
+			Expect(tcPro).To(BeNil())
+		})
 	})
 
 	Describe("AnalyzeVideo", func() {

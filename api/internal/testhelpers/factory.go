@@ -300,6 +300,7 @@ func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRu
 		HighlightSegments:        runAttr.HighlightSegments,
 		SessionScore:             runAttr.SessionScore,
 		WorkoutType:              runAttr.WorkoutType,
+		WODDescription:           runAttr.WODDescription,
 		Model:                    runAttr.Model,
 		PromptVersion:            runAttr.PromptVersion,
 		PromptHash:               runAttr.PromptHash,
@@ -384,4 +385,25 @@ func CreateStretchAlias(dbConn *gorm.DB, aliasAttr *db.StretchAlias) db.StretchA
 
 	g.Expect(dbConn.Create(&a).Error).NotTo(g.HaveOccurred())
 	return a
+}
+
+func CreateTokenUsage(dbConn *gorm.DB, usageAttr *db.TokenUsage) db.TokenUsage {
+	u := db.TokenUsage{
+		SessionID:       usageAttr.SessionID,
+		ProfileID:       usageAttr.ProfileID,
+		TaskType:        usageAttr.TaskType,
+		Model:           usageAttr.Model,
+		PromptTokens:    usageAttr.PromptTokens,
+		CandidateTokens: usageAttr.CandidateTokens,
+		TotalTokens:     usageAttr.TotalTokens,
+		CreatedAt:       usageAttr.CreatedAt,
+	}
+	if u.CreatedAt.IsZero() {
+		u.CreatedAt = time.Now().UTC()
+	}
+	if u.TotalTokens == 0 && (u.PromptTokens > 0 || u.CandidateTokens > 0) {
+		u.TotalTokens = u.PromptTokens + u.CandidateTokens
+	}
+	g.Expect(dbConn.Create(&u).Error).NotTo(g.HaveOccurred())
+	return u
 }
