@@ -1,4 +1,4 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { historyApi, type AnalysisResult } from "../api/history";
@@ -175,6 +175,12 @@ export function HistoryListPage() {
     enabled: !!selectedProfileId,
   });
 
+  const { data: totalCost } = useQuery({
+    queryKey: ["total-cost", selectedProfileId],
+    queryFn: () => historyApi.getTotalCost(selectedProfileId ?? undefined),
+    staleTime: 30000,
+  });
+
   const observerTarget = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -233,6 +239,47 @@ export function HistoryListPage() {
           </select>
         )}
       </div>
+
+      {totalCost && totalCost.total_tokens > 0 && (
+        <div className="bg-bg-elevated border border-border rounded-xl p-4 mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-bg-secondary flex items-center justify-center text-lg">
+              🪙
+            </div>
+            <div>
+              <div className="text-xs text-text-muted">누적 AI 분석 비용</div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-lg font-bold text-text-primary">
+                  ${totalCost.cost_usd.toFixed(3)}
+                </span>
+                <span className="text-xs font-medium text-text-muted">
+                  (₩{Math.round(totalCost.cost_krw).toLocaleString()})
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 text-xs text-text-secondary">
+            <div>
+              <span className="text-text-muted block text-[11px]">총 사용 토큰</span>
+              <span className="font-semibold text-text-primary">
+                {totalCost.total_tokens.toLocaleString()}
+              </span>
+            </div>
+            <div className="hidden sm:block">
+              <span className="text-text-muted block text-[11px]">입력 (Prompt)</span>
+              <span className="font-semibold text-text-primary">
+                {totalCost.prompt_tokens.toLocaleString()}
+              </span>
+            </div>
+            <div className="hidden sm:block">
+              <span className="text-text-muted block text-[11px]">출력 (Candidate)</span>
+              <span className="font-semibold text-text-primary">
+                {totalCost.candidate_tokens.toLocaleString()}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isLoading && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

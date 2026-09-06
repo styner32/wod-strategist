@@ -223,6 +223,7 @@ export interface SessionReanalysisRun {
   task_id?: string;
   status: SessionReanalysisStatus;
   candidate?: SessionReanalysisCandidate | null;
+  wod_description?: string | null;
   model?: string | null;
   prompt_version?: string | null;
   prompt_hash?: string | null;
@@ -384,6 +385,7 @@ export const historyApi = {
     clientRequestId: string,
     appearanceHints?: string,
     model?: string,
+    wodDescription?: string,
   ) =>
     api.post<CreateSessionReanalysisResponse>(
       `/sessions/${sessionId}/reanalyses`,
@@ -391,7 +393,22 @@ export const historyApi = {
         client_request_id: clientRequestId,
         ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
         ...(model ? { model } : {}),
+        ...(wodDescription !== undefined ? { wod_description: wodDescription } : {}),
       },
+    ),
+
+  applySessionReanalysis: (sessionId: string, runId: number) =>
+    api.post<ApplySessionReanalysisResponse>(
+      `/sessions/${sessionId}/reanalyses/${runId}/apply`,
+      {},
+    ),
+
+  getSessionCost: (sessionId: string) =>
+    api.get<SessionCostResponse>(`/sessions/${sessionId}/cost`),
+
+  getTotalCost: (profileId?: number) =>
+    api.get<TotalCostResponse>(
+      profileId ? `/analytics/cost?profile_id=${profileId}` : `/analytics/cost`,
     ),
 
   listSessionReanalyses: (sessionId: string) =>
@@ -414,6 +431,40 @@ export const historyApi = {
       `/related-wods?session_id=${encodeURIComponent(sessionId)}&profile_id=${profileId}`,
     ),
 };
+
+export interface CostBreakdownItem {
+  key: string;
+  prompt_tokens: number;
+  candidate_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_krw: number;
+}
+
+export interface SessionCostResponse {
+  session_id: string;
+  prompt_tokens: number;
+  candidate_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_krw: number;
+  by_task_type: CostBreakdownItem[];
+  by_model: CostBreakdownItem[];
+}
+
+export interface TotalCostResponse {
+  prompt_tokens: number;
+  candidate_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_krw: number;
+}
+
+export interface ApplySessionReanalysisResponse {
+  session_id: string;
+  run_id: number;
+  applied_at: string;
+}
 
 export interface NormalizedMovement {
   movement: string;

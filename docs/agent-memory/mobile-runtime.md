@@ -42,6 +42,11 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - Keep `BleManager` as a singleton outside React components to prevent memory leaks.
 - `react-native-ble-plx` v3.5.1+ is required — earlier versions crash on Android (RN 0.76+) when `Promise.reject` receives a `null` error code.
 
+### Chunk heart rate sampling (Peak BPM)
+- Each 10-second chunk tracks the maximum (peak) heart rate received during that window via `chunkMaxBpmRef`.
+- When a chunk finishes (`onRecordingFinished`), `chunkPeakBpm` is sent to `processWorkoutChunk` as `heartRateBpm`, ensuring peak cardiovascular stress during exercise bursts is captured instead of momentary recovery dips.
+- 1Hz telemetry recording continues to record instantaneous samples via `bpmRef.current`.
+
 ## Internationalization (i18n)
 Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/locales/{en,ko}.json`.
 

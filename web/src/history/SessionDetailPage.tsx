@@ -33,6 +33,7 @@ import {
 } from "./components/FeedbackDialog";
 import { GuidanceTimeline } from "./components/GuidanceTimeline";
 import { HighlightEventCard } from "./components/HighlightEventCard";
+import { SessionCostCard } from "./components/SessionCostCard";
 import { SessionReanalysisPanel } from "./components/SessionReanalysisPanel";
 import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
 import { getHighlightSeekTime, parseHighlightSegments } from "./highlights";
@@ -862,14 +863,32 @@ export function SessionDetailPage() {
                     </p>
                   </div>
                 )}
-                {analysis.wod_description && (
-                  <div className="col-span-2 border-t border-border pt-3 mt-1">
+                <div className="col-span-2 border-t border-border pt-3 mt-1">
+                  <div className="flex items-center justify-between">
                     <p className="text-text-muted">WOD Description</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const el = document.getElementById("session-reanalysis-panel");
+                        if (el) {
+                          el.scrollIntoView({ behavior: "smooth" });
+                        }
+                      }}
+                      className="text-xs font-semibold text-accent hover:underline focus:outline-none flex items-center gap-1"
+                    >
+                      <span>✏️</span> {analysis.wod_description ? "수정 및 전체 재분석" : "WOD 설명 등록 및 재분석"}
+                    </button>
+                  </div>
+                  {analysis.wod_description ? (
                     <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
                       {analysis.wod_description}
                     </p>
-                  </div>
-                )}
+                  ) : (
+                    <p className="text-text-muted text-xs mt-1 italic">
+                      등록된 WOD 설명이 없습니다. 위 버튼을 눌러 WOD 설명을 입력하고 재분석할 수 있습니다.
+                    </p>
+                  )}
+                </div>
                 {sessionAnalysis?.additional_observed_movements &&
                   sessionAnalysis.additional_observed_movements.length > 0 && (
                     <div className="col-span-2 border-t border-border pt-3 mt-1">
@@ -1043,6 +1062,8 @@ export function SessionDetailPage() {
         {/* Right: Guidance Timeline (2/5 width) */}
         <div className="lg:col-span-2">
           <div className="space-y-3 lg:sticky lg:top-4">
+            <SessionCostCard sessionId={sessionId!} />
+
             <section
               className="rounded-xl border border-border bg-bg-elevated p-4"
               aria-labelledby="bulk-reanalysis-heading"

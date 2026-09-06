@@ -1,5 +1,7 @@
-import * as MediaLibrary from "expo-media-library";
+import { useIsFocused } from "@react-navigation/native";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
+import * as MediaLibrary from "expo-media-library";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -16,6 +18,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { Video } from "react-native-compressor";
 import {
   Camera,
   useCameraDevice,
@@ -23,10 +26,8 @@ import {
   useCameraPermission,
   useMicrophonePermission,
 } from "react-native-vision-camera";
-import { Video } from "react-native-compressor";
-import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
-import { useIsFocused } from "@react-navigation/native";
 
+import { IconSymbol } from "@/components/ui/icon-symbol";
 import { useBleHeartRate } from "@/features/health/useBleHeartRate";
 import {
   buildWorkoutSessionId,
@@ -34,21 +35,30 @@ import {
   parseWorkoutType,
 } from "@/features/wod/workoutType";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
+import { EnergyMonitor } from "../../features/ai-coach/ui/EnergyMonitor";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
-import { processWorkoutChunk, fetchChunkAnalysis, mergeChunks } from "../../features/wod/api";
-import { mergeChunksLocal, mergedOutputPath } from "../../features/wod/mergeChunksLocal";
-import { IconSymbol } from "@/components/ui/icon-symbol";
-import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
-import { TelemetryRecorder } from '../../features/debug/telemetryRecorder';
-import { enqueueUpload as enqueueDebugUpload, flushPendingUploads } from '../../features/debug/telemetryUpload';
+import { TelemetryRecorder } from "../../features/debug/telemetryRecorder";
+import {
+  enqueueUpload as enqueueDebugUpload,
+  flushPendingUploads,
+} from "../../features/debug/telemetryUpload";
+import {
+  fetchChunkAnalysis,
+  mergeChunks,
+  processWorkoutChunk,
+} from "../../features/wod/api";
+import {
+  mergeChunksLocal,
+  mergedOutputPath,
+} from "../../features/wod/mergeChunksLocal";
 
-import { useProfileStore } from "@/store/useProfileStore";
-import { useMergeStatus } from "@/store/useMergeStatus";
-import { t } from "@/features/i18n";
 import { useAuthStore } from "@/features/auth/useAuthStore";
+import { t } from "@/features/i18n";
+import { useMergeStatus } from "@/store/useMergeStatus";
+import { useProfileStore } from "@/store/useProfileStore";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
-const IS_ANDROID = Platform.OS === 'android';
+const IS_ANDROID = Platform.OS === "android";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -60,7 +70,7 @@ function formatElapsed(ms: number): string {
   const totalSecs = Math.floor(ms / 1000);
   const mins = Math.floor(totalSecs / 60);
   const secs = totalSecs % 60;
-  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
 export default function VisionTestPage() {
@@ -99,39 +109,41 @@ export default function VisionTestPage() {
     appearanceHints?: string;
   }>();
 
-  const landscapeMode = landscapeModeParam === 'true';
-  const previewOnly = previewOnlyParam === 'true';
-  const zoomMode = zoomModeParam === 'true';
-  const aspectRatio = (aspectRatioParam === '4:3' ? '4:3' : '16:9') as '4:3' | '16:9';
-  const wodDescription = wodDescriptionParam || '';
+  const landscapeMode = landscapeModeParam === "true";
+  const previewOnly = previewOnlyParam === "true";
+  const zoomMode = zoomModeParam === "true";
+  const aspectRatio = (aspectRatioParam === "4:3" ? "4:3" : "16:9") as
+    | "4:3"
+    | "16:9";
+  const wodDescription = wodDescriptionParam || "";
   const appearanceHints = appearanceHintsParam || undefined;
 
   // Performance flags — default to power-saving on Android, full quality on iOS
-  const showSkeleton = showSkeletonParam !== undefined
-    ? showSkeletonParam === 'true'
-    : !IS_ANDROID;
-  const lowFps = lowFpsParam !== undefined
-    ? lowFpsParam === 'true'
-    : IS_ANDROID;
-  const skipCompression = skipCompressionParam !== undefined
-    ? skipCompressionParam === 'true'
-    : IS_ANDROID;
-  const serialUpload = serialUploadParam !== undefined
-    ? serialUploadParam === 'true'
-    : IS_ANDROID;
+  const showSkeleton =
+    showSkeletonParam !== undefined
+      ? showSkeletonParam === "true"
+      : !IS_ANDROID;
+  const lowFps =
+    lowFpsParam !== undefined ? lowFpsParam === "true" : IS_ANDROID;
+  const skipCompression =
+    skipCompressionParam !== undefined
+      ? skipCompressionParam === "true"
+      : IS_ANDROID;
+  const serialUpload =
+    serialUploadParam !== undefined ? serialUploadParam === "true" : IS_ANDROID;
 
   const workoutType = parseWorkoutType(workoutTypeParam);
   const workoutTypeLabel = formatWorkoutTypeLabel(workoutType).toUpperCase();
-  
+
   // Resolution: honor selected resolution and aspect ratio
-  const is43 = aspectRatio === '4:3';
+  const is43 = aspectRatio === "4:3";
   const resMap: Record<string, { w16: number; w43: number; h: number }> = {
-    '480p':  { w16: 854,  w43: 640,  h: 480 },
-    '720p':  { w16: 1280, w43: 960,  h: 720 },
-    '1080p': { w16: 1920, w43: 1440, h: 1080 },
-    '2160p': { w16: 3840, w43: 2880, h: 2160 },
+    "480p": { w16: 854, w43: 640, h: 480 },
+    "720p": { w16: 1280, w43: 960, h: 720 },
+    "1080p": { w16: 1920, w43: 1440, h: 1080 },
+    "2160p": { w16: 3840, w43: 2880, h: 2160 },
   };
-  const res = resMap[resolution] || resMap['720p'];
+  const res = resMap[resolution] || resMap["720p"];
   const targetWidth = is43 ? res.w43 : res.w16;
   const targetHeight = res.h;
 
@@ -139,18 +151,23 @@ export default function VisionTestPage() {
   const targetFps = lowFps ? 24 : 30;
 
   const isFocused = useIsFocused();
-  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
-  const isCameraActive = isFocused && appState === 'active';
+  const [appState, setAppState] = useState<AppStateStatus>(
+    AppState.currentState,
+  );
+  const isCameraActive = isFocused && appState === "active";
 
   const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
-  const { hasPermission: hasMicPermission, requestPermission: requestMicPermission } =
-    useMicrophonePermission();
+  const {
+    hasPermission: hasMicPermission,
+    requestPermission: requestMicPermission,
+  } = useMicrophonePermission();
   const { width, height } = useWindowDimensions();
   const isLandscapeLayout = width > height;
   // On Android, landscape mode keeps portrait but user mounts phone sideways.
   // Apply landscape styles based on the toggle, not screen dimensions.
-  const applyLandscapeStyles = isLandscapeLayout || (IS_ANDROID && landscapeMode);
+  const applyLandscapeStyles =
+    isLandscapeLayout || (IS_ANDROID && landscapeMode);
   const camera = useRef<Camera>(null);
 
   // Use a ref to track if we should continue recording chunks,
@@ -163,8 +180,6 @@ export default function VisionTestPage() {
   // Track frames during the current chunk to calculate workout confidence
   // (counting now happens inside usePoseDetection's useRunOnJS callback,
   // which is immune to React state batching — see resetFrameCounts below)
-
-
 
   // Store chunk paths locally (Android: used as final video source)
   const chunkPaths = useRef<string[]>([]);
@@ -195,13 +210,13 @@ export default function VisionTestPage() {
     while (uploadQueue.current.length > 0) {
       const task = uploadQueue.current.shift()!;
       setPendingUploads(uploadQueue.current.length);
-      setInflightUploads(prev => prev + 1);
+      setInflightUploads((prev) => prev + 1);
       try {
         await task();
       } catch (err) {
         console.error("Upload queue task failed:", err);
       }
-      setInflightUploads(prev => Math.max(0, prev - 1));
+      setInflightUploads((prev) => Math.max(0, prev - 1));
     }
     isUploading.current = false;
   };
@@ -214,8 +229,8 @@ export default function VisionTestPage() {
 
   // Track fire-and-forget (concurrent) uploads
   const trackUpload = (task: () => Promise<void>) => {
-    setInflightUploads(prev => prev + 1);
-    task().finally(() => setInflightUploads(prev => Math.max(0, prev - 1)));
+    setInflightUploads((prev) => prev + 1);
+    task().finally(() => setInflightUploads((prev) => Math.max(0, prev - 1)));
   };
 
   // 720p or 1080p format based on user/platform selection
@@ -251,9 +266,9 @@ export default function VisionTestPage() {
   }, [isRecording, isPaused]);
 
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', (nextAppState) => {
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
       console.log(`📱 AppState changed: ${nextAppState}`);
-      if (nextAppState === 'background' || nextAppState === 'inactive') {
+      if (nextAppState === "background" || nextAppState === "inactive") {
         if (isRecordingRef.current && !isPausedRef.current) {
           console.log("📱 App backgrounded while recording — auto-pausing");
           handlePauseRecording();
@@ -278,30 +293,28 @@ export default function VisionTestPage() {
           const sessionId = sessionIdRef.current;
           const results = await fetchChunkAnalysis(sessionId);
           if (results.length > 0) {
-            const latest = results.find(r => r.status === 'COMPLETED');
+            const latest = results.find((r) => r.status === "COMPLETED");
             if (latest && latest.output) {
-               setChunkFeedback(latest.output);
+              setChunkFeedback(latest.output);
             }
           }
         } catch (e) {
-            // Error fetching feedback, ignore to not clutter logs
+          // Error fetching feedback, ignore to not clutter logs
         }
       }, 3000);
     }
     return () => clearInterval(interval);
   }, [isRecording, workoutType]);
 
-
-
   // Keep screen awake while recording (prevents Android/iOS sleep)
   useEffect(() => {
     if (isRecording) {
-      void activateKeepAwakeAsync('recording');
+      void activateKeepAwakeAsync("recording");
     } else {
-      deactivateKeepAwake('recording');
+      deactivateKeepAwake("recording");
     }
     return () => {
-      deactivateKeepAwake('recording');
+      deactivateKeepAwake("recording");
     };
   }, [isRecording]);
 
@@ -311,7 +324,10 @@ export default function VisionTestPage() {
       return;
     }
     const tick = setInterval(() => {
-      const currentSegment = segmentStartTime.current > 0 ? (Date.now() - segmentStartTime.current) : 0;
+      const currentSegment =
+        segmentStartTime.current > 0
+          ? Date.now() - segmentStartTime.current
+          : 0;
       setElapsedMs(accumulatedMs.current + currentSegment);
     }, 1000);
     return () => clearInterval(tick);
@@ -341,39 +357,66 @@ export default function VisionTestPage() {
   useFocusEffect(
     useCallback(() => {
       if (landscapeMode && !IS_ANDROID) {
-        ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+        ScreenOrientation.lockAsync(
+          ScreenOrientation.OrientationLock.LANDSCAPE,
+        );
       }
       return () => {
         if (!IS_ANDROID) {
-          ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+          ScreenOrientation.lockAsync(
+            ScreenOrientation.OrientationLock.PORTRAIT_UP,
+          );
         }
       };
-    }, [landscapeMode])
+    }, [landscapeMode]),
   );
 
   // Pass isRecording to the hook — inference always runs, but frame counting only during recording
-  const { frameProcessor, poseResult, monitorData, isModelLoaded, resetFrameCounts, getWorkoutConfidence, getLatestMotion } = usePoseDetection(isRecording);
+  const {
+    frameProcessor,
+    poseResult,
+    monitorData,
+    isModelLoaded,
+    resetFrameCounts,
+    getWorkoutConfidence,
+    getLatestMotion,
+  } = usePoseDetection(isRecording);
   const { bpm, status: hrStatus } = useBleHeartRate();
   // const { bpm, status: hrStatus } = useHeartRate();
 
   // Refs that mirror render-state for sampling outside the render cycle.
   // TelemetryRecorder polls these at 1Hz via registered providers.
   const bpmRef = useRef(0);
+  const chunkMaxBpmRef = useRef(0);
   const chunkCountRef = useRef(0);
-  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
-  useEffect(() => { chunkCountRef.current = chunkCount; }, [chunkCount]);
+  useEffect(() => {
+    bpmRef.current = bpm;
+    if (bpm > 0) {
+      chunkMaxBpmRef.current = Math.max(chunkMaxBpmRef.current, bpm);
+    }
+  }, [bpm]);
+  useEffect(() => {
+    chunkCountRef.current = chunkCount;
+  }, [chunkCount]);
 
   useEffect(() => {
     if (!hasPermission) requestPermission();
     if (!hasMicPermission) requestMicPermission();
     if (!mediaPermission?.granted) requestMediaPermission();
-  }, [hasPermission, hasMicPermission, mediaPermission, requestMediaPermission, requestMicPermission, requestPermission]);
+  }, [
+    hasPermission,
+    hasMicPermission,
+    mediaPermission,
+    requestMediaPermission,
+    requestMicPermission,
+    requestPermission,
+  ]);
 
   // Auto-start recording when navigated from setup with autoRecord
   const hasAutoStarted = useRef(false);
   useEffect(() => {
     if (
-      autoRecord === 'true' &&
+      autoRecord === "true" &&
       !hasAutoStarted.current &&
       hasPermission &&
       device &&
@@ -386,8 +429,6 @@ export default function VisionTestPage() {
     }
   }, [autoRecord, hasPermission, device, isCameraReady, isRecording]);
 
-
-
   // --- Chunk Recording Logic (Raw Camera) ---
 
   const startChunkLoop = async () => {
@@ -397,18 +438,35 @@ export default function VisionTestPage() {
       console.log("📷 Starting new chunk recording...");
       isChunkRecordingActive.current = true;
       chunkStartTime.current = Date.now();
+      // Reset peak heart rate for this chunk window (seed with current instantaneous bpm)
+      chunkMaxBpmRef.current = bpmRef.current > 0 ? bpmRef.current : 0;
+
       camera.current.startRecording({
         // Android: force mp4 + HEVC to reduce chunk size (12MB → ~2-4MB).
         // iOS: use VisionCamera defaults.
-        ...(IS_ANDROID ? { fileType: 'mp4' as const, videoCodec: 'h265' as const } : {}),
+        ...(IS_ANDROID
+          ? { fileType: "mp4" as const, videoCodec: "h265" as const }
+          : {}),
         onRecordingFinished: async (video) => {
           console.log("📷 Chunk Finished:", video.path);
           isChunkRecordingActive.current = false;
 
           // Compute chunk timing relative to recording start
           const chunkEndTime = Date.now();
-          const startSecs = (chunkStartTime.current - recordingStartTime.current) / 1000;
+          const startSecs =
+            (chunkStartTime.current - recordingStartTime.current) / 1000;
           const endSecs = (chunkEndTime - recordingStartTime.current) / 1000;
+
+          // Compute peak heart rate during this 10-second chunk
+          const chunkPeakBpm =
+            chunkMaxBpmRef.current > 0
+              ? chunkMaxBpmRef.current
+              : bpmRef.current > 0
+                ? bpmRef.current
+                : undefined;
+          console.log(
+            `❤️ Chunk Heart Rate: peak=${chunkPeakBpm ?? 0} bpm, last=${bpmRef.current} bpm`,
+          );
 
           // Resolve the last-chunk promise if we're waiting for it
           if (lastChunkResolve.current) {
@@ -420,23 +478,27 @@ export default function VisionTestPage() {
           // even if recording has stopped (orphan chunk).
           chunkPaths.current.push(video.path);
 
-          const { total: totalFrames, workout: workoutFrames } = resetFrameCounts();
-          const workoutConfidence = totalFrames > 0
-            ? workoutFrames / totalFrames
-            : 0.0;
-          console.log(`📊 Chunk confidence: ${(workoutConfidence * 100).toFixed(1)}% (workout=${workoutFrames} / total=${totalFrames}) | UI_CONF=${(monitorData.confidence * 100).toFixed(1)}%`);
+          const { total: totalFrames, workout: workoutFrames } =
+            resetFrameCounts();
+          const workoutConfidence =
+            totalFrames > 0 ? workoutFrames / totalFrames : 0.0;
+          console.log(
+            `📊 Chunk confidence: ${(workoutConfidence * 100).toFixed(1)}% (workout=${workoutFrames} / total=${totalFrames}) | UI_CONF=${(monitorData.confidence * 100).toFixed(1)}%`,
+          );
 
           // Skip upload if recording has already been stopped
           if (!isRecordingChunks.current) {
-            console.log("⏹️ Recording stopped — skipping upload for final chunk");
+            console.log(
+              "⏹️ Recording stopped — skipping upload for final chunk",
+            );
           } else {
-            setChunkCount(prev => prev + 1);
+            setChunkCount((prev) => prev + 1);
 
             // Compress (iOS only) and Upload chunk to backend
             try {
               const sessionId = sessionIdRef.current;
-              const movementsArray = movements ? movements.split(', ') : [];
-              const injuriesArray = injuries ? injuries.split(', ') : [];
+              const movementsArray = movements ? movements.split(", ") : [];
+              const injuriesArray = injuries ? injuries.split(", ") : [];
 
               const doUpload = async (uri: string, shouldCleanup: boolean) => {
                 try {
@@ -447,7 +509,7 @@ export default function VisionTestPage() {
                     profileId: profileId!,
                     startSecs,
                     endSecs,
-                    heartRateBpm: bpmRef.current > 0 ? bpmRef.current : undefined,
+                    heartRateBpm: chunkPeakBpm,
                     workoutConfidence,
                     appearanceHints,
                   });
@@ -482,17 +544,19 @@ export default function VisionTestPage() {
                 Video.compress(video.path, {
                   compressionMethod: "auto",
                   maxSize: 720,
-                }).then((compressedUri) => {
-                  // Upload the compressed file; delete it after upload completes.
-                  const uploadTask = () => doUpload(compressedUri, true);
-                  if (serialUpload) {
-                    enqueueUpload(uploadTask);
-                  } else {
-                    trackUpload(uploadTask);
-                  }
-                }).catch((err) => {
-                  console.error("Failed to compress chunk:", err);
-                });
+                })
+                  .then((compressedUri) => {
+                    // Upload the compressed file; delete it after upload completes.
+                    const uploadTask = () => doUpload(compressedUri, true);
+                    if (serialUpload) {
+                      enqueueUpload(uploadTask);
+                    } else {
+                      trackUpload(uploadTask);
+                    }
+                  })
+                  .catch((err) => {
+                    console.error("Failed to compress chunk:", err);
+                  });
               }
             } catch (e) {
               console.error("Failed to process chunk for upload:", e);
@@ -656,7 +720,7 @@ export default function VisionTestPage() {
       Alert.alert(
         "Profile Required",
         "Please select a profile before recording.",
-        [{ text: "OK", onPress: () => router.push("/profiles" as any) }]
+        [{ text: "OK", onPress: () => router.push("/profiles" as any) }],
       );
       return;
     }
@@ -681,12 +745,14 @@ export default function VisionTestPage() {
 
       // Start debug telemetry recording (1Hz sampling)
       TelemetryRecorder.start(sessionIdRef.current, profileId!);
-      TelemetryRecorder.registerProvider('hr', () => ({ hr: bpmRef.current }));
-      TelemetryRecorder.registerProvider('chunk', () => ({ chunkIdx: chunkCountRef.current }));
-      TelemetryRecorder.registerProvider('workoutConf', () => ({
+      TelemetryRecorder.registerProvider("hr", () => ({ hr: bpmRef.current }));
+      TelemetryRecorder.registerProvider("chunk", () => ({
+        chunkIdx: chunkCountRef.current,
+      }));
+      TelemetryRecorder.registerProvider("workoutConf", () => ({
         workoutConf: Math.round(getWorkoutConfidence() * 1000) / 1000,
       }));
-      TelemetryRecorder.registerProvider('motion', () => ({
+      TelemetryRecorder.registerProvider("motion", () => ({
         motion: getLatestMotion(),
       }));
 
@@ -754,11 +820,14 @@ export default function VisionTestPage() {
       try {
         const telemetryResult = await TelemetryRecorder.stop();
         if (telemetryResult) {
-          await enqueueDebugUpload(telemetryResult.sessionId, telemetryResult.filePath);
+          await enqueueDebugUpload(
+            telemetryResult.sessionId,
+            telemetryResult.filePath,
+          );
           flushPendingUploads().catch(() => {}); // fire and forget
         }
       } catch (e) {
-        console.warn('telemetry stop failed', e);
+        console.warn("telemetry stop failed", e);
       }
 
       // Snapshot session ID for both server merge and local merge
@@ -779,7 +848,7 @@ export default function VisionTestPage() {
         // Fire the merge — the 2s delay lets the last chunk upload reach GCS
         (async () => {
           // Small delay to let the last chunk upload reach the server
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await new Promise((resolve) => setTimeout(resolve, 2000));
           try {
             await mergeChunks(sessionId, {
               workoutType,
@@ -795,14 +864,17 @@ export default function VisionTestPage() {
           } finally {
             useMergeStatus.getState().removePending(sessionId);
           }
-        })();  // IIFE — fires immediately, does not block
+        })(); // IIFE — fires immediately, does not block
       }
 
       // --- Local merge for gallery save (both platforms) ---
       // Snapshot chunk paths before clearing — we need them for the merge.
       const localChunks = [...chunkPaths.current];
 
-      console.log(`📦 Gallery save: ${localChunks.length} chunks, paths:`, localChunks);
+      console.log(
+        `📦 Gallery save: ${localChunks.length} chunks, paths:`,
+        localChunks,
+      );
 
       // Clean up state immediately so the UI reflects "stopped"
       setChunkCount(0);
@@ -818,7 +890,11 @@ export default function VisionTestPage() {
         setIsMerging(true);
 
         const handlePostWorkoutAuthCheck = () => {
-          const { sessionExpiredDuringRecording, finishDeferredUnauthorized, setRecordingActive } = useAuthStore.getState();
+          const {
+            sessionExpiredDuringRecording,
+            finishDeferredUnauthorized,
+            setRecordingActive,
+          } = useAuthStore.getState();
           setRecordingActive(false);
           if (sessionExpiredDuringRecording) {
             Alert.alert(
@@ -831,7 +907,7 @@ export default function VisionTestPage() {
                     finishDeferredUnauthorized();
                   },
                 },
-              ]
+              ],
             );
           } else {
             router.replace("/history" as any);
@@ -842,7 +918,9 @@ export default function VisionTestPage() {
         // The alert is shown BEFORE navigating so it stays visible.
         const performMergeAndPrompt = async () => {
           try {
-            console.log(`🎬 Starting local merge of ${localChunks.length} chunks...`);
+            console.log(
+              `🎬 Starting local merge of ${localChunks.length} chunks...`,
+            );
             await mergeChunksLocal(localChunks, outPath);
             console.log(`🎬 Local merge succeeded, showing gallery save alert`);
 
@@ -881,23 +959,28 @@ export default function VisionTestPage() {
                         Alert.alert(
                           "저장 실패",
                           "갤러리에 저장하지 못했습니다. 하지만 병합된 파일은 안전하게 보관되어 있습니다. Files 앱에서 직접 가져오실 수 있습니다.",
-                          [{ text: "확인", onPress: () => handlePostWorkoutAuthCheck() }]
+                          [
+                            {
+                              text: "확인",
+                              onPress: () => handlePostWorkoutAuthCheck(),
+                            },
+                          ],
                         );
                       });
                   },
                 },
-              ]
+              ],
             );
           } catch (mergeErr) {
             console.warn("⚠️ Local merge failed:", mergeErr);
             setIsMerging(false);
-            
+
             // CRITICAL: DO NOT delete local chunks on merge failure!
             // Instead, keep them in cache/tmp, alert the user, and navigate to history.
             Alert.alert(
               "로컬 병합 실패",
               "비디오 조각 병합에 실패했습니다. 하지만 촬영된 원본 비디오 조각들은 삭제되지 않고 안전하게 보관되었습니다. 디버그 메뉴에서 PC로 내보낼 수 있습니다.",
-              [{ text: "확인", onPress: () => handlePostWorkoutAuthCheck() }]
+              [{ text: "확인", onPress: () => handlePostWorkoutAuthCheck() }],
             );
           }
         };
@@ -906,7 +989,11 @@ export default function VisionTestPage() {
         performMergeAndPrompt();
       } else {
         console.log("📦 No local chunks — skipping gallery save");
-        const { sessionExpiredDuringRecording, finishDeferredUnauthorized, setRecordingActive } = useAuthStore.getState();
+        const {
+          sessionExpiredDuringRecording,
+          finishDeferredUnauthorized,
+          setRecordingActive,
+        } = useAuthStore.getState();
         setRecordingActive(false);
         if (sessionExpiredDuringRecording) {
           Alert.alert(
@@ -919,7 +1006,7 @@ export default function VisionTestPage() {
                   finishDeferredUnauthorized();
                 },
               },
-            ]
+            ],
           );
         } else {
           router.replace("/history" as any);
@@ -956,8 +1043,11 @@ export default function VisionTestPage() {
                 "Camera or Microphone permission was permanently denied. Please enable them in Settings.",
                 [
                   { text: "Cancel", style: "cancel" },
-                  { text: "Open Settings", onPress: () => Linking.openSettings() },
-                ]
+                  {
+                    text: "Open Settings",
+                    onPress: () => Linking.openSettings(),
+                  },
+                ],
               );
             }
           }}
@@ -988,7 +1078,9 @@ export default function VisionTestPage() {
       {/* Android: hint to mount phone sideways when landscape mode is on */}
       {IS_ANDROID && landscapeMode && !isRecording && (
         <View style={styles.landscapeHint}>
-          <Text style={styles.landscapeHintText}>📱 Mount phone sideways for landscape view</Text>
+          <Text style={styles.landscapeHintText}>
+            📱 Mount phone sideways for landscape view
+          </Text>
         </View>
       )}
       <Camera
@@ -1024,15 +1116,27 @@ export default function VisionTestPage() {
 
       {/* Energy impact monitor — always visible for testing */}
       {!previewOnly && (
-        <View style={[styles.energyMonitorContainer, applyLandscapeStyles && styles.energyMonitorLandscape]}>
-          <EnergyMonitor label={isRecording ? "Default Model (7MB) · 2fps" : "Preview · 1fps"} />
+        <View
+          style={[
+            styles.energyMonitorContainer,
+            applyLandscapeStyles && styles.energyMonitorLandscape,
+          ]}
+        >
+          <EnergyMonitor
+            label={
+              isRecording ? "Default Model (7MB) · 2fps" : "Preview · 1fps"
+            }
+          />
         </View>
       )}
 
       {/* 닫기 버튼 */}
       {!isRecording && (
-        <TouchableOpacity 
-          style={[styles.closeBtn, applyLandscapeStyles && styles.closeBtnLandscape]} 
+        <TouchableOpacity
+          style={[
+            styles.closeBtn,
+            applyLandscapeStyles && styles.closeBtnLandscape,
+          ]}
           onPress={() => router.back()}
         >
           <IconSymbol name="chevron.left" size={32} color="#fff" />
@@ -1040,7 +1144,12 @@ export default function VisionTestPage() {
       )}
 
       {/* 심박수 패널 */}
-      <View style={[styles.hrPanel, applyLandscapeStyles && styles.hrPanelLandscape]}>
+      <View
+        style={[
+          styles.hrPanel,
+          applyLandscapeStyles && styles.hrPanelLandscape,
+        ]}
+      >
         <Text style={styles.hrLabel}>HEART RATE</Text>
         <View style={styles.hrValueContainer}>
           <Text style={[styles.hrValue, { color: bpm > 0 ? "#0f0" : "#888" }]}>
@@ -1051,33 +1160,115 @@ export default function VisionTestPage() {
         <Text style={styles.hrStatus}>State: {hrStatus}</Text>
       </View>
 
-      <View style={[styles.dashboard, applyLandscapeStyles && styles.dashboardLandscape]}>
-          <Text style={styles.dashTitle}>
-            {isRecording
-              ? (isPaused ? `${workoutTypeLabel} PAUSED` : `${workoutTypeLabel} LIVE`)
-              : `${workoutTypeLabel} SETUP`}
-          </Text>
+      <View
+        style={[
+          styles.dashboard,
+          applyLandscapeStyles && styles.dashboardLandscape,
+        ]}
+      >
+        <Text style={styles.dashTitle}>
+          {isRecording
+            ? isPaused
+              ? `${workoutTypeLabel} PAUSED`
+              : `${workoutTypeLabel} LIVE`
+            : `${workoutTypeLabel} SETUP`}
+        </Text>
+        <View style={styles.row}>
+          <Text style={styles.label}>TYPE:</Text>
+          <Text style={styles.val}>{workoutTypeLabel}</Text>
+        </View>
+        {!isRecording && injuries.length > 0 && (
           <View style={styles.row}>
-            <Text style={styles.label}>TYPE:</Text>
-            <Text style={styles.val}>{workoutTypeLabel}</Text>
+            <Text style={styles.label}>INJ:</Text>
+            <Text style={styles.val}>{injuries.split(", ").length}</Text>
           </View>
-          {!isRecording && injuries.length > 0 && (
+        )}
+        {!isRecording && (
+          <View style={styles.row}>
+            <Text style={styles.label}>RES:</Text>
+            <Text style={styles.val}>
+              {format?.videoWidth}x{format?.videoHeight}
+            </Text>
+          </View>
+        )}
+
+        {isRecording && (
+          <>
             <View style={styles.row}>
-              <Text style={styles.label}>INJ:</Text>
-              <Text style={styles.val}>{injuries.split(", ").length}</Text>
-            </View>
-          )}
-          {!isRecording && (
-            <View style={styles.row}>
-              <Text style={styles.label}>RES:</Text>
+              <Text style={styles.label}>CONF:</Text>
               <Text style={styles.val}>
-                {format?.videoWidth}x{format?.videoHeight}
+                {(monitorData.confidence * 100).toFixed(0)}%
               </Text>
             </View>
-          )}
-          
-          {isRecording && (
-            <>
+            <View style={styles.row}>
+              <Text style={styles.label}>MOTION:</Text>
+              <Text style={styles.val}>{monitorData.motion.toFixed(3)}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.label}>STATE:</Text>
+              <Text style={styles.val}>
+                {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
+              </Text>
+            </View>
+            <View
+              style={{
+                marginTop: 6,
+                borderTopWidth: 1,
+                borderTopColor: "#333",
+                paddingTop: 4,
+              }}
+            >
+              <Text style={[styles.label, { fontSize: 8, color: "#666" }]}>
+                OPT FLAGS
+              </Text>
+              <Text
+                style={{ color: "#555", fontSize: 9, fontFamily: "monospace" }}
+              >
+                {[
+                  lowFps ? "24fps" : "30fps",
+                  resolution,
+                  skipCompression ? "raw" : "compress",
+                  showSkeleton ? "skel" : "no-skel",
+                  serialUpload ? "serial" : "parallel",
+                  landscapeMode ? "land" : "port",
+                  zoomMode ? "zoom:0.1" : "zoom:0",
+                  aspectRatio,
+                ].join(" · ")}
+              </Text>
+              <Text
+                style={{
+                  color: inflightUploads > 2 ? "#FF453A" : "#555",
+                  fontSize: 9,
+                  fontFamily: "monospace",
+                  marginTop: 2,
+                }}
+              >
+                UL: {inflightUploads} inflight · {pendingUploads} queued ·{" "}
+                {chunkCount} chunks
+              </Text>
+            </View>
+          </>
+        )}
+
+        {/* Pose detection metrics — visible during preview and recording */}
+        {!previewOnly && (
+          <>
+            <View
+              style={{
+                marginTop: 4,
+                borderTopWidth: 1,
+                borderTopColor: "#333",
+                paddingTop: 4,
+              }}
+            >
+              <Text
+                style={[
+                  styles.label,
+                  { fontSize: 8, color: "#666", marginBottom: 2 },
+                ]}
+              >
+                POSE {isModelLoaded ? "✅" : "⏳ LOADING..."}
+              </Text>
               <View style={styles.row}>
                 <Text style={styles.label}>CONF:</Text>
                 <Text style={styles.val}>
@@ -1090,65 +1281,28 @@ export default function VisionTestPage() {
               </View>
               <View style={styles.row}>
                 <Text style={styles.label}>STATE:</Text>
-                <Text style={styles.val}>
+                <Text
+                  style={[
+                    styles.val,
+                    { color: monitorData.isWorkingOut ? "#30D158" : "#888" },
+                  ]}
+                >
                   {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
                 </Text>
               </View>
-              <View style={{ marginTop: 6, borderTopWidth: 1, borderTopColor: '#333', paddingTop: 4 }}>
-                <Text style={[styles.label, { fontSize: 8, color: '#666' }]}>OPT FLAGS</Text>
-                <Text style={{ color: '#555', fontSize: 9, fontFamily: 'monospace' }}>
-                  {[
-                    lowFps ? '24fps' : '30fps',
-                    resolution,
-                    skipCompression ? 'raw' : 'compress',
-                    showSkeleton ? 'skel' : 'no-skel',
-                    serialUpload ? 'serial' : 'parallel',
-                    landscapeMode ? 'land' : 'port',
-                    zoomMode ? 'zoom:0.1' : 'zoom:0',
-                    aspectRatio,
-                  ].join(' · ')}
-                </Text>
-                <Text style={{ color: inflightUploads > 2 ? '#FF453A' : '#555', fontSize: 9, fontFamily: 'monospace', marginTop: 2 }}>
-                  UL: {inflightUploads} inflight · {pendingUploads} queued · {chunkCount} chunks
-                </Text>
-              </View>
-            </>
-          )}
-
-          {/* Pose detection metrics — visible during preview and recording */}
-          {!previewOnly && (
-            <>
-              <View style={{ marginTop: 4, borderTopWidth: 1, borderTopColor: '#333', paddingTop: 4 }}>
-                <Text style={[styles.label, { fontSize: 8, color: '#666', marginBottom: 2 }]}>
-                  POSE {isModelLoaded ? '✅' : '⏳ LOADING...'}
-                </Text>
-                <View style={styles.row}>
-                  <Text style={styles.label}>CONF:</Text>
-                  <Text style={styles.val}>
-                    {(monitorData.confidence * 100).toFixed(0)}%
-                  </Text>
-                </View>
-                <View style={styles.row}>
-                  <Text style={styles.label}>MOTION:</Text>
-                  <Text style={styles.val}>{monitorData.motion.toFixed(3)}</Text>
-                </View>
-                <View style={styles.row}>
-                  <Text style={styles.label}>STATE:</Text>
-                  <Text style={[styles.val, { color: monitorData.isWorkingOut ? '#30D158' : '#888' }]}>
-                    {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
-                  </Text>
-                </View>
-              </View>
-            </>
-          )}
-
-
-
-        </View>
+            </View>
+          </>
+        )}
+      </View>
 
       {/* Chunk Feedback Overlay */}
       {isRecording && !previewOnly && chunkFeedback && (
-        <View style={[styles.feedbackOverlay, applyLandscapeStyles && styles.feedbackOverlayLandscape]}>
+        <View
+          style={[
+            styles.feedbackOverlay,
+            applyLandscapeStyles && styles.feedbackOverlayLandscape,
+          ]}
+        >
           <Text style={styles.feedbackText}>{chunkFeedback}</Text>
         </View>
       )}
@@ -1167,12 +1321,14 @@ export default function VisionTestPage() {
                 style={[
                   styles.mergingProgressIndeterminate,
                   {
-                    transform: [{
-                      translateX: mergeShimmerAnim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [-60, 160],
-                      }),
-                    }],
+                    transform: [
+                      {
+                        translateX: mergeShimmerAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [-60, 160],
+                        }),
+                      },
+                    ],
                   },
                 ]}
               />
@@ -1183,73 +1339,91 @@ export default function VisionTestPage() {
 
       {/* Recording controls — compact pill bar */}
       {!previewOnly && !isMerging && (
-        <View style={[styles.recordControl, applyLandscapeStyles && styles.recordControlLandscape]}>
-        {isSaving ? (
-          <View style={styles.postRecordingFooter}>
-            <Text style={styles.footerStatus}>Saving...</Text>
-            <View style={styles.footerProgressBg}>
-              <View
-                style={[styles.footerProgressFill, { width: "100%", backgroundColor: "#30D158" }]}
-              />
+        <View
+          style={[
+            styles.recordControl,
+            applyLandscapeStyles && styles.recordControlLandscape,
+          ]}
+        >
+          {isSaving ? (
+            <View style={styles.postRecordingFooter}>
+              <Text style={styles.footerStatus}>Saving...</Text>
+              <View style={styles.footerProgressBg}>
+                <View
+                  style={[
+                    styles.footerProgressFill,
+                    { width: "100%", backgroundColor: "#30D158" },
+                  ]}
+                />
+              </View>
             </View>
-          </View>
-        ) : (
-          /* Compact pill recording bar with Pause / Resume / Stop */
-          <View style={styles.pillBar}>
-            {!isRecording ? (
-              <TouchableOpacity
-                onPress={handleStartRecording}
-                style={styles.pillRecordBtn}
-              >
-                <View style={styles.pillRecordInner} />
-              </TouchableOpacity>
-            ) : (
-              <>
-                {/* Pause / Resume Button */}
+          ) : (
+            /* Compact pill recording bar with Pause / Resume / Stop */
+            <View style={styles.pillBar}>
+              {!isRecording ? (
                 <TouchableOpacity
-                  onPress={isPaused ? handleResumeRecording : handlePauseRecording}
-                  style={[styles.pillActionBtn, isPaused ? styles.pillResumeBtn : styles.pillPauseBtn]}
+                  onPress={handleStartRecording}
+                  style={styles.pillRecordBtn}
                 >
-                  <IconSymbol
-                    name={isPaused ? "play.fill" : "pause.fill"}
-                    size={20}
-                    color="#fff"
-                  />
+                  <View style={styles.pillRecordInner} />
                 </TouchableOpacity>
+              ) : (
+                <>
+                  {/* Pause / Resume Button */}
+                  <TouchableOpacity
+                    onPress={
+                      isPaused ? handleResumeRecording : handlePauseRecording
+                    }
+                    style={[
+                      styles.pillActionBtn,
+                      isPaused ? styles.pillResumeBtn : styles.pillPauseBtn,
+                    ]}
+                  >
+                    <IconSymbol
+                      name={isPaused ? "play.fill" : "pause.fill"}
+                      size={20}
+                      color="#fff"
+                    />
+                  </TouchableOpacity>
 
-                <View style={styles.pillDivider} />
+                  <View style={styles.pillDivider} />
 
-                {/* Timer Display */}
-                <View style={styles.pillTimerContainer}>
-                  <Text style={[styles.pillTimer, isPaused && styles.pillTimerPaused]}>
-                    {formatElapsed(elapsedMs)}
-                  </Text>
-                  {isPaused && (
-                    <Text style={styles.pillPausedBadge}>PAUSED</Text>
+                  {/* Timer Display */}
+                  <View style={styles.pillTimerContainer}>
+                    <Text
+                      style={[
+                        styles.pillTimer,
+                        isPaused && styles.pillTimerPaused,
+                      ]}
+                    >
+                      {formatElapsed(elapsedMs)}
+                    </Text>
+                    {isPaused && (
+                      <Text style={styles.pillPausedBadge}>PAUSED</Text>
+                    )}
+                  </View>
+
+                  {!applyLandscapeStyles && (
+                    <>
+                      <View style={styles.pillDivider} />
+                      <Text style={styles.pillChunks}>▌▌ {chunkCount}</Text>
+                    </>
                   )}
-                </View>
 
-                {!applyLandscapeStyles && (
-                  <>
-                    <View style={styles.pillDivider} />
-                    <Text style={styles.pillChunks}>▌▌ {chunkCount}</Text>
-                  </>
-                )}
+                  <View style={styles.pillDivider} />
 
-                <View style={styles.pillDivider} />
-
-                {/* Stop Button */}
-                <TouchableOpacity
-                  onPress={handleStopRecording}
-                  style={styles.pillStopBtn}
-                >
-                  <IconSymbol name="square.fill" size={18} color="#FF453A" />
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        )}
-      </View>
+                  {/* Stop Button */}
+                  <TouchableOpacity
+                    onPress={handleStopRecording}
+                    style={styles.pillStopBtn}
+                  >
+                    <IconSymbol name="square.fill" size={18} color="#FF453A" />
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+          )}
+        </View>
       )}
     </View>
   );
@@ -1272,21 +1446,21 @@ const styles = StyleSheet.create({
     left: 20,
   },
   landscapeHint: {
-    position: 'absolute',
-    bottom: 'auto' as any,
+    position: "absolute",
+    bottom: "auto" as any,
     top: 50,
-    alignSelf: 'center',
+    alignSelf: "center",
     zIndex: 50,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: "rgba(0,0,0,0.7)",
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 20,
-    transform: [{ rotate: '-90deg' }],
+    transform: [{ rotate: "-90deg" }],
   },
   landscapeHintText: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: "600",
   },
   dashboard: {
     position: "absolute",
@@ -1302,9 +1476,9 @@ const styles = StyleSheet.create({
   },
   dashboardLandscape: {
     top: 10,
-    left: 'auto' as any,
+    left: "auto" as any,
     right: -30,
-    transform: [{ rotate: '-90deg' }],
+    transform: [{ rotate: "-90deg" }],
   },
   dashTitle: {
     color: "#fff",
@@ -1331,19 +1505,19 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   energyMonitorContainer: {
-    position: 'absolute',
+    position: "absolute",
     bottom: 120,
     left: 0,
     right: 0,
     zIndex: 10,
   },
   energyMonitorLandscape: {
-    bottom: 'auto' as any,
-    top: '50%' as any,
+    bottom: "auto" as any,
+    top: "50%" as any,
     left: -40,
-    right: 'auto' as any,
+    right: "auto" as any,
     width: 280,
-    transform: [{ rotate: '-90deg' }],
+    transform: [{ rotate: "-90deg" }],
   },
   hrPanel: {
     position: "absolute",
@@ -1360,7 +1534,7 @@ const styles = StyleSheet.create({
   hrPanelLandscape: {
     top: 200,
     right: -10,
-    transform: [{ rotate: '-90deg' }],
+    transform: [{ rotate: "-90deg" }],
   },
   hrLabel: { color: "#FF0000", fontSize: 10, fontWeight: "900" },
   hrValue: { fontSize: 32, fontWeight: "bold", fontFamily: "monospace" },
@@ -1380,28 +1554,28 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     alignItems: "center",
     zIndex: 20,
-    width: '80%',
+    width: "80%",
   },
   recordControlLandscape: {
-    bottom: 'auto' as any,
-    right: 'auto' as any,
-    left: 'auto' as any,
-    top: '40%' as any,
-    width: 'auto' as any,
-    alignSelf: 'center' as any,
-    transform: [{ rotate: '-90deg' }],
+    bottom: "auto" as any,
+    right: "auto" as any,
+    left: "auto" as any,
+    top: "40%" as any,
+    width: "auto" as any,
+    alignSelf: "center" as any,
+    transform: [{ rotate: "-90deg" }],
   },
 
   // --- Compact pill recording bar ---
   pillBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.75)',
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.75)",
     borderRadius: 28,
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: "#333",
     gap: 0,
   },
   pillRecordBtn: {
@@ -1409,72 +1583,72 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: 24,
     borderWidth: 4,
-    borderColor: '#fff',
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
   },
   pillRecordInner: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#FF453A',
+    backgroundColor: "#FF453A",
   },
   pillActionBtn: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    justifyContent: 'center',
-    alignItems: 'center',
+    justifyContent: "center",
+    alignItems: "center",
   },
   pillPauseBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
   },
   pillResumeBtn: {
-    backgroundColor: '#30D158',
+    backgroundColor: "#30D158",
   },
   pillStopBtn: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: 'rgba(255, 69, 58, 0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "rgba(255, 69, 58, 0.2)",
+    justifyContent: "center",
+    alignItems: "center",
     borderWidth: 1.5,
-    borderColor: '#FF453A',
+    borderColor: "#FF453A",
   },
   pillDivider: {
     width: 1,
     height: 24,
-    backgroundColor: '#444',
+    backgroundColor: "#444",
     marginHorizontal: 8,
   },
   pillTimerContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: "center",
+    justifyContent: "center",
     minWidth: 60,
   },
   pillTimer: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 18,
-    fontWeight: '700',
-    fontFamily: 'monospace',
-    textAlign: 'center',
+    fontWeight: "700",
+    fontFamily: "monospace",
+    textAlign: "center",
   },
   pillTimerPaused: {
-    color: '#FFD60A',
+    color: "#FFD60A",
   },
   pillPausedBadge: {
-    color: '#FFD60A',
+    color: "#FFD60A",
     fontSize: 8,
-    fontWeight: '800',
+    fontWeight: "800",
     letterSpacing: 1,
     marginTop: -2,
   },
   pillChunks: {
-    color: '#888',
+    color: "#888",
     fontSize: 13,
-    fontFamily: 'monospace',
-    fontWeight: '600',
+    fontFamily: "monospace",
+    fontWeight: "600",
   },
 
   postRecordingFooter: {
@@ -1533,7 +1707,7 @@ const styles = StyleSheet.create({
   },
   feedbackOverlay: {
     position: "absolute",
-    top: '35%' as any,
+    top: "35%" as any,
     alignSelf: "center",
     backgroundColor: "rgba(255, 0, 0, 0.8)",
     paddingHorizontal: 20,
@@ -1543,10 +1717,10 @@ const styles = StyleSheet.create({
     zIndex: 50,
   },
   feedbackOverlayLandscape: {
-    top: 'auto' as any,
+    top: "auto" as any,
     bottom: 80,
-    maxWidth: '60%',
-    transform: [{ rotate: '-90deg' }],
+    maxWidth: "60%",
+    transform: [{ rotate: "-90deg" }],
   },
   feedbackText: {
     color: "#fff",
@@ -1557,46 +1731,46 @@ const styles = StyleSheet.create({
   // --- Merging indicator overlay ---
   mergingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: "rgba(0, 0, 0, 0.85)",
+    justifyContent: "center",
+    alignItems: "center",
     zIndex: 100,
   },
   mergingCard: {
-    backgroundColor: 'rgba(30, 30, 30, 0.95)',
+    backgroundColor: "rgba(30, 30, 30, 0.95)",
     borderRadius: 20,
     paddingVertical: 32,
     paddingHorizontal: 40,
-    alignItems: 'center',
+    alignItems: "center",
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: "#333",
     gap: 12,
     minWidth: 260,
   },
   mergingTitle: {
-    color: '#fff',
+    color: "#fff",
     fontSize: 20,
-    fontWeight: '700',
+    fontWeight: "700",
     marginTop: 8,
   },
   mergingSubtitle: {
-    color: '#999',
+    color: "#999",
     fontSize: 14,
-    fontWeight: '500',
-    textAlign: 'center',
+    fontWeight: "500",
+    textAlign: "center",
   },
   mergingProgressBg: {
-    width: '100%',
+    width: "100%",
     height: 4,
-    backgroundColor: '#333',
+    backgroundColor: "#333",
     borderRadius: 2,
-    overflow: 'hidden',
+    overflow: "hidden",
     marginTop: 8,
   },
   mergingProgressIndeterminate: {
-    width: '40%',
-    height: '100%',
-    backgroundColor: '#30D158',
+    width: "40%",
+    height: "100%",
+    backgroundColor: "#30D158",
     borderRadius: 2,
   },
 });
