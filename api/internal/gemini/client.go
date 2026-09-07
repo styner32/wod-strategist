@@ -52,13 +52,14 @@ const (
 const defaultModel = ModelPro31Preview
 
 type Client struct {
-	client         *genai.Client
-	logger         *zap.Logger
-	model          string
-	thinkingLevel  string
-	thinkingBudget *int32
-	pollInterval   time.Duration
-	sleep          func(time.Duration)
+	client             *genai.Client
+	logger             *zap.Logger
+	model              string
+	thinkingLevel      string
+	thinkingLevelChunk string
+	thinkingBudget     *int32
+	pollInterval       time.Duration
+	sleep              func(time.Duration)
 }
 
 // Model returns the configured generation model used by AnalyzeSegment.
@@ -70,15 +71,16 @@ func (c *Client) Model() string {
 }
 
 type Options struct {
-	APIKey         string
-	BaseURL        string
-	APIVersion     string
-	HTTPClient     *http.Client
-	Model          string // e.g. "gemini-3.1-pro-preview", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"
-	ThinkingLevel  string // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL"
-	ThinkingBudget *int32 // Optional token budget for thinking
-	PollInterval   time.Duration
-	Sleep          func(time.Duration)
+	APIKey             string
+	BaseURL            string
+	APIVersion         string
+	HTTPClient         *http.Client
+	Model              string // e.g. "gemini-3.1-pro-preview", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"
+	ThinkingLevel      string // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL" (default / full video analysis)
+	ThinkingLevelChunk string // e.g. "LOW", "MEDIUM" (for short chunk analysis)
+	ThinkingBudget     *int32 // Optional token budget for thinking
+	PollInterval       time.Duration
+	Sleep              func(time.Duration)
 }
 
 type exactSegmentOffsets struct {
@@ -227,14 +229,21 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 		sleep = time.Sleep
 	}
 
+	thinkingLevel := options.ThinkingLevel
+	thinkingLevelChunk := options.ThinkingLevelChunk
+	if thinkingLevelChunk == "" {
+		thinkingLevelChunk = thinkingLevel
+	}
+
 	return &Client{
-		client:         client,
-		logger:         logger,
-		model:          model,
-		thinkingLevel:  options.ThinkingLevel,
-		thinkingBudget: options.ThinkingBudget,
-		pollInterval:   pollInterval,
-		sleep:          sleep,
+		client:             client,
+		logger:             logger,
+		model:              model,
+		thinkingLevel:      thinkingLevel,
+		thinkingLevelChunk: thinkingLevelChunk,
+		thinkingBudget:     options.ThinkingBudget,
+		pollInterval:       pollInterval,
+		sleep:              sleep,
 	}, nil
 }
 
@@ -244,17 +253,24 @@ func supportsThinking(model string) bool {
 }
 
 func (c *Client) thinkingConfigForModel(model string) *genai.ThinkingConfig {
+	if c == nil {
+		return nil
+	}
+	return c.thinkingConfigForModelAndLevel(model, c.thinkingLevel)
+}
+
+func (c *Client) thinkingConfigForModelAndLevel(model string, level string) *genai.ThinkingConfig {
 	if c == nil || !supportsThinking(model) {
 		return nil
 	}
-	if c.thinkingLevel == "" && c.thinkingBudget == nil {
+	if level == "" && c.thinkingBudget == nil {
 		return nil
 	}
 	tc := &genai.ThinkingConfig{}
 	if c.thinkingBudget != nil {
 		tc.ThinkingBudget = c.thinkingBudget
 	}
-	switch strings.ToUpper(strings.TrimSpace(c.thinkingLevel)) {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
 	case "HIGH":
 		tc.ThinkingLevel = genai.ThinkingLevelHigh
 	case "MEDIUM":
@@ -311,7 +327,26 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 }
 
 // AnalyzeVideoWithModel returns the analysis result, the name of the uploaded file on Gemini, and token usage using the specified model.
+// It uses the default thinking level (c.thinkingLevel).
 func (c *Client) AnalyzeVideoWithModel(ctx context.Context, filePath string, prompt string, model string) (string, string, *TokenUsage, error) {
+	level := ""
+	if c != nil {
+		level = c.thinkingLevel
+	}
+	return c.AnalyzeVideoWithThinking(ctx, filePath, prompt, model, level)
+}
+
+// AnalyzeChunkVideo analyzes a short video chunk using the configured chunk thinking level (c.thinkingLevelChunk).
+func (c *Client) AnalyzeChunkVideo(ctx context.Context, filePath string, prompt string, model string) (string, string, *TokenUsage, error) {
+	level := ""
+	if c != nil {
+		level = c.thinkingLevelChunk
+	}
+	return c.AnalyzeVideoWithThinking(ctx, filePath, prompt, model, level)
+}
+
+// AnalyzeVideoWithThinking returns the analysis result, the name of the uploaded file on Gemini, and token usage using the specified model and thinking level.
+func (c *Client) AnalyzeVideoWithThinking(ctx context.Context, filePath string, prompt string, model string, thinkingLevel string) (string, string, *TokenUsage, error) {
 	// Upload file
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -361,7 +396,7 @@ func (c *Client) AnalyzeVideoWithModel(ctx context.Context, filePath string, pro
 
 	// Generate content — single multimodal turn with video first for better temporal grounding
 	var genConfig *genai.GenerateContentConfig
-	if tc := c.thinkingConfigForModel(model); tc != nil {
+	if tc := c.thinkingConfigForModelAndLevel(model, thinkingLevel); tc != nil {
 		genConfig = &genai.GenerateContentConfig{
 			ThinkingConfig: tc,
 		}

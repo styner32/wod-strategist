@@ -33,6 +33,24 @@ variable "gemini_api_key" {
   sensitive   = true
 }
 
+variable "gemini_model" {
+  description = "Default Gemini model for video analysis"
+  type        = string
+  default     = "gemini-3.8-flash"
+}
+
+variable "gemini_thinking_chunk" {
+  description = "Thinking level for short chunk video analysis (LOW, MEDIUM, HIGH)"
+  type        = string
+  default     = "MEDIUM"
+}
+
+variable "gemini_thinking_level" {
+  description = "Thinking level for full video / segment analysis (HIGH, MEDIUM, LOW)"
+  type        = string
+  default     = "HIGH"
+}
+
 variable "jwt_secret" {
   description = "Secret key for signing JWT tokens"
   type        = string

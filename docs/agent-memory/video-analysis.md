@@ -231,8 +231,12 @@ Chunks are processed in parallel with bounded concurrency.
 - Worker runtime default model: `gemini-3.8-flash` (replaces legacy `gemini-3.1-pro-preview`).
 - Config env vars:
   - `GEMINI_MODEL`: Model name (default `gemini-3.8-flash`).
-  - `GEMINI_THINKING_LEVEL`: Thinking level (default `HIGH`).
+  - `GEMINI_THINKING_LEVEL`: Full video / deep segment analysis thinking level (default `HIGH`). Valid: `HIGH`, `MEDIUM`, `LOW`.
+  - `GEMINI_THINKING_CHUNK`: Short video (~10s chunk) analysis thinking level (default `LOW`). Valid: `HIGH`, `MEDIUM`, `LOW`. Minimizes response latency and thinking token costs for real-time coaching feedback.
   - `GEMINI_THINKING_BUDGET`: Optional integer thinking budget in tokens.
+- Stage-specific thinking levels:
+  - Short video / chunk analysis: Uses `AnalyzeChunkVideo`, which resolves to `GEMINI_THINKING_CHUNK` (`LOW` by default). Note that `MINIMAL` is not supported on Gemini 3.8 / 3.7 Flash and will be rejected.
+  - Full video / deep segment analysis: Uses `AnalyzeSegmentWithModel` / `AnalyzeVideo`, which resolves to `GEMINI_THINKING_LEVEL` (`HIGH` by default) to maximize accuracy and temporal grounding.
 - Thinking config is applied via SDK `ThinkingConfig` on models that support it (the current `supportsThinking` implementation matches names containing `3.8`, `3.7`, or `2.5`). Older preview models (`gemini-3.1-pro-preview`) omit `ThinkingConfig` to prevent API errors.
 
 The bare Gemini client constructor still defaults to `gemini-3.1-pro-preview` when no model is supplied; `cmd/worker` supplies the runtime config above. Some stages use `flashModel` directly. Do not equate all stage/test defaults.

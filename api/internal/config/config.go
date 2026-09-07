@@ -44,6 +44,7 @@ type Worker struct {
 	GeminiAPIKey         string
 	GeminiModel          string // GEMINI_MODEL — default "gemini-3.8-flash"
 	GeminiThinkingLevel  string // GEMINI_THINKING_LEVEL — default "HIGH"
+	GeminiThinkingChunk  string // GEMINI_THINKING_CHUNK — default "LOW"
 	GeminiThinkingBudget *int32 // GEMINI_THINKING_BUDGET — optional token count
 	UseCache             bool   // GEMINI_USE_CACHE — enable context caching for long videos
 	PipelineMode         string // PIPELINE_MODE — legacy, optimized, compare
@@ -128,9 +129,14 @@ func InitWorker() (Worker, error) {
 		model = gemini.ModelFlash38
 	}
 
-	thinkingLevel := strings.TrimSpace(os.Getenv("GEMINI_THINKING_LEVEL"))
+	thinkingLevel := strings.ToUpper(strings.TrimSpace(os.Getenv("GEMINI_THINKING_LEVEL")))
 	if thinkingLevel == "" {
 		thinkingLevel = "HIGH"
+	}
+
+	thinkingChunk := strings.ToUpper(strings.TrimSpace(os.Getenv("GEMINI_THINKING_CHUNK")))
+	if thinkingChunk == "" {
+		thinkingChunk = "LOW"
 	}
 
 	var thinkingBudget *int32
@@ -151,6 +157,7 @@ func InitWorker() (Worker, error) {
 		GeminiAPIKey:         strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		GeminiModel:          model,
 		GeminiThinkingLevel:  thinkingLevel,
+		GeminiThinkingChunk:  thinkingChunk,
 		GeminiThinkingBudget: thinkingBudget,
 		UseCache:             strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_USE_CACHE")), "true"),
 		PipelineMode:         pMode,
@@ -168,6 +175,8 @@ func InitWorker() (Worker, error) {
 	if err := validateValues(
 		validateDatabaseURL(cfg.DatabaseURL),
 		validateRedisURL(cfg.RedisURL),
+		validateThinkingLevel("GEMINI_THINKING_LEVEL", cfg.GeminiThinkingLevel),
+		validateThinkingLevel("GEMINI_THINKING_CHUNK", cfg.GeminiThinkingChunk),
 	); err != nil {
 		return Worker{}, err
 	}
@@ -248,6 +257,17 @@ func validateRedisURL(url string) error {
 		return fmt.Errorf("REDIS_URL port must not be empty")
 	}
 	return nil
+}
+
+func validateThinkingLevel(name, level string) error {
+	switch level {
+	case "HIGH", "MEDIUM", "LOW":
+		return nil
+	case "MINIMAL":
+		return fmt.Errorf("%s %q is not supported by Gemini 3.8 Flash (use LOW, MEDIUM, or HIGH)", name, level)
+	default:
+		return fmt.Errorf("invalid %s %q: must be one of HIGH, MEDIUM, LOW", name, level)
+	}
 }
 
 // --- env file loading ---

@@ -101,6 +101,7 @@ type GeminiClient interface {
 	// File-upload based analysis (used by chunk analysis, legacy path)
 	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, *gemini.TokenUsage, error)
 	AnalyzeVideoWithModel(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
+	AnalyzeChunkVideo(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
 	DeleteFile(ctx context.Context, name string) error
 	FileExists(ctx context.Context, name string) (bool, error)
 	FileVideoDuration(ctx context.Context, name string) (time.Duration, bool, error)
