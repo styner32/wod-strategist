@@ -2,19 +2,6 @@ package auth
 
 import "golang.org/x/crypto/bcrypt"
 
-<<<<<<< HEAD
-var dummyHash string
-
-func init() {
-	// Precompute a dummy hash to use for timing attack mitigation.
-	var err error
-	dummyHash, err = HashPassword("dummy")
-	if err != nil {
-		panic(err)
-	}
-}
-
-=======
 var dummyHash []byte
 
 func init() {
@@ -25,12 +12,12 @@ func init() {
 	}
 }
 
-// DummyVerifyPassword compares a plaintext password against a dummy hash to prevent timing attacks.
+// DummyVerifyPassword compares a plaintext password against a precomputed dummy hash
+// to burn CPU time and prevent user enumeration timing attacks when a user is not found.
 func DummyVerifyPassword(plain string) {
 	_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(plain))
 }
 
->>>>>>> 32d529a (Fix timing attack vulnerability in auth logic)
 // HashPassword creates a bcrypt hash of the plaintext password using the default cost.
 func HashPassword(plain string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(plain), bcrypt.DefaultCost)
