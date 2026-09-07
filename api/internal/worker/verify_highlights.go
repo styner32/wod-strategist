@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -562,41 +561,10 @@ func filterObservationsWithChunks(chunks []db.ChunkAnalysisResult, segments []Hi
 		return segments
 	}
 
-	// 1. Check if media clock mapping exists and whether the session has media_end == end.
-	// Migration 000038 backfilled historical sessions with media_* = start_*, so media_end == end
-	// cannot distinguish between a zero-drift session and a session without true media mapping.
-	// In such cases, act conservatively: do not exclude observations.
-	var (
-		maxEnd        float64
-		maxMediaEnd   float64
-		hasEnd        bool
-		hasMediaEnd   bool
-		hasValidMedia bool
-	)
-
-	for _, chunk := range chunks {
-		if chunk.MediaStartSecs != nil && chunk.MediaEndSecs != nil && chunk.EndSecs != nil && *chunk.MediaEndSecs > *chunk.MediaStartSecs {
-			hasValidMedia = true
-			if !hasEnd || *chunk.EndSecs > maxEnd {
-				maxEnd = *chunk.EndSecs
-				hasEnd = true
-			}
-			if !hasMediaEnd || *chunk.MediaEndSecs > maxMediaEnd {
-				maxMediaEnd = *chunk.MediaEndSecs
-				hasMediaEnd = true
-			}
-		}
-	}
-
-	if !hasValidMedia || !hasEnd || !hasMediaEnd {
-		return segments
-	}
-
-	// Conservative check: if max media_end == max end (within 1ms tolerance), drift mapping is absent/backfilled.
-	if math.Abs(maxEnd-maxMediaEnd) < 0.001 || maxMediaEnd >= maxEnd {
-		return segments
-	}
-
+	// Media offsets are written by probed merges or server splits. Migration
+	// 000038 backfilled only server-split rows, whose clocks legitimately match;
+	// unmapped mobile rows retain NULL. Validate each media interval independently
+	// without inferring its provenance from drift relative to the capture clock.
 	type mediaInterval struct {
 		start float64
 		end   float64

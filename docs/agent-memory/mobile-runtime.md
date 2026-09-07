@@ -47,6 +47,11 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - When a chunk finishes (`onRecordingFinished`), `chunkPeakBpm` is sent to `processWorkoutChunk` as `heartRateBpm`, ensuring peak cardiovascular stress during exercise bursts is captured instead of momentary recovery dips.
 - 1Hz telemetry recording continues to record instantaneous samples via `bpmRef.current`.
 
+### Polar ACC packet timing
+- `parseAccPacket` accepts device-derived `dt` only within 10% of `1000 / accHz` (the negotiated rate), allowing the observed 19.53ms interval at 50Hz.
+- A rejected delta uses `lastSampleIntervalMs`, or the nominal interval before a valid measurement exists. Do not stretch samples across packet loss using a fixed upper limit such as 60ms.
+- Reset the measured interval with the clock anchor on a new stream; stop/disconnect also clears it. This heuristic cannot detect every small partial-packet loss without a sequence counter.
+
 ## Internationalization (i18n)
 Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/locales/{en,ko}.json`.
 

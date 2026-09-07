@@ -46,6 +46,7 @@ export interface PmdStreamContext {
     deviceTimestampNs: string;
   };
   lastDeviceMs?: number;
+  lastSampleIntervalMs?: number;
 }
 
 export interface ParsedAccPacket {
@@ -347,7 +348,8 @@ export function decodeRawFrames(
  * Implements device clock anchoring:
  * - On first packet, establishes anchor (deviceMs -> reception phone offset).
  * - Subsequent packets calculate offset from device clock delta.
- * - Sample offsets are 20ms monotonic: offset[i] = packetOffset - (N - 1 - i) * dt.
+ * - Sample offsets use the observed interval when consistent with the negotiated rate.
+ * - Packet loss preserves the last valid interval instead of stretching samples across the gap.
  */
 export function parseAccPacket(
   raw: Uint8Array | Buffer | string,
@@ -409,20 +411,24 @@ export function parseAccPacket(
     };
     isNewAnchor = true;
     delete context.lastDeviceMs;
+    delete context.lastSampleIntervalMs;
   }
 
   const packetOffsetMs = context.anchor.phoneOffsetMs + (deviceMs - context.anchor.deviceMs);
   const nominalDt = Math.round(1000 / context.accHz);
   const N = samples.length;
 
-  let dt = nominalDt;
+  let dt = context.lastSampleIntervalMs ?? nominalDt;
   if (!isNewAnchor && context.lastDeviceMs !== undefined && deviceMs > context.lastDeviceMs && N > 0) {
     const deltaMs = deviceMs - context.lastDeviceMs;
     const computedDt = Math.round((deltaMs / N) * 100) / 100;
-    // Polar H10 ACC supports 25Hz (40ms), 50Hz (20ms), 100Hz (10ms), 200Hz (5ms).
-    // An interval > 60ms indicates packet loss or abnormal delay; fall back to nominalDt.
-    if (computedDt >= 1 && computedDt <= 60) {
+    // Allow device clock drift (e.g. 19.53ms at negotiated 50Hz), but compare
+    // against that rate: one lost packet doubles dt even below a fixed 60ms cap.
+    // A 10% tolerance also accommodates integer-ms timestamp quantization for
+    // normal multi-sample packets. Rejected deltas must not train the fallback.
+    if (Math.abs(computedDt - nominalDt) <= nominalDt * 0.1) {
       dt = computedDt;
+      context.lastSampleIntervalMs = dt;
     }
   }
   context.lastDeviceMs = deviceMs;

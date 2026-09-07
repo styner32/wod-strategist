@@ -155,7 +155,7 @@ describe("polarPmdProtocol", () => {
         const parsed = parseAccPacket(frameFixture.base64, ctx, 1200 + i * 200);
 
         expect(parsed.samples.length).toBe(frameFixture.sampleCount);
-        expect(parsed.dt).toBe(frameFixture.sampleCount === 5 ? 40 : 20);
+        expect(parsed.dt).toBe(20);
 
         // Verify values match expected within 0.001 G
         for (let s = 0; s < parsed.samples.length; s++) {
@@ -210,7 +210,7 @@ describe("polarPmdProtocol", () => {
       expect(parsedAfterReconnect.packetOffsetMs).toBe(10000);
     });
 
-    it("calculates dt from device timestamp delta / sample count and falls back to nominal dt", () => {
+    it("calculates dt from device timestamps and preserves the last valid interval on loss", () => {
       const ctx: PmdStreamContext = { baseEpochMs: 0, accHz: 50 };
 
       const makePacket = (timestampNs: bigint, sampleCount: number) => {
@@ -232,21 +232,64 @@ describe("polarPmdProtocol", () => {
       const parsed2 = parseAccPacket(pkt2, ctx, 1703);
       expect(parsed2.dt).toBe(19.53);
 
-      // Packet 3 with large packet-loss gap (e.g. 3500ms device delta with only 36 samples) -> falls back to nominal dt = 20
+      // A large loss gap keeps the previously measured interval.
       const pktPacketLoss = makePacket(5_203_000_000n, 36);
       const parsedPacketLoss = parseAccPacket(pktPacketLoss, ctx, 5203);
-      expect(parsedPacketLoss.dt).toBe(20);
+      expect(parsedPacketLoss.dt).toBe(19.53);
 
-      // Packet 4 with negative/zero delta -> falls back to nominal dt = 20
+      // A duplicate timestamp also keeps the previously measured interval.
       const pktAnomaly = makePacket(5_203_000_000n, 36);
       const parsedAnomaly = parseAccPacket(pktAnomaly, ctx, 5203);
-      expect(parsedAnomaly.dt).toBe(20);
+      expect(parsedAnomaly.dt).toBe(19.53);
 
       // Packet 5 after reconnect (anchor deleted) -> falls back to nominal dt = 20
       delete ctx.anchor;
       const pkt3 = makePacket(10_000_000_000n, 36);
       const parsed3 = parseAccPacket(pkt3, ctx, 10000);
       expect(parsed3.dt).toBe(20);
+    });
+
+    it.each([25, 50, 100, 200])("keeps packet loss as a gap at %iHz", (accHz) => {
+      const ctx: PmdStreamContext = { baseEpochMs: 0, accHz };
+      const interval = 1000 / accHz;
+      const packet = (deviceMs: number, samples = 36) => {
+        const bytes = new Uint8Array(10 + samples * 3);
+        bytes[0] = PMD_MEASUREMENT_ACC;
+        new DataView(bytes.buffer).setBigUint64(1, BigInt(deviceMs) * 1_000_000n, true);
+        return bytes;
+      };
+      const packetDuration = 36 * interval;
+      parseAccPacket(packet(1000), ctx, 1000);
+      // The very next packet is lost, before any measured interval exists.
+      const afterLoss = parseAccPacket(packet(1000 + 2 * packetDuration), ctx);
+      expect(afterLoss.dt).toBe(interval);
+      expect(afterLoss.firstSampleOffsetMs).toBe(1000 + packetDuration + interval);
+      // Normal delivery resumes with a different packet size.
+      const resumed = parseAccPacket(packet(1000 + 2 * packetDuration + 18 * interval, 18), ctx);
+      expect(resumed.dt).toBe(interval);
+      expect(resumed.firstSampleOffsetMs).toBe(afterLoss.packetOffsetMs + interval);
+    });
+
+    it("retains the measured 51.2Hz interval through single and repeated packet loss", () => {
+      const ctx: PmdStreamContext = { baseEpochMs: 0, accHz: 50 };
+      const packet = (deviceMs: number) => {
+        const bytes = new Uint8Array(10 + 36 * 3);
+        bytes[0] = PMD_MEASUREMENT_ACC;
+        new DataView(bytes.buffer).setBigUint64(1, BigInt(deviceMs) * 1_000_000n, true);
+        return bytes;
+      };
+      parseAccPacket(packet(1000), ctx, 1000);
+      expect(parseAccPacket(packet(1703), ctx).dt).toBe(19.53);
+      for (const end of [3109, 4515]) {
+        const parsed = parseAccPacket(packet(end), ctx);
+        expect(parsed.dt).toBe(19.53);
+        expect(parsed.firstSampleOffsetMs).toBeCloseTo(end - 35 * 19.53, 2);
+      }
+      expect(parseAccPacket(packet(5218), ctx).dt).toBe(19.53);
+      // A fresh stream must not inherit the old measured rate.
+      delete ctx.anchor;
+      ctx.accHz = 100;
+      expect(parseAccPacket(packet(6000), ctx, 6000).dt).toBe(10);
     });
 
     it("decodes 8-bit TYPE_0 frames using 1 byte per channel", () => {

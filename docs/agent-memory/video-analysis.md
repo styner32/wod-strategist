@@ -91,6 +91,11 @@ playback and re-analysis may use `media_start_secs`/`media_end_secs` only after
 they were written from server-split offsets, probed concat durations, or a
 verified legacy reconstruction.
 
+Highlight confidence filtering uses each non-null, increasing `media_*`
+interval independently. Equal capture/media endpoints are valid: migration
+`000038` backfilled only `split_chunk` rows, leaving unmapped mobile rows NULL.
+Do not disable the filter based on session drift or missing capture offsets.
+
 ## Key helpers and concepts
 - `buildSegmentsFromChunks`
 - `buildIndexPrompt`
