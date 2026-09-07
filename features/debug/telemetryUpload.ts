@@ -28,6 +28,24 @@ export interface UploadQueueOptions {
 export function createUploadQueue(options: UploadQueueOptions) {
   const { subDir, uploadFn, logTag = '📊' } = options;
 
+  // The queue file is a whole-file read-modify-write. Uploads take seconds, so
+  // an enqueue from a finishing recording can land in the middle of a flush;
+  // without serialization the flush's stale snapshot overwrites the new entry
+  // and that upload is lost for good. Every mutation runs under this lock,
+  // and the lock is never held across a network call.
+  let mutationLock: Promise<unknown> = Promise.resolve();
+  let isFlushing = false;
+
+  function withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const run = mutationLock.then(fn, fn);
+    mutationLock = run.catch(() => undefined);
+    return run;
+  }
+
+  function isSameEntry(a: PendingUpload, b: PendingUpload): boolean {
+    return a.sessionId === b.sessionId && a.filePath === b.filePath;
+  }
+
   function queuePath(): string {
     return `${documentDirectory}${subDir}/_pending.json`;
   }
@@ -60,9 +78,32 @@ export function createUploadQueue(options: UploadQueueOptions) {
     filePath: string,
     profileId?: number,
   ): Promise<void> {
-    const queue = await loadQueue();
-    queue.push({ sessionId, filePath, attempts: 0, profileId });
-    await saveQueue(queue);
+    await withLock(async () => {
+      const queue = await loadQueue();
+      queue.push({ sessionId, filePath, attempts: 0, profileId });
+      await saveQueue(queue);
+    });
+  }
+
+  /** Removes one entry from the queue as it stands right now. */
+  async function removeEntry(entry: PendingUpload): Promise<void> {
+    await withLock(async () => {
+      const queue = await loadQueue();
+      await saveQueue(queue.filter((e) => !isSameEntry(e, entry)));
+    });
+  }
+
+  /** Records a failed attempt against the queue as it stands right now. */
+  async function recordFailure(entry: PendingUpload): Promise<void> {
+    await withLock(async () => {
+      const queue = await loadQueue();
+      const match = queue.find((e) => isSameEntry(e, entry));
+      if (match) {
+        match.attempts += 1;
+        match.lastAttemptAt = Date.now();
+      }
+      await saveQueue(queue);
+    });
   }
 
   async function uploadOne(pending: PendingUpload): Promise<boolean> {
@@ -79,10 +120,8 @@ export function createUploadQueue(options: UploadQueueOptions) {
       console.log(`${logTag} uploaded for ${pending.sessionId}`);
       return true;
     } catch (e) {
-      pending.attempts += 1;
-      pending.lastAttemptAt = Date.now();
       console.warn(
-        `${logTag} upload failed for ${pending.sessionId} (attempt ${pending.attempts}):`,
+        `${logTag} upload failed for ${pending.sessionId} (attempt ${pending.attempts + 1}):`,
         e,
       );
       return false;
@@ -90,26 +129,35 @@ export function createUploadQueue(options: UploadQueueOptions) {
   }
 
   async function flushPendingUploads(): Promise<void> {
-    const queue = await loadQueue();
-    if (queue.length === 0) return;
+    // A second concurrent flush would upload the same entries twice.
+    if (isFlushing) return;
+    isFlushing = true;
 
-    const remaining: PendingUpload[] = [];
+    try {
+      const snapshot = await withLock(() => loadQueue());
+      if (snapshot.length === 0) return;
 
-    for (const entry of queue) {
-      if (entry.attempts >= MAX_ATTEMPTS) {
-        console.warn(
-          `${logTag} Giving up on upload for ${entry.sessionId} after ${entry.attempts} attempts`,
-        );
-        continue;
+      for (const entry of snapshot) {
+        if (entry.attempts >= MAX_ATTEMPTS) {
+          console.warn(
+            `${logTag} Giving up on upload for ${entry.sessionId} after ${entry.attempts} attempts`,
+          );
+          await removeEntry(entry);
+          continue;
+        }
+
+        const ok = await uploadOne(entry);
+        // Re-read the queue for each outcome: entries enqueued while this
+        // upload was in flight must survive.
+        if (ok) {
+          await removeEntry(entry);
+        } else {
+          await recordFailure(entry);
+        }
       }
-
-      const ok = await uploadOne(entry);
-      if (!ok) {
-        remaining.push(entry);
-      }
+    } finally {
+      isFlushing = false;
     }
-
-    await saveQueue(remaining);
   }
 
   return {

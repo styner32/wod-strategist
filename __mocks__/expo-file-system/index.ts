@@ -4,7 +4,16 @@ import { Buffer } from "buffer";
 const memoryFiles = new Map<string, Uint8Array>();
 const memoryDirs = new Set<string>();
 
+/** Number of upcoming writeBytes calls that should throw (disk-full style). */
+let failNextWrites = 0;
+
+/** Makes the next `count` writeBytes calls throw, to exercise write failures. */
+export function __failNextWrites(count: number): void {
+  failNextWrites = count;
+}
+
 export function __resetMockFileSystem(): void {
+  failNextWrites = 0;
   memoryFiles.clear();
   memoryDirs.clear();
   memoryDirs.add("file:///mock/docs/");
@@ -91,6 +100,10 @@ export class FileHandle {
   writeBytes(bytes: Uint8Array): void {
     if (this.isClosed) {
       throw new Error("Cannot write to closed FileHandle");
+    }
+    if (failNextWrites > 0) {
+      failNextWrites -= 1;
+      throw new Error("Mock write failure");
     }
     const current = memoryFiles.get(this.fileUri) ?? new Uint8Array(0);
     const writePos = this.offset ?? current.length;

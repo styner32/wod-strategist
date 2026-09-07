@@ -18,6 +18,13 @@ import {
   parseStartMeasurementResponse,
 } from "./polarPmdProtocol";
 
+export interface StopResult {
+  filePath: string;
+  sessionId: string;
+  /** False when some lines never reached disk — the file is not a full record. */
+  complete: boolean;
+}
+
 interface PauseInterval {
   start_offset_ms: number;
   end_offset_ms: number;
@@ -79,7 +86,21 @@ let state: RecorderState = {
   pmdDataSubscription: null,
 };
 
-let stopPromise: Promise<{ filePath: string; sessionId: string } | null> | null = null;
+let stopPromise: Promise<StopResult | null> | null = null;
+
+/**
+ * Monotonic token identifying the current PMD setup attempt.
+ *
+ * setupPmdStreaming awaits BLE calls; a session stop, a disconnect, or a newer
+ * device can land while it waits. Every continuation checks its captured
+ * generation before touching state, so a stale attempt cannot resurrect
+ * subscriptions or start a measurement after the session it belonged to ended.
+ */
+let pmdGeneration = 0;
+
+function invalidatePmdGeneration(): void {
+  pmdGeneration += 1;
+}
 
 function cleanupSubscriptions(): void {
   if (state.pmdCpSubscription) {
@@ -96,7 +117,7 @@ export const PolarSensorRecorder: BleSensorSink & {
   start(opts: { sessionId: string; profileId: number; baseEpochMs: number }): void;
   pause(): void;
   resume(): void;
-  stop(): Promise<{ filePath: string; sessionId: string } | null>;
+  stop(): Promise<StopResult | null>;
   getLiveStatus(): { accSamples: number; hrSamples: number; dropped: number | null };
   isActive(): boolean;
   setBattery(percent: number): void;
@@ -122,6 +143,9 @@ export const PolarSensorRecorder: BleSensorSink & {
       console.warn("⚠️ PolarSensorRecorder is already active");
       return;
     }
+
+    // Any PMD setup still in flight belongs to the previous session.
+    invalidatePmdGeneration();
 
     const writer = new NdjsonWriter(opts.sessionId);
 
@@ -221,7 +245,7 @@ export const PolarSensorRecorder: BleSensorSink & {
     state.writer?.writeImmediate({ k: "resume", t: offset });
   },
 
-  stop(): Promise<{ filePath: string; sessionId: string } | null> {
+  stop(): Promise<StopResult | null> {
     if (stopPromise) {
       return stopPromise;
     }
@@ -229,6 +253,9 @@ export const PolarSensorRecorder: BleSensorSink & {
     if (!state.isActive || !activeWriter) {
       return Promise.resolve(null);
     }
+
+    // Stop any PMD setup that is still waiting on a BLE round-trip.
+    invalidatePmdGeneration();
 
     stopPromise = (async () => {
       const { sessionId, baseEpochMs, pauseIntervals, pauseStartTime } = state;
@@ -265,7 +292,9 @@ export const PolarSensorRecorder: BleSensorSink & {
 
       cleanupSubscriptions();
 
-      // Footer (last line)
+      // Footer (last line). Write failures are recorded so a consumer can tell
+      // a lossy file from a complete one even when the file itself parses.
+      const writeStats = activeWriter.stats();
       const footer = {
         k: "end",
         t: endOffset,
@@ -278,17 +307,26 @@ export const PolarSensorRecorder: BleSensorSink & {
           acc_samples: state.accSamples,
           dropped_packets: state.droppedPackets,
           gaps: state.gaps,
+          write_failures: writeStats.failedWrites,
+          dropped_lines: writeStats.droppedLines,
         },
       };
 
       activeWriter.writeImmediate(footer);
-      const filePath = activeWriter.close();
+      const closed = activeWriter.close();
 
       state.isActive = false;
       state.writer = null;
       delete state.streamContext.anchor;
 
-      return { filePath, sessionId };
+      if (!closed.complete) {
+        console.warn(
+          `⚠️ Sensor file for ${sessionId} is incomplete: ${closed.failedWrites} failed writes, ` +
+            `${closed.droppedLines} dropped lines, ${closed.pendingLines} lines never written`,
+        );
+      }
+
+      return { filePath: closed.filePath, sessionId, complete: closed.complete };
     })().finally(() => {
       stopPromise = null;
     });
@@ -345,6 +383,7 @@ export const PolarSensorRecorder: BleSensorSink & {
   },
 
   onDeviceLost(reason: string): void {
+    invalidatePmdGeneration();
     cleanupSubscriptions();
     state.device = null;
     delete state.streamContext.anchor;
@@ -392,6 +431,12 @@ function pickSetting(available: number[], preferred: number, fallback: number): 
 async function setupPmdStreaming(device: Device): Promise<void> {
   cleanupSubscriptions();
 
+  // Claim a generation; every continuation below bails out if a stop, a
+  // disconnect, or a newer setup has since superseded this attempt.
+  invalidatePmdGeneration();
+  const generation = pmdGeneration;
+  const isCurrent = () => generation === pmdGeneration && state.device === device;
+
   try {
     if (Platform.OS === "android") {
       try {
@@ -399,10 +444,11 @@ async function setupPmdStreaming(device: Device): Promise<void> {
       } catch (err) {
         console.warn("⚠️ Failed to request MTU 232 on Android:", err);
       }
+      if (!isCurrent()) return;
     }
 
     // Monitor PMD Control Point for settings response and start response
-    state.pmdCpSubscription = device.monitorCharacteristicForService(
+    const cpSubscription = device.monitorCharacteristicForService(
       PMD_SERVICE_UUID,
       PMD_CONTROL_POINT_UUID,
       (error, characteristic) => {
@@ -410,6 +456,8 @@ async function setupPmdStreaming(device: Device): Promise<void> {
           if (error) console.warn("⚠️ PMD CP error:", error);
           return;
         }
+        // Never negotiate or start a measurement for a session that ended.
+        if (!isCurrent() || !state.isActive) return;
 
         try {
           const raw = Buffer.from(characteristic.value, "base64");
@@ -457,7 +505,7 @@ async function setupPmdStreaming(device: Device): Promise<void> {
     );
 
     // Monitor PMD Data notifications (50Hz ACC)
-    state.pmdDataSubscription = device.monitorCharacteristicForService(
+    const dataSubscription = device.monitorCharacteristicForService(
       PMD_SERVICE_UUID,
       PMD_DATA_UUID,
       (error, characteristic) => {
@@ -468,7 +516,7 @@ async function setupPmdStreaming(device: Device): Promise<void> {
           return;
         }
 
-        if (!state.isActive || !state.writer) return;
+        if (!isCurrent() || !state.isActive || !state.writer) return;
 
         try {
           const parsed = parseAccPacket(
@@ -513,6 +561,16 @@ async function setupPmdStreaming(device: Device): Promise<void> {
         }
       },
     );
+
+    // Both subscriptions exist now — publish them only if still relevant,
+    // otherwise remove them so no notification outlives its session.
+    if (!isCurrent()) {
+      cpSubscription.remove();
+      dataSubscription.remove();
+      return;
+    }
+    state.pmdCpSubscription = cpSubscription;
+    state.pmdDataSubscription = dataSubscription;
 
     // Query settings to initiate negotiation
     const queryCmd = createGetMeasurementSettingsCommand();

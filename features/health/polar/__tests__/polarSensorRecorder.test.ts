@@ -1,7 +1,11 @@
 import { Buffer } from "buffer";
 import type { Device } from "react-native-ble-plx";
 
-import { __getMockFileContent, __resetMockFileSystem } from "../../../../__mocks__/expo-file-system";
+import {
+  __failNextWrites,
+  __getMockFileContent,
+  __resetMockFileSystem,
+} from "../../../../__mocks__/expo-file-system";
 import { PolarSensorRecorder } from "../polarSensorRecorder";
 import settingsFixture from "../__fixtures__/h10-settings.json";
 import startFixture from "../__fixtures__/h10-start-response.json";
@@ -478,6 +482,89 @@ describe("PolarSensorRecorder", () => {
     expect(lines.filter((l) => l.k === "gap_start").length).toBe(1);
     expect(lines.find((l) => l.k === "gap_start").reason).toBe("disconnected");
     expect(lines[lines.length - 1].summary.gaps).toBe(1);
+  });
+
+  it("retries buffered lines after a failed write instead of dropping them", async () => {
+    PolarSensorRecorder.start({
+      sessionId: "WOD-WRITE-RETRY",
+      profileId: 2,
+      baseEpochMs: Date.now(),
+    });
+
+    // The header write fails; its line must survive for the next flush.
+    __failNextWrites(1);
+    PolarSensorRecorder.onHeartRate(120, [500], Date.now());
+    jest.advanceTimersByTime(1000);
+
+    const result = await PolarSensorRecorder.stop();
+    const lines = __getMockFileContent(result!.filePath)!
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+
+    // Nothing was lost: meta, hr and the footer all reached disk
+    expect(lines.map((l) => l.k)).toEqual(["meta", "hr", "end"]);
+    expect(result!.complete).toBe(true);
+  });
+
+  it("reports an incomplete file when lines never reach disk", async () => {
+    PolarSensorRecorder.start({
+      sessionId: "WOD-WRITE-FAIL",
+      profileId: 2,
+      baseEpochMs: Date.now(),
+    });
+
+    // Every write from here on fails, including the footer.
+    __failNextWrites(50);
+    PolarSensorRecorder.onHeartRate(120, [500], Date.now());
+    jest.advanceTimersByTime(1000);
+
+    const result = await PolarSensorRecorder.stop();
+    expect(result).not.toBeNull();
+    expect(result!.complete).toBe(false);
+  });
+
+  it("does not resurrect subscriptions when the session ends mid-setup", async () => {
+    PolarSensorRecorder.start({
+      sessionId: "WOD-STALE-SETUP",
+      profileId: 5,
+      baseEpochMs: Date.now(),
+    });
+
+    let releaseMtu: (() => void) | null = null;
+    const mockDevice: any = {
+      name: "Polar H10 12345678",
+      requestMTU: jest.fn(
+        () => new Promise((resolve) => {
+          releaseMtu = () => resolve(232);
+        }),
+      ),
+      writeCharacteristicWithResponseForService: jest.fn().mockResolvedValue(undefined),
+      monitorCharacteristicForService: jest.fn().mockReturnValue({ remove: jest.fn() }),
+    };
+
+    // Setup parks on the MTU round-trip
+    PolarSensorRecorder.onDeviceReady(mockDevice, true);
+    await Promise.resolve();
+    expect(mockDevice.requestMTU).toHaveBeenCalled();
+    expect(mockDevice.monitorCharacteristicForService).not.toHaveBeenCalled();
+
+    // The user stops recording while the MTU request is still outstanding
+    await PolarSensorRecorder.stop();
+
+    // ...and only then does the device answer
+    releaseMtu!();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // No subscriptions, and no GET_SETTINGS for a session that already ended
+    expect(mockDevice.monitorCharacteristicForService).not.toHaveBeenCalled();
+    expect(mockDevice.writeCharacteristicWithResponseForService).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringMatching(/^AQI=$/), // [0x01, 0x02] GET_SETTINGS
+    );
   });
 
   it("shares in-flight promise on concurrent stop() calls", async () => {

@@ -63,6 +63,8 @@ import { useMergeStatus } from "@/store/useMergeStatus";
 import { useProfileStore } from "@/store/useProfileStore";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
+/** Upper bound on waiting for chunk uploads before the server merge fires. */
+const MERGE_UPLOAD_WAIT_MS = 90000;
 const IS_ANDROID = Platform.OS === "android";
 
 function formatBytes(bytes: number): string {
@@ -178,6 +180,13 @@ export default function VisionTestPage() {
   // Use a ref to track if we should continue recording chunks,
   // preventing stale state in closures/timeouts.
   const isRecordingChunks = useRef(false);
+  // The chunk flushed by an intentional stop/pause is a real chunk, not an
+  // orphan — it must still be uploaded even though chunking has stopped.
+  const finalChunkPending = useRef(false);
+  // Chunks whose compress+upload work has not settled yet, and how many
+  // actually entered the upload path this session.
+  const outstandingUploads = useRef(0);
+  const uploadedChunkCount = useRef(0);
   const isStartingRecording = useRef(false);
   const chunkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isChunkRecordingActive = useRef(false);
@@ -237,6 +246,22 @@ export default function VisionTestPage() {
     uploadQueue.current.push(task);
     setPendingUploads(uploadQueue.current.length);
     drainUploadQueue();
+  };
+
+  /**
+   * Waits until every chunk's compress+upload work has settled, capped so a
+   * stuck upload cannot postpone the merge forever.
+   */
+  const waitForOutstandingUploads = async (timeoutMs: number) => {
+    const deadline = Date.now() + timeoutMs;
+    while (outstandingUploads.current > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (outstandingUploads.current > 0) {
+      console.warn(
+        `⚠️ Merging with ${outstandingUploads.current} chunk upload(s) still in flight after ${timeoutMs}ms`,
+      );
+    }
   };
 
   // Track fire-and-forget (concurrent) uploads
@@ -513,13 +538,20 @@ export default function VisionTestPage() {
             `📊 Chunk confidence: ${(workoutConfidence * 100).toFixed(1)}% (workout=${workoutFrames} / total=${totalFrames}) | UI_CONF=${(monitorData.confidence * 100).toFixed(1)}%`,
           );
 
-          // Skip upload if recording has already been stopped
-          if (!isRecordingChunks.current) {
-            console.log(
-              "⏹️ Recording stopped — skipping upload for final chunk",
-            );
+          // A stop/pause flushes one last chunk — that one is legitimate and
+          // must be uploaded. Anything arriving after it is an orphan.
+          const isFinalChunk =
+            !isRecordingChunks.current && finalChunkPending.current;
+          if (isFinalChunk) {
+            finalChunkPending.current = false;
+          }
+
+          if (!isRecordingChunks.current && !isFinalChunk) {
+            console.log("⏹️ Orphan chunk after stop — skipping upload");
           } else {
             setChunkCount((prev) => prev + 1);
+            uploadedChunkCount.current += 1;
+            outstandingUploads.current += 1;
 
             // Compress (iOS only) and Upload chunk to backend
             try {
@@ -551,6 +583,10 @@ export default function VisionTestPage() {
                       if (f.exists) f.delete();
                     } catch (_) {}
                   }
+                  outstandingUploads.current = Math.max(
+                    0,
+                    outstandingUploads.current - 1,
+                  );
                 }
               };
 
@@ -583,10 +619,18 @@ export default function VisionTestPage() {
                   })
                   .catch((err) => {
                     console.error("Failed to compress chunk:", err);
+                    outstandingUploads.current = Math.max(
+                      0,
+                      outstandingUploads.current - 1,
+                    );
                   });
               }
             } catch (e) {
               console.error("Failed to process chunk for upload:", e);
+              outstandingUploads.current = Math.max(
+                0,
+                outstandingUploads.current - 1,
+              );
             }
           }
 
@@ -633,6 +677,8 @@ export default function VisionTestPage() {
 
   const startChunkRecording = () => {
     isRecordingChunks.current = true;
+    // A resumed recording is chunking again — no pending "final" chunk.
+    finalChunkPending.current = false;
     startChunkLoop();
   };
 
@@ -647,6 +693,8 @@ export default function VisionTestPage() {
     // Set up a promise so the caller can wait for the last chunk's
     // onRecordingFinished callback (which pushes its path to chunkPaths).
     if (camera.current && isChunkRecordingActive.current) {
+      // The chunk about to be flushed still belongs to this recording.
+      finalChunkPending.current = true;
       const lastChunkPromise = new Promise<string | null>((resolve) => {
         lastChunkResolve.current = resolve;
         // Safety timeout — if onRecordingFinished never fires, unblock after 5s
@@ -771,6 +819,9 @@ export default function VisionTestPage() {
       recordingStartTime.current = Date.now();
       capturedProfileIdRef.current = profileId!;
       setSensorLiveStatus({ accSamples: 0, dropped: null });
+      finalChunkPending.current = false;
+      outstandingUploads.current = 0;
+      uploadedChunkCount.current = 0;
 
       // Start debug telemetry recording (1Hz sampling)
       TelemetryRecorder.start(sessionIdRef.current, profileId!);
@@ -785,18 +836,40 @@ export default function VisionTestPage() {
         motion: getLatestMotion(),
       }));
 
-      // Start Polar H10 time-series sensor recording
-      PolarSensorRecorder.start({
-        sessionId: sessionIdRef.current,
-        profileId: profileId!,
-        baseEpochMs: recordingStartTime.current,
-      });
+      // Start Polar H10 time-series sensor recording.
+      // Sensor capture is auxiliary: a failure to create/open its file must
+      // never keep the camera from recording.
+      try {
+        PolarSensorRecorder.start({
+          sessionId: sessionIdRef.current,
+          profileId: profileId!,
+          baseEpochMs: recordingStartTime.current,
+        });
+      } catch (sensorError) {
+        console.warn(
+          "⚠️ Sensor recording unavailable for this session:",
+          sensorError,
+        );
+      }
 
       // Record sequential chunks: each is uploaded for real-time analysis,
       // and raw chunk files are kept locally for gallery-save merge.
       startChunkRecording();
     } catch (error) {
       console.error("Recording Start Error:", error);
+      // Roll back the optimistic "recording" state. Without this the UI and
+      // the auth store stay in a recording state that no camera is backing,
+      // and the `if (isRecording) return` guard blocks any retry.
+      setIsRecording(false);
+      setIsPaused(false);
+      useAuthStore.getState().setRecordingActive(false);
+      isRecordingChunks.current = false;
+      finalChunkPending.current = false;
+      accumulatedMs.current = 0;
+      segmentStartTime.current = 0;
+      setElapsedMs(0);
+      void TelemetryRecorder.stop().catch(() => {});
+      void PolarSensorRecorder.stop().catch(() => {});
       Alert.alert("녹화 시작 실패", "녹화를 시작할 수 없습니다.");
     } finally {
       isStartingRecording.current = false;
@@ -871,6 +944,13 @@ export default function VisionTestPage() {
       // Stop Polar H10 sensor recording and enqueue upload
       try {
         const sensorResult = await PolarSensorRecorder.stop();
+        if (sensorResult && !sensorResult.complete) {
+          // Still worth uploading — the file records its own write failures in
+          // the footer, so downstream can tell a lossy session from a full one.
+          console.warn(
+            `⚠️ Sensor file for ${sensorResult.sessionId} is incomplete; uploading anyway`,
+          );
+        }
         if (sensorResult && capturedProfileIdRef.current !== null) {
           await enqueueSensorUpload(
             sensorResult.sessionId,
@@ -891,17 +971,20 @@ export default function VisionTestPage() {
       // on the recording view while it completes.
       // We call it inline (not in setTimeout) so the network request starts
       // before the user can background the app.
-      if (chunkCount > 0) {
+      // Use the ref, not `chunkCount` state: the final chunk increments it
+      // inside an async callback that this closure may not have observed yet.
+      if (uploadedChunkCount.current > 0) {
         const movementsArray = movements ? movements.split(", ") : [];
         const injuriesArray = injuries ? injuries.split(", ") : [];
 
         // Track the merge globally so History page can show a banner
         useMergeStatus.getState().addPending(sessionId);
 
-        // Fire the merge — the 2s delay lets the last chunk upload reach GCS
         (async () => {
-          // Small delay to let the last chunk upload reach the server
-          await new Promise((resolve) => setTimeout(resolve, 2000));
+          // Merge only once every chunk has actually reached GCS. A fixed
+          // delay merged incomplete sessions whenever compression or the
+          // network ran long.
+          await waitForOutstandingUploads(MERGE_UPLOAD_WAIT_MS);
           try {
             await mergeChunks(sessionId, {
               workoutType,

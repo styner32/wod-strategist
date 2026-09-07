@@ -1,6 +1,19 @@
-const mockReadAsStringAsync = jest.fn();
-const mockWriteAsStringAsync = jest.fn().mockResolvedValue(undefined);
-const mockDeleteAsync = jest.fn().mockResolvedValue(undefined);
+// The queue is re-read after every upload outcome, so back the mocks with an
+// in-memory file map rather than one-shot resolved values.
+const mockFiles = new Map<string, string>();
+
+const mockReadAsStringAsync = jest.fn(async (...args: unknown[]) => {
+  const path = args[0] as string;
+  const content = mockFiles.get(path);
+  if (content === undefined) throw new Error(`File not found: ${path}`);
+  return content;
+});
+const mockWriteAsStringAsync = jest.fn(async (...args: unknown[]) => {
+  mockFiles.set(args[0] as string, args[1] as string);
+});
+const mockDeleteAsync = jest.fn(async (...args: unknown[]) => {
+  mockFiles.delete(args[0] as string);
+});
 const mockGetInfoAsync = jest.fn().mockResolvedValue({ exists: true });
 const mockMakeDirectoryAsync = jest.fn().mockResolvedValue(undefined);
 
@@ -28,8 +41,13 @@ import {
 } from "../sensorTelemetryUpload";
 
 describe("sensorTelemetryUpload", () => {
+  const QUEUE_PATH = "/mock/docs/sensor/_pending.json";
+  const seedQueue = (entries: unknown[]) =>
+    mockFiles.set(QUEUE_PATH, JSON.stringify(entries));
+
   beforeEach(() => {
     jest.clearAllMocks();
+    mockFiles.clear();
     mockGetInfoAsync.mockResolvedValue({ exists: true });
   });
 
@@ -57,7 +75,7 @@ describe("sensorTelemetryUpload", () => {
 
   describe("sensor upload queue", () => {
     it("enqueues upload entry and saves queue to disk", async () => {
-      mockReadAsStringAsync.mockResolvedValueOnce(JSON.stringify([]));
+      seedQueue([]);
 
       await enqueueSensorUpload(
         "session-enqueue",
@@ -87,7 +105,7 @@ describe("sensorTelemetryUpload", () => {
           profileId: 10,
         },
       ];
-      mockReadAsStringAsync.mockResolvedValueOnce(JSON.stringify(queue));
+      seedQueue(queue);
       mockGetUploadUrl.mockResolvedValueOnce({ upload_url: "https://gcs.com/signed" });
       mockUploadToGcs.mockResolvedValueOnce(undefined);
 
@@ -120,7 +138,7 @@ describe("sensorTelemetryUpload", () => {
           profileId: 7,
         },
       ];
-      mockReadAsStringAsync.mockResolvedValueOnce(JSON.stringify(queue));
+      seedQueue(queue);
       mockGetUploadUrl.mockRejectedValueOnce(new Error("Network timeout"));
 
       await flushSensorUploads();
@@ -128,9 +146,7 @@ describe("sensorTelemetryUpload", () => {
       expect(mockDeleteAsync).not.toHaveBeenCalled();
 
       // Saved queue should have attempts = 2
-      const [savedPath, savedContent] = mockWriteAsStringAsync.mock.calls[0];
-      expect(savedPath).toBe("/mock/docs/sensor/_pending.json");
-      const savedQueue = JSON.parse(savedContent);
+      const savedQueue = JSON.parse(mockFiles.get(QUEUE_PATH)!);
       expect(savedQueue.length).toBe(1);
       expect(savedQueue[0].sessionId).toBe("session-fail");
       expect(savedQueue[0].attempts).toBe(2);
@@ -146,7 +162,7 @@ describe("sensorTelemetryUpload", () => {
           profileId: 99,
         },
       ];
-      mockReadAsStringAsync.mockResolvedValueOnce(JSON.stringify(queue));
+      seedQueue(queue);
 
       await flushSensorUploads();
 
