@@ -37,6 +37,7 @@ export const uploadApi = {
     injuries: string[];
     wod_description?: string;
     pipeline_mode?: string;
+    appearance_hints?: string;
   }) => api.post<UploadCompleteResponse>('/upload-complete', params),
 };
 

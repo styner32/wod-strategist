@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/config"
+	"github.com/wod-strategist/api/internal/gemini"
 )
 
 func setEnv(name string, value string) {
@@ -229,6 +230,65 @@ var _ = Describe("InitWorker", func() {
 			cfg, err := config.InitWorker()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.AppEnv).To(Equal("production"))
+		})
+	})
+
+	Context("GeminiModel and ThinkingConfig", func() {
+		It("defaults to ModelFlash38, HIGH thinking level, and LOW chunk thinking level", func() {
+			setEnv("GEMINI_MODEL", "")
+			setEnv("GEMINI_THINKING_LEVEL", "")
+			setEnv("GEMINI_THINKING_CHUNK", "")
+			setEnv("GEMINI_THINKING_BUDGET", "")
+
+			cfg, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.GeminiModel).To(Equal(gemini.ModelFlash38))
+			Expect(cfg.GeminiThinkingLevel).To(Equal("HIGH"))
+			Expect(cfg.GeminiThinkingChunk).To(Equal("LOW"))
+			Expect(cfg.GeminiThinkingBudget).To(BeNil())
+		})
+
+		It("accepts custom model, thinking level, chunk thinking level, and thinking budget", func() {
+			setEnv("GEMINI_MODEL", "gemini-3.1-pro-preview")
+			setEnv("GEMINI_THINKING_LEVEL", "MEDIUM")
+			setEnv("GEMINI_THINKING_CHUNK", "MEDIUM")
+			setEnv("GEMINI_THINKING_BUDGET", "2048")
+
+			cfg, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.GeminiModel).To(Equal(gemini.ModelPro31Preview))
+			Expect(cfg.GeminiThinkingLevel).To(Equal("MEDIUM"))
+			Expect(cfg.GeminiThinkingChunk).To(Equal("MEDIUM"))
+			Expect(cfg.GeminiThinkingBudget).NotTo(BeNil())
+			Expect(*cfg.GeminiThinkingBudget).To(Equal(int32(2048)))
+		})
+
+		It("rejects unsupported MINIMAL thinking level", func() {
+			setEnv("GEMINI_THINKING_CHUNK", "MINIMAL")
+			_, err := config.InitWorker()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not supported by Gemini 3.8 Flash"))
+		})
+
+		It("rejects invalid thinking level strings", func() {
+			setEnv("GEMINI_THINKING_LEVEL", "SUPER_HIGH")
+			_, err := config.InitWorker()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("must be one of HIGH, MEDIUM, LOW"))
+		})
+
+		It("accepts thinking budget of 0 (disable thinking) and -1 (dynamic thinking)", func() {
+			setEnv("GEMINI_THINKING_BUDGET", "0")
+			cfg0, err0 := config.InitWorker()
+			Expect(err0).NotTo(HaveOccurred())
+			Expect(cfg0.GeminiThinkingBudget).NotTo(BeNil())
+			Expect(*cfg0.GeminiThinkingBudget).To(Equal(int32(0)))
+
+			setEnv("GEMINI_THINKING_BUDGET", "-1")
+			cfgDyn, errDyn := config.InitWorker()
+			Expect(errDyn).NotTo(HaveOccurred())
+			Expect(cfgDyn.GeminiThinkingBudget).NotTo(BeNil())
+			Expect(*cfgDyn.GeminiThinkingBudget).To(Equal(int32(-1)))
 		})
 	})
 })

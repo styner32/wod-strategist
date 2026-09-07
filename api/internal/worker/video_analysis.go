@@ -153,6 +153,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return err
 	}
 	p.ProfileID = profileID
+	p.WorkoutType = w.resolveSessionWorkoutType(ctx, p.SessionID, p.WorkoutType)
 
 	pMode := p.PipelineMode
 	if pMode == "" {
@@ -253,6 +254,7 @@ Any timestamp exceeding this duration means you are hallucinating — discard it
 The person to track has the following profile:
 - %s
 Focus ONLY on this person's movements. Ignore other people in the background.
+If visual appearance cues are provided in the Target Person Confirmation section below, use persistent features (shoes, hair, build) as primary identification and session outfit as secondary identification. Removable gear (knee sleeves, belts) may be taken off during workout — do not re-assign identity just because removable gear is absent.
 `, durationStr, durationStr, personalProfile)
 
 	if len(p.Movements) > 0 {
@@ -263,14 +265,24 @@ They are suggestions, not confirmation and not a closed list. Omit any hint not 
 `, strings.Join(p.Movements, ", "))
 	}
 	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
+	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 
 	prompt += `
 ## Instructions
 1. First, scrub through the entire video frame by frame and create a brief text timeline.
 2. For EACH segment, require target-person evidence for apparatus contact (when applicable), body position, and the continuous motion pattern.
 3. Nearby equipment is not evidence. A rope beside a pull-up bar does not make a target person's pull-up a rope climb.
-4. Background athletes and their equipment are not target-person evidence.
-5. If target exercise is visible but the exact movement is unclear, use type "Unknown"; do not force a hint. Omit walking, rest, recovery, setup, and no-exercise intervals.
+4. Background athletes and their equipment are not target-person evidence.`
+
+	if IsRecoveryWorkoutType(p.WorkoutType) {
+		prompt += `
+5. Static stretch holds and slow mobility movements ARE active exercise segments — label with the pose or stretch name (e.g., "Pigeon Pose", "Cossack Squat Hold", "Mobility"). Do NOT discard slow stretching or static holds as rest.`
+	} else {
+		prompt += `
+5. If target exercise is visible but the exact movement is unclear, use type "Unknown"; do not force a hint. Omit walking, rest, recovery, setup, and no-exercise intervals.`
+	}
+
+	prompt += `
 6. Only report exercises you can visually confirm — do NOT guess or infer exercises from context.
 7. Output a strictly formatted JSON array of the segments.
 8. Use "MM:SS" format for timestamps.
@@ -462,7 +474,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	// For uploaded videos (no chunks), split into ~10s segments first to simulate
 	// the real-time recording flow and provide accurate segment data.
 	// Fall back to Flash model indexing only when splitting also fails.
-	segments := w.buildSegmentsFromChunks(p.SessionID)
+	segments := w.buildSegmentsFromChunks(p.SessionID, p.WorkoutType)
 
 	// Determine if we need to (re-)split the video.
 	// If existing chunks don't cover the full video duration (e.g. worker restarted
@@ -497,7 +509,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				zap.Error(splitErr))
 		} else {
 			// Re-query chunks after splitting
-			segments = w.buildSegmentsFromChunks(p.SessionID)
+			segments = w.buildSegmentsFromChunks(p.SessionID, p.WorkoutType)
 		}
 	}
 
@@ -552,7 +564,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("max_segments", maxSegs))
 
 		apiCalls++
-		triagedSegments, triageUsage, triageErr := w.triageSegments(ctx, upload, segments, maxSegs)
+		triagedSegments, triageUsage, triageErr := w.triageSegments(ctx, upload, segments, maxSegs, p.WorkoutType)
 		if triageErr != nil {
 			w.logger.Warn("Segment triage failed, using first N segments",
 				zap.Error(triageErr),
@@ -649,20 +661,32 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.String("session_id", p.SessionID),
 		zap.String("session_score", sessionScore))
 
+	normalizedWorkout := ""
+	if (p.WorkoutType == "" || p.WorkoutType == WorkoutTypeWOD) && strings.TrimSpace(p.WODDescription) != "" {
+		normalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements)
+	}
+
+	mobilityObs := sanitizeMobilityObservations(parseMobilityObservations(analysis))
+	mobilityJSON := marshalMobilityObservations(mobilityObs)
+	stretchRecsJSON := w.recommendStretches(ctx, p.ProfileID, p.SessionID, mobilityObs, p.Injuries)
+
 	expiresAt := uploadTime.Add(47 * time.Hour)
 	result := &db.AnalysisResult{
-		SessionID:           p.SessionID,
-		Status:              "COMPLETED",
-		Output:              analysis,
-		AnalysisType:        db.AnalysisTypeWOD,
-		HighlightSegments:   highlightSegments,
-		WODDescription:      p.WODDescription,
-		SessionScore:        sessionScore,
-		AvailableVideos:     db.CommaStringArray{"merged"},
-		GeminiFileURI:       upload.FileURI,
-		GeminiFileName:      upload.FileName,
-		GeminiMIMEType:      upload.MIMEType,
-		GeminiFileExpiresAt: &expiresAt,
+		SessionID:              p.SessionID,
+		Status:                 "COMPLETED",
+		Output:                 analysis,
+		AnalysisType:           db.AnalysisTypeWOD,
+		HighlightSegments:      highlightSegments,
+		WODDescription:         p.WODDescription,
+		SessionScore:           sessionScore,
+		NormalizedWorkout:      normalizedWorkout,
+		MobilityObservations:   mobilityJSON,
+		StretchRecommendations: stretchRecsJSON,
+		AvailableVideos:        db.CommaStringArray{"merged"},
+		GeminiFileURI:          upload.FileURI,
+		GeminiFileName:         upload.FileName,
+		GeminiMIMEType:         upload.MIMEType,
+		GeminiFileExpiresAt:    &expiresAt,
 	}
 	result.ProfileID = p.ProfileID
 	if err := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(result).Error; err != nil {
@@ -736,13 +760,14 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 ## 개인 프로필
 %s
 `, seg.Start, seg.End, seg.Type, personalProfile)
+	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 
 	// WOD context (type-specific analysis guidance)
 	if wodContext != "" {
 		prompt += wodContext
 	}
 
-	prompt += AnalysisPrompt
+	prompt += analysisPromptFor(p.WorkoutType)
 	prompt += MovementEvidenceRulesPrompt
 	prompt += FatigueEvidenceRulesPrompt
 
@@ -750,7 +775,8 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 		prompt += fmt.Sprintf("%s\n   - 부상 부위: %s", InjuryTimestampPrompt, strings.Join(p.Injuries, ", "))
 	}
 
-	prompt += HighlightSelectionPrompt
+	prompt += highlightSelectionPromptFor(p.WorkoutType)
+	prompt += MobilityOutputPrompt
 
 	prompt += buildMovementHintsContext(p.Movements)
 	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
@@ -771,10 +797,38 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 		if historyContext != "" {
 			prompt += historyContext
 		}
-		prompt += ScoreOutputPrompt
+		if IsRecoveryWorkoutType(p.WorkoutType) {
+			prompt += w.buildMobilityHistoryContext(context.Background(), p.ProfileID, p.SessionID)
+		}
+		prompt += scoreOutputPromptFor(p.WorkoutType)
 	}
 
 	return prompt
+}
+
+func (w *Worker) buildMobilityHistoryContext(ctx context.Context, profileID uint, excludeSessionID string) string {
+	if w.DB == nil || profileID == 0 {
+		return ""
+	}
+	history, err := db.BuildMobilityHistory(ctx, w.DB, profileID, excludeSessionID)
+	if err != nil || len(history) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n\n## 최근 관절 가동성 제한 이력 (누적 관찰기록)\n")
+	sb.WriteString("| 관절 부위 | 방향 | 관찰 항목 | 관찰 세션 수 | 주요 운동 예시 |\n")
+	sb.WriteString("|-----------|------|-----------|:------------:|----------------|\n")
+	for _, item := range history {
+		movements := strings.Join(item.Movements, ", ")
+		if movements == "" {
+			movements = "-"
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %s | %d개 세션 | %s |\n",
+			item.Joint, item.Side, item.Observation, item.SessionCount, movements))
+	}
+	sb.WriteString("위 알려진 관절 제한 항목을 참고하여 오늘 웜업/쿨다운 자세와 가동범위를 주의 깊게 관찰하세요.\n")
+	return sb.String()
 }
 
 // parseSegments extracts the JSON array of Segment from the model's indexing output.
@@ -813,8 +867,11 @@ func (w *Worker) queryMaxChunkEndSecs(sessionID string) float64 {
 // and converts them to Segment structs. Only verified offsets in the merged media
 // timeline are safe here; capture-clock timestamps must never be applied to the
 // session video. Chunks with no detected exercise are filtered out, while Unknown
+// buildSegmentsFromChunks constructs candidate video segments from existing
+// chunk_analysis_results rows in DB.
+// Walking, rest, and setup rows are omitted for WOD sessions, while Unknown
 // is retained so the deeper analyzer can revalidate it from the video.
-func (w *Worker) buildSegmentsFromChunks(sessionID string) []Segment {
+func (w *Worker) buildSegmentsFromChunks(sessionID string, workoutType string) []Segment {
 	if w.DB == nil {
 		return nil
 	}
@@ -833,7 +890,7 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string) []Segment {
 			continue
 		}
 
-		if !includeChunkInDeepAnalysis(chunk) {
+		if !includeChunkInDeepAnalysis(chunk, workoutType) {
 			continue
 		}
 
@@ -843,10 +900,15 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string) []Segment {
 			desc = desc[:200] + "..."
 		}
 
+		exerciseType := chunk.ExerciseType
+		if IsRecoveryWorkoutType(workoutType) && strings.TrimSpace(exerciseType) == "" {
+			exerciseType = "Mobility"
+		}
+
 		segments = append(segments, Segment{
 			Start:       formatSegmentTimestamp(*chunk.MediaStartSecs),
 			End:         formatSegmentTimestamp(*chunk.MediaEndSecs),
-			Type:        chunk.ExerciseType,
+			Type:        exerciseType,
 			Description: desc,
 		})
 	}
@@ -856,17 +918,27 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string) []Segment {
 	return mergeSegmentsByMovement(segments)
 }
 
-func includeChunkInDeepAnalysis(chunk db.ChunkAnalysisResult) bool {
+func includeChunkInDeepAnalysis(chunk db.ChunkAnalysisResult, workoutType string) bool {
 	movement := strings.TrimSpace(chunk.ExerciseType)
-	if movement == "" {
-		return false
-	}
 
 	var signals struct {
 		ActivityState string `json:"activity_state"`
 	}
-	if json.Unmarshal([]byte(chunk.ObservedSignals), &signals) == nil &&
-		isExplicitNonExerciseActivity(signals.ActivityState) {
+	_ = json.Unmarshal([]byte(chunk.ObservedSignals), &signals)
+
+	if IsRecoveryWorkoutType(workoutType) {
+		// Recovery sessions keep rest/setup/unknown chunks (stretch holds are routinely mislabeled as rest), excluding only explicit walking.
+		if isWalkingActivity(movement) || isWalkingActivity(signals.ActivityState) {
+			return false
+		}
+		return true
+	}
+
+	if movement == "" {
+		return false
+	}
+
+	if isExplicitNonExerciseActivity(signals.ActivityState) {
 		return false
 	}
 
@@ -874,6 +946,11 @@ func includeChunkInDeepAnalysis(chunk db.ChunkAnalysisResult) bool {
 		return true
 	}
 	return !isNonExerciseMovement(movement)
+}
+
+func isWalkingActivity(val string) bool {
+	norm := strings.ToLower(strings.TrimSpace(val))
+	return norm == "walk" || norm == "walking"
 }
 
 func formatSegmentTimestamp(seconds float64) string {
@@ -955,8 +1032,8 @@ type TriagedSegment struct {
 //
 // Future optimization: use segment descriptions instead of video for cost saving,
 // once chunk analysis descriptions are rich enough.
-func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, segments []Segment, maxSegs int) ([]Segment, *gemini.TokenUsage, error) {
-	triagePrompt := buildTriagePrompt(segments, maxSegs, upload.VideoDuration)
+func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult, segments []Segment, maxSegs int, workoutType string) ([]Segment, *gemini.TokenUsage, error) {
+	triagePrompt := buildTriagePrompt(segments, maxSegs, upload.VideoDuration, workoutType)
 
 	triageOutput, triageUsage, err := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, triagePrompt)
 	if err != nil {
@@ -972,10 +1049,23 @@ func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult
 }
 
 // buildTriagePrompt creates the Flash model prompt for segment prioritization.
-func buildTriagePrompt(segments []Segment, maxSegs int, videoDuration time.Duration) string {
+func buildTriagePrompt(segments []Segment, maxSegs int, videoDuration time.Duration, workoutType string) string {
 	var segList strings.Builder
 	for i, seg := range segments {
 		segList.WriteString(fmt.Sprintf("%d. [%s ~ %s] %s: %s\n", i, seg.Start, seg.End, seg.Type, seg.Description))
+	}
+
+	criteria := `1. **Form issues visible** - segments where posture problems, compensations, or technique errors are noted
+2. **Visually established fatigue indicators** - sustained rep slowdown, cadence loss, range loss, or form breakdown during exercise; heart rate, walking, rest, recovery, and setup are not fatigue evidence
+3. **High-technique movements** - complex movements (Olympic lifts, gymnastics) over simple ones (running, jumping jacks)
+4. **Diversity** - try to cover different movement types rather than redundantly analyzing the same exercise
+5. **Skip low-value** - rest periods, setup, transitions, or very short clips with no meaningful movement`
+
+	if IsRecoveryWorkoutType(workoutType) {
+		criteria = `1. **ROM restriction or asymmetry visible** - segments showing restricted joint range of motion, stiffness, or left-right asymmetry
+2. **Hold quality & posture** - segments showing stretching holds, mobility positions, or posture alignment
+3. **Movement diversity** - cover different joints/stretches rather than redundant segments
+4. **Never skip slow or static holds** - static stretching holds and slow mobility movements are the core content of warm-up/cool-down sessions; do not discard them as rest. Only skip equipment setup or off-screen intervals.`
 	}
 
 	prompt := fmt.Sprintf(`## Task: Segment Triage for Coaching Analysis
@@ -986,17 +1076,13 @@ Your job is to select the **top %d segments** that would benefit most from detai
 ## Segments
 %s
 ## Selection Criteria (in priority order)
-1. **Form issues visible** - segments where posture problems, compensations, or technique errors are noted
-2. **Visually established fatigue indicators** - sustained rep slowdown, cadence loss, range loss, or form breakdown during exercise; heart rate, walking, rest, recovery, and setup are not fatigue evidence
-3. **High-technique movements** - complex movements (Olympic lifts, gymnastics) over simple ones (running, jumping jacks)
-4. **Diversity** - try to cover different movement types rather than redundantly analyzing the same exercise
-5. **Skip low-value** - rest periods, setup, transitions, or very short clips with no meaningful movement
+%s
 
 ## Output Format
 Return a JSON array of the top %d segment indices (0-based), sorted by coaching value (highest first).
 Include a brief reason for each selection.
 `,
-		formatDuration(videoDuration), maxSegs, segList.String(), maxSegs)
+		formatDuration(videoDuration), maxSegs, segList.String(), criteria, maxSegs)
 
 	prompt += "\n" + "```" + "json\n" + `[{"index": 0, "score": 9, "reason": "Snatch pull shows early arm bend"}, {"index": 3, "score": 7, "reason": "Squat depth decreasing (fatigue)"}]` + "\n" + "```"
 
@@ -1184,13 +1270,28 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		highlightSegments = MarshalHighlightSegments(normalizedHighlights)
 	}
 
+	legacyNormalizedWorkout := ""
+	if (p.WorkoutType == "" || p.WorkoutType == WorkoutTypeWOD) && strings.TrimSpace(p.WODDescription) != "" {
+		legacyNormalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements)
+	}
+
+	legacyMobilityObs := sanitizeMobilityObservations(parseMobilityObservations(analysis))
+	legacyMobilityJSON := marshalMobilityObservations(legacyMobilityObs)
+	legacyStretchRecsJSON := w.recommendStretches(ctx, p.ProfileID, p.SessionID, legacyMobilityObs, p.Injuries)
+	legacySessionScore := parseSessionScore(analysis)
+
 	result := &db.AnalysisResult{
-		SessionID:         p.SessionID,
-		Status:            "COMPLETED",
-		Output:            analysis,
-		AnalysisType:      db.AnalysisTypeWOD,
-		HighlightSegments: highlightSegments,
-		AvailableVideos:   db.CommaStringArray{"merged"},
+		SessionID:              p.SessionID,
+		Status:                 "COMPLETED",
+		Output:                 analysis,
+		AnalysisType:           db.AnalysisTypeWOD,
+		HighlightSegments:      highlightSegments,
+		WODDescription:         p.WODDescription,
+		SessionScore:           legacySessionScore,
+		NormalizedWorkout:      legacyNormalizedWorkout,
+		MobilityObservations:   legacyMobilityJSON,
+		StretchRecommendations: legacyStretchRecsJSON,
+		AvailableVideos:        db.CommaStringArray{"merged"},
 	}
 	result.ProfileID = p.ProfileID
 	if err := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(result).Error; err != nil {
@@ -1241,7 +1342,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 }
 
 func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs float64) string {
-	prompt := AnalysisPrompt + MovementEvidenceRulesPrompt + FatigueEvidenceRulesPrompt
+	prompt := analysisPromptFor(p.WorkoutType) + MovementEvidenceRulesPrompt + FatigueEvidenceRulesPrompt
 
 	if wod := buildWODContext(p.WODDescription); wod != "" {
 		prompt += wod
@@ -1253,7 +1354,8 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	}
 
 	// Always request highlight segments for short-form video generation
-	prompt += HighlightSelectionPrompt
+	prompt += highlightSelectionPromptFor(p.WorkoutType)
+	prompt += MobilityOutputPrompt
 
 	prompt += buildMovementHintsContext(p.Movements)
 	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
@@ -1267,6 +1369,7 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	w.logger.Info("Personal Profile", zap.Uint("profile_id", p.ProfileID), zap.String("personal_profile", personalProfile))
 
 	prompt += fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
+	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 	prompt += w.buildSessionFatigueEvidenceContext(p.SessionID)
 
 	// Ground timestamps with actual video duration to prevent hallucinated timestamps.
@@ -1282,6 +1385,8 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 - 모든 타임스탬프는 0:00 ~ %d:%02d 범위 안에 있어야 합니다.
 - 타임스탬프를 추측하지 말고, 영상을 직접 확인하여 정확한 시점을 기록하세요.`, minutes, seconds, minutes, seconds)
 	}
+
+	prompt += scoreOutputPromptFor(p.WorkoutType)
 
 	return prompt
 }

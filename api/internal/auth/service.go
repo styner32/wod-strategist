@@ -209,6 +209,7 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uint, password strin
 				&db.ChunkAnalysisResult{},
 				&db.HighlightResult{},
 				&db.TokenUsage{},
+				&db.SessionAppearanceHint{},
 			} {
 				if err := tx.Where("profile_id IN ?", profileIDs).Delete(model).Error; err != nil {
 					return fmt.Errorf("delete leaf data: %w", err)

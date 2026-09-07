@@ -1,23 +1,51 @@
-import { Buffer } from "buffer";
 import { useEffect, useRef, useState } from "react";
 import { PermissionsAndroid, Platform } from "react-native";
 import { BleManager, Device, State, Subscription } from "react-native-ble-plx";
 
+import type { BleSensorSink } from "./bleSensorSink";
+import {
+  BATTERY_CHARACTERISTIC_UUID,
+  BATTERY_SERVICE_UUID,
+  HR_CHARACTERISTIC_UUID,
+  HR_SERVICE_UUID,
+  PMD_SERVICE_UUID,
+  parseBatteryLevel,
+  parseHeartRateMeasurement,
+} from "./polar/polarPmdProtocol";
+
 // [중요] Manager는 컴포넌트 밖에서 한 번만 생성 (메모리 릭 방지)
 const manager = new BleManager();
 
-const HR_SERVICE_UUID = "180D";
-const HR_CHARACTERISTIC_UUID = "2A37";
 const CONNECTION_TIMEOUT_MS = 10000;
 const INACTIVITY_TIMEOUT_MS = 15000;
 const RECONNECT_MIN_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 10000;
 
-export function useBleHeartRate() {
+export interface UseBleHeartRateOptions {
+  sink?: BleSensorSink;
+}
+
+export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   const [bpm, setBpm] = useState(0);
+  const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
   const [status, setStatus] = useState<
     "Init" | "Scanning" | "Connecting" | "Live" | "Error"
   >("Init");
+
+  const sinkRef = useRef<BleSensorSink | undefined>(options?.sink);
+  const hasPmdRef = useRef(false);
+
+  useEffect(() => {
+    const prevSink = sinkRef.current;
+    sinkRef.current = options?.sink;
+    if (options?.sink && options.sink !== prevSink && deviceRef.current) {
+      options.sink.onDeviceReady(deviceRef.current, hasPmdRef.current);
+      if (batteryLevel !== null) {
+        options.sink.onBattery?.(batteryLevel);
+      }
+    }
+  }, [options?.sink, batteryLevel]);
+
   const deviceRef = useRef<Device | null>(null);
   const bleStateRef = useRef<State | null>(null);
   const isMountedRef = useRef(true);
@@ -28,12 +56,13 @@ export function useBleHeartRate() {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const monitorSubscriptionRef = useRef<Subscription | null>(null);
+  const batterySubscriptionRef = useRef<Subscription | null>(null);
   const disconnectSubscriptionRef = useRef<Subscription | null>(null);
 
   useEffect(() => {
     // 1. 블루투스 상태 감지 (PoweredOn 될 때까지 대기)
     const subscription = manager.onStateChange((state) => {
-      console.log("🔹 BLE State:", state); // 로그 확인 필수
+      console.log("🔹 BLE State:", state);
       bleStateRef.current = state;
 
       if (state === State.PoweredOn) {
@@ -43,19 +72,21 @@ export function useBleHeartRate() {
       } else {
         stopScan();
         clearInactivityTimer();
-        void cleanupConnection();
+        void cleanupConnection(`ble-state-${state}`);
         setStatus("Init");
       }
-    }, true); // true: 현재 상태 즉시 검사
+    }, true);
 
     return () => {
       isMountedRef.current = false;
       clearReconnectTimer();
       clearInactivityTimer();
-      // 클린업: 스캔 중단 및 연결 해제
       stopScan();
       cleanupSubscriptions();
-      deviceRef.current?.cancelConnection();
+      if (deviceRef.current) {
+        sinkRef.current?.onDeviceLost("unmount");
+        deviceRef.current.cancelConnection();
+      }
       subscription.remove();
     };
   }, []);
@@ -86,6 +117,8 @@ export function useBleHeartRate() {
   const cleanupSubscriptions = () => {
     monitorSubscriptionRef.current?.remove();
     monitorSubscriptionRef.current = null;
+    batterySubscriptionRef.current?.remove();
+    batterySubscriptionRef.current = null;
     disconnectSubscriptionRef.current?.remove();
     disconnectSubscriptionRef.current = null;
   };
@@ -97,12 +130,17 @@ export function useBleHeartRate() {
     }
   };
 
-  const cleanupConnection = async () => {
+  const cleanupConnection = async (reason: string) => {
     cleanupSubscriptions();
     clearInactivityTimer();
     const device = deviceRef.current;
     deviceRef.current = null;
+    setBatteryLevel(null);
     if (device) {
+      // Tear-downs that bypass onDisconnected (adapter off, inactivity
+      // reconnect) still end the sensor stream — the sink must hear about it
+      // or the recording keeps a stale handle and logs no gap.
+      sinkRef.current?.onDeviceLost(reason);
       try {
         await device.cancelConnection();
       } catch (error) {
@@ -137,7 +175,7 @@ export function useBleHeartRate() {
     try {
       console.log(`♻️ Reconnecting now (${reason})`);
       const lastDevice = deviceRef.current;
-      await cleanupConnection();
+      await cleanupConnection(`reconnect-${reason}`);
       setBpm(0);
 
       if (lastDevice) {
@@ -192,8 +230,6 @@ export function useBleHeartRate() {
     console.log("🚀 Scanning started...");
     setStatus("Scanning");
 
-    // [핵심] UUID 자리에 null을 넣어 "모든 기기"를 다 찾습니다.
-    // HeartCast가 UUID를 숨기고 광고할 수 있기 때문입니다.
     manager.startDeviceScan(null, null, (error, device) => {
       if (error) {
         console.error("❌ Scan Error:", error);
@@ -203,11 +239,6 @@ export function useBleHeartRate() {
         return;
       }
 
-      // 로그로 발견된 기기 이름 확인 (디버깅용)
-      // if (device?.name) console.log("Found:", device.name);
-
-      // [필터링] HeartCast(앱) 또는 Polar(심박계) 찾기
-      // "Polar mobile"은 폰 앱(브릿지)이므로 제외 — 실제 H10/OH1 스트랩만 연결
       const isPolarApp = device?.name?.includes("Polar mobile");
       const isTargetDevice =
         !isPolarApp &&
@@ -218,7 +249,7 @@ export function useBleHeartRate() {
 
       if (isTargetDevice && device) {
         console.log("✅ Target Found:", device.name);
-        stopScan(); // 찾으면 스캔 즉시 중단
+        stopScan();
         connectToDevice(device);
       }
     });
@@ -237,11 +268,54 @@ export function useBleHeartRate() {
       const connectedDevice = await device.connect({ timeout: CONNECTION_TIMEOUT_MS });
       console.log("🔗 Connected. Discovering services...");
 
-      // [필수] 서비스 및 특성 검색
       await connectedDevice.discoverAllServicesAndCharacteristics();
       cleanupSubscriptions();
       deviceRef.current = connectedDevice;
       reconnectAttemptsRef.current = 0;
+
+      // Check for PMD Service
+      let hasPmd = false;
+      try {
+        const services = await connectedDevice.services();
+        hasPmd = services.some(
+          (s) => s.uuid.toLowerCase() === PMD_SERVICE_UUID.toLowerCase(),
+        );
+      } catch (e) {
+        console.warn("⚠️ Failed to list services for PMD check:", e);
+      }
+      hasPmdRef.current = hasPmd;
+
+      // Read Battery Level (0x2A19)
+      try {
+        const battChar = await connectedDevice.readCharacteristicForService(
+          BATTERY_SERVICE_UUID,
+          BATTERY_CHARACTERISTIC_UUID,
+        );
+        if (battChar?.value) {
+          const batt = parseBatteryLevel(battChar.value);
+          setBatteryLevel(batt);
+          sinkRef.current?.onBattery?.(batt);
+        }
+      } catch (e) {
+        // Battery service not present on all devices
+      }
+
+      // Monitor Battery characteristic notifications if supported
+      try {
+        batterySubscriptionRef.current = connectedDevice.monitorCharacteristicForService(
+          BATTERY_SERVICE_UUID,
+          BATTERY_CHARACTERISTIC_UUID,
+          (error, characteristic) => {
+            if (!error && characteristic?.value) {
+              const batt = parseBatteryLevel(characteristic.value);
+              setBatteryLevel(batt);
+              sinkRef.current?.onBattery?.(batt);
+            }
+          },
+        );
+      } catch (e) {
+        // Ignored
+      }
 
       disconnectSubscriptionRef.current = connectedDevice.onDisconnected(
         (error) => {
@@ -249,6 +323,8 @@ export function useBleHeartRate() {
           clearInactivityTimer();
           setStatus("Scanning");
           setBpm(0);
+          setBatteryLevel(null);
+          sinkRef.current?.onDeviceLost("disconnected");
           requestReconnect("disconnected");
         },
       );
@@ -269,6 +345,10 @@ export function useBleHeartRate() {
           }
         },
       );
+
+      // Notify sink that device is ready and whether PMD is available
+      sinkRef.current?.onDeviceReady(connectedDevice, hasPmd);
+
       resetInactivityTimer();
       setStatus("Live");
     } catch (e) {
@@ -282,24 +362,14 @@ export function useBleHeartRate() {
 
   const parseHeartRate = (base64Value: string) => {
     try {
-      const buffer = Buffer.from(base64Value, "base64");
-      const flags = buffer.readUInt8(0);
-      const is16Bit = (flags & 1) !== 0;
-
-      let heartRate = 0;
-      if (is16Bit) {
-        heartRate = buffer.readUInt16LE(1);
-      } else {
-        heartRate = buffer.readUInt8(1);
-      }
-
-      // console.log(`BPM: ${heartRate}`);
+      const { bpm: heartRate, rrIntervalsMs } = parseHeartRateMeasurement(base64Value);
       setBpm(heartRate);
       resetInactivityTimer();
+      sinkRef.current?.onHeartRate(heartRate, rrIntervalsMs, Date.now());
     } catch (error) {
       console.warn("Parse Error:", error);
     }
   };
 
-  return { bpm, status };
+  return { bpm, status, batteryLevel };
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func InitDB() (*gorm.DB, error) {
@@ -21,7 +22,14 @@ func InitDB() (*gorm.DB, error) {
 		dsn = "postgresql://sunjinlee@localhost:5432/wod_test?sslmode=disable"
 	}
 
-	gdb, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	gormConfig := &gorm.Config{}
+	if os.Getenv("SHOW_LOG") == "true" || os.Getenv("SHOW_SQL_LOG") == "true" {
+		gormConfig.Logger = gormlogger.Default.LogMode(gormlogger.Info)
+	} else {
+		gormConfig.Logger = gormlogger.Discard
+	}
+
+	gdb, err := gorm.Open(postgres.Open(dsn), gormConfig)
 	if err != nil {
 		return nil, fmt.Errorf("testDB: open: %w", err)
 	}
@@ -123,24 +131,40 @@ func CreateSession(dbConn *gorm.DB, sessionAttr *db.Session) db.Session {
 
 func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.AnalysisResult {
 	result := db.AnalysisResult{
-		SessionID:           resultAttr.SessionID,
-		ProfileID:           resultAttr.ProfileID,
-		AnalysisType:        resultAttr.AnalysisType,
-		Status:              resultAttr.Status,
-		Output:              resultAttr.Output,
-		GeminiFileURI:       resultAttr.GeminiFileURI,
-		GeminiFileName:      resultAttr.GeminiFileName,
-		GeminiMIMEType:      resultAttr.GeminiMIMEType,
-		GeminiFileExpiresAt: resultAttr.GeminiFileExpiresAt,
-		HighlightSegments:   resultAttr.HighlightSegments,
-		WODDescription:      resultAttr.WODDescription,
-		SessionScore:        resultAttr.SessionScore,
+		SessionID:              resultAttr.SessionID,
+		ProfileID:              resultAttr.ProfileID,
+		AnalysisType:           resultAttr.AnalysisType,
+		Status:                 resultAttr.Status,
+		Output:                 resultAttr.Output,
+		GeminiFileURI:          resultAttr.GeminiFileURI,
+		GeminiFileName:         resultAttr.GeminiFileName,
+		GeminiMIMEType:         resultAttr.GeminiMIMEType,
+		GeminiFileExpiresAt:    resultAttr.GeminiFileExpiresAt,
+		HighlightSegments:      resultAttr.HighlightSegments,
+		WODDescription:         resultAttr.WODDescription,
+		SessionScore:           resultAttr.SessionScore,
+		NormalizedWorkout:      resultAttr.NormalizedWorkout,
+		MobilityObservations:   resultAttr.MobilityObservations,
+		StretchRecommendations: resultAttr.StretchRecommendations,
+		ArchivedAt:             resultAttr.ArchivedAt,
 	}
 	if result.AnalysisType == "" {
 		result.AnalysisType = db.AnalysisTypeWOD
 	}
+	if result.MobilityObservations == "" {
+		result.MobilityObservations = "[]"
+	}
+	if result.StretchRecommendations == "" {
+		result.StretchRecommendations = "[]"
+	}
 
 	g.Expect(dbConn.Create(&result).Error).NotTo(g.HaveOccurred())
+
+	if !resultAttr.CreatedAt.IsZero() {
+		g.Expect(dbConn.Model(&result).UpdateColumn("created_at", resultAttr.CreatedAt).Error).NotTo(g.HaveOccurred())
+		result.CreatedAt = resultAttr.CreatedAt
+	}
+
 	return result
 }
 
@@ -276,6 +300,7 @@ func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRu
 		HighlightSegments:        runAttr.HighlightSegments,
 		SessionScore:             runAttr.SessionScore,
 		WorkoutType:              runAttr.WorkoutType,
+		WODDescription:           runAttr.WODDescription,
 		Model:                    runAttr.Model,
 		PromptVersion:            runAttr.PromptVersion,
 		PromptHash:               runAttr.PromptHash,
@@ -315,4 +340,70 @@ func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRu
 
 	g.Expect(dbConn.Create(&run).Error).NotTo(g.HaveOccurred())
 	return run
+}
+
+var stretchCounter uint64
+
+func CreateStretch(dbConn *gorm.DB, stretchAttr *db.Stretch) db.Stretch {
+	val := atomic.AddUint64(&stretchCounter, 1)
+	s := db.Stretch{
+		Name:         stretchAttr.Name,
+		TargetArea:   stretchAttr.TargetArea,
+		Description:  stretchAttr.Description,
+		DurationHint: stretchAttr.DurationHint,
+		Caution:      stretchAttr.Caution,
+		ImageObject:  stretchAttr.ImageObject,
+		VideoObject:  stretchAttr.VideoObject,
+	}
+
+	if s.Name == "" {
+		s.Name = fmt.Sprintf("Test Stretch %d", val)
+	}
+	s.NormalizedKey = db.NormalizeStretchKey(s.Name)
+	if s.TargetArea == "" {
+		s.TargetArea = "Hips & Glutes"
+	}
+
+	g.Expect(dbConn.Create(&s).Error).NotTo(g.HaveOccurred())
+	return s
+}
+
+var stretchAliasCounter uint64
+
+func CreateStretchAlias(dbConn *gorm.DB, aliasAttr *db.StretchAlias) db.StretchAlias {
+	val := atomic.AddUint64(&stretchAliasCounter, 1)
+	a := db.StretchAlias{
+		StretchID: aliasAttr.StretchID,
+		Alias:     aliasAttr.Alias,
+	}
+
+	g.Expect(a.StretchID).NotTo(g.BeZero(), "StretchID is required for CreateStretchAlias")
+	if a.Alias == "" {
+		a.Alias = fmt.Sprintf("Test Alias %d", val)
+	}
+	a.NormalizedKey = db.NormalizeStretchKey(a.Alias)
+
+	g.Expect(dbConn.Create(&a).Error).NotTo(g.HaveOccurred())
+	return a
+}
+
+func CreateTokenUsage(dbConn *gorm.DB, usageAttr *db.TokenUsage) db.TokenUsage {
+	u := db.TokenUsage{
+		SessionID:       usageAttr.SessionID,
+		ProfileID:       usageAttr.ProfileID,
+		TaskType:        usageAttr.TaskType,
+		Model:           usageAttr.Model,
+		PromptTokens:    usageAttr.PromptTokens,
+		CandidateTokens: usageAttr.CandidateTokens,
+		TotalTokens:     usageAttr.TotalTokens,
+		CreatedAt:       usageAttr.CreatedAt,
+	}
+	if u.CreatedAt.IsZero() {
+		u.CreatedAt = time.Now().UTC()
+	}
+	if u.TotalTokens == 0 && (u.PromptTokens > 0 || u.CandidateTokens > 0) {
+		u.TotalTokens = u.PromptTokens + u.CandidateTokens
+	}
+	g.Expect(dbConn.Create(&u).Error).NotTo(g.HaveOccurred())
+	return u
 }

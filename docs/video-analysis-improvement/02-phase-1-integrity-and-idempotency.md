@@ -1,5 +1,7 @@
 # Phase 1: Integrity and Idempotency
 
+> Target plan. Read the [2026-09-06 source reconciliation](README.md#current-status-versus-target-work) first; existing implementation must be preserved and extended. Checkboxes are release gates, not a live code inventory.
+
 Priority: P0
 Goal: make the bytes, ordering, timestamps, task routing, retries, and visible status trustworthy before optimizing model behavior.
 
@@ -108,9 +110,9 @@ Use Jest for pure mobile/API behavior. Do not attempt to instantiate the native 
 
 #### Additive schema
 
-Create a migration pair. Do not rename or remove current columns in this phase.
+Create a migration pair for missing fields only. `000038` already creates `media_start_secs` and `media_end_secs` as nullable `DOUBLE PRECISION`; reuse them and do not drop them in a later migration's rollback. Do not rename or remove current columns in this phase.
 
-Add to `chunk_analysis_results`:
+Target fields on `chunk_analysis_results` (add only fields not already present):
 
 | Column | Type | Initial/default behavior |
 |---|---|---|
@@ -126,7 +128,7 @@ Add indexes in migration SQL, not GORM tags:
 
 ```sql
 CREATE UNIQUE INDEX ...
-ON chunk_analysis_results(profile_id, session_id, chunk_index)
+ON chunk_analysis_results(profile_id, session_id, chunk_source, chunk_index)
 WHERE chunk_index IS NOT NULL;
 
 CREATE UNIQUE INDEX ...
@@ -136,6 +138,8 @@ WHERE file_path <> '' AND chunk_source = 'recorded';
 CREATE INDEX ...
 ON chunk_analysis_results(profile_id, session_id, status, chunk_index);
 ```
+
+A `chunk_index` is unique within its source kind. Recorded and synthetic index 0 may coexist; synthetic rows must never overwrite the recorded manifest. Only one selected indexing source may contribute to a coverage calculation; do not double-count overlapping sources.
 
 Before creating unique indexes, deterministically deduplicate existing identical recorded file paths. Retain one row using this precedence: `COMPLETED` over `PROCESSING` over `PENDING` over `FAILED`, then newest `updated_at`, then highest `id`. Exclude empty `file_path` rows and synthetic sources from this cleanup and partial index. Put the cleanup SQL in the migration so every environment applies the same rule.
 
@@ -147,7 +151,7 @@ In `Controller.ChunkComplete`:
 
 1. Validate `chunk_index >= 0` when present.
 2. Verify profile ownership and URI format as today.
-3. Upsert the logical chunk row keyed by `(profile_id, session_id, chunk_index)` for new clients, or `(profile_id, session_id, file_path)` for legacy clients.
+3. Upsert the logical chunk row keyed by `(profile_id, session_id, chunk_source, chunk_index)` for new clients, or `(profile_id, session_id, file_path)` with `chunk_source='recorded'` for legacy clients.
 4. Set `chunk_source='recorded'`, `file_path`, capture offsets, heart rate, client confidence, and status `PENDING` without overwriting a prior `COMPLETED` result.
 5. Enqueue analysis only when the row is not already COMPLETED.
 6. If enqueue fails, return an error but retain PENDING. A client retry then resumes the same logical row.
@@ -168,7 +172,7 @@ For requests with `expected_chunk_count=N`, `HandleMergeChunksTask` must:
 
 Chunk analysis status does not determine whether uploaded media is mergeable. A PENDING or FAILED analysis row can still point to a valid uploaded clip. Merge the complete media manifest, propagate `expected_chunk_count` into `video:analysis`, and make the full-analysis indexing stage wait/retry while expected chunk analyses are nonterminal. When an expected chunk is terminal FAILED, recover that media interval from the merged/full file or report it in PARTIAL coverage; never omit its bytes from `merged.mp4`.
 
-Remove the current tautological existence check that tests DB records against a map built from those same DB records.
+Preserve the existing `gcsSet` existence check; it has already replaced the old tautological DB-map check. Extend it to validate the authoritative expected manifest.
 
 Legacy fallback may continue ordering null-index rows by capture `start_secs`, but it must log `legacy_chunk_manifest=true` and must never mix indexed and null-index chunks in one merge.
 
@@ -220,14 +224,14 @@ media_end[i] = media_start[i] + probed_duration[i]
 media_start[i+1] = media_end[i]
 ```
 
-4. Update `media_duration_secs`, `media_start_secs`, and `media_end_secs` for all rows in one DB transaction.
+4. Keep the candidate intervals in memory; do not publish verified media offsets before successful concat.
 5. Run concat.
 6. Probe `merged.mp4` and compare its duration with the cumulative input duration. Allow only a documented encoder tolerance (start with max of 250 ms or one output frame per chunk; adjust only from test evidence).
-7. Commit the merged object and enqueue full analysis only after the media timeline is valid.
+7. After successful concat and duration validation, persist `media_duration_secs`, `media_start_secs`, and `media_end_secs` in one DB transaction. Commit the merged object and enqueue full analysis only after the media timeline is valid.
 
 If an analysis-grade re-encode is created, it must preserve a zero-based timeline and remain within the same duration tolerance as `merged.mp4`. Validate it before using the same media offsets with Gemini. If it does not preserve the timeline, use the verified merged file or fail explicitly; never apply merged-video offsets to a materially shifted analysis copy.
 
-The full-analysis path must prefer `media_start_secs`/`media_end_secs`. A legacy fallback to `start_secs`/`end_secs` is allowed only when all media fields are null; emit `legacy_media_timeline=true`.
+The full-analysis path must prefer `media_start_secs`/`media_end_secs`. Null media fields never authorize a fallback to capture `start_secs`/`end_secs`. Reconstruct from ordered retained chunks and probed durations; otherwise index the actual full video or abstain. Exact single-chunk debug analysis may use the retained clip at `0..duration`. Emit `legacy_media_timeline=true` for reconstruction/fallback observability.
 
 Expose both timelines to clients with explicit names. Keep current `start_secs`/`end_secs` response fields during compatibility; document them as capture time and add the media fields. Do not silently change the meaning of an existing JSON field.
 
@@ -245,11 +249,11 @@ Expose both timelines to clients with explicit names. Keep current `start_secs`/
 - Android 500 ms cooldown never appears as a gap in merged-video offsets.
 - A zero/corrupt duration prevents enqueue of full analysis.
 - Merged duration outside tolerance fails.
-- Legacy rows fall back without mixing timelines.
+- Legacy rows reconstruct verified media intervals or use exact-source/model indexing; capture offsets are never used as merged-video ranges.
 
 ### REL-04 — Derive split-video offsets from actual durations
 
-`runFFmpegSplit` uses stream copy, so keyframes determine boundaries. Keep stream copy for now, but stop assigning `startSecs = index * splitChunkDurationSecs`.
+`runFFmpegSplit` uses stream copy, so keyframes determine boundaries. Keep stream copy and the already implemented cumulative-duration offsets. Do not reintroduce `startSecs = index * splitChunkDurationSecs`; finish the manifest, validation, and retry identity below.
 
 After discovering split files and before starting parallel analysis:
 
@@ -259,7 +263,7 @@ After discovering split files and before starting parallel analysis:
 4. Pass manifest offsets into goroutines.
 5. Persist `chunk_index` plus media fields for synthetic chunks.
 6. Persist `chunk_source='synthetic_split'`; do not identify source type by filename in new code.
-7. Use `(profile_id, session_id, chunk_index)` for retry skip/upsert, not floating-point `start_secs` equality.
+7. Use `(profile_id, session_id, chunk_source, chunk_index)` for retry skip/upsert, not floating-point `start_secs` equality.
 
 Do not force exact 10-second boundaries by re-encoding in this PR; that adds cost and a new quality variable. If later evaluation proves exact boundaries necessary, test forced keyframes as a separate experiment.
 
@@ -270,7 +274,7 @@ Depends on: PR 1A; may run in parallel with PR 1B after the migration contract i
 
 ### REL-05 — Register the session-aware handler exactly
 
-In `api/cmd/worker/main.go`, register:
+The following registrations already exist in `api/cmd/worker/main.go`; preserve them:
 
 ```go
 mux.HandleFunc(worker.TypeChunkAnalysisWithSession, w.HandleChunkAnalysisWithSessionTask)
@@ -458,7 +462,7 @@ npm test -- features/wod/chunkFinalization.test.ts
 Run from `api/` after applying the new migration to the test DB:
 
 ```bash
-make migrate-test-redo
+make migrate-test-up
 go test -p 1 ./internal/controllers ./internal/worker
 go test -p 1 ./cmd/worker
 ```

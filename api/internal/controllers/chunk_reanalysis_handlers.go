@@ -54,11 +54,6 @@ type chunkReanalysisTarget struct {
 // GetChunkPlayURL signs the server-resolved video source for one owned chunk.
 // It never accepts a storage URI from the caller.
 func (ctl *Controller) GetChunkPlayURL(c *gin.Context) {
-	if ctl.storageClient == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "storage is not configured"})
-		return
-	}
-
 	sessionID, chunkID, ok := parseChunkReanalysisPath(c)
 	if !ok {
 		return
@@ -122,13 +117,21 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 
 	req, err := decodeCreateChunkReanalysisRequest(c.Request.Body)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body; only client_request_id is allowed"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
 	if req.ClientRequestID == "" || len(req.ClientRequestID) > 128 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "client_request_id must be between 1 and 128 characters"})
 		return
+	}
+
+	if strings.TrimSpace(req.AppearanceHints) != "" {
+		if err := persistSessionAppearanceHints(c.Request.Context(), ctl.db, sessionID, target.ProfileID, &AppearanceInput{Appearance: strings.TrimSpace(req.AppearanceHints)}); err != nil {
+			logger.Log.Error("failed to persist session appearance hints for chunk re-analysis", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save appearance hints"})
+			return
+		}
 	}
 
 	var existing db.ChunkReanalysisRun

@@ -30,12 +30,12 @@ resource "google_secret_manager_secret_iam_member" "jwt_signing_secret_accessor"
 resource "google_cloud_run_v2_service" "api" {
   name     = "${var.app_name}-api-${var.environment}"
   location = var.region
-  ingress = "INGRESS_TRAFFIC_ALL"
+  ingress  = "INGRESS_TRAFFIC_ALL"
 
   template {
     service_account = google_service_account.run_sa.email
 
-    vpc_access{
+    vpc_access {
       connector = google_vpc_access_connector.connector.id
       egress    = "PRIVATE_RANGES_ONLY"
     }
@@ -44,7 +44,7 @@ resource "google_cloud_run_v2_service" "api" {
       # Use a placeholder image initially so `terraform apply` works.
       # User must build/push the real image later.
       image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.app_name}-repo-${var.environment}/api:latest"
-      
+
       ports {
         container_port = 8080
       }
@@ -66,12 +66,12 @@ resource "google_cloud_run_v2_service" "api" {
         value = google_storage_bucket.uploads.name
       }
       env {
-        name = "GEMINI_USE_CACHE"
+        name  = "GEMINI_USE_CACHE"
         value = true
       }
       env {
-        name = "GEMINI_MODEL"
-        value = "gemini-3.1-pro-preview"
+        name  = "GEMINI_MODEL"
+        value = var.gemini_model
       }
       env {
         name  = "PIPELINE_MODE"
@@ -119,9 +119,9 @@ resource "google_cloud_run_v2_service" "api" {
 
 # Worker Pool (for background tasks)
 resource "google_cloud_run_v2_worker_pool" "worker" {
-  provider = google-beta
-  name     = "${var.app_name}-worker-${var.environment}"
-  location = var.region
+  provider     = google-beta
+  name         = "${var.app_name}-worker-${var.environment}"
+  location     = var.region
   launch_stage = "BETA"
 
   template {
@@ -132,12 +132,12 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
         network    = google_compute_network.vpc.name
         subnetwork = google_compute_subnetwork.subnet.name
       }
-      egress = "PRIVATE_RANGES_ONLY" 
+      egress = "PRIVATE_RANGES_ONLY"
     }
 
     containers {
       image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.app_name}-repo-${var.environment}/worker:latest"
-      
+
       resources {
         limits = {
           memory = "8Gi"
@@ -162,12 +162,20 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
         value = google_storage_bucket.uploads.name
       }
       env {
-        name = "GEMINI_USE_CACHE"
+        name  = "GEMINI_USE_CACHE"
         value = true
       }
       env {
-        name = "GEMINI_MODEL"
-        value = "gemini-3.1-pro-preview"
+        name  = "GEMINI_MODEL"
+        value = var.gemini_model
+      }
+      env {
+        name  = "GEMINI_THINKING_CHUNK"
+        value = var.gemini_thinking_chunk
+      }
+      env {
+        name  = "GEMINI_THINKING_LEVEL"
+        value = var.gemini_thinking_level
       }
       env {
         name  = "PIPELINE_MODE"
@@ -175,7 +183,7 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       }
     }
   }
-  
+
   depends_on = [
     google_sql_database_instance.postgres,
     google_redis_instance.cache
@@ -184,8 +192,8 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
 
 # Migration Job
 resource "google_cloud_run_v2_job" "migrate" {
-  name     = "${var.app_name}-migrate-${var.environment}"
-  location = var.region
+  name         = "${var.app_name}-migrate-${var.environment}"
+  location     = var.region
   launch_stage = "BETA"
 
   template {
@@ -195,10 +203,10 @@ resource "google_cloud_run_v2_job" "migrate" {
         connector = google_vpc_access_connector.connector.id
         egress    = "PRIVATE_RANGES_ONLY"
       }
-      
+
       containers {
         image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.app_name}-repo-${var.environment}/migrate:latest"
-        args = ["-database", "postgres://appuser:${var.db_password}@${google_sql_database_instance.postgres.private_ip_address}:5432/${google_sql_database.database.name}?sslmode=disable", "up"]
+        args  = ["-database", "postgres://appuser:${var.db_password}@${google_sql_database_instance.postgres.private_ip_address}:5432/${google_sql_database.database.name}?sslmode=disable", "up"]
       }
     }
   }

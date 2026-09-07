@@ -25,11 +25,59 @@ var _ = Describe("Gemini client", func() {
 		It("exposes the configured segment-analysis model", func() {
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey: "test-api-key",
-				Model:  ModelFlash35,
+				Model:  ModelFlash38,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(client.Model()).To(Equal(ModelFlash35))
+			Expect(client.Model()).To(Equal(ModelFlash38))
 			Expect((*Client)(nil).Model()).To(BeEmpty())
+		})
+
+		It("configures thinking level and budget for supported models", func() {
+			budget := int32(4096)
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:         "test-api-key",
+				Model:          ModelFlash38,
+				ThinkingLevel:  "HIGH",
+				ThinkingBudget: &budget,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Flash 3.8 supports thinking
+			tc := client.thinkingConfigForModel(ModelFlash38)
+			Expect(tc).NotTo(BeNil())
+			Expect(string(tc.ThinkingLevel)).To(Equal("HIGH"))
+			Expect(tc.ThinkingBudget).To(Equal(&budget))
+
+			// Pro 3.1 preview does not support thinking config
+			tcPro := client.thinkingConfigForModel(ModelPro31Preview)
+			Expect(tcPro).To(BeNil())
+		})
+
+		It("configures distinct thinking level for chunk analysis and falls back when unset", func() {
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:             "test-api-key",
+				Model:              ModelFlash38,
+				ThinkingLevel:      "HIGH",
+				ThinkingLevelChunk: "LOW",
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			tcFull := client.thinkingConfigForModel(ModelFlash38)
+			Expect(tcFull).NotTo(BeNil())
+			Expect(string(tcFull.ThinkingLevel)).To(Equal("HIGH"))
+
+			tcChunk := client.thinkingConfigForModelAndLevel(ModelFlash38, client.thinkingLevelChunk)
+			Expect(tcChunk).NotTo(BeNil())
+			Expect(string(tcChunk.ThinkingLevel)).To(Equal("LOW"))
+
+			// Fallback behavior when ThinkingLevelChunk is empty
+			clientFallback, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:        "test-api-key",
+				Model:         ModelFlash38,
+				ThinkingLevel: "MEDIUM",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(clientFallback.thinkingLevelChunk).To(Equal("MEDIUM"))
 		})
 	})
 
@@ -187,7 +235,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash35+":generateContent").
+				Post("/v1beta/models/"+ModelFlash38+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -203,11 +251,69 @@ var _ = Describe("Gemini client", func() {
 					},
 				})
 
-			result, geminiFile, _, err := client.AnalyzeVideoWithModel(context.Background(), videoPath, "analyze this", ModelFlash35)
+			result, geminiFile, _, err := client.AnalyzeVideoWithModel(context.Background(), videoPath, "analyze this", ModelFlash38)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("flash 3.5 response"))
 			Expect(geminiFile).To(Equal("files/mock-file"))
 			Expect(transport.Requests()).To(HaveLen(5))
+		})
+
+		It("uploads, polls until active, and generates content with AnalyzeChunkVideo", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				MatchHeader("X-Goog-Upload-Protocol", "resumable").
+				MatchHeader("X-Goog-Upload-Command", "start").
+				MatchHeader("X-Goog-Upload-Header-Content-Type", mimeType).
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				MatchHeader("X-Goog-Upload-Command", "upload, finalize").
+				MatchHeader("X-Goog-Upload-Offset", "0").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Status", "final").
+				JSON(map[string]any{
+					"file": map[string]any{
+						"name":     "files/mock-chunk",
+						"uri":      "https://example.test/files/mock-chunk",
+						"mimeType": mimeType,
+					},
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-chunk").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-chunk",
+					"state": "ACTIVE",
+				})
+
+			transport.New(baseURL).
+				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{
+						{
+							"content": map[string]any{
+								"parts": []map[string]any{
+									{"text": "chunk response"},
+								},
+							},
+						},
+					},
+				})
+
+			result, geminiFile, _, err := client.AnalyzeChunkVideo(context.Background(), videoPath, "analyze chunk", ModelFlash38)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("chunk response"))
+			Expect(geminiFile).To(Equal("files/mock-chunk"))
+			Expect(transport.Requests()).To(HaveLen(4))
 		})
 
 		It("returns an error when the local file does not exist", func() {
@@ -451,7 +557,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash35+":generateContent").
+				Post("/v1beta/models/"+ModelFlash38+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -479,7 +585,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelFlash35 + ":generateContent").
+				Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{"message": "indexing failed"},

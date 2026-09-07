@@ -1,6 +1,18 @@
-# Wod Strategist API
+# WOD Strategist API
+
+All commands below run from `api/` unless stated otherwise.
 
 ## Get started
+
+Configure the variables below, start PostgreSQL and Redis, and provide GCS credentials. Install `ffmpeg`/`ffprobe` for worker media processing. Apply pending local migrations with `make migrate-up`. In separate terminals run:
+
+```bash
+PORT=8088 make run
+```
+
+```bash
+make run-worker
+```
 
 ## Configuration
 
@@ -18,7 +30,7 @@ brew install cloud-sql-proxy
 ```
 
 ```bash
-cd infra && terraform output db_instance_connection_name
+terraform -chdir=../infra output db_instance_connection_name
 ```
 
 ```bash
@@ -34,7 +46,7 @@ psql "postgres://DB_USER:DB_PASS@localhost:5433/wod_dev?sslmode=disable"
 - Run migration remotely
 
 ```bash
-gcloud run jobs execute $(MIGRATE_SERVICE_NAME) --region $(REGION)
+make migrate-up-remote
 ```
 
 ## API Documentation (Swagger UI)
@@ -45,49 +57,30 @@ To view and interact with the Swagger docs:
 
 1. Start the API server:
    ```bash
-   go run cmd/server/main.go
+   PORT=8088 go run cmd/server/main.go
    ```
 2. Navigate to the generated Swagger UI in your browser:
    **[http://localhost:8088/swagger/index.html](http://localhost:8088/swagger/index.html)**
-   *(Or replace `8088` with your custom `PORT`).*
+   *(The examples set `PORT=8088` to match the mobile default and Vite proxy. Without an override, the server defaults to `8080`.)*
 
 To update the Swagger schema specs after modifying structs or handler comments, run:
 ```bash
 swag init -g cmd/server/main.go
 ```
 
-## Local Chunk Upload Replay
+## Legacy upload replay scripts
 
-If you want to reuse an existing workout video instead of recording from the phone every time, you can replay the chunk upload flow locally from `api/`.
+`make test-upload` and `make test-chunk-upload` invoke the root `scripts/test-*.js` scripts and load the root `.env`. They currently send `X-API-Key` without a JWT and cannot call the protected API.
 
-Prerequisites:
+The chunk script also hardcodes its input path, session ID, workout type, chunk duration, and merge options. `VIDEO=...`, `CHUNK_SECS=...`, and the previously documented optional Make variables do not configure those constants. Treat this script as legacy until its authentication and arguments are updated.
 
-- API server and worker running locally
-- `ffmpeg` and `ffprobe` installed
-- Valid storage configuration in `api/.env` or your shell environment
+Use the [web app](../web/README.md) for authenticated saved-video upload and the mobile app for recording/chunk-finalization QA. Both use real configured GCS storage; no local storage emulator flow is provided.
 
-Run:
+## Tests and migrations
 
 ```bash
-cd api
-make test-chunk-upload VIDEO=./tmp/test_wod.mp4 CHUNK_SECS=10
+make migrate-test-up
+make test
 ```
 
-Optional variables:
-
-- `MOVEMENTS=Burpee,Pull-up`
-- `INJURIES=Left Knee`
-- `WORKOUT_TYPE=rehab`
-- `PROFILE_ID=1`
-- `AUTO_MERGE=0` to upload/analyze chunks without merging
-- `KEEP_CHUNKS=1` to keep the generated local chunk files for inspection
-
-The replay script uses the real chunk flow:
-
-1. Split one saved `.mp4` into ordered chunk files with `ffmpeg`
-2. Call `POST /api/v1/upload-url` for each chunk
-3. Upload each chunk to GCS with the signed URL
-4. Call `POST /api/v1/chunk-complete` with `start_secs` and `end_secs`
-5. Optionally call `POST /api/v1/merge-chunks`
-
-This is not a fully offline path yet. The current API still uploads chunk files to the configured GCS bucket because the repo does not include a local storage emulator flow.
+`make migrate-test-up` applies every pending test migration. `make migrate-test-redo` rolls back one applied migration and reapplies pending migrations; use it only when deliberately testing the latest pair's rollback. Do not run backend test invocations concurrently. See [backend-testing.md](../docs/agent-memory/backend-testing.md).

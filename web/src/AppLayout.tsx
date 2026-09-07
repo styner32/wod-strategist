@@ -32,6 +32,7 @@ export function AppLayout() {
             </Link>
             <nav className="flex items-center gap-1">
               <NavLink to="/">History</NavLink>
+              <NavLink to="/stretches">Stretches</NavLink>
               <NavLink to="/upload">Upload</NavLink>
             </nav>
           </div>

@@ -21,7 +21,7 @@ Both are injected into future analysis prompts for personalized comparison.
 
 ```json
 {
-  "overall": 74,
+  "overall": 73,
   "form": 68,
   "intensity": 82,
   "consistency": 72,
@@ -34,7 +34,7 @@ Both are injected into future analysis prompts for personalized comparison.
 
 | Field | Range | Notes |
 |---|---|---|
-| `overall` | 0–100 | `form×0.5 + intensity×0.3 + consistency×0.2` (skill WODs: `form×0.7`) |
+| `overall` | 0–100 | `form×0.5 + intensity×0.3 + consistency×0.2` (skill WOD: form weight 0.7; remaining 0.3 split is undefined in the current prompt; recovery: `form×0.7 + consistency×0.3`) |
 | `form` | 0–100 | Absolute CrossFit standard for fitness level |
 | `intensity` | 0–100 | Absolute, NOT relative to user's own history |
 | `consistency` | 0–100 | Set/round-to-round uniformity |
@@ -135,7 +135,7 @@ User submits session with wod_description="Fran"
 
 Run after adding migrations:
 ```bash
-make migrate-test-redo
+make migrate-test-up
 ```
 
 ---
@@ -156,7 +156,7 @@ make migrate-test-redo
 Mobile captures whiteboard photo
   → POST /api/v1/parse-workout-image (multipart: image)
   → Server: DetectImageMIME → NormalizeImage (max 1024px, JPEG q85)
-  → Gemini Flash (gemini-3.6-flash) with inline InlineData part
+  → Gemini Flash (gemini-3.8-flash) with inline InlineData part
   → Parse ```workout { ... } ``` block
   → Response: { wod_description, movements[], raw_text }
 ```

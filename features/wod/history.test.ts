@@ -53,6 +53,22 @@ describe("fetchAnalysisHistory", () => {
     expect(capturedAuth).toBeNull();
   });
 
+  it("should send limit param when provided", async () => {
+    let capturedUrl: string | undefined;
+
+    server.use(
+      http.get(`${API_BASE_URL}/history`, ({ request }) => {
+        capturedUrl = request.url;
+        return HttpResponse.json(mockData);
+      })
+    );
+
+    await fetchAnalysisHistory(1, 100);
+
+    expect(capturedUrl).toContain("profile_id=1");
+    expect(capturedUrl).toContain("limit=100");
+  });
+
   it("should return the parsed JSON response body", async () => {
     server.use(
       http.get(`${API_BASE_URL}/history`, () => {

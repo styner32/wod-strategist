@@ -19,6 +19,7 @@ const MAPPING = {
   'chevron.right': 'chevron-right',
   'clock.fill': 'schedule',
   'figure.run': 'directions-run',
+  'figure.flexibility': 'self-improvement',
   'chevron.left': 'chevron-left',
   'xmark.circle.fill': 'close',
   'xmark.circle': 'cancel',
@@ -35,6 +36,9 @@ const MAPPING = {
   'dumbbell.fill': 'fitness-center',
   'camera.fill': 'camera-alt',
   'photo.fill': 'photo-library',
+  'play.fill': 'play-arrow',
+  'pause.fill': 'pause',
+  'square.fill': 'stop',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**

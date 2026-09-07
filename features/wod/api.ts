@@ -25,12 +25,12 @@ export interface ApiRequestOptions extends RequestInit {
  */
 export async function apiClient<T = any>(
   endpoint: string,
-  options: ApiRequestOptions = {}
+  options: ApiRequestOptions = {},
 ): Promise<T> {
   const { bodyPayload, headers: customHeaders, ...fetchOptions } = options;
 
   const url = `${API_BASE_URL}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
-  
+
   const headers = new Headers(customHeaders);
 
   // Inject auth token if available
@@ -61,7 +61,9 @@ export async function apiClient<T = any>(
     try {
       errorText = await res.text();
     } catch {}
-    throw new Error(`API Error [${res.status}]: ${errorText || res.statusText}`);
+    throw new Error(
+      `API Error [${res.status}]: ${errorText || res.statusText}`,
+    );
   }
 
   // Not all responses have JSON bodies (e.g. 204 No Content)
@@ -94,10 +96,15 @@ export interface ProcessWorkoutVideoOptions {
   endSecs?: number;
   heartRateBpm?: number;
   workoutConfidence?: number;
+  appearanceHints?: string;
 }
 
-export type UploadUrlResponse = Required<components["schemas"]["controllers.CreateUploadURLResponse"]>;
-export type UploadCompleteResponse = Required<components["schemas"]["controllers.CompleteUploadResponse"]>;
+export type UploadUrlResponse = Required<
+  components["schemas"]["controllers.CreateUploadURLResponse"]
+>;
+export type UploadCompleteResponse = Required<
+  components["schemas"]["controllers.CompleteUploadResponse"]
+>;
 
 export interface ChunkAnalysisResult {
   id: number;
@@ -111,7 +118,9 @@ export interface ChunkAnalysisResult {
   updated_at: string;
 }
 
-export async function fetchChunkAnalysis(sessionId: string): Promise<ChunkAnalysisResult[]> {
+export async function fetchChunkAnalysis(
+  sessionId: string,
+): Promise<ChunkAnalysisResult[]> {
   return apiClient<ChunkAnalysisResult[]>(`/chunk-analysis/${sessionId}`);
 }
 
@@ -136,6 +145,16 @@ export async function fetchInjuries(): Promise<string[]> {
 // Profile API
 // ==========================================
 
+export interface AppearanceInput {
+  top?: string;
+  bottom?: string;
+  shoes?: string;
+  hair?: string;
+  build?: string;
+  gear?: string[];
+  notes?: string;
+}
+
 export interface ProfileResponse {
   id: number;
   name: string;
@@ -147,6 +166,7 @@ export interface ProfileResponse {
   weight_kg: number;
   fitness_level: string;
   injuries: string[];
+  appearance?: string | AppearanceInput;
   archived_at?: string;
 }
 
@@ -160,6 +180,7 @@ export interface CreateProfileRequest {
   weight_kg?: number;
   fitness_level?: string;
   injuries?: string[];
+  appearance?: string | AppearanceInput;
 }
 
 export interface UpdateProfileRequest {
@@ -172,10 +193,11 @@ export interface UpdateProfileRequest {
   weight_kg?: number;
   fitness_level?: string;
   injuries?: string[];
+  appearance?: string | AppearanceInput;
 }
 
 export async function createProfile(
-  data: CreateProfileRequest
+  data: CreateProfileRequest,
 ): Promise<ProfileResponse> {
   return apiClient<ProfileResponse>("/profiles", {
     method: "POST",
@@ -188,7 +210,7 @@ export async function getProfile(id: number): Promise<ProfileResponse> {
 }
 
 export async function listProfiles(
-  includeArchived = false
+  includeArchived = false,
 ): Promise<ProfileResponse[]> {
   const params = includeArchived ? "?include_archived=true" : "";
   return apiClient<ProfileResponse[]>(`/profiles${params}`);
@@ -196,7 +218,7 @@ export async function listProfiles(
 
 export async function updateProfile(
   id: number,
-  data: UpdateProfileRequest
+  data: UpdateProfileRequest,
 ): Promise<ProfileResponse> {
   return apiClient<ProfileResponse>(`/profiles/${id}`, {
     method: "PUT",
@@ -220,7 +242,7 @@ export async function unarchiveProfile(id: number): Promise<void> {
 export async function getUploadUrl(
   sessionId: string,
   filename: string,
-  profileId: number
+  profileId: number,
 ): Promise<UploadUrlResponse> {
   return apiClient<UploadUrlResponse>("/upload-url", {
     method: "POST",
@@ -234,7 +256,7 @@ export async function uploadToGcs(
   fileUri: string,
   mimeType: string,
   onProgress?: (progress: number) => void,
-  onCancelReady?: (cancel: () => Promise<void>) => void
+  onCancelReady?: (cancel: () => Promise<void>) => void,
 ): Promise<void> {
   const uploadTask = createUploadTask(
     uploadUrl,
@@ -248,7 +270,7 @@ export async function uploadToGcs(
       if (onProgress && data.totalBytesExpectedToSend > 0) {
         onProgress(data.totalBytesSent / data.totalBytesExpectedToSend);
       }
-    }
+    },
   );
 
   // Expose the cancel function to the caller before starting
@@ -262,7 +284,7 @@ export async function uploadToGcs(
 
   if (response.status < 200 || response.status >= 300) {
     throw new Error(
-      `Failed to upload to GCS: HTTP ${response.status} ${response.body || ""}`
+      `Failed to upload to GCS: HTTP ${response.status} ${response.body || ""}`,
     );
   }
 }
@@ -273,7 +295,8 @@ export async function notifyUploadComplete(
   movements: string[],
   injuries: string[],
   workoutType: string,
-  profileId: number
+  profileId: number,
+  appearanceHints?: string,
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/upload-complete", {
     method: "POST",
@@ -284,6 +307,7 @@ export async function notifyUploadComplete(
       injuries,
       workout_type: workoutType,
       profile_id: profileId,
+      ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
     },
   });
 }
@@ -298,7 +322,8 @@ export async function notifyChunkUploadComplete(
   startSecs?: number,
   endSecs?: number,
   heartRateBpm?: number,
-  workoutConfidence?: number
+  workoutConfidence?: number,
+  appearanceHints?: string,
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
@@ -311,8 +336,13 @@ export async function notifyChunkUploadComplete(
       profile_id: profileId,
       ...(startSecs !== undefined ? { start_secs: startSecs } : {}),
       ...(endSecs !== undefined ? { end_secs: endSecs } : {}),
-      ...(heartRateBpm !== undefined && heartRateBpm > 0 ? { heart_rate_bpm: heartRateBpm } : {}),
-      ...(workoutConfidence !== undefined ? { workout_confidence: workoutConfidence } : {}),
+      ...(heartRateBpm !== undefined && heartRateBpm > 0
+        ? { heart_rate_bpm: heartRateBpm }
+        : {}),
+      ...(workoutConfidence !== undefined
+        ? { workout_confidence: workoutConfidence }
+        : {}),
+      ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
     },
   });
 }
@@ -323,7 +353,7 @@ export async function notifyChunkUploadComplete(
 export async function processWorkoutVideo(
   fileUri: string,
   sessionId: string = "session_dev_001",
-  options: ProcessWorkoutVideoOptions
+  options: ProcessWorkoutVideoOptions,
 ): Promise<UploadResult> {
   const {
     onProgress,
@@ -337,12 +367,23 @@ export async function processWorkoutVideo(
   const filename = fileUri.split("/").pop() || "workout.mp4";
 
   if (!sessionId) {
-    throw new Error("session_id is required but was empty. The recording may not have started properly.");
+    throw new Error(
+      "session_id is required but was empty. The recording may not have started properly.",
+    );
   }
 
-  console.log("🚀 Starting upload process for:", filename, "sessionId:", sessionId);
+  console.log(
+    "🚀 Starting upload process for:",
+    filename,
+    "sessionId:",
+    sessionId,
+  );
 
-  const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename, profileId);
+  const { upload_url, gcs_uri } = await getUploadUrl(
+    sessionId,
+    filename,
+    profileId,
+  );
   console.log("✅ Got Signed URL");
 
   await uploadToGcs(upload_url, fileUri, mimeType, onProgress, onCancelReady);
@@ -354,7 +395,7 @@ export async function processWorkoutVideo(
     movements,
     injuries,
     workoutType,
-    profileId
+    profileId,
   );
   console.log("✅ Analysis Started:", result);
 
@@ -367,7 +408,7 @@ export async function processWorkoutVideo(
 export async function processWorkoutChunk(
   fileUri: string,
   sessionId: string,
-  options: ProcessWorkoutVideoOptions
+  options: ProcessWorkoutVideoOptions,
 ): Promise<UploadResult> {
   const {
     movements = [],
@@ -379,6 +420,7 @@ export async function processWorkoutChunk(
     endSecs,
     heartRateBpm,
     workoutConfidence,
+    appearanceHints,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
 
@@ -386,11 +428,17 @@ export async function processWorkoutChunk(
   // e.g. 15000 = each upload takes 15s extra, causing pile-up with 10s chunks.
   const DEBUG_SLOW_UPLOAD_MS = 0;
   if (DEBUG_SLOW_UPLOAD_MS > 0) {
-    console.warn(`⏳ DEBUG: Simulating slow upload (${DEBUG_SLOW_UPLOAD_MS}ms delay)`);
-    await new Promise(resolve => setTimeout(resolve, DEBUG_SLOW_UPLOAD_MS));
+    console.warn(
+      `⏳ DEBUG: Simulating slow upload (${DEBUG_SLOW_UPLOAD_MS}ms delay)`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, DEBUG_SLOW_UPLOAD_MS));
   }
 
-  const { upload_url, gcs_uri } = await getUploadUrl(sessionId, filename, profileId);
+  const { upload_url, gcs_uri } = await getUploadUrl(
+    sessionId,
+    filename,
+    profileId,
+  );
   await uploadToGcs(upload_url, fileUri, mimeType);
 
   const result = await notifyChunkUploadComplete(
@@ -403,7 +451,8 @@ export async function processWorkoutChunk(
     startSecs,
     endSecs,
     heartRateBpm,
-    workoutConfidence
+    workoutConfidence,
+    appearanceHints,
   );
 
   return {
@@ -432,7 +481,8 @@ export async function mergeChunks(
     profileId: number;
     enableTts?: boolean;
     wodDescription?: string;
-  }
+    appearanceHints?: string;
+  },
 ): Promise<MergeChunksResult> {
   const {
     workoutType = "wod",
@@ -441,6 +491,7 @@ export async function mergeChunks(
     profileId,
     enableTts = false,
     wodDescription,
+    appearanceHints,
   } = options;
 
   const result = await apiClient<{
@@ -457,6 +508,7 @@ export async function mergeChunks(
       profile_id: profileId,
       enable_tts: enableTts,
       ...(wodDescription ? { wod_description: wodDescription } : {}),
+      ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
     },
   });
 
@@ -488,10 +540,10 @@ export interface VideoDownloadURLResponse {
 export async function fetchVideoDownloadURL(
   sessionId: string,
   profileId: number,
-  kind: "merged" | "hardsubbed" | "encoded" = "merged"
+  kind: "merged" | "hardsubbed" | "encoded" = "merged",
 ): Promise<VideoDownloadURLResponse> {
   return apiClient<VideoDownloadURLResponse>(
-    `/video-download/${sessionId}?kind=${kind}&profile_id=${profileId}`
+    `/video-download/${sessionId}?kind=${kind}&profile_id=${profileId}`,
   );
 }
 
@@ -513,7 +565,7 @@ export interface GenerateHighlightResult {
 export async function generateHighlight(
   sessionId: string,
   profileId: number,
-  maxDuration: number = 60
+  maxDuration: number = 60,
 ): Promise<GenerateHighlightResult> {
   return apiClient<GenerateHighlightResult>("/generate-highlight", {
     method: "POST",
@@ -529,7 +581,7 @@ export async function generateHighlight(
  * Fetches highlight results for a session. Returns all variants and their status.
  */
 export async function fetchHighlightResults(
-  sessionId: string
+  sessionId: string,
 ): Promise<HighlightResult[]> {
   return apiClient<HighlightResult[]>(`/highlight/${sessionId}`);
 }
@@ -538,10 +590,10 @@ export async function fetchHighlightResults(
  * Fetches a signed download URL for a specific highlight result.
  */
 export async function fetchHighlightDownloadURL(
-  highlightId: number
+  highlightId: number,
 ): Promise<VideoDownloadURLResponse> {
   return apiClient<VideoDownloadURLResponse>(
-    `/highlight-download/${highlightId}`
+    `/highlight-download/${highlightId}`,
   );
 }
 
@@ -560,7 +612,7 @@ export interface RetryAnalysisResponse {
  */
 export async function retryAnalysis(
   sessionId: string,
-  profileId: number
+  profileId: number,
 ): Promise<RetryAnalysisResponse> {
   return apiClient<RetryAnalysisResponse>("/retry-analysis", {
     method: "POST",
@@ -600,7 +652,7 @@ export interface GenerateHardSubResponse {
 export async function generateHardSub(
   sessionId: string,
   profileId: number,
-  enableTts: boolean = false
+  enableTts: boolean = false,
 ): Promise<GenerateHardSubResponse> {
   return apiClient<GenerateHardSubResponse>("/generate-hardsub", {
     method: "POST",
@@ -629,7 +681,7 @@ export interface ParseWorkoutImageResponse {
  * @param imageUri - Local file URI of the image (camera or gallery)
  */
 export async function parseWorkoutImage(
-  imageUri: string
+  imageUri: string,
 ): Promise<ParseWorkoutImageResponse> {
   const url = `${API_BASE_URL}/parse-workout-image`;
 
@@ -668,10 +720,70 @@ export async function parseWorkoutImage(
     try {
       errorText = await res.text();
     } catch {}
-    throw new Error(`API Error [${res.status}]: ${errorText || res.statusText}`);
+    throw new Error(
+      `API Error [${res.status}]: ${errorText || res.statusText}`,
+    );
   }
 
   return res.json() as Promise<ParseWorkoutImageResponse>;
+}
+
+// ==========================================
+// Parse Appearance Image
+// ==========================================
+
+/**
+ * Sends a person photo to the backend for Gemini-based appearance parsing.
+ * Returns structured appearance cues (persistent, session, removable).
+ *
+ * @param imageUri - Local file URI of the image (camera or gallery)
+ */
+export async function parseAppearanceImage(
+  imageUri: string,
+): Promise<{ appearance: string }> {
+  const url = `${API_BASE_URL}/appearance-from-image`;
+
+  const formData = new FormData();
+  const filename = imageUri.split("/").pop() || "person.jpg";
+  const ext = filename.split(".").pop()?.toLowerCase();
+  const mimeType = ext === "png" ? "image/png" : "image/jpeg";
+
+  formData.append("image", {
+    uri: imageUri,
+    name: filename,
+    type: mimeType,
+  } as any);
+
+  const headers: Record<string, string> = {};
+
+  const token = await getToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    const { useAuthStore } = await import("@/features/auth/useAuthStore");
+    useAuthStore.getState().handleUnauthorized();
+    throw new Error("Unauthorized");
+  }
+
+  if (!res.ok) {
+    let errorText = res.statusText;
+    try {
+      errorText = await res.text();
+    } catch {}
+    throw new Error(
+      `API Error [${res.status}]: ${errorText || res.statusText}`,
+    );
+  }
+
+  return res.json() as Promise<{ appearance: string }>;
 }
 
 // ==========================================
@@ -685,10 +797,101 @@ import type { TelemetrySession } from "../debug/types";
  * The backend writes it to gs://{bucket}/debug/telemetry/{profileId}/{sessionId}.json.
  */
 export async function uploadDebugTelemetry(
-  session: TelemetrySession
+  session: TelemetrySession,
 ): Promise<void> {
   await apiClient<{ ok: boolean }>("/debug/telemetry", {
     method: "POST",
     bodyPayload: session,
+  });
+}
+
+// ==========================================
+// Related WODs
+// ==========================================
+
+export type RelatedWODsResponse =
+  components["schemas"]["controllers.RelatedWODsResponse"];
+
+export interface FetchRelatedWodsParams {
+  profileId: number;
+  movement?: string;
+  weightKg?: number;
+  sessionId?: string;
+  limit?: number;
+}
+
+export async function fetchRelatedWods(
+  params: FetchRelatedWodsParams,
+): Promise<RelatedWODsResponse> {
+  const query = new URLSearchParams();
+  query.append("profile_id", params.profileId.toString());
+  if (params.movement) query.append("movement", params.movement);
+  if (params.weightKg !== undefined && !isNaN(params.weightKg)) {
+    query.append("weight_kg", params.weightKg.toString());
+  }
+  if (params.sessionId) query.append("session_id", params.sessionId);
+  if (params.limit !== undefined)
+    query.append("limit", params.limit.toString());
+
+  return apiClient<RelatedWODsResponse>(`/related-wods?${query.toString()}`);
+}
+
+// ==========================================
+// Pre-WOD Strategy & Scaling Advice
+// ==========================================
+
+export interface MuscleReadinessItem {
+  group: string;
+  name_ko: string;
+  fatigue_score: number;
+  state: "fresh" | "moderate" | "fatigued" | "exhausted";
+  state_ko: string;
+  note: string;
+}
+
+export interface TargetRPEInfo {
+  score: number;
+  label: string;
+  pacing_strategy: string;
+}
+
+export interface ScalingAdviceItem {
+  movement: string;
+  recommendation: string;
+  detail: string;
+}
+
+export interface MobilityWarmupItem {
+  title: string;
+  target_area: string;
+  duration: string;
+  reason: string;
+}
+
+export interface PreWodAdviceResponse {
+  profile_id: number;
+  overall_fatigue_score: number;
+  overall_state: string;
+  overall_state_ko: string;
+  muscle_readiness: MuscleReadinessItem[];
+  target_rpe: TargetRPEInfo;
+  scaling_advice: ScalingAdviceItem[];
+  mobility_warmup: MobilityWarmupItem[];
+  overall_summary: string;
+  last_workout_at?: string;
+}
+
+export interface PreWodAdviceRequest {
+  profile_id: number;
+  wod_description?: string;
+  movements?: string[];
+}
+
+export async function fetchPreWodAdvice(
+  req: PreWodAdviceRequest,
+): Promise<PreWodAdviceResponse> {
+  return apiClient<PreWodAdviceResponse>("/strategies/pre-wod-advice", {
+    method: "POST",
+    bodyPayload: req,
   });
 }

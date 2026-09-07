@@ -1,0 +1,50 @@
+{
+  "description": "Polar H10 Heart Rate Measurement (0x2A37) notifications with and without RR intervals SYNTHETIC fixture \u2014 hand-authored to the Polar PMD spec, not captured from hardware. Replace with a real H10 dump before trusting ACC values.",
+  "packets": [
+    {
+      "name": "8bit_hr_single_rr",
+      "hex": "10483303",
+      "base64": "EEgzAw==",
+      "expectedBpm": 72,
+      "expectedRrMs": [
+        800
+      ]
+    },
+    {
+      "name": "8bit_hr_double_rr",
+      "hex": "104b20031b03",
+      "base64": "EEsgAxsD",
+      "expectedBpm": 75,
+      "expectedRrMs": [
+        781,
+        776
+      ]
+    },
+    {
+      "name": "16bit_hr_double_rr",
+      "hex": "118600cb01c901",
+      "base64": "EYYAywHJAQ==",
+      "expectedBpm": 134,
+      "expectedRrMs": [
+        448,
+        446
+      ]
+    },
+    {
+      "name": "8bit_hr_with_energy_and_rr",
+      "hex": "18879600c201",
+      "base64": "GIeWAMIB",
+      "expectedBpm": 135,
+      "expectedRrMs": [
+        439
+      ]
+    },
+    {
+      "name": "8bit_hr_no_rr",
+      "hex": "0044",
+      "base64": "AEQ=",
+      "expectedBpm": 68,
+      "expectedRrMs": []
+    }
+  ]
+}

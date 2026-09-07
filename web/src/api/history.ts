@@ -1,4 +1,30 @@
-import { api } from './client';
+import { api } from "./client";
+
+export interface StretchRecommendation {
+  stretch: string;
+  target_area: string;
+  reason: string;
+  duration_hint?: string;
+  caution?: string;
+  provisional?: boolean;
+}
+
+export interface MuscleLoads {
+  shoulders_push?: number;
+  upper_pull_grip?: number;
+  posterior_chain?: number;
+  quads_squat?: number;
+  core_midline?: number;
+  cardio_metabolic?: number;
+  [key: string]: number | undefined;
+}
+
+export interface SessionFatigue {
+  overall_score: number;
+  state: "fresh" | "moderate" | "fatigued" | "exhausted" | string;
+  state_ko: string;
+  muscles: MuscleLoads;
+}
 
 export interface AnalysisResult {
   id: number;
@@ -8,6 +34,10 @@ export interface AnalysisResult {
   workout_type: string;
   output: string;
   highlight_segments?: string;
+  session_score?: string;
+  session_fatigue?: SessionFatigue;
+  mobility_observations?: string;
+  stretch_recommendations?: string;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -60,7 +90,7 @@ export interface SessionAnalysisResponse {
   corrections_updated_at?: string | null;
 }
 
-export type FeedbackTargetType = 'session' | 'chunk';
+export type FeedbackTargetType = "session" | "chunk";
 
 export interface FeedbackCorrection {
   accurate?: boolean;
@@ -116,12 +146,12 @@ export interface FeedbackUpdateRequest {
 }
 
 export type ReanalysisStatus =
-  | 'QUEUED'
-  | 'RUNNING'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'VIDEO_UNAVAILABLE'
-  | 'INTERVAL_UNAVAILABLE';
+  | "QUEUED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "VIDEO_UNAVAILABLE"
+  | "INTERVAL_UNAVAILABLE";
 
 export interface ChunkReanalysisCandidate {
   exercise_type?: string | null;
@@ -144,7 +174,7 @@ export interface ChunkReanalysisRun {
   session_id?: string;
   chunk_id?: number;
   status: ReanalysisStatus;
-  source_kind?: 'session_video' | 'chunk';
+  source_kind?: "session_video" | "chunk";
   media_start_secs?: number | null;
   media_end_secs?: number | null;
   candidate?: ChunkReanalysisCandidate | null;
@@ -173,12 +203,12 @@ export interface CreateChunkReanalysisResponse {
 }
 
 export type SessionReanalysisStatus =
-  | 'QUEUED'
-  | 'RUNNING'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'VIDEO_UNAVAILABLE'
-  | 'CONTEXT_UNAVAILABLE';
+  | "QUEUED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "VIDEO_UNAVAILABLE"
+  | "CONTEXT_UNAVAILABLE";
 
 export interface SessionReanalysisCandidate {
   output: string;
@@ -193,6 +223,7 @@ export interface SessionReanalysisRun {
   task_id?: string;
   status: SessionReanalysisStatus;
   candidate?: SessionReanalysisCandidate | null;
+  wod_description?: string | null;
   model?: string | null;
   prompt_version?: string | null;
   prompt_hash?: string | null;
@@ -232,7 +263,7 @@ export interface ChunkPlayUrlResponse {
   chunk_id?: number;
   play_url?: string;
   download_url?: string;
-  source_kind?: 'session_video' | 'chunk';
+  source_kind?: "session_video" | "chunk";
   media_start_secs?: number | null;
   media_end_secs?: number | null;
   expires_at?: string;
@@ -262,17 +293,17 @@ export interface VideoDownloadResponse {
   expires_at: string;
 }
 
-export type VideoKind = 'merged' | 'hardsubbed' | 'encoded';
+export type VideoKind = "merged" | "hardsubbed" | "encoded";
 
 export const historyApi = {
   list: (profileId: number, beforeId?: number, limit?: number) => {
     const params = new URLSearchParams();
-    params.append('profile_id', String(profileId));
+    params.append("profile_id", String(profileId));
     if (beforeId !== undefined) {
-      params.append('before_id', String(beforeId));
+      params.append("before_id", String(beforeId));
     }
     if (limit !== undefined) {
-      params.append('limit', String(limit));
+      params.append("limit", String(limit));
     }
     return api.get<AnalysisResult[]>(`/history?${params.toString()}`);
   },
@@ -286,7 +317,7 @@ export const historyApi = {
   getSessionAnalysis: (sessionId: string) =>
     api.get<SessionAnalysisResponse>(`/sessions/${sessionId}/analysis`),
 
-  getMovementSuggestions: () => api.get<string[]>('/movements'),
+  getMovementSuggestions: () => api.get<string[]>("/movements"),
 
   listFeedback: (sessionId: string) =>
     api.get<FeedbackListResponse>(`/sessions/${sessionId}/feedback`),
@@ -298,20 +329,25 @@ export const historyApi = {
     sessionId: string,
     feedbackId: number,
     body: FeedbackUpdateRequest,
-  ) => api.patch<FeedbackMutationResponse>(
-    `/sessions/${sessionId}/feedback/${feedbackId}`,
-    body,
-  ),
+  ) =>
+    api.patch<FeedbackMutationResponse>(
+      `/sessions/${sessionId}/feedback/${feedbackId}`,
+      body,
+    ),
 
   deleteFeedback: (
     sessionId: string,
     feedbackId: number,
     expectedRevision: number,
     clientRequestId: string,
-  ) => api.delete<FeedbackMutationResponse>(`/sessions/${sessionId}/feedback/${feedbackId}`, {
-    client_request_id: clientRequestId,
-    expected_revision: expectedRevision,
-  }),
+  ) =>
+    api.delete<FeedbackMutationResponse>(
+      `/sessions/${sessionId}/feedback/${feedbackId}`,
+      {
+        client_request_id: clientRequestId,
+        expected_revision: expectedRevision,
+      },
+    ),
 
   getChunkPlayUrl: (sessionId: string, chunkId: number) =>
     api.get<ChunkPlayUrlResponse>(
@@ -322,10 +358,17 @@ export const historyApi = {
     sessionId: string,
     chunkId: number,
     clientRequestId: string,
-  ) => api.post<CreateChunkReanalysisResponse>(
-    `/sessions/${sessionId}/chunks/${chunkId}/reanalyses`,
-    { client_request_id: clientRequestId },
-  ),
+    appearanceHints?: string,
+    model?: string,
+  ) =>
+    api.post<CreateChunkReanalysisResponse>(
+      `/sessions/${sessionId}/chunks/${chunkId}/reanalyses`,
+      {
+        client_request_id: clientRequestId,
+        ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
+        ...(model ? { model } : {}),
+      },
+    ),
 
   listChunkReanalyses: (sessionId: string, chunkId: number) =>
     api.get<ReanalysisListResponse>(
@@ -337,10 +380,35 @@ export const historyApi = {
       `/sessions/${sessionId}/chunks/${chunkId}/reanalyses/${runId}`,
     ),
 
-  createSessionReanalysis: (sessionId: string, clientRequestId: string) =>
+  createSessionReanalysis: (
+    sessionId: string,
+    clientRequestId: string,
+    appearanceHints?: string,
+    model?: string,
+    wodDescription?: string,
+  ) =>
     api.post<CreateSessionReanalysisResponse>(
       `/sessions/${sessionId}/reanalyses`,
-      { client_request_id: clientRequestId },
+      {
+        client_request_id: clientRequestId,
+        ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
+        ...(model ? { model } : {}),
+        ...(wodDescription !== undefined ? { wod_description: wodDescription } : {}),
+      },
+    ),
+
+  applySessionReanalysis: (sessionId: string, runId: number) =>
+    api.post<ApplySessionReanalysisResponse>(
+      `/sessions/${sessionId}/reanalyses/${runId}/apply`,
+      {},
+    ),
+
+  getSessionCost: (sessionId: string) =>
+    api.get<SessionCostResponse>(`/sessions/${sessionId}/cost`),
+
+  getTotalCost: (profileId?: number) =>
+    api.get<TotalCostResponse>(
+      profileId ? `/analytics/cost?profile_id=${profileId}` : `/analytics/cost`,
     ),
 
   listSessionReanalyses: (sessionId: string) =>
@@ -352,9 +420,80 @@ export const historyApi = {
   getVideoDownloadUrl: (
     sessionId: string,
     profileId: number,
-    kind: VideoKind = 'merged',
+    kind: VideoKind = "merged",
   ) =>
     api.get<VideoDownloadResponse>(
       `/video-download/${sessionId}?profile_id=${profileId}&kind=${kind}`,
     ),
+
+  getRelatedWods: (sessionId: string, profileId: number) =>
+    api.get<RelatedWODsResponse>(
+      `/related-wods?session_id=${encodeURIComponent(sessionId)}&profile_id=${profileId}`,
+    ),
 };
+
+export interface CostBreakdownItem {
+  key: string;
+  prompt_tokens: number;
+  candidate_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_krw: number;
+}
+
+export interface SessionCostResponse {
+  session_id: string;
+  prompt_tokens: number;
+  candidate_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_krw: number;
+  by_task_type: CostBreakdownItem[];
+  by_model: CostBreakdownItem[];
+}
+
+export interface TotalCostResponse {
+  prompt_tokens: number;
+  candidate_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_krw: number;
+}
+
+export interface ApplySessionReanalysisResponse {
+  session_id: string;
+  run_id: number;
+  applied_at: string;
+}
+
+export interface NormalizedMovement {
+  movement: string;
+  weight_raw?: string;
+  weight_kg?: number | null;
+  reps?: string;
+  is_main: boolean;
+}
+
+export interface RelatedWODItem {
+  session_id: string;
+  analysis_id: number;
+  created_at: string;
+  wod_description: string;
+  movement: NormalizedMovement;
+  session_score?: string;
+  score: number;
+  score_parts?: {
+    recency: number;
+    weight: number;
+    main: number;
+  };
+}
+
+export interface RelatedWODsResponse {
+  query: {
+    movement: string;
+    weight_kg?: number | null;
+    source_session_id: string;
+  };
+  related: RelatedWODItem[];
+}

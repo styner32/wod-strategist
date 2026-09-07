@@ -9,7 +9,7 @@ TEST_DATABASE_URL ?= postgresql://sunjinlee@localhost:5432/wod_test?sslmode=disa
 MIGRATIONS_DIR ?= internal/db/migrations
 IMAGE_REPO ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)
 CMD_DIR ?= cmd
-TEST_DIR ?= ./...
+TEST_DIR ?= ./cmd/... ./internal/...
 
 GIT_SHA := $(shell git rev-parse --short HEAD)
 
@@ -78,7 +78,11 @@ test-chunk-upload: ## Replay chunk upload from a saved video. Usage: make test-c
 
 test: ## Run the tests
 	@mkdir -p tmp/go-build tmp/go-tmp
-	GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp go test $(TEST_DIR) -p 1 -v
+	@if command -v gotestsum >/dev/null 2>&1; then \
+		GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp gotestsum --format pkgname-and-test-fails -- -p 1 $(TEST_DIR); \
+	else \
+		GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp go test $(TEST_DIR) -p 1 -v; \
+	fi
 
 migrate-test-up:
 ifndef TEST_DATABASE_URL

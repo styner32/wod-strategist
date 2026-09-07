@@ -8,7 +8,7 @@
   structured correction, optional note, consent, and optional completed debug
   re-analysis reference.
 - Production `analysis_results` and `chunk_analysis_results` are immutable with
-  respect to feedback. Legacy mobile endpoints continue to return originals.
+  respect to feedback. Legacy mobile endpoints return the production rows. The separate whole-session re-analysis `/apply` action can replace those rows; it is not a feedback mutation. See [video-analysis.md](video-analysis.md#whole-workout-re-analysis--apply-workflow).
 - Chunk feedback targets `chunk_analysis_results.id`, and the chunk must match
   the owned `session_id` and `profile_id` exactly.
 - `client_request_id` is required for every create, edit, and retraction and is

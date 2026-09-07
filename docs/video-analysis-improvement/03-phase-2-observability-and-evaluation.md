@@ -1,5 +1,7 @@
 # Phase 2: Observability and Evaluation
 
+> Target plan. Read the [2026-09-06 source reconciliation](README.md#current-status-versus-target-work) first; existing implementation must be preserved and extended. Checkboxes are release gates, not a live code inventory.
+
 Priority: P0 before model/cost rollout
 Goal: make every proposed optimization measurable by session, stage, variant, attempt, and evidence coverage.
 
@@ -20,7 +22,7 @@ Current gaps:
 - no task attempt, outcome, error class, parse result, or actual successful segment count;
 - real-time and synthetic split calls are not consistently distinguishable;
 - stage metrics are mostly written only on success;
-- no estimated cost report tied to a dated pricing snapshot;
+- estimated cost endpoints exist in `internal/controllers/cost_handlers.go`, using `internal/cost/cost.go`; a dated pricing snapshot and complete billed-token reconciliation are still missing;
 - no annotated evaluation set or repeatable variant runner;
 - `compare` is user-selectable in the web upload page even though the video path does not actually execute both variants.
 

@@ -13,8 +13,8 @@
 **One exception:** faking a *stdlib* interface (e.g. `multipart.File`) is fine; faking internal clients/wrappers is not.
 
 ## Test tiers (what goes where)
-- **Pure functions** (validators, sanitizers, parsers): plain table-driven
-  unit tests, no DB/Redis/transport. See `handlers_test.go`. Mock-free unit
+- **Pure functions** (validators, sanitizers, parsers): table-driven
+  Ginkgo/Gomega unit tests, no DB/Redis/transport. See `handlers_test.go`. Mock-free unit
   tests of pure logic are encouraged — the "no mocks" rule bans *layer
   isolation via fakes*, not fast tests of pure code.
 - **Everything with I/O**: sociable tests through the real entry point
@@ -26,9 +26,8 @@
 - Overrides: `TEST_DATABASE_URL`, `TEST_REDIS_URL`
 
 Run from `api/`:
-- `make migrate-test-up` — builds the test schema from scratch (fresh clone).
-- `make migrate-test-redo` — re-runs only the **latest** migration; use it
-  when iterating on a new migration, not for bootstrap.
+- `make migrate-test-up` — applies all pending migrations (also bootstraps a fresh test database).
+- `make migrate-test-redo` — rolls back one **applied** migration, then applies pending migrations. Use it for deliberate latest-pair rollback/reapply testing, not bootstrap or the first application of a new pair.
 
 See also: [migrations.md](migrations.md).
 
@@ -92,8 +91,7 @@ BeforeEach(func() {
 ```
 
 ## Layer 2 — Gemini API
-Wire a real `gemini.Client` to a `MockTransport` and register the 5 expected
-requests (`upload-start`, `upload-finalize`, `poll`, `generateContent`,
+For a single-call path that owns deletion, wire a real `gemini.Client` to a `MockTransport` and register the expected lifecycle requests (`upload-start`, `upload-finalize`, `poll`, `generateContent`,
 `deleteFile` — matching is unordered, see
 [Assertions on outbound HTTP](#assertions-on-outbound-http)):
 
@@ -130,9 +128,9 @@ for _, r := range transport.Requests() {
 Expect(genBody).To(ContainSubstring("## 운동 종목: Burpee, Pull-up"))
 ```
 
-**Two-pass variant:** when `chunk_analysis_results` rows exist, there is no `IndexVideo` call — the flow becomes `upload-start → upload-finalize → poll → analyzeSegment (Pro) → deleteFile`. Seed chunks in `BeforeEach` via a factory (add `CreateChunkAnalysisResult` if it doesn't exist yet — don't inline `dbConn.Create`).
+**Two-pass variant:** seed usable completed chunks with verified media offsets to avoid `IndexVideo`; merely having chunk rows is insufficient. Match the model configured on the test client, and register triage/segment calls according to the fixture. Successful two-pass output currently retains file metadata; do not assume it always sends `deleteFile`. See [video-analysis.md](video-analysis.md#file-lifecycle). Use the existing `CreateChunkAnalysisResult` factory.
 
-**Important:** register the deferred `DeleteFile` expectation **before** any early-return path (e.g. empty analysis). This prevents Gemini file leaks and is what `transport.Verify()` catches.
+**Important:** for paths that own deletion, register the deferred `DeleteFile` expectation before invoking the handler. Verify retained-file paths separately; a passing transport test is not proof of a universal cleanup guarantee.
 
 ## Layer 3 — GCS storage
 ```go

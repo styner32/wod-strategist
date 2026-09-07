@@ -93,7 +93,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 		Expect(count).To(BeZero())
 	})
 
-	It("accepts only client_request_id in the request body", func() {
+	It("accepts only valid fields in the request body", func() {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, newAuthorizedJSONRequest(
 			http.MethodPost,
@@ -103,10 +103,44 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 		))
 
 		Expect(response.Code).To(Equal(http.StatusBadRequest))
-		Expect(response.Body.String()).To(ContainSubstring("only client_request_id is allowed"))
+		Expect(response.Body.String()).To(ContainSubstring("invalid request body"))
 		var count int64
 		Expect(dbConn.Model(&db.SessionReanalysisRun{}).Count(&count).Error).To(Succeed())
 		Expect(count).To(BeZero())
+	})
+
+	It("persists custom wod_description on the run when provided", func() {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(
+			http.MethodPost,
+			requestPath(),
+			`{"client_request_id":"wod-desc-1","wod_description":"5 rounds of 10 pullups and 20 thrusters"}`,
+			&user,
+		))
+		Expect(response.Code).To(Equal(http.StatusAccepted))
+		var resp controllers.CreateSessionReanalysisResponse
+		Expect(json.Unmarshal(response.Body.Bytes(), &resp)).To(Succeed())
+
+		var saved db.SessionReanalysisRun
+		Expect(dbConn.First(&saved, resp.RunID).Error).To(Succeed())
+		Expect(saved.WODDescription).To(Equal("5 rounds of 10 pullups and 20 thrusters"))
+	})
+
+	It("falls back to the existing session wod_description when none is provided", func() {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(
+			http.MethodPost,
+			requestPath(),
+			`{"client_request_id":"wod-desc-fallback-1"}`,
+			&user,
+		))
+		Expect(response.Code).To(Equal(http.StatusAccepted))
+		var resp controllers.CreateSessionReanalysisResponse
+		Expect(json.Unmarshal(response.Body.Bytes(), &resp)).To(Succeed())
+
+		var saved db.SessionReanalysisRun
+		Expect(dbConn.First(&saved, resp.RunID).Error).To(Succeed())
+		Expect(saved.WODDescription).To(Equal("3 rounds of pull-ups and burpees"))
 	})
 
 	It("returns the same run and queues only one task for an idempotent retry", func() {
@@ -524,5 +558,121 @@ var _ = Describe("GET /api/v1/sessions/:session_id/reanalyses/:run_id", func() {
 			&user,
 		))
 		Expect(missingRun.Code).To(Equal(http.StatusNotFound))
+	})
+})
+
+var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply", func() {
+	var (
+		router  *gin.Engine
+		profile db.Profile
+		user    db.User
+		session db.Session
+		run     db.SessionReanalysisRun
+	)
+
+	requestPath := func(sessionID string, runID uint) string {
+		return fmt.Sprintf("/api/v1/sessions/%s/reanalyses/%d/apply", sessionID, runID)
+	}
+
+	BeforeEach(func() {
+		testhelpers.CleanupDB(dbConn)
+
+		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
+		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())
+		session = testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:      "WOD-20260716-01JAPPLYTEST0000000",
+			ProfileID:      profile.ID,
+			WorkoutType:    "wod",
+			WODDescription: "Original WOD description",
+		})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:         session.SessionID,
+			ProfileID:         profile.ID,
+			Status:            "COMPLETED",
+			Output:            `{"coaching_feedback":"Original output"}`,
+			SessionScore:      `{"overall":70}`,
+			HighlightSegments: `[{"type":"key_moment","start":"0:01"}]`,
+			WODDescription:    "Original WOD description",
+		})
+
+		run = testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{
+			SessionID:         session.SessionID,
+			ProfileID:         profile.ID,
+			Status:            db.SessionReanalysisStatusCompleted,
+			Output:            `{"coaching_feedback":"Updated candidate output"}`,
+			SessionScore:      `{"overall":95}`,
+			HighlightSegments: `[{"type":"candidate_highlight","start":"0:05"}]`,
+			WODDescription:    "Updated candidate WOD description",
+			WorkoutType:       "amrap",
+		})
+
+		router = newTestRouterWithAuthService(controllers.Config{
+			EnableSessionReanalysis: true,
+		})
+	})
+
+	It("atomically applies the completed candidate to analysis_results and sessions", func() {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(
+			http.MethodPost,
+			requestPath(session.SessionID, run.ID),
+			"",
+			&user,
+		))
+
+		Expect(response.Code).To(Equal(http.StatusOK))
+		var applyResp controllers.ApplySessionReanalysisResponse
+		Expect(json.Unmarshal(response.Body.Bytes(), &applyResp)).To(Succeed())
+		Expect(applyResp.SessionID).To(Equal(session.SessionID))
+		Expect(applyResp.RunID).To(Equal(run.ID))
+
+		// Check analysis_results
+		var updatedAnalysis db.AnalysisResult
+		Expect(dbConn.Where("session_id = ?", session.SessionID).First(&updatedAnalysis).Error).To(Succeed())
+		Expect(updatedAnalysis.Output).To(Equal(`{"coaching_feedback":"Updated candidate output"}`))
+		Expect(updatedAnalysis.SessionScore).To(Equal(`{"overall":95}`))
+		Expect(updatedAnalysis.HighlightSegments).To(Equal(`[{"type":"candidate_highlight","start":"0:05"}]`))
+		Expect(updatedAnalysis.WODDescription).To(Equal("Updated candidate WOD description"))
+
+		// Check sessions
+		var updatedSession db.Session
+		Expect(dbConn.Where("session_id = ?", session.SessionID).First(&updatedSession).Error).To(Succeed())
+		Expect(updatedSession.WODDescription).To(Equal("Updated candidate WOD description"))
+		Expect(updatedSession.WorkoutType).To(Equal("amrap"))
+	})
+
+	It("rejects applying when run status is not COMPLETED", func() {
+		runningRun := testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{
+			SessionID: session.SessionID,
+			ProfileID: profile.ID,
+			Status:    db.SessionReanalysisStatusRunning,
+		})
+
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(
+			http.MethodPost,
+			requestPath(session.SessionID, runningRun.ID),
+			"",
+			&user,
+		))
+
+		Expect(response.Code).To(Equal(http.StatusConflict))
+		Expect(response.Body.String()).To(ContainSubstring("only COMPLETED runs can be applied"))
+	})
+
+	It("rejects unauthorized user for apply", func() {
+		otherProfile := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		otherUser := db.User{}
+		Expect(dbConn.First(&otherUser, otherProfile.UserID).Error).NotTo(HaveOccurred())
+
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(
+			http.MethodPost,
+			requestPath(session.SessionID, run.ID),
+			"",
+			&otherUser,
+		))
+
+		Expect(response.Code).To(Equal(http.StatusForbidden))
 	})
 })

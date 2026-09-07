@@ -28,6 +28,7 @@ type SessionReanalysisRun struct {
 	HighlightSegments        string       `json:"-"`
 	SessionScore             string       `json:"-"`
 	WorkoutType              string       `json:"-"`
+	WODDescription           string       `json:"wod_description,omitempty"`
 	Model                    string       `json:"model,omitempty"`
 	PromptVersion            string       `json:"prompt_version,omitempty"`
 	PromptHash               string       `json:"prompt_hash,omitempty"`

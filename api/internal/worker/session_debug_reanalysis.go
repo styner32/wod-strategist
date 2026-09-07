@@ -118,6 +118,10 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		return w.failSessionDebugRun(ctx, run.ID, retryCount, started, "The workout context could not be loaded.", err)
 	}
 
+	if strings.TrimSpace(run.WODDescription) != "" {
+		target.WODDescription = strings.TrimSpace(run.WODDescription)
+	}
+
 	file, uploadBytes, err := w.prepareSessionDebugGeminiFile(ctx, &run)
 	if err != nil {
 		return w.failSessionDebugRun(ctx, run.ID, retryCount, started, "The session video could not be prepared.", err)
@@ -164,11 +168,11 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	}
 	maxSegments := maxSegmentsForDuration(file.Duration)
 	if len(segments) > maxSegments {
-		triagePrompt := buildTriagePrompt(segments, maxSegments, file.Duration)
+		triagePrompt := buildTriagePrompt(segments, maxSegments, file.Duration, target.WorkoutType)
 		promptRecord.WriteString(triagePrompt)
 		triaged, usage, triageErr := w.triageSegments(ctx, &gemini.UploadResult{
 			FileName: file.Name, FileURI: file.URI, MIMEType: chunkDebugMIMEType(file.MIMEType), VideoDuration: file.Duration,
-		}, segments, maxSegments)
+		}, segments, maxSegments, target.WorkoutType)
 		apiCalls++
 		w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", usage)
 		addSessionDebugUsage(&aggregate, usage)
@@ -182,6 +186,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	contextSnapshot, _ := json.Marshal(map[string]any{
 		"session_id": run.SessionID, "profile_id": run.ProfileID,
 		"profile_context": w.lookupProfileString(run.ProfileID),
+		"appearance":      w.buildTargetPersonContext(run.ProfileID, run.SessionID),
 		"wod_description": target.WODDescription, "workout_type": target.WorkoutType,
 		"movement_hints": movementHintsFromDocument(target.MovementHints),
 		"injuries":       target.Injuries, "confirmed_corrections": target.Corrections,
@@ -208,8 +213,12 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, finalContext, i == len(segments)-1)
 		prompt += correctionContext
-		promptRecord.WriteString(prompt)
-		analysis, usage, callErr := w.GeminiClient.AnalyzeSegment(ctx, file.URI, chunkDebugMIMEType(file.MIMEType), start, end, prompt)
+		defaultClientModel := ""
+		if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
+			defaultClientModel = provider.Model()
+		}
+		selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
+		analysis, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(ctx, file.URI, chunkDebugMIMEType(file.MIMEType), start, end, prompt, selectedModel)
 		apiCalls++
 		if callErr != nil || strings.TrimSpace(analysis) == "" {
 			if callErr == nil {
@@ -315,7 +324,7 @@ func (w *Worker) loadSessionDebugContext(ctx context.Context, sessionID string, 
 		return nil, err
 	}
 	target.Corrections = corrections
-	target.Segments, err = w.buildSessionDebugSegments(ctx, sessionID, profileID, corrections)
+	target.Segments, err = w.buildSessionDebugSegments(ctx, sessionID, profileID, corrections, target.WorkoutType)
 	if err != nil {
 		return nil, err
 	}
@@ -355,7 +364,7 @@ func (w *Worker) loadActiveSessionDebugCorrections(ctx context.Context, sessionI
 	return result, nil
 }
 
-func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection) ([]Segment, error) {
+func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection, workoutType string) ([]Segment, error) {
 	var chunks []db.ChunkAnalysisResult
 	if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 		Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error; err != nil {
@@ -371,7 +380,7 @@ func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string
 			continue
 		}
 		movement := strings.TrimSpace(chunk.ExerciseType)
-		include := strings.EqualFold(chunk.Status, "COMPLETED") && includeChunkInDeepAnalysis(chunk)
+		include := strings.EqualFold(chunk.Status, "COMPLETED") && includeChunkInDeepAnalysis(chunk, workoutType)
 		for _, correctionIndex := range byChunk[chunk.ID] {
 			corrections[correctionIndex].MediaStartSecs = cloneSessionDebugFloat(chunk.MediaStartSecs)
 			corrections[correctionIndex].MediaEndSecs = cloneSessionDebugFloat(chunk.MediaEndSecs)

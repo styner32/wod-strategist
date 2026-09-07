@@ -2,7 +2,7 @@
 
 ## Architecture overview
 - **Scheme:** JWT (HS256) with DB-side `token_version` check on every request (via 30s in-memory cache).
-- **Single token** — no refresh token. Revocation is instant via `token_version` bump.
+- **Single token** — no refresh token. Revocation bumps `token_version` and invalidates the local service cache; other instances may accept the old version until their 30-second cache TTL expires.
 - **Password hashing:** bcrypt (`DefaultCost`).
 - **User ID:** auto-increment `uint` (SERIAL). Originally planned as petname TEXT, migrated in `000026`.
 - **No application API-key gate.** Authorization is JWT only (`Authorization: Bearer` for mobile, `jwt` httpOnly cookie for web). Gemini uses a separate `GEMINI_API_KEY` / `X-Goog-Api-Key` unrelated to app auth.
@@ -55,13 +55,15 @@
 2. Transaction deletes: feedback, chunk/session re-analysis runs, `analysis_results`, `chunk_analysis_results`, `highlight_results`, `token_usages` (by profile_id), then profiles, then soft-deletes user (`deleted_at`, scrubs `password_hash`, bumps `token_version`)
 3. Returns `gcsPrefixes` for async GCS cleanup — **currently not wired up** (see TODO)
 
-## 401 handling (mobile)
-- `apiClient` in `features/wod/api.ts` intercepts 401 responses
-- Calls `useAuthStore.getState().handleUnauthorized()` which clears SecureStore + resets state
-- `_layout.tsx` redirects to `/auth/login` when `isLoggedIn` is false
+## 401 handling & token validation (mobile)
+- `apiClient` in `features/wod/api.ts` intercepts 401 responses and calls `useAuthStore.getState().handleUnauthorized()`.
+- **Deferred logout during recording:** If a workout recording is active (`isRecordingActive: true`), `handleUnauthorized()` sets `sessionExpiredDuringRecording: true` and defers clearing credentials and redirecting until after the session finishes and the local video is merged and saved.
+- `_layout.tsx` redirects to `/auth/login` when `isLoggedIn` is false.
+- **Pre-workout token validation:** `setup.tsx` calls `validateStoredToken()` (`features/auth/jwt.ts`). If the token is expired, it blocks starting and prompts login. If the token expires in < 24h, it prompts the user to re-login or continue.
+- **Hydration token check:** `useAuthStore.hydrate()` decodes the JWT and clears expired tokens on launch.
 
 ## Gotchas
-- Username unique index is partial: `WHERE deleted_at IS NULL` — deleted usernames are NOT freed for reuse (username is not scrubbed on delete)
+- Username unique index is partial: `WHERE deleted_at IS NULL` — soft-deleted rows do not block username reuse at the DB layer. Self-service signup is currently disabled.
 - CORS `allowMethods` includes `DELETE` and `PATCH`; `allowHeaders` is `Content-Type, Authorization` (no `X-API-Key`)
 - Workers do not check `deleted_at` — in-flight tasks continue after account deletion
 - Old mobile clients may still send an ignored `X-API-Key` header; that is harmless after server removal
@@ -70,5 +72,5 @@
 ## Remaining hardening TODO
 - [ ] Replace in-memory login rate limiter with a distributed limiter
 - [ ] Wire up GCS cleanup on account deletion (resolve TODO in `auth_handlers.go`)
-- [ ] Decide username scrub-on-delete policy (currently blocks reuse)
+- [ ] Decide username scrub-on-delete policy for retained deleted-user data (the partial index already permits reuse)
 - [ ] Add worker-side `deleted_at` check before processing tasks

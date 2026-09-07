@@ -385,6 +385,7 @@ func (w *Worker) runFFmpegMixAudio(ctx context.Context, videoPath, audioPath, ou
 			"-map", "[aout]",
 			"-c:v", "copy",
 			"-c:a", "aac", "-b:a", "128k",
+			"-movflags", "+faststart",
 			"-y", outputPath,
 		}
 	} else {
@@ -398,6 +399,7 @@ func (w *Worker) runFFmpegMixAudio(ctx context.Context, videoPath, audioPath, ou
 			"-map", "[aout]",
 			"-c:v", "copy",
 			"-c:a", "aac", "-b:a", "128k",
+			"-movflags", "+faststart",
 			"-shortest",
 			"-y", outputPath,
 		}

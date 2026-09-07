@@ -2,7 +2,7 @@
 
 ## Session ID format
 Current format:
-`{TYPE}-{YYYYMMDD}-{ULID}`
+`{TYPE}-{YYYYMMDD}-{ULID}` where `TYPE` is `WOD`, `WARMUP`, `ACCESSORY`, or `COOLDOWN`.
 
 Example:
 `WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF`
@@ -24,9 +24,9 @@ Old format:
 `P{profileId}-WOD-YYYY-MM-DD-HH-MM`
 
 Both formats must remain supported. Legacy-aware parsers:
-- `sessionIDFromObjectName()` in `api/internal/handlers/dev_handlers.go` — tries the new `videos/{pid}/{sid}/{file}` regex first, falls back to filename-prefix parsing.
+- `sessionIDFromObjectName()` in `api/internal/controllers/dev_handlers.go` — tries the new `videos/{pid}/{sid}/{file}` regex first, falls back to filename-prefix parsing.
 - `buildVideoAssets()` — matches objects by either directory containment or filename prefix.
-- `formatSessionLabel()` in `HistoryList.tsx` — handles both formats on the client.
+- `formatSessionLabel()` in `features/wod/sessionLabel.ts` (used by `HistoryList.tsx`) — handles both formats on the client.
 - `GetVideoDownloadURL` — searches for both `merged.mp4` (new) and `*_merged_*` (old).
 
 ## GCS layout

@@ -1,5 +1,5 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { t } from "@/features/i18n";
+import { useAuthStore } from "@/features/auth/useAuthStore";
 import {
   type CacheItem,
   deleteAllByRelPath,
@@ -10,10 +10,19 @@ import {
   listItemsByRelPath,
   runStorageScanAndShare,
 } from "@/features/debug/storageScanner";
-import { useAuthStore } from "@/features/auth/useAuthStore";
-import { useActiveProfile, useProfileId, useProfileStore } from "@/store/useProfileStore";
-import { Link, router } from "expo-router";
-import React, { useState } from "react";
+import { t } from "@/features/i18n";
+import {
+  clearAllVideoCache,
+  getVideoCacheStats,
+  type VideoCacheStats,
+} from "@/features/video/videoCacheManager";
+import {
+  useActiveProfile,
+  useProfileId,
+  useProfileStore,
+} from "@/store/useProfileStore";
+import { Link, router, useFocusEffect } from "expo-router";
+import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -30,6 +39,9 @@ export default function ProfileTab() {
   const activeProfile = useActiveProfile();
   const profileId = useProfileId();
   const clearActiveProfile = useProfileStore((s) => s.clearActiveProfile);
+  const [videoCacheStats, setVideoCacheStats] =
+    useState<VideoCacheStats | null>(null);
+  const [clearingVideoCache, setClearingVideoCache] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [extractProgress, setExtractProgress] = useState("");
@@ -40,13 +52,55 @@ export default function ProfileTab() {
   const [deletingItem, setDeletingItem] = useState<string | null>(null);
   const [deletingDir, setDeletingDir] = useState<string | null>(null);
   // Dynamic directory management
-  const [containerDirs, setContainerDirs] = useState<{ name: string; path: string }[]>([]);
+  const [containerDirs, setContainerDirs] = useState<
+    { name: string; path: string }[]
+  >([]);
   const [dirItems, setDirItems] = useState<Record<string, CacheItem[]>>({});
   const [showDir, setShowDir] = useState<Record<string, boolean>>({});
   const [loadingDir, setLoadingDir] = useState<Record<string, boolean>>({});
 
+  const refreshVideoCache = useCallback(async () => {
+    try {
+      const stats = await getVideoCacheStats();
+      setVideoCacheStats(stats);
+    } catch {}
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshVideoCache();
+    }, [refreshVideoCache]),
+  );
+
+  const handleClearVideoCache = () => {
+    Alert.alert(
+      t("profileTab.videoCacheTitle"),
+      t("profileTab.videoCacheClearConfirm"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("profileTab.videoCacheClear"),
+          style: "destructive",
+          onPress: async () => {
+            setClearingVideoCache(true);
+            try {
+              await clearAllVideoCache();
+              await refreshVideoCache();
+              Alert.alert(t("common.saved"), t("profileTab.videoCacheCleared"));
+            } catch (e) {
+              Alert.alert("Error", String(e));
+            } finally {
+              setClearingVideoCache(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const formatSize = (bytes: number): string => {
-    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    if (bytes >= 1024 * 1024 * 1024)
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
     if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${bytes} B`;
@@ -74,10 +128,7 @@ export default function ProfileTab() {
     }
   };
 
-  const handleDeleteSingleItem = (
-    item: CacheItem,
-    dirName: string,
-  ) => {
+  const handleDeleteSingleItem = (item: CacheItem, dirName: string) => {
     Alert.alert(
       "Delete",
       `Delete "${item.name}" (${formatSize(item.sizeBytes)})?`,
@@ -92,7 +143,9 @@ export default function ProfileTab() {
               await deleteItemByRelPath(dirName, item.name);
               setDirItems((prev) => ({
                 ...prev,
-                [dirName]: (prev[dirName] ?? []).filter((i) => i.name !== item.name),
+                [dirName]: (prev[dirName] ?? []).filter(
+                  (i) => i.name !== item.name,
+                ),
               }));
             } catch (e) {
               Alert.alert("Error", `Failed to delete: ${e}`);
@@ -101,7 +154,7 @@ export default function ProfileTab() {
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -119,7 +172,9 @@ export default function ProfileTab() {
             setDeletingDir(dirName);
             setDeleteProgress("Starting...");
             try {
-              const count = await deleteAllByRelPath(dirName, (file) => setDeleteProgress(file));
+              const count = await deleteAllByRelPath(dirName, (file) =>
+                setDeleteProgress(file),
+              );
               setDirItems((prev) => ({ ...prev, [dirName]: [] }));
               Alert.alert("Cleared", `Deleted ${count} items from ${dirName}.`);
             } catch (e) {
@@ -131,7 +186,7 @@ export default function ProfileTab() {
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -161,7 +216,7 @@ export default function ProfileTab() {
               });
               Alert.alert(
                 "Done!",
-                `Copied ${count} files to Documents/Hidden_Cache/.\n\nNow connect to Xcode and download the container again.`
+                `Copied ${count} files to Documents/Hidden_Cache/.\n\nNow connect to Xcode and download the container again.`,
               );
             } catch (e) {
               Alert.alert("Error", `Extraction failed: ${e}`);
@@ -171,7 +226,7 @@ export default function ProfileTab() {
             }
           },
         },
-      ]
+      ],
     );
   };
   const summaryLine = activeProfile
@@ -223,21 +278,41 @@ export default function ProfileTab() {
             <Text style={{ fontSize: 18 }}>📂</Text>
           </View>
           <Text style={styles.menuItemText}>
-            {isLoading ? "Loading…" : isShown ? `Hide ${dirName}` : `Manage ${dirName}`}
+            {isLoading
+              ? "Loading…"
+              : isShown
+                ? `Hide ${dirName}`
+                : `Manage ${dirName}`}
           </Text>
           {isLoading && <ActivityIndicator color="#8B8BFF" size="small" />}
-          {!isLoading && <Text style={styles.chevron}>{isShown ? "▼" : "›"}</Text>}
+          {!isLoading && (
+            <Text style={styles.chevron}>{isShown ? "▼" : "›"}</Text>
+          )}
         </TouchableOpacity>
 
         {isShown && (
           <View style={{ marginTop: 4 }}>
             {items.length === 0 ? (
-              <Text style={{ color: "#555", fontSize: 13, padding: 12, textAlign: "center" }}>
+              <Text
+                style={{
+                  color: "#555",
+                  fontSize: 13,
+                  padding: 12,
+                  textAlign: "center",
+                }}
+              >
                 {dirName} is empty
               </Text>
             ) : (
               <>
-                <Text style={{ color: "#888", fontSize: 11, marginBottom: 8, marginLeft: 4 }}>
+                <Text
+                  style={{
+                    color: "#888",
+                    fontSize: 11,
+                    marginBottom: 8,
+                    marginLeft: 4,
+                  }}
+                >
                   {items.length} items — tap 🗑️ to delete individually
                 </Text>
                 {items.map((item) => {
@@ -259,10 +334,19 @@ export default function ProfileTab() {
                         {item.isDirectory ? "📁" : "📄"}
                       </Text>
                       <View style={{ flex: 1, marginRight: 8 }}>
-                        <Text style={{ color: "#ddd", fontSize: 13, fontWeight: "500" }} numberOfLines={1}>
+                        <Text
+                          style={{
+                            color: "#ddd",
+                            fontSize: 13,
+                            fontWeight: "500",
+                          }}
+                          numberOfLines={1}
+                        >
                           {item.name}
                         </Text>
-                        <Text style={{ color: "#666", fontSize: 11, marginTop: 2 }}>
+                        <Text
+                          style={{ color: "#666", fontSize: 11, marginTop: 2 }}
+                        >
                           {formatSize(item.sizeBytes)}
                         </Text>
                       </View>
@@ -279,7 +363,15 @@ export default function ProfileTab() {
                         {deletingItem === itemKey ? (
                           <ActivityIndicator color="#FF453A" size="small" />
                         ) : (
-                          <Text style={{ color: "#FF453A", fontSize: 13, fontWeight: "600" }}>🗑️</Text>
+                          <Text
+                            style={{
+                              color: "#FF453A",
+                              fontSize: 13,
+                              fontWeight: "600",
+                            }}
+                          >
+                            🗑️
+                          </Text>
                         )}
                       </TouchableOpacity>
                     </View>
@@ -311,12 +403,13 @@ export default function ProfileTab() {
                               setCopying(dirName);
                               setCopyProgress("Starting...");
                               try {
-                                const count = await extractDirToDocuments(dirName, (file) =>
-                                  setCopyProgress(file)
+                                const count = await extractDirToDocuments(
+                                  dirName,
+                                  (file) => setCopyProgress(file),
                                 );
                                 Alert.alert(
                                   "Done!",
-                                  `Copied ${count} files to Documents/Extracted_${dirName.replace(/\//g, "_")}/.\n\nConnect to Xcode and download the container.`
+                                  `Copied ${count} files to Documents/Extracted_${dirName.replace(/\//g, "_")}/.\n\nConnect to Xcode and download the container.`,
                                 );
                               } catch (e) {
                                 Alert.alert("Error", `Copy failed: ${e}`);
@@ -326,20 +419,39 @@ export default function ProfileTab() {
                               }
                             },
                           },
-                        ]
+                        ],
                       );
                     }}
                     disabled={isBusy || copying !== null}
                   >
                     {copying === dirName ? (
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 8,
+                        }}
+                      >
                         <ActivityIndicator color="#53E16F" size="small" />
-                        <Text style={{ color: "#53E16F", fontSize: 14, fontWeight: "600" }} numberOfLines={1}>
+                        <Text
+                          style={{
+                            color: "#53E16F",
+                            fontSize: 14,
+                            fontWeight: "600",
+                          }}
+                          numberOfLines={1}
+                        >
                           Copying… {copyProgress}
                         </Text>
                       </View>
                     ) : (
-                      <Text style={{ color: "#53E16F", fontSize: 14, fontWeight: "600" }}>
+                      <Text
+                        style={{
+                          color: "#53E16F",
+                          fontSize: 14,
+                          fontWeight: "600",
+                        }}
+                      >
                         📦 Copy All → Documents ({items.length} items)
                       </Text>
                     )}
@@ -361,14 +473,32 @@ export default function ProfileTab() {
                   disabled={isBusy}
                 >
                   {isThisDirDeleting ? (
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
                       <ActivityIndicator color="#FF453A" size="small" />
-                      <Text style={{ color: "#FF453A", fontSize: 14, fontWeight: "600" }}>
+                      <Text
+                        style={{
+                          color: "#FF453A",
+                          fontSize: 14,
+                          fontWeight: "600",
+                        }}
+                      >
                         Deleting… {deleteProgress}
                       </Text>
                     </View>
                   ) : (
-                    <Text style={{ color: "#FF453A", fontSize: 14, fontWeight: "600" }}>
+                    <Text
+                      style={{
+                        color: "#FF453A",
+                        fontSize: 14,
+                        fontWeight: "600",
+                      }}
+                    >
                       Delete All ({items.length} items)
                     </Text>
                   )}
@@ -391,9 +521,7 @@ export default function ProfileTab() {
         <View style={styles.avatarSection}>
           <View style={styles.avatarCircle}>
             <Text style={styles.avatarText}>
-              {activeProfile?.name
-                ? activeProfile.name[0].toUpperCase()
-                : "?"}
+              {activeProfile?.name ? activeProfile.name[0].toUpperCase() : "?"}
             </Text>
           </View>
           <Text style={styles.profileName}>
@@ -423,15 +551,14 @@ export default function ProfileTab() {
           <Text style={styles.sectionTitle}>{t("profileTab.account")}</Text>
 
           {activeProfile ? (
-            <Link
-              href={`/profile?id=${profileId}` as any}
-              asChild
-            >
+            <Link href={`/profile?id=${profileId}` as any} asChild>
               <Pressable style={styles.menuItem}>
                 <View style={styles.menuIconBox}>
                   <IconSymbol name="person.fill" size={18} color="#00E5FF" />
                 </View>
-                <Text style={styles.menuItemText}>{t("profileTab.editProfile")}</Text>
+                <Text style={styles.menuItemText}>
+                  {t("profileTab.editProfile")}
+                </Text>
                 <Text style={styles.chevron}>›</Text>
               </Pressable>
             </Link>
@@ -441,7 +568,9 @@ export default function ProfileTab() {
                 <View style={styles.menuIconBox}>
                   <IconSymbol name="person.fill" size={18} color="#53E16F" />
                 </View>
-                <Text style={styles.menuItemText}>{t("profileTab.createProfile")}</Text>
+                <Text style={styles.menuItemText}>
+                  {t("profileTab.createProfile")}
+                </Text>
                 <Text style={styles.chevron}>›</Text>
               </Pressable>
             </Link>
@@ -452,10 +581,64 @@ export default function ProfileTab() {
               <View style={styles.menuIconBox}>
                 <IconSymbol name="person.fill" size={18} color="#FFD60A" />
               </View>
-              <Text style={styles.menuItemText}>{t("profileTab.switchProfile")}</Text>
+              <Text style={styles.menuItemText}>
+                {t("profileTab.switchProfile")}
+              </Text>
               <Text style={styles.chevron}>›</Text>
             </Pressable>
           </Link>
+        </View>
+
+        {/* Video Cache Management */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>
+            {t("profileTab.videoCacheTitle")}
+          </Text>
+          <View style={styles.cacheCard}>
+            <View style={styles.cacheHeader}>
+              <View
+                style={[styles.menuIconBox, { backgroundColor: "#152636" }]}
+              >
+                <Text style={{ fontSize: 18 }}>🎬</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cacheStatusText}>
+                  {videoCacheStats && videoCacheStats.count > 0
+                    ? t("profileTab.videoCacheCount", {
+                        size: videoCacheStats.formattedSize,
+                        count: videoCacheStats.count,
+                      })
+                    : t("profileTab.videoCacheEmpty")}
+                </Text>
+                <Text style={styles.cacheDescText}>
+                  {t("profileTab.videoCacheDesc")}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.cachePolicyText}>
+              💡 {t("profileTab.videoCacheAutoPolicy")}
+            </Text>
+
+            {videoCacheStats && videoCacheStats.count > 0 && (
+              <TouchableOpacity
+                style={[
+                  styles.clearCacheBtn,
+                  clearingVideoCache && { opacity: 0.6 },
+                ]}
+                onPress={handleClearVideoCache}
+                disabled={clearingVideoCache}
+              >
+                {clearingVideoCache ? (
+                  <ActivityIndicator size="small" color="#FF453A" />
+                ) : (
+                  <Text style={styles.clearCacheBtnText}>
+                    🗑️ {t("profileTab.videoCacheClear")}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         {/* Debug: Storage Scanner */}
@@ -489,7 +672,10 @@ export default function ProfileTab() {
                 {extracting ? "Extracting…" : "Extract Cache → Documents"}
               </Text>
               {extracting && extractProgress ? (
-                <Text style={{ color: "#888", fontSize: 11, marginTop: 4 }} numberOfLines={1}>
+                <Text
+                  style={{ color: "#888", fontSize: 11, marginTop: 4 }}
+                  numberOfLines={1}
+                >
                   {extractProgress}
                 </Text>
               ) : null}
@@ -510,7 +696,9 @@ export default function ProfileTab() {
                 setContainerDirs(dirs);
               }}
             >
-              <View style={[styles.menuIconBox, { backgroundColor: "#2A2A1A" }]}>
+              <View
+                style={[styles.menuIconBox, { backgroundColor: "#2A2A1A" }]}
+              >
                 <Text style={{ fontSize: 18 }}>🔎</Text>
               </View>
               <Text style={styles.menuItemText}>Discover All Directories</Text>
@@ -519,12 +707,21 @@ export default function ProfileTab() {
           ) : (
             <>
               {containerDirs
-                .filter((d) => d.name !== "Documents" && d.name !== "Library/Caches")
+                .filter(
+                  (d) => d.name !== "Documents" && d.name !== "Library/Caches",
+                )
                 .map((d) => renderDirManager(d.name))}
             </>
           )}
 
-          <Text style={{ color: "#555", fontSize: 11, marginTop: 8, lineHeight: 16 }}>
+          <Text
+            style={{
+              color: "#555",
+              fontSize: 11,
+              marginTop: 8,
+              lineHeight: 16,
+            }}
+          >
             Step 1: Scan to see where hidden data lives.{"\n"}
             Step 2: Extract to copy cache → Documents.{"\n"}
             Step 3: Manage items to selectively or bulk delete.
@@ -533,10 +730,7 @@ export default function ProfileTab() {
 
         {/* Account Actions */}
         <View style={styles.section}>
-          <TouchableOpacity
-            style={styles.logoutBtn}
-            onPress={handleLogout}
-          >
+          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
             <Text style={styles.logoutText}>{t("profileTab.signOut")}</Text>
           </TouchableOpacity>
 
@@ -544,7 +738,9 @@ export default function ProfileTab() {
             style={[styles.logoutBtn, { marginTop: 8 }]}
             onPress={() => router.push("/settings/deleteAccount" as any)}
           >
-            <Text style={[styles.logoutText, { color: "#888" }]}>{t("auth.deleteAccount")}</Text>
+            <Text style={[styles.logoutText, { color: "#888" }]}>
+              {t("auth.deleteAccount")}
+            </Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -653,6 +849,49 @@ const styles = StyleSheet.create({
   injuryPillText: {
     color: "#FF6B35",
     fontSize: 12,
+    fontWeight: "600",
+  },
+
+  cacheCard: {
+    backgroundColor: "#1A1A1A",
+    padding: 16,
+    borderRadius: 14,
+  },
+  cacheHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  cacheStatusText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  cacheDescText: {
+    color: "#888",
+    fontSize: 12,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  cachePolicyText: {
+    color: "#666",
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  clearCacheBtn: {
+    backgroundColor: "#2A1010",
+    borderWidth: 1,
+    borderColor: "#4A1818",
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  clearCacheBtnText: {
+    color: "#FF453A",
+    fontSize: 14,
     fontWeight: "600",
   },
 

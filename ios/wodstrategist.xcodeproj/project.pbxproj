@@ -52,20 +52,20 @@
 		13B07FB61A68108700A75B9A /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = WODStrategist/Info.plist; sourceTree = "<group>"; };
 		14A3DC9F01FDEFA3C9D34FF5 /* libPods-WODStrategist.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-WODStrategist.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		376400E88684861B321B47DB /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-WODStrategist/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
-		3CD7F244B32B4B6EB6A25E83 /* BroadcastHelper.m */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.objc; name = BroadcastHelper.m; path = BroadcastHelper.m; sourceTree = "<group>"; };
-		41A7E6D4C30B4404AB71FE63 /* BroadcastExtension.entitlements */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = BroadcastExtension.entitlements; path = BroadcastExtension.entitlements; sourceTree = "<group>"; };
-		6D5D679303784542BB1B1FCE /* CoreML.framework */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
-		7DF6DDF971354085B025F3DC /* BroadcastExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = undefined; name = BroadcastExtension.appex; path = BroadcastExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
-		852C85A82A74405DBA61ED7E /* BroadcastExtension-PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = unknown; name = "BroadcastExtension-PrivacyInfo.xcprivacy"; path = "BroadcastExtension-PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
-		9AF9A4442CF84EDD94425487 /* SampleHandler.swift */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = SampleHandler.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
-		A0529B17B34B4CD89686E4D9 /* BroadcastExtension-Bridging-Header.h */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.h; name = "BroadcastExtension-Bridging-Header.h"; path = "BroadcastExtension-Bridging-Header.h"; sourceTree = "<group>"; };
+		3CD7F244B32B4B6EB6A25E83 /* BroadcastHelper.m */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.objc; path = BroadcastHelper.m; sourceTree = "<group>"; };
+		41A7E6D4C30B4404AB71FE63 /* BroadcastExtension.entitlements */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; path = BroadcastExtension.entitlements; sourceTree = "<group>"; };
+		6D5D679303784542BB1B1FCE /* CoreML.framework */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
+		7DF6DDF971354085B025F3DC /* BroadcastExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; fileEncoding = 9; includeInIndex = 0; path = BroadcastExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		852C85A82A74405DBA61ED7E /* BroadcastExtension-PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = unknown; path = "BroadcastExtension-PrivacyInfo.xcprivacy"; sourceTree = "<group>"; };
+		9AF9A4442CF84EDD94425487 /* SampleHandler.swift */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; path = SampleHandler.swift; sourceTree = "<group>"; };
+		A0529B17B34B4CD89686E4D9 /* BroadcastExtension-Bridging-Header.h */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.h; path = "BroadcastExtension-Bridging-Header.h"; sourceTree = "<group>"; };
 		A4BD4DBF558E464F814E6433 /* WOD Strategist.entitlements */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = text.plist.entitlements; name = "WOD Strategist.entitlements"; path = "WOD Strategist/WOD Strategist.entitlements"; sourceTree = "<group>"; };
-		A955297B004342CFA7C3390B /* BroadcastWriter.swift */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = BroadcastWriter.swift; path = BroadcastWriter.swift; sourceTree = "<group>"; };
+		A955297B004342CFA7C3390B /* BroadcastWriter.swift */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; path = BroadcastWriter.swift; sourceTree = "<group>"; };
 		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = WODStrategist/SplashScreen.storyboard; sourceTree = "<group>"; };
-		AC2305596B484ABFA7C7D699 /* BroadcastHelper.h */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.h; name = BroadcastHelper.h; path = BroadcastHelper.h; sourceTree = "<group>"; };
-		B754EBB4EF2E4D20873933A6 /* ReplayKit.framework */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = undefined; includeInIndex = 0; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = System/Library/Frameworks/ReplayKit.framework; sourceTree = SDKROOT; };
+		AC2305596B484ABFA7C7D699 /* BroadcastHelper.h */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.c.h; path = BroadcastHelper.h; sourceTree = "<group>"; };
+		B754EBB4EF2E4D20873933A6 /* ReplayKit.framework */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 9; includeInIndex = 0; lastKnownFileType = wrapper.framework; name = ReplayKit.framework; path = System/Library/Frameworks/ReplayKit.framework; sourceTree = SDKROOT; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
-		DF8FEA39F60246D09F3B8872 /* BroadcastExtension-Info.plist */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = text.plist.xml; name = "BroadcastExtension-Info.plist"; path = "BroadcastExtension-Info.plist"; sourceTree = "<group>"; };
+		DF8FEA39F60246D09F3B8872 /* BroadcastExtension-Info.plist */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = text.plist.xml; path = "BroadcastExtension-Info.plist"; sourceTree = "<group>"; };
 		E0E4E1AFC8A319117D3E0218 /* Pods-WODStrategist.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-WODStrategist.debug.xcconfig"; path = "Target Support Files/Pods-WODStrategist/Pods-WODStrategist.debug.xcconfig"; sourceTree = "<group>"; };
 		E4CE4BC55E2A81271F847209 /* Pods-WODStrategist.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-WODStrategist.release.xcconfig"; path = "Target Support Files/Pods-WODStrategist/Pods-WODStrategist.release.xcconfig"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
@@ -100,7 +100,6 @@
 				E0E4E1AFC8A319117D3E0218 /* Pods-WODStrategist.debug.xcconfig */,
 				E4CE4BC55E2A81271F847209 /* Pods-WODStrategist.release.xcconfig */,
 			);
-			name = Pods;
 			path = Pods;
 			sourceTree = "<group>";
 		};
@@ -198,7 +197,6 @@
 				AC2305596B484ABFA7C7D699 /* BroadcastHelper.h */,
 				A0529B17B34B4CD89686E4D9 /* BroadcastExtension-Bridging-Header.h */,
 			);
-			name = BroadcastExtension;
 			path = BroadcastExtension;
 			sourceTree = "<group>";
 		};
@@ -483,7 +481,7 @@
 					"FB_SONARKIT_ENABLED=1",
 				);
 				INFOPLIST_FILE = WODStrategist/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -517,7 +515,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = FV89L56N85;
 				INFOPLIST_FILE = WODStrategist/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

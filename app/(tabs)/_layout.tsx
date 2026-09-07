@@ -47,6 +47,16 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="stretches"
+        options={{
+          title: t("tabs.stretches"),
+          headerTitle: t("tabs.stretches"),
+          tabBarIcon: ({ color, size }) => (
+            <IconSymbol name="figure.flexibility" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="profile"
         options={{
           title: t("tabs.profile"),

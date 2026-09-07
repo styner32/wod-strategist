@@ -40,6 +40,161 @@ var _ = Describe("Highlight verification prompt", func() {
 	})
 })
 
+var _ = Describe("Highlight low-confidence chunk filtering", func() {
+	ptr := func(f float64) *float64 { return &f }
+
+	It("compares against media clock offsets instead of capture clock offsets", func() {
+		chunks := []db.ChunkAnalysisResult{
+			{
+				StartSecs:        ptr(0),
+				EndSecs:          ptr(10),
+				MediaStartSecs:   ptr(0),
+				MediaEndSecs:     ptr(10),
+				TargetConfidence: 0.9,
+			},
+			{
+				StartSecs:        ptr(150),
+				EndSecs:          ptr(160),
+				MediaStartSecs:   ptr(100),
+				MediaEndSecs:     ptr(110),
+				TargetConfidence: 0.2, // low confidence
+			},
+			{
+				StartSecs:        ptr(190),
+				EndSecs:          ptr(200),
+				MediaStartSecs:   ptr(140),
+				MediaEndSecs:     ptr(150),
+				TargetConfidence: 0.9,
+			},
+		}
+
+		segments := []HighlightSegment{
+			{
+				Observations: []HighlightObservation{
+					// Obs 1: in media clock 102.0 ~ 104.0 -> overlaps with low conf chunk's media clock (100~110)
+					{Start: "1:42.0", End: "1:44.0", Reason: "in-media-low-conf"}, // 102s ~ 104s
+					// Obs 2: in media clock 152.0 ~ 154.0 -> would overlap with capture clock 150~160, but NOT media clock (100~110)
+					{Start: "2:32.0", End: "2:34.0", Reason: "in-capture-window-only"}, // 152s ~ 154s
+				},
+			},
+		}
+
+		filtered := filterObservationsWithChunks(chunks, segments)
+		Expect(filtered).To(HaveLen(1))
+		Expect(filtered[0].Observations).To(HaveLen(1))
+		Expect(filtered[0].Observations[0].Reason).To(Equal("in-capture-window-only"), "only obs overlapping media clock is filtered out")
+	})
+
+	It("excludes chunks with nil media_* without falling back to StartSecs", func() {
+		chunks := []db.ChunkAnalysisResult{
+			{
+				StartSecs:        ptr(0),
+				EndSecs:          ptr(200),
+				MediaStartSecs:   ptr(0),
+				MediaEndSecs:     ptr(150),
+				TargetConfidence: 0.9,
+			},
+			{
+				StartSecs:        ptr(50),
+				EndSecs:          ptr(60),
+				MediaStartSecs:   nil, // no media mapping
+				MediaEndSecs:     nil,
+				TargetConfidence: 0.2, // low confidence
+			},
+		}
+
+		segments := []HighlightSegment{
+			{
+				Observations: []HighlightObservation{
+					{Start: "0:52.0", End: "0:55.0", Reason: "overlaps-start-secs-only"},
+				},
+			},
+		}
+
+		filtered := filterObservationsWithChunks(chunks, segments)
+		Expect(filtered).To(HaveLen(1))
+		Expect(filtered[0].Observations).To(HaveLen(1), "chunk with nil media_* must not filter observation")
+	})
+
+	It("acts conservatively and does not drop observations when session has media_end == end", func() {
+		chunks := []db.ChunkAnalysisResult{
+			{
+				StartSecs:        ptr(0),
+				EndSecs:          ptr(100),
+				MediaStartSecs:   ptr(0),
+				MediaEndSecs:     ptr(100),
+				TargetConfidence: 0.2, // low confidence
+			},
+		}
+
+		segments := []HighlightSegment{
+			{
+				Observations: []HighlightObservation{
+					{Start: "0:30.0", End: "0:35.0", Reason: "backfilled-session-obs"},
+				},
+			},
+		}
+
+		filtered := filterObservationsWithChunks(chunks, segments)
+		Expect(filtered).To(HaveLen(1))
+		Expect(filtered[0].Observations).To(HaveLen(1), "conservative filter preserves observations when media_end == end")
+	})
+
+	It("acts conservatively when earlier chunks have media_end == end and subsequent chunks have nil media timestamps", func() {
+		chunks := []db.ChunkAnalysisResult{
+			{
+				StartSecs:        ptr(0),
+				EndSecs:          ptr(100),
+				MediaStartSecs:   ptr(0),
+				MediaEndSecs:     ptr(100),
+				TargetConfidence: 0.2, // low confidence
+			},
+			{
+				StartSecs:        ptr(100),
+				EndSecs:          ptr(200),
+				MediaStartSecs:   nil, // unmapped/failed chunk
+				MediaEndSecs:     nil,
+				TargetConfidence: 0.2,
+			},
+		}
+
+		segments := []HighlightSegment{
+			{
+				Observations: []HighlightObservation{
+					{Start: "0:30.0", End: "0:35.0", Reason: "preserve-backfilled"},
+				},
+			},
+		}
+
+		filtered := filterObservationsWithChunks(chunks, segments)
+		Expect(filtered).To(HaveLen(1))
+		Expect(filtered[0].Observations).To(HaveLen(1), "must not calculate drift from chunks missing media info")
+	})
+
+	It("returns empty slice when all observations are filtered out", func() {
+		chunks := []db.ChunkAnalysisResult{
+			{
+				StartSecs:        ptr(0),
+				EndSecs:          ptr(200),
+				MediaStartSecs:   ptr(0),
+				MediaEndSecs:     ptr(150),
+				TargetConfidence: 0.2, // low confidence everywhere
+			},
+		}
+
+		segments := []HighlightSegment{
+			{
+				Observations: []HighlightObservation{
+					{Start: "1:00.0", End: "1:10.0", Reason: "all-filtered"},
+				},
+			},
+		}
+
+		filtered := filterObservationsWithChunks(chunks, segments)
+		Expect(filtered).To(BeEmpty())
+	})
+})
+
 var _ = Describe("Highlight verification result parsing", func() {
 	segments := []HighlightSegment{
 		{Observations: []HighlightObservation{{}, {}}},
@@ -376,7 +531,7 @@ var _ = Describe("HandleVerifyHighlightsTask", func() {
 				"videoMetadata": map[string]any{"videoDuration": "20s"},
 			})
 		geminiTransport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelFlash35+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			MatchBodyContains("event=0 observation=0").
 			MatchBodyContains("visible-positive").

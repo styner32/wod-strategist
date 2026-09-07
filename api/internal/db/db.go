@@ -47,7 +47,6 @@ func (a CommaStringArray) Value() (driver.Value, error) {
 	return strings.Join(a, ","), nil
 }
 
-
 type User struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
 	Username     string     `gorm:"not null" json:"username"`
@@ -59,20 +58,21 @@ type User struct {
 }
 
 type Profile struct {
-	ID           uint       `gorm:"primaryKey" json:"id"`
-	UserID       uint       `gorm:"index;not null" json:"user_id"`
-	Name         string     `gorm:"not null" json:"name"`
-	BirthYear    *int       `json:"birth_year,omitempty"`
-	BirthMonth   *int       `json:"birth_month,omitempty"`
-	BirthDay     *int       `json:"birth_day,omitempty"`
-	Gender       *string    `json:"gender,omitempty"` // male, female, other
-	HeightCm     *int       `json:"height_cm,omitempty"`
-	WeightKg     *float64   `json:"weight_kg,omitempty"`
-	FitnessLevel string     `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
-	Injuries     *string    `gorm:"type:text;not null;default:'[]'" json:"injuries"`                // JSON array of injury strings
-	ArchivedAt   *time.Time `json:"archived_at,omitempty"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID           uint         `gorm:"primaryKey" json:"id"`
+	UserID       uint         `gorm:"index;not null" json:"user_id"`
+	Name         string       `gorm:"not null" json:"name"`
+	BirthYear    *int         `json:"birth_year,omitempty"`
+	BirthMonth   *int         `json:"birth_month,omitempty"`
+	BirthDay     *int         `json:"birth_day,omitempty"`
+	Gender       *string      `json:"gender,omitempty"` // male, female, other
+	HeightCm     *int         `json:"height_cm,omitempty"`
+	WeightKg     *float64     `json:"weight_kg,omitempty"`
+	FitnessLevel string       `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
+	Injuries     *string      `gorm:"type:text;not null;default:'[]'" json:"injuries"`                // JSON array of injury strings
+	Appearance   JSONDocument `json:"appearance"`
+	ArchivedAt   *time.Time   `json:"archived_at,omitempty"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
 }
 
 const (
@@ -101,11 +101,30 @@ type AnalysisResult struct {
 	// SessionScore is a compact JSON blob of per-dimension scores (0–100) produced at analysis time.
 	// Schema: {"overall":74,"form":68,"intensity":82,"consistency":72,"movements":{},"summary":"..."}
 	// Used to inject historical performance context into future analysis prompts.
-	SessionScore        string           `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
-	AvailableVideos     CommaStringArray `gorm:"column:available_videos;type:text;not null;default:'merged'" json:"available_videos"`
-	ArchivedAt          *time.Time       `json:"archived_at,omitempty"`
-	CreatedAt           time.Time        `json:"created_at"`
-	UpdatedAt           time.Time        `json:"updated_at"`
+	SessionScore           string           `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
+	SessionFatigue         *SessionFatigue  `gorm:"-" json:"session_fatigue,omitempty"`
+	NormalizedWorkout      string           `json:"normalized_workout,omitempty"`
+	MobilityObservations   string           `gorm:"type:text;not null;default:'[]'" json:"mobility_observations,omitempty"`
+	StretchRecommendations string           `gorm:"type:text;not null;default:'[]'" json:"stretch_recommendations,omitempty"`
+	AvailableVideos        CommaStringArray `gorm:"column:available_videos;type:text;not null;default:'merged'" json:"available_videos"`
+	ArchivedAt             *time.Time       `json:"archived_at,omitempty"`
+	CreatedAt              time.Time        `json:"created_at"`
+	UpdatedAt              time.Time        `json:"updated_at"`
+}
+
+type SessionFatigue struct {
+	OverallScore int            `json:"overall_score"`
+	State        string         `json:"state"`
+	StateKO      string         `json:"state_ko"`
+	Muscles      map[string]int `json:"muscles"`
+}
+
+type NormalizedMovement struct {
+	Movement  string   `json:"movement"`
+	WeightRaw string   `json:"weight_raw,omitempty"`
+	WeightKG  *float64 `json:"weight_kg,omitempty"`
+	Reps      string   `json:"reps,omitempty"`
+	IsMain    bool     `json:"is_main"`
 }
 
 type HighlightResult struct {
@@ -138,6 +157,8 @@ type ChunkAnalysisResult struct {
 	MediaStartSecs    *float64  `json:"media_start_secs,omitempty"`
 	MediaEndSecs      *float64  `json:"media_end_secs,omitempty"`
 	WorkoutConfidence float64   `gorm:"not null;default:0.0" json:"workout_confidence"` // confidence if person actually workout
+	TargetConfidence  float64   `gorm:"not null;default:0.0" json:"target_confidence"`
+	TargetCues        string    `gorm:"type:text;not null;default:'{}'" json:"target_cues"`
 	MotionScore       *float64  `json:"motion_score,omitempty"`
 	SkipReason        string    `json:"skip_reason,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
@@ -149,7 +170,7 @@ type TokenUsage struct {
 	SessionID       string    `gorm:"index;not null" json:"session_id"`
 	ProfileID       uint      `gorm:"index;not null" json:"profile_id"`
 	TaskType        string    `gorm:"not null" json:"task_type"` // chunk:analysis, video:index, video:segment, etc.
-	Model           string    `gorm:"not null" json:"model"`     // gemini-3.1-pro-preview, gemini-3.5-flash-lite, gemini-3.6-flash
+	Model           string    `gorm:"not null" json:"model"`     // gemini-3.1-pro-preview, gemini-3.5-flash-lite, gemini-3.8-flash
 	PromptTokens    int32     `gorm:"not null;default:0" json:"prompt_tokens"`
 	CandidateTokens int32     `gorm:"not null;default:0" json:"candidate_tokens"`
 	TotalTokens     int32     `gorm:"not null;default:0" json:"total_tokens"`
@@ -179,6 +200,15 @@ type Session struct {
 	WorkoutType    string        `json:"workout_type"`
 	UpdatedAt      time.Time     `json:"updated_at"`
 	CreatedAt      time.Time     `json:"created_at"`
+}
+
+type SessionAppearanceHint struct {
+	ID        uint         `gorm:"primaryKey" json:"id"`
+	SessionID string       `json:"session_id"`
+	ProfileID uint         `json:"profile_id"`
+	Hints     JSONDocument `json:"hints"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
 }
 
 func Connect(databaseURL string) (*gorm.DB, error) {

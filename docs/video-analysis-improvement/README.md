@@ -1,8 +1,27 @@
 # Video Analysis Improvement Program
 
-Status: implementation-ready review plan
-Reviewed against the repository: 2026-07-11
+Status: target work packages; partially implemented, release gates not re-certified
+Original review: 2026-07-11
+Documentation/source reconciliation: 2026-09-06
 Scope: real-time 10-second chunk analysis and post-workout full-video analysis
+
+## Current status versus target work
+
+`01-current-pipeline.md` preserves the original review baseline. Its defects and diagrams are not a live inventory. The phase documents are target contracts; unchecked gates do not imply that every substep is absent, and code presence alone does not prove a gate passed.
+
+Source checks on 2026-09-06 found:
+
+| Work item | Implementation present | Remaining gate/evidence |
+|---|---|---|
+| REL-02/03 | Merge filters DB inputs with the actual GCS set and persists probed media intervals; migration `000038` already adds nullable media offsets. | Authoritative expected manifest, strict duration validation, complete downstream coverage. |
+| REL-04 | Server-split offsets use cumulative probed durations. | Source-qualified stable indices, idempotency, full coverage/error contract. |
+| REL-05 | Production mux explicitly registers the session-aware handler. | Verify mux-level regression coverage before closing the work item. |
+| OBS-01 | Cost endpoints and repository rate constants exist. | Dated pricing source/version, thinking/cache reconciliation, complete call metadata. |
+| ACC-02/03/05 | Appearance context, visual movement/fatigue rules, and touching-segment merging have evolved. | `lookupProfileString` still fabricates missing demographics; structured abstention and canonicalization gates remain open. |
+| ACC-08 | Highlight v2 observations and canonical merged-source resolution exist. | Preserve those contracts while adding canonical evidence IDs and measured selective verification. |
+| COST-01 | Worker model/thinking settings exist globally. | Per-stage resolved configuration and evaluation. |
+
+Use [video-analysis.md](../agent-memory/video-analysis.md) and the [documentation review](../documentation-review.md) for reconciled current behavior. Do not recreate existing columns, restore capture-clock fallbacks, or replace highlight v2 with an older flat contract.
 
 ## Purpose
 
@@ -31,16 +50,16 @@ In particular:
 
 - Use versioned `golang-migrate` SQL. Never use `AutoMigrate`.
 - Use Ginkgo/Gomega and the existing real-client test strategy.
-- Keep every object under `videos/{profileId}/{sessionId}/`.
+- Keep every session-scoped object under `videos/{profileId}/{sessionId}/`.
 - Never put `profile_id` inside the session ID.
-- Preserve both current `WOD-...` and legacy `P{id}-WOD-...` session ID formats.
+- Preserve current `{TYPE}-YYYYMMDD-{ULID}` IDs (`WOD`, `WARMUP`, `ACCESSORY`, `COOLDOWN`) and legacy `P{id}-WOD-...` session ID formats.
 - Do not change dependency versions, infrastructure sizing, or product retention policy unless the corresponding work package explicitly calls for a decision and the user approves it.
 
 ## Reading order
 
 | Document | Use |
 |---|---|
-| [01-current-pipeline.md](01-current-pipeline.md) | Understand the code that exists today and its failure modes. |
+| [01-current-pipeline.md](01-current-pipeline.md) | Read the dated baseline and its failure modes, then apply the status reconciliation above. |
 | [02-phase-1-integrity-and-idempotency.md](02-phase-1-integrity-and-idempotency.md) | Fix data loss, timeline errors, duplicate work, retry semantics, and task routing. |
 | [03-phase-2-observability-and-evaluation.md](03-phase-2-observability-and-evaluation.md) | Establish cost, latency, coverage, and accuracy baselines. |
 | [04-phase-3-accuracy-and-contracts.md](04-phase-3-accuracy-and-contracts.md) | Add structured evidence, safer prompts, correct segmentation, and final synthesis. |

@@ -69,28 +69,71 @@ export default function ProfileScreen() {
   const [fitnessLevel, setFitnessLevel] = useState<FitnessLevel>(
     existingProfile?.fitnessLevel ?? "intermediate"
   );
+  const [appearance, setAppearance] = useState(existingProfile?.appearance ?? "");
+  const [parsingImage, setParsingImage] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  // Injuries
-  const [injuryOptions, setInjuryOptions] = useState<string[]>([]);
   const [selectedInjuries, setSelectedInjuries] = useState<string[]>(
     existingProfile?.injuries ?? []
   );
+  const [injuryOptions, setInjuryOptions] = useState<string[]>([]);
   const [loadingInjuries, setLoadingInjuries] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
     fetchInjuries()
-      .then(setInjuryOptions)
-      .catch((e) => console.error("Failed to load injuries", e))
-      .finally(() => setLoadingInjuries(false));
+      .then((data) => {
+        if (isMounted) {
+          setInjuryOptions(data);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load injuries:", err);
+      })
+      .finally(() => {
+        if (isMounted) {
+          setLoadingInjuries(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const toggleInjury = (injury: string) => {
     setSelectedInjuries((prev) =>
       prev.includes(injury)
-        ? prev.filter((x) => x !== injury)
+        ? prev.filter((item) => item !== injury)
         : [...prev, injury]
     );
+  };
+
+  const handleFillFromPhoto = async () => {
+    try {
+      const ImagePicker = await import("expo-image-picker");
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(t("common.permissionRequired"), t("common.galleryPermission"));
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets[0]?.uri) return;
+
+      setParsingImage(true);
+      const { parseAppearanceImage } = await import("@/features/wod/api");
+      const res = await parseAppearanceImage(result.assets[0].uri);
+      if (res.appearance) {
+        setAppearance(res.appearance);
+      }
+      Alert.alert(t("common.saved"), t("profileEdit.appearanceFilled"));
+    } catch (err) {
+      console.error("Failed to parse appearance image:", err);
+      Alert.alert(t("common.error"), t("profileEdit.parseImageFailed"));
+    } finally {
+      setParsingImage(false);
+    }
   };
 
   const handleSave = async () => {
@@ -135,6 +178,7 @@ export default function ProfileScreen() {
         ...(w ? { weight_kg: Math.round(w * 10) / 10 } : {}),
         fitness_level: fitnessLevel,
         injuries: selectedInjuries,
+        ...(appearance.trim() ? { appearance: appearance.trim() } : {}),
       };
 
       if (isEditing) {
@@ -326,6 +370,26 @@ export default function ProfileScreen() {
             )}
           </View>
 
+          {/* Appearance Cues */}
+          <View style={styles.section}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <Text style={styles.sectionTitle}>{t("profileEdit.appearance")}</Text>
+              <TouchableOpacity style={styles.fillPhotoBtn} onPress={handleFillFromPhoto} disabled={parsingImage}>
+                {parsingImage ? <ActivityIndicator size="small" color="#00E5FF" /> : <Text style={styles.fillPhotoText}>{t("profileEdit.fillFromPhoto")}</Text>}
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.hint}>{t("profileEdit.appearanceHint")}</Text>
+
+            <TextInput
+              style={styles.input}
+              placeholder={t("profileEdit.appearancePlaceholder")}
+              placeholderTextColor="#555"
+              value={appearance}
+              onChangeText={setAppearance}
+              multiline
+            />
+          </View>
+
           {/* Fitness Level */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>{t("profileEdit.fitnessLevel")}</Text>
@@ -486,6 +550,26 @@ const styles = StyleSheet.create({
   saveBtnText: {
     color: "#000",
     fontSize: 18,
+    fontWeight: "bold",
+  },
+  inputLabel: {
+    color: "#aaa",
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 6,
+    marginTop: 10,
+  },
+  fillPhotoBtn: {
+    backgroundColor: "#0B1A2F",
+    borderColor: "#00E5FF",
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  fillPhotoText: {
+    color: "#00E5FF",
+    fontSize: 12,
     fontWeight: "bold",
   },
 });

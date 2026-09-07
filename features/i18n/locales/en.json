@@ -27,6 +27,7 @@
     "home": "Home",
     "train": "Train",
     "history": "History",
+    "stretches": "Stretches",
     "profile": "Profile"
   },
   "home": {
@@ -79,7 +80,16 @@
     "createProfile": "Create Profile",
     "switchProfile": "Switch Profile",
     "signOut": "Sign Out",
-    "signOutConfirm": "Are you sure you want to sign out?"
+    "signOutConfirm": "Are you sure you want to sign out?",
+    "videoCacheTitle": "Video Cache Management",
+    "videoCacheDesc": "Cached video data for smooth playback and offline viewing.",
+    "videoCacheAutoPolicy": "Automatically caches up to 1.5 GB; oldest videos are pruned when limit is exceeded.",
+    "videoCacheEmpty": "No cached videos.",
+    "videoCacheCount": "%{size} (%{count} videos)",
+    "videoCacheClear": "Clear All Video Cache",
+    "videoCacheClearConfirm": "Delete all cached workout videos? Originals remain safe on the server.",
+    "videoCacheCleared": "All video cache cleared successfully.",
+    "videoCacheClearing": "Clearing cache..."
   },
   "profileEdit": {
     "editProfile": "Edit Profile",
@@ -110,7 +120,20 @@
     "invalidGender": "Please select your gender.",
     "invalidHeight": "Please enter a valid height in cm.",
     "invalidWeight": "Please enter a valid weight in kg.",
-    "saveFailed": "Failed to save profile. Please try again."
+    "saveFailed": "Failed to save profile. Please try again.",
+    "appearance": "Visual Appearance (Optional)",
+    "appearanceHint": "Specify distinct visual features for identification in multi-person gym videos.",
+    "appearancePlaceholder": "e.g. Black t-shirt, grey shorts, red shoes, knee sleeves",
+    "fillFromPhoto": "📷 Fill from Photo",
+    "shoesLabel": "Shoes",
+    "shoesPlaceholder": "e.g. White Nike",
+    "hairLabel": "Hair Style/Color",
+    "hairPlaceholder": "e.g. Short dark hair",
+    "buildLabel": "Build",
+    "buildPlaceholder": "e.g. Slim build",
+    "removableGear": "Frequently Worn Gear",
+    "appearanceFilled": "Appearance features extracted. Please review the populated values.",
+    "parseImageFailed": "Failed to extract appearance from photo."
   },
   "profiles": {
     "title": "Profiles",
@@ -283,7 +306,16 @@
     "archiveConfirm": "This will hide the record from your history. You can still find it later.",
     "archive": "Archive",
     "archiveFailed": "Failed to archive. Please try again.",
-    "mergePreparing": "Preparing merge... Your session will appear shortly."
+    "mergePreparing": "Preparing merge... Your session will appear shortly.",
+    "fatigueBadge": "⚡ Fatigue %{score}%",
+    "fatigueSummary": "Fatigue %{score}% (%{state})",
+    "fatigueCardTitle": "Muscle Fatigue & Strain",
+    "overallStrain": "Overall Strain",
+    "topLoadedMuscles": "Main Strain: %{muscles}",
+    "fresh": "Fresh",
+    "moderate": "Moderate",
+    "fatigued": "High Fatigue",
+    "exhausted": "Exhausted"
   },
   "player": {
     "loadingVideo": "Loading workout video...",
@@ -309,7 +341,8 @@
     "observationFatigueOnset": "Fatigue Onset",
     "observationTechniqueEvent": "Technique Event",
     "observationConfidence": "%{value}% confidence",
-    "saveToGallery": "💾 Save to Gallery"
+    "saveToGallery": "💾 Save to Gallery",
+    "cachedOffline": "Cached"
   },
   "overlay": {
     "encoding": "Encoding... %{percent}%",
@@ -317,7 +350,14 @@
     "needAttention": "%{count} need attention",
     "readyToUpload": "%{count} ready to upload",
     "awaitingEncode": "%{count} awaiting encode",
-    "uploaded": "%{count} uploaded"
+    "uploaded": "%{count} uploaded",
+    "sensor": {
+      "heartRate": "HEART RATE",
+      "state": "State: %{status}",
+      "strapBattery": "Strap: %{level}%",
+      "strapBatteryUnknown": "Strap: --",
+      "liveStatus": "REC %{accSamples} pts · %{dropped} drop"
+    }
   },
   "auth": {
     "login": "Log In",
@@ -338,6 +378,54 @@
     "accountDeleted": "Account deleted.",
     "loggingOut": "Logging out...",
     "noAccount": "Don't have an account?",
-    "haveAccount": "Already have an account?"
+    "haveAccount": "Already have an account?",
+    "sessionExpiredTitle": "Session Expired",
+    "sessionExpiredMessage": "Your login session has expired. Please log in again before starting your workout.",
+    "tokenExpiringSoonTitle": "Session Expiring Soon",
+    "tokenExpiringSoonMessage": "Your login session will expire in less than 24 hours. Would you like to log in again now to prevent interruptions during recording?",
+    "sessionExpiredDuringWorkoutTitle": "Session Expired",
+    "sessionExpiredDuringWorkoutMessage": "Your workout video was safely merged and saved locally. Please log in again to upload and analyze your recording.",
+    "relogin": "Re-login",
+    "continueWorkout": "Continue"
+  },
+  "relatedWods": {
+    "title": "Related Past WODs",
+    "mainBadge": "MAIN",
+    "noHistory": "No previous analysis records found for this movement.",
+    "score": "Score"
+  },
+  "stretchRecs": {
+    "title": "Stretch Recommendations",
+    "provisional": "Provisional",
+    "tapForDetail": "Tap for details →"
+  },
+  "stretches": {
+    "detailTitle": "Stretch Details",
+    "empty": "No recommended stretches yet",
+    "emptyDesc": "Stretches recommended by AI analysis will be collected here.",
+    "loadFailed": "Failed to load stretches",
+    "sessionCount": "%{count} sessions",
+    "lastRecommended": "Last recommended: %{date}",
+    "noDescription": "No catalog description available for this stretch.",
+    "sessionsTitle": "Recommended in %{count} sessions",
+    "notFound": "Stretch not found",
+    "viewSession": "View in History",
+    "video": "Movement Video"
+  },
+  "preWod": {
+    "title": "Today's Custom WOD Strategy & Fatigue",
+    "analyzingFatigue": "Analyzing muscle group fatigue & strategy...",
+    "pacingStrategy": "Pacing Strategy",
+    "muscleReadiness": "6-Muscle Group Fatigue Analysis",
+    "scalingAdvice": "Scaling & Movement Recommendations",
+    "recommendedMobility": "Pre-WOD Essential Mobility & Warm-up"
+  },
+  "muscleGroups": {
+    "shoulders_push": "Shoulders & Push",
+    "upper_pull_grip": "Back, Pull & Grip",
+    "posterior_chain": "Posterior Chain",
+    "quads_squat": "Quads & Squat",
+    "core_midline": "Core & Midline",
+    "cardio_metabolic": "Cardio & Metabolic"
   }
 }

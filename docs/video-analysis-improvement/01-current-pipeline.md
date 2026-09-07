@@ -1,6 +1,6 @@
-# Current Video Analysis Pipeline
+# Video Analysis Pipeline — Original Review Baseline
 
-This is a source-level map of the implementation as reviewed on 2026-07-11. It describes behavior that exists now, including defects. It is not the target architecture.
+This is the source-level review baseline dated 2026-07-11, including defects identified then. The descriptions and diagram below are retained as historical context, not current behavior. Later edits have also changed model names, so this is not an immutable Git snapshot. See the [2026-09-06 status reconciliation](README.md#current-status-versus-target-work) and [current video-analysis memory](../agent-memory/video-analysis.md) before implementing a fix.
 
 ## Entry points and core files
 
@@ -103,7 +103,7 @@ The generic handler:
 1. Downloads the chunk from GCS.
 2. Runs the FFmpeg motion probe concurrently with the model call.
 3. Builds profile, WOD, movement, injury, and heart-rate prompt context.
-4. Uploads the clip to Gemini Files, waits for ACTIVE, and generates with `gemini-3.6-flash`.
+4. Uploads the clip to Gemini Files, waits for ACTIVE, and generates with `gemini-3.8-flash`.
 5. Deletes the Gemini file.
 6. Parses an exercise tag and optional observed-signals block from free-form text.
 7. Inserts a `chunk_analysis_results` row.
@@ -212,11 +212,11 @@ The Gemini client polls Files API state without an explicit maximum poll duratio
 
 ## Current external cost drivers
 
-- One Files upload and one `gemini-3.6-flash` generation per real-time chunk.
+- One Files upload and one `gemini-3.8-flash` generation per real-time chunk.
 - For a direct upload, potentially one Files/Gemini lifecycle per synthetic 10-second chunk in addition to the full-video upload.
 - Full-video high-resolution indexing/triage or verification calls.
 - Up to 20 Pro segment calls with repeated long prompt/output contracts.
-- Default thinking is not explicitly configured (`gemini-3.6-flash` currently defaults to medium; `gemini-3.1-pro-preview` to high).
+- Default thinking is not explicitly configured (`gemini-3.8-flash` currently defaults to medium; `gemini-3.1-pro-preview` to high).
 - Automatic hardsub full-video re-encode.
 - Persistent raw, split, merged, analysis, hardsub, and highlight objects without lifecycle cleanup.
 - Full Gemini responses and some profile/analysis content logged at information level.

@@ -1,73 +1,36 @@
-# React + TypeScript + Vite
+# WOD Strategist Web
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React/TypeScript review app for authenticated video upload, workout history, session playback, feedback, re-analysis, and cost inspection. This app is separate from the root Expo web target.
 
-Currently, two official plugins are available:
+## Local development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Start the API and worker using [api/README.md](../api/README.md). The Vite proxy targets `http://localhost:8088`, so set `PORT=8088` on the API.
 
-## React Compiler
+From `web/`:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Open [http://localhost:5173](http://localhost:5173). Requests to `/api/v1` are proxied to the API; authentication uses the `jwt` httpOnly cookie. An existing account is required because self-service signup is disabled. For local HTTP development, configure the API with `COOKIE_SECURE=false`; retain secure cookies in HTTPS environments.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Optional API feature flags (both default to false):
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- `ENABLE_CHUNK_REANALYSIS=true`
+- `ENABLE_SESSION_REANALYSIS=true`
+
+Re-analysis creates a candidate. Explicit whole-session apply changes the production result; feedback alone does not. See [video-analysis.md](../docs/agent-memory/video-analysis.md).
+
+## Validation
+
+```bash
+npm run build
+npm run lint
 ```
+
+There is no web `test` script. `npm run preview` serves the built frontend; it is not a production API deployment.
+
+## Known behavior to review
+
+The upload page currently defaults to `compare` and labels it as two parallel pipelines, while the video worker routes it only through two-pass analysis. This remains OBS-05 in the [improvement plan](../docs/video-analysis-improvement/03-phase-2-observability-and-evaluation.md). Use the actual worker path and recorded model IDs when interpreting output or cost.

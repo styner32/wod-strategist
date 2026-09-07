@@ -1411,6 +1411,37 @@ export interface components {
             title?: string;
             updated_at?: string;
         };
+        "controllers.RelatedWODQuery": {
+            movement?: string;
+            source_session_id?: string;
+            weight_kg?: number;
+        };
+        "controllers.ScoreParts": {
+            main?: number;
+            recency?: number;
+            weight?: number;
+        };
+        "db.NormalizedMovement": {
+            is_main?: boolean;
+            movement?: string;
+            reps?: string;
+            weight_kg?: number;
+            weight_raw?: string;
+        };
+        "controllers.RelatedWODItem": {
+            analysis_id?: number;
+            created_at?: string;
+            movement?: components["schemas"]["db.NormalizedMovement"];
+            score?: number;
+            score_parts?: components["schemas"]["controllers.ScoreParts"];
+            session_id?: string;
+            session_score?: string;
+            wod_description?: string;
+        };
+        "controllers.RelatedWODsResponse": {
+            query?: components["schemas"]["controllers.RelatedWODQuery"];
+            related?: components["schemas"]["controllers.RelatedWODItem"][];
+        };
     };
     responses: never;
     parameters: never;

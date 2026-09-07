@@ -93,6 +93,9 @@ func SetupRouter(appEnv string, allowedOrigins []string,
 	protected.POST("/generate-hardsub", ctl.GenerateHardSub)
 	protected.POST("/debug/telemetry", ctl.UploadDebugTelemetry)
 	protected.POST("/parse-workout-image", ctl.ParseWorkoutImage)
+	protected.GET("/related-wods", ctl.GetRelatedWODs)
+	protected.POST("/strategies/pre-wod-advice", ctl.GetPreWODAdvice)
+	protected.POST("/appearance-from-image", ctl.ParseAppearanceImage)
 	protected.POST("/sessions", ctl.CreateSession)
 	protected.GET("/sessions/:session_id/analysis", ctl.GetSessionAnalysis)
 	protected.GET("/sessions/:session_id/chunks/:chunk_id/play-url", ctl.GetChunkPlayURL)
@@ -102,10 +105,22 @@ func SetupRouter(appEnv string, allowedOrigins []string,
 	protected.POST("/sessions/:session_id/reanalyses", ctl.CreateSessionReanalysis)
 	protected.GET("/sessions/:session_id/reanalyses", ctl.ListSessionReanalyses)
 	protected.GET("/sessions/:session_id/reanalyses/:run_id", ctl.GetSessionReanalysis)
+	protected.POST("/sessions/:session_id/reanalyses/:run_id/apply", ctl.ApplySessionReanalysis)
+	protected.GET("/sessions/:session_id/cost", ctl.GetSessionCost)
+	protected.GET("/analytics/cost", ctl.GetTotalCost)
 	protected.POST("/sessions/:session_id/feedback", ctl.CreateFeedback)
 	protected.GET("/sessions/:session_id/feedback", ctl.ListFeedback)
 	protected.PATCH("/sessions/:session_id/feedback/:feedback_id", ctl.UpdateFeedback)
 	protected.DELETE("/sessions/:session_id/feedback/:feedback_id", ctl.DeleteFeedback)
+
+	protected.GET("/stretches", ctl.ListStretches)
+	protected.GET("/stretches/recommended", ctl.ListRecommendedStretches)
+	protected.POST("/stretches", ctl.CreateStretch)
+	protected.PUT("/stretches/:id", ctl.UpdateStretch)
+	protected.DELETE("/stretches/:id", ctl.DeleteStretch)
+	protected.POST("/stretches/:id/media-upload-url", ctl.CreateStretchMediaUploadURL)
+	protected.POST("/stretches/:id/media", ctl.SetStretchMedia)
+	protected.DELETE("/stretches/:id/media", ctl.ClearStretchMedia)
 
 	return r, nil
 }

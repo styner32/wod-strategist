@@ -1,6 +1,12 @@
-import { useParams, Link } from 'react-router-dom';
-import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { ApiError } from "../api/client";
 import {
   historyApi,
   type AnalysisFeedback,
@@ -10,41 +16,48 @@ import {
   type FeedbackListResponse,
   type ReanalysisListResponse,
   type ReanalysisStatus,
+  type StretchRecommendation,
   type VideoKind,
-} from '../api/history';
-import { ApiError } from '../api/client';
-import { useAuth } from '../auth/useAuth';
-import { ChunkMetricsChart } from './components/ChunkMetricsChart';
-import { GuidanceTimeline } from './components/GuidanceTimeline';
+} from "../api/history";
+import {
+  buildStretchLookup,
+  normalizeStretchKey,
+  stretchesApi,
+} from "../api/stretches";
+import { useAuth } from "../auth/useAuth";
+import { ChunkInspector } from "./components/ChunkInspector";
+import { ChunkMetricsChart } from "./components/ChunkMetricsChart";
 import {
   FeedbackDialog,
   type FeedbackDialogValue,
-} from './components/FeedbackDialog';
-import { ChunkInspector } from './components/ChunkInspector';
-import { SessionReanalysisPanel } from './components/SessionReanalysisPanel';
-import { HighlightEventCard } from './components/HighlightEventCard';
-import {
-  getHighlightSeekTime,
-  parseHighlightSegments,
-} from './highlights';
+} from "./components/FeedbackDialog";
+import { GuidanceTimeline } from "./components/GuidanceTimeline";
+import { HighlightEventCard } from "./components/HighlightEventCard";
+import { SessionCostCard } from "./components/SessionCostCard";
+import { SessionReanalysisPanel } from "./components/SessionReanalysisPanel";
+import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
+import { getHighlightSeekTime, parseHighlightSegments } from "./highlights";
 
 function formatDate(dateStr: string) {
-  return new Date(dateStr).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+  return new Date(dateStr).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
-const VIDEO_KIND_LABELS: Record<VideoKind, { label: string; icon: string; desc: string }> = {
-  merged: { label: 'Original', icon: '📹', desc: 'Raw workout video' },
-  hardsubbed: { label: 'Guided', icon: '📝', desc: 'With AI coaching overlay' },
-  encoded: { label: 'Encoded', icon: '🎬', desc: 'Compressed version' },
+const VIDEO_KIND_LABELS: Record<
+  VideoKind,
+  { label: string; icon: string; desc: string }
+> = {
+  merged: { label: "Original", icon: "📹", desc: "Raw workout video" },
+  hardsubbed: { label: "Guided", icon: "📝", desc: "With AI coaching overlay" },
+  encoded: { label: "Encoded", icon: "🎬", desc: "Compressed version" },
 };
 
-const VIDEO_KINDS: VideoKind[] = ['merged', 'hardsubbed', 'encoded'];
+const VIDEO_KINDS: VideoKind[] = ["merged", "hardsubbed", "encoded"];
 
 const SIDEBAR_HIGHLIGHT_PREVIEW_COUNT = 3;
 
@@ -53,7 +66,9 @@ async function loadTargetVideo(
   profileId: number,
   selectedKind?: VideoKind,
 ) {
-  const kinds: VideoKind[] = selectedKind ? [selectedKind] : ['merged', 'encoded'];
+  const kinds: VideoKind[] = selectedKind
+    ? [selectedKind]
+    : ["merged", "encoded"];
   let unavailableError: ApiError | undefined;
 
   for (const kind of kinds) {
@@ -68,7 +83,7 @@ async function loadTargetVideo(
     }
   }
 
-  throw unavailableError ?? new Error('Video not available');
+  throw unavailableError ?? new Error("Video not available");
 }
 
 const BULK_REANALYSIS_LIMIT = 20;
@@ -92,7 +107,7 @@ interface BulkReanalysisResult {
 }
 
 interface FeedbackDialogState {
-  targetType: 'session' | 'chunk';
+  targetType: "session" | "chunk";
   chunk?: ChunkAnalysisResult;
   existing?: AnalysisFeedback;
   preset?: FeedbackCorrection;
@@ -102,7 +117,9 @@ interface FeedbackDialogState {
 function normalizeFeedback(response?: FeedbackListResponse) {
   if (!response) return [];
   if (Array.isArray(response)) {
-    return response.filter((feedback) => !feedback.retracted && !feedback.retracted_at);
+    return response.filter(
+      (feedback) => !feedback.retracted && !feedback.retracted_at,
+    );
   }
   return response.current ?? [];
 }
@@ -117,11 +134,11 @@ function feedbackChunkId(feedback: AnalysisFeedback) {
 }
 
 function feedbackError(error: unknown) {
-  return error instanceof Error ? error.message : 'Unable to save feedback.';
+  return error instanceof Error ? error.message : "Unable to save feedback.";
 }
 
 function isTerminalChunkReanalysisStatus(status?: ReanalysisStatus) {
-  return status != null && status !== 'QUEUED' && status !== 'RUNNING';
+  return status != null && status !== "QUEUED" && status !== "RUNNING";
 }
 
 function orderChunksForTimeline(chunks: ChunkAnalysisResult[]) {
@@ -136,6 +153,10 @@ function orderChunksForTimeline(chunks: ChunkAnalysisResult[]) {
 
 export function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const [searchParams] = useSearchParams();
+  const searchProfileId = searchParams.get("profile_id")
+    ? Number(searchParams.get("profile_id"))
+    : undefined;
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
@@ -146,30 +167,57 @@ export function SessionDetailPage() {
   const [showFullAnalysis, setShowFullAnalysis] = useState(false);
   const [showAllHighlights, setShowAllHighlights] = useState(false);
   const [selectedChunkId, setSelectedChunkId] = useState<number>();
-  const [selectedReanalysisChunkIds, setSelectedReanalysisChunkIds] = useState<Set<number>>(
-    () => new Set(),
-  );
-  const [bulkReanalysisResult, setBulkReanalysisResult] = useState<BulkReanalysisResult>();
+  const [selectedReanalysisChunkIds, setSelectedReanalysisChunkIds] = useState<
+    Set<number>
+  >(() => new Set());
+  const [bulkReanalysisResult, setBulkReanalysisResult] =
+    useState<BulkReanalysisResult>();
   const [dialog, setDialog] = useState<FeedbackDialogState>();
   const closeFeedbackDialog = useCallback(() => setDialog(undefined), []);
 
+  const { data: dbCatalog = [] } = useQuery({
+    queryKey: ["stretches"],
+    queryFn: stretchesApi.list,
+    staleTime: 10 * 60 * 1000,
+  });
+
+  const stretchLookup = useMemo(
+    () => buildStretchLookup(dbCatalog),
+    [dbCatalog],
+  );
+
   const { data: analyses, isLoading: analysisLoading } = useQuery({
-    queryKey: ['analysis', sessionId],
+    queryKey: ["analysis", sessionId],
     queryFn: () => historyApi.getAnalysis(sessionId!),
     enabled: !!sessionId,
   });
 
-  const { data: sessionAnalysis } = useQuery({
-    queryKey: ['session-analysis', sessionId],
-    queryFn: () => historyApi.getSessionAnalysis(sessionId!),
-    enabled: !!sessionId,
-    retry: false,
-  });
+  const { data: sessionAnalysis, isLoading: sessionAnalysisLoading } = useQuery(
+    {
+      queryKey: ["session-analysis", sessionId],
+      queryFn: () => historyApi.getSessionAnalysis(sessionId!),
+      enabled: !!sessionId,
+      retry: false,
+    },
+  );
 
   const analysis = sessionAnalysis?.analysis ?? analyses?.[0];
 
-  const { data: legacyChunks } = useQuery({
-    queryKey: ['chunks', sessionId],
+  const stretchRecommendations = useMemo<StretchRecommendation[]>(() => {
+    if (!analysis?.stretch_recommendations) return [];
+    try {
+      const parsed =
+        typeof analysis.stretch_recommendations === "string"
+          ? JSON.parse(analysis.stretch_recommendations)
+          : analysis.stretch_recommendations;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [analysis?.stretch_recommendations]);
+
+  const { data: legacyChunks, isLoading: legacyChunksLoading } = useQuery({
+    queryKey: ["chunks", sessionId],
     queryFn: () => historyApi.getChunkAnalysis(sessionId!),
     enabled: !!sessionId,
   });
@@ -182,26 +230,41 @@ export function SessionDetailPage() {
     }
     return [...byId.values()];
   }, [legacyChunks, sessionAnalysis?.chunks]);
-  const timelineOrderedChunks = useMemo(() => orderChunksForTimeline(chunks), [chunks]);
-  const profileId = analysis?.profile_id
-    ?? chunks[0]?.profile_id
-    ?? user?.profiles?.[0]?.id;
+  const timelineOrderedChunks = useMemo(
+    () => orderChunksForTimeline(chunks),
+    [chunks],
+  );
+  const isMetadataLoading =
+    (sessionAnalysisLoading || analysisLoading) && legacyChunksLoading;
+  const profileId =
+    searchProfileId ??
+    analysis?.profile_id ??
+    chunks[0]?.profile_id ??
+    (!isMetadataLoading ? user?.profiles?.[0]?.id : undefined);
 
   const { data: feedbackResponse } = useQuery({
-    queryKey: ['session-feedback', sessionId],
+    queryKey: ["session-feedback", sessionId],
     queryFn: () => historyApi.listFeedback(sessionId!),
     enabled: !!sessionId,
     retry: false,
   });
 
   const { data: movementSuggestions = [] } = useQuery({
-    queryKey: ['movement-suggestions'],
+    queryKey: ["movement-suggestions"],
     queryFn: historyApi.getMovementSuggestions,
     retry: false,
   });
 
+  const { data: relatedWodsData } = useQuery({
+    queryKey: ["related-wods", sessionId, profileId],
+    queryFn: () => historyApi.getRelatedWods(sessionId!, profileId!),
+    enabled: !!sessionId && !!profileId && analysis?.status === "COMPLETED",
+    retry: false,
+  });
+
   const currentFeedback = useMemo(() => {
-    if (feedbackResponse !== undefined) return normalizeFeedback(feedbackResponse);
+    if (feedbackResponse !== undefined)
+      return normalizeFeedback(feedbackResponse);
     return (sessionAnalysis?.feedback ?? []).filter(
       (feedback) => !feedback.retracted && !feedback.retracted_at,
     );
@@ -210,11 +273,14 @@ export function SessionDetailPage() {
   const feedbackByChunk = useMemo(() => {
     const result = new Map<number, AnalysisFeedback>();
     for (const feedback of currentFeedback) {
-      if (feedback.target_type !== 'chunk') continue;
+      if (feedback.target_type !== "chunk") continue;
       const chunkId = feedbackChunkId(feedback);
       if (chunkId == null) continue;
       const current = result.get(chunkId);
-      if (!current || Date.parse(feedback.created_at) >= Date.parse(current.created_at)) {
+      if (
+        !current ||
+        Date.parse(feedback.created_at) >= Date.parse(current.created_at)
+      ) {
         result.set(chunkId, feedback);
       }
     }
@@ -222,36 +288,50 @@ export function SessionDetailPage() {
   }, [currentFeedback]);
 
   const sessionFeedback = currentFeedback.find(
-    (feedback) => feedback.target_type === 'session' && feedback.category === 'session_accuracy',
+    (feedback) =>
+      feedback.target_type === "session" &&
+      feedback.category === "session_accuracy",
   );
   const hasChunkCorrections = feedbackByChunk.size > 0;
-  const selectedChunk = chunks.find((chunk) => chunk.id === selectedChunkId)
-    ?? chunks[0];
+  const selectedChunk =
+    chunks.find((chunk) => chunk.id === selectedChunkId) ?? chunks[0];
 
   const { data: runResponse, isLoading: runsLoading } = useQuery({
-    queryKey: ['chunk-reanalyses', sessionId, selectedChunk?.id],
-    queryFn: () => historyApi.listChunkReanalyses(sessionId!, selectedChunk!.id),
+    queryKey: ["chunk-reanalyses", sessionId, selectedChunk?.id],
+    queryFn: () =>
+      historyApi.listChunkReanalyses(sessionId!, selectedChunk!.id),
     enabled: !!sessionId && !!selectedChunk,
     retry: false,
     refetchInterval: (query) => {
-      const runs = normalizeRuns(query.state.data as ReanalysisListResponse | undefined);
-      if (!runs.some((run) => run.status === 'QUEUED' || run.status === 'RUNNING')) {
+      const runs = normalizeRuns(
+        query.state.data as ReanalysisListResponse | undefined,
+      );
+      if (
+        !runs.some((run) => run.status === "QUEUED" || run.status === "RUNNING")
+      ) {
         return false;
       }
       const pollCount = Math.min(query.state.dataUpdateCount, 4);
-      return Math.min(1000 * (2 ** pollCount), 8000);
+      return Math.min(1000 * 2 ** pollCount, 8000);
     },
   });
   const runs = normalizeRuns(runResponse);
   const selectedChunksForReanalysis = useMemo(
-    () => timelineOrderedChunks.filter((chunk) => selectedReanalysisChunkIds.has(chunk.id)),
+    () =>
+      timelineOrderedChunks.filter((chunk) =>
+        selectedReanalysisChunkIds.has(chunk.id),
+      ),
     [timelineOrderedChunks, selectedReanalysisChunkIds],
   );
 
   const invalidateFeedback = async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['session-feedback', sessionId] }),
-      queryClient.invalidateQueries({ queryKey: ['session-analysis', sessionId] }),
+      queryClient.invalidateQueries({
+        queryKey: ["session-feedback", sessionId],
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["session-analysis", sessionId],
+      }),
     ]);
   };
 
@@ -289,30 +369,34 @@ export function SessionDetailPage() {
   });
 
   const undoFeedbackMutation = useMutation({
-    mutationFn: (feedback: AnalysisFeedback) => historyApi.deleteFeedback(
-      sessionId!,
-      feedback.id,
-      feedback.revision,
-      crypto.randomUUID(),
-    ),
+    mutationFn: (feedback: AnalysisFeedback) =>
+      historyApi.deleteFeedback(
+        sessionId!,
+        feedback.id,
+        feedback.revision,
+        crypto.randomUUID(),
+      ),
     onSuccess: invalidateFeedback,
   });
 
   const reanalysisMutation = useMutation({
-    mutationFn: (chunk: ChunkAnalysisResult) => historyApi.createChunkReanalysis(
-      sessionId!,
-      chunk.id,
-      crypto.randomUUID(),
-    ),
+    mutationFn: (chunk: ChunkAnalysisResult) =>
+      historyApi.createChunkReanalysis(
+        sessionId!,
+        chunk.id,
+        crypto.randomUUID(),
+      ),
     onSuccess: async (_result, chunk) => {
       await queryClient.invalidateQueries({
-        queryKey: ['chunk-reanalyses', sessionId, chunk.id],
+        queryKey: ["chunk-reanalyses", sessionId, chunk.id],
       });
     },
   });
 
   const bulkReanalysisMutation = useMutation({
-    mutationFn: async (selectedChunks: ChunkAnalysisResult[]): Promise<BulkReanalysisResult> => {
+    mutationFn: async (
+      selectedChunks: ChunkAnalysisResult[],
+    ): Promise<BulkReanalysisResult> => {
       const requestedChunkIds = selectedChunks.map((chunk) => chunk.id);
       const queuedRuns: BulkQueuedRun[] = [];
       const failures: BulkReanalysisFailure[] = [];
@@ -333,13 +417,17 @@ export function SessionDetailPage() {
             status: response.status,
           });
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Request failed.';
+          const message =
+            error instanceof Error ? error.message : "Request failed.";
           failures.push({
             chunkId: chunk.id,
             message,
           });
 
-          if (error instanceof ApiError && (error.status === 429 || error.status === 503)) {
+          if (
+            error instanceof ApiError &&
+            (error.status === 429 || error.status === 503)
+          ) {
             for (const notAttempted of selectedChunks.slice(index + 1)) {
               failures.push({
                 chunkId: notAttempted.id,
@@ -354,69 +442,91 @@ export function SessionDetailPage() {
       return { requestedChunkIds, queuedRuns, failures };
     },
     onSuccess: async (result) => {
-      await Promise.all(result.requestedChunkIds.map((chunkId) =>
-        queryClient.invalidateQueries({
-          queryKey: ['chunk-reanalyses', sessionId, chunkId],
-        }),
-      ));
+      await Promise.all(
+        result.requestedChunkIds.map((chunkId) =>
+          queryClient.invalidateQueries({
+            queryKey: ["chunk-reanalyses", sessionId, chunkId],
+          }),
+        ),
+      );
       setBulkReanalysisResult(result);
-      setSelectedReanalysisChunkIds(new Set(result.failures.map((failure) => failure.chunkId)));
+      setSelectedReanalysisChunkIds(
+        new Set(result.failures.map((failure) => failure.chunkId)),
+      );
     },
   });
 
   const bulkRunQueries = useQueries({
     queries: (bulkReanalysisResult?.queuedRuns ?? []).map((run) => ({
-      queryKey: ['chunk-reanalysis', sessionId, run.chunkId, run.runId],
-      queryFn: () => historyApi.getChunkReanalysis(sessionId!, run.chunkId, run.runId),
+      queryKey: ["chunk-reanalysis", sessionId, run.chunkId, run.runId],
+      queryFn: () =>
+        historyApi.getChunkReanalysis(sessionId!, run.chunkId, run.runId),
       enabled: !!sessionId,
       retry: false,
-      refetchInterval: (query: { state: { data?: ChunkReanalysisRun; error?: any; dataUpdateCount: number } }) => {
+      refetchInterval: (query: {
+        state: {
+          data?: ChunkReanalysisRun;
+          error?: any;
+          dataUpdateCount: number;
+        };
+      }) => {
         if (query.state.error) return false;
         const status = query.state.data?.status ?? run.status;
         if (isTerminalChunkReanalysisStatus(status)) return false;
         const pollCount = Math.min(query.state.dataUpdateCount, 4);
-        return Math.min(1000 * (2 ** pollCount), 8000);
+        return Math.min(1000 * 2 ** pollCount, 8000);
       },
     })),
   });
 
-  const trackedBulkRuns = (bulkReanalysisResult?.queuedRuns ?? []).map((run, index) => ({
-    ...run,
-    detail: bulkRunQueries[index]?.data,
-    pollingError: bulkRunQueries[index]?.isError ?? false,
-  }));
+  const trackedBulkRuns = (bulkReanalysisResult?.queuedRuns ?? []).map(
+    (run, index) => ({
+      ...run,
+      detail: bulkRunQueries[index]?.data,
+      pollingError: bulkRunQueries[index]?.isError ?? false,
+    }),
+  );
   const bulkRunStatusByChunk = new Map<number, string>();
   for (const run of trackedBulkRuns) {
     bulkRunStatusByChunk.set(
       run.chunkId,
-      run.pollingError ? 'STATUS UNAVAILABLE' : (run.detail?.status ?? run.status),
+      run.pollingError
+        ? "STATUS UNAVAILABLE"
+        : (run.detail?.status ?? run.status),
     );
   }
   for (const failure of bulkReanalysisResult?.failures ?? []) {
     bulkRunStatusByChunk.set(
       failure.chunkId,
-      failure.message.startsWith('Not attempted:') ? 'NOT ATTEMPTED' : 'REQUEST FAILED',
+      failure.message.startsWith("Not attempted:")
+        ? "NOT ATTEMPTED"
+        : "REQUEST FAILED",
     );
   }
   const terminalBulkRunCount = trackedBulkRuns.filter((run) =>
     isTerminalChunkReanalysisStatus(run.detail?.status ?? run.status),
   ).length;
-  const bulkChunkRunsReady = bulkReanalysisResult != null
-    && bulkReanalysisResult.failures.length === 0
-    && trackedBulkRuns.length > 0
-    && terminalBulkRunCount === trackedBulkRuns.length
-    && trackedBulkRuns.every((run) => !run.pollingError);
-  const unconfirmedBulkCandidateCount = trackedBulkRuns.filter((run) =>
-    (run.detail?.status ?? run.status) === 'COMPLETED'
-      && !currentFeedback.some((feedback) => feedback.reanalysis_run_id === run.runId),
+  const bulkChunkRunsReady =
+    bulkReanalysisResult != null &&
+    bulkReanalysisResult.failures.length === 0 &&
+    trackedBulkRuns.length > 0 &&
+    terminalBulkRunCount === trackedBulkRuns.length &&
+    trackedBulkRuns.every((run) => !run.pollingError);
+  const unconfirmedBulkCandidateCount = trackedBulkRuns.filter(
+    (run) =>
+      (run.detail?.status ?? run.status) === "COMPLETED" &&
+      !currentFeedback.some(
+        (feedback) => feedback.reanalysis_run_id === run.runId,
+      ),
   ).length;
-  const chunkBatchReadyForSessionReanalysis = bulkReanalysisResult == null || bulkChunkRunsReady;
+  const chunkBatchReadyForSessionReanalysis =
+    bulkReanalysisResult == null || bulkChunkRunsReady;
   const chunkBatchBlockedReason = bulkReanalysisMutation.isPending
-    ? 'Wait for the selected chunk re-analysis requests to finish queueing.'
+    ? "Wait for the selected chunk re-analysis requests to finish queueing."
     : bulkReanalysisResult?.failures.length
-      ? 'Resolve or remove the chunk requests that were not queued before re-analyzing the whole workout.'
+      ? "Resolve or remove the chunk requests that were not queued before re-analyzing the whole workout."
       : trackedBulkRuns.some((run) => run.pollingError)
-        ? 'A chunk attempt status could not be refreshed. Retry when its status is available.'
+        ? "A chunk attempt status could not be refreshed. Retry when its status is available."
         : bulkReanalysisResult && !bulkChunkRunsReady
           ? `Wait for all chunk attempts to finish (${terminalBulkRunCount}/${trackedBulkRuns.length} terminal).`
           : undefined;
@@ -425,7 +535,7 @@ export function SessionDetailPage() {
     feedbackMutation.reset();
     undoFeedbackMutation.reset();
     setDialog({
-      targetType: 'chunk',
+      targetType: "chunk",
       chunk,
       existing: feedbackByChunk.get(chunk.id),
     });
@@ -434,7 +544,7 @@ export function SessionDetailPage() {
   const openSessionMistake = () => {
     feedbackMutation.reset();
     undoFeedbackMutation.reset();
-    setDialog({ targetType: 'session', existing: sessionFeedback });
+    setDialog({ targetType: "session", existing: sessionFeedback });
   };
 
   const submitFeedback = async (value: FeedbackDialogValue) => {
@@ -444,7 +554,12 @@ export function SessionDetailPage() {
   };
 
   const undoFeedback = async (feedback: AnalysisFeedback) => {
-    if (!window.confirm('Undo this correction? The original analysis will remain unchanged.')) return;
+    if (
+      !window.confirm(
+        "Undo this correction? The original analysis will remain unchanged.",
+      )
+    )
+      return;
     try {
       await undoFeedbackMutation.mutateAsync(feedback);
       setDialog(undefined);
@@ -457,11 +572,11 @@ export function SessionDetailPage() {
     feedbackMutation.reset();
     try {
       await feedbackMutation.mutateAsync({
-        state: { targetType: 'session', existing: sessionFeedback },
+        state: { targetType: "session", existing: sessionFeedback },
         value: {
-          category: 'session_accuracy',
+          category: "session_accuracy",
           correction: { accurate: true },
-          note: '',
+          note: "",
           consent_to_improve: sessionFeedback?.consent_to_improve ?? false,
         },
       });
@@ -473,20 +588,24 @@ export function SessionDetailPage() {
   const showInspector = (chunk: ChunkAnalysisResult) => {
     setSelectedChunkId(chunk.id);
     window.setTimeout(() => {
-      inspectorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      inspectorRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
     }, 0);
   };
 
   const requestReanalysis = (chunk: ChunkAnalysisResult) => {
     showInspector(chunk);
     const confirmed = window.confirm(
-      'Re-analyze this exact video interval with the current AI analyzer? This incurs an AI call and will not change the original result.',
+      "Re-analyze this exact video interval with the current AI analyzer? This incurs an AI call and will not change the original result.",
     );
     if (confirmed) reanalysisMutation.mutate(chunk);
   };
 
   const toggleReanalysisSelection = (chunkId: number) => {
-    if (bulkReanalysisMutation.isPending || reanalysisMutation.isPending) return;
+    if (bulkReanalysisMutation.isPending || reanalysisMutation.isPending)
+      return;
     setBulkReanalysisResult(undefined);
     setSelectedReanalysisChunkIds((current) => {
       const next = new Set(current);
@@ -501,9 +620,13 @@ export function SessionDetailPage() {
 
   const selectAllChunksForReanalysis = () => {
     setBulkReanalysisResult(undefined);
-    setSelectedReanalysisChunkIds(new Set(
-      timelineOrderedChunks.slice(0, BULK_REANALYSIS_LIMIT).map((chunk) => chunk.id),
-    ));
+    setSelectedReanalysisChunkIds(
+      new Set(
+        timelineOrderedChunks
+          .slice(0, BULK_REANALYSIS_LIMIT)
+          .map((chunk) => chunk.id),
+      ),
+    );
   };
 
   const clearReanalysisSelection = () => {
@@ -515,8 +638,8 @@ export function SessionDetailPage() {
     if (selectedChunksForReanalysis.length === 0) return;
     const count = selectedChunksForReanalysis.length;
     const confirmed = window.confirm(
-      `Queue exact-interval re-analysis for ${count} selected ${count === 1 ? 'chunk' : 'chunks'}? `
-      + `This makes ${count} separate AI ${count === 1 ? 'call' : 'calls'}, counts toward the rolling quota, and will not change the original results.`,
+      `Queue exact-interval re-analysis for ${count} selected ${count === 1 ? "chunk" : "chunks"}? ` +
+        `This makes ${count} separate AI ${count === 1 ? "call" : "calls"}, counts toward the rolling quota, and will not change the original results.`,
     );
     if (!confirmed) return;
 
@@ -531,7 +654,7 @@ export function SessionDetailPage() {
   ) => {
     feedbackMutation.reset();
     setDialog({
-      targetType: 'chunk',
+      targetType: "chunk",
       chunk,
       existing: feedbackByChunk.get(chunk.id),
       preset: correction,
@@ -544,13 +667,13 @@ export function SessionDetailPage() {
     error: videoError,
     isLoading: videoLoading,
   } = useQuery({
-    queryKey: ['video-url', sessionId, selectedKind ?? 'default'],
+    queryKey: ["video-url", sessionId, profileId, selectedKind ?? "default"],
     queryFn: () => loadTargetVideo(sessionId!, profileId!, selectedKind),
     enabled: !!sessionId && !!profileId,
     staleTime: 10 * 60 * 1000, // 10 min (signed URLs expire)
     retry: false,
   });
-  const effectiveVideoKind = selectedKind ?? videoUrl?.kind ?? 'merged';
+  const effectiveVideoKind = selectedKind ?? videoUrl?.kind ?? "merged";
 
   const parsedOutput = (() => {
     try {
@@ -582,15 +705,18 @@ export function SessionDetailPage() {
     }
   }, []);
 
-  const handleHighlightSeek = useCallback((startSeconds: number, version?: number) => {
-    const targetSeconds = getHighlightSeekTime(
-      startSeconds,
-      videoRef.current?.duration,
-      version,
-    );
-    handleSeek(targetSeconds);
-    videoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [handleSeek]);
+  const handleHighlightSeek = useCallback(
+    (startSeconds: number, version?: number) => {
+      const targetSeconds = getHighlightSeekTime(
+        startSeconds,
+        videoRef.current?.duration,
+        version,
+      );
+      handleSeek(targetSeconds);
+      videoRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    },
+    [handleSeek],
+  );
 
   if (analysisLoading) {
     return (
@@ -607,8 +733,18 @@ export function SessionDetailPage() {
           to="/"
           className="text-text-muted hover:text-text-primary transition-colors"
         >
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M15.75 19.5 8.25 12l7.5-7.5"
+            />
           </svg>
         </Link>
         <h1 className="text-xl font-bold text-text-primary">Session Detail</h1>
@@ -624,25 +760,37 @@ export function SessionDetailPage() {
                 ref={videoRef}
                 src={videoUrl.download_url}
                 controls
+                preload="auto"
                 onTimeUpdate={handleTimeUpdate}
                 className="w-full aspect-video bg-black"
               />
             ) : (
               <div className="w-full aspect-video bg-bg-secondary flex items-center justify-center">
                 <div className="text-center">
-                  <svg className="w-12 h-12 text-text-muted mx-auto mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+                  <svg
+                    className="w-12 h-12 text-text-muted mx-auto mb-2"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={1}
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z"
+                    />
                   </svg>
                   <p className="text-text-muted text-sm">
                     {videoLoading
-                      ? 'Loading video...'
-                      : videoError instanceof ApiError && videoError.status === 404
+                      ? "Loading video..."
+                      : videoError instanceof ApiError &&
+                          videoError.status === 404
                         ? selectedKind
                           ? `${VIDEO_KIND_LABELS[selectedKind].label} video not available`
-                          : 'Video not available'
+                          : "Video not available"
                         : videoError
-                          ? 'Unable to load video'
-                          : 'Video not available'}
+                          ? "Unable to load video"
+                          : "Video not available"}
                   </p>
                 </div>
               </div>
@@ -665,8 +813,8 @@ export function SessionDetailPage() {
                       transition-all duration-200 border
                       ${
                         isSelected
-                          ? 'bg-accent/15 border-accent/40 text-accent'
-                          : 'bg-bg-secondary border-transparent text-text-secondary hover:text-text-primary hover:bg-bg-tertiary'
+                          ? "bg-accent/15 border-accent/40 text-accent"
+                          : "bg-bg-secondary border-transparent text-text-secondary hover:text-text-primary hover:bg-bg-tertiary"
                       }
                     `}
                     title={cfg.desc}
@@ -685,59 +833,101 @@ export function SessionDetailPage() {
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <p className="text-text-muted">Session ID</p>
-                  <p className="text-text-primary font-mono text-xs mt-0.5 break-all">{analysis.session_id}</p>
+                  <p className="text-text-primary font-mono text-xs mt-0.5 break-all">
+                    {analysis.session_id}
+                  </p>
                 </div>
                 <div>
                   <p className="text-text-muted">Status</p>
-                  <p className="text-text-primary mt-0.5 capitalize">{analysis.status}</p>
+                  <p className="text-text-primary mt-0.5 capitalize">
+                    {analysis.status}
+                  </p>
                 </div>
                 <div>
                   <p className="text-text-muted">Created</p>
-                  <p className="text-text-primary mt-0.5">{formatDate(analysis.created_at)}</p>
+                  <p className="text-text-primary mt-0.5">
+                    {formatDate(analysis.created_at)}
+                  </p>
                 </div>
                 <div>
                   <p className="text-text-muted">Workout Type</p>
-                  <p className="text-text-primary mt-0.5 capitalize">{analysis.workout_type || '—'}</p>
+                  <p className="text-text-primary mt-0.5 capitalize">
+                    {analysis.workout_type || "—"}
+                  </p>
                 </div>
                 {sessionAnalysis?.coverage_status && (
                   <div>
                     <p className="text-text-muted">Media coverage</p>
                     <p className="text-text-primary mt-0.5 capitalize">
-                      {sessionAnalysis.coverage_status.replaceAll('_', ' ')}
+                      {sessionAnalysis.coverage_status.replaceAll("_", " ")}
                     </p>
                   </div>
                 )}
-                {analysis.wod_description && (
-                  <div className="col-span-2 border-t border-border pt-3 mt-1">
+                <div className="col-span-2 border-t border-border pt-3 mt-1">
+                  <div className="flex items-center justify-between">
                     <p className="text-text-muted">WOD Description</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const el = document.getElementById("session-reanalysis-panel");
+                        if (el) {
+                          el.scrollIntoView({ behavior: "smooth" });
+                        }
+                      }}
+                      className="text-xs font-semibold text-accent hover:underline focus:outline-none flex items-center gap-1"
+                    >
+                      <span>✏️</span> {analysis.wod_description ? "수정 및 전체 재분석" : "WOD 설명 등록 및 재분석"}
+                    </button>
+                  </div>
+                  {analysis.wod_description ? (
                     <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
                       {analysis.wod_description}
                     </p>
-                  </div>
-                )}
-                {sessionAnalysis?.additional_observed_movements && sessionAnalysis.additional_observed_movements.length > 0 && (
-                  <div className="col-span-2 border-t border-border pt-3 mt-1">
-                    <p className="text-text-muted">Additional observed movements</p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {sessionAnalysis.additional_observed_movements.map((movement) => (
-                        <span key={movement} className="rounded-md bg-info/10 px-2 py-1 text-xs text-info">
-                          {movement}
-                        </span>
-                      ))}
-                    </div>
-                    <p className="mt-2 text-xs text-text-muted">
-                      Video observations are shown separately and do not change the entered WOD.
+                  ) : (
+                    <p className="text-text-muted text-xs mt-1 italic">
+                      등록된 WOD 설명이 없습니다. 위 버튼을 눌러 WOD 설명을 입력하고 재분석할 수 있습니다.
                     </p>
-                  </div>
-                )}
+                  )}
+                </div>
+                {sessionAnalysis?.additional_observed_movements &&
+                  sessionAnalysis.additional_observed_movements.length > 0 && (
+                    <div className="col-span-2 border-t border-border pt-3 mt-1">
+                      <p className="text-text-muted">
+                        Additional observed movements
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {sessionAnalysis.additional_observed_movements.map(
+                          (movement) => (
+                            <span
+                              key={movement}
+                              className="rounded-md bg-info/10 px-2 py-1 text-xs text-info"
+                            >
+                              {movement}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                      <p className="mt-2 text-xs text-text-muted">
+                        Video observations are shown separately and do not
+                        change the entered WOD.
+                      </p>
+                    </div>
+                  )}
               </div>
             </div>
+          )}
+
+          {/* Muscle Fatigue & Strain */}
+          {analysis?.session_fatigue && (
+            <WorkoutFatiguePanel fatigue={analysis.session_fatigue} />
           )}
 
           {/* AI Analysis */}
           <div className="bg-bg-elevated border border-border rounded-xl p-5">
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-              <h2 className="text-lg font-semibold text-text-primary">AI Analysis</h2>
+              <h2 className="text-lg font-semibold text-text-primary">
+                AI Analysis
+              </h2>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -759,15 +949,16 @@ export function SessionDetailPage() {
             </div>
             {hasChunkCorrections && (
               <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning">
-                Generated before your corrections. The original session summary has not been regenerated.
+                Generated before your corrections. The original session summary
+                has not been regenerated.
               </div>
             )}
             {sessionFeedback && (
               <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-success/20 bg-success/5 px-3 py-2 text-xs text-success">
                 <p>
                   {sessionFeedback.correction?.accurate
-                    ? 'You marked this session analysis as accurate.'
-                    : 'Your session feedback was saved.'}
+                    ? "You marked this session analysis as accurate."
+                    : "Your session feedback was saved."}
                 </p>
                 <button
                   type="button"
@@ -780,7 +971,10 @@ export function SessionDetailPage() {
               </div>
             )}
             {feedbackMutation.isError && !dialog && (
-              <p role="alert" className="mb-4 rounded-lg border border-error/30 bg-error/10 px-3 py-2 text-sm text-error">
+              <p
+                role="alert"
+                className="mb-4 rounded-lg border border-error/30 bg-error/10 px-3 py-2 text-sm text-error"
+              >
                 {feedbackError(feedbackMutation.error)}
               </p>
             )}
@@ -788,7 +982,9 @@ export function SessionDetailPage() {
               <div className="space-y-4">
                 {parsedOutput.overall_summary && (
                   <div>
-                    <h3 className="text-sm font-medium text-text-secondary mb-1">Summary</h3>
+                    <h3 className="text-sm font-medium text-text-secondary mb-1">
+                      Summary
+                    </h3>
                     <p className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap">
                       {parsedOutput.overall_summary}
                     </p>
@@ -796,7 +992,9 @@ export function SessionDetailPage() {
                 )}
                 {parsedOutput.coaching_feedback && (
                   <div>
-                    <h3 className="text-sm font-medium text-text-secondary mb-1">Coaching Feedback</h3>
+                    <h3 className="text-sm font-medium text-text-secondary mb-1">
+                      Coaching Feedback
+                    </h3>
                     <p className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap">
                       {parsedOutput.coaching_feedback}
                     </p>
@@ -804,44 +1002,53 @@ export function SessionDetailPage() {
                 )}
                 {parsedOutput.key_observations && (
                   <div>
-                    <h3 className="text-sm font-medium text-text-secondary mb-1">Key Observations</h3>
+                    <h3 className="text-sm font-medium text-text-secondary mb-1">
+                      Key Observations
+                    </h3>
                     <ul className="text-text-primary text-sm space-y-1">
-                      {(Array.isArray(parsedOutput.key_observations) ? parsedOutput.key_observations : []).map(
-                        (obs: string, i: number) => (
-                          <li key={i} className="flex gap-2">
-                            <span className="text-accent mt-1">•</span>
-                            <span>{obs}</span>
-                          </li>
-                        ),
-                      )}
+                      {(Array.isArray(parsedOutput.key_observations)
+                        ? parsedOutput.key_observations
+                        : []
+                      ).map((obs: string, i: number) => (
+                        <li key={i} className="flex gap-2">
+                          <span className="text-accent mt-1">•</span>
+                          <span>{obs}</span>
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}
               </div>
-            ) : analysis?.output ? (() => {
-              const lines = analysis.output.split('\n');
-              const isTruncated = lines.length > 10;
-              const displayedText = showFullAnalysis || !isTruncated
-                ? analysis.output
-                : lines.slice(0, 10).join('\n') + '\n...';
-              return (
-                <div className="bg-bg-secondary p-4 rounded-xl border border-border">
-                  <div className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap font-sans">
-                    {displayedText}
+            ) : analysis?.output ? (
+              (() => {
+                const lines = analysis.output.split("\n");
+                const isTruncated = lines.length > 10;
+                const displayedText =
+                  showFullAnalysis || !isTruncated
+                    ? analysis.output
+                    : lines.slice(0, 10).join("\n") + "\n...";
+                return (
+                  <div className="bg-bg-secondary p-4 rounded-xl border border-border">
+                    <div className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap font-sans">
+                      {displayedText}
+                    </div>
+                    {isTruncated && (
+                      <button
+                        onClick={() => setShowFullAnalysis(!showFullAnalysis)}
+                        className="mt-3 text-sm font-semibold text-accent hover:underline transition-colors cursor-pointer"
+                      >
+                        {showFullAnalysis ? "Show Less" : "Show More"}
+                      </button>
+                    )}
                   </div>
-                  {isTruncated && (
-                    <button
-                      onClick={() => setShowFullAnalysis(!showFullAnalysis)}
-                      className="mt-3 text-sm font-semibold text-accent hover:underline transition-colors cursor-pointer"
-                    >
-                      {showFullAnalysis ? 'Show Less' : 'Show More'}
-                    </button>
-                  )}
-                </div>
-              );
-            })() : analysis?.status?.toLowerCase() === 'completed' ? (
-              <p className="text-text-muted text-sm">Analysis output not available.</p>
-            ) : analysis?.status?.toLowerCase() === 'processing' || analysis?.status?.toLowerCase() === 'pending' ? (
+                );
+              })()
+            ) : analysis?.status?.toLowerCase() === "completed" ? (
+              <p className="text-text-muted text-sm">
+                Analysis output not available.
+              </p>
+            ) : analysis?.status?.toLowerCase() === "processing" ||
+              analysis?.status?.toLowerCase() === "pending" ? (
               <div className="flex items-center gap-3 text-text-secondary">
                 <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
                 <span className="text-sm">Analysis in progress...</span>
@@ -855,18 +1062,24 @@ export function SessionDetailPage() {
         {/* Right: Guidance Timeline (2/5 width) */}
         <div className="lg:col-span-2">
           <div className="space-y-3 lg:sticky lg:top-4">
+            <SessionCostCard sessionId={sessionId!} />
+
             <section
               className="rounded-xl border border-border bg-bg-elevated p-4"
               aria-labelledby="bulk-reanalysis-heading"
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 id="bulk-reanalysis-heading" className="text-sm font-semibold text-text-primary">
+                  <h2
+                    id="bulk-reanalysis-heading"
+                    className="text-sm font-semibold text-text-primary"
+                  >
                     Bulk re-analysis
                   </h2>
                   <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                    Select up to {BULK_REANALYSIS_LIMIT} chunks below. Each selected chunk uses one AI call;
-                    the server&apos;s rolling quota and active-run checks still apply.
+                    Select up to {BULK_REANALYSIS_LIMIT} chunks below. Each
+                    selected chunk uses one AI call; the server&apos;s rolling
+                    quota and active-run checks still apply.
                   </p>
                 </div>
                 <span className="shrink-0 rounded-md bg-bg-tertiary px-2 py-1 text-xs font-medium text-text-secondary">
@@ -878,15 +1091,24 @@ export function SessionDetailPage() {
                 <button
                   type="button"
                   onClick={selectAllChunksForReanalysis}
-                  disabled={chunks.length === 0 || bulkReanalysisMutation.isPending || reanalysisMutation.isPending}
+                  disabled={
+                    chunks.length === 0 ||
+                    bulkReanalysisMutation.isPending ||
+                    reanalysisMutation.isPending
+                  }
                   className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-tertiary hover:text-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  {chunks.length > BULK_REANALYSIS_LIMIT ? `Select first ${BULK_REANALYSIS_LIMIT}` : 'Select all'}
+                  {chunks.length > BULK_REANALYSIS_LIMIT
+                    ? `Select first ${BULK_REANALYSIS_LIMIT}`
+                    : "Select all"}
                 </button>
                 <button
                   type="button"
                   onClick={clearReanalysisSelection}
-                  disabled={selectedChunksForReanalysis.length === 0 || bulkReanalysisMutation.isPending}
+                  disabled={
+                    selectedChunksForReanalysis.length === 0 ||
+                    bulkReanalysisMutation.isPending
+                  }
                   className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-tertiary hover:text-text-primary focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   Clear
@@ -894,11 +1116,15 @@ export function SessionDetailPage() {
                 <button
                   type="button"
                   onClick={requestBulkReanalysis}
-                  disabled={selectedChunksForReanalysis.length === 0 || bulkReanalysisMutation.isPending || reanalysisMutation.isPending}
+                  disabled={
+                    selectedChunksForReanalysis.length === 0 ||
+                    bulkReanalysisMutation.isPending ||
+                    reanalysisMutation.isPending
+                  }
                   className="rounded-md border border-accent/40 px-2.5 py-1.5 text-xs font-semibold text-accent hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {bulkReanalysisMutation.isPending
-                    ? 'Queueing…'
+                    ? "Queueing…"
                     : `Re-analyze selected (${selectedChunksForReanalysis.length})`}
                 </button>
               </div>
@@ -906,33 +1132,42 @@ export function SessionDetailPage() {
               <div className="mt-3 text-xs" role="status" aria-live="polite">
                 {bulkReanalysisMutation.isPending && (
                   <p className="text-warning">
-                    Queueing {selectedChunksForReanalysis.length} selected chunks one at a time…
+                    Queueing {selectedChunksForReanalysis.length} selected
+                    chunks one at a time…
                   </p>
                 )}
                 {!bulkReanalysisMutation.isPending && bulkReanalysisResult && (
-                  <p className={bulkReanalysisResult.failures.length > 0 ? 'text-warning' : 'text-success'}>
-                    Queued {bulkReanalysisResult.queuedRuns.length} of {bulkReanalysisResult.requestedChunkIds.length} chunks.
+                  <p
+                    className={
+                      bulkReanalysisResult.failures.length > 0
+                        ? "text-warning"
+                        : "text-success"
+                    }
+                  >
+                    Queued {bulkReanalysisResult.queuedRuns.length} of{" "}
+                    {bulkReanalysisResult.requestedChunkIds.length} chunks.
                     {bulkReanalysisResult.failures.length > 0
-                      ? ' Chunks that failed remain selected for review or retry.'
+                      ? " Chunks that failed remain selected for review or retry."
                       : ` ${terminalBulkRunCount} of ${bulkReanalysisResult.queuedRuns.length} attempts finished.`}
                   </p>
                 )}
               </div>
 
-              {bulkReanalysisResult && bulkReanalysisResult.failures.length > 0 && (
-                <details className="mt-2 rounded-md border border-warning/20 bg-warning/5 px-2.5 py-2 text-xs text-warning">
-                  <summary className="cursor-pointer font-medium">
-                    {bulkReanalysisResult.failures.length} not queued
-                  </summary>
-                  <ul className="mt-2 space-y-1 pl-4">
-                    {bulkReanalysisResult.failures.map((failure) => (
-                      <li key={failure.chunkId} className="list-disc">
-                        Chunk {failure.chunkId}: {failure.message}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
+              {bulkReanalysisResult &&
+                bulkReanalysisResult.failures.length > 0 && (
+                  <details className="mt-2 rounded-md border border-warning/20 bg-warning/5 px-2.5 py-2 text-xs text-warning">
+                    <summary className="cursor-pointer font-medium">
+                      {bulkReanalysisResult.failures.length} not queued
+                    </summary>
+                    <ul className="mt-2 space-y-1 pl-4">
+                      {bulkReanalysisResult.failures.map((failure) => (
+                        <li key={failure.chunkId} className="list-disc">
+                          Chunk {failure.chunkId}: {failure.message}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
             </section>
 
             <GuidanceTimeline
@@ -942,8 +1177,12 @@ export function SessionDetailPage() {
               feedbackByChunk={feedbackByChunk}
               selectedReanalysisChunkIds={selectedReanalysisChunkIds}
               bulkRunStatusByChunk={bulkRunStatusByChunk}
-              reanalysisBusy={bulkReanalysisMutation.isPending || reanalysisMutation.isPending}
-              reanalysisSelectionLimitReached={selectedReanalysisChunkIds.size >= BULK_REANALYSIS_LIMIT}
+              reanalysisBusy={
+                bulkReanalysisMutation.isPending || reanalysisMutation.isPending
+              }
+              reanalysisSelectionLimitReached={
+                selectedReanalysisChunkIds.size >= BULK_REANALYSIS_LIMIT
+              }
               onSeek={handleSeek}
               onInspect={showInspector}
               onCorrect={openCorrection}
@@ -958,11 +1197,15 @@ export function SessionDetailPage() {
               >
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div>
-                    <h2 id="selected-highlights-heading" className="text-lg font-semibold text-text-primary">
+                    <h2
+                      id="selected-highlights-heading"
+                      className="text-lg font-semibold text-text-primary"
+                    >
                       Selected Highlights
                     </h2>
                     <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                      Select an event to play its context. Legacy highlights retain their 5-second lead-in.
+                      Select an event to play its context. Legacy highlights
+                      retain their 5-second lead-in.
                     </p>
                   </div>
                   <span className="shrink-0 rounded-md bg-bg-tertiary px-2 py-1 text-xs font-medium text-text-secondary">
@@ -972,8 +1215,9 @@ export function SessionDetailPage() {
 
                 <div id="selected-highlights-list" className="space-y-2">
                   {visibleHighlightSegments.map((highlight, index) => {
-                    const isActive = currentTime >= highlight.startSeconds
-                      && currentTime <= highlight.endSeconds;
+                    const isActive =
+                      currentTime >= highlight.startSeconds &&
+                      currentTime <= highlight.endSeconds;
 
                     return (
                       <HighlightEventCard
@@ -981,7 +1225,12 @@ export function SessionDetailPage() {
                         highlight={highlight}
                         isActive={isActive}
                         disabled={!videoUrl?.download_url}
-                        onSelect={() => handleHighlightSeek(highlight.startSeconds, highlight.version)}
+                        onSelect={() =>
+                          handleHighlightSeek(
+                            highlight.startSeconds,
+                            highlight.version,
+                          )
+                        }
                       />
                     );
                   })}
@@ -995,9 +1244,137 @@ export function SessionDetailPage() {
                     aria-controls="selected-highlights-list"
                     className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-semibold text-accent transition-colors hover:border-accent/40 hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent"
                   >
-                    {showAllHighlights ? 'Show Less' : 'Show More'}
+                    {showAllHighlights ? "Show Less" : "Show More"}
                   </button>
                 )}
+              </section>
+            )}
+
+            {stretchRecommendations.length > 0 && (
+              <section className="rounded-xl border border-border bg-bg-elevated p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span>🧘</span>
+                    <h2 className="text-lg font-semibold text-text-primary">
+                      Stretch Recommendations
+                    </h2>
+                  </div>
+                  <Link
+                    to="/stretches"
+                    className="text-xs text-accent hover:text-accent-hover font-semibold transition-colors flex items-center gap-1"
+                  >
+                    <span>View All</span>
+                    <span>→</span>
+                  </Link>
+                </div>
+                <div className="space-y-3">
+                  {stretchRecommendations.map((rec, idx) => {
+                    const resolved = stretchLookup.get(
+                      normalizeStretchKey(rec.stretch),
+                    );
+                    return (
+                      <div
+                        key={`${rec.stretch}-${idx}`}
+                        className="rounded-xl border border-border bg-bg-secondary p-3.5 transition-colors hover:border-accent/40"
+                      >
+                        {resolved &&
+                        (resolved.image_url || resolved.video_url) ? (
+                          <div className="mb-3 grid gap-2">
+                            {resolved.image_url && (
+                              <div className="overflow-hidden rounded-lg border border-border bg-black max-h-40 flex items-center justify-center">
+                                <img
+                                  src={resolved.image_url}
+                                  alt={rec.stretch}
+                                  className="w-full h-40 object-cover rounded-lg"
+                                />
+                              </div>
+                            )}
+                            {resolved.video_url && (
+                              <div className="overflow-hidden rounded-lg border border-border bg-black max-h-40 flex items-center justify-center">
+                                <video
+                                  src={resolved.video_url}
+                                  controls
+                                  preload="metadata"
+                                  className="w-full h-40 object-contain rounded-lg"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-text-primary text-sm">
+                              {rec.stretch}
+                            </span>
+                            <span className="rounded-md bg-accent/10 text-accent border border-accent/20 px-2 py-0.5 text-[10px] font-semibold">
+                              {rec.target_area}
+                            </span>
+                          </div>
+                          {rec.provisional && (
+                            <span className="rounded bg-amber-500/20 text-amber-400 px-2 py-0.5 text-[10px] font-semibold">
+                              Provisional
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-text-secondary leading-relaxed">
+                          {rec.reason}
+                        </p>
+                        {resolved?.description &&
+                          resolved.description !== rec.reason && (
+                            <p className="text-[11px] text-text-muted mt-1.5 leading-relaxed border-t border-border-subtle pt-1.5">
+                              {resolved.description}
+                            </p>
+                          )}
+                        {(rec.duration_hint || resolved?.duration_hint) && (
+                          <p className="text-[11px] text-text-muted mt-2 flex items-center gap-1 font-medium">
+                            <span>⏱️</span>{" "}
+                            {rec.duration_hint || resolved?.duration_hint}
+                          </p>
+                        )}
+                        {(rec.caution || resolved?.caution) && (
+                          <div className="text-[11px] text-amber-400 mt-2 p-2 rounded bg-amber-500/10 border border-amber-500/20 flex items-start gap-1.5">
+                            <span className="shrink-0">⚠️</span>
+                            <span>{rec.caution || resolved?.caution}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {relatedWodsData?.related && relatedWodsData.related.length > 0 && (
+              <section className="rounded-xl border border-border bg-bg-elevated p-4">
+                <h2 className="text-lg font-semibold text-text-primary mb-3">
+                  Related Past WODs
+                </h2>
+                <div className="space-y-2">
+                  {relatedWodsData.related.map((item) => (
+                    <Link
+                      key={item.session_id}
+                      to={`/sessions/${item.session_id}?profile_id=${profileId}`}
+                      className="block rounded-lg border border-border bg-bg-secondary p-3 transition-colors hover:border-accent/40 hover:bg-bg-tertiary"
+                    >
+                      <div className="flex items-center justify-between text-xs text-text-muted mb-1">
+                        <span>
+                          {new Date(item.created_at).toLocaleDateString()}
+                        </span>
+                        <span className="font-semibold text-accent">
+                          {item.movement.movement}
+                          {item.movement.weight_raw
+                            ? ` · ${item.movement.weight_raw}`
+                            : ""}
+                        </span>
+                      </div>
+                      {item.wod_description && (
+                        <p className="text-xs text-text-secondary line-clamp-2 leading-relaxed">
+                          {item.wod_description}
+                        </p>
+                      )}
+                    </Link>
+                  ))}
+                </div>
               </section>
             )}
           </div>
@@ -1021,17 +1398,27 @@ export function SessionDetailPage() {
             feedback={feedbackByChunk.get(selectedChunk.id)}
             runs={runs}
             runsLoading={runsLoading}
-            creatingRun={reanalysisMutation.isPending
-              || (bulkReanalysisMutation.isPending && selectedReanalysisChunkIds.has(selectedChunk.id))}
-            reanalysisError={reanalysisMutation.isError
-              ? feedbackError(reanalysisMutation.error)
-              : undefined}
+            creatingRun={
+              reanalysisMutation.isPending ||
+              (bulkReanalysisMutation.isPending &&
+                selectedReanalysisChunkIds.has(selectedChunk.id))
+            }
+            reanalysisError={
+              reanalysisMutation.isError
+                ? feedbackError(reanalysisMutation.error)
+                : undefined
+            }
             onCreateRun={() => requestReanalysis(selectedChunk)}
             onCorrect={() => openCorrection(selectedChunk)}
-            onUndoCorrection={feedbackByChunk.has(selectedChunk.id)
-              ? () => void undoFeedback(feedbackByChunk.get(selectedChunk.id)!)
-              : undefined}
-            onUseCandidate={(correction, runId) => openCandidateCorrection(selectedChunk, correction, runId)}
+            onUndoCorrection={
+              feedbackByChunk.has(selectedChunk.id)
+                ? () =>
+                    void undoFeedback(feedbackByChunk.get(selectedChunk.id)!)
+                : undefined
+            }
+            onUseCandidate={(correction, runId) =>
+              openCandidateCorrection(selectedChunk, correction, runId)
+            }
           />
         </div>
       )}
@@ -1050,23 +1437,27 @@ export function SessionDetailPage() {
       {dialog && (
         <FeedbackDialog
           targetType={dialog.targetType}
-          chunkLabel={dialog.chunk
-            ? `chunk ${dialog.chunk.id} (${dialog.chunk.media_start_secs ?? 'unknown'}s–${dialog.chunk.media_end_secs ?? 'unknown'}s)`
-            : undefined}
+          chunkLabel={
+            dialog.chunk
+              ? `chunk ${dialog.chunk.id} (${dialog.chunk.media_start_secs ?? "unknown"}s–${dialog.chunk.media_end_secs ?? "unknown"}s)`
+              : undefined
+          }
           movementSuggestions={movementSuggestions}
           existing={dialog.existing}
           preset={dialog.preset}
           pending={feedbackMutation.isPending || undoFeedbackMutation.isPending}
-          error={feedbackMutation.isError
-            ? feedbackError(feedbackMutation.error)
-            : undoFeedbackMutation.isError
-              ? feedbackError(undoFeedbackMutation.error)
-              : undefined}
+          error={
+            feedbackMutation.isError
+              ? feedbackError(feedbackMutation.error)
+              : undoFeedbackMutation.isError
+                ? feedbackError(undoFeedbackMutation.error)
+                : undefined
+          }
           onClose={closeFeedbackDialog}
           onSubmit={submitFeedback}
-          onUndo={dialog.existing
-            ? () => undoFeedback(dialog.existing!)
-            : undefined}
+          onUndo={
+            dialog.existing ? () => undoFeedback(dialog.existing!) : undefined
+          }
         />
       )}
     </div>

@@ -394,6 +394,7 @@ func runFFmpegHardSub(ctx context.Context, log *zap.Logger, inputPath, srtPath, 
 		"-vf", fmt.Sprintf("subtitles=%s:force_style='%s'", srtPath, forceStyle),
 		"-preset", "ultrafast",
 		"-c:a", "copy",
+		"-movflags", "+faststart",
 		"-y",
 		outputPath,
 	}
@@ -432,6 +433,12 @@ func (w *Worker) listOriginalChunks(ctx context.Context, filePath string) ([]str
 	var chunks []string
 	for _, obj := range listed {
 		base := filepath.Base(obj)
+		// Exclude non-video session artifacts (e.g. sensor telemetry).
+		switch strings.ToLower(filepath.Ext(base)) {
+		case ".mp4", ".mov":
+		default:
+			continue
+		}
 		// Exclude output files from previous merge/analysis runs.
 		if strings.Contains(base, "_merged_") || strings.Contains(base, "_hardsubbed_") || strings.Contains(base, "_encoded_") {
 			continue

@@ -24,8 +24,8 @@ Resolved invariants:
   cannot create `index * 10` overlaps or gaps.
 
 Do not build new timestamp consumers on current `start_secs`/`end_secs`. The
-remediation target keeps capture offsets and adds separately probed cumulative
-media offsets for merged-video analysis, subtitles, highlights, and playback.
+current implementation keeps capture offsets and separately probed cumulative
+media offsets; remaining manifest/coverage work must preserve this separation for merged-video analysis, subtitles, highlights, and playback.
 
 ## Architecture
 Merged-video analysis uses a two-pass design to reduce timestamp hallucination.
@@ -42,12 +42,12 @@ Preferred source of truth is verified `media_start_secs` and
 used as merged-video offsets. Rows without verified media offsets are skipped,
 which causes model-based indexing to remain the safe fallback.
 
-Current code removes walking/rest/setup rows, retains `Unknown` for deeper
+For standard WODs, current code removes walking/rest/setup rows, retains `Unknown` for deeper
 visual revalidation, and merges only touching segments with the same free-text
-movement. A filtered rest gap is never merged into the surrounding movement.
+movement. Recovery workouts retain low-motion/rest/setup chunks and exclude explicit walking; see [recovery-and-mobility.md](recovery-and-mobility.md). A filtered rest gap is never merged into the surrounding movement.
 
 Fallback:
-- if no chunks exist, use model-based indexing
+- if no usable verified chunk segments remain after split/recovery attempts, use model-based indexing
 - inject real video duration into the prompt
 - use high media resolution
 - post-filter timestamps beyond real duration
@@ -67,8 +67,7 @@ Typical lifecycle:
 
 Cleanup rule:
 - on two-pass failure: video analysis attempts deletion
-- injuries exist: injury analysis is intended to become the final owner and delete
-  the file
+- injuries exist: the optimized injury path can reuse the file but does not guarantee deletion; final-owner cleanup remains COST-07 work
 - successful no-injury analysis currently retains file metadata and relies on
   Files API expiration; bounded explicit cleanup is part of COST-07 in the
   remediation plan
@@ -80,10 +79,10 @@ Cleanup rule:
 | `session_id` | TEXT | Links chunks to a session |
 | `file_path` | TEXT | GCS URI of the individual chunk video |
 | `exercise_type` | TEXT | Detected movement (e.g. "Snatch", "Pull-up") |
-| `start_secs` | REAL | Legacy capture-clock start offset; not reliable merged-media time |
-| `end_secs` | REAL | Legacy capture-clock end offset; not reliable merged-media time |
-| `media_start_secs` | REAL | Verified media-relative start offset; nullable for legacy/unverified rows |
-| `media_end_secs` | REAL | Verified media-relative end offset; nullable for legacy/unverified rows |
+| `start_secs` | REAL | Legacy start: mobile capture-clock offset or server-split source offset; not a universal merged-media contract |
+| `end_secs` | REAL | Legacy end with the same source-dependent meaning as `start_secs` |
+| `media_start_secs` | DOUBLE PRECISION | Verified media-relative start offset; nullable for legacy/unverified rows |
+| `media_end_secs` | DOUBLE PRECISION | Verified media-relative end offset; nullable for legacy/unverified rows |
 | `output` | TEXT | Short coaching feedback from chunk analysis |
 | `status` | TEXT | PENDING / COMPLETED / FAILED |
 
@@ -138,13 +137,13 @@ verified legacy reconstruction.
 - Feature flag: `ENABLE_SESSION_REANALYSIS=true` on the API server. It is
   independent from `ENABLE_CHUNK_REANALYSIS` and disabled by default.
 - Queue task: `session:debug-reanalysis`; its payload contains only `run_id`.
-- Persistence: `session_reanalysis_runs`. Candidates never replace the unique
-  production `analysis_results` row and never enqueue highlights, hardsubs,
-  subtitles, injury analysis, or TTS.
+- Persistence: `session_reanalysis_runs`. Candidate generation never replaces the unique
+  production `analysis_results` row and never enqueues highlights, hardsubs,
+  subtitles, injury analysis, or TTS. The separate explicit `/apply` action can replace the production result (see below).
 - Owner APIs are `POST /sessions/:session_id/reanalyses`,
   `GET /sessions/:session_id/reanalyses`, and
-  `GET /sessions/:session_id/reanalyses/:run_id`. POST accepts only
-  `client_request_id`, enforces one active run per session, blocks while any
+  `GET /sessions/:session_id/reanalyses/:run_id`. POST requires
+  `client_request_id` and accepts optional `appearance_hints`, `model`, and `wod_description` (`session_reanalysis_dto.go`). It enforces one active run per session, blocks while any
   chunk debug run is active, and limits each profile to 5 runs per rolling 24h.
 - The API resolves and snapshots the exact GCS session source. The worker may
   reuse a still-valid Gemini Files object only from a chunk or session debug run
@@ -219,12 +218,41 @@ Chunks are processed in parallel with bounded concurrency.
 | `splitAnalysisConcurrency` | 10 | Max parallel Gemini API calls during split analysis |
 
 ### Timeout risk
-- Each chunk takes ~18s (GCS upload + Gemini analysis).
-- Default asynq task timeout is **30 minutes**.
-- At concurrency 10: max ~160 chunks ≈ **27 min** of video per task attempt.
-- Videos longer than ~27 min may time out. The coverage check in `handleVideoAnalysisTwoPass` detects incomplete splits (compares `MAX(end_secs)` from `chunk_analysis_results` against probed video duration) and re-triggers `splitAndAnalyzeChunks` on retry.
+- There is no measured supported video-length limit recorded here. A previous estimate of ~27 minutes incorrectly treated concurrency 10 as serial processing.
+- Illustrative split-only arithmetic: `ceil(chunk_count / 10) × per_chunk_seconds`; this excludes splitting, upload/poll variance, rate limits, and sequential deep calls. It cannot establish an end-to-end timeout guarantee.
+- The current completeness heuristic compares `MAX(end_secs)` with probed duration. It can miss earlier gaps and still uses legacy offsets; replacing it with successful media-interval union coverage remains REL-07.
 
 ### Idempotent skip
 - `chunkAlreadyAnalyzed(sessionID, startSecs)` checks for existing `COMPLETED` records.
 - On retry after a partial run, already-analyzed chunks are skipped, so only the remaining chunks are processed.
-- This makes the entire split flow resumable across task retries/worker restarts.
+- This skips some repeated work after retries, but floating-point start equality and non-idempotent writes do not guarantee full resumability; REL-06/REL-07 remain open.
+
+## Gemini Model & Thinking Configuration
+- Worker runtime default model: `gemini-3.8-flash` (replaces legacy `gemini-3.1-pro-preview`).
+- Config env vars:
+  - `GEMINI_MODEL`: Model name (default `gemini-3.8-flash`).
+  - `GEMINI_THINKING_LEVEL`: Full video / deep segment analysis thinking level (default `HIGH`). Valid: `HIGH`, `MEDIUM`, `LOW`.
+  - `GEMINI_THINKING_CHUNK`: Short video (~10s chunk) analysis thinking level (default `LOW`). Valid: `HIGH`, `MEDIUM`, `LOW`. Minimizes response latency and thinking token costs for real-time coaching feedback.
+  - `GEMINI_THINKING_BUDGET`: Optional integer thinking budget in tokens.
+- Stage-specific thinking levels:
+  - Short video / chunk analysis: Uses `AnalyzeChunkVideo`, which resolves to `GEMINI_THINKING_CHUNK` (`LOW` by default). Note that `MINIMAL` is not supported on Gemini 3.8 / 3.7 Flash and will be rejected.
+  - Full video / deep segment analysis: Uses `AnalyzeSegmentWithModel` / `AnalyzeVideo`, which resolves to `GEMINI_THINKING_LEVEL` (`HIGH` by default) to maximize accuracy and temporal grounding.
+- Thinking config is applied via SDK `ThinkingConfig` on models that support it (the current `supportsThinking` implementation matches names containing `3.8`, `3.7`, or `2.5`). Older preview models (`gemini-3.1-pro-preview`) omit `ThinkingConfig` to prevent API errors.
+
+The bare Gemini client constructor still defaults to `gemini-3.1-pro-preview` when no model is supplied; `cmd/worker` supplies the runtime config above. Some stages use `flashModel` directly. Do not equate all stage/test defaults.
+
+## Whole-Workout Re-Analysis & Apply Workflow
+- **Re-analysis with custom WOD description**: When an athlete updates their workout description or appearance hints in the web app, a new `session_reanalysis_runs` record is created with `wod_description`.
+- **Worker Execution**: `session_debug_reanalysis.go` overrides the target WOD description with the run's `wod_description` for both indexing and segment prompts.
+- **Candidate Apply**: `POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply` atomically updates `analysis_results` (output, session_score, highlight_segments, wod_description, status) and `sessions` (`wod_description`, `workout_type`) using an atomic DB transaction.
+
+## AI Cost & Token Tracking
+- Repository estimate constants in `internal/cost/cost.go` (not a verified current vendor quote):
+  - `gemini-3.8-flash`: $1.50 / 1M prompt tokens, $9.00 / 1M candidate tokens.
+  - `gemini-3.5-flash-lite`: $0.25 / 1M prompt tokens, $1.50 / 1M candidate tokens.
+  - `gemini-3.1-pro-preview`: $1.25 / 1M prompt tokens, $5.00 / 1M candidate tokens.
+  - Exchange rate: 1,380 KRW / USD.
+- Current calculation uses prompt + candidate tokens and the fixed exchange rate; it has no dated pricing version or separate thinking/cache billing reconciliation. OBS-01 remains open.
+- Endpoints:
+  - `GET /api/v1/sessions/:session_id/cost`: Cost breakdown for a single session.
+  - `GET /api/v1/analytics/cost`: Cumulative token/cost totals for owned profiles (optionally one `profile_id`); task/model breakdown arrays are on the session-cost response only.

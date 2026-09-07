@@ -41,22 +41,25 @@ func extractTokenUsage(resp *genai.GenerateContentResponse, model string) *Token
 const (
 	ModelPro31Preview      = "gemini-3.1-pro-preview"
 	ModelFlash35Lite       = "gemini-3.5-flash-lite"
-	ModelFlash36           = "gemini-3.6-flash"
+	ModelFlash37           = "gemini-3.7-flash"
+	ModelFlash38           = "gemini-3.8-flash"
 	ModelFlashTTS31Preview = "gemini-3.1-flash-tts-preview"
 
 	// Retained for backward compatibility
 	ModelFlash30Preview = ModelFlash35Lite
-	ModelFlash35        = ModelFlash36
 )
 
 const defaultModel = ModelPro31Preview
 
 type Client struct {
-	client       *genai.Client
-	logger       *zap.Logger
-	model        string
-	pollInterval time.Duration
-	sleep        func(time.Duration)
+	client             *genai.Client
+	logger             *zap.Logger
+	model              string
+	thinkingLevel      string
+	thinkingLevelChunk string
+	thinkingBudget     *int32
+	pollInterval       time.Duration
+	sleep              func(time.Duration)
 }
 
 // Model returns the configured generation model used by AnalyzeSegment.
@@ -68,13 +71,16 @@ func (c *Client) Model() string {
 }
 
 type Options struct {
-	APIKey       string
-	BaseURL      string
-	APIVersion   string
-	HTTPClient   *http.Client
-	Model        string // e.g. "gemini-3.1-pro-preview", "gemini-3.5-flash-lite", "gemini-3.6-flash"
-	PollInterval time.Duration
-	Sleep        func(time.Duration)
+	APIKey             string
+	BaseURL            string
+	APIVersion         string
+	HTTPClient         *http.Client
+	Model              string // e.g. "gemini-3.1-pro-preview", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"
+	ThinkingLevel      string // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL" (default / full video analysis)
+	ThinkingLevelChunk string // e.g. "LOW", "MEDIUM" (for short chunk analysis)
+	ThinkingBudget     *int32 // Optional token budget for thinking
+	PollInterval       time.Duration
+	Sleep              func(time.Duration)
 }
 
 type exactSegmentOffsets struct {
@@ -223,13 +229,58 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 		sleep = time.Sleep
 	}
 
+	thinkingLevel := options.ThinkingLevel
+	thinkingLevelChunk := options.ThinkingLevelChunk
+	if thinkingLevelChunk == "" {
+		thinkingLevelChunk = thinkingLevel
+	}
+
 	return &Client{
-		client:       client,
-		logger:       logger,
-		model:        model,
-		pollInterval: pollInterval,
-		sleep:        sleep,
+		client:             client,
+		logger:             logger,
+		model:              model,
+		thinkingLevel:      thinkingLevel,
+		thinkingLevelChunk: thinkingLevelChunk,
+		thinkingBudget:     options.ThinkingBudget,
+		pollInterval:       pollInterval,
+		sleep:              sleep,
 	}, nil
+}
+
+func supportsThinking(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.Contains(m, "3.8") || strings.Contains(m, "3.7") || strings.Contains(m, "2.5")
+}
+
+func (c *Client) thinkingConfigForModel(model string) *genai.ThinkingConfig {
+	if c == nil {
+		return nil
+	}
+	return c.thinkingConfigForModelAndLevel(model, c.thinkingLevel)
+}
+
+func (c *Client) thinkingConfigForModelAndLevel(model string, level string) *genai.ThinkingConfig {
+	if c == nil || !supportsThinking(model) {
+		return nil
+	}
+	if level == "" && c.thinkingBudget == nil {
+		return nil
+	}
+	tc := &genai.ThinkingConfig{}
+	if c.thinkingBudget != nil {
+		tc.ThinkingBudget = c.thinkingBudget
+	}
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case "HIGH":
+		tc.ThinkingLevel = genai.ThinkingLevelHigh
+	case "MEDIUM":
+		tc.ThinkingLevel = genai.ThinkingLevelMedium
+	case "LOW":
+		tc.ThinkingLevel = genai.ThinkingLevelLow
+	case "MINIMAL":
+		tc.ThinkingLevel = genai.ThinkingLevelMinimal
+	}
+	return tc
 }
 
 // mimeTypeFromExtension returns a MIME type based on the file extension.
@@ -276,7 +327,26 @@ func (c *Client) AnalyzeVideo(ctx context.Context, filePath string, prompt strin
 }
 
 // AnalyzeVideoWithModel returns the analysis result, the name of the uploaded file on Gemini, and token usage using the specified model.
+// It uses the default thinking level (c.thinkingLevel).
 func (c *Client) AnalyzeVideoWithModel(ctx context.Context, filePath string, prompt string, model string) (string, string, *TokenUsage, error) {
+	level := ""
+	if c != nil {
+		level = c.thinkingLevel
+	}
+	return c.AnalyzeVideoWithThinking(ctx, filePath, prompt, model, level)
+}
+
+// AnalyzeChunkVideo analyzes a short video chunk using the configured chunk thinking level (c.thinkingLevelChunk).
+func (c *Client) AnalyzeChunkVideo(ctx context.Context, filePath string, prompt string, model string) (string, string, *TokenUsage, error) {
+	level := ""
+	if c != nil {
+		level = c.thinkingLevelChunk
+	}
+	return c.AnalyzeVideoWithThinking(ctx, filePath, prompt, model, level)
+}
+
+// AnalyzeVideoWithThinking returns the analysis result, the name of the uploaded file on Gemini, and token usage using the specified model and thinking level.
+func (c *Client) AnalyzeVideoWithThinking(ctx context.Context, filePath string, prompt string, model string, thinkingLevel string) (string, string, *TokenUsage, error) {
 	// Upload file
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -325,13 +395,19 @@ func (c *Client) AnalyzeVideoWithModel(ctx context.Context, filePath string, pro
 	c.logger.Info("File uploaded", zap.Any("file", uploadResult), zap.String("mime_type", mimeType))
 
 	// Generate content — single multimodal turn with video first for better temporal grounding
+	var genConfig *genai.GenerateContentConfig
+	if tc := c.thinkingConfigForModelAndLevel(model, thinkingLevel); tc != nil {
+		genConfig = &genai.GenerateContentConfig{
+			ThinkingConfig: tc,
+		}
+	}
 	resp, err := c.client.Models.GenerateContent(ctx, model, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}},
 			{Text: prompt},
 		},
-	}}, nil)
+	}}, genConfig)
 	if err != nil {
 		return "", uploadResult.Name, nil, fmt.Errorf("failed to generate content: %w", err)
 	}
@@ -436,7 +512,7 @@ func (c *Client) GenerateWorkoutMusic(ctx context.Context, model, prompt, output
 	return nil
 }
 
-const flashModel = ModelFlash36
+const flashModel = ModelFlash38
 
 // UploadResult holds info about an uploaded file for use across multiple passes.
 type UploadResult struct {
@@ -546,15 +622,19 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 		zap.String("file_uri", fileURI),
 		zap.String("model", flashModel))
 
+	genConfig := &genai.GenerateContentConfig{
+		MediaResolution: genai.MediaResolutionHigh,
+	}
+	if tc := c.thinkingConfigForModel(flashModel); tc != nil {
+		genConfig.ThinkingConfig = tc
+	}
 	resp, err := c.client.Models.GenerateContent(ctx, flashModel, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			{FileData: &genai.FileData{FileURI: fileURI, MIMEType: mimeType}},
 			genai.NewPartFromText(prompt),
 		},
-	}}, &genai.GenerateContentConfig{
-		MediaResolution: genai.MediaResolutionHigh,
-	})
+	}}, genConfig)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to index video: %w", err)
 	}
@@ -575,8 +655,17 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 }
 
 // AnalyzeSegment performs deep biomechanical analysis on a specific time range
-// of the video using the Pro model with VideoMetadata to constrain attention.
+// of the video using the default model with VideoMetadata to constrain attention.
 func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *TokenUsage, error) {
+	return c.AnalyzeSegmentWithModel(ctx, fileURI, mimeType, start, end, prompt, c.model)
+}
+
+// AnalyzeSegmentWithModel performs deep biomechanical analysis on a specific time range
+// of the video using a specified model (e.g. ModelFlash36 or ModelPro31Preview).
+func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *TokenUsage, error) {
+	if model == "" {
+		model = c.model
+	}
 	if start < 0 || end <= start {
 		return "", nil, fmt.Errorf("invalid segment interval: start=%s end=%s", start, end)
 	}
@@ -584,7 +673,7 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 
 	c.logger.Info("Analyzing segment",
 		zap.String("file_uri", fileURI),
-		zap.String("model", c.model),
+		zap.String("model", model),
 		zap.Duration("start", start),
 		zap.Duration("end", end),
 		zap.Float64("fps", fps))
@@ -602,15 +691,19 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 	}
 
 	exactOffsetContext := context.WithValue(ctx, exactSegmentOffsetsContextKey{}, exactSegmentOffsets{start: start, end: end})
-	resp, err := c.client.Models.GenerateContent(exactOffsetContext, c.model, []*genai.Content{{
+	genConfig := &genai.GenerateContentConfig{
+		MediaResolution: genai.MediaResolution(genai.MediaResolutionMedium),
+	}
+	if tc := c.thinkingConfigForModel(model); tc != nil {
+		genConfig.ThinkingConfig = tc
+	}
+	resp, err := c.client.Models.GenerateContent(exactOffsetContext, model, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			videoPart,
 			genai.NewPartFromText(prompt),
 		},
-	}}, &genai.GenerateContentConfig{
-		MediaResolution: genai.MediaResolution(genai.MediaResolutionMedium),
-	})
+	}}, genConfig)
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to analyze segment: %w", err)
 	}
@@ -619,7 +712,7 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 		return "", nil, fmt.Errorf("no content from segment analysis")
 	}
 
-	usage := extractTokenUsage(resp, c.model)
+	usage := extractTokenUsage(resp, model)
 
 	var result string
 	for _, part := range resp.Candidates[0].Content.Parts {
@@ -818,5 +911,36 @@ func (c *Client) ParseImage(ctx context.Context, imageBytes []byte, mimeType str
 	}
 
 	c.logger.Info("Image parsed", zap.Int("response_length", len(result)))
+	return result, usage, nil
+}
+
+// ParseText sends a text prompt to the Flash model and returns the raw text response.
+func (c *Client) ParseText(ctx context.Context, prompt string) (string, *TokenUsage, error) {
+	c.logger.Info("Parsing text with Flash",
+		zap.String("model", flashModel),
+		zap.Int("prompt_length", len(prompt)))
+
+	resp, err := c.client.Models.GenerateContent(ctx, flashModel, []*genai.Content{{
+		Role: genai.RoleUser,
+		Parts: []*genai.Part{
+			genai.NewPartFromText(prompt),
+		},
+	}}, nil)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to parse text: %w", err)
+	}
+
+	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", nil, fmt.Errorf("no content from text parsing")
+	}
+
+	usage := extractTokenUsage(resp, flashModel)
+
+	var result string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		result += part.Text
+	}
+
+	c.logger.Info("Text parsed", zap.Int("response_length", len(result)))
 	return result, usage, nil
 }

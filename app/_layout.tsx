@@ -8,6 +8,7 @@ import { t, useLocale } from "@/features/i18n";
 import { useAuthStore } from "@/features/auth/useAuthStore";
 import { useProfileStore } from "@/store/useProfileStore";
 import { flushPendingUploads } from "@/features/debug/telemetryUpload";
+import { flushSensorUploads } from "@/features/health/polar/sensorTelemetryUpload";
 import { Redirect, Stack } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
@@ -33,6 +34,7 @@ export default function RootLayout() {
     if (isLoggedIn) {
       useProfileStore.getState().hydrate();
       flushPendingUploads().catch(() => {});
+      flushSensorUploads().catch(() => {});
     }
   }, [isLoggedIn]);
 
@@ -90,6 +92,10 @@ export default function RootLayout() {
         <Stack.Screen
           name="settings/deleteAccount"
           options={{ title: t("auth.deleteAccount"), presentation: "modal" }}
+        />
+        <Stack.Screen
+          name="stretch/[key]"
+          options={{ title: t("stretches.detailTitle") }}
         />
       </Stack>
 

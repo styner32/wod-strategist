@@ -16,15 +16,16 @@ type ErrorResponse struct {
 }
 
 type CompleteUploadRequest struct {
-	SessionID      string   `json:"session_id"`
-	GCSURI         string   `json:"gcs_uri"`
-	Movements      []string `json:"movements"`
-	Injuries       []string `json:"injuries"`
-	WorkoutType    string   `json:"workout_type"`
-	ProfileID      uint     `json:"profile_id"`
-	EnableTTS      bool     `json:"enable_tts,omitempty"`
-	WODDescription string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
-	PipelineMode   string   `json:"pipeline_mode,omitempty"`
+	SessionID       string   `json:"session_id"`
+	GCSURI          string   `json:"gcs_uri"`
+	Movements       []string `json:"movements"`
+	Injuries        []string `json:"injuries"`
+	WorkoutType     string   `json:"workout_type"`
+	ProfileID       uint     `json:"profile_id"`
+	EnableTTS       bool     `json:"enable_tts,omitempty"`
+	WODDescription  string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
+	PipelineMode    string   `json:"pipeline_mode,omitempty"`
+	AppearanceHints string   `json:"appearance_hints,omitempty"`
 }
 
 type CompleteUploadResponse struct {
@@ -43,6 +44,7 @@ type CreateProfileRequest struct {
 	WeightKg     *float64 `json:"weight_kg" binding:"omitempty,min=20,max=500"`
 	FitnessLevel string   `json:"fitness_level" binding:"omitempty,oneof=beginner intermediate advanced"`
 	Injuries     []string `json:"injuries"`
+	Appearance   string   `json:"appearance,omitempty"`
 }
 
 type UpdateProfileRequest struct {
@@ -55,6 +57,7 @@ type UpdateProfileRequest struct {
 	WeightKg     *float64 `json:"weight_kg" binding:"omitempty,min=20,max=500"`
 	FitnessLevel *string  `json:"fitness_level" binding:"omitempty,oneof=beginner intermediate advanced"`
 	Injuries     []string `json:"injuries"`
+	Appearance   *string  `json:"appearance,omitempty"`
 }
 
 type ProfileResponse struct {
@@ -68,18 +71,20 @@ type ProfileResponse struct {
 	WeightKg     *float64 `json:"weight_kg,omitempty"`
 	FitnessLevel string   `json:"fitness_level"`
 	Injuries     []string `json:"injuries"`
+	Appearance   string   `json:"appearance,omitempty"`
 	ArchivedAt   *string  `json:"archived_at,omitempty"`
 }
 
 type MergeChunksRequest struct {
-	SessionID      string   `json:"session_id"`
-	WorkoutType    string   `json:"workout_type"`
-	Movements      []string `json:"movements"`
-	Injuries       []string `json:"injuries"`
-	ProfileID      uint     `json:"profile_id"`
-	EnableTTS      bool     `json:"enable_tts,omitempty"`
-	WODDescription string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
-	PipelineMode   string   `json:"pipeline_mode,omitempty"`
+	SessionID       string   `json:"session_id"`
+	WorkoutType     string   `json:"workout_type"`
+	Movements       []string `json:"movements"`
+	Injuries        []string `json:"injuries"`
+	ProfileID       uint     `json:"profile_id"`
+	EnableTTS       bool     `json:"enable_tts,omitempty"`
+	WODDescription  string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
+	PipelineMode    string   `json:"pipeline_mode,omitempty"`
+	AppearanceHints string   `json:"appearance_hints,omitempty"`
 }
 
 type MergeChunksResponse struct {
@@ -100,6 +105,7 @@ type ChunkCompleteRequest struct {
 	HeartRateBPM      int      `json:"heart_rate_bpm"`
 	WODDescription    string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
 	WorkoutConfidence float64  `json:"workout_confidence"`
+	AppearanceHints   string   `json:"appearance_hints,omitempty"`
 }
 
 type GenerateHighlightRequest struct {

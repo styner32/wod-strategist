@@ -101,6 +101,7 @@ type GeminiClient interface {
 	// File-upload based analysis (used by chunk analysis, legacy path)
 	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, *gemini.TokenUsage, error)
 	AnalyzeVideoWithModel(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
+	AnalyzeChunkVideo(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
 	DeleteFile(ctx context.Context, name string) error
 	FileExists(ctx context.Context, name string) (bool, error)
 	FileVideoDuration(ctx context.Context, name string) (time.Duration, bool, error)
@@ -110,9 +111,13 @@ type GeminiClient interface {
 	UploadVideo(ctx context.Context, filePath string) (*gemini.UploadResult, error)
 	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *gemini.TokenUsage, error)
+	AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *gemini.TokenUsage, error)
 
 	// Lightweight Flash model query (e.g. verification)
 	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
+
+	// Text parsing
+	ParseText(ctx context.Context, prompt string) (string, *gemini.TokenUsage, error)
 
 	// TTS: generate speech audio from text using gemini-3.1-flash-tts-preview.
 	// Writes a WAV file (24kHz, 16-bit mono) to outputPath.
@@ -201,6 +206,21 @@ func IsValidWorkoutType(wt string) bool {
 	default:
 		return false
 	}
+}
+
+func IsRecoveryWorkoutType(wt string) bool {
+	norm := NormalizeWorkoutType(wt)
+	return norm == WorkoutTypeWarmup || norm == WorkoutTypeCooldown
+}
+
+func (w *Worker) resolveSessionWorkoutType(ctx context.Context, sessionID, payloadType string) string {
+	if w.DB != nil && strings.TrimSpace(sessionID) != "" {
+		var s db.Session
+		if err := w.DB.WithContext(ctx).Select("workout_type").Where("session_id = ?", sessionID).First(&s).Error; err == nil && s.WorkoutType != "" {
+			return NormalizeWorkoutType(s.WorkoutType)
+		}
+	}
+	return NormalizeWorkoutType(payloadType)
 }
 
 var (

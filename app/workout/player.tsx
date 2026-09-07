@@ -1,15 +1,20 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 
 import { t } from "@/features/i18n";
-import { fetchVideoDownloadURL, fetchChunkAnalysis } from "@/features/wod/api";
+import {
+  getCachedVideoUri,
+  startProgressiveVideoDownload,
+  type DownloadTaskHandle,
+} from "@/features/video/videoCacheManager";
 import type { ChunkAnalysisResult } from "@/features/wod/api";
+import { fetchChunkAnalysis, fetchVideoDownloadURL } from "@/features/wod/api";
+import { fetchAnalysisHistory } from "@/features/wod/history";
 import {
   WorkoutVideoPlayer,
   type HighlightSegment,
 } from "@/features/wod/ui/WorkoutVideoPlayer";
-import { fetchAnalysisHistory } from "@/features/wod/history";
 
 /**
  * Full-screen workout video player page.
@@ -27,10 +32,12 @@ export default function WorkoutPlayerPage() {
   }>();
 
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [isCached, setIsCached] = useState(false);
   const [chunks, setChunks] = useState<ChunkAnalysisResult[]>([]);
   const [highlights, setHighlights] = useState<HighlightSegment[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const downloadTaskRef = useRef<DownloadTaskHandle | null>(null);
 
   const pid = parseInt(profileId ?? "0", 10);
   const kind = (videoKind as "merged" | "hardsubbed" | "encoded") || "merged";
@@ -45,16 +52,46 @@ export default function WorkoutPlayerPage() {
       setLoading(true);
       setError(null);
 
-      // Fetch video URL, chunks, and analysis (for highlights) in parallel
+      // Check if local cache already exists
+      const localCacheUri = await getCachedVideoUri(sessionId, kind);
+      if (localCacheUri) {
+        setVideoUrl(localCacheUri);
+        setIsCached(true);
+      }
+
+      // Fetch video URL (if not cached), chunks, and analysis (for highlights) in parallel
+      const fetchVideoPromise = localCacheUri
+        ? Promise.resolve({
+            download_url: localCacheUri,
+            filename: `${sessionId}_${kind}.mp4`,
+          })
+        : fetchVideoDownloadURL(sessionId, pid, kind);
+
       const [videoRes, chunksRes, historyRes] = await Promise.allSettled([
-        fetchVideoDownloadURL(sessionId, pid, kind),
+        fetchVideoPromise,
         fetchChunkAnalysis(sessionId),
         fetchAnalysisHistory(pid),
       ]);
 
-      // Video URL (required)
+      // Video URL
       if (videoRes.status === "fulfilled") {
-        setVideoUrl(videoRes.value.download_url);
+        const resolvedUrl = videoRes.value.download_url;
+        setVideoUrl(resolvedUrl);
+
+        // If not already cached from local storage, start progressive background download
+        if (!localCacheUri) {
+          const handle = startProgressiveVideoDownload(
+            sessionId,
+            kind,
+            resolvedUrl,
+          );
+          downloadTaskRef.current = handle;
+          handle.promise.then((savedUri) => {
+            if (savedUri) {
+              setIsCached(true);
+            }
+          });
+        }
       } else {
         setError(t("player.failedLoadVideo"));
         setLoading(false);
@@ -69,14 +106,19 @@ export default function WorkoutPlayerPage() {
       // Extract highlight_segments from the matching analysis result
       if (historyRes.status === "fulfilled") {
         const match = historyRes.value.find(
-          (r) => r.session_id === sessionId && r.highlight_segments
+          (r) => r.session_id === sessionId && r.highlight_segments,
         );
         if (match?.highlight_segments) {
           try {
-            const parsed = JSON.parse(match.highlight_segments) as HighlightSegment[];
+            const parsed = JSON.parse(
+              match.highlight_segments,
+            ) as HighlightSegment[];
             setHighlights(parsed);
           } catch (e) {
-            console.warn("[WorkoutPlayerPage] Failed to parse highlight_segments JSON:", e);
+            console.warn(
+              "[WorkoutPlayerPage] Failed to parse highlight_segments JSON:",
+              e,
+            );
           }
         }
       }
@@ -85,10 +127,15 @@ export default function WorkoutPlayerPage() {
     } finally {
       setLoading(false);
     }
-  }, [sessionId, pid]);
+  }, [sessionId, pid, kind]);
 
   useEffect(() => {
     loadData();
+    return () => {
+      if (downloadTaskRef.current) {
+        downloadTaskRef.current.cancel().catch(() => {});
+      }
+    };
   }, [loadData]);
 
   const handleClose = useCallback(() => {
@@ -134,6 +181,7 @@ export default function WorkoutPlayerPage() {
       sessionLabel={sessionLabel}
       chunks={chunks}
       highlightSegments={highlights}
+      isCached={isCached}
       onClose={handleClose}
     />
   );

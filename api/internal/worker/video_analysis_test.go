@@ -488,6 +488,19 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 			Reply(http.StatusOK).
 			JSON(map[string]any{})
 
+		transport.New(geminiBaseURL).
+			Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			SetOptional().
+			Reply(http.StatusOK).
+			JSON(map[string]any{
+				"candidates": []map[string]any{{
+					"content": map[string]any{
+						"parts": []map[string]any{{"text": "```movements\n{\"movements\":[{\"movement\":\"burpee\",\"is_main\":true}]}\n```"}},
+					},
+				}},
+			})
+
 		return transport
 	}
 
@@ -594,7 +607,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		// RoundTrip, so no exact request-count assertion is needed.
 		var genBody string
 		for _, r := range transport.Requests() {
-			if strings.Contains(r.URL, ":generateContent") {
+			if strings.Contains(r.URL, gemini.ModelPro31Preview+":generateContent") {
 				genBody = string(r.Body)
 			}
 		}
@@ -975,7 +988,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			MediaEndSecs:    &walkingEnd,
 		}).Error).NotTo(HaveOccurred())
 
-		segments := w.buildSegmentsFromChunks("sess-media-timeline-001")
+		segments := w.buildSegmentsFromChunks("sess-media-timeline-001", WorkoutTypeWOD)
 		Expect(segments).To(Equal([]Segment{{
 			Start:       "0:12.25",
 			End:         "0:22.75",

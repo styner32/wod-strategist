@@ -51,12 +51,6 @@ type sessionCatalogItem struct {
 // @Failure      500 {object} ErrorResponse
 // @Router       /dev/sessions [get]
 func (ctl *Controller) ListSessionCatalog(c *gin.Context) {
-	if ctl.storageClient == nil {
-		logger.Log.Error("storage client is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list sessions"})
-		return
-	}
-
 	catalog, err := ctl.collectSessionCatalog(c.Request.Context())
 	if err != nil {
 		logger.Log.Error("failed to collect session catalog", zap.Error(err))
@@ -106,12 +100,6 @@ func (ctl *Controller) GetSessionAssets(c *gin.Context) {
 // @Failure      500 {object} ErrorResponse
 // @Router       /dev/sessions/{session_id}/play-url [get]
 func (ctl *Controller) GetPlayURL(c *gin.Context) {
-	if ctl.storageClient == nil {
-		logger.Log.Error("storage client is not configured")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate play URL"})
-		return
-	}
-
 	sessionID := sanitizeIdentifier(c.Param("session_id"))
 	if sessionID == "" || !isValidSessionID(sessionID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
@@ -167,9 +155,6 @@ func (ctl *Controller) GetPlayURL(c *gin.Context) {
 }
 
 func (ctl *Controller) collectSessionAssets(ctx context.Context, sessionID string) (SessionAssetsResponse, error) {
-	if ctl.storageClient == nil {
-		return SessionAssetsResponse{}, fmt.Errorf("storage client is not configured")
-	}
 	if ctl.analysisResults == nil {
 		return SessionAssetsResponse{}, fmt.Errorf("analysis results repository is not configured")
 	}

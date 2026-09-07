@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
+  AppState,
+  AppStateStatus,
   Platform,
   StyleSheet,
   Text,
@@ -17,6 +19,7 @@ import {
   useCameraPermission,
 } from 'react-native-vision-camera';
 import { router } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 
 import { usePoseDetection, HEAVY_MODEL } from '../../features/ai-coach/frame-processors/usePoseDetection';
 import { KeypointLabelOverlay, KEYPOINT_NAMES, KEYPOINT_COLORS, MIN_SCORE } from '../../features/ai-coach/ui/KeypointLabelOverlay';
@@ -32,6 +35,18 @@ import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
  * This is for experimentation — battery efficiency is not a concern here.
  */
 export default function PoseTestPage() {
+  const isFocused = useIsFocused();
+  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      setAppState(nextAppState);
+    });
+    return () => subscription.remove();
+  }, []);
+
+  const isCameraActive = isFocused && appState === 'active';
+
   const device = useCameraDevice('back');
   const { hasPermission, requestPermission } = useCameraPermission();
   const { width, height } = useWindowDimensions();
@@ -100,7 +115,7 @@ export default function PoseTestPage() {
       <Camera
         style={StyleSheet.absoluteFill}
         device={activeDevice}
-        isActive={true}
+        isActive={isCameraActive}
         format={format}
         fps={30}
         frameProcessor={frameProcessor}

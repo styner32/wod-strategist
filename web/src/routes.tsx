@@ -4,6 +4,9 @@ import { LoginPage } from './auth/LoginPage';
 
 import { HistoryListPage } from './history/HistoryListPage';
 import { SessionDetailPage } from './history/SessionDetailPage';
+import { StretchesPage } from './stretches/StretchesPage';
+import { StretchCatalogManagePage } from './stretches/StretchCatalogManagePage';
+import { StretchFormPage } from './stretches/StretchFormPage';
 import { UploadPage } from './upload/UploadPage';
 import { AppLayout } from './AppLayout';
 
@@ -26,6 +29,22 @@ export const router = createBrowserRouter([
           {
             path: '/sessions/:sessionId',
             element: <SessionDetailPage />,
+          },
+          {
+            path: '/stretches',
+            element: <StretchesPage />,
+          },
+          {
+            path: '/stretches/manage',
+            element: <StretchCatalogManagePage />,
+          },
+          {
+            path: '/stretches/manage/new',
+            element: <StretchFormPage />,
+          },
+          {
+            path: '/stretches/manage/:id',
+            element: <StretchFormPage />,
           },
           {
             path: '/upload',

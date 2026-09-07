@@ -12,3 +12,7 @@ pipeline_mode        = "legacy"
 # Set to false to avoid exposing AI-consuming operations unless explicitly needed/quota has been approved.
 enable_chunk_reanalysis   = false
 enable_session_reanalysis = false
+
+# Gemini thinking levels (LOW, MEDIUM, HIGH)
+gemini_thinking_chunk = "LOW"
+gemini_thinking_level = "HIGH"

@@ -26,13 +26,18 @@ func probeMotionScore(ctx context.Context, chunkPath string) (float64, error) {
 	if len(matches) == 0 {
 		return 0, fmt.Errorf("no scene scores in probe output")
 	}
+	validMatches := matches
+	if len(matches) > 1 {
+		validMatches = matches[1:]
+	}
+
 	var sum float64
-	for _, m := range matches {
+	for _, m := range validMatches {
 		v, err := strconv.ParseFloat(m[1], 64)
 		if err != nil {
 			continue
 		}
 		sum += v
 	}
-	return sum / float64(len(matches)), nil
+	return sum / float64(len(validMatches)), nil
 }
