@@ -19,11 +19,23 @@ export interface MuscleLoads {
   [key: string]: number | undefined;
 }
 
+export interface SessionFatigueGuidance {
+  state_code: string;
+  state_label: string;
+  advice_code: string;
+  advice_label: string;
+}
+
 export interface SessionFatigue {
-  overall_score: number;
-  state: "fresh" | "moderate" | "fatigued" | "exhausted" | string;
-  state_ko: string;
-  muscles: MuscleLoads;
+  status?: "available" | "insufficient_evidence" | string;
+  load_calculation_version?: number;
+  sensor_status?: string;
+  heart_rate_adjusted?: boolean;
+  overall_score?: number | null;
+  state?: "fresh" | "moderate" | "fatigued" | "exhausted" | string;
+  state_ko?: string;
+  muscles?: MuscleLoads;
+  guidance?: SessionFatigueGuidance;
 }
 
 export interface AnalysisResult {
@@ -42,6 +54,11 @@ export interface AnalysisResult {
   updated_at: string;
   archived_at: string | null;
   wod_description?: string;
+  workout_at?: string | null;
+  workout_at_source?: string | null;
+  sensor_version?: number;
+  sensor_state?: string;
+  sensor_summary?: Record<string, unknown>;
 }
 
 export interface ChunkAnalysisResult {

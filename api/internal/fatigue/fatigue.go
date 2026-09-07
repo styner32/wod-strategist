@@ -185,13 +185,24 @@ type MuscleReadinessStatus struct {
 	StateKO      string `json:"state_ko"`      // 신선, 보통, 피로 주의, 극심한 피로
 }
 
+// EvidenceCounts tracks session breakdown for readiness calculation.
+type EvidenceCounts struct {
+	TotalSessions          int `json:"total_sessions"`
+	ValidSessions          int `json:"valid_sessions"`
+	ExcludedSessions       int `json:"excluded_sessions"`
+	UnresolvedTimeSessions int `json:"unresolved_time_sessions"`
+}
+
 // ProfileReadinessState represents the overall multi-muscle readiness.
 type ProfileReadinessState struct {
-	OverallFatigueScore int                              `json:"overall_fatigue_score"` // 0 - 100
+	OverallFatigueScore *int                             `json:"overall_fatigue_score,omitempty"` // 0 - 100, nil when insufficient/no_history
 	OverallState        string                           `json:"overall_state"`
 	OverallStateKO      string                           `json:"overall_state_ko"`
-	Muscles             map[string]MuscleReadinessStatus `json:"muscles"`
+	Muscles             map[string]MuscleReadinessStatus `json:"muscles,omitempty"`
 	LastWorkoutAt       *time.Time                       `json:"last_workout_at,omitempty"`
+	EvidenceStatus      string                           `json:"evidence_status"` // no_history, insufficient, partial, complete
+	Evidence            EvidenceCounts                   `json:"evidence"`
+	AsOf                time.Time                        `json:"as_of"`
 }
 
 // StateFromFatigueScore maps 0-100 fatigue score to state string.
@@ -313,8 +324,157 @@ func ComputeSessionMuscleLoads(
 	return loads
 }
 
+// ComputeSessionMuscleLoadsWithSensor computes 0-100 muscle loads for a session using
+// movements from sessionScore and optional sensor HR bonus from sensorSummary.
+// Returns (loads, true) if valid movements exist, or (nil, false) if no valid movements exist.
+func ComputeSessionMuscleLoadsWithSensor(
+	sessionScoreJSON string,
+	sensorSummaryJSON string,
+) (map[string]float64, bool) {
+	if strings.TrimSpace(sessionScoreJSON) == "" || sessionScoreJSON == "{}" {
+		return nil, false
+	}
+
+	type scoreParsed struct {
+		Intensity int            `json:"intensity"`
+		Movements map[string]any `json:"movements"`
+	}
+
+	var score scoreParsed
+	if err := json.Unmarshal([]byte(sessionScoreJSON), &score); err != nil {
+		return nil, false
+	}
+
+	// Filter movements: reject empty, unknown, walking, rest, setup
+	validMovements := make(map[string]bool)
+	for rawMov := range score.Movements {
+		norm := movement.NormalizeKey(rawMov)
+		if norm == "" || strings.EqualFold(norm, "unknown") || strings.EqualFold(norm, "walking") ||
+			strings.EqualFold(norm, "rest") || strings.EqualFold(norm, "setup") {
+			continue
+		}
+		// Must be known in catalog
+		if _, ok := movementLoadCatalog[norm]; ok {
+			validMovements[norm] = true
+			continue
+		}
+		// Partial match only if catalogKey contains norm or norm contains catalogKey (with min length 3)
+		matched := false
+		for _, catalogKey := range sortedCatalogKeys {
+			if len(norm) >= 3 && (strings.Contains(norm, catalogKey) || strings.Contains(catalogKey, norm)) {
+				validMovements[catalogKey] = true
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			// Do not allow unverified default fallback
+			continue
+		}
+	}
+
+	if len(validMovements) == 0 {
+		return nil, false
+	}
+
+	intensityFactor := 1.0
+	if score.Intensity > 0 {
+		intensityFactor = math.Max(0.5, math.Min(1.5, float64(score.Intensity)/70.0))
+	}
+
+	loads := make(map[string]float64, len(AllMuscleGroups))
+	for _, g := range AllMuscleGroups {
+		loads[g] = 0.0
+	}
+
+	for mov := range validMovements {
+		weights := movementLoadCatalog[mov]
+		baseStrain := 30.0 * intensityFactor
+		loads[GroupShouldersPush] += baseStrain * weights.ShouldersPush
+		loads[GroupUpperPullGrip] += baseStrain * weights.UpperPullGrip
+		loads[GroupPosteriorChain] += baseStrain * weights.PosteriorChain
+		loads[GroupQuadsSquat] += baseStrain * weights.QuadsSquat
+		loads[GroupCoreMidline] += baseStrain * weights.CoreMidline
+		loads[GroupCardioMetabolic] += baseStrain * weights.CardioMetabolic
+	}
+
+	// Check sensor summary for HR bonus
+	if strings.TrimSpace(sensorSummaryJSON) != "" && sensorSummaryJSON != "{}" {
+		var summary struct {
+			Quality struct {
+				ValidHR    bool `json:"valid_hr"`
+				IsComplete bool `json:"is_complete"`
+			} `json:"quality"`
+			HRBonus float64 `json:"hr_bonus"`
+		}
+		if err := json.Unmarshal([]byte(sensorSummaryJSON), &summary); err == nil {
+			if summary.Quality.ValidHR && summary.Quality.IsComplete && summary.HRBonus > 0 {
+				loads[GroupCardioMetabolic] += summary.HRBonus
+			}
+		}
+	}
+
+	// Clamp to [0, 100]
+	for _, g := range AllMuscleGroups {
+		v := loads[g]
+		if v < 0 {
+			v = 0
+		} else if v > 100 {
+			v = 100
+		}
+		loads[g] = math.Round(v*10) / 10
+	}
+
+	return loads, true
+}
+
+// DetermineEvidenceStatus calculates the evidence status from session counts.
+func DetermineEvidenceStatus(evidence EvidenceCounts) string {
+	if evidence.TotalSessions == 0 && evidence.UnresolvedTimeSessions == 0 {
+		return "no_history"
+	}
+	if evidence.ValidSessions == 0 && (evidence.TotalSessions+evidence.UnresolvedTimeSessions > 0) {
+		return "insufficient"
+	}
+	if evidence.ValidSessions > 0 && (evidence.ExcludedSessions > 0 || evidence.UnresolvedTimeSessions > 0) {
+		return "partial"
+	}
+	if evidence.ValidSessions == evidence.TotalSessions && evidence.TotalSessions > 0 && evidence.UnresolvedTimeSessions == 0 {
+		return "complete"
+	}
+	return "insufficient"
+}
+
 // ComputeCurrentReadiness applies exponential decay to past session loads and computes current readiness.
-func ComputeCurrentReadiness(records []SessionLoadRecord, now time.Time) ProfileReadinessState {
+func ComputeCurrentReadiness(records []SessionLoadRecord, evidence EvidenceCounts, asOf time.Time) ProfileReadinessState {
+	evidenceStatus := DetermineEvidenceStatus(evidence)
+
+	if evidenceStatus == "no_history" {
+		return ProfileReadinessState{
+			OverallFatigueScore: nil,
+			OverallState:        "no_history",
+			OverallStateKO:      "기록 없음",
+			Muscles:             nil,
+			LastWorkoutAt:       nil,
+			EvidenceStatus:      evidenceStatus,
+			Evidence:            evidence,
+			AsOf:                asOf,
+		}
+	}
+
+	if evidenceStatus == "insufficient" {
+		return ProfileReadinessState{
+			OverallFatigueScore: nil,
+			OverallState:        "insufficient",
+			OverallStateKO:      "평가 근거 부족",
+			Muscles:             nil,
+			LastWorkoutAt:       nil,
+			EvidenceStatus:      evidenceStatus,
+			Evidence:            evidence,
+			AsOf:                asOf,
+		}
+	}
+
 	accumulatedFatigue := make(map[string]float64)
 	for _, g := range AllMuscleGroups {
 		accumulatedFatigue[g] = 0.0
@@ -323,7 +483,7 @@ func ComputeCurrentReadiness(records []SessionLoadRecord, now time.Time) Profile
 	var lastWorkoutAt *time.Time
 
 	for _, rec := range records {
-		if rec.CreatedAt.After(now) {
+		if rec.CreatedAt.After(asOf) {
 			continue
 		}
 		if lastWorkoutAt == nil || rec.CreatedAt.After(*lastWorkoutAt) {
@@ -331,7 +491,7 @@ func ComputeCurrentReadiness(records []SessionLoadRecord, now time.Time) Profile
 			lastWorkoutAt = &t
 		}
 
-		hoursPassed := now.Sub(rec.CreatedAt).Hours()
+		hoursPassed := asOf.Sub(rec.CreatedAt).Hours()
 		if hoursPassed < 0 {
 			hoursPassed = 0
 		}
@@ -373,10 +533,13 @@ func ComputeCurrentReadiness(records []SessionLoadRecord, now time.Time) Profile
 	overallState, overallStateKO := StateFromFatigueScore(overallScore)
 
 	return ProfileReadinessState{
-		OverallFatigueScore: overallScore,
+		OverallFatigueScore: &overallScore,
 		OverallState:        overallState,
 		OverallStateKO:      overallStateKO,
 		Muscles:             muscles,
 		LastWorkoutAt:       lastWorkoutAt,
+		EvidenceStatus:      evidenceStatus,
+		Evidence:            evidence,
+		AsOf:                asOf,
 	}
 }

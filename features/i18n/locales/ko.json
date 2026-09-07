@@ -315,7 +315,11 @@
     "fresh": "신선",
     "moderate": "보통",
     "fatigued": "피로 주의",
-    "exhausted": "극심한 피로"
+    "exhausted": "극심한 피로",
+    "insufficientEvidence": "분석 근거 부족",
+    "insufficientEvidenceNotice": "유효한 동작 데이터가 부족하여 신체 부위별 부하를 산출할 수 없습니다.",
+    "heartRateAdjusted": "실측 심박으로 보정한 추정값",
+    "estimatedWorkoutLoad": "이번 세션의 추정 운동 부하"
   },
   "player": {
     "loadingVideo": "운동 영상 불러오는 중...",
@@ -418,7 +422,10 @@
     "pacingStrategy": "페이스 운용 전략",
     "muscleReadiness": "신체 6대 부위별 피로도 분석",
     "scalingAdvice": "스케일링 및 동작 조절 권장",
-    "recommendedMobility": "프리-WOD 필수 모빌리티 / 워밍업"
+    "recommendedMobility": "프리-WOD 필수 모빌리티 / 워밍업",
+    "partialHistoryBadge": "일부 기록만 반영됨",
+    "noHistoryNotice": "최근 운동 기록이 없습니다.",
+    "insufficientHistoryNotice": "최근 운동 근거만으로 강도를 판단할 수 없습니다. 실제 컨디션을 확인하세요."
   },
   "muscleGroups": {
     "shoulders_push": "어깨 / 상체 밀기",

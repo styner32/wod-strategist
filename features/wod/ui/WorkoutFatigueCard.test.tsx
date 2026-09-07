@@ -18,6 +18,10 @@ jest.mock("@/features/i18n", () => ({
       "historyList.moderate": "보통",
       "historyList.fatigued": "피로 주의",
       "historyList.exhausted": "극심한 피로",
+      "historyList.insufficientEvidence": "분석 근거 부족",
+      "historyList.insufficientEvidenceNotice":
+        "유효한 동작 데이터가 부족하여 신체 부위별 부하를 산출할 수 없습니다.",
+      "historyList.heartRateAdjusted": "실측 심박으로 보정한 추정값",
       "muscleGroups.shoulders_push": "어깨 / 상체 밀기",
       "muscleGroups.upper_pull_grip": "등·광배 / 당기기·악력",
       "muscleGroups.posterior_chain": "허리 / 후면사슬",
@@ -71,6 +75,69 @@ describe("WorkoutFatigueCard", () => {
     expect(
       getByText(/주요 부하: 어깨 \/ 상체 밀기 \(85%\), 하체 \/ 스쿼트 \(78%\)/),
     ).toBeTruthy();
+  });
+
+  it("renders available status with /100 score format, top muscles >= 50, and HR adjusted note", () => {
+    const availableFatigue: SessionFatigue = {
+      status: "available",
+      overall_score: 68,
+      state: "fatigued",
+      state_ko: "피로 주의",
+      heart_rate_adjusted: true,
+      muscles: {
+        shoulders_push: 85,
+        upper_pull_grip: 20,
+        posterior_chain: 45,
+        quads_squat: 78,
+        core_midline: 49,
+        cardio_metabolic: 70,
+      },
+      guidance: {
+        state_code: "fatigued",
+        advice_code: "high_load",
+        text_en: "High workout load observed",
+        text_ko: "이번 세션의 추정 운동 부하가 높습니다.",
+      },
+    };
+
+    const { getByText, queryByText } = render(
+      <WorkoutFatigueCard fatigue={availableFatigue} />,
+    );
+
+    // /100 format in header and bars
+    expect(getByText("피로 주의 (68/100)")).toBeTruthy();
+    expect(getByText("85/100")).toBeTruthy();
+    expect(getByText("78/100")).toBeTruthy();
+
+    // HR adjusted notice
+    expect(getByText(/실측 심박으로 보정한 추정값/)).toBeTruthy();
+
+    // Guidance text
+    expect(getByText(/이번 세션의 추정 운동 부하가 높습니다./)).toBeTruthy();
+
+    // Top muscles >= 50 (shoulders 85, quads 78, cardio 70 -> top 2 are shoulders and quads)
+    expect(
+      getByText(/주요 부하: 어깨 \/ 상체 밀기 \(85\/100\), 하체 \/ 스쿼트 \(78\/100\)/),
+    ).toBeTruthy();
+    expect(queryByText(/49\/100/)).toBeNull;
+  });
+
+  it("renders insufficient_evidence card without 0% or score", () => {
+    const insufficientFatigue: SessionFatigue = {
+      status: "insufficient_evidence",
+      heart_rate_adjusted: false,
+    };
+
+    const { getByText, queryByText } = render(
+      <WorkoutFatigueCard fatigue={insufficientFatigue} />,
+    );
+
+    expect(getByText("분석 근거 부족")).toBeTruthy();
+    expect(
+      getByText("유효한 동작 데이터가 부족하여 신체 부위별 부하를 산출할 수 없습니다."),
+    ).toBeTruthy();
+    expect(queryByText("0%")).toBeNull();
+    expect(queryByText("0/100")).toBeNull();
   });
 
   describe("getFatigueColor", () => {

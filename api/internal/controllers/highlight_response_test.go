@@ -100,3 +100,80 @@ func TestPopulateSessionFatigue_IncompleteOrEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestPopulateSessionFatigue_SchemaV1_InsufficientEvidence(t *testing.T) {
+	results := []db.AnalysisResult{
+		{
+			SessionID: "WOD-20260904-01EMPTY01",
+			Status:    "COMPLETED",
+			Output:    "No movements here",
+		},
+	}
+
+	normalized := normalizeHighlightResultsForResponseWithSchema(results, 1)
+	if normalized[0].SessionFatigue == nil {
+		t.Fatal("expected SessionFatigue to be populated for schema v1, got nil")
+	}
+	if normalized[0].SessionFatigue.Status != "insufficient_evidence" {
+		t.Errorf("expected status insufficient_evidence, got %s", normalized[0].SessionFatigue.Status)
+	}
+	if normalized[0].SessionFatigue.Guidance != nil {
+		t.Errorf("expected guidance to be nil for insufficient_evidence, got %+v", normalized[0].SessionFatigue.Guidance)
+	}
+}
+
+func TestPopulateSessionFatigue_SchemaV1_AvailableWithGuidance(t *testing.T) {
+	results := []db.AnalysisResult{
+		{
+			SessionID:    "WOD-20260904-01AVAILABLE01",
+			Status:       "COMPLETED",
+			SessionScore: `{"intensity":85,"movements":{"Thruster":{"reps":45},"Pull-up":{"reps":30}}}`,
+		},
+	}
+
+	normalized := normalizeHighlightResultsForResponseWithSchema(results, 1)
+	if normalized[0].SessionFatigue == nil {
+		t.Fatal("expected SessionFatigue to be populated, got nil")
+	}
+	fatigueRes := normalized[0].SessionFatigue
+	if fatigueRes.Status != "available" {
+		t.Errorf("expected status available, got %s", fatigueRes.Status)
+	}
+	if fatigueRes.Guidance == nil {
+		t.Fatal("expected guidance to be populated, got nil")
+	}
+	if fatigueRes.Guidance.StateCode != fatigueRes.State {
+		t.Errorf("expected guidance state %s, got %s", fatigueRes.State, fatigueRes.Guidance.StateCode)
+	}
+	if fatigueRes.Guidance.TextKO == "" || fatigueRes.Guidance.TextEN == "" {
+		t.Errorf("expected non-empty guidance text, got KO=%q, EN=%q", fatigueRes.Guidance.TextKO, fatigueRes.Guidance.TextEN)
+	}
+}
+
+func TestPopulateSessionFatigue_SensorFreshnessRejection(t *testing.T) {
+	// If sensor version in summary does not match row's SensorVersion, summary must NOT be used
+	results := []db.AnalysisResult{
+		{
+			SessionID:       "WOD-20260904-01STALE01",
+			Status:          "COMPLETED",
+			SessionScore:    `{"intensity":70,"movements":{"Row":{"meters":1000}}}`,
+			SensorVersion:   2,
+			SensorState:     db.SensorStateCompleted,
+			SensorProcessing: db.JSONDocument(`{"request_id":"req-new","target_generation":"100"}`),
+			SensorSummary:    db.JSONDocument(`{"version":1,"request_id":"req-old","source_generation":"99","calculation_version":1,"quality":{"valid_hr":true,"is_complete":true},"hr_bonus":15.0}`),
+		},
+	}
+
+	normalized := normalizeHighlightResultsForResponseWithSchema(results, 1)
+	fatigueRes := normalized[0].SessionFatigue
+	if fatigueRes == nil {
+		t.Fatal("expected SessionFatigue to be populated, got nil")
+	}
+	// Sensor was stale, so it should not be applied
+	if fatigueRes.HeartRateAdjusted {
+		t.Errorf("expected HeartRateAdjusted to be false due to stale sensor summary, got true")
+	}
+	if fatigueRes.SensorStatus != "none" {
+		t.Errorf("expected SensorStatus to be none, got %s", fatigueRes.SensorStatus)
+	}
+}

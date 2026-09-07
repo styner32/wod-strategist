@@ -1,7 +1,9 @@
 package controllers
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -142,4 +144,83 @@ func (ctl *Controller) assertOwnsAnalysis(c *gin.Context, analysisID uint) bool 
 	}
 
 	return true
+}
+
+// verifySensorSessionOwnership performs strict write-side ownership validation:
+// 1. Ensures profileID belongs to the authenticated user.
+// 2. Checks sessions, analysis_results, and chunk_analysis_results for existing profile ownership.
+// Returns (httpStatus, error). Returns (0, nil) if authorized and valid.
+func (ctl *Controller) verifySensorSessionOwnership(ctx context.Context, tx *gorm.DB, sessionID string, profileID uint, userID uint) (int, error) {
+	if profileID == 0 {
+		return http.StatusBadRequest, errors.New("profile_id is required")
+	}
+
+	if userID == 0 {
+		return http.StatusUnauthorized, errors.New("unauthorized")
+	}
+
+	var profile db.Profile
+	if err := tx.WithContext(ctx).Where("id = ? AND user_id = ?", profileID, userID).First(&profile).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return http.StatusForbidden, errors.New("not authorized for this profile")
+		}
+		return http.StatusInternalServerError, err
+	}
+
+	// 1. Check sessions
+	var session db.Session
+	err := tx.WithContext(ctx).Select("profile_id").Where("session_id = ?", sessionID).First(&session).Error
+	if err == nil {
+		if session.ProfileID != profileID {
+			if userID > 0 {
+				var otherProfile db.Profile
+				if checkErr := tx.WithContext(ctx).Where("id = ? AND user_id = ?", session.ProfileID, userID).First(&otherProfile).Error; checkErr == nil {
+					return http.StatusConflict, fmt.Errorf("session belongs to profile %d", session.ProfileID)
+				}
+			}
+			return http.StatusForbidden, errors.New("session belongs to another user")
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return http.StatusInternalServerError, err
+	}
+
+	// 2. Check chunk_analysis_results
+	var chunkProfiles []uint
+	err = tx.WithContext(ctx).Model(&db.ChunkAnalysisResult{}).
+		Where("session_id = ?", sessionID).
+		Distinct("profile_id").
+		Pluck("profile_id", &chunkProfiles).Error
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+	for _, cPid := range chunkProfiles {
+		if cPid != profileID {
+			if userID > 0 {
+				var otherProfile db.Profile
+				if checkErr := tx.WithContext(ctx).Where("id = ? AND user_id = ?", cPid, userID).First(&otherProfile).Error; checkErr == nil {
+					return http.StatusConflict, fmt.Errorf("session chunks belong to profile %d", cPid)
+				}
+			}
+			return http.StatusForbidden, errors.New("session chunks belong to another user")
+		}
+	}
+
+	// 3. Check analysis_results
+	var analysis db.AnalysisResult
+	err = tx.WithContext(ctx).Select("profile_id").Where("session_id = ?", sessionID).First(&analysis).Error
+	if err == nil {
+		if analysis.ProfileID != profileID {
+			if userID > 0 {
+				var otherProfile db.Profile
+				if checkErr := tx.WithContext(ctx).Where("id = ? AND user_id = ?", analysis.ProfileID, userID).First(&otherProfile).Error; checkErr == nil {
+					return http.StatusConflict, fmt.Errorf("session analysis belongs to profile %d", analysis.ProfileID)
+				}
+			}
+			return http.StatusForbidden, errors.New("session analysis belongs to another user")
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return http.StatusInternalServerError, err
+	}
+
+	return 0, nil
 }

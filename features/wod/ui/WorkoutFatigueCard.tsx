@@ -33,29 +33,73 @@ export function getFatigueStateText(state: string, score: number): string {
 }
 
 export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
-  if (!fatigue || !fatigue.muscles) {
+  if (!fatigue) {
     return null;
   }
 
-  const overallColor = getFatigueColor(fatigue.overall_score);
+  if (fatigue.status === "insufficient_evidence") {
+    return (
+      <View style={styles.card}>
+        <View style={styles.headerRow}>
+          <View style={styles.headerLeft}>
+            <Text style={styles.icon}>⚡</Text>
+            <Text style={styles.title}>{t("historyList.fatigueCardTitle")}</Text>
+          </View>
+          <View
+            style={[
+              styles.overallBadge,
+              {
+                backgroundColor: "rgba(142, 155, 174, 0.15)",
+                borderColor: "rgba(142, 155, 174, 0.3)",
+              },
+            ]}
+          >
+            <Text style={[styles.overallBadgeText, { color: "#8E9BAE" }]}>
+              {t("historyList.insufficientEvidence") || "분석 근거 부족"}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.summaryBox}>
+          <Text style={styles.summaryText}>
+            {t("historyList.insufficientEvidenceNotice") ||
+              "유효한 동작 데이터가 부족하여 신체 부위별 부하를 산출할 수 없습니다."}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (!fatigue.muscles) {
+    return null;
+  }
+
+  const isAvailable = fatigue.status === "available";
+  const overallScore = fatigue.overall_score ?? 0;
+  const overallColor = getFatigueColor(overallScore);
   const stateLabel =
     fatigue.state_ko ||
-    getFatigueStateText(fatigue.state, fatigue.overall_score);
+    getFatigueStateText(fatigue.state, overallScore);
 
-  // Identify top-loaded muscle groups
+  const scoreSuffix = isAvailable ? "/100" : "%";
+
+  // Identify top-loaded muscle groups: >=50 for available (top 2), >30 for legacy
+  const threshold = isAvailable ? 50 : 30;
   const sortedMuscles = MUSCLE_GROUPS.map((key) => ({
     key,
     name: t(`muscleGroups.${key}` as any),
-    score: fatigue.muscles[key] ?? 0,
+    score: fatigue.muscles ? (fatigue.muscles[key] ?? 0) : 0,
   }))
-    .filter((m) => m.score > 30)
-    .sort((a, b) => b.score - a.score);
+    .filter((m) => m.score >= threshold)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return MUSCLE_GROUPS.indexOf(a.key) - MUSCLE_GROUPS.indexOf(b.key);
+    });
 
   const topMusclesText =
     sortedMuscles.length > 0
       ? sortedMuscles
           .slice(0, 2)
-          .map((m) => `${m.name} (${m.score}%)`)
+          .map((m) => `${m.name} (${m.score}${scoreSuffix})`)
           .join(", ")
       : null;
 
@@ -77,7 +121,7 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
           ]}
         >
           <Text style={[styles.overallBadgeText, { color: overallColor }]}>
-            {stateLabel} ({fatigue.overall_score}%)
+            {stateLabel} ({overallScore}{scoreSuffix})
           </Text>
         </View>
       </View>
@@ -87,7 +131,7 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
         {MUSCLE_GROUPS.map((groupKey) => {
           const score = Math.min(
             100,
-            Math.max(0, fatigue.muscles[groupKey] ?? 0),
+            Math.max(0, fatigue.muscles ? (fatigue.muscles[groupKey] ?? 0) : 0),
           );
           const muscleColor = getFatigueColor(score);
           const name = t(`muscleGroups.${groupKey}` as any);
@@ -97,7 +141,7 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
               <View style={styles.muscleLabelRow}>
                 <Text style={styles.muscleName}>{name}</Text>
                 <Text style={[styles.muscleScore, { color: muscleColor }]}>
-                  {score}%
+                  {score}{scoreSuffix}
                 </Text>
               </View>
               <View style={styles.barTrack}>
@@ -115,6 +159,24 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
           );
         })}
       </View>
+
+      {/* Heart rate adjustment notice */}
+      {isAvailable && fatigue.heart_rate_adjusted ? (
+        <View style={styles.hrAdjustedBox}>
+          <Text style={styles.hrAdjustedText}>
+            ❤️ {t("historyList.heartRateAdjusted") || "실측 심박으로 보정한 추정값"}
+          </Text>
+        </View>
+      ) : null}
+
+      {/* Guidance text if available */}
+      {isAvailable && fatigue.guidance ? (
+        <View style={styles.guidanceBox}>
+          <Text style={styles.guidanceText}>
+            💡 {fatigue.guidance.text_ko || fatigue.guidance.text_en}
+          </Text>
+        </View>
+      ) : null}
 
       {/* Top loaded summary notice */}
       {topMusclesText ? (
@@ -205,6 +267,32 @@ const styles = StyleSheet.create({
   },
   summaryText: {
     color: "#8E8E93",
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  hrAdjustedBox: {
+    marginTop: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: "rgba(255, 69, 58, 0.1)",
+    borderRadius: 6,
+  },
+  hrAdjustedText: {
+    color: "#FF453A",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  guidanceBox: {
+    marginTop: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    backgroundColor: "rgba(0, 229, 255, 0.08)",
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(0, 229, 255, 0.2)",
+  },
+  guidanceText: {
+    color: "#00E5FF",
     fontSize: 12,
     lineHeight: 16,
   },

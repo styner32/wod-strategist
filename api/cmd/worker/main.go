@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/config"
@@ -42,14 +43,22 @@ func main() {
 
 	logger.Log.Info("Redis connection established", zap.String("redis_addr", redisAddr))
 
-	// Start Asynq Server (Worker)
+	// Start Asynq Server (Worker for video processing)
 	srv := asynq.NewServer(
 		redisOpt,
 		asynq.Config{
 			Concurrency: 10,
-			// Add logger adapter if needed, or Asynq will use its own logger.
-			// Asynq supports custom logger via Logger interface.
-			// For now, let's keep it simple. Asynq logs to stderr by default.
+		},
+	)
+
+	// Start dedicated Asynq Server for sensor telemetry (Concurrency: 1)
+	sensorSrv := asynq.NewServer(
+		redisOpt,
+		asynq.Config{
+			Concurrency: 1,
+			Queues: map[string]int{
+				worker.SensorQueueName: 1,
+			},
 		},
 	)
 
@@ -88,6 +97,15 @@ func main() {
 	mux.HandleFunc(worker.TypeChunkDebugReanalysis, w.HandleChunkDebugReanalysisTask)
 	mux.HandleFunc(worker.TypeSessionDebugReanalysis, w.HandleSessionDebugReanalysisTask)
 
+	sensorMux := asynq.NewServeMux()
+	sensorMux.HandleFunc(worker.TypeSensorTelemetry, w.HandleSensorTelemetryTask)
+
+	// Sensor recovery manager
+	recoveryCtx, cancelRecovery := context.WithCancel(context.Background())
+	defer cancelRecovery()
+	recoveryMgr := worker.NewSensorRecoveryManager(dbConn, queueClient, logger.Log)
+	go recoveryMgr.Start(recoveryCtx, 10*time.Second)
+
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")
 
@@ -95,10 +113,17 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start server in a goroutine
+	// Start video worker in a goroutine
 	go func() {
 		if err := srv.Run(mux); err != nil {
-			logger.Log.Fatal("could not run asynq server", zap.Error(err))
+			logger.Log.Fatal("could not run asynq video server", zap.Error(err))
+		}
+	}()
+
+	// Start sensor worker in a goroutine
+	go func() {
+		if err := sensorSrv.Run(sensorMux); err != nil {
+			logger.Log.Fatal("could not run asynq sensor server", zap.Error(err))
 		}
 	}()
 
@@ -106,7 +131,8 @@ func main() {
 	<-quit
 	logger.Log.Info("Shutting down worker...")
 
-	// Shutdown the server
+	cancelRecovery()
+	sensorSrv.Shutdown()
 	srv.Shutdown()
 
 	logger.Log.Info("Worker exiting")

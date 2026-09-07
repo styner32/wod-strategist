@@ -844,9 +844,9 @@ export function SessionDetailPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-text-muted">Created</p>
+                  <p className="text-text-muted">Workout Time</p>
                   <p className="text-text-primary mt-0.5">
-                    {formatDate(analysis.created_at)}
+                    {formatDate(analysis.workout_at || analysis.created_at)}
                   </p>
                 </div>
                 <div>
@@ -855,6 +855,14 @@ export function SessionDetailPage() {
                     {analysis.workout_type || "—"}
                   </p>
                 </div>
+                {analysis.sensor_state && analysis.sensor_state !== "NONE" && (
+                  <div>
+                    <p className="text-text-muted">Polar Sensor</p>
+                    <p className="text-text-primary mt-0.5 capitalize">
+                      {analysis.sensor_state === "COMPLETED" ? "Connected (완료)" : analysis.sensor_state}
+                    </p>
+                  </div>
+                )}
                 {sessionAnalysis?.coverage_status && (
                   <div>
                     <p className="text-text-muted">Media coverage</p>

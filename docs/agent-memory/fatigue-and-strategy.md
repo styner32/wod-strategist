@@ -2,6 +2,8 @@
 
 This document outlines the architecture, mathematical model, database schema, and API contracts for the multi-muscle group fatigue tracking and Pre-WOD Strategy coaching system.
 
+> Planned change, not implemented (2026-09-07): [Single-table sensor analysis and workout load design](../polar-sensor-analysis-design.md) specifies optional sensor fields in `analysis_results`, frozen calculation inputs, canonical workout timestamps, and evidence-aware API responses. The descriptions below remain the current implementation baseline; the linked design must not be reported as deployed behavior.
+
 ## 1. 6 Functional Muscle Groups & Movement Patterns
 
 The system divides CrossFit and functional fitness movements into 6 core anatomical & kinematic categories:

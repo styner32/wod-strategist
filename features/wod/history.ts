@@ -10,12 +10,59 @@ export interface MuscleLoads {
   [key: string]: number | undefined;
 }
 
-export interface SessionFatigue {
+export interface FatigueGuidance {
+  state_code: string;
+  advice_code: string;
+  text_en: string;
+  text_ko: string;
+}
+
+export interface AvailableSessionFatigue {
+  status: "available";
+  load_calculation_version?: number;
+  sensor_status?: "none" | "applied" | "failed" | "pending" | string;
+  heart_rate_adjusted: boolean;
+  overall_score: number;
+  state: "fresh" | "moderate" | "fatigued" | "exhausted" | string;
+  state_ko: string;
+  advice_code?: string;
+  focus_muscles?: string[];
+  muscles: MuscleLoads;
+  guidance?: FatigueGuidance;
+}
+
+export interface InsufficientEvidenceSessionFatigue {
+  status: "insufficient_evidence";
+  load_calculation_version?: number;
+  sensor_status?: "none" | "applied" | "failed" | "pending" | string;
+  heart_rate_adjusted: boolean;
+  overall_score?: null;
+  state?: string;
+  state_ko?: string;
+  advice_code?: string;
+  focus_muscles?: string[];
+  muscles?: MuscleLoads;
+  guidance?: FatigueGuidance;
+}
+
+export interface LegacySessionFatigue {
+  status?: undefined;
   overall_score: number;
   state: "fresh" | "moderate" | "fatigued" | "exhausted" | string;
   state_ko: string;
   muscles: MuscleLoads;
+  load_calculation_version?: number;
+  sensor_status?: string;
+  heart_rate_adjusted?: boolean;
+  advice_code?: string;
+  focus_muscles?: string[];
+  guidance?: FatigueGuidance;
 }
+
+export type SessionFatigue =
+  | AvailableSessionFatigue
+  | InsufficientEvidenceSessionFatigue
+  | LegacySessionFatigue;
 
 export interface AnalysisResult {
   id: number;
@@ -43,7 +90,9 @@ export async function fetchAnalysisHistory(
   if (limit) {
     params.set("limit", String(limit));
   }
-  return apiClient<AnalysisResult[]>(`/history?${params.toString()}`);
+  return apiClient<AnalysisResult[]>(`/history?${params.toString()}`, {
+    headers: { "X-Workout-Load-Schema": "1" },
+  });
 }
 
 export interface HighlightResult {

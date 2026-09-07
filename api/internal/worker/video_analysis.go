@@ -15,6 +15,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
+	"github.com/wod-strategist/api/internal/timeline"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -201,6 +202,22 @@ func (w *Worker) resolveVideoAnalysisProfile(ctx context.Context, sessionID stri
 		}
 	}
 
+	var analysis db.AnalysisResult
+	analysisErr := w.DB.WithContext(ctx).
+		Select("session_id", "profile_id").
+		Where("session_id = ?", sessionID).
+		First(&analysis).Error
+	if analysisErr != nil && !errors.Is(analysisErr, gorm.ErrRecordNotFound) {
+		return 0, fmt.Errorf("failed to check existing analysis ownership: %w", analysisErr)
+	}
+	if analysisErr == nil && analysis.ProfileID != 0 {
+		if profileID == 0 {
+			profileID = analysis.ProfileID
+		} else if analysis.ProfileID != profileID {
+			return 0, fmt.Errorf("analysis result profile %d does not match task profile %d: %w", analysis.ProfileID, profileID, asynq.SkipRetry)
+		}
+	}
+
 	if profileID == 0 {
 		match := legacySessionProfilePattern.FindStringSubmatch(sessionID)
 		if len(match) == 2 {
@@ -224,6 +241,119 @@ func (w *Worker) resolveVideoAnalysisProfile(ctx context.Context, sessionID stri
 	}
 
 	return profileID, nil
+}
+
+func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnalysisPayload, result *db.AnalysisResult) error {
+	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var session db.Session
+		var sessionCreatedAt *time.Time
+		if err := tx.Select("created_at").Where("session_id = ?", p.SessionID).First(&session).Error; err == nil {
+			sessionCreatedAt = &session.CreatedAt
+		}
+
+		var existing db.AnalysisResult
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("session_id = ?", p.SessionID).
+			First(&existing).Error
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			result.ProfileID = p.ProfileID
+			if result.WorkoutAt == nil {
+				workoutAt, source, _ := timeline.ResolveWorkoutAt(p.SessionID, sessionCreatedAt, nil)
+				if !workoutAt.IsZero() {
+					result.WorkoutAt = &workoutAt
+					result.WorkoutAtSource = &source
+				}
+			}
+			return tx.Create(result).Error
+		}
+		if err != nil {
+			return err
+		}
+
+		if existing.ProfileID != 0 && existing.ProfileID != p.ProfileID {
+			return fmt.Errorf("ownership conflict: existing profile %d != task profile %d: %w", existing.ProfileID, p.ProfileID, asynq.SkipRetry)
+		}
+
+		updates := map[string]any{
+			"status":                   result.Status,
+			"output":                   result.Output,
+			"analysis_type":            result.AnalysisType,
+			"highlight_segments":      result.HighlightSegments,
+			"wod_description":         result.WODDescription,
+			"session_score":           result.SessionScore,
+			"normalized_workout":      result.NormalizedWorkout,
+			"mobility_observations":   result.MobilityObservations,
+			"stretch_recommendations": result.StretchRecommendations,
+			"available_videos":        result.AvailableVideos,
+			"gemini_file_uri":          result.GeminiFileURI,
+			"gemini_file_name":         result.GeminiFileName,
+			"gemini_mime_type":         result.GeminiMIMEType,
+			"gemini_file_expires_at":    result.GeminiFileExpiresAt,
+			"updated_at":               time.Now(),
+		}
+
+		if existing.WorkoutAt == nil {
+			workoutAt, source, _ := timeline.ResolveWorkoutAt(p.SessionID, sessionCreatedAt, &existing.CreatedAt)
+			if !workoutAt.IsZero() {
+				updates["workout_at"] = workoutAt
+				updates["workout_at_source"] = source
+			}
+		}
+
+		return tx.Model(&existing).Updates(updates).Error
+	})
+}
+
+func (w *Worker) persistVideoAnalysisFailed(ctx context.Context, p VideoAnalysisPayload, failedResult *db.AnalysisResult) error {
+	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var session db.Session
+		var sessionCreatedAt *time.Time
+		if err := tx.Select("created_at").Where("session_id = ?", p.SessionID).First(&session).Error; err == nil {
+			sessionCreatedAt = &session.CreatedAt
+		}
+
+		var existing db.AnalysisResult
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("session_id = ?", p.SessionID).
+			First(&existing).Error
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			failedResult.ProfileID = p.ProfileID
+			if failedResult.WorkoutAt == nil {
+				workoutAt, source, _ := timeline.ResolveWorkoutAt(p.SessionID, sessionCreatedAt, nil)
+				if !workoutAt.IsZero() {
+					failedResult.WorkoutAt = &workoutAt
+					failedResult.WorkoutAtSource = &source
+				}
+			}
+			return tx.Create(failedResult).Error
+		}
+		if err != nil {
+			return err
+		}
+
+		if existing.ProfileID != 0 && existing.ProfileID != p.ProfileID {
+			return fmt.Errorf("ownership conflict: existing profile %d != task profile %d: %w", existing.ProfileID, p.ProfileID, asynq.SkipRetry)
+		}
+
+		updates := map[string]any{
+			"status":        failedResult.Status,
+			"output":        failedResult.Output,
+			"analysis_type": failedResult.AnalysisType,
+			"updated_at":    time.Now(),
+		}
+
+		if existing.WorkoutAt == nil {
+			workoutAt, source, _ := timeline.ResolveWorkoutAt(p.SessionID, sessionCreatedAt, &existing.CreatedAt)
+			if !workoutAt.IsZero() {
+				updates["workout_at"] = workoutAt
+				updates["workout_at_source"] = source
+			}
+		}
+
+		return tx.Model(&existing).Updates(updates).Error
+	})
 }
 
 // Segment represents an identified exercise set within a larger video.
@@ -329,7 +459,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				AnalysisType: db.AnalysisTypeWOD,
 			}
 			failedResult.ProfileID = p.ProfileID
-			if dbErr := w.DB.Clauses(clause.OnConflict{UpdateAll: true}).Create(failedResult).Error; dbErr != nil {
+			if dbErr := w.persistVideoAnalysisFailed(ctx, p, failedResult); dbErr != nil {
 				w.logger.Error("Failed to write FAILED analysis result",
 					zap.String("session_id", p.SessionID),
 					zap.Error(dbErr))
@@ -689,7 +819,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		GeminiFileExpiresAt:    &expiresAt,
 	}
 	result.ProfileID = p.ProfileID
-	if err := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(result).Error; err != nil {
+	if err := w.persistVideoAnalysisCompleted(ctx, p, result); err != nil {
 		return fmt.Errorf("failed to persist completed video analysis: %w", err)
 	}
 	success = true
@@ -1248,7 +1378,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 			Output:    "An internal error occurred during analysis.",
 		}
 		failedResult.ProfileID = p.ProfileID
-		if dbErr := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(failedResult).Error; dbErr != nil {
+		if dbErr := w.persistVideoAnalysisFailed(ctx, p, failedResult); dbErr != nil {
 			w.logger.Error("Failed to persist legacy FAILED analysis result",
 				zap.String("session_id", p.SessionID),
 				zap.Error(dbErr))
@@ -1294,7 +1424,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		AvailableVideos:        db.CommaStringArray{"merged"},
 	}
 	result.ProfileID = p.ProfileID
-	if err := w.DB.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(result).Error; err != nil {
+	if err := w.persistVideoAnalysisCompleted(ctx, p, result); err != nil {
 		return fmt.Errorf("failed to persist completed legacy video analysis: %w", err)
 	}
 

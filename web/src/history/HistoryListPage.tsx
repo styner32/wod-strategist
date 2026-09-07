@@ -113,7 +113,7 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
               {result.session_id.slice(0, 20)}...
             </p>
             <p className="text-xs text-text-muted">
-              {formatDate(result.created_at)}
+              {formatDate(result.workout_at || result.created_at)}
             </p>
           </div>
         </div>
@@ -127,11 +127,19 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
           </span>
         )}
         {result.session_fatigue && (
-          <span className="inline-flex items-center gap-1 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-md font-medium">
-            <span>⚡</span>{" "}
-            {result.session_fatigue.state_ko || result.session_fatigue.state}{" "}
-            {result.session_fatigue.overall_score}%
-          </span>
+          result.session_fatigue.status === "insufficient_evidence" ? (
+            <span className="inline-flex items-center gap-1 text-xs bg-bg-secondary text-text-muted border border-border px-2 py-0.5 rounded-md font-medium">
+              <span>⚡</span> 분석 근거 부족
+            </span>
+          ) : result.session_fatigue.overall_score !== undefined && result.session_fatigue.overall_score !== null ? (
+            <span className="inline-flex items-center gap-1 text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-md font-medium">
+              <span>⚡</span>{" "}
+              {result.session_fatigue.state_ko || result.session_fatigue.state}{" "}
+              {result.session_fatigue.overall_score}
+              {result.session_fatigue.status === "available" ? "/100" : "%"}
+              {result.session_fatigue.heart_rate_adjusted && " (심박)"}
+            </span>
+          ) : null
         )}
         {stretchCount > 0 && (
           <span className="inline-flex items-center gap-1 text-xs bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-md font-medium">

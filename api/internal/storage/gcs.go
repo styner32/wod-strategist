@@ -64,6 +64,47 @@ func (c *Client) GenerateSignedURL(objectName string, method string, expires tim
 	return u, nil
 }
 
+// GenerateCreateSignedURL creates a V4 PUT signed URL with precondition x-goog-if-generation-match: 0
+// and binds Content-Type and x-goog-meta-sha256 headers.
+func (c *Client) GenerateCreateSignedURL(objectName string, contentType string, sha256Hex string, expires time.Duration) (string, map[string]string, error) {
+	requiredHeaders := map[string]string{
+		"Content-Type":                contentType,
+		"x-goog-if-generation-match": "0",
+		"x-goog-meta-sha256":          sha256Hex,
+	}
+
+	opts := &gcs.SignedURLOptions{
+		Scheme:      gcs.SigningSchemeV4,
+		Method:      "PUT",
+		ContentType: contentType,
+		Headers: []string{
+			"content-type:" + contentType,
+			"x-goog-if-generation-match:0",
+			"x-goog-meta-sha256:" + sha256Hex,
+		},
+		Expires: time.Now().Add(expires),
+	}
+	if c.signEmail != "" && len(c.signKey) > 0 {
+		opts.GoogleAccessID = c.signEmail
+		opts.PrivateKey = c.signKey
+	}
+	u, err := c.client.Bucket(c.bucketName).SignedURL(objectName, opts)
+	if err != nil {
+		return "", nil, fmt.Errorf("Bucket(%q).SignedURL: %w", c.bucketName, err)
+	}
+	return u, requiredHeaders, nil
+}
+
+// ObjectAttrs fetches metadata attributes for an object in the bucket.
+func (c *Client) ObjectAttrs(ctx context.Context, objectName string) (*gcs.ObjectAttrs, error) {
+	return c.client.Bucket(c.bucketName).Object(objectName).Attrs(ctx)
+}
+
+// NewReaderWithGeneration opens an object reader pinned to a specific GCS object generation.
+func (c *Client) NewReaderWithGeneration(ctx context.Context, objectName string, generation int64) (io.ReadCloser, error) {
+	return c.client.Bucket(c.bucketName).Object(objectName).Generation(generation).NewReader(ctx)
+}
+
 func (c *Client) UploadFile(ctx context.Context, file multipart.File, filename string) (string, error) {
 	wc := c.client.Bucket(c.bucketName).Object(filename).NewWriter(ctx)
 	if _, err := io.Copy(wc, file); err != nil {

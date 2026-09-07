@@ -614,24 +614,38 @@ function HistoryCard({
             <View
               style={[
                 styles.fatiguePill,
-                {
-                  backgroundColor:
-                    getFatigueColor(item.session_fatigue.overall_score) + "18",
-                  borderColor:
-                    getFatigueColor(item.session_fatigue.overall_score) + "40",
-                },
+                item.session_fatigue.status === "insufficient_evidence"
+                  ? {
+                      backgroundColor: "rgba(142, 155, 174, 0.15)",
+                      borderColor: "rgba(142, 155, 174, 0.3)",
+                    }
+                  : {
+                      backgroundColor:
+                        getFatigueColor(item.session_fatigue.overall_score ?? 0) + "18",
+                      borderColor:
+                        getFatigueColor(item.session_fatigue.overall_score ?? 0) + "40",
+                    },
               ]}
             >
               <Text
                 style={[
                   styles.fatiguePillText,
-                  {
-                    color: getFatigueColor(item.session_fatigue.overall_score),
-                  },
+                  item.session_fatigue.status === "insufficient_evidence"
+                    ? { color: "#8E9BAE" }
+                    : {
+                        color: getFatigueColor(item.session_fatigue.overall_score ?? 0),
+                      },
                 ]}
               >
-                ⚡ {item.session_fatigue.state_ko || item.session_fatigue.state}{" "}
-                {item.session_fatigue.overall_score}%
+                {item.session_fatigue.status === "insufficient_evidence" ? (
+                  `⚡ ${t("historyList.insufficientEvidence") || "분석 근거 부족"}`
+                ) : (
+                  `⚡ ${item.session_fatigue.state_ko || item.session_fatigue.state} ${
+                    item.session_fatigue.status === "available"
+                      ? `${item.session_fatigue.overall_score}/100`
+                      : `${item.session_fatigue.overall_score}%`
+                  }`
+                )}
               </Text>
             </View>
           )}

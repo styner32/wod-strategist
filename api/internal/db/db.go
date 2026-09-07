@@ -80,6 +80,16 @@ const (
 	AnalysisTypeInjurySupplement = "injury_supplement"
 )
 
+const (
+	SensorStateNone      = "NONE"
+	SensorStateUploading = "UPLOADING"
+	SensorStatePending   = "PENDING"
+	SensorStateRunning   = "RUNNING"
+	SensorStateCompleted = "COMPLETED"
+	SensorStateFailed    = "FAILED"
+	SensorStateExpired   = "EXPIRED"
+)
+
 type AnalysisResult struct {
 	ID                  uint       `gorm:"primaryKey" json:"id"`
 	SessionID           string     `gorm:"uniqueIndex;not null" json:"session_id"`
@@ -107,16 +117,37 @@ type AnalysisResult struct {
 	MobilityObservations   string           `gorm:"type:text;not null;default:'[]'" json:"mobility_observations,omitempty"`
 	StretchRecommendations string           `gorm:"type:text;not null;default:'[]'" json:"stretch_recommendations,omitempty"`
 	AvailableVideos        CommaStringArray `gorm:"column:available_videos;type:text;not null;default:'merged'" json:"available_videos"`
+	SensorVersion          int64            `gorm:"column:sensor_version;not null;default:0" json:"sensor_version,string"`
+	SensorState            string           `gorm:"column:sensor_state;not null;default:NONE" json:"sensor_state"`
+	SensorProcessing       JSONDocument     `gorm:"column:sensor_processing;type:jsonb;not null;default:'{}'" json:"-"`
+	SensorSummary          JSONDocument     `gorm:"column:sensor_summary;type:jsonb;not null;default:'{}'" json:"sensor_summary,omitempty"`
+	SensorNextAttemptAt    *time.Time       `gorm:"column:sensor_next_attempt_at" json:"-"`
+	WorkoutAt              *time.Time       `gorm:"column:workout_at" json:"workout_at,omitempty"`
+	WorkoutAtSource        *string          `gorm:"column:workout_at_source" json:"workout_at_source,omitempty"`
 	ArchivedAt             *time.Time       `json:"archived_at,omitempty"`
 	CreatedAt              time.Time        `json:"created_at"`
 	UpdatedAt              time.Time        `json:"updated_at"`
 }
 
+type FatigueGuidance struct {
+	StateCode  string `json:"state_code"`
+	AdviceCode string `json:"advice_code"`
+	TextEN     string `json:"text_en"`
+	TextKO     string `json:"text_ko"`
+}
+
 type SessionFatigue struct {
-	OverallScore int            `json:"overall_score"`
-	State        string         `json:"state"`
-	StateKO      string         `json:"state_ko"`
-	Muscles      map[string]int `json:"muscles"`
+	Status                 string            `json:"status,omitempty"` // available, insufficient_evidence
+	LoadCalculationVersion int               `json:"load_calculation_version,omitempty"`
+	SensorStatus           string            `json:"sensor_status,omitempty"` // none, applied, failed, pending
+	HeartRateAdjusted      bool              `json:"heart_rate_adjusted"`
+	OverallScore           int               `json:"overall_score,omitempty"`
+	State                  string            `json:"state,omitempty"`
+	StateKO                string            `json:"state_ko,omitempty"`
+	AdviceCode             string            `json:"advice_code,omitempty"`
+	FocusMuscles           []string          `json:"focus_muscles,omitempty"`
+	Muscles                map[string]int    `json:"muscles,omitempty"`
+	Guidance               *FatigueGuidance  `json:"guidance,omitempty"`
 }
 
 type NormalizedMovement struct {

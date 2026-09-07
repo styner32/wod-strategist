@@ -6,6 +6,7 @@ import (
 	"mime/multipart"
 	"time"
 
+	gcs "cloud.google.com/go/storage"
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
@@ -24,6 +25,8 @@ type QueueClient interface {
 
 type ObjectStorage interface {
 	GenerateSignedURL(objectName string, method string, expires time.Duration) (string, error)
+	GenerateCreateSignedURL(objectName string, contentType string, sha256Hex string, expires time.Duration) (string, map[string]string, error)
+	ObjectAttrs(ctx context.Context, objectName string) (*gcs.ObjectAttrs, error)
 	UploadFile(ctx context.Context, file multipart.File, filename string) (string, error)
 	ListObjects(ctx context.Context, prefix string) ([]string, error)
 	ListObjectInfos(ctx context.Context, prefix string) ([]storage.ObjectInfo, error)

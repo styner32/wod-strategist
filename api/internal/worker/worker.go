@@ -4,12 +4,16 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"time"
+
+	gcs "cloud.google.com/go/storage"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
@@ -27,11 +31,35 @@ const (
 	TypeGenerateHighlight        = "highlight:generate"
 	TypeVerifyHighlights         = "highlight:verify"
 	TypeGenerateHardSub          = "hardsub:generate"
+	TypeSensorTelemetry          = "sensor:telemetry"
+	SensorQueueName              = "sensor"
 	WorkoutTypeWOD               = "wod"
 	WorkoutTypeWarmup            = "warmup"
 	WorkoutTypeAccessory         = "accessory"
 	WorkoutTypeCooldown          = "cooldown"
 )
+
+// SensorTelemetryPayload is the minimal queue message for sensor processing.
+type SensorTelemetryPayload struct {
+	AnalysisResultID uint   `json:"analysis_result_id"`
+	ProfileID        uint   `json:"profile_id"`
+	RequestID        string `json:"request_id"`
+	Version          int64  `json:"version"`
+}
+
+// NewSensorTelemetryTask constructs an asynq task for sensor telemetry processing with MaxRetry(0).
+func NewSensorTelemetryTask(analysisResultID, profileID uint, requestID string, version int64) (*asynq.Task, error) {
+	payload, err := json.Marshal(SensorTelemetryPayload{
+		AnalysisResultID: analysisResultID,
+		ProfileID:        profileID,
+		RequestID:        requestID,
+		Version:          version,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return asynq.NewTask(TypeSensorTelemetry, payload, asynq.MaxRetry(0), asynq.Queue(SensorQueueName)), nil
+}
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.
 type VideoAnalysisPayload struct {
@@ -94,6 +122,8 @@ type StorageClient interface {
 	DownloadFile(ctx context.Context, gcsURI, destPath string) error
 	UploadFromFile(ctx context.Context, localPath, objectName string) (string, error)
 	ListObjects(ctx context.Context, prefix string) ([]string, error)
+	ObjectAttrs(ctx context.Context, objectName string) (*gcs.ObjectAttrs, error)
+	NewReaderWithGeneration(ctx context.Context, objectName string, gen int64) (io.ReadCloser, error)
 }
 
 // GeminiClient is the minimal interface over gemini.Client used by handlers.

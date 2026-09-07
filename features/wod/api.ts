@@ -250,6 +250,121 @@ export async function getUploadUrl(
   });
 }
 
+export interface PrepareSensorUploadRequest {
+  profile_id: number;
+  request_id: string;
+  expected_version: string;
+  size_bytes: number;
+  sha256: string;
+}
+
+export interface PrepareSensorUploadResponse {
+  request_id: string;
+  version: string;
+  state: string;
+  object_name: string;
+  upload_url?: string;
+  required_headers?: Record<string, string>;
+  expires_at?: string;
+}
+
+export interface CompleteSensorUploadRequest {
+  profile_id: number;
+  request_id: string;
+  version: string;
+}
+
+export interface CompleteSensorUploadResponse {
+  accepted: boolean;
+  request_id?: string;
+  version?: string;
+  state: string;
+  error_code?: string;
+  retryable: boolean;
+}
+
+export interface SensorStatusResponse {
+  request_id: string;
+  version: string;
+  state: string;
+  last_error_code?: string | null;
+  retryable: boolean;
+}
+
+export async function prepareSensorUpload(
+  sessionId: string,
+  req: PrepareSensorUploadRequest,
+): Promise<PrepareSensorUploadResponse> {
+  return apiClient<PrepareSensorUploadResponse>(
+    `/sessions/${sessionId}/sensor-upload`,
+    {
+      method: "POST",
+      bodyPayload: req,
+    },
+  );
+}
+
+export async function completeSensorUpload(
+  sessionId: string,
+  req: CompleteSensorUploadRequest,
+): Promise<CompleteSensorUploadResponse> {
+  return apiClient<CompleteSensorUploadResponse>(
+    `/sessions/${sessionId}/sensor-complete`,
+    {
+      method: "POST",
+      bodyPayload: req,
+    },
+  );
+}
+
+export async function getSensorStatus(
+  sessionId: string,
+  profileId: number,
+): Promise<SensorStatusResponse> {
+  const params = new URLSearchParams({ profile_id: String(profileId) });
+  return apiClient<SensorStatusResponse>(
+    `/sessions/${sessionId}/sensor-status?${params.toString()}`,
+  );
+}
+
+export async function uploadSensorToGcs(
+  uploadUrl: string,
+  fileUri: string,
+  requiredHeaders?: Record<string, string>,
+): Promise<void> {
+  const headers = {
+    "Content-Type": "application/x-ndjson",
+    ...(requiredHeaders || {}),
+  };
+
+  const uploadTask = createUploadTask(
+    uploadUrl,
+    fileUri,
+    {
+      httpMethod: "PUT",
+      headers,
+      uploadType: FileSystemUploadType.BINARY_CONTENT,
+    },
+  );
+
+  const response = await uploadTask.uploadAsync();
+
+  if (!response) {
+    throw new Error(
+      "Failed to upload sensor telemetry to GCS: No response from upload task.",
+    );
+  }
+
+  if (response.status < 200 || response.status >= 300) {
+    const err: any = new Error(
+      `Failed to upload sensor telemetry to GCS: HTTP ${response.status} ${response.body || ""}`,
+    );
+    err.status = response.status;
+    err.body = response.body;
+    throw err;
+  }
+}
+
 /** Step 2: Stream the binary payload directly into GCS using Expo FileSystem */
 export async function uploadToGcs(
   uploadUrl: string,
@@ -868,17 +983,28 @@ export interface MobilityWarmupItem {
   reason: string;
 }
 
+export interface EvidenceCounts {
+  total_sessions: number;
+  valid_sessions: number;
+  excluded_sessions: number;
+  unresolved_time_sessions: number;
+}
+
 export interface PreWodAdviceResponse {
   profile_id: number;
-  overall_fatigue_score: number;
+  overall_fatigue_score?: number | null;
   overall_state: string;
   overall_state_ko: string;
-  muscle_readiness: MuscleReadinessItem[];
-  target_rpe: TargetRPEInfo;
+  muscle_readiness?: MuscleReadinessItem[];
+  target_rpe?: TargetRPEInfo | null;
   scaling_advice: ScalingAdviceItem[];
   mobility_warmup: MobilityWarmupItem[];
   overall_summary: string;
-  last_workout_at?: string;
+  advice_code?: string;
+  evidence_status?: "no_history" | "insufficient" | "partial" | "complete" | string;
+  evidence?: EvidenceCounts;
+  as_of?: string;
+  last_workout_at?: string | null;
 }
 
 export interface PreWodAdviceRequest {

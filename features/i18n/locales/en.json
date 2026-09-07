@@ -315,7 +315,11 @@
     "fresh": "Fresh",
     "moderate": "Moderate",
     "fatigued": "High Fatigue",
-    "exhausted": "Exhausted"
+    "exhausted": "Exhausted",
+    "insufficientEvidence": "Insufficient Evidence",
+    "insufficientEvidenceNotice": "Cannot compute muscle load due to insufficient movement data.",
+    "heartRateAdjusted": "Estimated value adjusted with measured heart rate",
+    "estimatedWorkoutLoad": "Estimated workout load for this session"
   },
   "player": {
     "loadingVideo": "Loading workout video...",
@@ -418,7 +422,10 @@
     "pacingStrategy": "Pacing Strategy",
     "muscleReadiness": "6-Muscle Group Fatigue Analysis",
     "scalingAdvice": "Scaling & Movement Recommendations",
-    "recommendedMobility": "Pre-WOD Essential Mobility & Warm-up"
+    "recommendedMobility": "Pre-WOD Essential Mobility & Warm-up",
+    "partialHistoryBadge": "Partial history reflected",
+    "noHistoryNotice": "No recent workout history.",
+    "insufficientHistoryNotice": "Cannot determine intensity from recent workouts alone. Check your physical condition."
   },
   "muscleGroups": {
     "shoulders_push": "Shoulders & Push",
