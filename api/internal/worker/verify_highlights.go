@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -189,9 +190,33 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 	if err != nil {
 		return fmt.Errorf("invalid highlight segments JSON: %w", asynq.SkipRetry)
 	}
-	segments = w.filterLowTargetConfidenceObservations(p.SessionID, segments)
 	if len(segments) == 0 {
 		return fmt.Errorf("no highlight segments to verify: %w", asynq.SkipRetry)
+	}
+	segments = w.filterLowTargetConfidenceObservations(p.SessionID, segments)
+	if len(segments) == 0 {
+		w.logger.Info("Highlight verification completed with no segments remaining after low-confidence filtering",
+			zap.String("session_id", p.SessionID))
+		profileID := analysisResult.ProfileID
+		if err := w.DB.Model(&db.AnalysisResult{}).
+			Where("id = ?", analysisResult.ID).
+			Updates(map[string]any{
+				"highlight_segments": MarshalHighlightSegments(nil),
+				"verified":           false,
+			}).Error; err != nil {
+			return fmt.Errorf("failed to update verified highlights: %w", err)
+		}
+
+		pMode := string(w.PipelineMode)
+		if pMode == "" && w.UseCache {
+			pMode = string(PipelineModeOptimized)
+		}
+		variant := "legacy"
+		if pMode == "optimized" || pMode == "compare" {
+			variant = "optimized"
+		}
+		w.recordStageMetrics(p.SessionID, profileID, "verify_highlights", variant, 0, 0, uploadBytes, time.Since(started))
+		return nil
 	}
 
 	// 5. Build a verification prompt over exact observations, not padded parent clips.
@@ -522,12 +547,75 @@ func boolPointer(value bool) *bool {
 const minTargetConfidenceThreshold = 0.4
 
 func (w *Worker) filterLowTargetConfidenceObservations(sessionID string, segments []HighlightSegment) []HighlightSegment {
-	if w == nil || w.DB == nil || sessionID == "" {
+	if w == nil || w.DB == nil || sessionID == "" || len(segments) == 0 {
 		return segments
 	}
-	var lowConfChunks []db.ChunkAnalysisResult
-	if err := w.DB.Where("session_id = ? AND status = ? AND target_confidence > 0 AND target_confidence < ?",
-		sessionID, "COMPLETED", minTargetConfidenceThreshold).Find(&lowConfChunks).Error; err != nil || len(lowConfChunks) == 0 {
+	var chunks []db.ChunkAnalysisResult
+	if err := w.DB.Where("session_id = ? AND status = ?", sessionID, "COMPLETED").Find(&chunks).Error; err != nil || len(chunks) == 0 {
+		return segments
+	}
+	return filterObservationsWithChunks(chunks, segments)
+}
+
+func filterObservationsWithChunks(chunks []db.ChunkAnalysisResult, segments []HighlightSegment) []HighlightSegment {
+	if len(chunks) == 0 || len(segments) == 0 {
+		return segments
+	}
+
+	// 1. Check if media clock mapping exists and whether the session has media_end == end.
+	// Migration 000038 backfilled historical sessions with media_* = start_*, so media_end == end
+	// cannot distinguish between a zero-drift session and a session without true media mapping.
+	// In such cases, act conservatively: do not exclude observations.
+	var (
+		maxEnd        float64
+		maxMediaEnd   float64
+		hasEnd        bool
+		hasMediaEnd   bool
+		hasValidMedia bool
+	)
+
+	for _, chunk := range chunks {
+		if chunk.MediaStartSecs != nil && chunk.MediaEndSecs != nil && chunk.EndSecs != nil && *chunk.MediaEndSecs > *chunk.MediaStartSecs {
+			hasValidMedia = true
+			if !hasEnd || *chunk.EndSecs > maxEnd {
+				maxEnd = *chunk.EndSecs
+				hasEnd = true
+			}
+			if !hasMediaEnd || *chunk.MediaEndSecs > maxMediaEnd {
+				maxMediaEnd = *chunk.MediaEndSecs
+				hasMediaEnd = true
+			}
+		}
+	}
+
+	if !hasValidMedia || !hasEnd || !hasMediaEnd {
+		return segments
+	}
+
+	// Conservative check: if max media_end == max end (within 1ms tolerance), drift mapping is absent/backfilled.
+	if math.Abs(maxEnd-maxMediaEnd) < 0.001 || maxMediaEnd >= maxEnd {
+		return segments
+	}
+
+	type mediaInterval struct {
+		start float64
+		end   float64
+	}
+	var lowConfIntervals []mediaInterval
+	for _, chunk := range chunks {
+		if chunk.TargetConfidence > 0 && chunk.TargetConfidence < minTargetConfidenceThreshold {
+			// Exclude nil media_* without falling back to StartSecs
+			if chunk.MediaStartSecs != nil && chunk.MediaEndSecs != nil {
+				mStart := *chunk.MediaStartSecs
+				mEnd := *chunk.MediaEndSecs
+				if mEnd > mStart {
+					lowConfIntervals = append(lowConfIntervals, mediaInterval{start: mStart, end: mEnd})
+				}
+			}
+		}
+	}
+
+	if len(lowConfIntervals) == 0 {
 		return segments
 	}
 
@@ -539,16 +627,8 @@ func (w *Worker) filterLowTargetConfidenceObservations(sessionID string, segment
 			obsEnd, eErr := parseTimestampToSeconds(obs.End)
 			isLowConf := false
 			if sErr == nil && eErr == nil {
-				for _, chunk := range lowConfChunks {
-					cStart := 0.0
-					cEnd := 0.0
-					if chunk.StartSecs != nil {
-						cStart = *chunk.StartSecs
-					}
-					if chunk.EndSecs != nil {
-						cEnd = *chunk.EndSecs
-					}
-					if cEnd > cStart && obsStart < cEnd && obsEnd > cStart {
+				for _, interval := range lowConfIntervals {
+					if interval.end > interval.start && obsStart < interval.end && obsEnd > interval.start {
 						isLowConf = true
 						break
 					}

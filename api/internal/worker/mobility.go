@@ -63,6 +63,16 @@ var allowedObservations = map[string]string{
 	"general_stiffness":                 "general_stiffness",
 }
 
+type rawMobilityObservation struct {
+	Joint       string   `json:"joint"`
+	Side        string   `json:"side,omitempty"`
+	Observation string   `json:"observation"`
+	Movement    string   `json:"movement,omitempty"`
+	Evidence    string   `json:"evidence"`
+	Confidence  float64  `json:"confidence"`
+	Assessable  *bool    `json:"assessable"`
+}
+
 func parseMobilityObservations(text string) []MobilityObservation {
 	matches := mobilityBlockRegex.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
@@ -81,9 +91,23 @@ func parseMobilityObservations(text string) []MobilityObservation {
 			continue
 		}
 
-		var items []MobilityObservation
+		var items []rawMobilityObservation
 		if err := json.Unmarshal([]byte(jsonStr), &items); err == nil {
-			all = append(all, items...)
+			for _, item := range items {
+				assessable := true
+				if item.Assessable != nil {
+					assessable = *item.Assessable
+				}
+				all = append(all, MobilityObservation{
+					Joint:       item.Joint,
+					Side:        item.Side,
+					Observation: item.Observation,
+					Movement:    item.Movement,
+					Evidence:    item.Evidence,
+					Confidence:  item.Confidence,
+					Assessable:  assessable,
+				})
+			}
 		}
 	}
 	return all
@@ -108,13 +132,6 @@ func sanitizeMobilityObservations(obs []MobilityObservation) []MobilityObservati
 			continue
 		}
 
-		// Assessable default check: if JSON included "assessable": false explicitly
-		// Wait: in Go unmarshaling boolean defaults to false if omitted unless defaulted.
-		// However, if confidence >= 0.4 and assessable was omitted (false by default in Go),
-		// we check if confidence >= 0.4 and treat omitted assessable as true when confidence > 0.
-		// To distinguish explicit assessable: false, if confidence < 0.4 or assessable == false and confidence == 0, drop it.
-		// If explicit assessable field is present in JSON and set to false:
-		// We drop when confidence < 0.4.
 		if item.Confidence < 0.4 {
 			continue
 		}
@@ -139,7 +156,7 @@ func sanitizeMobilityObservations(obs []MobilityObservation) []MobilityObservati
 			Movement:    strings.TrimSpace(item.Movement),
 			Evidence:    strings.TrimSpace(item.Evidence),
 			Confidence:  conf,
-			Assessable:  true,
+			Assessable:  item.Assessable,
 		})
 
 		if len(sanitized) >= 10 {

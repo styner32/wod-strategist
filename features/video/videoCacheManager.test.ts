@@ -284,5 +284,44 @@ describe("videoCacheManager", () => {
       // The newer file should remain
       expect(mockFiles[uriNew]?.exists).toBe(true);
     });
+
+    it("does not trigger 80% headroom pruning of valid recent files when deleting only expired files below maxBytes", async () => {
+      const fileExpired = "WOD-EXPIRED_merged.mp4";
+      const fileRecent = "WOD-RECENT_merged.mp4";
+      const uriExpired = `file:///mock_cache/video_cache/${fileExpired}`;
+      const uriRecent = `file:///mock_cache/video_cache/${fileRecent}`;
+
+      mockReadDirectoryFiles = [fileExpired, fileRecent];
+      mockFiles["file:///mock_cache/video_cache/"] = {
+        exists: true,
+        isDirectory: true,
+        size: 0,
+        modificationTime: 0,
+      };
+      const nowSec = Date.now() / 1000;
+      // Expired file: 10MB, 40 days ago (> 30 days maxAge)
+      mockFiles[uriExpired] = {
+        exists: true,
+        isDirectory: false,
+        size: 10 * 1024 * 1024,
+        modificationTime: nowSec - 40 * 86400,
+      };
+      // Recent file: 85MB, 1 day ago (< 30 days maxAge)
+      mockFiles[uriRecent] = {
+        exists: true,
+        isDirectory: false,
+        size: 85 * 1024 * 1024,
+        modificationTime: nowSec - 86400,
+      };
+
+      // Total is 95MB <= limit of 100MB. Target is 80MB.
+      // With expired file deleted (10MB), total is 85MB > 80MB target.
+      // But because total never exceeded maxBytes (100MB), sizePruningStarted remains false,
+      // and recent file (85MB) must NOT be pruned.
+      const pruned = await pruneVideoCacheIfNeeded(100 * 1024 * 1024, 30);
+      expect(pruned).toBe(1);
+      expect(mockFiles[uriExpired]).toBeUndefined();
+      expect(mockFiles[uriRecent]?.exists).toBe(true);
+    });
   });
 });

@@ -3,6 +3,7 @@ package fatigue
 import (
 	"encoding/json"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -127,6 +128,22 @@ var movementLoadCatalog = map[string]MovementMuscleWeights{
 	"double-under": {ShouldersPush: 0.4, UpperPullGrip: 0.4, PosteriorChain: 0.4, QuadsSquat: 0.6, CoreMidline: 0.4, CardioMetabolic: 0.8},
 }
 
+var sortedCatalogKeys []string
+
+func init() {
+	sortedCatalogKeys = make([]string, 0, len(movementLoadCatalog))
+	for k := range movementLoadCatalog {
+		sortedCatalogKeys = append(sortedCatalogKeys, k)
+	}
+	sort.Slice(sortedCatalogKeys, func(i, j int) bool {
+		li, lj := len(sortedCatalogKeys[i]), len(sortedCatalogKeys[j])
+		if li != lj {
+			return li > lj // longest catalogKey first
+		}
+		return sortedCatalogKeys[i] < sortedCatalogKeys[j] // tie-break lexicographically
+	})
+}
+
 // GetMovementWeights returns load weights for a given movement name.
 func GetMovementWeights(name string) MovementMuscleWeights {
 	key := movement.NormalizeKey(name)
@@ -134,10 +151,10 @@ func GetMovementWeights(name string) MovementMuscleWeights {
 		return w
 	}
 
-	// Partial match fallback
-	for catalogKey, w := range movementLoadCatalog {
+	// Deterministic partial match fallback: longest match first, then lexicographical
+	for _, catalogKey := range sortedCatalogKeys {
 		if strings.Contains(key, catalogKey) || strings.Contains(catalogKey, key) {
-			return w
+			return movementLoadCatalog[catalogKey]
 		}
 	}
 

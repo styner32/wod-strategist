@@ -42,6 +42,10 @@ func (ctl *Controller) GetSessionCost(c *gin.Context) {
 // GetTotalCost returns the cumulative total tokens and costs across all sessions for the authenticated user.
 func (ctl *Controller) GetTotalCost(c *gin.Context) {
 	userID := UserIDFromContext(c)
+	if userID == 0 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
 
 	var profileIDs []uint
 	pidStr := strings.TrimSpace(c.Query("profile_id"))
@@ -55,7 +59,7 @@ func (ctl *Controller) GetTotalCost(c *gin.Context) {
 			return
 		}
 		profileIDs = []uint{uint(pid)}
-	} else if userID != 0 {
+	} else {
 		if err := ctl.db.WithContext(c.Request.Context()).
 			Model(&db.Profile{}).
 			Where("user_id = ?", userID).
@@ -64,19 +68,17 @@ func (ctl *Controller) GetTotalCost(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query analytics"})
 			return
 		}
-		if len(profileIDs) == 0 {
-			c.JSON(http.StatusOK, cost.TotalCostResponse{})
-			return
-		}
+	}
+
+	if len(profileIDs) == 0 {
+		c.JSON(http.StatusOK, cost.TotalCostResponse{})
+		return
 	}
 
 	query := ctl.db.WithContext(c.Request.Context()).Model(&db.TokenUsage{}).
 		Select("model, SUM(prompt_tokens) as prompt_tokens, SUM(candidate_tokens) as candidate_tokens, SUM(total_tokens) as total_tokens").
+		Where("profile_id IN ?", profileIDs).
 		Group("model")
-
-	if len(profileIDs) > 0 {
-		query = query.Where("profile_id IN ?", profileIDs)
-	}
 
 	var aggs []cost.ModelTokenAggregate
 	if err := query.Scan(&aggs).Error; err != nil {

@@ -357,17 +357,21 @@ export async function pruneVideoCacheIfNeeded(
       (a, b) => a.modifiedTime - b.modifiedTime,
     );
     const targetSize = maxBytes * 0.8; // Retain 20% headroom
+    let sizePruningStarted = false;
     let prunedCount = 0;
 
     for (const item of sortedOldestFirst) {
       const isExpired = maxAgeMs > 0 && now - item.modifiedTime > maxAgeMs;
       const isOverSize =
-        totalSize > maxBytes || (prunedCount > 0 && totalSize > targetSize);
+        totalSize > maxBytes || (sizePruningStarted && totalSize > targetSize);
 
       if (isExpired || isOverSize) {
         await FileSystem.deleteAsync(item.uri, { idempotent: true });
         totalSize -= item.sizeBytes;
         prunedCount++;
+        if (isOverSize) {
+          sizePruningStarted = true;
+        }
       }
     }
 

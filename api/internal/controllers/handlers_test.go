@@ -129,3 +129,13 @@ var _ = Describe("asset helpers", func() {
 		Expect(assets[0].PublicURL).To(Equal("https://storage.googleapis.com/wod-strategist-uploads-dev/videos/WOD-2026-03-30-10-34_vid_1774835318197_7cyyzb_encoded.mp4"))
 	})
 })
+
+var _ = Describe("escapeLikePattern", func() {
+	It("escapes SQL LIKE special characters %, _, and \\", func() {
+		Expect(escapeLikePattern("pull-up")).To(Equal("pull-up"))
+		Expect(escapeLikePattern("50% snatch")).To(Equal(`50\% snatch`))
+		Expect(escapeLikePattern("dead_lift")).To(Equal(`dead\_lift`))
+		Expect(escapeLikePattern(`back\squat`)).To(Equal(`back\\squat`))
+		Expect(escapeLikePattern(`100%_clean\jerk`)).To(Equal(`100\%\_clean\\jerk`))
+	})
+})

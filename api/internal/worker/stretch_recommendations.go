@@ -114,10 +114,19 @@ func BuildStretchRecommendationPrompt(current []MobilityObservation, history []d
 	}
 
 	if len(current) > 0 {
-		evidenceSb.WriteString("### 오늘 세션 관찰 항목 (Today's Observations):\n")
+		var assessableLines []string
 		for _, c := range current {
-			evidenceSb.WriteString(fmt.Sprintf("- Joint: %s (%s), Observation: %s, Movement: %s, Evidence: %s\n",
+			if !c.Assessable {
+				continue
+			}
+			assessableLines = append(assessableLines, fmt.Sprintf("- Joint: %s (%s), Observation: %s, Movement: %s, Evidence: %s",
 				c.Joint, c.Side, c.Observation, c.Movement, c.Evidence))
+		}
+		if len(assessableLines) > 0 {
+			evidenceSb.WriteString("### 오늘 세션 관찰 항목 (Today's Observations):\n")
+			for _, line := range assessableLines {
+				evidenceSb.WriteString(line + "\n")
+			}
 		}
 	}
 
@@ -369,7 +378,7 @@ func (w *Worker) sanitizeAndPersistStretchRecommendations(ctx context.Context, i
 
 	evidencedJoints := make(map[string]struct{})
 	for _, c := range current {
-		if c.Joint != "" {
+		if c.Assessable && c.Joint != "" {
 			evidencedJoints[strings.ToLower(c.Joint)] = struct{}{}
 		}
 	}
@@ -399,17 +408,50 @@ func (w *Worker) sanitizeAndPersistStretchRecommendations(ctx context.Context, i
 			}
 			canonicalStretch = formattedNewName
 
+			nameRunes := utf8.RuneCountInString(canonicalStretch)
+			if nameRunes < 1 || nameRunes > 120 {
+				continue
+			}
+
+			newKey := db.NormalizeStretchKey(canonicalStretch)
+			if newKey == "" {
+				continue
+			}
+
+			desc := item.Reason
+			if utf8.RuneCountInString(desc) > 4000 {
+				runes := []rune(desc)
+				desc = string(runes[:4000])
+			}
+			dur := strings.TrimSpace(item.DurationHint)
+			if utf8.RuneCountInString(dur) > 200 {
+				runes := []rune(dur)
+				dur = string(runes[:200])
+			}
+			caut := strings.TrimSpace(item.Caution)
+			if utf8.RuneCountInString(caut) > 1000 {
+				runes := []rune(caut)
+				caut = string(runes[:1000])
+			}
+
 			// Auto-persist valid new stretch into DB catalog
 			if w != nil && w.DB != nil {
-				newKey := db.NormalizeStretchKey(canonicalStretch)
-				if newKey != "" {
-					_ = w.DB.WithContext(ctx).Exec(`
-						INSERT INTO stretches (name, normalized_key, target_area, description, duration_hint, caution, image_object, video_object)
-						VALUES (?, ?, ?, ?, ?, ?, '', '')
-						ON CONFLICT (normalized_key) DO NOTHING
-					`, canonicalStretch, newKey, item.TargetArea, item.Reason, item.DurationHint, item.Caution)
+				execErr := w.DB.WithContext(ctx).Exec(`
+					INSERT INTO stretches (name, normalized_key, target_area, description, duration_hint, caution, image_object, video_object)
+					VALUES (?, ?, ?, ?, ?, ?, '', '')
+					ON CONFLICT (normalized_key) DO NOTHING
+				`, canonicalStretch, newKey, item.TargetArea, desc, dur, caut).Error
+				if execErr != nil {
+					if w.logger != nil {
+						w.logger.Error("Failed to auto-persist new stretch", zap.Error(execErr))
+					}
+					continue
+				}
+				if resolver != nil {
 					resolver[newKey] = canonicalStretch
 				}
+			} else if resolver != nil {
+				resolver[newKey] = canonicalStretch
 			}
 		}
 
@@ -444,8 +486,15 @@ func (w *Worker) recommendStretches(ctx context.Context, profileID uint, session
 		w.logger.Warn("Failed to build mobility history for stretch recommendations", zap.Error(err))
 	}
 
-	// Gate: if no history restrictions and no current session mobility observations, return "[]" (0 Gemini calls!)
-	if len(history) == 0 && len(current) == 0 {
+	var assessableCurrent []MobilityObservation
+	for _, c := range current {
+		if c.Assessable {
+			assessableCurrent = append(assessableCurrent, c)
+		}
+	}
+
+	// Gate: if no history restrictions and no current assessable mobility observations, return "[]" (0 Gemini calls!)
+	if len(history) == 0 && len(assessableCurrent) == 0 {
 		return "[]"
 	}
 
@@ -455,7 +504,7 @@ func (w *Worker) recommendStretches(ctx context.Context, profileID uint, session
 
 	catalogNames, resolver := w.loadStretchCatalog(ctx)
 
-	prompt := BuildStretchRecommendationPrompt(current, history, injuries, catalogNames)
+	prompt := BuildStretchRecommendationPrompt(assessableCurrent, history, injuries, catalogNames)
 	output, usage, parseErr := w.GeminiClient.ParseText(ctx, prompt)
 	if parseErr != nil {
 		w.logger.Error("Gemini parseText failed for stretch recommendations", zap.Error(parseErr))
@@ -465,7 +514,7 @@ func (w *Worker) recommendStretches(ctx context.Context, profileID uint, session
 	w.saveTokenUsage(sessionID, profileID, "session:stretch-recommendations", usage)
 
 	parsed := parseStretchRecommendations(output)
-	sanitized := w.sanitizeAndPersistStretchRecommendations(ctx, parsed, current, history, resolver)
+	sanitized := w.sanitizeAndPersistStretchRecommendations(ctx, parsed, assessableCurrent, history, resolver)
 	if len(sanitized) == 0 {
 		return "[]"
 	}

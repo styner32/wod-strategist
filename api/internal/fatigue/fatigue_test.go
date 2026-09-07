@@ -30,6 +30,27 @@ var _ = Describe("Fatigue Calculation & Readiness", func() {
 			Expect(unknownW.CardioMetabolic).To(Equal(0.5))
 			Expect(unknownW.ShouldersPush).To(Equal(0.3))
 		})
+
+		It("matches deterministically across repeated calls", func() {
+			first := fatigue.GetMovementWeights("squat")
+			for i := 0; i < 100; i++ {
+				w := fatigue.GetMovementWeights("squat")
+				Expect(w).To(Equal(first))
+			}
+		})
+
+		It("matches partial query deterministically to longest catalog key", func() {
+			w := fatigue.GetMovementWeights("squat")
+			Expect(w.QuadsSquat).To(BeNumerically(">", 0.0))
+
+			ambiguousInputs := []string{"squat", "press", "snatch", "clean"}
+			for _, input := range ambiguousInputs {
+				expected := fatigue.GetMovementWeights(input)
+				for i := 0; i < 50; i++ {
+					Expect(fatigue.GetMovementWeights(input)).To(Equal(expected))
+				}
+			}
+		})
 	})
 
 	Context("ComputeSessionMuscleLoads", func() {

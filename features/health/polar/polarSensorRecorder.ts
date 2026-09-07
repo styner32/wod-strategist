@@ -128,9 +128,17 @@ export const PolarSensorRecorder: BleSensorSink & {
   },
 
   setBattery(percent: number): void {
+    const changed = state.batteryLatest !== percent;
     state.batteryLatest = percent;
     if (state.isActive && state.batteryStart === undefined) {
       state.batteryStart = percent;
+    }
+    if (changed && state.isActive) {
+      state.writer?.writeImmediate({
+        k: "battery",
+        t: Math.max(0, Date.now() - state.baseEpochMs),
+        percent,
+      });
     }
   },
 
@@ -318,6 +326,7 @@ export const PolarSensorRecorder: BleSensorSink & {
       state.isActive = false;
       state.writer = null;
       delete state.streamContext.anchor;
+      delete state.streamContext.lastDeviceMs;
 
       if (!closed.complete) {
         console.warn(
@@ -387,6 +396,7 @@ export const PolarSensorRecorder: BleSensorSink & {
     cleanupSubscriptions();
     state.device = null;
     delete state.streamContext.anchor;
+    delete state.streamContext.lastDeviceMs;
 
     // The hook can report the same outage twice (onDisconnected, then the
     // reconnect path tearing the connection down). One gap per outage.

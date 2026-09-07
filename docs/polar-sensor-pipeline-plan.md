@@ -30,10 +30,23 @@
 
 - **t0(`base_epoch_ms`)** = `recordingStartTime.current` ([visionTestPage.tsx:744](../app/workout/visionTestPage.tsx#L744)).
   파일의 `t`는 t0 기준 경과 **밀리초**이며 일시정지 구간을 **포함**한다. `Date.now()`는 시계 보정으로 역행할 수 있으므로 단조 증가를 보장한다고 쓰지 않는다. HR/수명주기 이벤트는 수신 wall clock을 사용하고, ACC는 아래 디바이스 앵커 변환을 사용한다. 시계 점프가 감지되면 새 동기화 구간을 기록하며 무조건 값을 증가시키는 보정은 하지 않는다.
-- **근거 (v2에서 새로 확인):** 청크 분석의 `start_secs`/`end_secs`도 동일한 wall-clock 기준으로 계산된다
-  ([visionTestPage.tsx:456-458](../app/workout/visionTestPage.tsx#L456-L458)).
-  → 모바일 촬영 행의 `start_secs`/`end_secs`와는 기준 시계가 같지만 **단위 변환(`t / 1000`)이 필요**하다. 서버 분할 행의 기존 `start_secs`/`end_secs`는 이 capture-clock 계약 대상이 아니다.
-  `merged.mp4` 정렬은 별도 문제다. 일시정지뿐 아니라 청크 사이 카메라 중단 시간도 제거되므로 `pause_intervals`만 빼서 변환할 수 없다. 검증된 청크별 capture 구간과 `media_start_secs`/`media_end_secs`를 연결해야 하며, 녹화되지 않은 구간은 미매핑으로 둔다. 자세한 규칙은 [storage-and-session-format.md](agent-memory/storage-and-session-format.md#capture-time-versus-media-time)를 따른다. 정확한 센서→프레임 보간과 허용 오차는 후속 소비자 구현 전에 결정한다.
+- **캡처시계 vs 미디어시계 분리 (2026-09-07 교정):**
+  - 센서 NDJSON의 `t`, `chunk_analysis_results.start_secs`/`end_secs` = **캡처시계**(사람 기준 실제 경과시간).
+  - `merged.mp4` 재생 위치, `media_start_secs`/`media_end_secs` = **미디어시계**.
+  - 일시정지 0회인 31분 세션에서도 188개 청크 경계 공백(각 ~278ms)으로 인해 미디어시계와 캡처시계 간 **52.31초 드리프트**가 실측되었다. 따라서 `pause_intervals`는 사용자 일시정지 표시 전용이며 두 시계 간 변환에 쓸 수 없다.
+  - 두 시계의 변환은 공용 변환기(`api/internal/timeline.CaptureToMedia`)를 통한 **청크별 구간 선형 매핑**으로만 가능하다.
+    - 해당 캡처 시각을 포함하는 청크를 찾아 `media_start + (capture - start)`.
+    - 어떤 청크에도 속하지 않는 청크 경계 공백(전체의 약 2.7%)은 대응 영상 프레임이 없으므로 `ok = false`.
+    - `media_*`가 NULL이거나 `media_end == end`인 과거/미보정 세션은 `ok = false`.
+  
+  **용도별 시계 규칙:**
+
+  | 대상 | 시계 |
+  |---|---|
+  | 하이라이트 클립 구간, 하드섭 자막, 재생 seek | 미디어시계 |
+  | 심박·가속도·피로도·페이싱 등 사람 기준 지표 | 캡처시계 |
+  | 센서를 영상 위에 겹치기 | 캡처 → 청크별 매핑으로 변환 (`api/internal/timeline`) |
+
 - **일시정지 처리:** pause/resume을 발생 시점에 **인라인 이벤트 라인**으로 기록하고, 종료 시 푸터에서 `pause_intervals`로 집계한다.
   (인라인 기록 → 앱이 죽어도 부분 파일이 해석 가능)
 - **pause 중 PMD 스트림:** **유지한다.** 정지·회복 구간의 심박/무동작 관측 가치가 있고, 스트림 재시작 실패 리스크를 피할 수 있다.
@@ -117,6 +130,7 @@ flowchart TD
 {"k":"device_ready","t":500,"stream_id":1,"device":{"name":"Polar H10 12345678","firmware":null,"battery_percent_start":92}}
 {"k":"stream_start","t":600,"stream_id":1,"sampling":{"acc_hz":50,"acc_range_g":8,"acc_resolution_bits":16},"clock_anchor":{"device_timestamp_ns":"1000000000000","capture_offset_ms":600,"method":"first_packet_received"}}
 {"k":"hr","t":1000,"bpm":134,"rr":[448,446]}
+{"k":"battery","t":120000,"percent":91}
 {"k":"acc","t":1200,"stream_id":1,"dt":20,"v":[[0.02,0.98,-0.15],[0.05,1.02,-0.12]]}
 {"k":"pause","t":125000}
 {"k":"resume","t":140000}
@@ -130,6 +144,7 @@ flowchart TD
 설계 근거
 - **패킷 단위 배치**: 50Hz × 20분 = 결측 없는 경우 60,000 ACC 샘플. 라인 수는 실제 패킷당 샘플 수에 따라 달라진다. 1초마다 디스크에 flush하는 주기와 BLE 패킷 주기는 다르며, 파일 크기·라인 수는 Phase 0.2 덤프로 측정한다.
 - **`v: [[x,y,z]]` 배열**: 샘플마다 키를 반복하지 않는다. 절감률은 동일 데이터 직렬화 결과로 비교한다.
+- **배터리 시계열 (`k: "battery"`, D-1)**: 배터리 잔량(%) 변화 시점마다 `{"k":"battery","t":...,"percent":...}` 이벤트를 기록하여 세션 내 방전 곡선을 보존한다(중복 수치 전송 시 미기록).
 - **푸터 부재 = 종료 미확인**: 유효한 앞부분은 복구 가능하다. 푸터 존재만으로 전체 무결성을 보장하지 않으며, 파서가 행 유효성·샘플 합계·시간축·열린 갭을 확인한다.
 - 메타의 `requested_sampling`은 희망 설정이다. 실제 협상 결과는 `stream_start.sampling`에 기록한다. 장치·펌웨어·배터리를 읽지 못하면 `null`로 두고 고정값을 만들지 않는다.
 - `gap_start`/`gap_end`로 결측 구간을 표현한다. 파일 종료까지 복구되지 않은 갭은 열린 상태로 남긴다. 프로토콜상 손실 개수를 확정할 수 없으면 `dropped_packets=null`; `0`은 검증된 무손실일 때만 쓴다.

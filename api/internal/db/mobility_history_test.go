@@ -58,6 +58,15 @@ var _ = Describe("BuildMobilityHistory", func() {
 			]`,
 		})
 
+		// Session 4: Unassessable Ankle observation (should be ignored by history)
+		s4 := testhelpers.CreateSession(dbConn, &db.Session{ProfileID: profileID, WODDescription: "Session 4", SessionID: "sess-mob-4"})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:            s4.SessionID,
+			ProfileID:            profileID,
+			Status:               "COMPLETED",
+			MobilityObservations: `[{"joint":"Ankle","side":"both","observation":"limited_ankle_dorsiflexion","movement":"Pistol","evidence":"가림으로 판정 불가","confidence":0.8,"assessable":false}]`,
+		})
+
 		history, err := db.BuildMobilityHistory(context.Background(), dbConn, profileID, "current-active-session")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(history).To(HaveLen(2))

@@ -45,6 +45,7 @@ export interface PmdStreamContext {
     phoneOffsetMs: number;
     deviceTimestampNs: string;
   };
+  lastDeviceMs?: number;
 }
 
 export interface ParsedAccPacket {
@@ -407,11 +408,25 @@ export function parseAccPacket(
       deviceTimestampNs,
     };
     isNewAnchor = true;
+    delete context.lastDeviceMs;
   }
 
   const packetOffsetMs = context.anchor.phoneOffsetMs + (deviceMs - context.anchor.deviceMs);
-  const dt = Math.round(1000 / context.accHz);
+  const nominalDt = Math.round(1000 / context.accHz);
   const N = samples.length;
+
+  let dt = nominalDt;
+  if (!isNewAnchor && context.lastDeviceMs !== undefined && deviceMs > context.lastDeviceMs && N > 0) {
+    const deltaMs = deviceMs - context.lastDeviceMs;
+    const computedDt = Math.round((deltaMs / N) * 100) / 100;
+    // Polar H10 ACC supports 25Hz (40ms), 50Hz (20ms), 100Hz (10ms), 200Hz (5ms).
+    // An interval > 60ms indicates packet loss or abnormal delay; fall back to nominalDt.
+    if (computedDt >= 1 && computedDt <= 60) {
+      dt = computedDt;
+    }
+  }
+  context.lastDeviceMs = deviceMs;
+
   const firstSampleOffsetMs = N > 0 ? packetOffsetMs - (N - 1) * dt : packetOffsetMs;
 
   return {

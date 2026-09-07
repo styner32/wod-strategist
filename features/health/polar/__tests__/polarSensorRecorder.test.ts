@@ -462,6 +462,46 @@ describe("PolarSensorRecorder", () => {
     expect(secondLines.find((l) => l.k === "device_ready").device.battery_percent_start).toBe(85);
   });
 
+  it("records battery time-series events only when percent changes while active", async () => {
+    PolarSensorRecorder.setBattery(90); // before session starts: updates batteryLatest, not recorded to ndjson
+    PolarSensorRecorder.start({
+      sessionId: "WOD-BATT-TIMESERIES",
+      profileId: 5,
+      baseEpochMs: Date.now(),
+    });
+
+    // 1st change while active -> written
+    jest.advanceTimersByTime(2000);
+    PolarSensorRecorder.setBattery(89);
+
+    // Repeated reading with same percent -> NOT written
+    jest.advanceTimersByTime(2000);
+    PolarSensorRecorder.setBattery(89);
+
+    // 2nd change while active -> written
+    jest.advanceTimersByTime(2000);
+    PolarSensorRecorder.setBattery(88);
+
+    const result = await PolarSensorRecorder.stop();
+    const lines = __getMockFileContent(result!.filePath)!
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+
+    const batteryEvents = lines.filter((l) => l.k === "battery");
+    expect(batteryEvents).toHaveLength(2);
+    expect(batteryEvents[0]).toEqual({
+      k: "battery",
+      t: 2000,
+      percent: 89,
+    });
+    expect(batteryEvents[1]).toEqual({
+      k: "battery",
+      t: 6000,
+      percent: 88,
+    });
+  });
+
   it("records one gap when the same outage is reported twice", async () => {
     PolarSensorRecorder.start({
       sessionId: "WOD-DOUBLE-LOST",

@@ -204,11 +204,15 @@ func (ctl *Controller) GetRelatedWODs(c *gin.Context) {
 		return
 	}
 
+	escapedKey := escapeLikePattern(targetKey)
+	words := strings.Fields(escapedKey)
+	likePattern := "%" + strings.Join(words, "%") + "%"
+
 	var candidates []db.AnalysisResult
 	queryDB := ctl.db.WithContext(c.Request.Context()).
 		Where("profile_id = ? AND analysis_type = ? AND status = 'COMPLETED' AND archived_at IS NULL AND normalized_workout != ''",
 			uint(profileID), db.AnalysisTypeWOD).
-		Where("normalized_workout ILIKE ?", "%"+targetMovement+"%")
+		Where("normalized_workout ILIKE ?", likePattern)
 
 	if sourceSessionID != "" {
 		queryDB = queryDB.Where("session_id <> ?", sourceSessionID)
@@ -281,4 +285,11 @@ func (ctl *Controller) GetRelatedWODs(c *gin.Context) {
 		},
 		Related: items,
 	})
+}
+
+func escapeLikePattern(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
 }

@@ -27,7 +27,7 @@ type mobilityItem struct {
 	Movement    string  `json:"movement"`
 	Evidence    string  `json:"evidence"`
 	Confidence  float64 `json:"confidence"`
-	Assessable  bool    `json:"assessable"`
+	Assessable  *bool   `json:"assessable"`
 }
 
 // BuildMobilityHistory queries the last 20 completed non-archived sessions for profileID
@@ -76,6 +76,9 @@ func BuildMobilityHistory(ctx context.Context, database *gorm.DB, profileID uint
 		}
 
 		for _, item := range obs {
+			if item.Assessable != nil && !*item.Assessable {
+				continue
+			}
 			joint := strings.TrimSpace(item.Joint)
 			observation := strings.TrimSpace(item.Observation)
 			if joint == "" || observation == "" {

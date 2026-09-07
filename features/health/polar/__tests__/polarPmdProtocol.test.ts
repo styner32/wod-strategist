@@ -155,7 +155,7 @@ describe("polarPmdProtocol", () => {
         const parsed = parseAccPacket(frameFixture.base64, ctx, 1200 + i * 200);
 
         expect(parsed.samples.length).toBe(frameFixture.sampleCount);
-        expect(parsed.dt).toBe(20);
+        expect(parsed.dt).toBe(frameFixture.sampleCount === 5 ? 40 : 20);
 
         // Verify values match expected within 0.001 G
         for (let s = 0; s < parsed.samples.length; s++) {
@@ -208,6 +208,45 @@ describe("polarPmdProtocol", () => {
       const parsedAfterReconnect = parseAccPacket(accFramesFixture.frames[0].base64, ctx, 110000);
       expect(ctx.anchor!.phoneOffsetMs).toBe(10000);
       expect(parsedAfterReconnect.packetOffsetMs).toBe(10000);
+    });
+
+    it("calculates dt from device timestamp delta / sample count and falls back to nominal dt", () => {
+      const ctx: PmdStreamContext = { baseEpochMs: 0, accHz: 50 };
+
+      const makePacket = (timestampNs: bigint, sampleCount: number) => {
+        const bytes = new Uint8Array(10 + sampleCount * 3);
+        bytes[0] = 0x02; // PMD_MEASUREMENT_ACC
+        const view = new DataView(bytes.buffer);
+        view.setBigUint64(1, timestampNs, true);
+        bytes[9] = 0x00; // raw TYPE_0 (1 byte per channel = 3 bytes per sample)
+        return bytes;
+      };
+
+      // Packet 1: First packet -> nominal fallback dt = 1000/50 = 20
+      const pkt1 = makePacket(1_000_000_000n, 36);
+      const parsed1 = parseAccPacket(pkt1, ctx, 1000);
+      expect(parsed1.dt).toBe(20);
+
+      // Packet 2: 703ms device delta with 36 samples -> 703 / 36 = 19.5277... -> 19.53
+      const pkt2 = makePacket(1_703_000_000n, 36);
+      const parsed2 = parseAccPacket(pkt2, ctx, 1703);
+      expect(parsed2.dt).toBe(19.53);
+
+      // Packet 3 with large packet-loss gap (e.g. 3500ms device delta with only 36 samples) -> falls back to nominal dt = 20
+      const pktPacketLoss = makePacket(5_203_000_000n, 36);
+      const parsedPacketLoss = parseAccPacket(pktPacketLoss, ctx, 5203);
+      expect(parsedPacketLoss.dt).toBe(20);
+
+      // Packet 4 with negative/zero delta -> falls back to nominal dt = 20
+      const pktAnomaly = makePacket(5_203_000_000n, 36);
+      const parsedAnomaly = parseAccPacket(pktAnomaly, ctx, 5203);
+      expect(parsedAnomaly.dt).toBe(20);
+
+      // Packet 5 after reconnect (anchor deleted) -> falls back to nominal dt = 20
+      delete ctx.anchor;
+      const pkt3 = makePacket(10_000_000_000n, 36);
+      const parsed3 = parseAccPacket(pkt3, ctx, 10000);
+      expect(parsed3.dt).toBe(20);
     });
 
     it("decodes 8-bit TYPE_0 frames using 1 byte per channel", () => {

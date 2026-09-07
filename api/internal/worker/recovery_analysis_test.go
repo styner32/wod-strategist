@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -142,6 +143,23 @@ var _ = Describe("Recovery Workout Analysis & Stretch Recommendations", func() {
 			Expect(sanitized[0].Observation).To(Equal("limited_hip_flexion"))
 			Expect(sanitized[0].Confidence).To(Equal(0.95))
 		})
+
+		It("preserves assessable: false and defaults omitted assessable to true", func() {
+			rawOutput := "```mobility\n" + `[
+				{"joint":"Hip","side":"both","observation":"limited_hip_flexion","movement":"Squat","evidence":"카메라 가림으로 평가 불가","confidence":0.85,"assessable":false},
+				{"joint":"Ankle","side":"left","observation":"limited_ankle_dorsiflexion","movement":"Squat","evidence":"발목 가동성 제한","confidence":0.9}
+			]` + "\n```"
+
+			parsed := parseMobilityObservations(rawOutput)
+			Expect(parsed).To(HaveLen(2))
+			Expect(parsed[0].Assessable).To(BeFalse())
+			Expect(parsed[1].Assessable).To(BeTrue())
+
+			sanitized := sanitizeMobilityObservations(parsed)
+			Expect(sanitized).To(HaveLen(2))
+			Expect(sanitized[0].Assessable).To(BeFalse())
+			Expect(sanitized[1].Assessable).To(BeTrue())
+		})
 	})
 
 	Context("4. Stretch recommendations & fail-open gate", func() {
@@ -217,5 +235,39 @@ var _ = Describe("Recovery Workout Analysis & Stretch Recommendations", func() {
 			Expect(newDbStretch.Name).To(Equal("Adductor Groin Stretch"))
 			Expect(newDbStretch.TargetArea).To(Equal("Hip"))
 		})
+	})
+})
+
+var _ = Describe("Mobility & Stretch Recommendations Unit Tests", func() {
+	It("skips unassessable observations in prompt and evidencedJoints", func() {
+		current := []MobilityObservation{
+			{Joint: "Hip", Side: "both", Observation: "limited_hip_flexion", Movement: "Squat", Evidence: "스쿼트 가림", Confidence: 0.9, Assessable: false},
+		}
+		prompt := BuildStretchRecommendationPrompt(current, nil, nil, []string{"Pigeon Pose"})
+		Expect(prompt).NotTo(ContainSubstring("스쿼트 가림"))
+		Expect(prompt).NotTo(ContainSubstring("Today's Observations"))
+
+		w := &Worker{logger: zap.NewNop()}
+		resolver := map[string]string{}
+		recs := []StretchRecommendation{
+			{Stretch: "Pigeon Pose", TargetArea: "Hip", Reason: "가동성 향상"},
+		}
+		sanitized := w.sanitizeAndPersistStretchRecommendations(context.Background(), recs, current, nil, resolver)
+		Expect(sanitized).To(BeEmpty(), "unassessable observation must not qualify Hip as evidenced joint")
+	})
+
+	It("validates schema constraints and rejects stretch names longer than 120 characters", func() {
+		current := []MobilityObservation{
+			{Joint: "Hip", Side: "both", Observation: "limited_hip_flexion", Movement: "Squat", Evidence: "깊이 부족", Confidence: 0.9, Assessable: true},
+		}
+		tooLongName := strings.Repeat("A", 125)
+		recs := []StretchRecommendation{
+			{Stretch: tooLongName, TargetArea: "Hip", Reason: "내전근", DurationHint: "60s"},
+		}
+		w := &Worker{logger: zap.NewNop()}
+		resolver := map[string]string{}
+		sanitized := w.sanitizeAndPersistStretchRecommendations(context.Background(), recs, current, nil, resolver)
+		Expect(sanitized).To(BeEmpty())
+		Expect(resolver).To(BeEmpty())
 	})
 })
