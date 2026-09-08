@@ -52,6 +52,11 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - A rejected delta uses `lastSampleIntervalMs`, or the nominal interval before a valid measurement exists. Do not stretch samples across packet loss using a fixed upper limit such as 60ms.
 - Reset the measured interval with the clock anchor on a new stream; stop/disconnect also clears it. This heuristic cannot detect every small partial-packet loss without a sequence counter.
 
+## iOS sensor upload startup safety
+- A reinstall can change the absolute `file:///var/mobile/Containers/Data/Application/{UUID}/Documents/` prefix while retaining the files. `loadQueue()` rebases saved `Documents/sensor/*.ndjson` paths against the current `documentDirectory`, including backup recovery, without changing request IDs or upload stages.
+- Check `getInfoAsync(filePath)` before `PREPARE_PENDING` / `PUT_PENDING`. Missing files or directories become `NEEDS_ATTENTION`; retain the queue entry. `COMPLETE_PENDING` must still reconcile with the server even if the local file is absent.
+- Sensor PUTs use legacy `uploadAsync`, whose iOS implementation checks file existence before constructing a background upload. `createUploadTask().uploadAsync()` uses `uploadTaskStartAsync`, which lacks that guard in the installed Expo SDK and can raise an uncaught `NSInvalidArgumentException` for a stale path. JavaScript `.catch()` cannot catch that native exception.
+
 ## Internationalization (i18n)
 Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/locales/{en,ko}.json`.
 

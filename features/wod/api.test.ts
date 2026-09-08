@@ -5,6 +5,7 @@ import {
   fetchInjuries,
   getUploadUrl,
   uploadToGcs,
+  uploadSensorToGcs,
   notifyUploadComplete,
   processWorkoutVideo,
 } from "./api";
@@ -20,13 +21,21 @@ export const mockUploadAsync = jest.fn().mockResolvedValue({
 export const mockCreateUploadTask = jest.fn((url: string, fileUri: string, options?: any, callback?: any) => {
   return { uploadAsync: mockUploadAsync };
 });
+const mockSensorUploadAsync = jest.fn();
+
+export const mockGetInfoAsync = jest.fn().mockResolvedValue({
+  exists: true,
+  size: 100,
+});
 
 jest.mock("expo-file-system/legacy", () => ({
   FileSystemUploadType: {
     BINARY_CONTENT: 0,
     MULTIPART: 1,
   },
+  getInfoAsync: jest.fn().mockImplementation((path: string) => mockGetInfoAsync(path)),
   createUploadTask: jest.fn().mockImplementation((url: string, fileUri: string, options?: any, callback?: any) => mockCreateUploadTask(url, fileUri, options, callback)),
+  uploadAsync: (...args: unknown[]) => mockSensorUploadAsync(...args),
 }));
 
 // We must require the module AFTER the mock is defined so that the tests
@@ -45,6 +54,49 @@ afterEach(() => {
 afterAll(() => server.close());
 
 describe("API Client Methods", () => {
+  describe("uploadSensorToGcs", () => {
+    beforeEach(() => {
+      mockGetInfoAsync.mockResolvedValue({ exists: true, isDirectory: false });
+      mockSensorUploadAsync.mockResolvedValue({ status: 200, body: "" });
+    });
+
+    it.each([
+      { exists: false },
+      { exists: true, isDirectory: true },
+    ])("rejects invalid source %j before starting a native upload", async (info) => {
+      mockGetInfoAsync.mockResolvedValueOnce(info);
+      await expect(uploadSensorToGcs("https://gcs.fake/upload", "file:///missing.ndjson"))
+        .rejects.toThrow("Sensor upload file is missing");
+      expect(mockSensorUploadAsync).not.toHaveBeenCalled();
+      expect(mockCreateUploadTask).not.toHaveBeenCalled();
+    });
+
+    it("uses the native upload entry point with a file-existence guard and preserves signed headers", async () => {
+      await uploadSensorToGcs("https://gcs.fake/upload", "file:///sensor.ndjson", {
+        "x-goog-if-generation-match": "0",
+      });
+      expect(mockSensorUploadAsync).toHaveBeenCalledWith(
+        "https://gcs.fake/upload", "file:///sensor.ndjson", {
+          httpMethod: "PUT",
+          headers: { "Content-Type": "application/x-ndjson", "x-goog-if-generation-match": "0" },
+          uploadType: FileSystemUploadType.BINARY_CONTENT,
+        },
+      );
+      expect(mockCreateUploadTask).not.toHaveBeenCalled();
+    });
+
+    it("propagates a native rejection if the file disappears after preflight", async () => {
+      mockSensorUploadAsync.mockRejectedValueOnce(new Error("File does not exist"));
+      await expect(uploadSensorToGcs("https://gcs.fake/upload", "file:///sensor.ndjson"))
+        .rejects.toThrow("File does not exist");
+    });
+
+    it("preserves HTTP errors for queue reconciliation", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({ status: 412, body: "Precondition Failed" });
+      await expect(uploadSensorToGcs("https://gcs.fake/upload", "file:///sensor.ndjson"))
+        .rejects.toMatchObject({ status: 412, body: "Precondition Failed" });
+    });
+  });
   
   describe("fetchMovements", () => {
     it("should fetch movements successfully", async () => {

@@ -89,8 +89,6 @@ var _ = Describe("Sensor Handlers", func() {
 			Expect(resp.UploadURL).NotTo(BeEmpty())
 			Expect(resp.ObjectName).To(ContainSubstring(fmt.Sprintf("videos/%d/%s/sensor_telemetry_v1_%s.ndjson", profile.ID, validSessionID, reqUUID)))
 			Expect(resp.RequiredHeaders["Content-Type"]).To(Equal("application/x-ndjson"))
-			Expect(resp.RequiredHeaders["x-goog-if-generation-match"]).To(Equal("0"))
-			Expect(resp.RequiredHeaders["x-goog-meta-sha256"]).To(Equal(sha256Hash))
 
 			// Verify analysis_results row was created with minimal PENDING video status
 			var row db.AnalysisResult

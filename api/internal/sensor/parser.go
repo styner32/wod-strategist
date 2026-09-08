@@ -339,8 +339,8 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 					}
 					continue
 				}
-				sampleTMs := acce.Time + int64(math.Round(float64(i)*dt))
-				windowIdx := sampleTMs / 1000
+				sampleTMs := acce.Time + float64(i)*dt
+				windowIdx := int64(math.Floor(sampleTMs / 1000.0))
 
 				if activeWindow == nil {
 					activeWindow = &accWindow{
@@ -359,7 +359,7 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 					}
 				}
 
-				gap := float64(sampleTMs - activeWindow.lastSampleT)
+				gap := sampleTMs - activeWindow.lastSampleT
 				if gap > activeWindow.maxGapMs {
 					activeWindow.maxGapMs = gap
 				}
@@ -412,8 +412,8 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 	}
 
 	// Calculate capture and pause duration
-	var captureDurationMs int64
-	var pauseDurationMs int64
+	var captureDurationMs float64
+	var pauseDurationMs float64
 	if seenEnd {
 		captureDurationMs = endEvent.Time
 		for _, p := range pauseIntervals {
@@ -429,10 +429,10 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 	}
 
 	var coverage float64
-	var validHRSec float64 = float64(validHRDurationMs) / 1000.0
+	var validHRSec float64 = validHRDurationMs / 1000.0
 	var unknownHRSec float64
 	if effectiveCaptureMs > 0 {
-		effectiveCaptureSec := float64(effectiveCaptureMs) / 1000.0
+		effectiveCaptureSec := effectiveCaptureMs / 1000.0
 		coverage = validHRSec / effectiveCaptureSec
 		if coverage > 1.0 {
 			coverage = 1.0
@@ -462,11 +462,11 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 	var zones *HeartRateZones
 	hasHRZones := opts.EstimatedMaxHR != nil && *opts.EstimatedMaxHR > 0
 	if hasHRZones && validHRSec > 0 {
-		z1Sec := float64(zone1DurationMs) / 1000.0
-		z2Sec := float64(zone2DurationMs) / 1000.0
-		z3Sec := float64(zone3DurationMs) / 1000.0
-		z4Sec := float64(zone4DurationMs) / 1000.0
-		z5Sec := float64(zone5DurationMs) / 1000.0
+		z1Sec := zone1DurationMs / 1000.0
+		z2Sec := zone2DurationMs / 1000.0
+		z3Sec := zone3DurationMs / 1000.0
+		z4Sec := zone4DurationMs / 1000.0
+		z5Sec := zone5DurationMs / 1000.0
 		zones = &HeartRateZones{
 			Zone1Seconds: z1Sec,
 			Zone2Seconds: z2Sec,

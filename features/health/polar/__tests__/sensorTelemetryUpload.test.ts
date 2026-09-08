@@ -51,6 +51,8 @@ import {
   flushSensorUploads,
   loadQueue,
   saveQueue,
+  startPeriodicSensorUpload,
+  stopPeriodicSensorUpload,
   uploadSensorTelemetry,
   type SensorQueueEntry,
 } from "../sensorTelemetryUpload";
@@ -116,6 +118,62 @@ describe("sensorTelemetryUpload", () => {
   });
 
   describe("sensor upload queue lifecycle", () => {
+    function pendingEntry(overrides: Partial<SensorQueueEntry> = {}): SensorQueueEntry {
+      return {
+        sessionId: "session-01", profileId: 10, filePath: FILE_PATH,
+        requestId: "existing-request", expectedVersion: "0", serverVersion: "1",
+        sizeBytes: SAMPLE_NDJSON.length, sha256: "existing-hash",
+        stage: "PUT_PENDING", uploadUrl: "https://gcs.fake/upload",
+        attempts: 0, createdAt: Date.now(), ...overrides,
+      };
+    }
+
+    it.each([false, true])("rebases an old iOS container path, including backup recovery=%s", async (fromBackup) => {
+      const entry = pendingEntry({
+        filePath: "file:///var/mobile/Containers/Data/Application/OLD-CONTAINER/Documents/sensor/session-01.ndjson",
+      });
+      mockFiles.set(QUEUE_PATH, fromBackup ? "{ corrupt" : JSON.stringify([entry]));
+      if (fromBackup) mockFiles.set(BAK_PATH, JSON.stringify([entry]));
+
+      const loaded = await loadQueue();
+      expect(loaded).toEqual([{ ...entry, filePath: FILE_PATH }]);
+      expect(JSON.parse(mockFiles.get(QUEUE_PATH)!)).toEqual(loaded);
+
+      mockCompleteSensorUpload.mockResolvedValueOnce({ accepted: true });
+      mockUploadSensorToGcs.mockResolvedValueOnce(undefined);
+      await flushSensorUploads();
+      expect(mockUploadSensorToGcs).toHaveBeenCalledWith(entry.uploadUrl, FILE_PATH, undefined);
+      expect(mockCompleteSensorUpload).toHaveBeenCalledWith(entry.sessionId, {
+        profile_id: 10, request_id: entry.requestId, version: "1",
+      });
+      expect(JSON.parse(mockFiles.get(QUEUE_PATH)!)).toEqual([]);
+    });
+
+    it.each(["PREPARE_PENDING", "PUT_PENDING"] as const)("retains a missing file in NEEDS_ATTENTION from %s without uploading", async (stage) => {
+      const entry = pendingEntry({ stage });
+      mockFiles.set(QUEUE_PATH, JSON.stringify([entry]));
+      mockFiles.delete(FILE_PATH);
+      await flushSensorUploads();
+      expect(mockPrepareSensorUpload).not.toHaveBeenCalled();
+      expect(mockUploadSensorToGcs).not.toHaveBeenCalled();
+      expect(mockCompleteSensorUpload).not.toHaveBeenCalled();
+      expect(JSON.parse(mockFiles.get(QUEUE_PATH)!)).toEqual([
+        expect.objectContaining({ requestId: entry.requestId, stage: "NEEDS_ATTENTION" }),
+      ]);
+      await flushSensorUploads();
+      expect(mockUploadSensorToGcs).not.toHaveBeenCalled();
+    });
+
+    it("still completes an already uploaded entry when the local file is gone", async () => {
+      mockFiles.set(QUEUE_PATH, JSON.stringify([pendingEntry({ stage: "COMPLETE_PENDING" })]));
+      mockFiles.delete(FILE_PATH);
+      mockCompleteSensorUpload.mockResolvedValueOnce({ accepted: true });
+      await flushSensorUploads();
+      expect(mockCompleteSensorUpload).toHaveBeenCalled();
+      expect(mockUploadSensorToGcs).not.toHaveBeenCalled();
+      expect(JSON.parse(mockFiles.get(QUEUE_PATH)!)).toEqual([]);
+    });
+
     it("enqueues upload entry with UUID, PREPARE_PENDING stage, and sha256", async () => {
       await enqueueSensorUpload("session-enqueue", 15, FILE_PATH);
 
@@ -224,6 +282,8 @@ describe("sensorTelemetryUpload", () => {
       const savedQueue: SensorQueueEntry[] = JSON.parse(mockFiles.get(QUEUE_PATH)!);
       expect(savedQueue.length).toBe(1);
       expect(savedQueue[0].stage).toBe("PUT_PENDING");
+      expect(savedQueue[0].attempts).toBe(1);
+      expect(savedQueue[0].nextRetryAt).toBeGreaterThan(0);
     });
 
     it("U3: 24 hours exceeded -> transitions to NEEDS_ATTENTION, does NOT delete file", async () => {
@@ -320,6 +380,17 @@ describe("sensorTelemetryUpload", () => {
       expect(loaded[0].profileId).toBe(77);
       expect(loaded[0].stage).toBe("PREPARE_PENDING");
       expect(loaded[0].requestId).toBeDefined();
+    });
+
+    it("starts and stops periodic sensor upload timer", () => {
+      jest.useFakeTimers();
+      const stop = startPeriodicSensorUpload(5000);
+      expect(typeof stop).toBe("function");
+
+      jest.advanceTimersByTime(5000);
+      stop();
+      stopPeriodicSensorUpload();
+      jest.useRealTimers();
     });
   });
 });

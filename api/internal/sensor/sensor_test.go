@@ -17,6 +17,35 @@ func computeHash(content string) string {
 	return hex.EncodeToString(h[:])
 }
 
+func TestSensorParser_FloatingPointTimestamps(t *testing.T) {
+	opts := sensor.ParseOptions{
+		ExpectedProfileID: 1,
+		ExpectedSessionID: "WARMUP-20260908-01M1Z6RVEJZJ9HSWFAR9NWX926",
+	}
+
+	content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WARMUP-20260908-01M1Z6RVEJZJ9HSWFAR9NWX926","profile_id":1,"clock_source":"capture_clock","base_epoch_ms":1757302488832}
+{"k":"stream_start","t":4400.45,"stream_id":1,"sampling":{"acc_hz":52,"acc_range_g":8,"ecg_hz":130,"delta_compressed":false},"clock_anchor":{"device_timestamp_ns":1625902167906250,"capture_offset_ms":4400.45,"method":"bluetooth_notification"}}
+{"k":"acc","t":4400.45,"stream_id":1,"dt":19.53,"v":[[0.05,0.98,0.02],[0.06,0.97,0.03]]}
+{"k":"hr","t":4500.25,"bpm":150}
+{"k":"hr","t":5500.75,"bpm":155}
+{"k":"end","t":6000.5,"pause_intervals":[{"start_offset_ms":5000.1,"end_offset_ms":5100.2}],"device":{"battery_percent_end":85}}
+`
+	opts.ExpectedSHA256 = computeHash(content)
+	opts.ExpectedSizeBytes = int64(len(content))
+
+	res, err := sensor.ParseAndProcess(strings.NewReader(content), opts)
+	if err != nil {
+		t.Fatalf("ParseAndProcess failed: %v", err)
+	}
+	if !res.Quality.IsComplete {
+		t.Fatalf("expected complete, got errors: %v", res.Quality.Errors)
+	}
+	if res.Quality.Status != "ok" {
+		t.Errorf("expected status 'ok', got %s", res.Quality.Status)
+	}
+}
+
+
 func TestSensorParser_P1_QualityAndLimits(t *testing.T) {
 	opts := sensor.ParseOptions{
 		ExpectedProfileID: 42,
