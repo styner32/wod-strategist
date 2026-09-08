@@ -35,7 +35,7 @@ type accWindow struct {
 	streamID    int64
 	hz          float64
 	sampleCount int
-	lastSampleT int64
+	lastSampleT float64
 	maxGapMs    float64
 	sumDev      float64
 	sumSqDev    float64
@@ -72,25 +72,25 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 		streamHzMap = make(map[int64]float64)
 
 		// HR aggregation
-		prevHRTimeMs int64
-		prevBPM      int
-		hasPrevHR    bool
-		minBPM       int = 9999
-		peakBPM      int = 0
-		validHRDurationMs int64
+		prevHRTimeMs      float64
+		prevBPM           int
+		hasPrevHR         bool
+		minBPM            int = 9999
+		peakBPM           int = 0
+		validHRDurationMs float64
 		hrWeightedSum     float64
-		zone1DurationMs   int64
-		zone2DurationMs   int64
-		zone3DurationMs   int64
-		zone4DurationMs   int64
-		zone5DurationMs   int64
+		zone1DurationMs   float64
+		zone2DurationMs   float64
+		zone3DurationMs   float64
+		zone4DurationMs   float64
+		zone5DurationMs   float64
 
 		// ACC aggregation
-		activeWindow   *accWindow
-		lowMovementSec float64
-		otherMovementSec float64
+		activeWindow       *accWindow
+		lowMovementSec     float64
+		otherMovementSec   float64
 		unknownMovementSec float64
-		totalWindows   int
+		totalWindows       int
 	)
 
 	mergePauseIntervals := func(intervals []PauseInterval) []PauseInterval {
@@ -120,16 +120,16 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 	}
 
 	// Helper to calculate unpaused duration in [start, end)
-	calcUnpausedDurationMs := func(start, end int64, intervals []PauseInterval) int64 {
+	calcUnpausedDurationMs := func(start, end float64, intervals []PauseInterval) float64 {
 		if end <= start {
 			return 0
 		}
 		duration := end - start
 		for _, p := range intervals {
-			overlapStart := math.Max(float64(start), float64(p.StartOffsetMs))
-			overlapEnd := math.Min(float64(end), float64(p.EndOffsetMs))
+			overlapStart := math.Max(start, p.StartOffsetMs)
+			overlapEnd := math.Min(end, p.EndOffsetMs)
 			if overlapEnd > overlapStart {
-				duration -= int64(overlapEnd - overlapStart)
+				duration -= (overlapEnd - overlapStart)
 			}
 		}
 		if duration < 0 {
@@ -280,13 +280,13 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 			if hasPrevHR {
 				dtMs := hre.Time - prevHRTimeMs
 				if dtMs <= 0 {
-					parseErrors = append(parseErrors, fmt.Sprintf("line %d: HR timestamp reversed or duplicate (%d <= %d)", lineNum, hre.Time, prevHRTimeMs))
+					parseErrors = append(parseErrors, fmt.Sprintf("line %d: HR timestamp reversed or duplicate (%f <= %f)", lineNum, hre.Time, prevHRTimeMs))
 				} else if dtMs <= 5000 {
 					// Continuous valid interval [prevHRTimeMs, hre.Time)
 					effectiveDtMs := calcUnpausedDurationMs(prevHRTimeMs, hre.Time, pauseIntervals)
 					if effectiveDtMs > 0 {
 						validHRDurationMs += effectiveDtMs
-						hrWeightedSum += float64(prevBPM) * (float64(effectiveDtMs) / 1000.0)
+						hrWeightedSum += float64(prevBPM) * (effectiveDtMs / 1000.0)
 
 						// HR Zones (based on frozen MaxHR)
 						if opts.EstimatedMaxHR != nil && *opts.EstimatedMaxHR > 0 {

@@ -1,8 +1,8 @@
 package sensor
 
 type EventHeader struct {
-	Kind string `json:"k"`
-	Time int64  `json:"t"`
+	Kind string  `json:"k"`
+	Time float64 `json:"t"`
 }
 
 type MetaEvent struct {
@@ -19,7 +19,7 @@ type MetaEvent struct {
 
 type StreamStartEvent struct {
 	Kind        string `json:"k"`
-	Time        int64  `json:"t"`
+	Time        float64 `json:"t"`
 	StreamID    int64  `json:"stream_id"`
 	Sampling    struct {
 		ACCHz             float64 `json:"acc_hz"`
@@ -29,48 +29,48 @@ type StreamStartEvent struct {
 		DeltaCompressed   bool    `json:"delta_compressed"`
 	} `json:"sampling"`
 	ClockAnchor struct {
-		DeviceTimestampNs int64  `json:"device_timestamp_ns"`
-		CaptureOffsetMs   int64  `json:"capture_offset_ms"`
-		Method            string `json:"method"`
+		DeviceTimestampNs int64   `json:"device_timestamp_ns"`
+		CaptureOffsetMs   float64 `json:"capture_offset_ms"`
+		Method            string  `json:"method"`
 	} `json:"clock_anchor"`
 }
 
 type AccEvent struct {
-	Kind     string        `json:"k"`
-	Time     int64         `json:"t"`
-	StreamID int64         `json:"stream_id"`
-	Dt       float64       `json:"dt"`
-	V        [][]float64   `json:"v"`
+	Kind     string      `json:"k"`
+	Time     float64     `json:"t"`
+	StreamID int64       `json:"stream_id"`
+	Dt       float64     `json:"dt"`
+	V        [][]float64 `json:"v"`
 }
 
 type HREvent struct {
 	Kind string    `json:"k"`
-	Time int64     `json:"t"`
+	Time float64   `json:"t"`
 	BPM  int       `json:"bpm"`
 	RR   []float64 `json:"rr,omitempty"`
 }
 
 type GapStartEvent struct {
-	Kind   string `json:"k"`
-	Time   int64  `json:"t"`
-	GapID  int64  `json:"gap_id"`
-	Reason string `json:"reason,omitempty"`
+	Kind   string  `json:"k"`
+	Time   float64 `json:"t"`
+	GapID  int64   `json:"gap_id"`
+	Reason string  `json:"reason,omitempty"`
 }
 
 type GapEndEvent struct {
-	Kind  string `json:"k"`
-	Time  int64  `json:"t"`
-	GapID int64  `json:"gap_id"`
+	Kind  string  `json:"k"`
+	Time  float64 `json:"t"`
+	GapID int64   `json:"gap_id"`
 }
 
 type PauseInterval struct {
-	StartOffsetMs int64 `json:"start_offset_ms"`
-	EndOffsetMs   int64 `json:"end_offset_ms"`
+	StartOffsetMs float64 `json:"start_offset_ms"`
+	EndOffsetMs   float64 `json:"end_offset_ms"`
 }
 
 type EndEvent struct {
 	Kind           string          `json:"k"`
-	Time           int64           `json:"t"`
+	Time           float64         `json:"t"`
 	PauseIntervals []PauseInterval `json:"pause_intervals"`
 	Device         struct {
 		BatteryPercentEnd *int `json:"battery_percent_end"`

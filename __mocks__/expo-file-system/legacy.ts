@@ -3,6 +3,11 @@ export const FileSystemUploadType = {
   MULTIPART: 1,
 };
 
+export const getInfoAsync = jest.fn().mockResolvedValue({
+  exists: true,
+  size: 100,
+});
+
 export const createUploadTask = jest.fn((url, fileUri, options, callback) => {
   return {
     uploadAsync: jest.fn().mockResolvedValue({
@@ -12,3 +17,4 @@ export const createUploadTask = jest.fn((url, fileUri, options, callback) => {
     }),
   };
 });
+

@@ -235,7 +235,7 @@ export async function loadQueue(): Promise<SensorQueueEntry[]> {
         const parsed = JSON.parse(bakContent);
         if (Array.isArray(parsed)) {
           const { entries } = migrateLegacyEntries(parsed);
-          await writeAsStringAsync(qP, bakContent);
+          await writeAsStringAsync(qP, JSON.stringify(entries));
           return entries;
         }
       }
@@ -301,12 +301,22 @@ function migrateLegacyEntries(rawList: any[]): {
   const entries: SensorQueueEntry[] = [];
 
   for (const raw of rawList) {
+    // iOS may relocate the data container on reinstall. Keep the sensor filename
+    // and resolve it against this installation, including restored queue backups.
+    const oldSensorPath = typeof raw.filePath === "string"
+      ? raw.filePath.match(/^file:\/\/(?:\/private)?\/var\/mobile\/Containers\/Data\/Application\/[^/]+\/Documents\/sensor\/([^/]+\.ndjson)$/)
+      : null;
+    const filePath = oldSensorPath && documentDirectory
+      ? `${queueDir()}${oldSensorPath[1]}`
+      : raw.filePath;
+    if (filePath !== raw.filePath) changed = true;
+
     if (!raw.stage || !raw.requestId) {
       changed = true;
       entries.push({
         sessionId: raw.sessionId,
         profileId: raw.profileId ?? 0,
-        filePath: raw.filePath,
+        filePath,
         requestId: raw.requestId || generateUUID(),
         expectedVersion: raw.expectedVersion || "0",
         sizeBytes: raw.sizeBytes || 0,
@@ -317,7 +327,7 @@ function migrateLegacyEntries(rawList: any[]): {
         lastAttemptAt: raw.lastAttemptAt,
       });
     } else {
-      entries.push(raw as SensorQueueEntry);
+      entries.push({ ...raw, filePath } as SensorQueueEntry);
     }
   }
 
@@ -480,8 +490,27 @@ async function processOneEntry(entry: SensorQueueEntry): Promise<boolean> {
     return false;
   }
 
+  // Only stages that need a PUT require a local file. A completed PUT can still
+  // be acknowledged by the server even if the local file has since disappeared.
+  const needsLocalFile = entry.stage === "PREPARE_PENDING" || entry.stage === "PUT_PENDING";
+  if (needsLocalFile) {
+    try {
+      const info = await getInfoAsync(entry.filePath);
+      if (!info.exists || info.isDirectory) {
+        entry.stage = "NEEDS_ATTENTION";
+        entry.lastError = "Sensor upload file is missing or is not a regular file";
+        await updateEntry(entry);
+        return false;
+      }
+    } catch (err) {
+      applyBackoff(entry, err);
+      await updateEntry(entry);
+      return false;
+    }
+  }
+
   // Re-read file size and hash if missing
-  if (!entry.sizeBytes || !entry.sha256) {
+  if (needsLocalFile && (!entry.sizeBytes || !entry.sha256)) {
     try {
       const content = await readAsStringAsync(entry.filePath);
       entry.sizeBytes = Buffer.byteLength(content, "utf8");
@@ -597,6 +626,7 @@ async function processOneEntry(entry: SensorQueueEntry): Promise<boolean> {
 
       if (comp.error_code === "UPLOAD_NOT_FOUND") {
         entry.stage = "PUT_PENDING";
+        applyBackoff(entry, new Error("UPLOAD_NOT_FOUND"));
         await updateEntry(entry);
         return false;
       }
@@ -615,6 +645,7 @@ async function processOneEntry(entry: SensorQueueEntry): Promise<boolean> {
       const errMsg = err?.message || "";
       if (err?.status === 404 || errMsg.includes("UPLOAD_NOT_FOUND")) {
         entry.stage = "PUT_PENDING";
+        applyBackoff(entry, err);
         await updateEntry(entry);
         return false;
       }
@@ -656,6 +687,32 @@ export async function flushSensorUploads(): Promise<void> {
   }
 }
 
+let periodicTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Starts periodic flushing of the sensor upload queue (e.g. every 30s while app is active).
+ * Returns a cleanup function that stops the timer.
+ */
+export function startPeriodicSensorUpload(intervalMs = 30000): () => void {
+  if (periodicTimer) {
+    clearInterval(periodicTimer);
+  }
+  periodicTimer = setInterval(() => {
+    flushSensorUploads().catch(() => {});
+  }, intervalMs);
+
+  return () => {
+    stopPeriodicSensorUpload();
+  };
+}
+
+export function stopPeriodicSensorUpload(): void {
+  if (periodicTimer) {
+    clearInterval(periodicTimer);
+    periodicTimer = null;
+  }
+}
+
 /**
  * Object export to match legacy interface and allow inspection in tests.
  */
@@ -664,6 +721,8 @@ export const sensorUploadQueue = {
   logTag: "📡 Sensor telemetry",
   enqueueUpload: enqueueSensorUpload,
   flushPendingUploads: flushSensorUploads,
+  startPeriodic: startPeriodicSensorUpload,
+  stopPeriodic: stopPeriodicSensorUpload,
   loadQueue,
   saveQueue,
   uploadOne: async (entry: SensorQueueEntry): Promise<boolean> => {

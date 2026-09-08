@@ -8,7 +8,10 @@ import { t, useLocale } from "@/features/i18n";
 import { useAuthStore } from "@/features/auth/useAuthStore";
 import { useProfileStore } from "@/store/useProfileStore";
 import { flushPendingUploads } from "@/features/debug/telemetryUpload";
-import { flushSensorUploads } from "@/features/health/polar/sensorTelemetryUpload";
+import {
+  flushSensorUploads,
+  startPeriodicSensorUpload,
+} from "@/features/health/polar/sensorTelemetryUpload";
 import { Redirect, Stack } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
@@ -29,12 +32,16 @@ export default function RootLayout() {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
   }, []);
 
-  // Once logged in, hydrate profiles + flush telemetry
+  // Once logged in, hydrate profiles + flush telemetry + start periodic sensor queue sync
   useEffect(() => {
     if (isLoggedIn) {
       useProfileStore.getState().hydrate();
       flushPendingUploads().catch(() => {});
       flushSensorUploads().catch(() => {});
+      const stopPeriodic = startPeriodicSensorUpload(30000);
+      return () => {
+        stopPeriodic();
+      };
     }
   }, [isLoggedIn]);
 

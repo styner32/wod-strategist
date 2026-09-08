@@ -64,24 +64,15 @@ func (c *Client) GenerateSignedURL(objectName string, method string, expires tim
 	return u, nil
 }
 
-// GenerateCreateSignedURL creates a V4 PUT signed URL with precondition x-goog-if-generation-match: 0
-// and binds Content-Type and x-goog-meta-sha256 headers.
+// GenerateCreateSignedURL creates a V4 PUT signed URL for uploading sensor telemetry.
 func (c *Client) GenerateCreateSignedURL(objectName string, contentType string, sha256Hex string, expires time.Duration) (string, map[string]string, error) {
 	requiredHeaders := map[string]string{
-		"Content-Type":                contentType,
-		"x-goog-if-generation-match": "0",
-		"x-goog-meta-sha256":          sha256Hex,
+		"Content-Type": contentType,
 	}
 
 	opts := &gcs.SignedURLOptions{
-		Scheme:      gcs.SigningSchemeV4,
-		Method:      "PUT",
-		ContentType: contentType,
-		Headers: []string{
-			"content-type:" + contentType,
-			"x-goog-if-generation-match:0",
-			"x-goog-meta-sha256:" + sha256Hex,
-		},
+		Scheme:  gcs.SigningSchemeV4,
+		Method:  "PUT",
 		Expires: time.Now().Add(expires),
 	}
 	if c.signEmail != "" && len(c.signKey) > 0 {

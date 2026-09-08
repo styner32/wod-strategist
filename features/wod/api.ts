@@ -1,6 +1,8 @@
 import {
   createUploadTask,
   FileSystemUploadType,
+  getInfoAsync,
+  uploadAsync,
   UploadProgressData,
 } from "expo-file-system/legacy";
 
@@ -332,12 +334,19 @@ export async function uploadSensorToGcs(
   fileUri: string,
   requiredHeaders?: Record<string, string>,
 ): Promise<void> {
+  const info = await getInfoAsync(fileUri);
+  if (!info.exists || info.isDirectory) {
+    throw new Error("Sensor upload file is missing or is not a regular file");
+  }
+
   const headers = {
     "Content-Type": "application/x-ndjson",
     ...(requiredHeaders || {}),
   };
 
-  const uploadTask = createUploadTask(
+  // Unlike uploadTaskStartAsync, this native entry point checks file existence
+  // before creating an iOS background task (which can throw an NSException).
+  const response = await uploadAsync(
     uploadUrl,
     fileUri,
     {
@@ -346,8 +355,6 @@ export async function uploadSensorToGcs(
       uploadType: FileSystemUploadType.BINARY_CONTENT,
     },
   );
-
-  const response = await uploadTask.uploadAsync();
 
   if (!response) {
     throw new Error(
