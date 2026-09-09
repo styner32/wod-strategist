@@ -1,3 +1,4 @@
+import { HeartRateSummaryCard } from "./HeartRateSummaryCard";
 import { t } from "@/features/i18n";
 import * as FileSystem from "expo-file-system/legacy";
 import * as MediaLibrary from "expo-media-library";
@@ -650,6 +651,8 @@ function HistoryCard({
             </View>
           )}
         </View>
+
+        <HeartRateSummaryCard summary={item.heart_rate} />
 
         {/* Content */}
         {hasOutput && (

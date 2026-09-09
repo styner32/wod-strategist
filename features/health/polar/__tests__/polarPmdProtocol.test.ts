@@ -370,3 +370,18 @@ describe("polarPmdProtocol", () => {
     });
   });
 });
+
+describe('HR contact and packet validity', () => {
+  it.each([
+    [[0, 150], { bpm: 150, rrIntervalsMs: [] }],
+    [[2, 150], { bpm: 150, rrIntervalsMs: [] }],
+    [[4, 150], { bpm: 150, rrIntervalsMs: [], contact: false }],
+    [[6, 150], { bpm: 150, rrIntervalsMs: [], contact: true }],
+    [[7, 150, 0], { bpm: 150, rrIntervalsMs: [], contact: true }],
+  ])('parses flags in %j', (packet, expected) => {
+    expect(parseHeartRateMeasurement(Uint8Array.from(packet as number[]))).toEqual(expected);
+  });
+  it.each([[], [1, 150], [8, 150, 1], [16, 150, 1]])('rejects truncated packets %j', (...packet) => {
+    expect(parseHeartRateMeasurement(Uint8Array.from(packet))).toEqual({ bpm: 0, rrIntervalsMs: [] });
+  });
+});

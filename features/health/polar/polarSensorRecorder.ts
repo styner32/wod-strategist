@@ -415,18 +415,19 @@ export const PolarSensorRecorder: BleSensorSink & {
     }
   },
 
-  onHeartRate(bpm: number, rrIntervalsMs: number[], receivedAtMs: number): void {
+  onHeartRate(bpm: number, rrIntervalsMs: number[], receivedAtMs: number, contact?: boolean): void {
     if (!state.isActive || !state.writer) {
       return;
     }
 
     state.hrSamples += 1;
     const offset = Math.max(0, receivedAtMs - state.baseEpochMs);
-    const event: { k: string; t: number; bpm: number; rr?: number[] } = {
+    const event: { k: string; t: number; bpm: number; rr?: number[]; contact?: boolean } = {
       k: "hr",
       t: offset,
       bpm,
     };
+    if (contact !== undefined) event.contact = contact;
     if (rrIntervalsMs && rrIntervalsMs.length > 0) {
       event.rr = rrIntervalsMs;
     }

@@ -44,9 +44,15 @@ type accWindow struct {
 }
 
 // ParseAndProcess reads the sensor NDJSON stream in a single pass, computing
-// metrics, validating quality, and calculating the HR bonus without accumulating
-// the entire file or large arrays in memory.
+// metrics, validating quality, and calculating the HR bonus. Version 2 retains
+// compact HR observations until footer pause intervals are known; ACC is streamed.
 func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, error) {
+	if opts.CalculationVersion == 0 {
+		opts.CalculationVersion = 1
+	}
+	if opts.CalculationVersion != 1 && opts.CalculationVersion != 2 {
+		return nil, fmt.Errorf("unsupported calculation version: %d", opts.CalculationVersion)
+	}
 	hasher := sha256.New()
 	limitedReader := io.LimitReader(r, MaxFileSize+1)
 	countingReader := &CountingReader{reader: limitedReader}
@@ -75,6 +81,8 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 		prevHRTimeMs      float64
 		prevBPM           int
 		hasPrevHR         bool
+		hrEvents          []hrObservation
+		deviceName        string
 		minBPM            int = 9999
 		peakBPM           int = 0
 		validHRDurationMs float64
@@ -217,6 +225,30 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 		}
 
 		switch header.Kind {
+		case "device_ready":
+			var ready struct {
+				Device struct {
+					Name string `json:"name"`
+				} `json:"device"`
+			}
+			if json.Unmarshal([]byte(line), &ready) == nil && ready.Device.Name != "Unknown" {
+				deviceName = ready.Device.Name
+			}
+			if opts.CalculationVersion == 2 {
+				if header.Time < 0 || (len(hrEvents) > 0 && header.Time < hrEvents[len(hrEvents)-1].Time) {
+					parseErrors = append(parseErrors, "HR lifecycle timestamp reversed or negative")
+				} else {
+					hrEvents = append(hrEvents, hrObservation{HREvent: HREvent{Time: header.Time}, reset: true})
+				}
+			}
+		case "gap_start", "gap_end":
+			if opts.CalculationVersion == 2 {
+				if header.Time < 0 || (len(hrEvents) > 0 && header.Time < hrEvents[len(hrEvents)-1].Time) {
+					parseErrors = append(parseErrors, "HR lifecycle timestamp reversed or negative")
+				} else {
+					hrEvents = append(hrEvents, hrObservation{HREvent: HREvent{Time: header.Time}, reset: true})
+				}
+			}
 		case "meta":
 			parseErrors = append(parseErrors, fmt.Sprintf("line %d: duplicate meta event", lineNum))
 
@@ -260,9 +292,24 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 			var hre HREvent
 			if err := json.Unmarshal([]byte(line), &hre); err != nil {
 				parseWarnings = append(parseWarnings, fmt.Sprintf("line %d: invalid hr event: %v", lineNum, err))
-				continue
+				if opts.CalculationVersion != 2 {
+					continue
+				}
+				// Keep a timed invalid observation so malformed samples cannot
+				// connect two otherwise valid intervals.
+				hre = HREvent{Time: header.Time, BPM: 0}
 			}
 
+			if opts.CalculationVersion == 2 {
+				if hre.Time < 0 || (len(hrEvents) > 0 && hre.Time < hrEvents[len(hrEvents)-1].Time) {
+					parseErrors = append(parseErrors, "HR timestamp reversed or negative")
+				} else if len(hrEvents) > 0 && !hrEvents[len(hrEvents)-1].reset && hre.Time == hrEvents[len(hrEvents)-1].Time {
+					parseErrors = append(parseErrors, "HR timestamp duplicate")
+				} else {
+					hrEvents = append(hrEvents, hrObservation{HREvent: hre})
+				}
+				continue
+			}
 			// Validate BPM bounds: 30 to 240
 			if hre.BPM < 30 || hre.BPM > 240 {
 				// Invalid sample, resets continuity
@@ -412,6 +459,23 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 	}
 
 	// Calculate capture and pause duration
+	if opts.CalculationVersion == 2 && seenEnd {
+		var clipped []PauseInterval
+		for _, p := range pauseIntervals {
+			p.StartOffsetMs = math.Max(0, p.StartOffsetMs)
+			p.EndOffsetMs = math.Min(endEvent.Time, p.EndOffsetMs)
+			if p.EndOffsetMs > p.StartOffsetMs {
+				clipped = append(clipped, p)
+			}
+		}
+		pauseIntervals = mergePauseIntervals(clipped)
+		for _, e := range hrEvents {
+			if e.Time > endEvent.Time {
+				parseErrors = append(parseErrors, "HR timestamp exceeds recording end")
+				break
+			}
+		}
+	}
 	var captureDurationMs float64
 	var pauseDurationMs float64
 	if seenEnd {
@@ -508,9 +572,10 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 	}
 
 	result := &SensorSummaryResult{
-		CalculationVersion: 1,
+		DeviceName:         deviceName,
+		CalculationVersion: opts.CalculationVersion,
 		CalculationInputs: CalculationInputs{
-			CalculationVersion: 1,
+			CalculationVersion: opts.CalculationVersion,
 			Age:                opts.Age,
 			MaxHR:              opts.EstimatedMaxHR,
 			MaxHRSource:        maxHRSrc,
@@ -550,5 +615,12 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 		CalculatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
+	if opts.CalculationVersion == 2 {
+		hr, bonus := calculateHRV2(hrEvents, pauseIntervals, captureDurationMs, isComplete, opts)
+		result.Metrics.HR = hr
+		result.HRBonus = bonus
+		result.Quality.ValidHR = hr.ValidHR
+		result.Quality.HRCoverage = hr.Coverage
+	}
 	return result, nil
 }

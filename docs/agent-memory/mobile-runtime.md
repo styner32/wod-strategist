@@ -65,3 +65,8 @@ Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/
 - Use `t("key", { ...vars })` for every user-facing string — do not hardcode English.
 - `setLanguage(code)` switches the locale at runtime.
 - When adding a new string, add the key to **both** `en.json` and `ko.json` in the same change.
+
+## Contact quality and sensor summaries
+
+- See [heart-rate-quality.md](heart-rate-quality.md) for version 2 contact/drop filtering, raw versus accepted BPM, request version pinning, response-only summaries, and device acceptance status.
+- Chunk peaks now update synchronously from accepted readings; stale/invalid fallback BPM is omitted. A stable BPM below 55 is warned about, not discarded solely for being low.

@@ -1,3 +1,4 @@
+import type { HeartRateSummary } from "../../shared/heartRateSummary";
 import { apiClient } from "./api";
 
 export interface MuscleLoads {
@@ -65,6 +66,7 @@ export type SessionFatigue =
   | LegacySessionFatigue;
 
 export interface AnalysisResult {
+  heart_rate?: HeartRateSummary;
   id: number;
   session_id: string;
   profile_id?: number;

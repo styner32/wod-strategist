@@ -1,3 +1,4 @@
+import type { HeartRateSummary } from "../../../shared/heartRateSummary";
 import { api } from "./client";
 
 export interface StretchRecommendation {
@@ -39,6 +40,7 @@ export interface SessionFatigue {
 }
 
 export interface AnalysisResult {
+  heart_rate?: HeartRateSummary;
   id: number;
   session_id: string;
   profile_id: number;

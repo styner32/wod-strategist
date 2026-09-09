@@ -23,6 +23,7 @@ export type SensorUploadStage =
   | "NEEDS_ATTENTION";
 
 export interface SensorQueueEntry {
+  calculationVersion?: 1 | 2;
   sessionId: string;
   profileId: number;
   filePath: string;
@@ -319,6 +320,7 @@ function migrateLegacyEntries(rawList: any[]): {
         filePath,
         requestId: raw.requestId || generateUUID(),
         expectedVersion: raw.expectedVersion || "0",
+        calculationVersion: raw.calculationVersion ?? 1,
         sizeBytes: raw.sizeBytes || 0,
         sha256: raw.sha256 || "",
         stage: "PREPARE_PENDING",
@@ -407,6 +409,7 @@ export async function enqueueSensorUpload(
       filePath,
       requestId,
       expectedVersion: "0",
+      calculationVersion: 2,
       sizeBytes,
       sha256,
       stage: "PREPARE_PENDING",
@@ -435,6 +438,7 @@ export async function uploadSensorTelemetry(
   const requestId = generateUUID();
 
   const prep = await prepareSensorUpload(sessionId, {
+    calculation_version: 2,
     profile_id: profileId,
     request_id: requestId,
     expected_version: "0",
@@ -523,6 +527,7 @@ async function processOneEntry(entry: SensorQueueEntry): Promise<boolean> {
   if (entry.stage === "PREPARE_PENDING") {
     try {
       const prep = await prepareSensorUpload(entry.sessionId, {
+        calculation_version: entry.calculationVersion ?? 1,
         profile_id: entry.profileId,
         request_id: entry.requestId,
         expected_version: entry.expectedVersion,

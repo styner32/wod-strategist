@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/onsi/ginkgo/v2"
@@ -17,17 +18,21 @@ import (
 
 var _ = Describe("Sensor Handlers", func() {
 	var (
-		router   *gin.Engine
-		user     db.User
-		profile  db.Profile
-		user2    db.User
-		profile2 db.Profile
+		router    *gin.Engine
+		user      db.User
+		profile   db.Profile
+		user2     db.User
+		profile2  db.Profile
+		transport *testhelpers.MockTransport
 	)
 
 	BeforeEach(func() {
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
-		router = newTestRouterWithAuthService(controllers.Config{})
+		transport = testhelpers.NewMockTransport()
+		storage, err := testhelpers.NewStorageClientWithSigning("test-bucket", transport)
+		Expect(err).NotTo(HaveOccurred())
+		router = newTestRouterWithAuthService(controllers.Config{StorageClient: storage})
 
 		birthYear1 := 1990
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{
@@ -215,7 +220,7 @@ var _ = Describe("Sensor Handlers", func() {
 			Expect(w.Code).To(Equal(http.StatusForbidden))
 		})
 
-		It("rejects session owned by another profile (409)", func() {
+		It("rejects session owned by another user at authorization middleware", func() {
 			// Pre-create session owned by profile2
 			testhelpers.CreateSession(dbConn, &db.Session{
 				SessionID: validSessionID,
@@ -236,8 +241,7 @@ var _ = Describe("Sensor Handlers", func() {
 
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
-			Expect(w.Code).To(Equal(http.StatusConflict))
-			Expect(w.Body.String()).To(ContainSubstring("OWNERSHIP_CONFLICT"))
+			Expect(w.Code).To(Equal(http.StatusForbidden))
 		})
 	})
 
@@ -280,6 +284,9 @@ var _ = Describe("Sensor Handlers", func() {
 			router.ServeHTTP(w1, req1)
 			Expect(w1.Code).To(Equal(http.StatusOK))
 
+			// Metadata lookup must return an actual GCS 404.
+			object := fmt.Sprintf("videos/%d/%s/sensor_telemetry_v1_%s.ndjson", profile.ID, validSessionID, reqUUID)
+			transport.New(testhelpers.GCSBaseURL).Get("/storage/v1/b/test-bucket/o/" + url.PathEscape(object)).Reply(http.StatusNotFound).JSON(map[string]any{"error": map[string]any{"code": 404, "message": "Not Found"}})
 			// Now complete without uploading
 			completeBody, _ := json.Marshal(controllers.CompleteSensorUploadRequest{
 				ProfileID: profile.ID,
@@ -294,5 +301,47 @@ var _ = Describe("Sensor Handlers", func() {
 			Expect(w2.Code).To(Equal(http.StatusNotFound))
 			Expect(w2.Body.String()).To(ContainSubstring("UPLOAD_NOT_FOUND"))
 		})
+	})
+})
+
+var _ = Describe("POST /api/v1/sessions/:session_id/sensor-upload calculation version", func() {
+	BeforeEach(func() { testhelpers.CleanupDB(dbConn); testhelpers.CleanupQueue(inspector) })
+	It("pins version two per request and defaults legacy requests to version one", func() {
+		storage, err := testhelpers.NewStorageClientWithSigning("test-bucket", testhelpers.NewMockTransport())
+		Expect(err).NotTo(HaveOccurred())
+		router := newTestRouterWithAuthService(controllers.Config{StorageClient: storage})
+		profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		var user db.User
+		Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())
+		for _, version := range []int{0, 2} {
+			sid := fmt.Sprintf("WOD-20260908-01JQXYZ3K4M5N6P7Q8R9ABCDEF%d", version)
+			payload := controllers.PrepareSensorUploadRequest{ProfileID: profile.ID, RequestID: fmt.Sprintf("a0000000-0000-0000-0000-00000000000%d", version), ExpectedVersion: "0", SizeBytes: 1024, SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", CalculationVersion: version}
+			send := func() *httptest.ResponseRecorder {
+				body, err := json.Marshal(payload)
+				Expect(err).NotTo(HaveOccurred())
+				req := httptest.NewRequest("POST", "/api/v1/sessions/"+sid+"/sensor-upload", bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				authorizeRequest(req, &user)
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+				return w
+			}
+			w := send()
+			Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+			var row db.AnalysisResult
+			Expect(dbConn.Where("session_id = ?", sid).First(&row).Error).To(Succeed())
+			var proc controllers.SensorProcessingData
+			Expect(json.Unmarshal(row.SensorProcessing, &proc)).To(Succeed())
+			expected := version
+			if expected == 0 {
+				expected = 1
+			}
+			Expect(proc.CalculationInputs.CalculationVersion).To(Equal(expected))
+			Expect(send().Code).To(Equal(http.StatusOK))
+			payload.CalculationVersion = 3 - expected
+			Expect(send().Code).To(Equal(http.StatusConflict))
+			payload.CalculationVersion = 3
+			Expect(send().Code).To(Equal(http.StatusBadRequest))
+		}
 	})
 })

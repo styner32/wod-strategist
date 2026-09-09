@@ -418,8 +418,18 @@ export default function VisionTestPage() {
     getWorkoutConfidence,
     getLatestMotion,
   } = usePoseDetection(isRecording);
-  const { bpm, status: hrStatus, batteryLevel } = useBleHeartRate({
+  const bpmRef = useRef(0);
+  const chunkMaxBpmRef = useRef(0);
+  const { bpm, quality: hrQuality, getReading, resetQuality, status: hrStatus, batteryLevel } = useBleHeartRate({
     sink: PolarSensorRecorder,
+    recording: isRecording,
+    paused: isPaused,
+    onReading: (reading) => {
+      bpmRef.current = reading.bpm ?? 0;
+      if (reading.bpm !== null && isRecording && !isPaused && isChunkRecordingActive.current) {
+        chunkMaxBpmRef.current = Math.max(chunkMaxBpmRef.current, reading.bpm);
+      }
+    },
   });
   // const { bpm, status: hrStatus } = useHeartRate();
 
@@ -438,15 +448,7 @@ export default function VisionTestPage() {
 
   // Refs that mirror render-state for sampling outside the render cycle.
   // TelemetryRecorder polls these at 1Hz via registered providers.
-  const bpmRef = useRef(0);
-  const chunkMaxBpmRef = useRef(0);
   const chunkCountRef = useRef(0);
-  useEffect(() => {
-    bpmRef.current = bpm;
-    if (bpm > 0) {
-      chunkMaxBpmRef.current = Math.max(chunkMaxBpmRef.current, bpm);
-    }
-  }, [bpm]);
   useEffect(() => {
     chunkCountRef.current = chunkCount;
   }, [chunkCount]);
@@ -490,8 +492,8 @@ export default function VisionTestPage() {
       console.log("📷 Starting new chunk recording...");
       isChunkRecordingActive.current = true;
       chunkStartTime.current = Date.now();
-      // Reset peak heart rate for this chunk window (seed with current instantaneous bpm)
-      chunkMaxBpmRef.current = bpmRef.current > 0 ? bpmRef.current : 0;
+      // Only accepted measurements received inside this chunk may supply its peak.
+      chunkMaxBpmRef.current = 0;
 
       camera.current.startRecording({
         // Android: force mp4 + HEVC to reduce chunk size (12MB → ~2-4MB).
@@ -513,9 +515,7 @@ export default function VisionTestPage() {
           const chunkPeakBpm =
             chunkMaxBpmRef.current > 0
               ? chunkMaxBpmRef.current
-              : bpmRef.current > 0
-                ? bpmRef.current
-                : undefined;
+              : undefined;
           console.log(
             `❤️ Chunk Heart Rate: peak=${chunkPeakBpm ?? 0} bpm, last=${bpmRef.current} bpm`,
           );
@@ -806,6 +806,9 @@ export default function VisionTestPage() {
         return;
       }
 
+      resetQuality();
+      bpmRef.current = 0;
+      chunkMaxBpmRef.current = 0;
       setIsRecording(true);
       setIsPaused(false);
       useAuthStore.getState().setRecordingActive(true);
@@ -825,7 +828,7 @@ export default function VisionTestPage() {
 
       // Start debug telemetry recording (1Hz sampling)
       TelemetryRecorder.start(sessionIdRef.current, profileId!);
-      TelemetryRecorder.registerProvider("hr", () => ({ hr: bpmRef.current }));
+      TelemetryRecorder.registerProvider("hr", () => ({ hr: getReading().bpm ?? 0 }));
       TelemetryRecorder.registerProvider("chunk", () => ({
         chunkIdx: chunkCountRef.current,
       }));
@@ -898,6 +901,7 @@ export default function VisionTestPage() {
     segmentStartTime.current = Date.now();
     setIsPaused(false);
     PolarSensorRecorder.resume();
+    resetQuality();
     startChunkRecording();
     console.log("▶️ Recording resumed");
   };
@@ -1288,11 +1292,12 @@ export default function VisionTestPage() {
       >
         <Text style={styles.hrLabel}>{t("overlay.sensor.heartRate")}</Text>
         <View style={styles.hrValueContainer}>
-          <Text style={[styles.hrValue, { color: bpm > 0 ? "#0f0" : "#888" }]}>
-            {bpm > 0 ? bpm : "--"}
+          <Text style={[styles.hrValue, { color: bpm > 0 ? "#0f0" : "#ffbe72", ...(bpm > 0 ? {} : { fontSize: 13 }) }]}>
+            {bpm > 0 ? bpm : t(hrQuality === "missing" && !isRecording && hrStatus !== "Live" ? "heartRate.waiting" : "heartRate.unstable")}
           </Text>
-          <Text style={styles.hrUnit}> BPM</Text>
+          {bpm > 0 && <Text style={styles.hrUnit}> BPM</Text>}
         </View>
+        {hrQuality === "low" && <Text style={styles.hrWarning}>{t("heartRate.low")}</Text>}
         <Text style={styles.hrStatus}>
           {t("overlay.sensor.state", { status: hrStatus })}
         </Text>
@@ -1674,6 +1679,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 50,
     right: 10,
+    maxWidth: 280,
     backgroundColor: "rgba(0,0,0,0.7)",
     padding: 10,
     borderRadius: 8,
@@ -1688,7 +1694,8 @@ const styles = StyleSheet.create({
     transform: [{ rotate: "-90deg" }],
   },
   hrLabel: { color: "#FF0000", fontSize: 10, fontWeight: "900" },
-  hrValue: { fontSize: 32, fontWeight: "bold", fontFamily: "monospace" },
+  hrWarning: { color: "#ffbe72", fontSize: 11, marginTop: 2 },
+  hrValue: { flexShrink: 1, fontSize: 32, fontWeight: "bold", fontFamily: "monospace" },
   hrUnit: { color: "#888", fontSize: 12, marginBottom: 5, fontWeight: "bold" },
   hrValueContainer: {
     flexDirection: "row",

@@ -127,6 +127,8 @@ type AnalysisResult struct {
 	ArchivedAt             *time.Time       `json:"archived_at,omitempty"`
 	CreatedAt              time.Time        `json:"created_at"`
 	UpdatedAt              time.Time        `json:"updated_at"`
+
+	HeartRate *HeartRateSummaryDTO `gorm:"-" json:"heart_rate,omitempty"`
 }
 
 type FatigueGuidance struct {
@@ -297,4 +299,36 @@ type PipelineStageMetric struct {
 	UploadBytes  int64     `gorm:"not null;default:0" json:"upload_bytes"`
 	DurationMs   int64     `gorm:"not null;default:0" json:"duration_ms"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// HeartRateSummaryDTO is response-only; it is never persisted as a column.
+type HeartRateSummaryDTO struct {
+	Status             string             `json:"status"`
+	ProcessingState    string             `json:"processing_state"`
+	QualityStatus      string             `json:"quality_status"`
+	CalculationVersion int                `json:"calculation_version,omitempty"`
+	DeviceName         string             `json:"device_name,omitempty"`
+	AvgBPM             *float64           `json:"avg_bpm,omitempty"`
+	PeakBPM            *int               `json:"peak_bpm,omitempty"`
+	MinBPM             *int               `json:"min_bpm,omitempty"`
+	Coverage           *float64           `json:"coverage,omitempty"`
+	ValidSeconds       *float64           `json:"valid_seconds,omitempty"`
+	ExcludedSeconds    *float64           `json:"excluded_seconds,omitempty"`
+	UnknownSeconds     *float64           `json:"unknown_seconds,omitempty"`
+	ExcludedByReason   map[string]float64 `json:"excluded_by_reason,omitempty"`
+	LowBPMSeconds      *float64           `json:"low_bpm_seconds,omitempty"`
+	ContactCoverage    *float64           `json:"contact_coverage,omitempty"`
+	Zones              []HeartRateZoneDTO `json:"zones,omitempty"`
+	MaxBPM             *int               `json:"max_bpm,omitempty"`
+	MaxBPMSource       *string            `json:"max_bpm_source,omitempty"`
+	Applied            bool               `json:"applied"`
+	ApplicationReason  string             `json:"application_reason"`
+	CardioBefore       *float64           `json:"cardio_before,omitempty"`
+	CardioAfter        *float64           `json:"cardio_after,omitempty"`
+	CardioDelta        *float64           `json:"cardio_delta,omitempty"`
+}
+type HeartRateZoneDTO struct {
+	Zone    int     `json:"zone"`
+	Seconds float64 `json:"seconds"`
+	Ratio   float64 `json:"ratio"`
 }

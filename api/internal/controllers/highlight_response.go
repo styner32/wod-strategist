@@ -57,8 +57,11 @@ func evaluateSensorSummaryFreshness(res *db.AnalysisResult) sensorSummaryFreshne
 		return sensorSummaryFreshness{}
 	}
 	var proc struct {
-		RequestID        string `json:"request_id"`
-		TargetGeneration string `json:"target_generation"`
+		RequestID         string `json:"request_id"`
+		TargetGeneration  string `json:"target_generation"`
+		CalculationInputs struct {
+			CalculationVersion int `json:"calculation_version"`
+		} `json:"calculation_inputs"`
 	}
 	var sum struct {
 		Version            int64  `json:"version"`
@@ -82,7 +85,8 @@ func evaluateSensorSummaryFreshness(res *db.AnalysisResult) sensorSummaryFreshne
 		sum.RequestID != proc.RequestID ||
 		sum.SourceGeneration == "" ||
 		sum.SourceGeneration != proc.TargetGeneration ||
-		sum.CalculationVersion != 1 {
+		(sum.CalculationVersion != 1 && sum.CalculationVersion != 2) ||
+		(sum.CalculationVersion != proc.CalculationInputs.CalculationVersion && !(sum.CalculationVersion == 1 && proc.CalculationInputs.CalculationVersion == 0)) {
 		return sensorSummaryFreshness{}
 	}
 
@@ -123,6 +127,7 @@ func buildFatigueGuidance(stateCode, adviceCode string, hrAdjusted bool) *db.Fat
 }
 
 func populateSessionFatigueWithSchema(res *db.AnalysisResult, schemaVersion int) {
+	populateHeartRateSummary(res)
 	if res == nil || res.Status != "COMPLETED" {
 		return
 	}

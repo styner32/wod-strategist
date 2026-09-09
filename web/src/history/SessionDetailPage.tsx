@@ -1,3 +1,4 @@
+import { HeartRateSummaryPanel } from "./components/HeartRateSummaryPanel";
 import {
   useMutation,
   useQueries,
@@ -859,7 +860,7 @@ export function SessionDetailPage() {
                   <div>
                     <p className="text-text-muted">Polar Sensor</p>
                     <p className="text-text-primary mt-0.5 capitalize">
-                      {analysis.sensor_state === "COMPLETED" ? "Connected (완료)" : analysis.sensor_state}
+                      {analysis.sensor_state === "COMPLETED" ? "측정 처리 완료" : analysis.sensor_state}
                     </p>
                   </div>
                 )}
@@ -926,6 +927,7 @@ export function SessionDetailPage() {
           )}
 
           {/* Muscle Fatigue & Strain */}
+          {analysis && <HeartRateSummaryPanel summary={analysis.heart_rate} />}
           {analysis?.session_fatigue && (
             <WorkoutFatiguePanel fatigue={analysis.session_fatigue} />
           )}

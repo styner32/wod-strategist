@@ -1,3 +1,4 @@
+import { HeartRateBadge } from "./components/HeartRateSummaryPanel";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -126,6 +127,7 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
             {parsed.workoutType}
           </span>
         )}
+        <HeartRateBadge summary={result.heart_rate} />
         {result.session_fatigue && (
           result.session_fatigue.status === "insufficient_evidence" ? (
             <span className="inline-flex items-center gap-1 text-xs bg-bg-secondary text-text-muted border border-border px-2 py-0.5 rounded-md font-medium">

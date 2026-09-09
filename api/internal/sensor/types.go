@@ -44,10 +44,11 @@ type AccEvent struct {
 }
 
 type HREvent struct {
-	Kind string    `json:"k"`
-	Time float64   `json:"t"`
-	BPM  int       `json:"bpm"`
-	RR   []float64 `json:"rr,omitempty"`
+	Contact *bool     `json:"contact,omitempty"`
+	Kind    string    `json:"k"`
+	Time    float64   `json:"t"`
+	BPM     int       `json:"bpm"`
+	RR      []float64 `json:"rr,omitempty"`
 }
 
 type GapStartEvent struct {
@@ -86,12 +87,13 @@ type EndEvent struct {
 }
 
 type ParseOptions struct {
-	ExpectedProfileID uint
-	ExpectedSessionID string
-	ExpectedSHA256    string
-	ExpectedSizeBytes int64
-	Age               *int
-	EstimatedMaxHR    *int
+	CalculationVersion int
+	ExpectedProfileID  uint
+	ExpectedSessionID  string
+	ExpectedSHA256     string
+	ExpectedSizeBytes  int64
+	Age                *int
+	EstimatedMaxHR     *int
 }
 
 type HeartRateZones struct {
@@ -108,16 +110,20 @@ type HeartRateZones struct {
 }
 
 type HRMetrics struct {
-	ValidHR         bool            `json:"valid_hr"`
-	WeightedMeanBPM *float64        `json:"weighted_mean_bpm,omitempty"`
-	MinBPM          *int            `json:"min_bpm,omitempty"`
-	PeakBPM         *int            `json:"peak_bpm,omitempty"`
-	ValidSeconds    float64         `json:"valid_seconds"`
-	UnknownSeconds  float64         `json:"unknown_seconds"`
-	Coverage        float64         `json:"coverage"`
-	HasHRZones      bool            `json:"has_hr_zones"`
-	EstimatedMaxHR  *int            `json:"estimated_max_hr,omitempty"`
-	Zones           *HeartRateZones `json:"zones,omitempty"`
+	ExcludedSeconds  float64            `json:"excluded_seconds"`
+	ExcludedByReason map[string]float64 `json:"excluded_by_reason,omitempty"`
+	LowBPMSeconds    float64            `json:"low_bpm_seconds"`
+	ContactCoverage  *float64           `json:"contact_coverage,omitempty"`
+	ValidHR          bool               `json:"valid_hr"`
+	WeightedMeanBPM  *float64           `json:"weighted_mean_bpm,omitempty"`
+	MinBPM           *int               `json:"min_bpm,omitempty"`
+	PeakBPM          *int               `json:"peak_bpm,omitempty"`
+	ValidSeconds     float64            `json:"valid_seconds"`
+	UnknownSeconds   float64            `json:"unknown_seconds"`
+	Coverage         float64            `json:"coverage"`
+	HasHRZones       bool               `json:"has_hr_zones"`
+	EstimatedMaxHR   *int               `json:"estimated_max_hr,omitempty"`
+	Zones            *HeartRateZones    `json:"zones,omitempty"`
 }
 
 type ACCMetrics struct {
@@ -152,6 +158,7 @@ type CalculationInputs struct {
 }
 
 type SensorSummaryResult struct {
+	DeviceName         string            `json:"device_name,omitempty"`
 	Version            int64             `json:"version"`
 	RequestID          string            `json:"request_id"`
 	SourceGeneration   string            `json:"source_generation"`

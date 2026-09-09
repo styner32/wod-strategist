@@ -253,6 +253,7 @@ export async function getUploadUrl(
 }
 
 export interface PrepareSensorUploadRequest {
+  calculation_version?: 1 | 2;
   profile_id: number;
   request_id: string;
   expected_version: string;

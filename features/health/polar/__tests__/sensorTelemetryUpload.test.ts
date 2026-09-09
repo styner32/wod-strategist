@@ -100,6 +100,7 @@ describe("sensorTelemetryUpload", () => {
           profile_id: 42,
           expected_version: "0",
           size_bytes: SAMPLE_NDJSON.length,
+          calculation_version: 2,
         }),
       );
       expect(mockUploadSensorToGcs).toHaveBeenCalledWith(
@@ -127,6 +128,21 @@ describe("sensorTelemetryUpload", () => {
         attempts: 0, createdAt: Date.now(), ...overrides,
       };
     }
+
+    it.each([undefined, 1, 2] as const)("pins calculation version %s through a failed prepare retry", async (version) => {
+      const entry = pendingEntry({ stage: "PREPARE_PENDING", calculationVersion: version });
+      mockFiles.set(QUEUE_PATH, JSON.stringify([entry]));
+      mockPrepareSensorUpload.mockRejectedValue(new Error("offline"));
+      await flushSensorUploads();
+      expect(mockPrepareSensorUpload).toHaveBeenLastCalledWith(entry.sessionId,
+        expect.objectContaining({ request_id: entry.requestId, calculation_version: version ?? 1 }));
+      const queued = JSON.parse(mockFiles.get(QUEUE_PATH)!);
+      queued[0].nextRetryAt = 0;
+      mockFiles.set(QUEUE_PATH, JSON.stringify(queued));
+      await flushSensorUploads();
+      expect(mockPrepareSensorUpload).toHaveBeenLastCalledWith(entry.sessionId,
+        expect.objectContaining({ request_id: entry.requestId, calculation_version: version ?? 1 }));
+    });
 
     it.each([false, true])("rebases an old iOS container path, including backup recovery=%s", async (fromBackup) => {
       const entry = pendingEntry({

@@ -204,12 +204,13 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 	defer reader.Close()
 
 	opts := sensor.ParseOptions{
-		ExpectedProfileID: row.ProfileID,
-		ExpectedSessionID: row.SessionID,
-		ExpectedSHA256:    processing.SHA256,
-		ExpectedSizeBytes: processing.SizeBytes,
-		Age:               processing.CalculationInputs.Age,
-		EstimatedMaxHR:    processing.CalculationInputs.MaxHR,
+		CalculationVersion: processing.CalculationInputs.CalculationVersion,
+		ExpectedProfileID:  row.ProfileID,
+		ExpectedSessionID:  row.SessionID,
+		ExpectedSHA256:     processing.SHA256,
+		ExpectedSizeBytes:  processing.SizeBytes,
+		Age:                processing.CalculationInputs.Age,
+		EstimatedMaxHR:     processing.CalculationInputs.MaxHR,
 	}
 
 	summaryResult, err := sensor.ParseAndProcess(reader, opts)

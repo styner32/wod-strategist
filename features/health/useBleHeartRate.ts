@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { PermissionsAndroid, Platform } from "react-native";
 import { BleManager, Device, State, Subscription } from "react-native-ble-plx";
 
+import { HeartRateQuality, type HeartRateReading } from "./heartRateQuality";
 import type { BleSensorSink } from "./bleSensorSink";
 import {
   BATTERY_CHARACTERISTIC_UUID,
@@ -23,10 +24,41 @@ const RECONNECT_MAX_DELAY_MS = 10000;
 
 export interface UseBleHeartRateOptions {
   sink?: BleSensorSink;
+  recording?: boolean;
+  paused?: boolean;
+  onReading?: (reading: HeartRateReading) => void;
 }
 
 export function useBleHeartRate(options?: UseBleHeartRateOptions) {
-  const [bpm, setBpm] = useState(0);
+  const [reading, setReading] = useState<HeartRateReading>({ bpm: null, reason: "missing", receivedAt: 0 });
+  const quality = useRef(new HeartRateQuality());
+  const latestReading = useRef(reading);
+  const onReadingRef = useRef(options?.onReading);
+  onReadingRef.current = options?.onReading;
+  const publish = (next: HeartRateReading) => {
+    latestReading.current = next;
+    setReading(next);
+    onReadingRef.current?.(next);
+  };
+  const getReading = (): HeartRateReading => {
+    const current = latestReading.current;
+    return Date.now() - current.receivedAt >= 5000
+      ? { ...current, bpm: null, reason: "missing" } : current;
+  };
+  const resetQuality = (recovering = false) => {
+    quality.current.reset(recovering);
+    publish({ bpm: null, reason: "missing", receivedAt: 0 });
+  };
+  useEffect(() => { resetQuality(); }, [options?.recording, options?.paused]);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (latestReading.current.reason !== "missing" && Date.now() - latestReading.current.receivedAt >= 5000) {
+        quality.current.markMissing();
+        publish({ bpm: null, reason: "missing", receivedAt: 0 });
+      }
+    }, 250);
+    return () => clearInterval(timer);
+  }, []);
   const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
   const [status, setStatus] = useState<
     "Init" | "Scanning" | "Connecting" | "Live" | "Error"
@@ -131,6 +163,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   };
 
   const cleanupConnection = async (reason: string) => {
+    resetQuality(true);
     cleanupSubscriptions();
     clearInactivityTimer();
     const device = deviceRef.current;
@@ -176,7 +209,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
       console.log(`♻️ Reconnecting now (${reason})`);
       const lastDevice = deviceRef.current;
       await cleanupConnection(`reconnect-${reason}`);
-      setBpm(0);
+      resetQuality(true);
 
       if (lastDevice) {
         await connectToDevice(lastDevice);
@@ -322,7 +355,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
           console.warn("🔌 Disconnected:", error);
           clearInactivityTimer();
           setStatus("Scanning");
-          setBpm(0);
+          resetQuality(true);
           setBatteryLevel(null);
           sinkRef.current?.onDeviceLost("disconnected");
           requestReconnect("disconnected");
@@ -335,13 +368,14 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
         HR_CHARACTERISTIC_UUID,
         (error, characteristic) => {
           if (error) {
+            resetQuality(true);
             console.error("Monitor Error:", error);
             setStatus("Error");
             requestReconnect("monitor-error");
             return;
           }
-          if (characteristic?.value) {
-            parseHeartRate(characteristic.value);
+          if (characteristic) {
+            parseHeartRate(characteristic.value ?? "");
           }
         },
       );
@@ -361,15 +395,23 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   };
 
   const parseHeartRate = (base64Value: string) => {
+    let measurement: ReturnType<typeof parseHeartRateMeasurement>;
     try {
-      const { bpm: heartRate, rrIntervalsMs } = parseHeartRateMeasurement(base64Value);
-      setBpm(heartRate);
-      resetInactivityTimer();
-      sinkRef.current?.onHeartRate(heartRate, rrIntervalsMs, Date.now());
+      measurement = parseHeartRateMeasurement(base64Value);
     } catch (error) {
       console.warn("Parse Error:", error);
+      measurement = { bpm: 0, rrIntervalsMs: [] };
+    }
+    const { bpm: heartRate, rrIntervalsMs, contact } = measurement;
+    const receivedAt = Date.now();
+    publish(quality.current.update(receivedAt, heartRate, contact));
+    resetInactivityTimer();
+    try {
+      sinkRef.current?.onHeartRate(heartRate, rrIntervalsMs, receivedAt, contact);
+    } catch (error) {
+      console.warn("Sensor recording error:", error);
     }
   };
 
-  return { bpm, status, batteryLevel };
+  return { bpm: reading.bpm ?? 0, quality: reading.reason, getReading, resetQuality, status, batteryLevel };
 }

@@ -28,11 +28,12 @@ var (
 )
 
 type PrepareSensorUploadRequest struct {
-	ProfileID       uint   `json:"profile_id" binding:"required"`
-	RequestID       string `json:"request_id" binding:"required"`
-	ExpectedVersion string `json:"expected_version"`
-	SizeBytes       int64  `json:"size_bytes" binding:"required"`
-	SHA256          string `json:"sha256" binding:"required"`
+	CalculationVersion int    `json:"calculation_version"`
+	ProfileID          uint   `json:"profile_id" binding:"required"`
+	RequestID          string `json:"request_id" binding:"required"`
+	ExpectedVersion    string `json:"expected_version"`
+	SizeBytes          int64  `json:"size_bytes" binding:"required"`
+	SHA256             string `json:"sha256" binding:"required"`
 }
 
 type CalculationInputsSnapshot struct {
@@ -109,6 +110,13 @@ func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
 		return
 	}
 
+	if req.CalculationVersion == 0 {
+		req.CalculationVersion = 1
+	}
+	if req.CalculationVersion != 1 && req.CalculationVersion != 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported calculation_version"})
+		return
+	}
 	if req.ProfileID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id must be greater than 0"})
 		return
@@ -192,7 +200,8 @@ func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
 			// Idempotent re-send check: verify payload content
 			if processing.ExpectedSizeBytes != req.SizeBytes ||
 				processing.ExpectedSHA256 != req.SHA256 ||
-				processing.BaseVersion != req.ExpectedVersion {
+				processing.BaseVersion != req.ExpectedVersion ||
+				(processing.CalculationInputs.CalculationVersion != req.CalculationVersion && !(processing.CalculationInputs.CalculationVersion == 0 && req.CalculationVersion == 1)) {
 				c.JSON(http.StatusConflict, gin.H{"error": "request content conflict", "error_code": "REQUEST_CONTENT_CONFLICT"})
 				return errors.New("request content conflict")
 			}
@@ -253,7 +262,7 @@ func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
 		_ = tx.Select("birth_year").Where("id = ?", req.ProfileID).First(&profile).Error
 
 		var calcInputs CalculationInputsSnapshot
-		calcInputs.CalculationVersion = 1
+		calcInputs.CalculationVersion = req.CalculationVersion
 
 		refYear := time.Now().UTC().Year()
 		if row.WorkoutAt != nil {

@@ -38,6 +38,21 @@ describe("PolarSensorRecorder", () => {
     jest.useRealTimers();
   });
 
+  it("preserves raw low BPM, RR and false contact while omitting unsupported contact", async () => {
+    PolarSensorRecorder.start({ sessionId: "WOD-20260908-test", profileId: 10, baseEpochMs: 1000 });
+    PolarSensorRecorder.onHeartRate(45, [1333], 2000, false);
+    PolarSensorRecorder.onHeartRate(150, [400], 3000, true);
+    PolarSensorRecorder.onHeartRate(50, [1200], 4000);
+    const result = await PolarSensorRecorder.stop();
+    const events = __getMockFileContent(result!.filePath)!.trim().split("\n").map((line) => JSON.parse(line));
+    const hr = events.filter((event) => event.k === "hr");
+    expect(hr[0]).toMatchObject({ bpm: 45, contact: false });
+    expect(hr[1]).toMatchObject({ bpm: 150, contact: true });
+    expect(hr[2]).toMatchObject({ bpm: 50 });
+    expect(hr[2]).not.toHaveProperty("contact");
+    expect(hr[0].rr).toEqual([1333]);
+  });
+
   it("starts without a device, writes header line, and stops cleanly", async () => {
     const baseEpochMs = 1788673845000;
     PolarSensorRecorder.start({

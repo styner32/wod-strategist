@@ -458,6 +458,7 @@ export function parseHeartRateMeasurement(
 ): {
   bpm: number;
   rrIntervalsMs: number[];
+  contact?: boolean;
 } {
   const data = toUint8Array(raw, encoding);
   if (data.length < 2) {
@@ -482,8 +483,10 @@ export function parseHeartRateMeasurement(
   }
 
   if (hasEnergy) {
+    if (offset + 2 > data.length) return { bpm: 0, rrIntervalsMs: [] };
     offset += 2;
   }
+  if (hasRr && (data.length - offset) % 2 !== 0) return { bpm: 0, rrIntervalsMs: [] };
 
   const rrIntervalsMs: number[] = [];
   if (hasRr) {
@@ -496,7 +499,7 @@ export function parseHeartRateMeasurement(
     }
   }
 
-  return { bpm, rrIntervalsMs };
+  return { bpm, rrIntervalsMs, ...((flags & 0x04) !== 0 ? { contact: (flags & 0x02) !== 0 } : {}) };
 }
 
 /**
