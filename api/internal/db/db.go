@@ -121,6 +121,7 @@ type AnalysisResult struct {
 	SensorState            string           `gorm:"column:sensor_state;not null;default:NONE" json:"sensor_state"`
 	SensorProcessing       JSONDocument     `gorm:"column:sensor_processing;type:jsonb;not null;default:'{}'" json:"-"`
 	SensorSummary          JSONDocument     `gorm:"column:sensor_summary;type:jsonb;not null;default:'{}'" json:"sensor_summary,omitempty"`
+	SensorTimeline         JSONDocument     `gorm:"column:sensor_timeline;type:jsonb" json:"-"`
 	SensorNextAttemptAt    *time.Time       `gorm:"column:sensor_next_attempt_at" json:"-"`
 	WorkoutAt              *time.Time       `gorm:"column:workout_at" json:"workout_at,omitempty"`
 	WorkoutAtSource        *string          `gorm:"column:workout_at_source" json:"workout_at_source,omitempty"`

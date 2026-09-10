@@ -359,3 +359,31 @@ func TestCaptureToMediaMapping(t *testing.T) {
 		t.Errorf("expected false for overlapping chunks")
 	}
 }
+
+func TestMediaToCaptureMapping(t *testing.T) {
+	chunks := []sensor.ChunkTimeline{
+		{CaptureStartMs: 0, CaptureEndMs: 10000, MediaStartMs: 0.0, MediaEndMs: 10.0, IsFinal: false},
+		{CaptureStartMs: 12000, CaptureEndMs: 22000, MediaStartMs: 10.0, MediaEndMs: 20.0, IsFinal: true},
+	}
+
+	capMs, ok := sensor.MediaToCapture(5.0, chunks)
+	if !ok || capMs != 5000 {
+		t.Errorf("expected 5000, got %d, ok=%v", capMs, ok)
+	}
+
+	capMs, ok = sensor.MediaToCapture(13.0, chunks)
+	if !ok || capMs != 15000 {
+		t.Errorf("expected 15000, got %d, ok=%v", capMs, ok)
+	}
+
+	capMs, ok = sensor.MediaToCapture(20.0, chunks)
+	if !ok || capMs != 22000 {
+		t.Errorf("expected 22000, got %d, ok=%v", capMs, ok)
+	}
+
+	_, ok = sensor.MediaToCapture(25.0, chunks)
+	if ok {
+		t.Errorf("expected false for out-of-range media time")
+	}
+}
+

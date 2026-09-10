@@ -1,4 +1,5 @@
 import { HeartRateSummaryPanel } from "./components/HeartRateSummaryPanel";
+import { SensorTimelinePanel } from "./components/SensorTimelinePanel";
 import {
   useMutation,
   useQueries,
@@ -262,6 +263,18 @@ export function SessionDetailPage() {
     enabled: !!sessionId && !!profileId && analysis?.status === "COMPLETED",
     retry: false,
   });
+
+  const { data: sensorTimelineResponse, isLoading: sensorTimelineLoading } =
+    useQuery({
+      queryKey: ["sensor-timeline", sessionId, profileId],
+      queryFn: () => historyApi.getSensorTimeline(sessionId!, profileId!),
+      enabled: !!sessionId && !!profileId,
+      refetchInterval: (query) => {
+        const data = query.state.data;
+        return data?.status === "pending" ? 5000 : false;
+      },
+      retry: false,
+    });
 
   const currentFeedback = useMemo(() => {
     if (feedbackResponse !== undefined)
@@ -706,6 +719,13 @@ export function SessionDetailPage() {
     }
   }, []);
 
+  // Seek video without altering play/pause state
+  const handleTimelineSeek = useCallback((time: number) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = time;
+    }
+  }, []);
+
   const handleHighlightSeek = useCallback(
     (startSeconds: number, version?: number) => {
       const targetSeconds = getHighlightSeekTime(
@@ -928,6 +948,15 @@ export function SessionDetailPage() {
 
           {/* Muscle Fatigue & Strain */}
           {analysis && <HeartRateSummaryPanel summary={analysis.heart_rate} />}
+          {analysis && (
+            <SensorTimelinePanel
+              timelineResponse={sensorTimelineResponse}
+              isLoading={sensorTimelineLoading}
+              currentTime={currentTime}
+              onSeekMedia={handleTimelineSeek}
+              isMergedVideo={effectiveVideoKind === "merged"}
+            />
+          )}
           {analysis?.session_fatigue && (
             <WorkoutFatiguePanel fatigue={analysis.session_fatigue} />
           )}

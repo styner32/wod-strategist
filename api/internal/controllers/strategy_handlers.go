@@ -93,12 +93,7 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 	records := make([]fatigue.SessionLoadRecord, 0, len(pastResults))
 
 	for _, res := range pastResults {
-		sensorSummaryJSON := "{}"
-		freshness := evaluateSensorSummaryFreshness(&res)
-		if freshness.Valid {
-			sensorSummaryJSON = freshness.SummaryJSON
-		}
-		loads, ok := fatigue.ComputeSessionMuscleLoadsWithSensor(res.SessionScore, sensorSummaryJSON)
+		loads, ok := fatigue.ComputeSessionMuscleLoads(res.SessionScore)
 		if ok {
 			validSessions++
 			workoutTime := asOf

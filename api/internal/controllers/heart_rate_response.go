@@ -2,11 +2,9 @@ package controllers
 
 import (
 	"encoding/json"
+
 	"github.com/wod-strategist/api/internal/db"
-	"github.com/wod-strategist/api/internal/fatigue"
 	"github.com/wod-strategist/api/internal/sensor"
-	"github.com/wod-strategist/api/internal/worker"
-	"math"
 )
 
 func populateHeartRateSummary(res *db.AnalysisResult) {
@@ -77,28 +75,6 @@ func populateHeartRateSummary(res *db.AnalysisResult) {
 	if res.Status != "COMPLETED" {
 		return
 	}
-	score := res.SessionScore
-	if score == "" || score == "{}" {
-		score = worker.ParseSessionScore(res.Output)
-	}
-	before, ok := fatigue.ComputeSessionMuscleLoadsWithSensor(score, "{}")
-	if !ok {
-		return
-	}
-	after, ok := fatigue.ComputeSessionMuscleLoadsWithSensor(score, fresh.SummaryJSON)
-	if !ok {
-		return
-	}
-	b, a := before[fatigue.GroupCardioMetabolic], after[fatigue.GroupCardioMetabolic]
-	delta := math.Round((a-b)*10) / 10
-	dto.CardioBefore = &b
-	dto.CardioAfter = &a
-	dto.CardioDelta = &delta
-	dto.Applied = true
-	dto.ApplicationReason = "no_bonus"
-	if delta > 0 {
-		dto.ApplicationReason = "adjusted"
-	} else if summary.HRBonus > 0 {
-		dto.ApplicationReason = "score_capped"
-	}
+	dto.Applied = false
+	dto.ApplicationReason = "reference_only"
 }

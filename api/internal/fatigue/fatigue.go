@@ -219,8 +219,8 @@ func StateFromFatigueScore(score int) (string, string) {
 	}
 }
 
-// ComputeSessionMuscleLoads calculates 0-100 base muscle loads for a single session.
-func ComputeSessionMuscleLoads(
+// ComputeLegacySessionMuscleLoadsWithSignals calculates 0-100 base muscle loads for a single session using chunk signals.
+func ComputeLegacySessionMuscleLoadsWithSignals(
 	sessionScoreJSON string,
 	chunkSignals []string,
 	heartRateBPM int,
@@ -324,13 +324,10 @@ func ComputeSessionMuscleLoads(
 	return loads
 }
 
-// ComputeSessionMuscleLoadsWithSensor computes 0-100 muscle loads for a session using
-// movements from sessionScore and optional sensor HR bonus from sensorSummary.
+// ComputeSessionMuscleLoads computes 0-100 muscle loads for a session using
+// movements from sessionScore. Deterministic calculation without sensor bonus (v2).
 // Returns (loads, true) if valid movements exist, or (nil, false) if no valid movements exist.
-func ComputeSessionMuscleLoadsWithSensor(
-	sessionScoreJSON string,
-	sensorSummaryJSON string,
-) (map[string]float64, bool) {
+func ComputeSessionMuscleLoads(sessionScoreJSON string) (map[string]float64, bool) {
 	if strings.TrimSpace(sessionScoreJSON) == "" || sessionScoreJSON == "{}" {
 		return nil, false
 	}
@@ -398,22 +395,6 @@ func ComputeSessionMuscleLoadsWithSensor(
 		loads[GroupCardioMetabolic] += baseStrain * weights.CardioMetabolic
 	}
 
-	// Check sensor summary for HR bonus
-	if strings.TrimSpace(sensorSummaryJSON) != "" && sensorSummaryJSON != "{}" {
-		var summary struct {
-			Quality struct {
-				ValidHR    bool `json:"valid_hr"`
-				IsComplete bool `json:"is_complete"`
-			} `json:"quality"`
-			HRBonus float64 `json:"hr_bonus"`
-		}
-		if err := json.Unmarshal([]byte(sensorSummaryJSON), &summary); err == nil {
-			if summary.Quality.ValidHR && summary.Quality.IsComplete && summary.HRBonus > 0 {
-				loads[GroupCardioMetabolic] += summary.HRBonus
-			}
-		}
-	}
-
 	// Clamp to [0, 100]
 	for _, g := range AllMuscleGroups {
 		v := loads[g]
@@ -426,6 +407,14 @@ func ComputeSessionMuscleLoadsWithSensor(
 	}
 
 	return loads, true
+}
+
+// ComputeSessionMuscleLoadsWithSensor is deprecated. Use ComputeSessionMuscleLoads.
+func ComputeSessionMuscleLoadsWithSensor(
+	sessionScoreJSON string,
+	_ string,
+) (map[string]float64, bool) {
+	return ComputeSessionMuscleLoads(sessionScoreJSON)
 }
 
 // DetermineEvidenceStatus calculates the evidence status from session counts.

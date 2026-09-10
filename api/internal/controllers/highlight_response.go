@@ -149,16 +149,15 @@ func populateSessionFatigueWithSchema(res *db.AnalysisResult, schemaVersion int)
 	}
 
 	// Verify sensor freshness (§3)
-	sensorSummaryJSON := "{}"
 	sensorStatus := "none"
 	hrAdjusted := false
 
 	freshness := evaluateSensorSummaryFreshness(res)
 	if freshness.Valid {
-		sensorSummaryJSON = freshness.SummaryJSON
-		sensorStatus = "applied"
-		if freshness.ValidHR && freshness.HRBonus > 0 {
-			hrAdjusted = true
+		if freshness.ValidHR {
+			sensorStatus = "reference_only"
+		} else {
+			sensorStatus = "none"
 		}
 	} else if res.SensorState == db.SensorStatePending || res.SensorState == db.SensorStateRunning || res.SensorState == db.SensorStateUploading {
 		sensorStatus = "pending"
@@ -166,13 +165,14 @@ func populateSessionFatigueWithSchema(res *db.AnalysisResult, schemaVersion int)
 		sensorStatus = "failed"
 	}
 
-	loads, ok := fatigue.ComputeSessionMuscleLoadsWithSensor(scoreJSON, sensorSummaryJSON)
+	loads, ok := fatigue.ComputeSessionMuscleLoads(scoreJSON)
 	if !ok {
 		if schemaVersion == 1 {
 			res.SessionFatigue = &db.SessionFatigue{
 				Status:                 "insufficient_evidence",
-				LoadCalculationVersion: 1,
+				LoadCalculationVersion: 2,
 				SensorStatus:           sensorStatus,
+				HeartRateAdjusted:      false,
 			}
 		}
 		return
@@ -225,7 +225,7 @@ func populateSessionFatigueWithSchema(res *db.AnalysisResult, schemaVersion int)
 	if schemaVersion == 1 {
 		res.SessionFatigue = &db.SessionFatigue{
 			Status:                 "available",
-			LoadCalculationVersion: 1,
+			LoadCalculationVersion: 2,
 			SensorStatus:           sensorStatus,
 			HeartRateAdjusted:      hrAdjusted,
 			OverallScore:           overallScore,

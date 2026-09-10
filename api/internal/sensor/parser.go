@@ -43,16 +43,35 @@ type accWindow struct {
 	isPaused    bool
 }
 
+type ProcessingResult struct {
+	Summary  *SensorSummaryResult
+	Timeline *SensorTimelineData
+}
+
 // ParseAndProcess reads the sensor NDJSON stream in a single pass, computing
 // metrics, validating quality, and calculating the HR bonus. Version 2 retains
 // compact HR observations until footer pause intervals are known; ACC is streamed.
 func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, error) {
+	res, err := ParseAndProcessWithTimeline(r, opts, TimelineSource{
+		HRCalculationVersion: opts.CalculationVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res.Summary, nil
+}
+
+// ParseAndProcessWithTimeline reads the sensor NDJSON stream in a single pass,
+// computing metrics, validating quality, calculating the HR bonus, and generating
+// the 1-second sensor timeline when calculation version is 2.
+func ParseAndProcessWithTimeline(r io.Reader, opts ParseOptions, source TimelineSource) (*ProcessingResult, error) {
 	if opts.CalculationVersion == 0 {
 		opts.CalculationVersion = 1
 	}
 	if opts.CalculationVersion != 1 && opts.CalculationVersion != 2 {
 		return nil, fmt.Errorf("unsupported calculation version: %d", opts.CalculationVersion)
 	}
+	source.HRCalculationVersion = opts.CalculationVersion
 	hasher := sha256.New()
 	limitedReader := io.LimitReader(r, MaxFileSize+1)
 	countingReader := &CountingReader{reader: limitedReader}
@@ -99,7 +118,14 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 		otherMovementSec   float64
 		unknownMovementSec float64
 		totalWindows       int
+
+		// Timeline aggregation (version 2)
+		timelineBuilder *TimelineBuilder
 	)
+
+	if opts.CalculationVersion == 2 {
+		timelineBuilder = NewTimelineBuilder()
+	}
 
 	mergePauseIntervals := func(intervals []PauseInterval) []PauseInterval {
 		if len(intervals) == 0 {
@@ -282,6 +308,9 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 				if sse.Sampling.ACCHz > 0 {
 					streamHzMap[sse.StreamID] = sse.Sampling.ACCHz
 				}
+				if timelineBuilder != nil {
+					timelineBuilder.HandleStreamStart(sse)
+				}
 				// If active window was for this stream, reset anchor
 				if activeWindow != nil && activeWindow.streamID == sse.StreamID {
 					activeWindow.hasError = true
@@ -365,6 +394,9 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 			if err := json.Unmarshal([]byte(line), &acce); err != nil {
 				parseWarnings = append(parseWarnings, fmt.Sprintf("line %d: invalid acc event: %v", lineNum, err))
 				continue
+			}
+			if timelineBuilder != nil {
+				timelineBuilder.HandleAcc(acce)
 			}
 			hz, hasHz := streamHzMap[acce.StreamID]
 			if !hasHz || hz <= 0 {
@@ -622,5 +654,14 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 		result.Quality.ValidHR = hr.ValidHR
 		result.Quality.HRCoverage = hr.Coverage
 	}
-	return result, nil
+
+	var timeline *SensorTimelineData
+	if opts.CalculationVersion == 2 && seenEnd && isComplete && timelineBuilder != nil {
+		timeline = timelineBuilder.Build(source, captureDurationMs, pauseIntervals, hrEvents)
+	}
+
+	return &ProcessingResult{
+		Summary:  result,
+		Timeline: timeline,
+	}, nil
 }

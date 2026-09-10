@@ -477,6 +477,29 @@
     "cardio": "심폐 부하",
     "cardioNote": "심박 보정은 심폐 항목에 적용되며 전체 점수 차이는 작을 수 있습니다.",
     "estimated_220_minus_age": "나이 기반 추정 (220 − 나이)",
-    "unknownEstimate": "추정 기준 확인 불가"
+    "unknownEstimate": "추정 기준 확인 불가",
+    "reference_only": "심박수는 실시간 피드백과 운동 기록 확인에 사용됩니다. 별도 부하 점수 가산은 적용하지 않습니다."
+  },
+  "sensorTimeline": {
+    "title": "센서 시계열",
+    "movementVariance": "움직임 변화량",
+    "movementVarianceUnit": "g",
+    "heartRate": "심박수",
+    "heartRateUnit": "bpm",
+    "time": "시간",
+    "elapsedTime": "경과 시간",
+    "resetZoom": "전체 보기",
+    "zoomHint": "드래그하여 구간 확대",
+    "empty": "센서 시계열 데이터가 없습니다.",
+    "processing": "센서 시계열 처리 중...",
+    "failed": "센서 시계열 처리에 실패했습니다.",
+    "unavailable": "센서 시계열을 확인할 수 없습니다.",
+    "videoSyncNotice": "영상 싱크는 원본(Merged) 영상에서만 동작합니다.",
+    "referenceOnlyNotice": "움직임 변화량은 참고 데이터이며 운동 강도나 피로도를 판정하지 않습니다.",
+    "pointTime": "시점",
+    "paused": "일시 정지",
+    "invalid": "측정 불안정",
+    "gap": "미측정 구간",
+    "noData": "데이터 없음"
   }
 }

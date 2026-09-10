@@ -477,6 +477,29 @@
     "cardio": "Cardio load",
     "cardioNote": "Heart rate adjusts the cardio component; the overall score change may be small.",
     "estimated_220_minus_age": "Age-based estimate (220 − age)",
-    "unknownEstimate": "Estimation method unavailable"
+    "unknownEstimate": "Estimation method unavailable",
+    "reference_only": "Heart rate is used for live feedback and workout history review. No additional fatigue score adjustment is applied."
+  },
+  "sensorTimeline": {
+    "title": "Sensor Timeline",
+    "movementVariance": "Movement Variance",
+    "movementVarianceUnit": "g",
+    "heartRate": "Heart Rate",
+    "heartRateUnit": "bpm",
+    "time": "Time",
+    "elapsedTime": "Elapsed Time",
+    "resetZoom": "Reset Zoom",
+    "zoomHint": "Drag to zoom",
+    "empty": "No sensor timeline data available.",
+    "processing": "Processing sensor timeline...",
+    "failed": "Failed to process sensor timeline.",
+    "unavailable": "Sensor timeline unavailable.",
+    "videoSyncNotice": "Video sync is only available for the original (merged) video.",
+    "referenceOnlyNotice": "Movement variance is reference data only and does not determine intensity or fatigue.",
+    "pointTime": "Time",
+    "paused": "Paused",
+    "invalid": "Unstable",
+    "gap": "Gap",
+    "noData": "No data"
   }
 }

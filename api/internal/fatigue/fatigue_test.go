@@ -53,24 +53,23 @@ var _ = Describe("Fatigue Calculation & Readiness", func() {
 		})
 	})
 
-	Context("ComputeSessionMuscleLoadsWithSensor", func() {
+	Context("ComputeSessionMuscleLoads", func() {
 		It("returns (nil, false) when movements are empty or all unknown/walking/rest", func() {
 			scoreJSON := `{"intensity":70,"movements":{"walking":{},"rest":{},"unknown":{}}}`
-			loads, ok := fatigue.ComputeSessionMuscleLoadsWithSensor(scoreJSON, "{}")
+			loads, ok := fatigue.ComputeSessionMuscleLoads(scoreJSON)
 			Expect(ok).To(BeFalse())
 			Expect(loads).To(BeNil())
 		})
 
-		It("calculates loads and adds sensor HR bonus to cardio_metabolic", func() {
+		It("calculates deterministic loads without sensor HR bonus", func() {
 			scoreJSON := `{"intensity":70,"movements":{"Thruster":{},"Pull-up":{}}}`
-			sensorSummary := `{"quality":{"valid_hr":true,"is_complete":true},"hr_bonus":15.0}`
-			loads, ok := fatigue.ComputeSessionMuscleLoadsWithSensor(scoreJSON, sensorSummary)
+			loads, ok := fatigue.ComputeSessionMuscleLoads(scoreJSON)
 			Expect(ok).To(BeTrue())
 			Expect(loads).NotTo(BeNil())
 			Expect(loads[fatigue.GroupShouldersPush]).To(BeNumerically(">", 0.0))
-			// HR bonus adds 15.0 to cardio metabolic
-			loadsNoSensor, _ := fatigue.ComputeSessionMuscleLoadsWithSensor(scoreJSON, "{}")
-			Expect(loads[fatigue.GroupCardioMetabolic] - loadsNoSensor[fatigue.GroupCardioMetabolic]).To(BeNumerically("~", 15.0, 0.5))
+			// Deterministic check: loads are identical regardless of sensor presence
+			loadsWithSensor, _ := fatigue.ComputeSessionMuscleLoadsWithSensor(scoreJSON, `{"quality":{"valid_hr":true,"is_complete":true},"hr_bonus":15.0}`)
+			Expect(loads[fatigue.GroupCardioMetabolic]).To(Equal(loadsWithSensor[fatigue.GroupCardioMetabolic]))
 		})
 	})
 

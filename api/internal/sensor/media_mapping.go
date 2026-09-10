@@ -100,3 +100,36 @@ func ValidateTimelineSequence(chunks []ChunkTimeline) error {
 	}
 	return nil
 }
+
+// MediaToCapture maps a media timestamp in seconds to a capture timestamp in ms.
+// Returns (captureMs, ok).
+// Uses proportional scaling within the chunk:
+// captureMs = capture_start + (mediaSec - media_start) * (capture_duration) / (media_duration).
+func MediaToCapture(mediaSec float64, chunks []ChunkTimeline) (int64, bool) {
+	if len(chunks) == 0 || math.IsNaN(mediaSec) || math.IsInf(mediaSec, 0) {
+		return 0, false
+	}
+	for _, c := range chunks {
+		if c.CaptureEndMs <= c.CaptureStartMs || c.MediaEndMs <= c.MediaStartMs {
+			continue
+		}
+		inRange := false
+		if c.IsFinal {
+			inRange = (mediaSec >= c.MediaStartMs && mediaSec <= c.MediaEndMs)
+		} else {
+			inRange = (mediaSec >= c.MediaStartMs && mediaSec < c.MediaEndMs)
+		}
+		if inRange {
+			captureDurMs := float64(c.CaptureEndMs - c.CaptureStartMs)
+			mediaDurSec := c.MediaEndMs - c.MediaStartMs
+			offsetCaptureMs := (mediaSec - c.MediaStartMs) * (captureDurMs / mediaDurSec)
+			res := c.CaptureStartMs + int64(math.Round(offsetCaptureMs))
+			if res > c.CaptureEndMs {
+				res = c.CaptureEndMs
+			}
+			return res, true
+		}
+	}
+	return 0, false
+}
+

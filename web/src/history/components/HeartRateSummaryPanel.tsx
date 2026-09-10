@@ -44,14 +44,6 @@ export function HeartRateSummaryPanel({ summary }: { summary?: HeartRateSummary 
             </div>
           )}
           <p className="text-sm text-text-secondary">{label(summary.application_reason)}</p>
-          {summary.cardio_delta !== undefined && (
-            <>
-              <p className="text-sm text-text-primary mt-2">
-                {labels.cardio}: {hrNumber(summary.cardio_before)} → {hrNumber(summary.cardio_after)} (+{summary.cardio_delta})
-              </p>
-              <p className="text-xs text-text-secondary">{labels.cardioNote}</p>
-            </>
-          )}
           {summary.coverage !== undefined && (
             <div className="text-sm text-text-secondary space-y-2 mt-4">
               <p>{summary.contact_coverage ? `${labels.contactCoverage}: ${hrPercent(summary.contact_coverage)}` : labels.contactUnknown}</p>

@@ -213,11 +213,19 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 		EstimatedMaxHR:     processing.CalculationInputs.MaxHR,
 	}
 
-	summaryResult, err := sensor.ParseAndProcess(reader, opts)
+	timelineSource := sensor.TimelineSource{
+		SensorVersion:        fmt.Sprintf("%d", row.SensorVersion),
+		RequestID:            processing.RequestID,
+		SourceGeneration:     processing.TargetGeneration,
+		HRCalculationVersion: processing.CalculationInputs.CalculationVersion,
+	}
+
+	processingResult, err := sensor.ParseAndProcessWithTimeline(reader, opts, timelineSource)
 	if err != nil {
 		w.recordSensorFailure(row.ID, row.ProfileID, row.SensorVersion, leaseToken, processing, "PARSE_FATAL_ERROR", false)
 		return nil
 	}
+	summaryResult := processingResult.Summary
 
 	if !summaryResult.Quality.IsComplete {
 		errCode := "QUALITY_CHECK_FAILED"
@@ -239,6 +247,17 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 		return nil
 	}
 
+	var timelineStr string
+	if processingResult.Timeline != nil {
+		timelineJSON, err := json.Marshal(processingResult.Timeline)
+		if err != nil {
+			w.logger.Warn("timeline serialization error; saving error status in timeline", zap.Error(err))
+			timelineStr = fmt.Sprintf(`{"schema_version":1,"status":"failed","error":"%s"}`, err.Error())
+		} else {
+			timelineStr = string(timelineJSON)
+		}
+	}
+
 	processing.LeaseToken = nil
 	procFinalJSON, _ := json.Marshal(processing)
 
@@ -246,6 +265,7 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 	res := w.DB.Exec(`
 		UPDATE analysis_results
 		SET sensor_summary = ?::jsonb,
+		    sensor_timeline = NULLIF(?::text, '')::jsonb,
 		    sensor_state = 'COMPLETED',
 		    sensor_next_attempt_at = NULL,
 		    sensor_processing = ?::jsonb,
@@ -259,7 +279,7 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 		  AND sensor_processing->>'target_generation' = ?
 		  AND sensor_processing->>'lease_token' = ?
 		  AND sensor_next_attempt_at > NOW()
-	`, string(summaryJSON), string(procFinalJSON), row.ID, row.ProfileID, row.SensorVersion, processing.RequestID, processing.TargetGeneration, leaseToken)
+	`, string(summaryJSON), timelineStr, string(procFinalJSON), row.ID, row.ProfileID, row.SensorVersion, processing.RequestID, processing.TargetGeneration, leaseToken)
 
 	if res.Error != nil {
 		w.logger.Error("failed to commit sensor summary update", zap.Error(res.Error))
