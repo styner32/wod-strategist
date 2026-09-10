@@ -122,6 +122,7 @@ class VideoMergerModule : Module() {
         }
 
         // Read all samples from this chunk
+        var samplesWritten = 0
         while (true) {
           buffer.clear()
           val sampleSize = extractor.readSampleData(buffer, 0)
@@ -146,12 +147,15 @@ class VideoMergerModule : Module() {
           bufferInfo.flags = extractor.sampleFlags
 
           muxer.writeSampleData(muxerTrack, buffer, bufferInfo)
+          samplesWritten++
           extractor.advance()
         }
 
-        // Offset next chunk's timestamps after this chunk's last PTS
-        // Add a small gap (1ms) to avoid PTS collision
-        timeOffsetUs = maxPtsUs + 1000
+        // Offset next chunk's timestamps only if samples were written
+        if (samplesWritten > 0) {
+          // Add a small gap (1ms) to avoid PTS collision
+          timeOffsetUs = maxPtsUs + 1000
+        }
 
         extractor.release()
       }

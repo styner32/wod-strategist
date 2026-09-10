@@ -29,9 +29,9 @@ type StreamStartEvent struct {
 		DeltaCompressed   bool    `json:"delta_compressed"`
 	} `json:"sampling"`
 	ClockAnchor struct {
-		DeviceTimestampNs int64   `json:"device_timestamp_ns"`
-		CaptureOffsetMs   float64 `json:"capture_offset_ms"`
-		Method            string  `json:"method"`
+		DeviceTimestampNs deviceTimestampNS `json:"device_timestamp_ns"`
+		CaptureOffsetMs   float64           `json:"capture_offset_ms"`
+		Method            string            `json:"method"`
 	} `json:"clock_anchor"`
 }
 

@@ -28,6 +28,11 @@ import {
 } from "react-native-vision-camera";
 
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { PolarSensorRecorder } from "@/features/health/polar/polarSensorRecorder";
+import {
+  enqueueSensorUpload,
+  flushSensorUploads,
+} from "@/features/health/polar/sensorTelemetryUpload";
 import { useBleHeartRate } from "@/features/health/useBleHeartRate";
 import {
   buildWorkoutSessionId,
@@ -42,11 +47,6 @@ import {
   enqueueUpload as enqueueDebugUpload,
   flushPendingUploads,
 } from "../../features/debug/telemetryUpload";
-import { PolarSensorRecorder } from "@/features/health/polar/polarSensorRecorder";
-import {
-  enqueueSensorUpload,
-  flushSensorUploads,
-} from "@/features/health/polar/sensorTelemetryUpload";
 import {
   fetchChunkAnalysis,
   mergeChunks,
@@ -56,6 +56,7 @@ import {
   mergeChunksLocal,
   mergedOutputPath,
 } from "../../features/wod/mergeChunksLocal";
+import { createChunkRecordingCompletion } from "../../features/wod/chunkRecordingCompletion";
 
 import { useAuthStore } from "@/features/auth/useAuthStore";
 import { t } from "@/features/i18n";
@@ -197,8 +198,8 @@ export default function VisionTestPage() {
 
   // Store chunk paths locally (Android: used as final video source)
   const chunkPaths = useRef<string[]>([]);
-  // Promise resolve for waiting on the last chunk's onRecordingFinished
-  const lastChunkResolve = useRef<((path: string) => void) | null>(null);
+  // A timer-stopped chunk remains pending until the native finish callback.
+  const pendingChunk = useRef<ReturnType<typeof createChunkRecordingCompletion> | null>(null);
 
   // Session ID computed once at recording start, reused for all chunks + merge
   const sessionIdRef = useRef<string>("");
@@ -420,13 +421,25 @@ export default function VisionTestPage() {
   } = usePoseDetection(isRecording);
   const bpmRef = useRef(0);
   const chunkMaxBpmRef = useRef(0);
-  const { bpm, quality: hrQuality, getReading, resetQuality, status: hrStatus, batteryLevel } = useBleHeartRate({
+  const {
+    bpm,
+    quality: hrQuality,
+    getReading,
+    resetQuality,
+    status: hrStatus,
+    batteryLevel,
+  } = useBleHeartRate({
     sink: PolarSensorRecorder,
     recording: isRecording,
     paused: isPaused,
     onReading: (reading) => {
       bpmRef.current = reading.bpm ?? 0;
-      if (reading.bpm !== null && isRecording && !isPaused && isChunkRecordingActive.current) {
+      if (
+        reading.bpm !== null &&
+        isRecording &&
+        !isPaused &&
+        isChunkRecordingActive.current
+      ) {
         chunkMaxBpmRef.current = Math.max(chunkMaxBpmRef.current, reading.bpm);
       }
     },
@@ -488,6 +501,14 @@ export default function VisionTestPage() {
   const startChunkLoop = async () => {
     if (!camera.current || !isRecordingChunks.current) return;
 
+    const recordingCamera = camera.current;
+    const completion = createChunkRecordingCompletion(() => recordingCamera.stopRecording());
+    pendingChunk.current = completion;
+    const finishChunk = (path: string | null) => {
+      completion.finish(path);
+      if (pendingChunk.current === completion) pendingChunk.current = null;
+    };
+
     try {
       console.log("📷 Starting new chunk recording...");
       isChunkRecordingActive.current = true;
@@ -507,24 +528,44 @@ export default function VisionTestPage() {
 
           // Compute chunk timing relative to recording start
           const chunkEndTime = Date.now();
+          const chunkDurationMs = chunkEndTime - chunkStartTime.current;
+          const isMicroChunk =
+            (typeof video.duration === "number" && video.duration < 0.2) ||
+            chunkDurationMs < 200;
+
+          if (isMicroChunk) {
+            console.log(
+              `⚠️ Micro-chunk discarded (duration=${video.duration}s, wall=${chunkDurationMs}ms): ${video.path}`,
+            );
+            try {
+              const { File: FSFile } = require("expo-file-system");
+              const f = new FSFile(video.path);
+              if (f.exists) f.delete();
+            } catch (_) {}
+
+            finishChunk(null);
+            finalChunkPending.current = false;
+
+            if (isRecordingChunks.current) {
+              if (IS_ANDROID) {
+                setTimeout(() => startChunkLoop(), 500);
+              } else {
+                startChunkLoop();
+              }
+            }
+            return;
+          }
+
           const startSecs =
             (chunkStartTime.current - recordingStartTime.current) / 1000;
           const endSecs = (chunkEndTime - recordingStartTime.current) / 1000;
 
           // Compute peak heart rate during this 10-second chunk
           const chunkPeakBpm =
-            chunkMaxBpmRef.current > 0
-              ? chunkMaxBpmRef.current
-              : undefined;
+            chunkMaxBpmRef.current > 0 ? chunkMaxBpmRef.current : undefined;
           console.log(
             `❤️ Chunk Heart Rate: peak=${chunkPeakBpm ?? 0} bpm, last=${bpmRef.current} bpm`,
           );
-
-          // Resolve the last-chunk promise if we're waiting for it
-          if (lastChunkResolve.current) {
-            lastChunkResolve.current(video.path);
-            lastChunkResolve.current = null;
-          }
 
           // Always track chunk path for local merge (gallery save),
           // even if recording has stopped (orphan chunk).
@@ -634,6 +675,9 @@ export default function VisionTestPage() {
             }
           }
 
+          // Paths and upload counters are registered before stop/pause can resume.
+          finishChunk(video.path);
+
           // If still recording, start the next chunk after a short delay.
           // The camera HAL (especially Samsung) needs time to finalize the
           // previous recording before accepting a new startRecording() call.
@@ -650,6 +694,8 @@ export default function VisionTestPage() {
         },
         onRecordingError: (error) => {
           isChunkRecordingActive.current = false;
+          finalChunkPending.current = false;
+          finishChunk(null);
           console.error("📷 Chunk Recording Error:", error);
         },
       });
@@ -663,7 +709,7 @@ export default function VisionTestPage() {
         ) {
           try {
             isChunkRecordingActive.current = false;
-            await camera.current.stopRecording();
+            await completion.stop();
           } catch (e) {
             console.error("Failed to stop chunk recording:", e);
           }
@@ -671,6 +717,7 @@ export default function VisionTestPage() {
       }, CHUNK_DURATION_MS);
     } catch (e) {
       isChunkRecordingActive.current = false;
+      finishChunk(null);
       console.error("Failed to start chunk recording:", e);
     }
   };
@@ -689,31 +736,17 @@ export default function VisionTestPage() {
       chunkTimer.current = null;
     }
 
-    // Stop the current recording if active.
-    // Set up a promise so the caller can wait for the last chunk's
-    // onRecordingFinished callback (which pushes its path to chunkPaths).
-    if (camera.current && isChunkRecordingActive.current) {
-      // The chunk about to be flushed still belongs to this recording.
+    // Also wait when the timer has already requested native stop but the final
+    // callback has not arrived. Native stop completion is not file completion.
+    const finishingChunk = pendingChunk.current;
+    if (finishingChunk) {
       finalChunkPending.current = true;
-      const lastChunkPromise = new Promise<string | null>((resolve) => {
-        lastChunkResolve.current = resolve;
-        // Safety timeout — if onRecordingFinished never fires, unblock after 5s
-        setTimeout(() => {
-          if (lastChunkResolve.current === resolve) {
-            lastChunkResolve.current = null;
-            resolve(null);
-          }
-        }, 5000);
-      });
-
       try {
         isChunkRecordingActive.current = false;
-        await camera.current.stopRecording();
+        return await finishingChunk.stop();
       } catch (e) {
         console.error("Failed to stop chunk recording:", e);
       }
-
-      return lastChunkPromise;
     }
 
     return null;
@@ -828,7 +861,9 @@ export default function VisionTestPage() {
 
       // Start debug telemetry recording (1Hz sampling)
       TelemetryRecorder.start(sessionIdRef.current, profileId!);
-      TelemetryRecorder.registerProvider("hr", () => ({ hr: getReading().bpm ?? 0 }));
+      TelemetryRecorder.registerProvider("hr", () => ({
+        hr: getReading().bpm ?? 0,
+      }));
       TelemetryRecorder.registerProvider("chunk", () => ({
         chunkIdx: chunkCountRef.current,
       }));
@@ -1292,12 +1327,28 @@ export default function VisionTestPage() {
       >
         <Text style={styles.hrLabel}>{t("overlay.sensor.heartRate")}</Text>
         <View style={styles.hrValueContainer}>
-          <Text style={[styles.hrValue, { color: bpm > 0 ? "#0f0" : "#ffbe72", ...(bpm > 0 ? {} : { fontSize: 13 }) }]}>
-            {bpm > 0 ? bpm : t(hrQuality === "missing" && !isRecording && hrStatus !== "Live" ? "heartRate.waiting" : "heartRate.unstable")}
+          <Text
+            style={[
+              styles.hrValue,
+              {
+                color: bpm > 0 ? "#0f0" : "#ffbe72",
+                ...(bpm > 0 ? {} : { fontSize: 13 }),
+              },
+            ]}
+          >
+            {bpm > 0
+              ? bpm
+              : t(
+                  hrQuality === "missing" && !isRecording && hrStatus !== "Live"
+                    ? "heartRate.waiting"
+                    : "heartRate.unstable",
+                )}
           </Text>
           {bpm > 0 && <Text style={styles.hrUnit}> BPM</Text>}
         </View>
-        {hrQuality === "low" && <Text style={styles.hrWarning}>{t("heartRate.low")}</Text>}
+        {hrQuality === "low" && (
+          <Text style={styles.hrWarning}>{t("heartRate.low")}</Text>
+        )}
         <Text style={styles.hrStatus}>
           {t("overlay.sensor.state", { status: hrStatus })}
         </Text>
@@ -1695,7 +1746,12 @@ const styles = StyleSheet.create({
   },
   hrLabel: { color: "#FF0000", fontSize: 10, fontWeight: "900" },
   hrWarning: { color: "#ffbe72", fontSize: 11, marginTop: 2 },
-  hrValue: { flexShrink: 1, fontSize: 32, fontWeight: "bold", fontFamily: "monospace" },
+  hrValue: {
+    flexShrink: 1,
+    fontSize: 32,
+    fontWeight: "bold",
+    fontFamily: "monospace",
+  },
   hrUnit: { color: "#888", fontSize: 12, marginBottom: 5, fontWeight: "bold" },
   hrValueContainer: {
     flexDirection: "row",
