@@ -44,17 +44,18 @@ type accWindow struct {
 }
 
 type ProcessingResult struct {
-	Summary  *SensorSummaryResult
-	Timeline *SensorTimelineData
+	Summary       *SensorSummaryResult
+	Timeline      *SensorTimelineData
+	TimelineError error
 }
 
 // ParseAndProcess reads the sensor NDJSON stream in a single pass, computing
 // metrics, validating quality, and calculating the HR bonus. Version 2 retains
 // compact HR observations until footer pause intervals are known; ACC is streamed.
 func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, error) {
-	res, err := ParseAndProcessWithTimeline(r, opts, TimelineSource{
+	res, err := parseAndProcess(r, opts, TimelineSource{
 		HRCalculationVersion: opts.CalculationVersion,
-	})
+	}, false)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +66,10 @@ func ParseAndProcess(r io.Reader, opts ParseOptions) (*SensorSummaryResult, erro
 // computing metrics, validating quality, calculating the HR bonus, and generating
 // the 1-second sensor timeline when calculation version is 2.
 func ParseAndProcessWithTimeline(r io.Reader, opts ParseOptions, source TimelineSource) (*ProcessingResult, error) {
+	return parseAndProcess(r, opts, source, true)
+}
+
+func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, includeTimeline bool) (*ProcessingResult, error) {
 	if opts.CalculationVersion == 0 {
 		opts.CalculationVersion = 1
 	}
@@ -123,8 +128,9 @@ func ParseAndProcessWithTimeline(r io.Reader, opts ParseOptions, source Timeline
 		timelineBuilder *TimelineBuilder
 	)
 
-	if opts.CalculationVersion == 2 {
+	if includeTimeline && opts.CalculationVersion == 2 {
 		timelineBuilder = NewTimelineBuilder()
+		defer timelineBuilder.Close()
 	}
 
 	mergePauseIntervals := func(intervals []PauseInterval) []PauseInterval {
@@ -656,12 +662,15 @@ func ParseAndProcessWithTimeline(r io.Reader, opts ParseOptions, source Timeline
 	}
 
 	var timeline *SensorTimelineData
+	var timelineError error
 	if opts.CalculationVersion == 2 && seenEnd && isComplete && timelineBuilder != nil {
 		timeline = timelineBuilder.Build(source, captureDurationMs, pauseIntervals, hrEvents)
+		timelineError = timelineBuilder.Err()
 	}
 
 	return &ProcessingResult{
-		Summary:  result,
-		Timeline: timeline,
+		Summary:       result,
+		Timeline:      timeline,
+		TimelineError: timelineError,
 	}, nil
 }

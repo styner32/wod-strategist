@@ -31,17 +31,19 @@ var _ = Describe("Heart rate response", func() {
 		Expect(string(bytes)).To(ContainSubstring(`"heart_rate":`))
 		Expect(string(bytes)).To(ContainSubstring(`"zone":3`))
 	})
-	It("distinguishes no bonus from no sensor and reports actual cardio delta", func() {
-		row := makeResult(2, true, 0)
-		populateHeartRateSummary(&row)
-		Expect(row.HeartRate.Applied).To(BeTrue())
-		Expect(row.HeartRate.ApplicationReason).To(Equal("no_bonus"))
-		Expect(row.HeartRate.CardioDelta).To(HaveValue(BeZero()))
-		row = makeResult(2, true, 20)
-		populateHeartRateSummary(&row)
-		Expect(row.HeartRate.CardioDelta).To(HaveValue(BeNumerically(">", 0)))
-		Expect(*row.HeartRate.CardioDelta).To(BeNumerically("~", *row.HeartRate.CardioAfter-*row.HeartRate.CardioBefore, 0.05))
-		row = db.AnalysisResult{}
+	It("keeps measured heart rate visible as reference data regardless of legacy bonus", func() {
+		for _, bonus := range []float64{0, 20} {
+			row := makeResult(2, true, bonus)
+			populateHeartRateSummary(&row)
+			Expect(row.HeartRate.Status).To(Equal("completed"))
+			Expect(row.HeartRate.AvgBPM).To(HaveValue(Equal(130.0)))
+			Expect(row.HeartRate.Applied).To(BeFalse())
+			Expect(row.HeartRate.ApplicationReason).To(Equal("reference_only"))
+			Expect(row.HeartRate.CardioBefore).To(BeNil())
+			Expect(row.HeartRate.CardioAfter).To(BeNil())
+			Expect(row.HeartRate.CardioDelta).To(BeNil())
+		}
+		row := db.AnalysisResult{}
 		populateHeartRateSummary(&row)
 		Expect(row.HeartRate.Status).To(Equal("none"))
 		Expect(row.HeartRate.AvgBPM).To(BeNil())
@@ -85,13 +87,27 @@ var _ = Describe("Heart rate response", func() {
 			Expect(row.HeartRate.AvgBPM).To(BeNil())
 		}
 	})
-	It("reports the actual capped cardio difference", func() {
-		row := makeResult(2, true, 20)
-		row.SessionScore = `{"intensity":100,"movements":{"Thruster":{},"Burpee":{},"Row":{},"Run":{},"Double Under":{},"Wall Ball":{},"Box Jump":{}}}`
-		populateHeartRateSummary(&row)
-		Expect(row.HeartRate.CardioBefore).To(HaveValue(Equal(100.0)))
-		Expect(row.HeartRate.CardioDelta).To(HaveValue(BeZero()))
-		Expect(row.HeartRate.ApplicationReason).To(Equal("score_capped"))
+	It("keeps deterministic fatigue identical with or without optional sensor data", func() {
+		for _, intensity := range []int{70, 100} {
+			withoutSensor := db.AnalysisResult{
+				Status:       "COMPLETED",
+				SessionScore: fmt.Sprintf(`{"intensity":%d,"movements":{"Thruster":{},"Pull-up":{}}}`, intensity),
+			}
+			populateSessionFatigueWithSchema(&withoutSensor, 1)
+			Expect(withoutSensor.SessionFatigue).NotTo(BeNil())
+			for _, bonus := range []float64{0, 20} {
+				withSensor := makeResult(2, true, bonus)
+				withSensor.SessionScore = withoutSensor.SessionScore
+				populateSessionFatigueWithSchema(&withSensor, 1)
+				Expect(withSensor.SessionFatigue).NotTo(BeNil())
+				Expect(withSensor.SessionFatigue.Muscles).To(Equal(withoutSensor.SessionFatigue.Muscles))
+				Expect(withSensor.SessionFatigue.OverallScore).To(Equal(withoutSensor.SessionFatigue.OverallScore))
+				Expect(withSensor.SessionFatigue.State).To(Equal(withoutSensor.SessionFatigue.State))
+				Expect(withSensor.SessionFatigue.Guidance).To(Equal(withoutSensor.SessionFatigue.Guidance))
+				Expect(withSensor.SessionFatigue.HeartRateAdjusted).To(BeFalse())
+				Expect(withSensor.HeartRate.ApplicationReason).To(Equal("reference_only"))
+			}
+		}
 	})
 	It("omits zones when a saved result has no maximum heart rate basis", func() {
 		row := makeResult(2, true, 0)

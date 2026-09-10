@@ -150,6 +150,7 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 		SensorState:            resultAttr.SensorState,
 		SensorProcessing:       resultAttr.SensorProcessing,
 		SensorSummary:          resultAttr.SensorSummary,
+		SensorTimeline:         resultAttr.SensorTimeline,
 		SensorNextAttemptAt:    resultAttr.SensorNextAttemptAt,
 		WorkoutAt:              resultAttr.WorkoutAt,
 		WorkoutAtSource:        resultAttr.WorkoutAtSource,

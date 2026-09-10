@@ -248,14 +248,27 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 	}
 
 	var timelineStr string
+	timelineError := processingResult.TimelineError
 	if processingResult.Timeline != nil {
 		timelineJSON, err := json.Marshal(processingResult.Timeline)
 		if err != nil {
 			w.logger.Warn("timeline serialization error; saving error status in timeline", zap.Error(err))
-			timelineStr = fmt.Sprintf(`{"schema_version":1,"status":"failed","error":"%s"}`, err.Error())
+			timelineError = err
 		} else {
 			timelineStr = string(timelineJSON)
 		}
+	}
+
+	if timelineError != nil {
+		w.logger.Warn("sensor timeline failed; preserving sensor summary", zap.Error(timelineError))
+		// Marshal the error, rather than interpolating arbitrary text into JSON.
+		failedJSON, _ := json.Marshal(struct {
+			SchemaVersion int                   `json:"schema_version"`
+			Status        string                `json:"status"`
+			Error         string                `json:"error"`
+			Source        sensor.TimelineSource `json:"source"`
+		}{1, "failed", timelineError.Error(), timelineSource})
+		timelineStr = string(failedJSON)
 	}
 
 	processing.LeaseToken = nil

@@ -1,10 +1,10 @@
 # Heart rate quality and summaries
 
-Implementation baseline: 2026-09-08. Code and automated checks are separate from deployment and H10 device acceptance.
+Quality implementation baseline: 2026-09-08; optional timeline/load policy updated 2026-09-10. Code and automated checks are separate from deployment and H10 device acceptance. See [sensor-timeline.md](sensor-timeline.md) for the current graph contract.
 
 ## Version and storage contract
 
-- Keep the single `analysis_results` table and `videos/{profileId}/{sessionId}/sensor_telemetry_v{sensorVersion}_{requestId}.ndjson` path. No new database column or migration.
+- Keep the single `analysis_results` table and `videos/{profileId}/{sessionId}/sensor_telemetry_v{sensorVersion}_{requestId}.ndjson` path. The optional timeline uses `sensor_timeline`, added by migration `000050`; quality fields remain in the existing summary JSON.
 - `POST /sessions/:session_id/sensor-upload` accepts optional `calculation_version`: omitted/0 means 1; supported values are 1 and 2. New mobile queue entries use `calculationVersion: 2`; preexisting entries missing that field send 1. Preserve request ID and calculation version on retries, including after app restart or backup restoration. A version change under the same request ID returns `409 REQUEST_CONTENT_CONFLICT`.
 - Freeze version in `sensor_processing.calculation_inputs.calculation_version` when preparing the request. Worker passes it into `sensor.ParseAndProcess`. Historical successful version 1 summaries are read without recalculation; do not bulk reprocess today's or earlier sessions.
 - `AnalysisResult.heart_rate` is a response-only DTO (`gorm:"-"`). Populate it before video/fatigue early returns, including pending or failed video. Do not use `session_fatigue` or HR bonus as a prerequisite for displaying measured sensor data.
@@ -27,9 +27,9 @@ Implementation baseline: 2026-09-08. Code and automated checks are separate from
 - Integrate each observation until the next HR/lifecycle observation only for intervals shorter than 5 seconds, clipping pauses. Entire gaps of 5 seconds or longer and the unobserved final tail remain unknown. Do not fill excluded or missing intervals with a held BPM.
 - Accepted instantaneous samples contribute to minimum/peak even if they are the last sample; averages and zones require accepted duration. With no accepted duration, omit average, rather than zero. With no accepted samples, omit all BPM statistics.
 - `valid_seconds + excluded_seconds + unknown_seconds = active_duration`. Exclusion reasons partition excluded time (contact_loss, invalid, sudden_drop, recovering); they do not overlap. `low_bpm_seconds` is a subset of valid time. `contact_coverage` is the proportion of active time with an observed supported contact flag, including false.
-- Coverage threshold remains 50%; bonus remains `clamp((weighted_mean_bpm - 140) * 0.5, 0, 20)` only for complete files with adequate valid coverage.
+- Coverage threshold remains 50%; summary JSON retains the legacy bonus formula `clamp((weighted_mean_bpm - 140) * 0.5, 0, 20)` only for complete files with adequate valid coverage. Current deterministic load/readiness calculations do not consume that bonus.
 - DTO zones carry explicit `zone` 1–5, `seconds`, and `ratio`; ratio denominator is valid duration. Omit zones without a maximum-HR basis. Include `max_bpm` and `max_bpm_source` when known.
-- `applied` means the sensor result was considered by the load calculation, even if bonus is zero. `application_reason` distinguishes no_sensor, pending, failed, stale_summary, quality_insufficient, video_insufficient, no_bonus, adjusted, score_capped. `cardio_before/after/delta` report the actual capped load change, not raw bonus or whole-body score change. No valid video movements means no muscle-load scores.
+- Valid completed HR is reference data: `applied: false`, `application_reason: reference_only`, with `cardio_before/after/delta` absent. Existing no_sensor, pending, failed, stale_summary, quality_insufficient, and video_insufficient reasons still describe availability. No valid video movements means no muscle-load scores. Live accepted BPM and chunk HR input to AI feedback remain enabled.
 - `device_name` comes from recorded device metadata; absent names display “심박 센서” / “Heart rate sensor”. Never assume every sensor is H10. Version 1 is labeled “이전 품질 기준” / “Previous quality criteria”; contact/exclusion fields unavailable in old summaries remain absent.
 
 ## Verification and release acceptance

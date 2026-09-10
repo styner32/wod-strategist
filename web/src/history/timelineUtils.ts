@@ -1,4 +1,12 @@
-import type { SensorTimelinePoint, VideoMappingSegment } from "../api/history";
+import type {
+  ChunkAnalysisResult,
+  SensorTimelineData,
+  SensorTimelinePoint,
+  SensorTimelineResponse,
+  TimelineGap,
+  TimelineValue,
+  VideoMappingSegment,
+} from "../api/history";
 
 /**
  * Maps a workout capture-clock timestamp (in milliseconds) to merged video media time (in seconds).
@@ -96,9 +104,95 @@ export interface RenderableSample {
   status: string;
 }
 
+/** Find only the containing bucket; missing time must never snap to another sample. */
+export function findTimelinePoint(
+  points: SensorTimelinePoint[],
+  targetMs: number,
+  durationMs: number,
+): SensorTimelinePoint | null {
+  if (!Number.isFinite(targetMs)) return null;
+  let low = 0;
+  let high = points.length - 1;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const point = points[mid];
+    const atSessionEnd = targetMs === durationMs && point.end_ms === durationMs;
+    if (targetMs >= point.start_ms && (targetMs < point.end_ms || atSessionEnd)) {
+      return point;
+    }
+    if (targetMs < point.start_ms) high = mid - 1;
+    else low = mid + 1;
+  }
+  return null;
+}
+
+/** Resolve channel quality independently, including compressed pauses and gaps. */
+export function timelineValueAtTime(
+  timeline: SensorTimelineData,
+  channel: "heart_rate_bpm" | "acc_magnitude_std_g",
+  targetMs: number,
+): TimelineValue {
+  const contains = (interval: { start_ms: number; end_ms: number }) =>
+    targetMs >= interval.start_ms &&
+    (targetMs < interval.end_ms ||
+      (targetMs === timeline.duration_ms && interval.end_ms === timeline.duration_ms));
+  if (timeline.pauses.some(contains)) return { value: null, status: "paused" };
+  const gap = timeline.gaps.find((gap) =>
+    (gap.channel === "both" || gap.channel === channelName(channel)) && contains(gap),
+  );
+  if (gap) return { value: null, status: "missing", reason: gap.reason };
+  return findTimelinePoint(timeline.points, targetMs, timeline.duration_ms)?.[channel] ?? {
+    value: null,
+    status: "missing",
+  };
+}
+
+function channelName(channel: "heart_rate_bpm" | "acc_magnitude_std_g") {
+  return channel === "heart_rate_bpm" ? "heart_rate" : "acc";
+}
+
+export const SENSOR_TIMELINE_POLL_LIMIT_MS = 5 * 60 * 1000;
+
+/** Bound automatic waits; a missing video can be intentional or never become ready. */
+export function sensorTimelinePollInterval(
+  response: SensorTimelineResponse | undefined,
+  videoReady: boolean,
+  elapsedMs: number,
+  hasError: boolean,
+): number | false {
+  if (hasError || elapsedMs >= SENSOR_TIMELINE_POLL_LIMIT_MS) return false;
+  if (response?.status === "pending") return 5000;
+  if (response?.timeline && (response.status === "completed" || response.status === "limited") &&
+      (!videoReady || response.video_mapping.segments.length === 0)) return 5000;
+  return false;
+}
+
+/**
+ * Video/chunk changes refresh the mapping even after sensor processing completes.
+ * Only mapping inputs enter the key, so sensor responses cannot trigger a fetch loop.
+ */
+export function sensorTimelineQueryKey(
+  sessionId: string | undefined,
+  profileId: number | undefined,
+  chunks: Pick<ChunkAnalysisResult,
+    "id" | "start_secs" | "end_secs" | "media_start_secs" | "media_end_secs">[],
+  mergedVideoReady: boolean,
+) {
+  return ["sensor-timeline", sessionId, profileId, {
+    mergedVideoReady,
+    boundaries: [...chunks].sort((a, b) => a.id - b.id).map((chunk) => [
+      chunk.id,
+      chunk.start_secs ?? null,
+      chunk.end_secs ?? null,
+      chunk.media_start_secs ?? null,
+      chunk.media_end_secs ?? null,
+    ]),
+  }] as const;
+}
+
 /**
  * Decimates high-density 1s points for display over pixel width, preserving peaks,
- * valleys, and gap/null boundaries.
+ * valleys, and every channel gap/null boundary before grouping valid runs into bins.
  */
 export function decimatePoints(
   points: SensorTimelinePoint[],
@@ -106,79 +200,77 @@ export function decimatePoints(
   visibleStartMs: number,
   visibleEndMs: number,
   targetWidthPx = 600,
+  gaps: TimelineGap[] = [],
 ): RenderableSample[] {
   const visible = points.filter(
-    (p) => p.end_ms >= visibleStartMs && p.start_ms <= visibleEndMs,
+    (p) => p.end_ms > visibleStartMs && p.start_ms < visibleEndMs,
   );
-
-  if (visible.length <= targetWidthPx * 2) {
-    return visible.map((p) => {
-      const valObj = p[channel];
-      return {
-        xMs: (p.start_ms + p.end_ms) / 2,
-        value: valObj.status === "valid" ? valObj.value : null,
-        status: valObj.status,
-      };
+  const channelGaps = gaps
+    .filter((gap) => gap.channel === "both" || gap.channel === channelName(channel))
+    .sort((a, b) => a.start_ms - b.start_ms);
+  const samples: RenderableSample[] = [];
+  let gapIndex = 0;
+  let previousEnd: number | undefined;
+  for (const point of visible) {
+    // Sparse points omit long missing intervals entirely. Insert a separator before
+    // decimation so no line can cross the omitted time, even inside a single pixel.
+    if (previousEnd !== undefined && point.start_ms > previousEnd) {
+      samples.push({ xMs: (previousEnd + point.start_ms) / 2, value: null, status: "missing" });
+    }
+    while (gapIndex < channelGaps.length && channelGaps[gapIndex].end_ms <= point.start_ms) {
+      gapIndex++;
+    }
+    const gap = channelGaps[gapIndex];
+    const overlapsGap = gap && gap.start_ms < point.end_ms && gap.end_ms > point.start_ms;
+    const value = point[channel];
+    samples.push({
+      xMs: (point.start_ms + point.end_ms) / 2,
+      value: !overlapsGap && value.status === "valid" ? value.value : null,
+      status: overlapsGap ? "missing" : value.status,
     });
+    previousEnd = point.end_ms;
   }
 
-  // Binning to preserve extrema and gap edges
-  const binDurationMs = (visibleEndMs - visibleStartMs) / targetWidthPx;
-  const result: RenderableSample[] = [];
+  const width = Math.max(1, Math.floor(targetWidthPx));
+  if (samples.length <= width * 2) return samples;
 
-  let currentBin = 0;
-  let binMin: { sample: RenderableSample; val: number } | null = null;
-  let binMax: { sample: RenderableSample; val: number } | null = null;
+  const binDurationMs = Math.max(1, visibleEndMs - visibleStartMs) / width;
+  const result: RenderableSample[] = [];
+  let currentBin = -1;
+  let binMin: RenderableSample | null = null;
+  let binMax: RenderableSample | null = null;
   let binFirst: RenderableSample | null = null;
   let binLast: RenderableSample | null = null;
 
   const flushBin = () => {
-    if (!binFirst) return;
-    const candidates = [binFirst];
-    if (binMin && binMin.sample !== binFirst && binMin.sample !== binLast) {
-      candidates.push(binMin.sample);
-    }
-    if (binMax && binMax.sample !== binFirst && binMax.sample !== binLast && binMax.sample !== binMin?.sample) {
-      candidates.push(binMax.sample);
-    }
-    if (binLast && binLast !== binFirst) {
-      candidates.push(binLast);
-    }
-    candidates.sort((a, b) => a.xMs - b.xMs);
+    const candidates = [...new Set([binFirst, binMin, binMax, binLast])]
+      .filter((sample): sample is RenderableSample => sample !== null)
+      .sort((a, b) => a.xMs - b.xMs);
     result.push(...candidates);
-
     binMin = null;
     binMax = null;
     binFirst = null;
     binLast = null;
   };
 
-  for (const p of visible) {
-    const xMs = (p.start_ms + p.end_ms) / 2;
-    const bin = Math.floor((xMs - visibleStartMs) / binDurationMs);
+  for (const sample of samples) {
+    if (sample.value === null || !Number.isFinite(sample.value)) {
+      flushBin();
+      result.push(sample);
+      currentBin = -1;
+      continue;
+    }
+    const bin = Math.floor((sample.xMs - visibleStartMs) / binDurationMs);
     if (bin !== currentBin) {
       flushBin();
       currentBin = bin;
     }
-
-    const valObj = p[channel];
-    const val = valObj.status === "valid" ? valObj.value : null;
-    const sample: RenderableSample = {
-      xMs,
-      value: val,
-      status: valObj.status,
-    };
-
     if (!binFirst) binFirst = sample;
     binLast = sample;
-
-    if (val !== null) {
-      if (!binMin || val < binMin.val) binMin = { sample, val };
-      if (!binMax || val > binMax.val) binMax = { sample, val };
-    }
+    if (!binMin || sample.value < binMin.value!) binMin = sample;
+    if (!binMax || sample.value > binMax.value!) binMax = sample;
   }
   flushBin();
-
   return result;
 }
 

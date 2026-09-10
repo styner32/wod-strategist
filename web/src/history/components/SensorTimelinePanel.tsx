@@ -1,14 +1,12 @@
 import { useCallback, useId, useMemo, useRef, useState } from "react";
-import type {
-  SensorTimelinePoint,
-  SensorTimelineResponse,
-} from "../../api/history";
+import type { SensorTimelineResponse } from "../../api/history";
 import {
   buildSvgLinePath,
   captureToMedia,
   decimatePoints,
   formatTimelineTime,
   mediaToCapture,
+  timelineValueAtTime,
 } from "../timelineUtils";
 import ko from "../../../../features/i18n/locales/ko.json";
 
@@ -22,34 +20,6 @@ export interface SensorTimelinePanelProps {
   isMergedVideo?: boolean;
 }
 
-function findClosestPoint(
-  points: SensorTimelinePoint[],
-  targetMs: number,
-): SensorTimelinePoint | null {
-  if (!points || points.length === 0) return null;
-  let low = 0;
-  let high = points.length - 1;
-
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    const p = points[mid];
-    if (targetMs >= p.start_ms && targetMs <= p.end_ms) {
-      return p;
-    }
-    if (targetMs < p.start_ms) {
-      high = mid - 1;
-    } else {
-      low = mid + 1;
-    }
-  }
-
-  const cLow = Math.max(0, Math.min(points.length - 1, low));
-  const cHigh = Math.max(0, Math.min(points.length - 1, high));
-  const dLow = Math.abs((points[cLow].start_ms + points[cLow].end_ms) / 2 - targetMs);
-  const dHigh = Math.abs((points[cHigh].start_ms + points[cHigh].end_ms) / 2 - targetMs);
-  return dLow < dHigh ? points[cLow] : points[cHigh];
-}
-
 function getStatusLabel(status?: string): string {
   if (!status) return labels.noData;
   switch (status) {
@@ -59,6 +29,7 @@ function getStatusLabel(status?: string): string {
     case "unstable":
       return labels.invalid;
     case "gap":
+    case "missing":
       return labels.gap;
     default:
       return labels.noData;
@@ -83,19 +54,11 @@ export function SensorTimelinePanel({
 
   const points = useMemo(() => timeline?.points ?? [], [timeline]);
 
-  const timelineStartMs = useMemo(
-    () => (points.length > 0 ? points[0].start_ms : 0),
-    [points],
-  );
-  const timelineEndMs = useMemo(() => {
-    if (points.length === 0) return 0;
-    const lastPoint = points[points.length - 1];
-    return Math.max(lastPoint.end_ms, timelineStartMs + (timeline?.duration_ms ?? 0));
-  }, [points, timelineStartMs, timeline?.duration_ms]);
-
+  const timelineStartMs = 0;
+  const timelineEndMs = Math.max(0, timeline?.duration_ms ?? 0);
   const activeStartMs = zoomRange ? zoomRange[0] : timelineStartMs;
-  const activeEndMs = zoomRange ? zoomRange[1] : Math.max(timelineStartMs + 1000, timelineEndMs);
-  const activeDurationMs = Math.max(1000, activeEndMs - activeStartMs);
+  const activeEndMs = zoomRange ? zoomRange[1] : timelineEndMs;
+  const activeDurationMs = Math.max(1, activeEndMs - activeStartMs);
 
   // SVG dimensions
   const svgWidth = 800;
@@ -115,7 +78,7 @@ export function SensorTimelinePanel({
       const clamped = Math.max(activeStartMs, Math.min(activeEndMs, ms));
       return margin.left + ((clamped - activeStartMs) / activeDurationMs) * chartWidth;
     },
-    [activeStartMs, activeDurationMs, margin.left, chartWidth],
+    [activeStartMs, activeEndMs, activeDurationMs, margin.left, chartWidth],
   );
 
   const invertX = useCallback(
@@ -129,21 +92,17 @@ export function SensorTimelinePanel({
 
   // Heart Rate Y domain & scale
   const { minHR, maxHR } = useMemo(() => {
-    const visibleHR = points
-      .filter(
-        (p) =>
-          p.end_ms >= activeStartMs &&
-          p.start_ms <= activeEndMs &&
-          p.heart_rate_bpm.status === "valid" &&
-          p.heart_rate_bpm.value != null,
-      )
-      .map((p) => p.heart_rate_bpm.value!);
-
-    if (visibleHR.length === 0) {
-      return { minHR: 50, maxHR: 180 };
+    let rawMin = Infinity;
+    let rawMax = -Infinity;
+    for (const point of points) {
+      const { value, status } = point.heart_rate_bpm;
+      if (point.end_ms > activeStartMs && point.start_ms < activeEndMs &&
+          status === "valid" && value != null && Number.isFinite(value)) {
+        rawMin = Math.min(rawMin, value);
+        rawMax = Math.max(rawMax, value);
+      }
     }
-    const rawMin = Math.min(...visibleHR);
-    const rawMax = Math.max(...visibleHR);
+    if (rawMin === Infinity) return { minHR: 50, maxHR: 180 };
     const min = Math.max(30, Math.floor((rawMin - 10) / 10) * 10);
     const max = Math.min(230, Math.ceil((rawMax + 10) / 10) * 10);
     return { minHR: min, maxHR: Math.max(min + 20, max) };
@@ -159,17 +118,15 @@ export function SensorTimelinePanel({
 
   // Movement Variance Y domain & scale (starts at 0.0)
   const { minAcc, maxAcc } = useMemo(() => {
-    const visibleAcc = points
-      .filter(
-        (p) =>
-          p.end_ms >= activeStartMs &&
-          p.start_ms <= activeEndMs &&
-          p.acc_magnitude_std_g.status === "valid" &&
-          p.acc_magnitude_std_g.value != null,
-      )
-      .map((p) => p.acc_magnitude_std_g.value!);
-
-    const rawMax = visibleAcc.length > 0 ? Math.max(...visibleAcc) : 0.5;
+    let rawMax = -Infinity;
+    for (const point of points) {
+      const { value, status } = point.acc_magnitude_std_g;
+      if (point.end_ms > activeStartMs && point.start_ms < activeEndMs &&
+          status === "valid" && value != null && Number.isFinite(value)) {
+        rawMax = Math.max(rawMax, value);
+      }
+    }
+    if (rawMax === -Infinity) rawMax = 0.5;
     const roundedMax = Math.max(0.5, Math.ceil(rawMax * 1.25 * 10) / 10);
     return { minAcc: 0.0, maxAcc: roundedMax };
   }, [points, activeStartMs, activeEndMs]);
@@ -184,13 +141,13 @@ export function SensorTimelinePanel({
 
   // Downsampled points and paths
   const hrSamples = useMemo(
-    () => decimatePoints(points, "heart_rate_bpm", activeStartMs, activeEndMs, chartWidth),
-    [points, activeStartMs, activeEndMs, chartWidth],
+    () => decimatePoints(points, "heart_rate_bpm", activeStartMs, activeEndMs, chartWidth, timeline?.gaps),
+    [points, activeStartMs, activeEndMs, chartWidth, timeline?.gaps],
   );
 
   const accSamples = useMemo(
-    () => decimatePoints(points, "acc_magnitude_std_g", activeStartMs, activeEndMs, chartWidth),
-    [points, activeStartMs, activeEndMs, chartWidth],
+    () => decimatePoints(points, "acc_magnitude_std_g", activeStartMs, activeEndMs, chartWidth, timeline?.gaps),
+    [points, activeStartMs, activeEndMs, chartWidth, timeline?.gaps],
   );
 
   const hrLinePath = useMemo(
@@ -222,18 +179,19 @@ export function SensorTimelinePanel({
     return xScale(playheadCaptureMs);
   }, [playheadCaptureMs, activeStartMs, activeEndMs, xScale]);
 
-  // Closest point to hover
-  const hoverPoint = useMemo(() => {
-    if (hoverMs == null || points.length === 0) return null;
-    return findClosestPoint(points, hoverMs);
-  }, [hoverMs, points]);
-
+  // Selection stays at the actual capture time, including missing sensor intervals.
+  const hoverValues = useMemo(() => {
+    if (hoverMs == null || !timeline) return null;
+    return {
+      heartRate: timelineValueAtTime(timeline, "heart_rate_bpm", hoverMs),
+      movement: timelineValueAtTime(timeline, "acc_magnitude_std_g", hoverMs),
+    };
+  }, [hoverMs, timeline]);
+  const hoverMediaSec = hoverMs == null ? null : captureToMedia(hoverMs, segments);
   const hoverX = useMemo(() => {
-    if (!hoverPoint) return null;
-    const ptCenterMs = (hoverPoint.start_ms + hoverPoint.end_ms) / 2;
-    if (ptCenterMs < activeStartMs || ptCenterMs > activeEndMs) return null;
-    return xScale(ptCenterMs);
-  }, [hoverPoint, activeStartMs, activeEndMs, xScale]);
+    if (hoverMs == null || hoverMs < activeStartMs || hoverMs > activeEndMs) return null;
+    return xScale(hoverMs);
+  }, [hoverMs, activeStartMs, activeEndMs, xScale]);
 
   // Time ticks
   const xTicks = useMemo(() => {
@@ -326,9 +284,7 @@ export function SensorTimelinePanel({
       } else {
         // Single click -> seek video if available
         const clickedMs = dragState.startMs;
-        const targetPt = findClosestPoint(points, clickedMs);
-        const seekCenterMs = targetPt ? (targetPt.start_ms + targetPt.end_ms) / 2 : clickedMs;
-        const mediaSec = captureToMedia(seekCenterMs, segments);
+        const mediaSec = captureToMedia(clickedMs, segments);
         if (mediaSec != null && onSeekMedia && isMergedVideo) {
           onSeekMedia(mediaSec);
         }
@@ -336,7 +292,7 @@ export function SensorTimelinePanel({
 
       setDragState(null);
     },
-    [dragState, xScale, points, segments, onSeekMedia, isMergedVideo],
+    [dragState, xScale, segments, onSeekMedia, isMergedVideo],
   );
 
   const handlePointerLeave = useCallback(() => {
@@ -347,7 +303,7 @@ export function SensorTimelinePanel({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
-      if (points.length === 0) return;
+      if (timelineEndMs <= 0) return;
       const stepMs = e.shiftKey ? 5000 : 1000;
       const current = hoverMs ?? activeStartMs;
 
@@ -361,11 +317,9 @@ export function SensorTimelinePanel({
         setHoverMs(nextMs);
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        if (hoverPoint && onSeekMedia && isMergedVideo) {
-          const mediaSec = captureToMedia(
-            (hoverPoint.start_ms + hoverPoint.end_ms) / 2,
-            segments,
-          );
+        setHoverMs(current);
+        if (onSeekMedia && isMergedVideo) {
+          const mediaSec = captureToMedia(current, segments);
           if (mediaSec != null) {
             onSeekMedia(mediaSec);
           }
@@ -375,11 +329,10 @@ export function SensorTimelinePanel({
       }
     },
     [
-      points.length,
+      timelineEndMs,
       hoverMs,
       activeStartMs,
       activeEndMs,
-      hoverPoint,
       onSeekMedia,
       isMergedVideo,
       segments,
@@ -419,7 +372,7 @@ export function SensorTimelinePanel({
     );
   }
 
-  if (!timeline || points.length === 0) {
+  if (!timeline || timelineEndMs <= 0) {
     const isPastSession = timelineResponse?.reason === "timeline_not_generated";
     return (
       <section
@@ -476,30 +429,26 @@ export function SensorTimelinePanel({
 
       {/* Hover Information Bar */}
       <div className="flex flex-wrap items-center gap-4 text-xs font-mono mb-2 px-1 min-h-[20px]">
-        {hoverPoint ? (
+        {hoverValues && hoverMs != null ? (
           <>
             <span className="text-text-primary">
-              ⏱ {formatTimelineTime((hoverPoint.start_ms + hoverPoint.end_ms) / 2)}
+              ⏱ {formatTimelineTime(hoverMs)}
             </span>
             <span className="text-rose-400">
               ♥ {labels.heartRate}:{" "}
-              {hoverPoint.heart_rate_bpm.status === "valid"
-                ? `${hoverPoint.heart_rate_bpm.value} ${labels.heartRateUnit}`
-                : getStatusLabel(hoverPoint.heart_rate_bpm.status)}
+              {hoverValues.heartRate.status === "valid"
+                ? `${hoverValues.heartRate.value} ${labels.heartRateUnit}`
+                : getStatusLabel(hoverValues.heartRate.status)}
             </span>
             <span className="text-sky-400">
               ⚡ {labels.movementVariance}:{" "}
-              {hoverPoint.acc_magnitude_std_g.status === "valid" && hoverPoint.acc_magnitude_std_g.value != null
-                ? `${hoverPoint.acc_magnitude_std_g.value.toFixed(2)} ${labels.movementVarianceUnit}`
-                : getStatusLabel(hoverPoint.acc_magnitude_std_g.status)}
+              {hoverValues.movement.status === "valid" && hoverValues.movement.value != null
+                ? `${hoverValues.movement.value.toFixed(2)} ${labels.movementVarianceUnit}`
+                : getStatusLabel(hoverValues.movement.status)}
             </span>
             {isMergedVideo && (
               <span className="text-text-muted">
-                🎬 {captureToMedia((hoverPoint.start_ms + hoverPoint.end_ms) / 2, segments) != null
-                  ? formatTimelineTime(
-                      (captureToMedia((hoverPoint.start_ms + hoverPoint.end_ms) / 2, segments)! * 1000),
-                    )
-                  : "—"}
+                🎬 {hoverMediaSec != null ? formatTimelineTime(hoverMediaSec * 1000) : "—"}
               </span>
             )}
           </>
@@ -520,6 +469,7 @@ export function SensorTimelinePanel({
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerLeave}
+          onPointerCancel={() => setDragState(null)}
           onDoubleClick={() => setZoomRange(null)}
           aria-label={labels.title}
         >

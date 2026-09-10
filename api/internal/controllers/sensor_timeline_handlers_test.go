@@ -133,6 +133,29 @@ var _ = Describe("GET /api/v1/sessions/:session_id/sensor-timeline", func() {
 		Expect(resp.Timeline).To(BeNil())
 	})
 
+	It("reports optional timeline failure independently of the completed sensor summary", func() {
+		sid := "WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF"
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:      sid,
+			ProfileID:      profile.ID,
+			Status:         "COMPLETED",
+			SensorVersion:  1,
+			SensorState:    db.SensorStateCompleted,
+			SensorSummary:  db.JSONDocument(`{"quality":{"valid_hr":true}}`),
+			SensorTimeline: db.JSONDocument(`{"status":"failed","error":"timeline clock is out of range"}`),
+		})
+		req := httptest.NewRequest("GET", fmt.Sprintf("/api/v1/sessions/%s/sensor-timeline?profile_id=%d", sid, profile.ID), nil)
+		authorizeRequest(req, &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusOK))
+		var resp controllers.SensorTimelineResponse
+		Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
+		Expect(resp.Status).To(Equal("failed"))
+		Expect(resp.Reason).To(Equal("timeline clock is out of range"))
+		Expect(resp.Timeline).To(BeNil())
+	})
+
 	It("returns status 'completed' with timeline and dynamic video mapping", func() {
 		sid := "WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF"
 
@@ -182,7 +205,8 @@ var _ = Describe("GET /api/v1/sessions/:session_id/sensor-timeline", func() {
 				},
 			},
 		}
-		tlJSON, _ := json.Marshal(timelineData)
+		tlJSON, err := json.Marshal(timelineData)
+		Expect(err).NotTo(HaveOccurred())
 
 		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
 			SessionID:      sid,
@@ -206,6 +230,8 @@ var _ = Describe("GET /api/v1/sessions/:session_id/sensor-timeline", func() {
 		Expect(resp.Timeline).NotTo(BeNil())
 		Expect(resp.Timeline.Points).To(HaveLen(1))
 		Expect(*resp.Timeline.Points[0].HeartRateBPM.Value).To(Equal(130.0))
+		Expect(resp.Timeline.Source).To(Equal(timelineData.Source))
+		Expect(resp.Timeline.Points[0].AccMagnitudeStdG.Value).To(HaveValue(Equal(0.15)))
 
 		// Check video mapping
 		Expect(resp.VideoMapping.Kind).To(Equal("merged"))
@@ -241,5 +267,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/sensor-timeline", func() {
 		var jsonMap map[string]any
 		Expect(json.Unmarshal(w.Body.Bytes(), &jsonMap)).To(Succeed())
 		Expect(jsonMap).NotTo(HaveKey("sensor_timeline"))
+		Expect(jsonMap).To(HaveKey("analysis"))
+		Expect(jsonMap["analysis"]).NotTo(HaveKey("sensor_timeline"))
 	})
 })

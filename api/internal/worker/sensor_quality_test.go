@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/db"
@@ -14,7 +16,6 @@ import (
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-	"net/url"
 )
 
 var _ = Describe("Sensor quality worker", func() {
@@ -28,18 +29,27 @@ var _ = Describe("Sensor quality worker", func() {
 		}
 	})
 	BeforeEach(func() { testhelpers.CleanupDB(conn) })
-	It("uses the pinned version with a real generation-bound storage reader", func() {
+	It("persists the pinned summary and isolates optional timeline failures", func() {
 		profile := testhelpers.CreateProfile(conn, &db.Profile{})
-		for _, version := range []int{1, 2} {
-			sid := fmt.Sprintf("WOD-20260908-quality-%d", version)
+		for i, tc := range []struct {
+			version        int
+			endMs          string
+			timelineFailed bool
+		}{
+			{version: 1, endMs: "5000"},
+			{version: 2, endMs: "5000"},
+			{version: 2, endMs: "1e25", timelineFailed: true},
+		} {
+			version := tc.version
+			sid := fmt.Sprintf("WOD-20260908-quality-%d-%d", version, i)
 			content := fmt.Sprintf(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"%s","profile_id":%d,"clock_source":"capture_clock","base_epoch_ms":1000}
 {"k":"hr","t":0,"bpm":150,"contact":true}
 {"k":"hr","t":1000,"bpm":150,"contact":true}
 {"k":"hr","t":2000,"bpm":150,"contact":true}
 {"k":"hr","t":3000,"bpm":45,"contact":false}
 {"k":"hr","t":4000,"bpm":150,"contact":true}
-{"k":"end","t":5000}
-`, sid, profile.ID)
+{"k":"end","t":%s}
+`, sid, profile.ID, tc.endMs)
 			object := fmt.Sprintf("videos/%d/%s/sensor_telemetry_v1_r.ndjson", profile.ID, sid)
 			digest := sha256.Sum256([]byte(content))
 			proc := worker.SensorProcessingRecord{RequestID: "r", ObjectName: object, TargetGeneration: "100", SizeBytes: int64(len(content)), SHA256: hex.EncodeToString(digest[:])}
@@ -63,16 +73,41 @@ var _ = Describe("Sensor quality worker", func() {
 			Expect(summary.CalculationVersion).To(Equal(version))
 			Expect(summary.RequestID).To(Equal("r"))
 			Expect(summary.SourceGeneration).To(Equal("100"))
+			Expect(summary.Quality.IsComplete).To(BeTrue())
 			if version == 2 {
 				Expect(summary.Metrics.HR.MinBPM).To(HaveValue(Equal(150)))
 				Expect(summary.Metrics.HR.ExcludedSeconds).To(Equal(1.0))
+				if tc.timelineFailed {
+					var failure struct {
+						Status string `json:"status"`
+						Error  string `json:"error"`
+					}
+					Expect(json.Unmarshal(updated.SensorTimeline, &failure)).To(Succeed())
+					Expect(failure.Status).To(Equal("failed"))
+					Expect(failure.Error).NotTo(BeEmpty())
+				} else {
+					var timeline sensor.SensorTimelineData
+					Expect(json.Unmarshal(updated.SensorTimeline, &timeline)).To(Succeed())
+					Expect(timeline.DurationMs).To(Equal(int64(5000)))
+					Expect(timeline.Source).To(Equal(sensor.TimelineSource{
+						SensorVersion: "1", RequestID: "r", SourceGeneration: "100", HRCalculationVersion: 2,
+					}))
+					Expect(timeline.Points).To(HaveLen(5))
+					Expect(timeline.Points[0].HeartRateBPM.Value).To(HaveValue(Equal(150.0)))
+					Expect(timeline.Points[3].HeartRateBPM.Value).To(BeNil())
+					Expect(timeline.Points[3].HeartRateBPM.Status).To(Equal(sensor.StatusMissing))
+				}
 			} else {
 				Expect(summary.Metrics.HR.MinBPM).To(HaveValue(Equal(45)))
+				Expect(updated.SensorTimeline).To(BeEmpty())
 			}
-			Expect(transport.Requests()).To(HaveLen(1))
-			requestURL, err := url.Parse(transport.Requests()[0].URL)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(requestURL.Query().Get("generation")).To(Equal("100"))
+			Expect(transport.Verify()).To(Succeed())
+			Expect(transport.Requests()).NotTo(BeEmpty())
+			for _, request := range transport.Requests() {
+				requestURL, err := url.Parse(request.URL)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(requestURL.Query().Get("generation")).To(Equal("100"))
+			}
 		}
 	})
 }, Ordered)
