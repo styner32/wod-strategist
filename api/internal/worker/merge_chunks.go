@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
@@ -26,14 +27,15 @@ type concatMediaInterval struct {
 
 func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool, wodDescription string) (*asynq.Task, error) {
 	payload := VideoAnalysisPayload{
-		SessionID:      sessionID,
-		FilePath:       filePath,
-		WorkoutType:    NormalizeWorkoutType(workoutType),
-		Movements:      movements,
-		Injuries:       injuries,
-		ProfileID:      profileID,
-		EnableTTS:      enableTTS,
-		WODDescription: wodDescription,
+		SessionID:        sessionID,
+		MergeRequestedAt: time.Now(),
+		FilePath:         filePath,
+		WorkoutType:      NormalizeWorkoutType(workoutType),
+		Movements:        movements,
+		Injuries:         injuries,
+		ProfileID:        profileID,
+		EnableTTS:        enableTTS,
+		WODDescription:   wodDescription,
 	}
 
 	data, err := json.Marshal(payload)
@@ -90,10 +92,6 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		for _, rec := range dbRecords {
 			dbMap[rec.FilePath] = rec
 		}
-		gcsSet := make(map[string]struct{}, len(gcsChunks))
-		for _, chunkURI := range gcsChunks {
-			gcsSet[chunkURI] = struct{}{}
-		}
 
 		var pendingChunks []string
 		for _, chunkURI := range gcsChunks {
@@ -103,22 +101,26 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		}
 
 		if len(pendingChunks) > 0 {
-			w.logger.Info("Waiting for chunk analyses to complete before merging",
-				zap.String("session_id", p.SessionID),
-				zap.Int("pending_count", len(pendingChunks)),
-				zap.Int("total_chunks", len(gcsChunks)),
-				zap.Strings("pending_chunks", pendingChunks))
-			return fmt.Errorf("waiting for chunk analysis to complete (%d/%d pending)",
-				len(pendingChunks), len(gcsChunks))
-		}
-
-		// Build the ordered list of GCS URIs from DB records (ordered by start_secs).
-		for _, rec := range dbRecords {
-			// Only include files that actually exist in GCS
-			if _, exists := gcsSet[rec.FilePath]; exists {
-				objects = append(objects, rec.FilePath)
+			if err := w.resolvePendingChunks(ctx, p, pendingChunks); err != nil {
+				return err
+			}
+			if err := w.DB.Where("session_id = ? AND profile_id = ? AND status IN ? AND file_path NOT LIKE ?",
+				p.SessionID, p.ProfileID, []string{"COMPLETED", "FAILED"}, "%/split_chunk_%").
+				Order("start_secs ASC NULLS LAST, file_path ASC, id ASC").Find(&dbRecords).Error; err != nil {
+				return fmt.Errorf("failed to re-query chunk records: %w", err)
 			}
 		}
+		objects, err = orderedMergeChunks(gcsChunks, dbRecords)
+		if err != nil {
+			failed := &db.AnalysisResult{SessionID: p.SessionID, ProfileID: p.ProfileID,
+				Status: "FAILED", AnalysisType: db.AnalysisTypeWOD,
+				Output: "촬영 순서를 확인할 수 없어 동영상을 병합하지 못했습니다. 원본 영상을 다시 업로드해주세요."}
+			if saveErr := w.persistVideoAnalysisFailed(ctx, p, failed); saveErr != nil {
+				return fmt.Errorf("persist merge failure: %w", saveErr)
+			}
+			return fmt.Errorf("%v: %w", err, asynq.SkipRetry)
+		}
+
 		w.logger.Info("Chunk order resolved from DB (start_secs)",
 			zap.Int("count", len(objects)),
 			zap.Strings("objects", objects))

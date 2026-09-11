@@ -265,4 +265,36 @@ var _ = Describe("HandleChunkAnalysisWithSessionTask", func() {
 		err = w.HandleChunkAnalysisTask(context.Background(), task)
 		Expect(err).To(MatchError(ContainSubstring("invalid file path")))
 	})
+
+	It("marks chunk as FAILED and returns SkipRetry when retry count reaches 3", func() {
+		task, err := NewChunkAnalysisWithSessionTask(
+			sessionID,
+			"gs://test-bucket/chunks/sess-chunk-retry-002/chunk_001.mp4",
+			profile.ID,
+			2.0, 12.0,
+			120,
+			0.6,
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		ctx := WithRetryCount(context.Background(), 3)
+		err = w.HandleChunkAnalysisWithSessionTask(ctx, task)
+		Expect(err).To(Equal(asynq.SkipRetry))
+
+		var result db.ChunkAnalysisResult
+		Expect(dbConn.Where("session_id = ? AND file_path = ?", sessionID, "gs://test-bucket/chunks/sess-chunk-retry-002/chunk_001.mp4").First(&result).Error).
+			NotTo(HaveOccurred())
+		Expect(result.Status).To(Equal("FAILED"))
+		Expect(result.Output).To(Equal("Chunk analysis failed after max retries."))
+		Expect(result.WorkoutConfidence).To(Equal(0.6))
+		Expect(result.StartSecs).NotTo(BeNil())
+		Expect(*result.StartSecs).To(Equal(2.0))
+		Expect(result.EndSecs).NotTo(BeNil())
+		Expect(*result.EndSecs).To(Equal(12.0))
+		Expect(w.HandleChunkAnalysisWithSessionTask(ctx, task)).To(Equal(asynq.SkipRetry))
+		var count int64
+		Expect(dbConn.Model(&db.ChunkAnalysisResult{}).Where("session_id = ? AND file_path = ?", result.SessionID, result.FilePath).Count(&count).Error).To(Succeed())
+		Expect(count).To(Equal(int64(1)))
+
+	})
 })

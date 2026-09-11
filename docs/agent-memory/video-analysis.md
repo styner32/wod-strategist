@@ -28,6 +28,33 @@ current implementation keeps capture offsets and separately probed cumulative
 media offsets; remaining manifest/coverage work must preserve this separation for merged-video analysis, subtitles, highlights, and playback.
 
 ## Architecture
+
+### Original chunk failure recovery (2026-09-11)
+
+- Both original chunk handlers persist terminal results through
+  `persistChunkAnalysisResult`. A PostgreSQL transaction advisory lock keyed by
+  `(profile_id, session_id, file_path)` serializes insert/update, including an
+  absent row. A late success updates a failure while retaining its ID and verified
+  media offsets; terminal failure cannot overwrite success. No schema change is
+  required. Existing duplicate rows remain for feedback references, but merge
+  includes each GCS URI once. Other writers must use the same helper for original
+  chunks; this does not make server-split/full-analysis writes idempotent.
+- Final status write failures return a retryable error, including after the
+  analysis retry budget is exhausted. `SkipRetry` follows a successful failure
+  write, not a failed DB write.
+- The production worker wires a real `QueueInspector` to Redis DB 5. Missing
+  chunk results trigger inspection of the default queue's archived, pending,
+  scheduled, retry, and active tasks. Live matching tasks keep merge waiting,
+  regardless of merge retry count. Archived task payloads restore capture times.
+- `merge_requested_at` is set when creating a merge task. A chunk absent from
+  both DB terminal results and the queue is eligible for orphan recovery after
+  35 minutes from that time. Old payloads fall back to GCS object `Created`.
+  Queue/storage inspection failures remain retryable; they do not prove failure.
+- Merge orders by capture timestamps when all are present. Missing timestamps
+  allow only unambiguous numeric `chunk_<number>.mp4/.mov` ordering. Untimed native
+  UUID filenames cause a persisted session failure instead of a guessed video
+  order. This remains a legacy fallback, not an authoritative upload manifest.
+
 Merged-video analysis uses a two-pass design to reduce timestamp hallucination.
 
 Pipeline:

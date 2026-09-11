@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"time"
 
 	"github.com/hibiken/asynq"
 	. "github.com/onsi/ginkgo/v2"
@@ -148,11 +149,12 @@ var _ = Describe("HandleMergeChunksTask", func() {
 		profileID = p.ID
 
 		w = &Worker{
-			DB:            dbConn,
-			StorageClient: storageClient,
-			QueueClient:   queueClient,
-			BucketName:    "test-bucket",
-			logger:        zap.NewNop(),
+			DB:             dbConn,
+			StorageClient:  storageClient,
+			QueueClient:    queueClient,
+			QueueInspector: inspector,
+			BucketName:     "test-bucket",
+			logger:         zap.NewNop(),
 		}
 	})
 
@@ -222,6 +224,37 @@ var _ = Describe("HandleMergeChunksTask", func() {
 		Expect(chunks).To(Equal([]string{
 			"gs://test-bucket/videos/sess-filter-002/chunk_001.mp4",
 		}))
+	})
+
+	It("returns waiting error when chunk analysis is still pending and retryCount is high", func() {
+		sessionID := "sess-pending-wait"
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/"+sessionID+"/", []string{
+			"videos/" + sessionID + "/chunk_001.mp4",
+			"videos/" + sessionID + "/chunk_002.mp4",
+		})
+
+		start0, end0 := 0.0, 10.0
+		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID: sessionID,
+			ProfileID: profileID,
+			FilePath:  "gs://test-bucket/videos/" + sessionID + "/chunk_001.mp4",
+			Status:    "COMPLETED",
+			StartSecs: &start0,
+			EndSecs:   &end0,
+		})
+
+		task, err := NewMergeChunksTask(
+			sessionID,
+			"gs://test-bucket/videos/"+sessionID,
+			WorkoutTypeWOD, nil, nil, profileID,
+			false,
+			"",
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		ctx := WithRetryCount(context.Background(), 20)
+		err = w.HandleMergeChunksTask(ctx, task)
+		Expect(err).To(MatchError(ContainSubstring("waiting for chunk analysis to complete")))
 	})
 
 	It("persists concat-relative media offsets instead of capture-clock timestamps", func() {
@@ -430,6 +463,76 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			Expect(w.HandleMergeChunksTask(context.Background(), task)).To(Succeed())
 
 			// Verify a video:analysis task was enqueued
+			pending, err := inspector.ListPendingTasks("default")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pending).To(HaveLen(1))
+			Expect(pending[0].Type).To(Equal(TypeVideoAnalysis))
+		})
+
+		It("resolves abandoned first chunk after grace and preserves merge order", func() {
+			tmpFile := createTinyMP4(GinkgoT())
+			mp4Bytes, readErr := os.ReadFile(tmpFile)
+			Expect(readErr).NotTo(HaveOccurred())
+
+			sessionID := "sess-pending-autoheal"
+
+			// Only chunk_002 is completed; chunk_001 was abandoned/failed before DB record
+			start0, end0 := 1.0, 2.0
+			completed := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+				SessionID: sessionID,
+				ProfileID: profileID,
+				FilePath:  "gs://test-bucket/videos/" + sessionID + "/chunk_002.mp4",
+				Status:    "COMPLETED",
+				Output:    "good form",
+				StartSecs: &start0,
+				EndSecs:   &end0,
+			})
+			// Existing deployments may already contain duplicate rows.
+			testhelpers.CreateChunkAnalysisResult(dbConn, &completed)
+
+			ffmpegTransport := testhelpers.NewMockTransport()
+			ffmpegStorageClient, sErr := testhelpers.NewStorageClient("test-bucket", ffmpegTransport)
+			Expect(sErr).NotTo(HaveOccurred())
+			w.StorageClient = ffmpegStorageClient
+
+			testhelpers.MockGCSListObjects(ffmpegTransport, "test-bucket", "videos/"+sessionID+"/", []string{
+				"videos/" + sessionID + "/chunk_002.mp4",
+				"videos/" + sessionID + "/chunk_001.mp4",
+			})
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/"+sessionID+"/chunk_002.mp4", mp4Bytes)
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, "gs://test-bucket/videos/"+sessionID+"/chunk_001.mp4", mp4Bytes)
+			testhelpers.MockGCSUpload(ffmpegTransport, "test-bucket", "merged")
+
+			task, err := NewMergeChunksTask(
+				sessionID,
+				"gs://test-bucket/videos/"+sessionID,
+				WorkoutTypeWOD,
+				[]string{"Squat"},
+				nil, profileID,
+				false,
+				"",
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			var payload VideoAnalysisPayload
+			Expect(json.Unmarshal(task.Payload(), &payload)).To(Succeed())
+			payload.MergeRequestedAt = time.Now().Add(-orphanChunkGrace - time.Minute)
+			body, marshalErr := json.Marshal(payload)
+			Expect(marshalErr).NotTo(HaveOccurred())
+			task = asynq.NewTask(TypeMergeChunks, body)
+			ctx := WithRetryCount(context.Background(), 3)
+			Expect(w.HandleMergeChunksTask(ctx, task)).To(Succeed())
+
+			// Verify chunk_001 was marked as FAILED in DB
+			var failedRec db.ChunkAnalysisResult
+			Expect(dbConn.Where("session_id = ? AND file_path = ?", sessionID, "gs://test-bucket/videos/"+sessionID+"/chunk_001.mp4").First(&failedRec).Error).To(Succeed())
+			Expect(failedRec.Status).To(Equal("FAILED"))
+			Expect(failedRec.Output).To(ContainSubstring("archived or abandoned"))
+
+			Expect(failedRec.MediaStartSecs).NotTo(BeNil())
+			Expect(*failedRec.MediaStartSecs).To(Equal(0.0))
+
+			// Verify video:analysis task was enqueued
 			pending, err := inspector.ListPendingTasks("default")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(pending).To(HaveLen(1))

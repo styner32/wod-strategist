@@ -82,6 +82,8 @@ func main() {
 	queueClient := asynq.NewClient(redisOpt)
 
 	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient, logger.Log)
+	w.QueueInspector = asynq.NewInspector(redisOpt)
+	defer w.QueueInspector.Close()
 	w.UseCache = cfg.UseCache
 	w.PipelineMode = worker.PipelineMode(cfg.PipelineMode)
 

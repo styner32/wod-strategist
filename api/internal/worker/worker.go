@@ -39,6 +39,25 @@ const (
 	WorkoutTypeCooldown          = "cooldown"
 )
 
+type contextKey string
+
+const retryCountContextKey contextKey = "retry_count"
+
+// WithRetryCount returns a context with an overridden retry count (primarily for tests).
+func WithRetryCount(ctx context.Context, retryCount int) context.Context {
+	return context.WithValue(ctx, retryCountContextKey, retryCount)
+}
+
+func getRetryCount(ctx context.Context) int {
+	if count, ok := ctx.Value(retryCountContextKey).(int); ok {
+		return count
+	}
+	if count, ok := asynq.GetRetryCount(ctx); ok {
+		return count
+	}
+	return 0
+}
+
 // SensorTelemetryPayload is the minimal queue message for sensor processing.
 type SensorTelemetryPayload struct {
 	AnalysisResultID uint   `json:"analysis_result_id"`
@@ -71,11 +90,12 @@ type VideoAnalysisPayload struct {
 	ProfileID         uint
 	StartSecs         float64
 	EndSecs           float64
-	HeartRateBPM      int     `json:"heart_rate_bpm,omitempty"`     // BLE heart rate associated with the chunk; exact sample time is unavailable
-	EnableTTS         bool    `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
-	WODDescription    string  `json:"wod_description,omitempty"`    // user-supplied WOD descriptor (e.g. "Fran", "For Time: 5 rounds of...")
-	WorkoutConfidence float64 `json:"workout_confidence,omitempty"` // client-side workout confidence index
-	PipelineMode      string  `json:"pipeline_mode,omitempty"`
+	HeartRateBPM      int       `json:"heart_rate_bpm,omitempty"`     // BLE heart rate associated with the chunk; exact sample time is unavailable
+	EnableTTS         bool      `json:"enable_tts,omitempty"`         // generate TTS narration in hardsub
+	WODDescription    string    `json:"wod_description,omitempty"`    // user-supplied WOD descriptor (e.g. "Fran", "For Time: 5 rounds of...")
+	WorkoutConfidence float64   `json:"workout_confidence,omitempty"` // client-side workout confidence index
+	PipelineMode      string    `json:"pipeline_mode,omitempty"`
+	MergeRequestedAt  time.Time `json:"merge_requested_at,omitempty"`
 }
 
 // VideoAnalysisWithSessionPayload is used when session_id is available (when user has selected a session to upload)
@@ -169,14 +189,15 @@ const (
 
 // Worker holds all dependencies shared across task handlers.
 type Worker struct {
-	DB            *gorm.DB
-	StorageClient StorageClient
-	BucketName    string
-	GeminiClient  GeminiClient
-	QueueClient   QueueClient
-	UseCache      bool // enable context caching for long video analysis
-	PipelineMode  PipelineMode
-	logger        *zap.Logger
+	DB             *gorm.DB
+	StorageClient  StorageClient
+	BucketName     string
+	GeminiClient   GeminiClient
+	QueueClient    QueueClient
+	QueueInspector *asynq.Inspector
+	UseCache       bool // enable context caching for long video analysis
+	PipelineMode   PipelineMode
+	logger         *zap.Logger
 }
 
 func NewWorker(db *gorm.DB, storageClient StorageClient, bucketName string, geminiClient GeminiClient, queueClient QueueClient, log *zap.Logger) *Worker {

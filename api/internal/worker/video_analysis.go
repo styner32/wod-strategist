@@ -117,10 +117,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	retryCount, ok := asynq.GetRetryCount(ctx)
-	if !ok {
-		retryCount = 0
-	}
+	retryCount := getRetryCount(ctx)
 
 	w.logger.Info("Processing video analysis",
 		zap.String("session_id", p.SessionID),
@@ -131,7 +128,26 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		zap.Int("retry_count", int(retryCount)))
 
 	if retryCount >= 3 {
-		w.logger.Error("Max retries reached. Skipping analysis.")
+		w.logger.Error("Max retries reached for video analysis. Marking analysis as FAILED.",
+			zap.String("session_id", p.SessionID),
+			zap.String("file_path", p.FilePath))
+		profileID, err := w.resolveVideoAnalysisProfile(ctx, p.SessionID, p.ProfileID)
+		if err != nil {
+			return err
+		}
+		if profileID != 0 {
+			p.ProfileID = profileID
+		}
+		failedResult := &db.AnalysisResult{
+			SessionID:    p.SessionID,
+			ProfileID:    p.ProfileID,
+			Status:       "FAILED",
+			Output:       "동영상 분석 중 오류가 발생했습니다. 다시 시도해주세요.",
+			AnalysisType: db.AnalysisTypeWOD,
+		}
+		if dbErr := w.persistVideoAnalysisFailed(ctx, p, failedResult); dbErr != nil {
+			return fmt.Errorf("failed to persist FAILED analysis result on max retries: %w", dbErr)
+		}
 		return asynq.SkipRetry
 	}
 
