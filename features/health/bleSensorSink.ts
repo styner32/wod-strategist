@@ -10,7 +10,7 @@ export interface BleSensorSink {
   /** Called when the device disconnects or connection is lost. */
   onDeviceLost(reason: string): void;
   /** Direct push from GATT 0x2A37 parseHeartRate to bypass React state re-render latency. */
-  onHeartRate(bpm: number, rrIntervalsMs: number[], receivedAtMs: number): void;
+  onHeartRate(bpm: number, rrIntervalsMs: number[], receivedAtMs: number, contact?: boolean): void;
   /** Optional battery percentage update from GATT 0x2A19. */
   onBattery?(batteryPercent: number): void;
 }

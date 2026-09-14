@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -376,23 +377,12 @@ func (c *Client) AnalyzeVideoWithThinking(ctx context.Context, filePath string, 
 	}
 
 	// Poll for file state to be ACTIVE
-	for {
-		file, err := c.client.Files.Get(ctx, uploadResult.Name, nil)
-		if err != nil {
-			return "", uploadResult.Name, nil, fmt.Errorf("failed to get file info: %w", err)
-		}
-
-		if file.State == genai.FileStateActive {
-			break
-		}
-		if file.State == genai.FileStateFailed {
-			return "", uploadResult.Name, nil, fmt.Errorf("file processing failed")
-		}
-
-		c.sleep(c.pollInterval)
+	file, _, err := c.waitForFileActive(ctx, uploadResult.Name)
+	if err != nil {
+		return "", uploadResult.Name, nil, err
 	}
 
-	c.logger.Info("File uploaded", zap.Any("file", uploadResult), zap.String("mime_type", mimeType))
+	c.logger.Info("File uploaded", zap.Any("file", file), zap.String("mime_type", mimeType))
 
 	// Generate content — single multimodal turn with video first for better temporal grounding
 	var genConfig *genai.GenerateContentConfig
@@ -469,6 +459,85 @@ func (c *Client) FileVideoDuration(ctx context.Context, name string) (time.Durat
 		return 0, true, nil
 	}
 	return duration, true, nil
+}
+
+const maxConsecutiveFileGetErrors = 5
+
+// isRetryableFileGetError returns true if err is a transient server error, rate limit, or connection issue.
+func isRetryableFileGetError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr genai.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.Code >= 500 || apiErr.Code == 429 {
+			return true
+		}
+		status := strings.ToUpper(apiErr.Status)
+		if status == "INTERNAL" || status == "UNAVAILABLE" || status == "RESOURCE_EXHAUSTED" {
+			return true
+		}
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "500") ||
+		strings.Contains(errStr, "502") ||
+		strings.Contains(errStr, "503") ||
+		strings.Contains(errStr, "504") ||
+		strings.Contains(errStr, "429") ||
+		strings.Contains(errStr, "internal") ||
+		strings.Contains(errStr, "unavailable") ||
+		strings.Contains(errStr, "resource_exhausted") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "eof") ||
+		strings.Contains(errStr, "timeout")
+}
+
+// waitForFileActive polls until the uploaded file reaches FileStateActive.
+// It retries transient errors (e.g. HTTP 500, 503, 429) with backoff up to maxConsecutiveFileGetErrors times.
+func (c *Client) waitForFileActive(ctx context.Context, fileName string) (*genai.File, time.Duration, error) {
+	var videoDuration time.Duration
+	consecutiveErrors := 0
+
+	for {
+		if ctx.Err() != nil {
+			return nil, 0, ctx.Err()
+		}
+
+		file, err := c.client.Files.Get(ctx, fileName, nil)
+		if err != nil {
+			if isRetryableFileGetError(err) && consecutiveErrors < maxConsecutiveFileGetErrors {
+				consecutiveErrors++
+				if c.logger != nil {
+					c.logger.Warn("Transient error getting file state from Gemini, retrying...",
+						zap.String("file_name", fileName),
+						zap.Int("attempt", consecutiveErrors),
+						zap.Int("max_attempts", maxConsecutiveFileGetErrors),
+						zap.Error(err))
+				}
+				c.sleep(c.pollInterval * time.Duration(consecutiveErrors))
+				continue
+			}
+			return nil, 0, fmt.Errorf("failed to get file info: %w", err)
+		}
+		consecutiveErrors = 0
+
+		if file.State == genai.FileStateActive {
+			if file.VideoMetadata != nil {
+				if durStr, ok := file.VideoMetadata["videoDuration"].(string); ok {
+					if d, parseErr := time.ParseDuration(durStr); parseErr == nil {
+						videoDuration = d
+					}
+				}
+			}
+			return file, videoDuration, nil
+		}
+		if file.State == genai.FileStateFailed {
+			return nil, 0, fmt.Errorf("file processing failed")
+		}
+
+		c.sleep(c.pollInterval)
+	}
 }
 
 // GenerateWorkoutMusic generates a music clip using the Lyria 3 model and writes
@@ -575,35 +644,14 @@ func (c *Client) UploadVideo(ctx context.Context, filePath string) (*UploadResul
 		zap.Duration("upload_duration", time.Since(uploadStart)),
 		zap.Int64("file_size_bytes", fileSizeBytes))
 
-	var videoDuration time.Duration
-	for {
-		file, err := c.client.Files.Get(ctx, uploadResult.Name, nil)
-		if err != nil {
-			return &UploadResult{FileName: uploadResult.Name},
-				fmt.Errorf("failed to get file info: %w", err)
-		}
-
-		if file.State == genai.FileStateActive {
-			if file.VideoMetadata != nil {
-				if durStr, ok := file.VideoMetadata["videoDuration"].(string); ok {
-					if d, parseErr := time.ParseDuration(durStr); parseErr == nil {
-						videoDuration = d
-					}
-				}
-			}
-			break
-		}
-		if file.State == genai.FileStateFailed {
-			return &UploadResult{FileName: uploadResult.Name},
-				fmt.Errorf("file processing failed")
-		}
-
-		c.sleep(c.pollInterval)
+	file, videoDuration, err := c.waitForFileActive(ctx, uploadResult.Name)
+	if err != nil {
+		return &UploadResult{FileName: uploadResult.Name}, err
 	}
 
 	c.logger.Info("File is ACTIVE",
-		zap.String("file_name", uploadResult.Name),
-		zap.String("file_uri", uploadResult.URI),
+		zap.String("file_name", file.Name),
+		zap.String("file_uri", file.URI),
 		zap.Duration("video_duration", videoDuration))
 
 	return &UploadResult{

@@ -347,7 +347,7 @@ var _ = Describe("Gemini client", func() {
 			Expect(geminiFile).To(BeEmpty())
 		})
 
-		It("returns an error when polling file state fails", func() {
+		It("returns an error when polling file state repeatedly fails with 500", func() {
 			transport.New(baseURL).
 				Post("/upload/v1beta/files").
 				Reply(http.StatusOK).
@@ -365,20 +365,82 @@ var _ = Describe("Gemini client", func() {
 					},
 				})
 
-			transport.New(baseURL).
-				Get("/v1beta/files/mock-file").
-				Reply(http.StatusInternalServerError).
-				JSON(map[string]any{
-					"error": map[string]any{
-						"message": "poll failed",
-					},
-				})
+			for i := 0; i <= maxConsecutiveFileGetErrors; i++ {
+				transport.New(baseURL).
+					Get("/v1beta/files/mock-file").
+					Reply(http.StatusInternalServerError).
+					JSON(map[string]any{
+						"error": map[string]any{
+							"code":    500,
+							"status":  "INTERNAL",
+							"message": "poll failed",
+						},
+					})
+			}
 
 			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to get file info"))
 			Expect(result).To(BeEmpty())
 			Expect(geminiFile).To(Equal("files/mock-file"))
+		})
+
+		It("retries transient 500 error while polling and succeeds when active", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Status", "final").
+				JSON(map[string]any{
+					"file": map[string]any{
+						"name": "files/mock-retry-file",
+						"uri":  "https://example.test/files/mock-retry-file",
+					},
+				})
+
+			// First poll: transient 500 error
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-retry-file").
+				Reply(http.StatusInternalServerError).
+				JSON(map[string]any{
+					"error": map[string]any{
+						"message": "internal server error",
+					},
+				})
+
+			// Second poll: recovers and reports ACTIVE
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-retry-file").
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-retry-file",
+					"state": "ACTIVE",
+				})
+
+			transport.New(baseURL).
+				Post("/v1beta/models/"+defaultModel+":generateContent").
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{
+						{
+							"content": map[string]any{
+								"parts": []map[string]any{
+									{"text": "recovered response"},
+								},
+							},
+						},
+					},
+				})
+
+			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), videoPath, "prompt")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("recovered response"))
+			Expect(geminiFile).To(Equal("files/mock-retry-file"))
 		})
 
 		It("returns an error when Gemini marks the file as failed", func() {

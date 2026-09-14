@@ -1,0 +1,523 @@
+[
+  {
+    "name": "stable low heart rate is included",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 45,
+        "reason": "low"
+      },
+      {
+        "t": 1000,
+        "bpm": 48,
+        "reason": "low"
+      },
+      {
+        "t": 2000,
+        "bpm": 50,
+        "reason": "low"
+      },
+      {
+        "t": 3000,
+        "bpm": 54,
+        "reason": "low"
+      },
+      {
+        "t": 4000,
+        "bpm": 55,
+        "reason": "valid"
+      },
+      {
+        "t": 5000,
+        "bpm": 60,
+        "reason": "valid"
+      }
+    ]
+  },
+  {
+    "name": "gradual descent",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 148,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 145,
+        "reason": "valid"
+      },
+      {
+        "t": 3000,
+        "bpm": 140,
+        "reason": "valid"
+      },
+      {
+        "t": 4000,
+        "bpm": 135,
+        "reason": "valid"
+      },
+      {
+        "t": 5000,
+        "bpm": 130,
+        "reason": "valid"
+      },
+      {
+        "t": 6000,
+        "bpm": 125,
+        "reason": "valid"
+      },
+      {
+        "t": 7000,
+        "bpm": 120,
+        "reason": "valid"
+      },
+      {
+        "t": 8000,
+        "bpm": 115,
+        "reason": "valid"
+      },
+      {
+        "t": 9000,
+        "bpm": 110,
+        "reason": "valid"
+      },
+      {
+        "t": 10000,
+        "bpm": 105,
+        "reason": "valid"
+      },
+      {
+        "t": 11000,
+        "bpm": 100,
+        "reason": "valid"
+      }
+    ]
+  },
+  {
+    "name": "sudden drop and five second recovery",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 3000,
+        "bpm": 45,
+        "reason": "sudden_drop"
+      },
+      {
+        "t": 4000,
+        "bpm": 100,
+        "reason": "sudden_drop"
+      },
+      {
+        "t": 5000,
+        "bpm": 105,
+        "reason": "recovering"
+      },
+      {
+        "t": 6000,
+        "bpm": 105,
+        "reason": "recovering"
+      },
+      {
+        "t": 7000,
+        "bpm": 110,
+        "reason": "recovering"
+      },
+      {
+        "t": 8000,
+        "bpm": 120,
+        "reason": "recovering"
+      },
+      {
+        "t": 9000,
+        "bpm": 130,
+        "reason": "recovering"
+      },
+      {
+        "t": 10000,
+        "bpm": 140,
+        "reason": "valid"
+      }
+    ]
+  },
+  {
+    "name": "contact loss and repeated loss restart recovery",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 45,
+        "reason": "contact_loss",
+        "contact": false
+      },
+      {
+        "t": 2000,
+        "bpm": 150,
+        "reason": "recovering",
+        "contact": true
+      },
+      {
+        "t": 3000,
+        "bpm": 150,
+        "reason": "contact_loss",
+        "contact": false
+      },
+      {
+        "t": 4000,
+        "bpm": 150,
+        "reason": "recovering",
+        "contact": true
+      },
+      {
+        "t": 5000,
+        "bpm": 150,
+        "reason": "recovering",
+        "contact": true
+      },
+      {
+        "t": 6000,
+        "bpm": 150,
+        "reason": "recovering",
+        "contact": true
+      },
+      {
+        "t": 7000,
+        "bpm": 150,
+        "reason": "recovering",
+        "contact": true
+      },
+      {
+        "t": 8000,
+        "bpm": 150,
+        "reason": "recovering",
+        "contact": true
+      },
+      {
+        "t": 9000,
+        "bpm": 150,
+        "reason": "valid",
+        "contact": true
+      }
+    ]
+  },
+  {
+    "name": "minimum three baseline samples",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 45,
+        "reason": "low"
+      }
+    ]
+  },
+  {
+    "name": "drop requires both thirty BPM and thirty percent",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 90,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 90,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 90,
+        "reason": "valid"
+      },
+      {
+        "t": 3000,
+        "bpm": 63,
+        "reason": "valid"
+      }
+    ]
+  },
+  {
+    "name": "exact drop threshold",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 100,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 100,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 100,
+        "reason": "valid"
+      },
+      {
+        "t": 3000,
+        "bpm": 70,
+        "reason": "sudden_drop"
+      }
+    ]
+  },
+  {
+    "name": "accepted range boundaries",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 30,
+        "reason": "low"
+      },
+      {
+        "t": 1000,
+        "bpm": 240,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 241,
+        "reason": "invalid"
+      },
+      {
+        "t": 3000,
+        "bpm": 29,
+        "reason": "invalid"
+      }
+    ]
+  },
+  {
+    "name": "five second missing interval clears old baseline",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 7000,
+        "bpm": 50,
+        "reason": "recovering"
+      },
+      {
+        "t": 8000,
+        "bpm": 50,
+        "reason": "recovering"
+      },
+      {
+        "t": 9000,
+        "bpm": 50,
+        "reason": "recovering"
+      },
+      {
+        "t": 10000,
+        "bpm": 50,
+        "reason": "recovering"
+      },
+      {
+        "t": 11000,
+        "bpm": 50,
+        "reason": "recovering"
+      },
+      {
+        "t": 12000,
+        "bpm": 50,
+        "reason": "low"
+      }
+    ]
+  },
+  {
+    "name": "reconnect resets frozen baseline",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 3000,
+        "bpm": 45,
+        "reason": "sudden_drop"
+      },
+      {
+        "t": 4000,
+        "bpm": 50,
+        "reason": "recovering",
+        "reset": true
+      },
+      {
+        "t": 5000,
+        "bpm": 50,
+        "reason": "recovering"
+      },
+      {
+        "t": 6000,
+        "bpm": 50,
+        "reason": "recovering"
+      },
+      {
+        "t": 7000,
+        "bpm": 50,
+        "reason": "recovering"
+      },
+      {
+        "t": 8000,
+        "bpm": 50,
+        "reason": "recovering"
+      },
+      {
+        "t": 9000,
+        "bpm": 50,
+        "reason": "low"
+      }
+    ]
+  },
+  {
+    "name": "missing data cannot bypass a frozen drop baseline",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 3000,
+        "bpm": 45,
+        "reason": "sudden_drop"
+      },
+      {
+        "t": 8000,
+        "bpm": 45,
+        "reason": "sudden_drop"
+      },
+      {
+        "t": 9000,
+        "bpm": 105,
+        "reason": "recovering"
+      },
+      {
+        "t": 10000,
+        "bpm": 105,
+        "reason": "recovering"
+      },
+      {
+        "t": 11000,
+        "bpm": 105,
+        "reason": "recovering"
+      },
+      {
+        "t": 12000,
+        "bpm": 105,
+        "reason": "recovering"
+      },
+      {
+        "t": 13000,
+        "bpm": 105,
+        "reason": "recovering"
+      },
+      {
+        "t": 14000,
+        "bpm": 105,
+        "reason": "valid"
+      }
+    ]
+  },
+  {
+    "name": "contact recovery still checks for a sudden drop",
+    "readings": [
+      {
+        "t": 0,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 1000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 2000,
+        "bpm": 150,
+        "reason": "valid"
+      },
+      {
+        "t": 3000,
+        "bpm": 45,
+        "reason": "contact_loss",
+        "contact": false
+      },
+      {
+        "t": 4000,
+        "bpm": 45,
+        "reason": "sudden_drop"
+      },
+      {
+        "t": 5000,
+        "bpm": 45,
+        "reason": "sudden_drop"
+      }
+    ]
+  }
+]

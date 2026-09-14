@@ -75,18 +75,22 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 		Expect(w.Code).To(Equal(http.StatusForbidden))
 	})
 
-	It("returns deterministic fallback advice when Gemini is not configured", func() {
+	It("returns deterministic fallback advice when Gemini is not configured and evidence is complete", func() {
 		router = newTestRouterWithAuthService(controllers.Config{})
-		now := time.Now()
+		now := time.Now().UTC()
+		workoutTime := now.Add(-10 * time.Hour)
+		source := "session_ulid"
 
-		// Add recent past session with heavy shoulder load in SessionScore
+		// Add recent past session with reliable workout_at
 		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
-			SessionID:    "WOD-20260901-01PASTSESSION0001",
-			ProfileID:    profile.ID,
-			Status:       "COMPLETED",
-			AnalysisType: db.AnalysisTypeWOD,
-			SessionScore: `{"intensity":85,"movements":{"Push Jerk":{"reps":30},"Thruster":{"reps":45}}}`,
-			CreatedAt:    now.Add(-10 * time.Hour),
+			SessionID:       "WOD-20260901-01PASTSESSION0001",
+			ProfileID:       profile.ID,
+			Status:          "COMPLETED",
+			AnalysisType:    db.AnalysisTypeWOD,
+			SessionScore:    `{"intensity":85,"movements":{"Push Jerk":{"reps":30},"Thruster":{"reps":45}}}`,
+			WorkoutAt:       &workoutTime,
+			WorkoutAtSource: &source,
+			CreatedAt:       workoutTime,
 		})
 
 		reqBody := []byte(fmt.Sprintf(`{"profile_id":%d,"wod_description":"21-15-9 Thrusters and Pull-ups","movements":["Thruster","Pull-up"]}`, profile.ID))
@@ -101,13 +105,16 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 		var resp controllers.PreWODAdviceResponse
 		Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
 		Expect(resp.ProfileID).To(Equal(profile.ID))
+		Expect(resp.EvidenceStatus).To(Equal("complete"))
 		Expect(resp.MuscleReadiness).To(HaveLen(len(fatigue.AllMuscleGroups)))
-		Expect(resp.OverallFatigueScore).To(BeNumerically(">", 0))
+		Expect(resp.OverallFatigueScore).NotTo(BeNil())
+		Expect(*resp.OverallFatigueScore).To(BeNumerically(">", 0))
+		Expect(resp.TargetRPE).NotTo(BeNil())
 		Expect(resp.TargetRPE.Score).To(BeNumerically(">=", 1))
 		Expect(resp.OverallSummary).NotTo(BeEmpty())
 	})
 
-	It("uses Gemini generated output when textParser is configured", func() {
+	It("uses Gemini generated output when textParser is configured and evidence is complete", func() {
 		mockGemini := &mockTextParser{
 			response: `{
 				"muscle_readiness": [
@@ -148,6 +155,20 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 			TextParser: mockGemini,
 		})
 
+		now := time.Now().UTC()
+		workoutTime := now.Add(-10 * time.Hour)
+		source := "session_ulid"
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:       "WOD-20260901-01PASTSESSION0002",
+			ProfileID:       profile.ID,
+			Status:          "COMPLETED",
+			AnalysisType:    db.AnalysisTypeWOD,
+			SessionScore:    `{"intensity":85,"movements":{"Push Jerk":{"reps":30},"Thruster":{"reps":45}}}`,
+			WorkoutAt:       &workoutTime,
+			WorkoutAtSource: &source,
+			CreatedAt:       workoutTime,
+		})
+
 		reqBody := []byte(fmt.Sprintf(`{"profile_id":%d,"wod_description":"Fran","movements":["Thruster","Pull-up"]}`, profile.ID))
 		req, _ := http.NewRequest(http.MethodPost, "/api/v1/strategies/pre-wod-advice", bytes.NewReader(reqBody))
 		req.Header.Set("Authorization", "Bearer "+generateValidToken(user))
@@ -159,9 +180,30 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 
 		var resp controllers.PreWODAdviceResponse
 		Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
+		Expect(resp.TargetRPE).NotTo(BeNil())
 		Expect(resp.TargetRPE.Score).To(Equal(7))
 		Expect(resp.ScalingAdvice).To(HaveLen(1))
 		Expect(resp.ScalingAdvice[0].Movement).To(Equal("Thruster"))
 		Expect(resp.OverallSummary).To(Equal("어깨 피로에 주의하여 템포를 조절하세요."))
+	})
+
+	It("enforces null TargetRPE and standard text when history has no sessions (no_history)", func() {
+		router = newTestRouterWithAuthService(controllers.Config{})
+		reqBody := []byte(fmt.Sprintf(`{"profile_id":%d,"wod_description":"Fran"}`, profile.ID))
+		req, _ := http.NewRequest(http.MethodPost, "/api/v1/strategies/pre-wod-advice", bytes.NewReader(reqBody))
+		req.Header.Set("Authorization", "Bearer "+generateValidToken(user))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusOK))
+
+		var resp controllers.PreWODAdviceResponse
+		Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
+		Expect(resp.EvidenceStatus).To(Equal("no_history"))
+		Expect(resp.OverallFatigueScore).To(BeNil())
+		Expect(resp.TargetRPE).To(BeNil())
+		Expect(resp.AdviceCode).To(Equal("check_condition"))
+		Expect(resp.OverallSummary).To(ContainSubstring("판단할 수 없습니다"))
 	})
 })

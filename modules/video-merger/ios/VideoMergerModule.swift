@@ -54,28 +54,52 @@ public class VideoMergerModule: Module {
       }
 
       let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-      let duration = asset.duration
-      let timeRange = CMTimeRange(start: .zero, duration: duration)
 
       // Video track (required)
       guard let sourceVideoTrack = asset.tracks(withMediaType: .video).first else {
-        throw MergeError.missingTrack("video", index)
+        NSLog("⚠️ [VideoMerger] Chunk %d has no video track, skipping: %@", index, path)
+        continue
       }
 
+      var duration = asset.duration
+      if duration <= .zero {
+        duration = sourceVideoTrack.timeRange.duration
+      }
+
+      // Skip empty or micro chunks (e.g. < 0.1s from immediate stop)
+      if duration <= .zero || duration.seconds < 0.1 {
+        NSLog("⚠️ [VideoMerger] Chunk %d has zero or negligible duration (%.3fs), skipping: %@", index, duration.seconds, path)
+        continue
+      }
+
+      let timeRange = CMTimeRange(start: .zero, duration: duration)
       try videoTrack.insertTimeRange(timeRange, of: sourceVideoTrack, at: insertionTime)
 
-      // Preserve the first chunk's transform (orientation) for the entire composition
-      if index == 0 {
+      // Preserve the first valid chunk's transform (orientation) for the entire composition
+      if insertionTime == .zero {
         videoTrack.preferredTransform = sourceVideoTrack.preferredTransform
       }
 
       // Audio track (optional — skip silently if chunk has no audio)
       if let sourceAudioTrack = asset.tracks(withMediaType: .audio).first,
          let audioTrack = audioTrack {
-        try audioTrack.insertTimeRange(timeRange, of: sourceAudioTrack, at: insertionTime)
+        let audioDuration = min(duration.seconds, sourceAudioTrack.timeRange.duration.seconds)
+        if audioDuration > 0 {
+          let audioRange = CMTimeRange(start: .zero, duration: CMTime(seconds: audioDuration, preferredTimescale: duration.timescale))
+          try? audioTrack.insertTimeRange(audioRange, of: sourceAudioTrack, at: insertionTime)
+        }
       }
 
       insertionTime = CMTimeAdd(insertionTime, duration)
+    }
+
+    guard insertionTime > .zero else {
+      throw MergeError.noValidVideoTracks
+    }
+
+    // Remove empty audio track if no audio was inserted across all chunks
+    if let audioTrack = audioTrack, audioTrack.timeRange.duration <= .zero {
+      composition.removeTrack(audioTrack)
     }
 
     // Remove existing output file if present
@@ -137,6 +161,7 @@ public class VideoMergerModule: Module {
     case fileNotFound(String)
     case trackCreationFailed(String)
     case missingTrack(String, Int)
+    case noValidVideoTracks
     case exportSessionFailed
     case exportFailed(Int)
 
@@ -150,6 +175,8 @@ public class VideoMergerModule: Module {
         return "Failed to create \(type) track in composition"
       case .missingTrack(let type, let index):
         return "Chunk \(index) has no \(type) track"
+      case .noValidVideoTracks:
+        return "No valid video tracks found in input files"
       case .exportSessionFailed:
         return "Failed to create export session"
       case .exportFailed(let status):

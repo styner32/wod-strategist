@@ -3,9 +3,55 @@ package fatigue
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/wod-strategist/api/internal/db"
 )
+
+type TargetRPEInfo struct {
+	Score          int    `json:"score"`
+	Label          string `json:"label"`
+	PacingStrategy string `json:"pacing_strategy"`
+}
+
+type ScalingAdviceItem struct {
+	Movement       string `json:"movement"`
+	Recommendation string `json:"recommendation"`
+	Detail         string `json:"detail"`
+}
+
+type MobilityWarmupItem struct {
+	Title      string `json:"title"`
+	TargetArea string `json:"target_area"`
+	Duration   string `json:"duration"`
+	Reason     string `json:"reason"`
+}
+
+type MuscleReadinessItem struct {
+	Group        string `json:"group"`
+	NameKO       string `json:"name_ko"`
+	FatigueScore int    `json:"fatigue_score"`
+	State        string `json:"state"`
+	StateKO      string `json:"state_ko"`
+	Note         string `json:"note"`
+}
+
+type PreWODAdviceResponse struct {
+	ProfileID           uint                  `json:"profile_id"`
+	OverallFatigueScore *int                  `json:"overall_fatigue_score,omitempty"`
+	OverallState        string                `json:"overall_state"`
+	OverallStateKO      string                `json:"overall_state_ko"`
+	MuscleReadiness     []MuscleReadinessItem `json:"muscle_readiness,omitempty"`
+	TargetRPE           *TargetRPEInfo        `json:"target_rpe"`
+	ScalingAdvice       []ScalingAdviceItem   `json:"scaling_advice"`
+	MobilityWarmup      []MobilityWarmupItem  `json:"mobility_warmup"`
+	OverallSummary      string                `json:"overall_summary"`
+	AdviceCode          string                `json:"advice_code,omitempty"`
+	EvidenceStatus      string                `json:"evidence_status"`
+	Evidence            EvidenceCounts        `json:"evidence"`
+	AsOf                time.Time             `json:"as_of"`
+	LastWorkoutAt       *time.Time            `json:"last_workout_at,omitempty"`
+}
 
 // BuildPreWODAdvicePrompt constructs a Gemini prompt to generate structured pre-WOD strategy advice.
 func BuildPreWODAdvicePrompt(
@@ -36,10 +82,16 @@ func BuildPreWODAdvicePrompt(
 	}
 
 	sb.WriteString("\n## 현재 신체 부위별 잔여 피로도 및 신선도 (알고리즘 산출 결과)\n")
-	sb.WriteString(fmt.Sprintf("- 전신 종합 피로도: %d/100 (%s)\n", readiness.OverallFatigueScore, readiness.OverallStateKO))
+	scoreStr := "근거 부족"
+	if readiness.OverallFatigueScore != nil {
+		scoreStr = fmt.Sprintf("%d/100", *readiness.OverallFatigueScore)
+	}
+	sb.WriteString(fmt.Sprintf("- 전신 종합 피로도: %s (%s)\n", scoreStr, readiness.OverallStateKO))
 	for _, g := range AllMuscleGroups {
-		m := readiness.Muscles[g]
-		sb.WriteString(fmt.Sprintf("- %s (%s): 피로도 %d/100 [%s]\n", m.NameKO, g, m.FatigueScore, m.StateKO))
+		m, ok := readiness.Muscles[g]
+		if ok {
+			sb.WriteString(fmt.Sprintf("- %s (%s): 피로도 %d/100 [%s]\n", m.NameKO, g, m.FatigueScore, m.StateKO))
+		}
 	}
 
 	sb.WriteString("\n## 오늘 계획된 WOD / 운동\n")
@@ -106,4 +158,97 @@ func BuildPreWODAdvicePrompt(
 `)
 
 	return sb.String()
+}
+
+// FinalizePreWODAdvice ensures deterministic output restrictions and enforces evidence status guarantees.
+func FinalizePreWODAdvice(
+	resp *PreWODAdviceResponse,
+	readiness ProfileReadinessState,
+) {
+	if resp == nil {
+		return
+	}
+
+	// Always synchronize authoritative readiness state
+	resp.EvidenceStatus = readiness.EvidenceStatus
+	resp.Evidence = readiness.Evidence
+	resp.AsOf = readiness.AsOf
+	resp.OverallFatigueScore = readiness.OverallFatigueScore
+	resp.OverallState = readiness.OverallState
+	resp.OverallStateKO = readiness.OverallStateKO
+	resp.LastWorkoutAt = readiness.LastWorkoutAt
+
+	switch readiness.EvidenceStatus {
+	case "no_history", "insufficient":
+		resp.TargetRPE = nil
+		resp.AdviceCode = "check_condition"
+		resp.OverallSummary = "최근 운동 근거만으로 강도를 판단할 수 없습니다. 실제 컨디션을 확인하세요"
+		resp.MuscleReadiness = nil
+		resp.ScalingAdvice = []ScalingAdviceItem{}
+		resp.MobilityWarmup = []MobilityWarmupItem{}
+
+	case "partial":
+		resp.TargetRPE = nil
+		resp.AdviceCode = "partial_history"
+		resp.OverallSummary = "일부 확인된 운동 이력 기반의 참고 안내입니다. 몸 상태에 맞춰 강도를 조절하세요"
+
+		// Synchronize authoritative muscle readiness from server calculation
+		syncMuscleReadiness(resp, readiness)
+
+		// Replace free-text scaling with deterministic guidance per §11.2
+		resp.ScalingAdvice = []ScalingAdviceItem{
+			{
+				Movement:       "전체 운동",
+				Recommendation: "컨디션 조절 권장",
+				Detail:         "일부 운동 이력만 반영되었으므로 고강도 무리한 반복을 피하고 컨디션에 맞춰 무게와 템포를 조절하세요.",
+			},
+		}
+		if resp.MobilityWarmup == nil {
+			resp.MobilityWarmup = []MobilityWarmupItem{}
+		}
+
+	case "complete":
+		if resp.AdviceCode == "" {
+			resp.AdviceCode = "standard_guidance"
+		}
+		// Synchronize authoritative muscle readiness from server calculation
+		syncMuscleReadiness(resp, readiness)
+
+		if resp.TargetRPE != nil {
+			resp.TargetRPE.PacingStrategy = strings.ReplaceAll(resp.TargetRPE.PacingStrategy, "기록 경신을 보장", "참고 페이스로 조절")
+			resp.TargetRPE.PacingStrategy = strings.ReplaceAll(resp.TargetRPE.PacingStrategy, "최대 강도로 도전", "목표 페이스에 맞춰 조절")
+		}
+	}
+}
+
+func syncMuscleReadiness(resp *PreWODAdviceResponse, readiness ProfileReadinessState) {
+	if len(readiness.Muscles) == 0 {
+		return
+	}
+
+	noteMap := make(map[string]string)
+	for _, item := range resp.MuscleReadiness {
+		if item.Note != "" && !strings.Contains(item.Note, "기록 경신") && !strings.Contains(item.Note, "최대 강도") {
+			noteMap[item.Group] = item.Note
+		}
+	}
+
+	synced := make([]MuscleReadinessItem, 0, len(AllMuscleGroups))
+	for _, g := range AllMuscleGroups {
+		if m, ok := readiness.Muscles[g]; ok {
+			note := noteMap[g]
+			if note == "" {
+				note = fmt.Sprintf("%s 부하 점수: %d/100 (%s)", m.NameKO, m.FatigueScore, m.StateKO)
+			}
+			synced = append(synced, MuscleReadinessItem{
+				Group:        g,
+				NameKO:       m.NameKO,
+				FatigueScore: m.FatigueScore,
+				State:        m.State,
+				StateKO:      m.StateKO,
+				Note:         note,
+			})
+		}
+	}
+	resp.MuscleReadiness = synced
 }

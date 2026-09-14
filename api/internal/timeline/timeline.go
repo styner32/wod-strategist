@@ -1,7 +1,6 @@
 package timeline
 
 import (
-	"math"
 	"sort"
 
 	"github.com/wod-strategist/api/internal/db"
@@ -23,11 +22,19 @@ type SessionTimeline struct {
 }
 
 // NewSessionTimeline creates a new SessionTimeline from a slice of Chunks.
-// A timeline is considered valid only if:
-// 1. There is at least one chunk.
-// 2. Every chunk has non-nil StartSecs, EndSecs, MediaStartSecs, and MediaEndSecs with EndSecs > StartSecs and MediaEndSecs > MediaStartSecs.
-// 3. The session exhibits genuine media clock drift: max(end_secs) > max(media_end_secs) + 0.001.
-// If media_end == end, the session has no drift mapping (e.g. backfilled historical session), so the timeline is invalid.
+//
+// Each chunk is validated independently: it must have non-nil StartSecs,
+// EndSecs, MediaStartSecs and MediaEndSecs with positive durations on both
+// clocks. Chunks that fail are dropped, and the timeline is valid when at
+// least one chunk survives.
+//
+// There is deliberately no global "does this session drift?" check. Migration
+// 000038 backfilled media_* = start_* only for server-split rows
+// (file_path LIKE '%/split_chunk_%'), whose two clocks legitimately coincide;
+// unmapped mobile rows keep NULL and are dropped by the per-chunk validation
+// above. Rejecting a session because media_end == end would therefore throw
+// away correct identity mappings. This matches the per-interval rule used by
+// filterObservationsWithChunks in the worker package.
 func NewSessionTimeline(sessionID string, chunks []Chunk) *SessionTimeline {
 	st := &SessionTimeline{
 		SessionID: sessionID,
@@ -39,11 +46,6 @@ func NewSessionTimeline(sessionID string, chunks []Chunk) *SessionTimeline {
 		return st
 	}
 
-	var maxEnd float64
-	var maxMediaEnd float64
-	hasEnd := false
-	hasMediaEnd := false
-
 	for _, c := range chunks {
 		if c.StartSecs == nil || c.EndSecs == nil || c.MediaStartSecs == nil || c.MediaEndSecs == nil {
 			continue
@@ -52,21 +54,10 @@ func NewSessionTimeline(sessionID string, chunks []Chunk) *SessionTimeline {
 			continue
 		}
 
-		if !hasEnd || *c.EndSecs > maxEnd {
-			maxEnd = *c.EndSecs
-			hasEnd = true
-		}
-		if !hasMediaEnd || *c.MediaEndSecs > maxMediaEnd {
-			maxMediaEnd = *c.MediaEndSecs
-			hasMediaEnd = true
-		}
-
 		st.chunks = append(st.chunks, c)
 	}
 
-	// If no valid chunks, or if max media_end == max end (within 1ms tolerance) or maxMediaEnd >= maxEnd,
-	// the session has no drift information (e.g. backfilled by migration 000038).
-	if len(st.chunks) == 0 || !hasEnd || !hasMediaEnd || math.Abs(maxEnd-maxMediaEnd) < 0.001 || maxMediaEnd >= maxEnd {
+	if len(st.chunks) == 0 {
 		return st
 	}
 
@@ -101,6 +92,16 @@ func (st *SessionTimeline) IsValid() bool {
 // CaptureToMedia converts a capture clock time in seconds to the corresponding merged media clock time.
 // Returns (mediaSecs, true) if captureSecs falls within a recorded chunk.
 // Returns (0, false) if the timeline is invalid, or if captureSecs falls into a chunk boundary gap or out of bounds.
+//
+// The two clocks are scaled within each chunk rather than offset by a constant.
+// A chunk's capture window is wider than the video it produced: start_secs is
+// stamped just before startRecording() and end_secs when onRecordingFinished
+// arrives, so it also covers camera start-up and file finalisation, while
+// media_* comes from the probed duration of the recorded file. Offsetting by
+// (captureSecs - start) would therefore drift toward the end of every chunk and
+// can return a time past MediaEndSecs, i.e. inside the next chunk's footage.
+// Scaling is exact at both edges and always stays within the chunk's media
+// interval; when the two durations happen to match it reduces to a plain offset.
 func (st *SessionTimeline) CaptureToMedia(captureSecs float64) (float64, bool) {
 	if !st.IsValid() {
 		return 0, false
@@ -109,11 +110,18 @@ func (st *SessionTimeline) CaptureToMedia(captureSecs float64) (float64, bool) {
 	for _, c := range st.chunks {
 		start := *c.StartSecs
 		end := *c.EndSecs
-		if captureSecs >= start && captureSecs <= end {
-			offsetInChunk := captureSecs - start
-			mediaSecs := *c.MediaStartSecs + offsetInChunk
-			return mediaSecs, true
+		if captureSecs < start || captureSecs > end {
+			continue
 		}
+
+		captureDur := end - start
+		mediaStart := *c.MediaStartSecs
+		mediaDur := *c.MediaEndSecs - mediaStart
+		if captureDur <= 0 {
+			continue
+		}
+
+		return mediaStart + (captureSecs-start)*(mediaDur/captureDur), true
 	}
 
 	// Not in any chunk (e.g. chunk boundary gap or outside recording range)

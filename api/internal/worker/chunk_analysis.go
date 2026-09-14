@@ -280,10 +280,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	retryCount, ok := asynq.GetRetryCount(ctx)
-	if !ok {
-		retryCount = 0
-	}
+	retryCount := getRetryCount(ctx)
 
 	w.logger.Info("Processing chunk analysis",
 		zap.String("session_id", p.SessionID),
@@ -291,7 +288,25 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		zap.Int("retry_count", int(retryCount)))
 
 	if retryCount >= 3 {
-		w.logger.Error("Max retries reached. Skipping chunk analysis.")
+		w.logger.Error("Max retries reached for chunk analysis. Marking chunk as FAILED.",
+			zap.String("session_id", p.SessionID),
+			zap.String("file_path", p.FilePath))
+		chunkFailed := &db.ChunkAnalysisResult{
+			SessionID:         p.SessionID,
+			FilePath:          p.FilePath,
+			Status:            "FAILED",
+			Output:            "Chunk analysis failed after max retries.",
+			HeartRateBPM:      p.HeartRateBPM,
+			WorkoutConfidence: p.WorkoutConfidence,
+		}
+		chunkFailed.ProfileID = p.ProfileID
+		if p.StartSecs > 0 || p.EndSecs > 0 {
+			chunkFailed.StartSecs = &p.StartSecs
+			chunkFailed.EndSecs = &p.EndSecs
+		}
+		if err := w.persistChunkAnalysisResult(ctx, chunkFailed); err != nil {
+			return fmt.Errorf("failed to record failed chunk analysis result: %w", err)
+		}
 		return asynq.SkipRetry
 	}
 
@@ -350,28 +365,14 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	// Save token usage regardless of analysis outcome
 	w.saveTokenUsage(p.SessionID, p.ProfileID, "chunk:analysis", usage)
 
-	if analysis == "" {
-		return fmt.Errorf("chunk analysis is empty")
+	if err != nil {
+		w.logger.Error("Chunk analysis failed", zap.Error(err), zap.String("session_id", p.SessionID), zap.String("file_path", p.FilePath), zap.Int("retry_count", int(retryCount)))
+		return err
 	}
 
-	if err != nil {
-		w.logger.Error("Chunk analysis failed", zap.Error(err))
-		chunkFailed := &db.ChunkAnalysisResult{
-			SessionID:         p.SessionID,
-			FilePath:          p.FilePath,
-			Status:            "FAILED",
-			Output:            "An internal error occurred during chunk analysis.",
-			WorkoutConfidence: p.WorkoutConfidence,
-			MotionScore:       motionScore,
-			SkipReason:        "",
-		}
-		chunkFailed.ProfileID = p.ProfileID
-		if p.StartSecs > 0 || p.EndSecs > 0 {
-			chunkFailed.StartSecs = &p.StartSecs
-			chunkFailed.EndSecs = &p.EndSecs
-		}
-		w.DB.Create(chunkFailed)
-		return err
+	if analysis == "" {
+		w.logger.Warn("Chunk analysis returned empty output", zap.String("session_id", p.SessionID), zap.String("file_path", p.FilePath), zap.Int("retry_count", int(retryCount)))
+		return fmt.Errorf("chunk analysis is empty")
 	}
 
 	// Extract exercise type detected by the model from the response
@@ -403,7 +404,9 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		chunkResult.StartSecs = &p.StartSecs
 		chunkResult.EndSecs = &p.EndSecs
 	}
-	w.DB.Create(chunkResult)
+	if err := w.persistChunkAnalysisResult(ctx, chunkResult); err != nil {
+		return fmt.Errorf("failed to save chunk analysis result: %w", err)
+	}
 
 	w.logger.Info("Chunk analysis completed",
 		zap.String("session_id", p.SessionID),
@@ -418,10 +421,7 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	retryCount, ok := asynq.GetRetryCount(ctx)
-	if !ok {
-		retryCount = 0
-	}
+	retryCount := getRetryCount(ctx)
 
 	w.logger.Info("Processing chunk analysis",
 		zap.String("session_id", p.SessionID),
@@ -429,7 +429,25 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		zap.Int("retry_count", int(retryCount)))
 
 	if retryCount >= 3 {
-		w.logger.Error("Max retries reached. Skipping chunk analysis.")
+		w.logger.Error("Max retries reached for chunk analysis with session. Marking chunk as FAILED.",
+			zap.String("session_id", p.SessionID),
+			zap.String("file_path", p.FilePath))
+		chunkFailed := &db.ChunkAnalysisResult{
+			SessionID:         p.SessionID,
+			FilePath:          p.FilePath,
+			Status:            "FAILED",
+			Output:            "Chunk analysis failed after max retries.",
+			HeartRateBPM:      p.HeartRateBPM,
+			WorkoutConfidence: p.WorkoutConfidence,
+		}
+		chunkFailed.ProfileID = p.ProfileID
+		if p.StartSecs > 0 || p.EndSecs > 0 {
+			chunkFailed.StartSecs = &p.StartSecs
+			chunkFailed.EndSecs = &p.EndSecs
+		}
+		if err := w.persistChunkAnalysisResult(ctx, chunkFailed); err != nil {
+			return fmt.Errorf("failed to record failed chunk analysis result: %w", err)
+		}
 		return asynq.SkipRetry
 	}
 
@@ -503,28 +521,14 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	// Save token usage regardless of analysis outcome
 	w.saveTokenUsage(p.SessionID, p.ProfileID, "chunk:analysis", usage)
 
-	if analysis == "" {
-		return fmt.Errorf("chunk analysis is empty")
+	if err != nil {
+		w.logger.Error("Chunk analysis failed", zap.Error(err), zap.String("session_id", p.SessionID), zap.String("file_path", p.FilePath), zap.Int("retry_count", int(retryCount)))
+		return err
 	}
 
-	if err != nil {
-		w.logger.Error("Chunk analysis failed", zap.Error(err))
-		chunkFailed := &db.ChunkAnalysisResult{
-			SessionID:         p.SessionID,
-			FilePath:          p.FilePath,
-			Status:            "FAILED",
-			Output:            "An internal error occurred during chunk analysis.",
-			WorkoutConfidence: p.WorkoutConfidence,
-			MotionScore:       motionScoreWithSession,
-			SkipReason:        "",
-		}
-		chunkFailed.ProfileID = p.ProfileID
-		if p.StartSecs > 0 || p.EndSecs > 0 {
-			chunkFailed.StartSecs = &p.StartSecs
-			chunkFailed.EndSecs = &p.EndSecs
-		}
-		w.DB.Create(chunkFailed)
-		return err
+	if analysis == "" {
+		w.logger.Warn("Chunk analysis returned empty output", zap.String("session_id", p.SessionID), zap.String("file_path", p.FilePath), zap.Int("retry_count", int(retryCount)))
+		return fmt.Errorf("chunk analysis is empty")
 	}
 
 	// Extract exercise type detected by the model from the response
@@ -556,7 +560,9 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		chunkResult.StartSecs = &p.StartSecs
 		chunkResult.EndSecs = &p.EndSecs
 	}
-	w.DB.Create(chunkResult)
+	if err := w.persistChunkAnalysisResult(ctx, chunkResult); err != nil {
+		return fmt.Errorf("failed to save chunk analysis result: %w", err)
+	}
 
 	w.logger.Info("Chunk analysis completed",
 		zap.String("session_id", p.SessionID),

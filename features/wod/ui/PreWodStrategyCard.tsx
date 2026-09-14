@@ -66,19 +66,30 @@ export function PreWodStrategyCard({
             {t("preWod.title") || "오늘의 맞춤 WOD 전략 & 피로도"}
           </Text>
         </View>
-        <View
-          style={[
-            styles.overallBadge,
-            {
-              borderColor: overallColor + "60",
-              backgroundColor: overallColor + "15",
-            },
-          ]}
-        >
-          <Text style={[styles.overallBadgeText, { color: overallColor }]}>
-            {advice.overall_state_ko || advice.overall_state} (
-            {advice.overall_fatigue_score}%)
-          </Text>
+        <View style={styles.headerBadges}>
+          {advice.evidence_status === "partial" && (
+            <View style={styles.partialBadge}>
+              <Text style={styles.partialBadgeText}>
+                {t("preWod.partialHistoryBadge") || "일부 기록만 반영됨"}
+              </Text>
+            </View>
+          )}
+          <View
+            style={[
+              styles.overallBadge,
+              {
+                borderColor: overallColor + "60",
+                backgroundColor: overallColor + "15",
+              },
+            ]}
+          >
+            <Text style={[styles.overallBadgeText, { color: overallColor }]}>
+              {advice.overall_state_ko || advice.overall_state}
+              {advice.overall_fatigue_score != null
+                ? ` (${advice.overall_fatigue_score}/100)`
+                : ""}
+            </Text>
+          </View>
         </View>
       </View>
 
@@ -111,90 +122,92 @@ export function PreWodStrategyCard({
       ) : null}
 
       {/* 6-Muscle Group Readiness Bars */}
-      <View style={styles.musclesSection}>
-        <TouchableOpacity
-          style={styles.expandHeader}
-          onPress={() => setMusclesExpanded(!musclesExpanded)}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.sectionLabel}>
-            {t("preWod.muscleReadiness") || "신체 6대 부위별 피로도 분석"}
-          </Text>
-          <Text style={styles.expandChevron}>
-            {musclesExpanded ? "▲ 접기" : "▼ 상세보기"}
-          </Text>
-        </TouchableOpacity>
+      {advice.muscle_readiness && advice.muscle_readiness.length > 0 ? (
+        <View style={styles.musclesSection}>
+          <TouchableOpacity
+            style={styles.expandHeader}
+            onPress={() => setMusclesExpanded(!musclesExpanded)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.sectionLabel}>
+              {t("preWod.muscleReadiness") || "신체 6대 부위별 피로도 분석"}
+            </Text>
+            <Text style={styles.expandChevron}>
+              {musclesExpanded ? "▲ 접기" : "▼ 상세보기"}
+            </Text>
+          </TouchableOpacity>
 
-        {/* Compact Bar Summary (when collapsed) */}
-        {!musclesExpanded ? (
-          <View style={styles.compactGrid}>
-            {advice.muscle_readiness.map((m) => {
-              const color = getReadinessColor(m.state);
-              return (
-                <View key={m.group} style={styles.compactItem}>
-                  <View style={styles.compactItemHeader}>
-                    <Text style={styles.compactName} numberOfLines={1}>
-                      {m.name_ko}
-                    </Text>
-                    <Text style={[styles.compactPercent, { color }]}>
-                      {m.fatigue_score}%
-                    </Text>
-                  </View>
-                  <View style={styles.progressBarBg}>
-                    <View
-                      style={[
-                        styles.progressBarFill,
-                        {
-                          width: `${Math.min(100, Math.max(5, m.fatigue_score))}%`,
-                          backgroundColor: color,
-                        },
-                      ]}
-                    />
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        ) : (
-          /* Detailed Cards (when expanded) */
-          <View style={styles.detailedList}>
-            {advice.muscle_readiness.map((m) => {
-              const color = getReadinessColor(m.state);
-              return (
-                <View key={m.group} style={styles.detailedItem}>
-                  <View style={styles.detailedHeader}>
-                    <Text style={styles.detailedName}>{m.name_ko}</Text>
-                    <View
-                      style={[
-                        styles.stateTag,
-                        { backgroundColor: color + "20" },
-                      ]}
-                    >
-                      <Text style={[styles.stateTagText, { color }]}>
-                        {m.state_ko || m.state} ({m.fatigue_score}%)
+          {/* Compact Bar Summary (when collapsed) */}
+          {!musclesExpanded ? (
+            <View style={styles.compactGrid}>
+              {advice.muscle_readiness.map((m) => {
+                const color = getReadinessColor(m.state);
+                return (
+                  <View key={m.group} style={styles.compactItem}>
+                    <View style={styles.compactItemHeader}>
+                      <Text style={styles.compactName} numberOfLines={1}>
+                        {m.name_ko}
+                      </Text>
+                      <Text style={[styles.compactPercent, { color }]}>
+                        {m.fatigue_score}/100
                       </Text>
                     </View>
+                    <View style={styles.progressBarBg}>
+                      <View
+                        style={[
+                          styles.progressBarFill,
+                          {
+                            width: `${Math.min(100, Math.max(5, m.fatigue_score))}%`,
+                            backgroundColor: color,
+                          },
+                        ]}
+                      />
+                    </View>
                   </View>
-                  <View style={styles.progressBarBg}>
-                    <View
-                      style={[
-                        styles.progressBarFill,
-                        {
-                          width: `${Math.min(100, Math.max(5, m.fatigue_score))}%`,
-                          backgroundColor: color,
-                        },
-                      ]}
-                    />
+                );
+              })}
+            </View>
+          ) : (
+            /* Detailed Cards (when expanded) */
+            <View style={styles.detailedList}>
+              {advice.muscle_readiness.map((m) => {
+                const color = getReadinessColor(m.state);
+                return (
+                  <View key={m.group} style={styles.detailedItem}>
+                    <View style={styles.detailedHeader}>
+                      <Text style={styles.detailedName}>{m.name_ko}</Text>
+                      <View
+                        style={[
+                          styles.stateTag,
+                          { backgroundColor: color + "20" },
+                        ]}
+                      >
+                        <Text style={[styles.stateTagText, { color }]}>
+                          {m.state_ko || m.state} ({m.fatigue_score}/100)
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.progressBarBg}>
+                      <View
+                        style={[
+                          styles.progressBarFill,
+                          {
+                            width: `${Math.min(100, Math.max(5, m.fatigue_score))}%`,
+                            backgroundColor: color,
+                          },
+                        ]}
+                      />
+                    </View>
+                    {m.note ? (
+                      <Text style={styles.muscleNote}>{m.note}</Text>
+                    ) : null}
                   </View>
-                  {m.note ? (
-                    <Text style={styles.muscleNote}>{m.note}</Text>
-                  ) : null}
-                </View>
-              );
-            })}
-          </View>
-        )}
-      </View>
+                );
+              })}
+            </View>
+          )}
+        </View>
+      ) : null}
 
       {/* Scaling & Movement Modification Advice */}
       {advice.scaling_advice && advice.scaling_advice.length > 0 ? (
@@ -287,6 +300,24 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     letterSpacing: 0.3,
+  },
+  headerBadges: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  partialBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "rgba(255, 152, 0, 0.4)",
+    backgroundColor: "rgba(255, 152, 0, 0.15)",
+  },
+  partialBadgeText: {
+    color: "#FF9800",
+    fontSize: 11,
+    fontWeight: "600",
   },
   overallBadge: {
     paddingHorizontal: 8,

@@ -107,4 +107,72 @@ describe("PreWodStrategyCard", () => {
     // Detailed note is now visible
     expect(getByText("어제 스내치로 인해 어깨 피로 누적")).toBeTruthy();
   });
+
+  it("renders correctly for no_history / insufficient with null score and null target_rpe", () => {
+    const noHistoryAdvice: PreWodAdviceResponse = {
+      profile_id: 1,
+      overall_fatigue_score: null,
+      overall_state: "moderate",
+      overall_state_ko: "보통",
+      overall_summary: "최근 운동 근거만으로 강도를 판단할 수 없습니다. 실제 컨디션을 확인하세요.",
+      target_rpe: null,
+      evidence_status: "no_history",
+      evidence: {
+        total_sessions: 0,
+        valid_sessions: 0,
+        excluded_sessions: 0,
+        unresolved_time_sessions: 0,
+      },
+      scaling_advice: [],
+      mobility_warmup: [],
+    };
+
+    const { getByText, queryByText } = render(
+      <PreWodStrategyCard advice={noHistoryAdvice} />,
+    );
+
+    expect(getByText("보통")).toBeTruthy();
+    expect(queryByText(/null/)).toBeNull();
+    expect(queryByText(/%/)).toBeNull();
+    expect(queryByText(/RPE/)).toBeNull();
+    expect(
+      getByText("최근 운동 근거만으로 강도를 판단할 수 없습니다. 실제 컨디션을 확인하세요."),
+    ).toBeTruthy();
+  });
+
+  it("renders partial history badge and /100 score for partial evidence status", () => {
+    const partialAdvice: PreWodAdviceResponse = {
+      profile_id: 1,
+      overall_fatigue_score: 55,
+      overall_state: "moderate",
+      overall_state_ko: "보통",
+      overall_summary: "최근 7일 중 일부 기록만 확인되었습니다.",
+      target_rpe: null,
+      evidence_status: "partial",
+      evidence: {
+        total_sessions: 3,
+        valid_sessions: 2,
+        excluded_sessions: 1,
+        unresolved_time_sessions: 0,
+      },
+      muscle_readiness: [
+        {
+          group: "shoulders_push",
+          name_ko: "어깨 / 상체 밀기",
+          fatigue_score: 60,
+          state: "moderate",
+          state_ko: "보통",
+          note: "일부 기록 기반",
+        },
+      ],
+      scaling_advice: [],
+      mobility_warmup: [],
+    };
+
+    const { getByText } = render(<PreWodStrategyCard advice={partialAdvice} />);
+
+    expect(getByText("preWod.partialHistoryBadge")).toBeTruthy();
+    expect(getByText("보통 (55/100)")).toBeTruthy();
+    expect(getByText("60/100")).toBeTruthy();
+  });
 });

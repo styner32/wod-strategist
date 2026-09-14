@@ -146,6 +146,14 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 		NormalizedWorkout:      resultAttr.NormalizedWorkout,
 		MobilityObservations:   resultAttr.MobilityObservations,
 		StretchRecommendations: resultAttr.StretchRecommendations,
+		SensorVersion:          resultAttr.SensorVersion,
+		SensorState:            resultAttr.SensorState,
+		SensorProcessing:       resultAttr.SensorProcessing,
+		SensorSummary:          resultAttr.SensorSummary,
+		SensorTimeline:         resultAttr.SensorTimeline,
+		SensorNextAttemptAt:    resultAttr.SensorNextAttemptAt,
+		WorkoutAt:              resultAttr.WorkoutAt,
+		WorkoutAtSource:        resultAttr.WorkoutAtSource,
 		ArchivedAt:             resultAttr.ArchivedAt,
 	}
 	if result.AnalysisType == "" {

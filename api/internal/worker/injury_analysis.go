@@ -351,11 +351,6 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 	// Save token usage regardless of analysis outcome
 	w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:legacy", usage)
 
-	if analysis == "" {
-		w.logger.Warn("Injury analysis returned empty. Retrying...", zap.Error(err))
-		return fmt.Errorf("injury analysis is empty")
-	}
-
 	if err != nil {
 		w.logger.Error("Injury analysis failed", zap.Error(err))
 		// Update existing WOD row with failure note, or create standalone row
@@ -377,6 +372,11 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 			w.DB.Create(failedResult)
 		}
 		return err
+	}
+
+	if analysis == "" {
+		w.logger.Warn("Injury analysis returned empty. Retrying...")
+		return fmt.Errorf("injury analysis is empty")
 	}
 
 	// Append injury output to existing WOD analysis row, or create standalone row as fallback

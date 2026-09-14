@@ -1,3 +1,4 @@
+import { HeartRateSummaryCard } from "./HeartRateSummaryCard";
 import { t } from "@/features/i18n";
 import * as FileSystem from "expo-file-system/legacy";
 import * as MediaLibrary from "expo-media-library";
@@ -614,28 +615,44 @@ function HistoryCard({
             <View
               style={[
                 styles.fatiguePill,
-                {
-                  backgroundColor:
-                    getFatigueColor(item.session_fatigue.overall_score) + "18",
-                  borderColor:
-                    getFatigueColor(item.session_fatigue.overall_score) + "40",
-                },
+                item.session_fatigue.status === "insufficient_evidence"
+                  ? {
+                      backgroundColor: "rgba(142, 155, 174, 0.15)",
+                      borderColor: "rgba(142, 155, 174, 0.3)",
+                    }
+                  : {
+                      backgroundColor:
+                        getFatigueColor(item.session_fatigue.overall_score ?? 0) + "18",
+                      borderColor:
+                        getFatigueColor(item.session_fatigue.overall_score ?? 0) + "40",
+                    },
               ]}
             >
               <Text
                 style={[
                   styles.fatiguePillText,
-                  {
-                    color: getFatigueColor(item.session_fatigue.overall_score),
-                  },
+                  item.session_fatigue.status === "insufficient_evidence"
+                    ? { color: "#8E9BAE" }
+                    : {
+                        color: getFatigueColor(item.session_fatigue.overall_score ?? 0),
+                      },
                 ]}
               >
-                ⚡ {item.session_fatigue.state_ko || item.session_fatigue.state}{" "}
-                {item.session_fatigue.overall_score}%
+                {item.session_fatigue.status === "insufficient_evidence" ? (
+                  `⚡ ${t("historyList.insufficientEvidence") || "분석 근거 부족"}`
+                ) : (
+                  `⚡ ${item.session_fatigue.state_ko || item.session_fatigue.state} ${
+                    item.session_fatigue.status === "available"
+                      ? `${item.session_fatigue.overall_score}/100`
+                      : `${item.session_fatigue.overall_score}%`
+                  }`
+                )}
               </Text>
             </View>
           )}
         </View>
+
+        <HeartRateSummaryCard summary={item.heart_rate} />
 
         {/* Content */}
         {hasOutput && (

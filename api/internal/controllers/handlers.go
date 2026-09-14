@@ -57,8 +57,13 @@ func (ctl *Controller) CreateUploadURL(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
 		return
 	}
-	if sanitizeObjectPart(req.Filename, "") == "" {
+	cleanFilename := sanitizeObjectPart(req.Filename, "")
+	if cleanFilename == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "filename is required"})
+		return
+	}
+	if strings.HasPrefix(cleanFilename, "sensor_telemetry_v") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "reserved filename prefix: use sensor upload endpoint"})
 		return
 	}
 
@@ -316,7 +321,7 @@ func (ctl *Controller) GetAnalysis(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, normalizeHighlightResultsForResponse(results))
+	c.JSON(http.StatusOK, normalizeHighlightResultsForResponseWithSchema(results, workoutLoadSchemaVersion(c)))
 }
 
 // @Summary      Get Chunk Analysis
@@ -430,7 +435,7 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, normalizeHighlightResultsForResponse(results))
+	c.JSON(http.StatusOK, normalizeHighlightResultsForResponseWithSchema(results, workoutLoadSchemaVersion(c)))
 }
 
 func (ctl *Controller) ArchiveHistory(c *gin.Context) {

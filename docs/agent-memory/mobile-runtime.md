@@ -47,6 +47,16 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - When a chunk finishes (`onRecordingFinished`), `chunkPeakBpm` is sent to `processWorkoutChunk` as `heartRateBpm`, ensuring peak cardiovascular stress during exercise bursts is captured instead of momentary recovery dips.
 - 1Hz telemetry recording continues to record instantaneous samples via `bpmRef.current`.
 
+### Polar ACC packet timing
+- `parseAccPacket` accepts device-derived `dt` only within 10% of `1000 / accHz` (the negotiated rate), allowing the observed 19.53ms interval at 50Hz.
+- A rejected delta uses `lastSampleIntervalMs`, or the nominal interval before a valid measurement exists. Do not stretch samples across packet loss using a fixed upper limit such as 60ms.
+- Reset the measured interval with the clock anchor on a new stream; stop/disconnect also clears it. This heuristic cannot detect every small partial-packet loss without a sequence counter.
+
+## iOS sensor upload startup safety
+- A reinstall can change the absolute `file:///var/mobile/Containers/Data/Application/{UUID}/Documents/` prefix while retaining the files. `loadQueue()` rebases saved `Documents/sensor/*.ndjson` paths against the current `documentDirectory`, including backup recovery, without changing request IDs or upload stages.
+- Check `getInfoAsync(filePath)` before `PREPARE_PENDING` / `PUT_PENDING`. Missing files or directories become `NEEDS_ATTENTION`; retain the queue entry. `COMPLETE_PENDING` must still reconcile with the server even if the local file is absent.
+- Sensor PUTs use legacy `uploadAsync`, whose iOS implementation checks file existence before constructing a background upload. `createUploadTask().uploadAsync()` uses `uploadTaskStartAsync`, which lacks that guard in the installed Expo SDK and can raise an uncaught `NSInvalidArgumentException` for a stale path. JavaScript `.catch()` cannot catch that native exception.
+
 ## Internationalization (i18n)
 Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/locales/{en,ko}.json`.
 
@@ -55,3 +65,8 @@ Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/
 - Use `t("key", { ...vars })` for every user-facing string — do not hardcode English.
 - `setLanguage(code)` switches the locale at runtime.
 - When adding a new string, add the key to **both** `en.json` and `ko.json` in the same change.
+
+## Contact quality and sensor summaries
+
+- See [heart-rate-quality.md](heart-rate-quality.md) for version 2 contact/drop filtering, raw versus accepted BPM, request version pinning, response-only summaries, and device acceptance status.
+- Chunk peaks now update synchronously from accepted readings; stale/invalid fallback BPM is omitted. A stable BPM below 55 is warned about, not discarded solely for being low.

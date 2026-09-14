@@ -116,7 +116,7 @@ var _ = Describe("Highlight low-confidence chunk filtering", func() {
 		Expect(filtered[0].Observations).To(HaveLen(1), "chunk with nil media_* must not filter observation")
 	})
 
-	It("acts conservatively and does not drop observations when session has media_end == end", func() {
+	It("filters verified server-split intervals when media and capture clocks match", func() {
 		chunks := []db.ChunkAnalysisResult{
 			{
 				StartSecs:        ptr(0),
@@ -130,17 +130,16 @@ var _ = Describe("Highlight low-confidence chunk filtering", func() {
 		segments := []HighlightSegment{
 			{
 				Observations: []HighlightObservation{
-					{Start: "0:30.0", End: "0:35.0", Reason: "backfilled-session-obs"},
+					{Start: "0:30.0", End: "0:35.0", Reason: "verified-split-observation"},
 				},
 			},
 		}
 
 		filtered := filterObservationsWithChunks(chunks, segments)
-		Expect(filtered).To(HaveLen(1))
-		Expect(filtered[0].Observations).To(HaveLen(1), "conservative filter preserves observations when media_end == end")
+		Expect(filtered).To(BeEmpty())
 	})
 
-	It("acts conservatively when earlier chunks have media_end == end and subsequent chunks have nil media timestamps", func() {
+	It("filters mapped intervals independently of subsequent unmapped chunks", func() {
 		chunks := []db.ChunkAnalysisResult{
 			{
 				StartSecs:        ptr(0),
@@ -161,14 +160,41 @@ var _ = Describe("Highlight low-confidence chunk filtering", func() {
 		segments := []HighlightSegment{
 			{
 				Observations: []HighlightObservation{
-					{Start: "0:30.0", End: "0:35.0", Reason: "preserve-backfilled"},
+					{Start: "0:30.0", End: "0:35.0", Reason: "remove-mapped"},
+					{Start: "2:00.0", End: "2:05.0", Reason: "preserve-unmapped"},
 				},
 			},
 		}
 
 		filtered := filterObservationsWithChunks(chunks, segments)
 		Expect(filtered).To(HaveLen(1))
-		Expect(filtered[0].Observations).To(HaveLen(1), "must not calculate drift from chunks missing media info")
+		Expect(filtered[0].Observations).To(HaveLen(1))
+		Expect(filtered[0].Observations[0].Reason).To(Equal("preserve-unmapped"))
+	})
+
+	It("uses valid media intervals even without capture timestamps", func() {
+		chunks := []db.ChunkAnalysisResult{{
+			MediaStartSecs: ptr(10), MediaEndSecs: ptr(20), TargetConfidence: 0.2,
+		}}
+		segments := []HighlightSegment{{Observations: []HighlightObservation{
+			{Start: "0:12", End: "0:15", Reason: "mapped"},
+		}}}
+		Expect(filterObservationsWithChunks(chunks, segments)).To(BeEmpty())
+	})
+
+	It("does not filter using missing, empty, or reversed media intervals", func() {
+		for _, chunk := range []db.ChunkAnalysisResult{
+			{StartSecs: ptr(0), EndSecs: ptr(100), TargetConfidence: 0.2},
+			{MediaStartSecs: ptr(0), TargetConfidence: 0.2},
+			{MediaEndSecs: ptr(100), TargetConfidence: 0.2},
+			{MediaStartSecs: ptr(100), MediaEndSecs: ptr(100), TargetConfidence: 0.2},
+			{MediaStartSecs: ptr(100), MediaEndSecs: ptr(0), TargetConfidence: 0.2},
+		} {
+			segments := []HighlightSegment{{Observations: []HighlightObservation{
+				{Start: "0:30", End: "0:35", Reason: "unmapped"},
+			}}}
+			Expect(filterObservationsWithChunks([]db.ChunkAnalysisResult{chunk}, segments)).To(Equal(segments))
+		}
 	})
 
 	It("returns empty slice when all observations are filtered out", func() {

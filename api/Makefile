@@ -27,6 +27,9 @@ run-worker: ## Run worker locally
 run-admin: ## Run admin CLI. Usage: make run-admin CMD="reparse-highlights --dry-run"
 	go run ./cmd/admin/main.go $(CMD)
 
+run-backfill: ## Run workout_at backfill CLI. Usage: make run-backfill ARGS="--dry-run"
+	go run ./cmd/backfill-workout-at/main.go $(ARGS)
+
 migrate-create: ## Create new migration files. Usage: make migrate-create NAME=your_desc
 ifndef NAME
 	$(error NAME is not set)
@@ -56,6 +59,11 @@ update-image-migrate: ## Build and push Migration image
 	docker build --platform linux/amd64 -t $(IMAGE_REPO)/migrate:latest -t $(IMAGE_REPO)/migrate:$(GIT_SHA) -f Dockerfile_migrate .
 	docker push $(IMAGE_REPO)/migrate:latest
 	docker push $(IMAGE_REPO)/migrate:$(GIT_SHA)
+
+update-image-backfill: ## Build and push Backfill CLI image
+	docker build --platform linux/amd64 -t $(IMAGE_REPO)/backfill:latest -t $(IMAGE_REPO)/backfill:$(GIT_SHA) -f Dockerfile_backfill .
+	docker push $(IMAGE_REPO)/backfill:latest
+	docker push $(IMAGE_REPO)/backfill:$(GIT_SHA)
 
 deploy-api: ## Deploy API to Cloud Run
 	gcloud run deploy $(API_SERVICE_NAME) --image $(IMAGE_REPO)/api:latest --region $(REGION) --project $(PROJECT_ID)

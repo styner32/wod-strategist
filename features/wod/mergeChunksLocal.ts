@@ -1,10 +1,10 @@
 import {
+  deleteAsync,
   documentDirectory,
   getInfoAsync,
-  deleteAsync,
-} from 'expo-file-system/legacy';
+} from "expo-file-system/legacy";
 
-import { VideoMergerModule } from '@/modules/video-merger';
+import { VideoMergerModule } from "@/modules/video-merger";
 
 /**
  * Merge an ordered list of chunk files into a single output MP4.
@@ -19,15 +19,27 @@ export async function mergeChunksLocal(
   outputPath: string,
 ): Promise<string> {
   if (chunkPaths.length === 0) {
-    throw new Error('mergeChunksLocal: no chunk paths provided');
+    throw new Error("mergeChunksLocal: no chunk paths provided");
   }
 
-  // Validate all chunks exist before attempting merge
+  // Validate all chunks exist and filter out empty 0-byte chunks before attempting merge
+  const validChunkPaths: string[] = [];
   for (const p of chunkPaths) {
     const info = await getInfoAsync(p);
     if (!info.exists) {
       throw new Error(`mergeChunksLocal: chunk not found: ${p}`);
     }
+    if (info.size === 0) {
+      console.warn(`mergeChunksLocal: skipping 0-byte chunk: ${p}`);
+      continue;
+    }
+    validChunkPaths.push(p);
+  }
+
+  if (validChunkPaths.length === 0) {
+    throw new Error(
+      "mergeChunksLocal: no valid non-empty chunk paths provided",
+    );
   }
 
   // Remove existing output file if present
@@ -36,10 +48,13 @@ export async function mergeChunksLocal(
     await deleteAsync(outputPath, { idempotent: true });
   }
 
-  console.log(`🎬 Merging ${chunkPaths.length} chunks → ${outputPath}`);
+  console.log(`🎬 Merging ${validChunkPaths.length} chunks → ${outputPath}`);
   const start = Date.now();
 
-  const result = await VideoMergerModule.mergeVideos(chunkPaths, outputPath);
+  const result = await VideoMergerModule.mergeVideos(
+    validChunkPaths,
+    outputPath,
+  );
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   console.log(`🎬 Merge complete in ${elapsed}s → ${result.outputPath}`);
@@ -55,4 +70,3 @@ export async function mergeChunksLocal(
 export function mergedOutputPath(sessionId: string): string {
   return `${documentDirectory}merged_${sessionId}.mp4`;
 }
-

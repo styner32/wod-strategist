@@ -1,3 +1,4 @@
+import type { HeartRateSummary } from "../../../shared/heartRateSummary";
 import { api } from "./client";
 
 export interface StretchRecommendation {
@@ -19,14 +20,27 @@ export interface MuscleLoads {
   [key: string]: number | undefined;
 }
 
+export interface SessionFatigueGuidance {
+  state_code: string;
+  state_label: string;
+  advice_code: string;
+  advice_label: string;
+}
+
 export interface SessionFatigue {
-  overall_score: number;
-  state: "fresh" | "moderate" | "fatigued" | "exhausted" | string;
-  state_ko: string;
-  muscles: MuscleLoads;
+  status?: "available" | "insufficient_evidence" | string;
+  load_calculation_version?: number;
+  sensor_status?: string;
+  heart_rate_adjusted?: boolean;
+  overall_score?: number | null;
+  state?: "fresh" | "moderate" | "fatigued" | "exhausted" | string;
+  state_ko?: string;
+  muscles?: MuscleLoads;
+  guidance?: SessionFatigueGuidance;
 }
 
 export interface AnalysisResult {
+  heart_rate?: HeartRateSummary;
   id: number;
   session_id: string;
   profile_id: number;
@@ -42,6 +56,11 @@ export interface AnalysisResult {
   updated_at: string;
   archived_at: string | null;
   wod_description?: string;
+  workout_at?: string | null;
+  workout_at_source?: string | null;
+  sensor_version?: number;
+  sensor_state?: string;
+  sensor_summary?: Record<string, unknown>;
 }
 
 export interface ChunkAnalysisResult {
@@ -430,6 +449,11 @@ export const historyApi = {
     api.get<RelatedWODsResponse>(
       `/related-wods?session_id=${encodeURIComponent(sessionId)}&profile_id=${profileId}`,
     ),
+
+  getSensorTimeline: (sessionId: string, profileId: number) =>
+    api.get<SensorTimelineResponse>(
+      `/sessions/${encodeURIComponent(sessionId)}/sensor-timeline?profile_id=${profileId}`,
+    ),
 };
 
 export interface CostBreakdownItem {
@@ -497,3 +521,78 @@ export interface RelatedWODsResponse {
   };
   related: RelatedWODItem[];
 }
+
+export type SampleStatus =
+  | "valid"
+  | "missing"
+  | "insufficient"
+  | "invalid"
+  | "paused";
+
+export interface TimelineValue {
+  value: number | null;
+  status: SampleStatus;
+  reason?: string;
+}
+
+export interface SensorTimelinePoint {
+  start_ms: number;
+  end_ms: number;
+  heart_rate_bpm: TimelineValue;
+  acc_magnitude_std_g: TimelineValue;
+}
+
+export interface TimelineGap {
+  start_ms: number;
+  end_ms: number;
+  channel: "heart_rate" | "acc" | "both";
+  reason: string;
+}
+
+export interface TimelinePause {
+  start_ms: number;
+  end_ms: number;
+}
+
+export interface SensorTimelineData {
+  schema_version: 1;
+  clock: "capture_clock";
+  bucket_ms: number;
+  duration_ms: number;
+  source: {
+    sensor_version: string;
+    request_id: string;
+    source_generation: string;
+    hr_calculation_version: number;
+  };
+  points: SensorTimelinePoint[];
+  gaps: TimelineGap[];
+  pauses: TimelinePause[];
+}
+
+export interface VideoMappingSegment {
+  capture_start_ms: number;
+  capture_end_ms: number;
+  media_start_ms: number;
+  media_end_ms: number;
+}
+
+export interface VideoMapping {
+  kind: "merged";
+  method: "chunk_linear";
+  segments: VideoMappingSegment[];
+}
+
+export interface SensorTimelineResponse {
+  status:
+    | "none"
+    | "pending"
+    | "completed"
+    | "limited"
+    | "failed"
+    | "unavailable";
+  reason?: string;
+  timeline: SensorTimelineData | null;
+  video_mapping: VideoMapping;
+}
+

@@ -92,8 +92,11 @@ func TestNewSessionTimeline_ValidDriftSession(t *testing.T) {
 	}
 }
 
-func TestNewSessionTimeline_BackfilledSession(t *testing.T) {
-	// Session where media_end == end (e.g. backfilled historical session)
+func TestNewSessionTimeline_ServerSplitIdentityMapping(t *testing.T) {
+	// Server-split rows carry offsets that are already relative to the uploaded
+	// session video, so media_* == start_* is a correct identity mapping — not a
+	// missing one. Migration 000038 backfilled exactly these rows; unmapped
+	// mobile rows keep NULL and are rejected by TestNewSessionTimeline_MissingMediaOffsets.
 	chunks := []timeline.Chunk{
 		{
 			StartSecs:      ptr(0.0),
@@ -103,14 +106,68 @@ func TestNewSessionTimeline_BackfilledSession(t *testing.T) {
 		},
 	}
 
-	st := timeline.NewSessionTimeline("backfilled-session", chunks)
-	if st.IsValid() {
-		t.Errorf("expected backfilled session with media_end == end to be invalid")
+	st := timeline.NewSessionTimeline("server-split-session", chunks)
+	if !st.IsValid() {
+		t.Fatalf("expected server-split session with media_end == end to be valid")
 	}
 
-	_, ok := st.CaptureToMedia(50.0)
-	if ok {
-		t.Errorf("expected ok=false for invalid timeline")
+	media, ok := st.CaptureToMedia(50.0)
+	if !ok || mathAbs(media-50.0) > 1e-6 {
+		t.Errorf("expected identity mapping 50.0, got %f (ok=%v)", media, ok)
+	}
+}
+
+func TestCaptureToMedia_CaptureWindowWiderThanRecordedVideo(t *testing.T) {
+	// The real shape produced by the mobile chunk recorder: start_secs is stamped
+	// just before startRecording() and end_secs when onRecordingFinished arrives,
+	// so each capture window is ~278ms wider than the video it produced, and
+	// consecutive windows are contiguous (no gap between them).
+	//
+	// Chunk 1: capture [0.000, 10.278]  media [ 0.0, 10.0]
+	// Chunk 2: capture [10.278, 20.556] media [10.0, 20.0]
+	chunks := []timeline.Chunk{
+		{StartSecs: ptr(0.0), EndSecs: ptr(10.278), MediaStartSecs: ptr(0.0), MediaEndSecs: ptr(10.0)},
+		{StartSecs: ptr(10.278), EndSecs: ptr(20.556), MediaStartSecs: ptr(10.0), MediaEndSecs: ptr(20.0)},
+	}
+
+	st := timeline.NewSessionTimeline("wide-capture-session", chunks)
+	if !st.IsValid() {
+		t.Fatalf("expected timeline to be valid")
+	}
+
+	// A chunk's edges must land exactly on its media edges. A constant offset
+	// would map the end of chunk 1 to 10.278 — past MediaEndSecs and into the
+	// footage of chunk 2.
+	if media, ok := st.CaptureToMedia(0.0); !ok || mathAbs(media-0.0) > 1e-6 {
+		t.Errorf("chunk 1 start: expected 0.0, got %f (ok=%v)", media, ok)
+	}
+	if media, ok := st.CaptureToMedia(10.278); !ok || mathAbs(media-10.0) > 1e-6 {
+		t.Errorf("chunk 1 end: expected 10.0, got %f (ok=%v)", media, ok)
+	}
+	if media, ok := st.CaptureToMedia(20.556); !ok || mathAbs(media-20.0) > 1e-6 {
+		t.Errorf("chunk 2 end: expected 20.0, got %f (ok=%v)", media, ok)
+	}
+
+	// Midpoints scale proportionally.
+	if media, ok := st.CaptureToMedia(5.139); !ok || mathAbs(media-5.0) > 1e-6 {
+		t.Errorf("chunk 1 midpoint: expected 5.0, got %f (ok=%v)", media, ok)
+	}
+
+	// Every mapped time stays inside its chunk's media interval and increases
+	// monotonically across the session.
+	prev := -1.0
+	for capture := 0.0; capture <= 20.556; capture += 0.101 {
+		media, ok := st.CaptureToMedia(capture)
+		if !ok {
+			t.Fatalf("expected contiguous capture windows to be mapped, gap at %f", capture)
+		}
+		if media < 0 || media > 20.0+1e-9 {
+			t.Errorf("capture %f mapped outside the media range: %f", capture, media)
+		}
+		if media < prev-1e-9 {
+			t.Errorf("mapping is not monotonic at capture %f: %f after %f", capture, media, prev)
+		}
+		prev = media
 	}
 }
 

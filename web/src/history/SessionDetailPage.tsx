@@ -1,3 +1,5 @@
+import { HeartRateSummaryPanel } from "./components/HeartRateSummaryPanel";
+import { SensorTimelinePanel } from "./components/SensorTimelinePanel";
 import {
   useMutation,
   useQueries,
@@ -37,6 +39,7 @@ import { SessionCostCard } from "./components/SessionCostCard";
 import { SessionReanalysisPanel } from "./components/SessionReanalysisPanel";
 import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
 import { getHighlightSeekTime, parseHighlightSegments } from "./highlights";
+import { sensorTimelinePollInterval, sensorTimelineQueryKey } from "./timelineUtils";
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("en-US", {
@@ -162,6 +165,7 @@ export function SessionDetailPage() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const inspectorRef = useRef<HTMLDivElement>(null);
+  const sensorPollingBudget = useRef({ sessionKey: "", startedAtMs: 0 });
   const [currentTime, setCurrentTime] = useState(0);
   const [selectedKind, setSelectedKind] = useState<VideoKind>();
   const [showFullAnalysis, setShowFullAnalysis] = useState(false);
@@ -675,6 +679,44 @@ export function SessionDetailPage() {
   });
   const effectiveVideoKind = selectedKind ?? videoUrl?.kind ?? "merged";
 
+  const { data: sensorTimelineResponse, isLoading: sensorTimelineLoading } =
+    useQuery({
+      queryKey: sensorTimelineQueryKey(
+        sessionId,
+        profileId,
+        [...(legacyChunks ?? []), ...(sessionAnalysis?.chunks ?? [])],
+        videoUrl?.kind === "merged" && !!videoUrl.download_url,
+      ),
+      queryFn: async () => {
+        const sessionKey = `${sessionId}:${profileId}`;
+        if (sensorPollingBudget.current.sessionKey !== sessionKey) {
+          sensorPollingBudget.current = { sessionKey, startedAtMs: Date.now() };
+        }
+        const data = await historyApi.getSensorTimeline(sessionId!, profileId!);
+        const elapsedMs = Date.now() - sensorPollingBudget.current.startedAtMs;
+        if (sensorPollingBudget.current.sessionKey === sessionKey &&
+            data.status !== "pending" &&
+            sensorTimelinePollInterval(data, !!videoUrl?.download_url, elapsedMs, false) !== false) {
+          // A completed sensor response may arrive before merge boundaries or the
+          // first video URL. These queries otherwise only refresh on focus/remount.
+          await Promise.allSettled([
+            queryClient.refetchQueries({ queryKey: ["chunks", sessionId], type: "active" }, { cancelRefetch: false }),
+            queryClient.refetchQueries({ queryKey: ["session-analysis", sessionId], type: "active" }, { cancelRefetch: false }),
+            queryClient.refetchQueries({ queryKey: ["video-url", sessionId, profileId], type: "active" }, { cancelRefetch: false }),
+          ]);
+        }
+        return data;
+      },
+      enabled: !!sessionId && !!profileId,
+      refetchInterval: (query) => sensorTimelinePollInterval(
+        query.state.data,
+        !!videoUrl?.download_url,
+        Date.now() - sensorPollingBudget.current.startedAtMs,
+        query.state.status === "error",
+      ),
+      retry: false,
+    });
+
   const parsedOutput = (() => {
     try {
       return analysis?.output ? JSON.parse(analysis.output) : null;
@@ -702,6 +744,13 @@ export function SessionDetailPage() {
     if (videoRef.current) {
       videoRef.current.currentTime = time;
       videoRef.current.play().catch(() => {});
+    }
+  }, []);
+
+  // Seek video without altering play/pause state
+  const handleTimelineSeek = useCallback((time: number) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = time;
     }
   }, []);
 
@@ -844,9 +893,9 @@ export function SessionDetailPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-text-muted">Created</p>
+                  <p className="text-text-muted">Workout Time</p>
                   <p className="text-text-primary mt-0.5">
-                    {formatDate(analysis.created_at)}
+                    {formatDate(analysis.workout_at || analysis.created_at)}
                   </p>
                 </div>
                 <div>
@@ -855,6 +904,14 @@ export function SessionDetailPage() {
                     {analysis.workout_type || "—"}
                   </p>
                 </div>
+                {analysis.sensor_state && analysis.sensor_state !== "NONE" && (
+                  <div>
+                    <p className="text-text-muted">Polar Sensor</p>
+                    <p className="text-text-primary mt-0.5 capitalize">
+                      {analysis.sensor_state === "COMPLETED" ? "측정 처리 완료" : analysis.sensor_state}
+                    </p>
+                  </div>
+                )}
                 {sessionAnalysis?.coverage_status && (
                   <div>
                     <p className="text-text-muted">Media coverage</p>
@@ -918,6 +975,17 @@ export function SessionDetailPage() {
           )}
 
           {/* Muscle Fatigue & Strain */}
+          {analysis && <HeartRateSummaryPanel summary={analysis.heart_rate} />}
+          {analysis && (
+            <SensorTimelinePanel
+              key={`${sessionId}:${profileId}:${effectiveVideoKind}:${sensorTimelineResponse?.timeline?.source.request_id ?? ""}:${sensorTimelineResponse?.timeline?.source.source_generation ?? ""}`}
+              timelineResponse={sensorTimelineResponse}
+              isLoading={sensorTimelineLoading}
+              currentTime={currentTime}
+              onSeekMedia={handleTimelineSeek}
+              isMergedVideo={effectiveVideoKind === "merged"}
+            />
+          )}
           {analysis?.session_fatigue && (
             <WorkoutFatiguePanel fatigue={analysis.session_fatigue} />
           )}
