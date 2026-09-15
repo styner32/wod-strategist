@@ -189,5 +189,43 @@ var _ = Describe("Sensor timeline bounds and lifecycle", func() {
 			Expect(result.TimelineError).NotTo(HaveOccurred())
 			Expect(result.Timeline).NotTo(BeNil())
 		})
+
+		It("trims trailing HR event exceeding endEvent.Time instead of failing quality", func() {
+			clean := content(`{"k":"end","t":1000}`)
+			raw := content(`{"k":"hr","t":1150,"bpm":240}` + "\n" + `{"k":"end","t":1000}`)
+			result, err := sensor.ParseAndProcessWithTimeline(strings.NewReader(raw), sensor.ParseOptions{CalculationVersion: 2}, source)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Summary.Quality.IsComplete).To(BeTrue())
+			Expect(result.Summary.Quality.Status).To(Equal("ok"))
+			Expect(result.Summary.Quality.Errors).To(BeEmpty())
+			Expect(result.Summary.Quality.Warnings).To(ContainElement(ContainSubstring("HR timestamp 1150.000000 exceeds end 1000.000000; trimmed")))
+			Expect(result.Summary.Metrics.DurationSeconds).To(Equal(1.0))
+			Expect(result.TimelineError).NotTo(HaveOccurred())
+			Expect(result.Timeline).NotTo(BeNil())
+			Expect(result.Timeline.DurationMs).To(Equal(int64(1000)))
+			Expect(result.Summary.Metrics.HR.ValidSeconds).To(Equal(1.0)) // retain HR at exactly end.t
+			Expect(result.Summary.Metrics.HR.PeakBPM).To(HaveValue(Equal(150)))
+
+			baseline, err := sensor.ParseAndProcessWithTimeline(strings.NewReader(clean), sensor.ParseOptions{CalculationVersion: 2}, source)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Summary.Metrics).To(Equal(baseline.Summary.Metrics))
+			Expect(result.Timeline).To(Equal(baseline.Timeline))
+
+			summaryOnly, err := sensor.ParseAndProcess(strings.NewReader(raw), sensor.ParseOptions{CalculationVersion: 2})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(summaryOnly.Quality.IsComplete).To(BeTrue())
+			Expect(summaryOnly.Metrics).To(Equal(baseline.Summary.Metrics))
+		})
+
+		It("still rejects a checksum mismatch when trimming trailing HR", func() {
+			raw := content(`{"k":"hr","t":1150,"bpm":140}` + "\n" + `{"k":"end","t":1000}`)
+			result, err := sensor.ParseAndProcessWithTimeline(strings.NewReader(raw), sensor.ParseOptions{CalculationVersion: 2, ExpectedSHA256: "wrong-checksum"}, source)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Summary.Quality.IsComplete).To(BeFalse())
+			Expect(result.Summary.Quality.Status).To(Equal("corrupt"))
+			Expect(result.Summary.Quality.Errors).To(ContainElement(ContainSubstring("SHA-256 mismatch")))
+			Expect(result.Summary.Quality.Warnings).To(ContainElement(ContainSubstring("trimmed")))
+			Expect(result.Timeline).To(BeNil())
+		})
 	})
 })

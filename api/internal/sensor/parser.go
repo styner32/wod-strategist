@@ -507,12 +507,18 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 			}
 		}
 		pauseIntervals = mergePauseIntervals(clipped)
+
+		// Older clients accepted HR while awaiting BLE stop after fixing end.t.
+		// Trim that tail using the sensor footer, independently of video readiness.
+		var keptHREvents []hrObservation
 		for _, e := range hrEvents {
-			if e.Time > endEvent.Time {
-				parseErrors = append(parseErrors, "HR timestamp exceeds recording end")
-				break
+			if e.Time <= endEvent.Time {
+				keptHREvents = append(keptHREvents, e)
+			} else {
+				parseWarnings = append(parseWarnings, fmt.Sprintf("HR timestamp %f exceeds end %f; trimmed", e.Time, endEvent.Time))
 			}
 		}
+		hrEvents = keptHREvents
 	}
 	var captureDurationMs float64
 	var pauseDurationMs float64

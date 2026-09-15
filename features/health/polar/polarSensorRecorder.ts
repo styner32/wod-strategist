@@ -147,8 +147,8 @@ export const PolarSensorRecorder: BleSensorSink & {
   },
 
   start(opts: { sessionId: string; profileId: number; baseEpochMs: number }): void {
-    if (state.isActive) {
-      console.warn("⚠️ PolarSensorRecorder is already active");
+    if (state.isActive || stopPromise) {
+      console.warn("⚠️ PolarSensorRecorder is already active or stopping");
       return;
     }
 
@@ -262,6 +262,9 @@ export const PolarSensorRecorder: BleSensorSink & {
       return Promise.resolve(null);
     }
 
+    // Freeze sensor input before capturing the footer time or awaiting BLE.
+    state.isActive = false;
+
     // Stop any PMD setup that is still waiting on a BLE round-trip.
     invalidatePmdGeneration();
 
@@ -323,7 +326,6 @@ export const PolarSensorRecorder: BleSensorSink & {
       activeWriter.writeImmediate(footer);
       const closed = activeWriter.close();
 
-      state.isActive = false;
       state.writer = null;
       delete state.streamContext.anchor;
       delete state.streamContext.lastDeviceMs;
