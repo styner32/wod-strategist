@@ -26,17 +26,23 @@
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": [
-          "fetch"
-        ]
+        "UIBackgroundModes": ["fetch"],
+        "UIApplicationSceneManifest": {
+          "UIApplicationSupportsMultipleScenes": false,
+          "UISceneConfigurations": {
+            "UIWindowSceneSessionRoleApplication": [
+              {
+                "UISceneConfigurationName": "Default Configuration",
+                "UISceneDelegateClassName": "$(PRODUCT_MODULE_NAME).SceneDelegate"
+              }
+            ]
+          }
+        }
       }
     },
     "android": {
       "package": "com.sunjinlee.wodstrategist",
-      "permissions": [
-        "CAMERA",
-        "RECORD_AUDIO"
-      ],
+      "permissions": ["CAMERA", "RECORD_AUDIO"],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -101,9 +107,7 @@
         "react-native-ble-plx",
         {
           "isBackgroundEnabled": true,
-          "modes": [
-            "central"
-          ],
+          "modes": ["central"],
           "bluetoothAlwaysPermission": "심박계 연결을 위해 블루투스 권한이 필요합니다."
         }
       ],

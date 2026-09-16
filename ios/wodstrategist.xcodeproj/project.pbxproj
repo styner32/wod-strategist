@@ -19,6 +19,7 @@
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		E598ECC34C61F404887BDB13 /* libPods-WODStrategist.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 14A3DC9F01FDEFA3C9D34FF5 /* libPods-WODStrategist.a */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
+		F117484B2D0307B40044C1D9 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F117484A2D0307B40044C1D9 /* SceneDelegate.swift */; };
 		F5B98929F04A444A9BB2657A /* BroadcastHelper.m in Sources */ = {isa = PBXBuildFile; fileRef = 3CD7F244B32B4B6EB6A25E83 /* BroadcastHelper.m */; };
 /* End PBXBuildFile section */
 
@@ -70,6 +71,7 @@
 		E4CE4BC55E2A81271F847209 /* Pods-WODStrategist.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-WODStrategist.release.xcconfig"; path = "Target Support Files/Pods-WODStrategist/Pods-WODStrategist.release.xcconfig"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = WODStrategist/AppDelegate.swift; sourceTree = "<group>"; };
+		F117484A2D0307B40044C1D9 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SceneDelegate.swift; path = WODStrategist/SceneDelegate.swift; sourceTree = "<group>"; };
 		F11748442D0722820044C1D9 /* WODStrategist-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "WODStrategist-Bridging-Header.h"; path = "WODStrategist/WODStrategist-Bridging-Header.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -123,6 +125,7 @@
 			isa = PBXGroup;
 			children = (
 				F11748412D0307B40044C1D9 /* AppDelegate.swift */,
+				F117484A2D0307B40044C1D9 /* SceneDelegate.swift */,
 				F11748442D0722820044C1D9 /* WODStrategist-Bridging-Header.h */,
 				BB2F792B24A3F905000567C9 /* Supporting */,
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
@@ -449,6 +452,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */,
+				F117484B2D0307B40044C1D9 /* SceneDelegate.swift in Sources */,
 				AB502849C1F74F1DC440078C /* ExpoModulesProvider.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -481,7 +485,7 @@
 					"FB_SONARKIT_ENABLED=1",
 				);
 				INFOPLIST_FILE = WODStrategist/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -492,7 +496,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG -enable-upcoming-feature InternalImportsByDefault";
 				PRODUCT_BUNDLE_IDENTIFIER = com.sunjinlee.wodstrategist;
 				PRODUCT_NAME = WODStrategist;
 				SWIFT_OBJC_BRIDGING_HEADER = "WODStrategist/WODStrategist-Bridging-Header.h";
@@ -515,7 +519,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = FV89L56N85;
 				INFOPLIST_FILE = WODStrategist/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -526,7 +530,7 @@
 					"-ObjC",
 					"-lc++",
 				);
-				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
+				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE -enable-upcoming-feature InternalImportsByDefault";
 				PRODUCT_BUNDLE_IDENTIFIER = com.sunjinlee.wodstrategist;
 				PRODUCT_NAME = WODStrategist;
 				SWIFT_OBJC_BRIDGING_HEADER = "WODStrategist/WODStrategist-Bridging-Header.h";
