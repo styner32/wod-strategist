@@ -1,6 +1,6 @@
-import { useIsFocused } from "@react-navigation/native";
+import { useIsFocused } from "expo-router/react-navigation";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
-import * as MediaLibrary from "expo-media-library";
+import * as MediaLibrary from "expo-media-library/legacy";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -1944,7 +1944,7 @@ const styles = StyleSheet.create({
   },
   // --- Merging indicator overlay ---
   mergingOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0, 0, 0, 0.85)",
     justifyContent: "center",
     alignItems: "center",

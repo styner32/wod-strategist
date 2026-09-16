@@ -52,6 +52,10 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - A rejected delta uses `lastSampleIntervalMs`, or the nominal interval before a valid measurement exists. Do not stretch samples across packet loss using a fixed upper limit such as 60ms.
 - Reset the measured interval with the clock anchor on a new stream; stop/disconnect also clears it. This heuristic cannot detect every small partial-packet loss without a sequence counter.
 
+## iOS scene lifecycle
+
+- See [ios-scene-lifecycle.md](ios-scene-lifecycle.md) for Expo SDK 57 / Xcode 27 scene ownership, the iOS 16.4 minimum, native regeneration checks and dependency compatibility patches.
+
 ## iOS sensor upload startup safety
 - A reinstall can change the absolute `file:///var/mobile/Containers/Data/Application/{UUID}/Documents/` prefix while retaining the files. `loadQueue()` rebases saved `Documents/sensor/*.ndjson` paths against the current `documentDirectory`, including backup recovery, without changing request IDs or upload stages.
 - Check `getInfoAsync(filePath)` before `PREPARE_PENDING` / `PUT_PENDING`. Missing files or directories become `NEEDS_ATTENTION`; retain the queue entry. `COMPLETE_PENDING` must still reconcile with the server even if the local file is absent.

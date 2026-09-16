@@ -1,7 +1,7 @@
 import { HeartRateSummaryCard } from "./HeartRateSummaryCard";
 import { t } from "@/features/i18n";
 import * as FileSystem from "expo-file-system/legacy";
-import * as MediaLibrary from "expo-media-library";
+import * as MediaLibrary from "expo-media-library/legacy";
 import { router } from "expo-router";
 import React, {
   useCallback,

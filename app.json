@@ -7,7 +7,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "wodstrategist",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sunjinlee.wodstrategist",
@@ -26,18 +25,7 @@
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": ["fetch"],
-        "UIApplicationSceneManifest": {
-          "UIApplicationSupportsMultipleScenes": false,
-          "UISceneConfigurations": {
-            "UIWindowSceneSessionRoleApplication": [
-              {
-                "UISceneConfigurationName": "Default Configuration",
-                "UISceneDelegateClassName": "$(PRODUCT_MODULE_NAME).SceneDelegate"
-              }
-            ]
-          }
-        }
+        "UIBackgroundModes": ["fetch"]
       }
     },
     "android": {
@@ -49,7 +37,6 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -115,7 +102,8 @@
         "expo-build-properties",
         {
           "ios": {
-            "buildReactNativeFromSource": true
+            "deploymentTarget": "16.4",
+            "enableSceneSupport": true
           }
         }
       ],

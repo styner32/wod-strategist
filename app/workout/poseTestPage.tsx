@@ -19,7 +19,7 @@ import {
   useCameraPermission,
 } from 'react-native-vision-camera';
 import { router } from 'expo-router';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused } from 'expo-router/react-navigation';
 
 import { usePoseDetection, HEAVY_MODEL } from '../../features/ai-coach/frame-processors/usePoseDetection';
 import { KeypointLabelOverlay, KEYPOINT_NAMES, KEYPOINT_COLORS, MIN_SCORE } from '../../features/ai-coach/ui/KeypointLabelOverlay';
