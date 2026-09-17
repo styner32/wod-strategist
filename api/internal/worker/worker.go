@@ -82,6 +82,8 @@ func NewSensorTelemetryTask(analysisResultID, profileID uint, requestID string, 
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.
 type VideoAnalysisPayload struct {
+	LiveAnalysisVersion int `json:"live_analysis_version,omitempty"`
+
 	SessionID         string
 	FilePath          string
 	WorkoutType       string
@@ -100,6 +102,8 @@ type VideoAnalysisPayload struct {
 
 // VideoAnalysisWithSessionPayload is used when session_id is available (when user has selected a session to upload)
 type VideoAnalysisWithSessionPayload struct {
+	LiveAnalysisVersion int `json:"live_analysis_version,omitempty"`
+
 	SessionID         string
 	FilePath          string
 	ProfileID         uint
@@ -189,6 +193,10 @@ const (
 
 // Worker holds all dependencies shared across task handlers.
 type Worker struct {
+	CaptureFeedbackEnabled    bool
+	ContextualCoachingEnabled bool
+	ActivityCountingEnabled   bool
+
 	DB             *gorm.DB
 	StorageClient  StorageClient
 	BucketName     string

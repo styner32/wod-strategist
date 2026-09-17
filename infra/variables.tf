@@ -98,3 +98,20 @@ variable "enable_session_reanalysis" {
   default     = false
 }
 
+variable "enable_capture_feedback" {
+  description = "Enable capture environment feedback for new mobile recordings"
+  type        = bool
+  default     = false
+}
+
+variable "enable_contextual_coaching" {
+  description = "Enable additional coaching requests using the previous 60 seconds of observations"
+  type        = bool
+  default     = false
+}
+
+variable "enable_activity_counting" {
+  description = "Enable provisional activity totals and post-recording video count review"
+  type        = bool
+  default     = false
+}

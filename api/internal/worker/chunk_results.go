@@ -34,6 +34,7 @@ func (w *Worker) persistChunkAnalysisResult(ctx context.Context, result *db.Chun
 			return err
 		}
 		if existing.Status == "COMPLETED" {
+			*result = existing
 			return nil
 		}
 		// Keep verified merged-media offsets and references when a late success
@@ -45,6 +46,7 @@ func (w *Worker) persistChunkAnalysisResult(ctx context.Context, result *db.Chun
 		if err := tx.Model(&existing).Select("*").Omit("id", "created_at", "media_start_secs", "media_end_secs").Updates(result).Error; err != nil {
 			return fmt.Errorf("update chunk result: %w", err)
 		}
+		result.ID = existing.ID
 		return nil
 	})
 }

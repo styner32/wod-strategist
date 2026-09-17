@@ -454,6 +454,12 @@ export const historyApi = {
     api.get<SensorTimelineResponse>(
       `/sessions/${encodeURIComponent(sessionId)}/sensor-timeline?profile_id=${profileId}`,
     ),
+
+  reprocessSensor: (sessionId: string, profileId: number) =>
+    api.post<{ accepted: boolean; session_id: string; state: string }>(
+      `/sessions/${encodeURIComponent(sessionId)}/sensor-reprocess`,
+      { profile_id: profileId },
+    ),
 };
 
 export interface CostBreakdownItem {

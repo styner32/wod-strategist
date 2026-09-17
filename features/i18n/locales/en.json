@@ -493,6 +493,8 @@
     "empty": "No sensor timeline data available.",
     "processing": "Processing sensor timeline...",
     "failed": "Failed to process sensor timeline.",
+    "reprocess": "Retry Sensor Processing",
+    "reprocessing": "Requesting retry...",
     "unavailable": "Sensor timeline unavailable.",
     "videoSyncNotice": "Video sync is only available for the original (merged) video.",
     "referenceOnlyNotice": "Movement variance is reference data only and does not determine intensity or fatigue.",
@@ -501,5 +503,29 @@
     "invalid": "Unstable",
     "gap": "Gap",
     "noData": "No data"
+  },
+  "activity": {
+    "title": "Observed activity",
+    "camera": "Camera guidance",
+    "reps": "%{count} observed reps",
+    "seconds": "%{count} observed seconds",
+    "gaps": "%{count} unassessed intervals",
+    "noEvidence": "No countable observations yet.",
+    "observedOnly": "Recorded observations only. Review does not guarantee an exact total or competition-valid repetitions.",
+    "state": {
+      "unavailable": "Not evaluated",
+      "provisional": "Provisional observations",
+      "queued": "Review queued",
+      "running": "Review in progress",
+      "completed": "Review complete",
+      "partial": "Review with unresolved intervals",
+      "failed": "Review failed — provisional observations",
+      "disabled": "Review disabled — observed activity"
+    },
+    "more": "%{count} more movements",
+    "mediaTime": "Video time",
+    "captureTime": "Capture elapsed time",
+    "unknownTime": "Time unknown",
+    "chunkTime": "Time within source clip"
   }
 }

@@ -493,6 +493,8 @@
     "empty": "센서 시계열 데이터가 없습니다.",
     "processing": "센서 시계열 처리 중...",
     "failed": "센서 시계열 처리에 실패했습니다.",
+    "reprocess": "센서 데이터 재처리",
+    "reprocessing": "재처리 요청 중...",
     "unavailable": "센서 시계열을 확인할 수 없습니다.",
     "videoSyncNotice": "영상 싱크는 원본(Merged) 영상에서만 동작합니다.",
     "referenceOnlyNotice": "움직임 변화량은 참고 데이터이며 운동 강도나 피로도를 판정하지 않습니다.",
@@ -501,5 +503,29 @@
     "invalid": "측정 불안정",
     "gap": "미측정 구간",
     "noData": "데이터 없음"
+  },
+  "activity": {
+    "title": "관찰된 수행량",
+    "camera": "촬영 안내",
+    "reps": "관찰 %{count}회",
+    "seconds": "관찰 %{count}초",
+    "gaps": "미확인 구간 %{count}개 있음",
+    "noEvidence": "집계 가능한 관찰이 아직 없습니다.",
+    "observedOnly": "녹화에서 관찰한 수행량입니다. 검토 완료가 정확한 전체 횟수나 대회 유효 반복을 보장하지 않습니다.",
+    "state": {
+      "unavailable": "미평가",
+      "provisional": "잠정 관찰 집계",
+      "queued": "종료 후 검토 대기",
+      "running": "종료 후 검토 중",
+      "completed": "검토 완료",
+      "partial": "검토 결과 · 미확인 구간 있음",
+      "failed": "검토 실패 · 잠정 관찰 집계",
+      "disabled": "검토 비활성 · 관찰 집계"
+    },
+    "more": "추가 %{count}종목",
+    "mediaTime": "영상 시점",
+    "captureTime": "녹화 경과",
+    "unknownTime": "시점 확인 불가",
+    "chunkTime": "분석 구간 내 시점"
   }
 }

@@ -339,7 +339,15 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 				if hre.Time < 0 || (len(hrEvents) > 0 && hre.Time < hrEvents[len(hrEvents)-1].Time) {
 					parseErrors = append(parseErrors, "HR timestamp reversed or negative")
 				} else if len(hrEvents) > 0 && !hrEvents[len(hrEvents)-1].reset && hre.Time == hrEvents[len(hrEvents)-1].Time {
-					parseErrors = append(parseErrors, "HR timestamp duplicate")
+					parseWarnings = append(parseWarnings, fmt.Sprintf("line %d: duplicate HR timestamp %f; merged", lineNum, hre.Time))
+					lastIdx := len(hrEvents) - 1
+					hrEvents[lastIdx].BPM = hre.BPM
+					if len(hre.RR) > 0 {
+						hrEvents[lastIdx].RR = append(hrEvents[lastIdx].RR, hre.RR...)
+					}
+					if hre.Contact != nil {
+						hrEvents[lastIdx].Contact = hre.Contact
+					}
 				} else {
 					hrEvents = append(hrEvents, hrObservation{HREvent: hre})
 				}
@@ -361,8 +369,12 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 
 			if hasPrevHR {
 				dtMs := hre.Time - prevHRTimeMs
-				if dtMs <= 0 {
-					parseErrors = append(parseErrors, fmt.Sprintf("line %d: HR timestamp reversed or duplicate (%f <= %f)", lineNum, hre.Time, prevHRTimeMs))
+				if dtMs < 0 {
+					parseErrors = append(parseErrors, fmt.Sprintf("line %d: HR timestamp reversed (%f < %f)", lineNum, hre.Time, prevHRTimeMs))
+				} else if dtMs == 0 {
+					parseWarnings = append(parseWarnings, fmt.Sprintf("line %d: duplicate HR timestamp %f; skipped", lineNum, hre.Time))
+					prevBPM = hre.BPM
+					continue
 				} else if dtMs <= 5000 {
 					// Continuous valid interval [prevHRTimeMs, hre.Time)
 					effectiveDtMs := calcUnpausedDurationMs(prevHRTimeMs, hre.Time, pauseIntervals)

@@ -109,13 +109,14 @@ func CreateProfile(dbConn *gorm.DB, profileAttr *db.Profile) db.Profile {
 
 func CreateSession(dbConn *gorm.DB, sessionAttr *db.Session) db.Session {
 	s := db.Session{
-		SessionID:      sessionAttr.SessionID,
-		ProfileID:      sessionAttr.ProfileID,
-		Status:         sessionAttr.Status,
-		IdempotencyKey: sessionAttr.IdempotencyKey,
-		WODDescription: sessionAttr.WODDescription,
-		MovementHints:  sessionAttr.MovementHints,
-		WorkoutType:    sessionAttr.WorkoutType,
+		ActivitySummary: sessionAttr.ActivitySummary,
+		SessionID:       sessionAttr.SessionID,
+		ProfileID:       sessionAttr.ProfileID,
+		Status:          sessionAttr.Status,
+		IdempotencyKey:  sessionAttr.IdempotencyKey,
+		WODDescription:  sessionAttr.WODDescription,
+		MovementHints:   sessionAttr.MovementHints,
+		WorkoutType:     sessionAttr.WorkoutType,
 	}
 
 	if s.IdempotencyKey == "" {
@@ -178,21 +179,26 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 
 func CreateChunkAnalysisResult(dbConn *gorm.DB, resultAttr *db.ChunkAnalysisResult) db.ChunkAnalysisResult {
 	result := db.ChunkAnalysisResult{
-		SessionID:         resultAttr.SessionID,
-		ProfileID:         resultAttr.ProfileID,
-		FilePath:          resultAttr.FilePath,
-		ExerciseType:      resultAttr.ExerciseType,
-		Status:            resultAttr.Status,
-		Output:            resultAttr.Output,
-		ObservedSignals:   resultAttr.ObservedSignals,
-		HeartRateBPM:      resultAttr.HeartRateBPM,
-		StartSecs:         resultAttr.StartSecs,
-		EndSecs:           resultAttr.EndSecs,
-		MediaStartSecs:    resultAttr.MediaStartSecs,
-		MediaEndSecs:      resultAttr.MediaEndSecs,
-		WorkoutConfidence: resultAttr.WorkoutConfidence,
-		MotionScore:       resultAttr.MotionScore,
-		SkipReason:        resultAttr.SkipReason,
+		CaptureAssessment:    resultAttr.CaptureAssessment,
+		ContextualCoaching:   resultAttr.ContextualCoaching,
+		MovementObservations: resultAttr.MovementObservations,
+		TargetConfidence:     resultAttr.TargetConfidence,
+		TargetCues:           resultAttr.TargetCues,
+		SessionID:            resultAttr.SessionID,
+		ProfileID:            resultAttr.ProfileID,
+		FilePath:             resultAttr.FilePath,
+		ExerciseType:         resultAttr.ExerciseType,
+		Status:               resultAttr.Status,
+		Output:               resultAttr.Output,
+		ObservedSignals:      resultAttr.ObservedSignals,
+		HeartRateBPM:         resultAttr.HeartRateBPM,
+		StartSecs:            resultAttr.StartSecs,
+		EndSecs:              resultAttr.EndSecs,
+		MediaStartSecs:       resultAttr.MediaStartSecs,
+		MediaEndSecs:         resultAttr.MediaEndSecs,
+		WorkoutConfidence:    resultAttr.WorkoutConfidence,
+		MotionScore:          resultAttr.MotionScore,
+		SkipReason:           resultAttr.SkipReason,
 	}
 
 	g.Expect(dbConn.Create(&result).Error).NotTo(g.HaveOccurred())

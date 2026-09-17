@@ -1,5 +1,113 @@
 basePath: /api/v1
 definitions:
+  activity.Gap:
+    properties:
+      chunk_id:
+        type: integer
+      clock:
+        type: string
+      end_secs:
+        type: number
+      reason:
+        type: string
+      start_secs:
+        type: number
+    type: object
+  activity.Interval:
+    properties:
+      end_secs:
+        type: number
+      reason:
+        type: string
+      start_secs:
+        type: number
+    type: object
+  activity.Observation:
+    properties:
+      complete:
+        type: boolean
+      end_secs:
+        type: number
+      evidence:
+        type: string
+      movement:
+        type: string
+      start_secs:
+        type: number
+      unit:
+        description: reps or seconds
+        type: string
+    type: object
+  activity.Observations:
+    properties:
+      activity_state:
+        description: exercise, rest, unknown
+        type: string
+      duration_secs:
+        type: number
+      events:
+        items:
+          $ref: '#/definitions/activity.Observation'
+        type: array
+      target_state:
+        description: identified, ambiguous, not_visible, unknown
+        type: string
+      unassessed:
+        items:
+          $ref: '#/definitions/activity.Interval'
+        type: array
+      version:
+        type: integer
+    type: object
+  activity.ReviewedChunk:
+    properties:
+      chunk_id:
+        type: integer
+      observations:
+        $ref: '#/definitions/activity.Observations'
+      state:
+        type: string
+    type: object
+  activity.Summary:
+    properties:
+      available:
+        type: boolean
+      coverage_scope:
+        type: string
+      media_generation:
+        type: string
+      movements:
+        items:
+          $ref: '#/definitions/activity.Total'
+        type: array
+      review_state:
+        type: string
+      review_version:
+        type: integer
+      reviews:
+        items:
+          $ref: '#/definitions/activity.ReviewedChunk'
+        type: array
+      source_version:
+        type: string
+      unassessed:
+        items:
+          $ref: '#/definitions/activity.Gap'
+        type: array
+      version:
+        type: integer
+    type: object
+  activity.Total:
+    properties:
+      count:
+        type: integer
+      movement:
+        type: string
+      seconds:
+        type: number
+      unit:
+        type: string
+    type: object
   controllers.ChunkAnalysisSummaryResponse:
     properties:
       completed:
@@ -10,6 +118,40 @@ definitions:
         type: integer
       total:
         type: integer
+    type: object
+  controllers.ChunkCompleteRequest:
+    properties:
+      appearance_hints:
+        type: string
+      end_secs:
+        type: number
+      gcs_uri:
+        type: string
+      heart_rate_bpm:
+        type: integer
+      injuries:
+        items:
+          type: string
+        type: array
+      live_analysis_version:
+        type: integer
+      movements:
+        items:
+          type: string
+        type: array
+      profile_id:
+        type: integer
+      session_id:
+        type: string
+      start_secs:
+        type: number
+      wod_description:
+        description: 'e.g. "Fran" or "For Time: 5 rounds of..."'
+        type: string
+      workout_confidence:
+        type: number
+      workout_type:
+        type: string
     type: object
   controllers.CompleteUploadRequest:
     properties:
@@ -305,6 +447,10 @@ definitions:
     type: object
   db.ChunkAnalysisResult:
     properties:
+      capture_assessment:
+        type: object
+      contextual_coaching:
+        type: object
       created_at:
         type: string
       end_secs:
@@ -319,6 +465,8 @@ definitions:
         type: integer
       id:
         type: integer
+      movement_observations:
+        type: object
       observed_signals:
         description: 'JSON: estimated workout metrics for benchmarking'
         type: string
@@ -407,7 +555,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/controllers.CompleteUploadRequest'
+          $ref: '#/definitions/controllers.ChunkCompleteRequest'
       produces:
       - application/json
       responses:
@@ -796,6 +944,29 @@ paths:
           schema:
             $ref: '#/definitions/controllers.ErrorResponse'
       summary: Retry Analysis
+      tags:
+      - analysis
+  /sessions/{session_id}/activity-summary:
+    get:
+      parameters:
+      - description: Session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Owned profile ID
+        in: query
+        name: profile_id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/activity.Summary'
+      summary: Get observed workout activity
       tags:
       - analysis
   /subtitles/:session_id:

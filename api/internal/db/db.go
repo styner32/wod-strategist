@@ -140,17 +140,17 @@ type FatigueGuidance struct {
 }
 
 type SessionFatigue struct {
-	Status                 string            `json:"status,omitempty"` // available, insufficient_evidence
-	LoadCalculationVersion int               `json:"load_calculation_version,omitempty"`
-	SensorStatus           string            `json:"sensor_status,omitempty"` // none, applied, failed, pending
-	HeartRateAdjusted      bool              `json:"heart_rate_adjusted"`
-	OverallScore           int               `json:"overall_score,omitempty"`
-	State                  string            `json:"state,omitempty"`
-	StateKO                string            `json:"state_ko,omitempty"`
-	AdviceCode             string            `json:"advice_code,omitempty"`
-	FocusMuscles           []string          `json:"focus_muscles,omitempty"`
-	Muscles                map[string]int    `json:"muscles,omitempty"`
-	Guidance               *FatigueGuidance  `json:"guidance,omitempty"`
+	Status                 string           `json:"status,omitempty"` // available, insufficient_evidence
+	LoadCalculationVersion int              `json:"load_calculation_version,omitempty"`
+	SensorStatus           string           `json:"sensor_status,omitempty"` // none, applied, failed, pending
+	HeartRateAdjusted      bool             `json:"heart_rate_adjusted"`
+	OverallScore           int              `json:"overall_score,omitempty"`
+	State                  string           `json:"state,omitempty"`
+	StateKO                string           `json:"state_ko,omitempty"`
+	AdviceCode             string           `json:"advice_code,omitempty"`
+	FocusMuscles           []string         `json:"focus_muscles,omitempty"`
+	Muscles                map[string]int   `json:"muscles,omitempty"`
+	Guidance               *FatigueGuidance `json:"guidance,omitempty"`
 }
 
 type NormalizedMovement struct {
@@ -177,6 +177,10 @@ type HighlightResult struct {
 }
 
 type ChunkAnalysisResult struct {
+	CaptureAssessment    NullableJSONDocument `json:"capture_assessment,omitempty" swaggertype:"object"`
+	ContextualCoaching   NullableJSONDocument `json:"contextual_coaching,omitempty" swaggertype:"object"`
+	MovementObservations NullableJSONDocument `json:"movement_observations,omitempty" swaggertype:"object"`
+
 	ID                uint      `gorm:"primaryKey" json:"id"`
 	SessionID         string    `gorm:"index;not null" json:"session_id"`
 	ProfileID         uint      `gorm:"index;not null" json:"profile_id"`
@@ -224,6 +228,8 @@ func (s SessionStatus) String() string {
 }
 
 type Session struct {
+	ActivitySummary NullableJSONDocument `json:"activity_summary,omitempty" swaggertype:"object"`
+
 	ID             uint          `gorm:"primaryKey" json:"id"`
 	SessionID      string        `gorm:"uniqueIndex;not null" json:"session_id"`
 	Status         SessionStatus `json:"status"` // started, completed, failed

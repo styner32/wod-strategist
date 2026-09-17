@@ -1,3 +1,4 @@
+import { ActivitySummaryCard } from "./ActivitySummaryCard";
 import { HeartRateSummaryCard } from "./HeartRateSummaryCard";
 import { t } from "@/features/i18n";
 import * as FileSystem from "expo-file-system/legacy";
@@ -653,6 +654,7 @@ function HistoryCard({
         </View>
 
         <HeartRateSummaryCard summary={item.heart_rate} />
+        <ActivitySummaryCard sessionId={item.session_id} profileId={item.profile_id} />
 
         {/* Content */}
         {hasOutput && (

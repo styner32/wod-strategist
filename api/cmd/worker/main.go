@@ -84,6 +84,9 @@ func main() {
 	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient, logger.Log)
 	w.QueueInspector = asynq.NewInspector(redisOpt)
 	defer w.QueueInspector.Close()
+	w.CaptureFeedbackEnabled = cfg.CaptureFeedbackEnabled
+	w.ContextualCoachingEnabled = cfg.ContextualCoachingEnabled
+	w.ActivityCountingEnabled = cfg.ActivityCountingEnabled
 	w.UseCache = cfg.UseCache
 	w.PipelineMode = worker.PipelineMode(cfg.PipelineMode)
 
@@ -92,6 +95,7 @@ func main() {
 	mux.HandleFunc(worker.TypeChunkAnalysis, w.HandleChunkAnalysisTask)
 	mux.HandleFunc(worker.TypeChunkAnalysisWithSession, w.HandleChunkAnalysisWithSessionTask)
 	mux.HandleFunc(worker.TypeMergeChunks, w.HandleMergeChunksTask)
+	mux.HandleFunc(worker.TypeActivityReview, w.HandleActivityReviewTask)
 	mux.HandleFunc(worker.TypeInjuryAnalysis, w.HandleInjuryAnalysisTask)
 	mux.HandleFunc(worker.TypeGenerateHighlight, w.HandleGenerateHighlightTask)
 	mux.HandleFunc(worker.TypeVerifyHighlights, w.HandleVerifyHighlightsTask)

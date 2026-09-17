@@ -40,6 +40,9 @@ type Server struct {
 }
 
 type Worker struct {
+	CaptureFeedbackEnabled    bool
+	ContextualCoachingEnabled bool
+	ActivityCountingEnabled   bool
 	Common
 	GeminiAPIKey         string
 	GeminiModel          string // GEMINI_MODEL — default "gemini-3.8-flash"
@@ -148,6 +151,9 @@ func InitWorker() (Worker, error) {
 	}
 
 	cfg := Worker{
+		CaptureFeedbackEnabled:    strings.EqualFold(os.Getenv("ENABLE_CAPTURE_FEEDBACK"), "true"),
+		ContextualCoachingEnabled: strings.EqualFold(os.Getenv("ENABLE_CONTEXTUAL_COACHING"), "true"),
+		ActivityCountingEnabled:   strings.EqualFold(os.Getenv("ENABLE_ACTIVITY_COUNTING"), "true"),
 		Common: Common{
 			DatabaseURL:   strings.TrimSpace(os.Getenv("DATABASE_URL")),
 			RedisURL:      strings.TrimSpace(os.Getenv("REDIS_URL")),

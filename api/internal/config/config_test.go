@@ -233,6 +233,25 @@ var _ = Describe("InitWorker", func() {
 		})
 	})
 
+	Context("live feedback feature switches", func() {
+		It("defaults all new features off and enables each independently", func() {
+			setEnv("ENABLE_CAPTURE_FEEDBACK", "")
+			setEnv("ENABLE_CONTEXTUAL_COACHING", "")
+			setEnv("ENABLE_ACTIVITY_COUNTING", "")
+			cfg, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.CaptureFeedbackEnabled).To(BeFalse())
+			Expect(cfg.ContextualCoachingEnabled).To(BeFalse())
+			Expect(cfg.ActivityCountingEnabled).To(BeFalse())
+			setEnv("ENABLE_ACTIVITY_COUNTING", "true")
+			cfg, err = config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ActivityCountingEnabled).To(BeTrue())
+			Expect(cfg.CaptureFeedbackEnabled).To(BeFalse())
+			Expect(cfg.ContextualCoachingEnabled).To(BeFalse())
+		})
+	})
+
 	Context("GeminiModel and ThinkingConfig", func() {
 		It("defaults to ModelFlash38, HIGH thinking level, and LOW chunk thinking level", func() {
 			setEnv("GEMINI_MODEL", "")

@@ -1,3 +1,4 @@
+import { ActivitySummaryPanel } from "./components/ActivitySummaryPanel";
 import { HeartRateSummaryPanel } from "./components/HeartRateSummaryPanel";
 import { SensorTimelinePanel } from "./components/SensorTimelinePanel";
 import {
@@ -457,6 +458,22 @@ export function SessionDetailPage() {
       setSelectedReanalysisChunkIds(
         new Set(result.failures.map((failure) => failure.chunkId)),
       );
+    },
+  });
+
+  const reprocessSensorMutation = useMutation({
+    mutationFn: () => historyApi.reprocessSensor(sessionId!, profileId!),
+    onSuccess: async () => {
+      const sessionKey = `${sessionId}:${profileId}`;
+      sensorPollingBudget.current = { sessionKey, startedAtMs: Date.now() };
+      await Promise.allSettled([
+        queryClient.invalidateQueries({
+          queryKey: ["sensor-timeline", sessionId, profileId],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["session-analysis", sessionId],
+        }),
+      ]);
     },
   });
 
@@ -976,6 +993,7 @@ export function SessionDetailPage() {
 
           {/* Muscle Fatigue & Strain */}
           {analysis && <HeartRateSummaryPanel summary={analysis.heart_rate} />}
+          {sessionId && profileId && <ActivitySummaryPanel sessionId={sessionId} profileId={profileId} />}
           {analysis && (
             <SensorTimelinePanel
               key={`${sessionId}:${profileId}:${effectiveVideoKind}:${sensorTimelineResponse?.timeline?.source.request_id ?? ""}:${sensorTimelineResponse?.timeline?.source.source_generation ?? ""}`}
@@ -984,6 +1002,12 @@ export function SessionDetailPage() {
               currentTime={currentTime}
               onSeekMedia={handleTimelineSeek}
               isMergedVideo={effectiveVideoKind === "merged"}
+              onReprocess={
+                sessionId && profileId
+                  ? () => reprocessSensorMutation.mutate()
+                  : undefined
+              }
+              isReprocessing={reprocessSensorMutation.isPending}
             />
           )}
           {analysis?.session_fatigue && (

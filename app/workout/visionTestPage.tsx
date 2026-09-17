@@ -1,3 +1,5 @@
+import { useLiveWorkoutFeedback } from "../../features/wod/useLiveWorkoutFeedback";
+import { ActivitySummaryContent } from "../../features/wod/ui/ActivitySummaryCard";
 import { useIsFocused } from "expo-router/react-navigation";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as MediaLibrary from "expo-media-library/legacy";
@@ -48,7 +50,6 @@ import {
   flushPendingUploads,
 } from "../../features/debug/telemetryUpload";
 import {
-  fetchChunkAnalysis,
   mergeChunks,
   processWorkoutChunk,
 } from "../../features/wod/api";
@@ -286,7 +287,6 @@ export default function VisionTestPage() {
   const [isMerging, setIsMerging] = useState(false);
   const [mergeChunkTotal, setMergeChunkTotal] = useState(0);
   const mergeShimmerAnim = useRef(new Animated.Value(0)).current;
-  const [chunkFeedback, setChunkFeedback] = useState<string | null>(null);
   const [isCameraReady, setIsCameraReady] = useState(false);
   const [chunkCount, setChunkCount] = useState(0);
 
@@ -322,27 +322,8 @@ export default function VisionTestPage() {
 
   const profileId = useProfileStore((s) => s.activeProfileId);
 
-  // Poll for chunk feedback while recording
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (isRecording) {
-      interval = setInterval(async () => {
-        try {
-          const sessionId = sessionIdRef.current;
-          const results = await fetchChunkAnalysis(sessionId);
-          if (results.length > 0) {
-            const latest = results.find((r) => r.status === "COMPLETED");
-            if (latest && latest.output) {
-              setChunkFeedback(latest.output);
-            }
-          }
-        } catch (e) {
-          // Error fetching feedback, ignore to not clutter logs
-        }
-      }, 3000);
-    }
-    return () => clearInterval(interval);
-  }, [isRecording, workoutType]);
+  const liveFeedback = useLiveWorkoutFeedback(isRecording, profileId ?? 0, sessionIdRef, recordingStartTime);
+  const chunkFeedback = liveFeedback.coaching;
 
   // Keep screen awake while recording (prevents Android/iOS sleep)
   useEffect(() => {
@@ -1503,14 +1484,16 @@ export default function VisionTestPage() {
       </View>
 
       {/* Chunk Feedback Overlay */}
-      {isRecording && !previewOnly && chunkFeedback && (
+      {isRecording && !previewOnly && (chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
         <View
           style={[
             styles.feedbackOverlay,
             applyLandscapeStyles && styles.feedbackOverlayLandscape,
           ]}
         >
-          <Text style={styles.feedbackText}>{chunkFeedback}</Text>
+          {liveFeedback.captureAdvice && <Text style={[styles.feedbackText, { color: "#ffd28a" }]}>{t("activity.camera")}: {liveFeedback.captureAdvice}</Text>}
+          {chunkFeedback && <Text style={styles.feedbackText}>{chunkFeedback}</Text>}
+          <ActivitySummaryContent summary={liveFeedback.summary} compact />
         </View>
       )}
 

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"os"
 	"strings"
 	"testing"
 
@@ -386,4 +387,93 @@ func TestMediaToCaptureMapping(t *testing.T) {
 		t.Errorf("expected false for out-of-range media time")
 	}
 }
+
+func TestSensorParser_DuplicateHRTimestamps(t *testing.T) {
+	optsV2 := sensor.ParseOptions{
+		CalculationVersion: 2,
+		ExpectedProfileID:  1,
+		ExpectedSessionID:  "WOD-20260917-01M2PERXWM5NAA8ABX5Z44GH4B",
+	}
+
+	content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260917-01M2PERXWM5NAA8ABX5Z44GH4B","profile_id":1,"clock_source":"capture_clock","base_epoch_ms":1789607573396}
+{"k":"stream_start","t":1000,"stream_id":1,"sampling":{"acc_hz":50,"acc_range_g":8}}
+{"k":"hr","t":1000,"bpm":100,"rr":[600]}
+{"k":"hr","t":2000,"bpm":110,"rr":[550]}
+{"k":"hr","t":2000,"bpm":112,"rr":[540]}
+{"k":"hr","t":3000,"bpm":120,"rr":[500]}
+{"k":"end","t":4000,"pause_intervals":[]}
+`
+	optsV2.ExpectedSHA256 = computeHash(content)
+	optsV2.ExpectedSizeBytes = int64(len(content))
+
+	timelineSource := sensor.TimelineSource{
+		SensorVersion:        "1",
+		RequestID:            "test-req",
+		SourceGeneration:     "100",
+		HRCalculationVersion: 2,
+	}
+
+	res, err := sensor.ParseAndProcessWithTimeline(strings.NewReader(content), optsV2, timelineSource)
+	if err != nil {
+		t.Fatalf("ParseAndProcessWithTimeline failed: %v", err)
+	}
+	if !res.Summary.Quality.IsComplete {
+		t.Fatalf("expected IsComplete=true, got errors: %v", res.Summary.Quality.Errors)
+	}
+	if res.Summary.Quality.Status != "ok" {
+		t.Errorf("expected status 'ok', got %s", res.Summary.Quality.Status)
+	}
+	if !res.Summary.Quality.ValidHR {
+		t.Errorf("expected ValidHR=true")
+	}
+	if res.Timeline == nil {
+		t.Errorf("expected timeline to be generated")
+	}
+
+	// Also test CalculationVersion 1
+	optsV1 := optsV2
+	optsV1.CalculationVersion = 1
+	resV1, err := sensor.ParseAndProcess(strings.NewReader(content), optsV1)
+	if err != nil {
+		t.Fatalf("ParseAndProcess V1 failed: %v", err)
+	}
+	if !resV1.Quality.IsComplete {
+		t.Fatalf("expected V1 IsComplete=true, got errors: %v", resV1.Quality.Errors)
+	}
+
+	// Verify real session file if available on local disk
+	if data, err := os.ReadFile("/tmp/sensor_failed_20260917.ndjson"); err == nil {
+		h := sha256.Sum256(data)
+		realOpts := sensor.ParseOptions{
+			CalculationVersion: 2,
+			ExpectedProfileID:  1,
+			ExpectedSessionID:  "WOD-20260917-01M2PERXWM5NAA8ABX5Z44GH4B",
+			ExpectedSHA256:     hex.EncodeToString(h[:]),
+			ExpectedSizeBytes:  int64(len(data)),
+		}
+		realSource := sensor.TimelineSource{
+			SensorVersion:        "1",
+			RequestID:            "664fda62-bf90-4b69-a3f3-26b5d202f89a",
+			SourceGeneration:     "1",
+			HRCalculationVersion: 2,
+		}
+		realRes, err := sensor.ParseAndProcessWithTimeline(bytes.NewReader(data), realOpts, realSource)
+		if err != nil {
+			t.Fatalf("ParseAndProcessWithTimeline for real file failed: %v", err)
+		}
+		if !realRes.Summary.Quality.IsComplete {
+			t.Fatalf("expected real file IsComplete=true, got: %v", realRes.Summary.Quality.Errors)
+		}
+		if realRes.Summary.Quality.Status != "ok" {
+			t.Errorf("expected real file status ok, got %s", realRes.Summary.Quality.Status)
+		}
+		if !realRes.Summary.Quality.ValidHR {
+			t.Errorf("expected real file ValidHR=true")
+		}
+		if realRes.Timeline == nil {
+			t.Errorf("expected real file timeline to be present")
+		}
+	}
+}
+
 

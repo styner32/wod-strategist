@@ -1,3 +1,4 @@
+import { activitySummaryPath, type ActivitySummary, type CaptureAssessment, type ContextualCoaching, type MovementObservations } from "../../shared/activity";
 import {
   createUploadTask,
   FileSystemUploadType,
@@ -109,6 +110,9 @@ export type UploadCompleteResponse = Required<
 >;
 
 export interface ChunkAnalysisResult {
+ capture_assessment?: CaptureAssessment | null;
+ contextual_coaching?: ContextualCoaching | null;
+ movement_observations?: MovementObservations | null;
   id: number;
   session_id: string;
   status: string;
@@ -122,8 +126,9 @@ export interface ChunkAnalysisResult {
 
 export async function fetchChunkAnalysis(
   sessionId: string,
+ signal?: AbortSignal,
 ): Promise<ChunkAnalysisResult[]> {
-  return apiClient<ChunkAnalysisResult[]>(`/chunk-analysis/${sessionId}`);
+  return apiClient<ChunkAnalysisResult[]>(`/chunk-analysis/${sessionId}`, { signal });
 }
 
 export async function fetchMovements(): Promise<string[]> {
@@ -451,6 +456,7 @@ export async function notifyChunkUploadComplete(
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
     bodyPayload: {
+      live_analysis_version: 1,
       session_id: sessionId,
       gcs_uri: gcsUri,
       movements,
@@ -1028,4 +1034,8 @@ export async function fetchPreWodAdvice(
     method: "POST",
     bodyPayload: req,
   });
+}
+
+export function fetchActivitySummary(sessionId: string, profileId: number, signal?: AbortSignal): Promise<ActivitySummary> {
+ return apiClient<ActivitySummary>(activitySummaryPath(sessionId, profileId), { signal });
 }
