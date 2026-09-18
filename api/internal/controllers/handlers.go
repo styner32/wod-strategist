@@ -1411,14 +1411,21 @@ func (ctl *Controller) GenerateHardSub(c *gin.Context) {
 	})
 }
 
-// workoutBlockRegex extracts the JSON content from a ```workout ... ``` fenced block.
-var workoutBlockRegex = regexp.MustCompile("(?s)```workout\\s*\\n?(.*?)\\n?```")
+// workoutBlockRegex extracts the JSON content from a ```workout or ```json fenced block.
+var workoutBlockRegex = regexp.MustCompile(
+	"(?is)```(?:workout|json)?\\s*\\n?(\\{[^`]*?\\})\\s*\\n?```")
 
 // parseWorkoutBlock extracts the structured workout JSON from Gemini's output.
 func parseWorkoutBlock(output string) (*ParseWorkoutImageResponse, error) {
 	matches := workoutBlockRegex.FindStringSubmatch(output)
 	if len(matches) < 2 {
-		return nil, fmt.Errorf("no ```workout``` block found in output")
+		start := strings.Index(output, "{")
+		end := strings.LastIndex(output, "}")
+		if start != -1 && end > start {
+			matches = []string{output, output[start : end+1]}
+		} else {
+			return nil, fmt.Errorf("no workout JSON block found in output")
+		}
 	}
 
 	var resp ParseWorkoutImageResponse

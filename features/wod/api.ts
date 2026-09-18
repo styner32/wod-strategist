@@ -18,6 +18,19 @@ const API_BASE_URL =
 // Core API Client
 // ==========================================
 
+async function notifyUnauthorized(): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const authStoreModule = require("@/features/auth/useAuthStore");
+    authStoreModule.useAuthStore?.getState().handleUnauthorized();
+  } catch {
+    try {
+      const { useAuthStore } = await import("@/features/auth/useAuthStore");
+      useAuthStore.getState().handleUnauthorized();
+    } catch {}
+  }
+}
+
 export interface ApiRequestOptions extends RequestInit {
   bodyPayload?: any; // JSON body
 }
@@ -53,9 +66,7 @@ export async function apiClient<T = any>(
   });
 
   if (res.status === 401) {
-    // Lazy import to avoid circular dependency
-    const { useAuthStore } = await import("@/features/auth/useAuthStore");
-    useAuthStore.getState().handleUnauthorized();
+    await notifyUnauthorized();
     throw new Error("Unauthorized");
   }
 
@@ -814,47 +825,43 @@ export async function parseWorkoutImage(
 ): Promise<ParseWorkoutImageResponse> {
   const url = `${API_BASE_URL}/parse-workout-image`;
 
-  const formData = new FormData();
   const filename = imageUri.split("/").pop() || "whiteboard.jpg";
   const ext = filename.split(".").pop()?.toLowerCase();
   const mimeType = ext === "png" ? "image/png" : "image/jpeg";
 
-  formData.append("image", {
-    uri: imageUri,
-    name: filename,
-    type: mimeType,
-  } as any);
-
   const headers: Record<string, string> = {};
-
   const token = await getToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(url, {
-    method: "POST",
+  const response = await uploadAsync(url, imageUri, {
+    httpMethod: "POST",
+    uploadType: FileSystemUploadType.MULTIPART,
+    fieldName: "image",
+    mimeType,
     headers,
-    body: formData,
   });
 
-  if (res.status === 401) {
-    const { useAuthStore } = await import("@/features/auth/useAuthStore");
-    useAuthStore.getState().handleUnauthorized();
+  if (response.status === 401) {
+    await notifyUnauthorized();
     throw new Error("Unauthorized");
   }
 
-  if (!res.ok) {
-    let errorText = res.statusText;
+  if (response.status < 200 || response.status >= 300) {
+    let errorMsg = `API Error [${response.status}]`;
     try {
-      errorText = await res.text();
-    } catch {}
-    throw new Error(
-      `API Error [${res.status}]: ${errorText || res.statusText}`,
-    );
+      const parsed = JSON.parse(response.body);
+      if (parsed.error) {
+        errorMsg = parsed.error;
+      }
+    } catch {
+      if (response.body) errorMsg += `: ${response.body}`;
+    }
+    throw new Error(errorMsg);
   }
 
-  return res.json() as Promise<ParseWorkoutImageResponse>;
+  return JSON.parse(response.body) as ParseWorkoutImageResponse;
 }
 
 // ==========================================
@@ -872,47 +879,43 @@ export async function parseAppearanceImage(
 ): Promise<{ appearance: string }> {
   const url = `${API_BASE_URL}/appearance-from-image`;
 
-  const formData = new FormData();
   const filename = imageUri.split("/").pop() || "person.jpg";
   const ext = filename.split(".").pop()?.toLowerCase();
   const mimeType = ext === "png" ? "image/png" : "image/jpeg";
 
-  formData.append("image", {
-    uri: imageUri,
-    name: filename,
-    type: mimeType,
-  } as any);
-
   const headers: Record<string, string> = {};
-
   const token = await getToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(url, {
-    method: "POST",
+  const response = await uploadAsync(url, imageUri, {
+    httpMethod: "POST",
+    uploadType: FileSystemUploadType.MULTIPART,
+    fieldName: "image",
+    mimeType,
     headers,
-    body: formData,
   });
 
-  if (res.status === 401) {
-    const { useAuthStore } = await import("@/features/auth/useAuthStore");
-    useAuthStore.getState().handleUnauthorized();
+  if (response.status === 401) {
+    await notifyUnauthorized();
     throw new Error("Unauthorized");
   }
 
-  if (!res.ok) {
-    let errorText = res.statusText;
+  if (response.status < 200 || response.status >= 300) {
+    let errorMsg = `API Error [${response.status}]`;
     try {
-      errorText = await res.text();
-    } catch {}
-    throw new Error(
-      `API Error [${res.status}]: ${errorText || res.statusText}`,
-    );
+      const parsed = JSON.parse(response.body);
+      if (parsed.error) {
+        errorMsg = parsed.error;
+      }
+    } catch {
+      if (response.body) errorMsg += `: ${response.body}`;
+    }
+    throw new Error(errorMsg);
   }
 
-  return res.json() as Promise<{ appearance: string }>;
+  return JSON.parse(response.body) as { appearance: string };
 }
 
 // ==========================================

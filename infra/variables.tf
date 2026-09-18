@@ -107,11 +107,11 @@ variable "enable_capture_feedback" {
 variable "enable_contextual_coaching" {
   description = "Enable additional coaching requests using the previous 60 seconds of observations"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_activity_counting" {
   description = "Enable provisional activity totals and post-recording video count review"
   type        = bool
-  default     = false
+  default     = true
 }

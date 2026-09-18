@@ -349,9 +349,10 @@ export default function WorkoutSetup() {
         });
       }
       setCurrentStep("confirm");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Whiteboard scan failed:", err);
-      Alert.alert(t("common.error"), t("setup.scanFailed"));
+      const msg = err instanceof Error && err.message ? err.message : t("setup.scanFailed");
+      Alert.alert(t("common.error"), msg);
     } finally {
       setScanning(false);
     }

@@ -8,6 +8,8 @@ import {
   uploadSensorToGcs,
   notifyUploadComplete,
   processWorkoutVideo,
+  parseWorkoutImage,
+  parseAppearanceImage,
 } from "./api";
 import { FileSystemUploadType } from "expo-file-system/legacy";
 
@@ -248,4 +250,98 @@ describe("API Client Methods", () => {
       expect(createUploadTask).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("parseWorkoutImage", () => {
+    it("should upload image via uploadAsync with MULTIPART and return parsed workout", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 200,
+        body: JSON.stringify({
+          wod_description: "Fran 21-15-9",
+          movements: ["Thruster", "Pull-up"],
+          raw_text: "FRAN 21-15-9",
+        }),
+      });
+
+      const res = await parseWorkoutImage("file:///path/to/whiteboard.jpg");
+      expect(res.wod_description).toBe("Fran 21-15-9");
+      expect(res.movements).toEqual(["Thruster", "Pull-up"]);
+      expect(res.raw_text).toBe("FRAN 21-15-9");
+      expect(mockSensorUploadAsync).toHaveBeenCalledWith(
+        expect.stringContaining("/parse-workout-image"),
+        "file:///path/to/whiteboard.jpg",
+        expect.objectContaining({
+          httpMethod: "POST",
+          uploadType: FileSystemUploadType.MULTIPART,
+          fieldName: "image",
+          mimeType: "image/jpeg",
+        }),
+      );
+    });
+
+    it("should handle png files with correct mimeType", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 200,
+        body: JSON.stringify({
+          wod_description: "Grace",
+          movements: ["Clean and Jerk"],
+          raw_text: "GRACE",
+        }),
+      });
+
+      await parseWorkoutImage("file:///path/to/board.png");
+      expect(mockSensorUploadAsync).toHaveBeenCalledWith(
+        expect.stringContaining("/parse-workout-image"),
+        "file:///path/to/board.png",
+        expect.objectContaining({
+          mimeType: "image/png",
+        }),
+      );
+    });
+
+    it("should throw error with backend error message on non-200 response", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 422,
+        body: JSON.stringify({ error: "could not extract workout from image" }),
+      });
+
+      await expect(parseWorkoutImage("file:///path/to/whiteboard.jpg")).rejects.toThrow(
+        "could not extract workout from image",
+      );
+    });
+
+    it("should throw Unauthorized on 401 response", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 401,
+        body: "Unauthorized",
+      });
+
+      await expect(parseWorkoutImage("file:///path/to/whiteboard.jpg")).rejects.toThrow(
+        "Unauthorized",
+      );
+    });
+  });
+
+  describe("parseAppearanceImage", () => {
+    it("should upload image and return appearance string", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 200,
+        body: JSON.stringify({
+          appearance: "Black shirt, grey shorts",
+        }),
+      });
+
+      const res = await parseAppearanceImage("file:///path/to/person.jpg");
+      expect(res.appearance).toBe("Black shirt, grey shorts");
+      expect(mockSensorUploadAsync).toHaveBeenCalledWith(
+        expect.stringContaining("/appearance-from-image"),
+        "file:///path/to/person.jpg",
+        expect.objectContaining({
+          httpMethod: "POST",
+          uploadType: FileSystemUploadType.MULTIPART,
+          fieldName: "image",
+        }),
+      );
+    });
+  });
 });
+
