@@ -243,7 +243,7 @@ var _ = Describe("GET /api/v1/stretches/recommended", func() {
 			ProfileID:              profile.ID,
 			SessionID:              "WOD-ARCHIVED",
 			StretchRecommendations: `[{"stretch":"Archived Stretch","target_area":"Back","reason":"Archived"}]`,
-			ArchivedAt:              &archivedTime,
+			ArchivedAt:             &archivedTime,
 			CreatedAt:              tArchived,
 		})
 

@@ -130,4 +130,3 @@ func isValidSessionID(sessionID string) bool {
 		legacySessionIDPattern.MatchString(sessionID) ||
 		testSessionIDPattern.MatchString(sessionID)
 }
-
