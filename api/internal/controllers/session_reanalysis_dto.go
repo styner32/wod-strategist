@@ -23,25 +23,25 @@ type SessionReanalysisCandidateResponse struct {
 }
 
 type SessionReanalysisRunResponse struct {
-	ID            uint                                `json:"id"`
-	SessionID     string                              `json:"session_id"`
-	TaskID        string                              `json:"task_id,omitempty"`
-	Status        string                              `json:"status"`
-	Candidate     *SessionReanalysisCandidateResponse `json:"candidate,omitempty"`
-	WODDescription string                             `json:"wod_description,omitempty"`
-	Model         string                              `json:"model,omitempty"`
-	PromptVersion string                              `json:"prompt_version,omitempty"`
-	PromptHash    string                              `json:"prompt_hash,omitempty"`
-	SchemaVersion string                              `json:"schema_version,omitempty"`
-	InputTokens   int32                               `json:"input_tokens,omitempty"`
-	OutputTokens  int32                               `json:"output_tokens,omitempty"`
-	TokenUsage    *ChunkReanalysisTokenUsageResponse  `json:"token_usage,omitempty"`
-	DurationMs    int64                               `json:"duration_ms,omitempty"`
-	Error         string                              `json:"error,omitempty"`
-	CreatedAt     time.Time                           `json:"created_at"`
-	StartedAt     *time.Time                          `json:"started_at,omitempty"`
-	CompletedAt   *time.Time                          `json:"completed_at,omitempty"`
-	UpdatedAt     time.Time                           `json:"updated_at"`
+	ID             uint                                `json:"id"`
+	SessionID      string                              `json:"session_id"`
+	TaskID         string                              `json:"task_id,omitempty"`
+	Status         string                              `json:"status"`
+	Candidate      *SessionReanalysisCandidateResponse `json:"candidate,omitempty"`
+	WODDescription string                              `json:"wod_description,omitempty"`
+	Model          string                              `json:"model,omitempty"`
+	PromptVersion  string                              `json:"prompt_version,omitempty"`
+	PromptHash     string                              `json:"prompt_hash,omitempty"`
+	SchemaVersion  string                              `json:"schema_version,omitempty"`
+	InputTokens    int32                               `json:"input_tokens,omitempty"`
+	OutputTokens   int32                               `json:"output_tokens,omitempty"`
+	TokenUsage     *ChunkReanalysisTokenUsageResponse  `json:"token_usage,omitempty"`
+	DurationMs     int64                               `json:"duration_ms,omitempty"`
+	Error          string                              `json:"error,omitempty"`
+	CreatedAt      time.Time                           `json:"created_at"`
+	StartedAt      *time.Time                          `json:"started_at,omitempty"`
+	CompletedAt    *time.Time                          `json:"completed_at,omitempty"`
+	UpdatedAt      time.Time                           `json:"updated_at"`
 }
 
 type SessionReanalysisReadinessResponse struct {

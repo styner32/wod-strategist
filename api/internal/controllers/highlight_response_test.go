@@ -154,11 +154,11 @@ func TestPopulateSessionFatigue_SensorFreshnessRejection(t *testing.T) {
 	// If sensor version in summary does not match row's SensorVersion, summary must NOT be used
 	results := []db.AnalysisResult{
 		{
-			SessionID:       "WOD-20260904-01STALE01",
-			Status:          "COMPLETED",
-			SessionScore:    `{"intensity":70,"movements":{"Row":{"meters":1000}}}`,
-			SensorVersion:   2,
-			SensorState:     db.SensorStateCompleted,
+			SessionID:        "WOD-20260904-01STALE01",
+			Status:           "COMPLETED",
+			SessionScore:     `{"intensity":70,"movements":{"Row":{"meters":1000}}}`,
+			SensorVersion:    2,
+			SensorState:      db.SensorStateCompleted,
 			SensorProcessing: db.JSONDocument(`{"request_id":"req-new","target_generation":"100"}`),
 			SensorSummary:    db.JSONDocument(`{"version":1,"request_id":"req-old","source_generation":"99","calculation_version":1,"quality":{"valid_hr":true,"is_complete":true},"hr_bonus":15.0}`),
 		},

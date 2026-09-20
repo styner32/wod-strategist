@@ -36,9 +36,9 @@ type SensorTimelineResponse struct {
 
 // GetSensorTimeline handles GET /api/v1/sessions/:session_id/sensor-timeline?profile_id=...
 func (ctl *Controller) GetSensorTimeline(c *gin.Context) {
-	sessionID := c.Param("session_id")
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
 		return
 	}
 
