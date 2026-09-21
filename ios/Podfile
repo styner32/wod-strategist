@@ -70,6 +70,7 @@ target 'WODStrategist' do
     deployment_target = podfile_properties['ios.deploymentTarget'] || '16.4'
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |config|
+        config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
         current_target = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
         if current_target && current_target.to_f < 15.0
           config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = deployment_target
