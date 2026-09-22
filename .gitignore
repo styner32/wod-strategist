@@ -56,3 +56,6 @@ api/gcp-key.json
 
 # antigravity
 .antigravitycli
+
+# security audot
+.audit/
