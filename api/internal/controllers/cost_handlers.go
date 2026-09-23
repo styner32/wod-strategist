@@ -14,9 +14,9 @@ import (
 
 // GetSessionCost returns the aggregated token usage and cost breakdown for a session.
 func (ctl *Controller) GetSessionCost(c *gin.Context) {
-	sessionID := strings.TrimSpace(c.Param("session_id"))
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
 		return
 	}
 
