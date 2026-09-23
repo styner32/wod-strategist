@@ -98,9 +98,9 @@ type SensorStatusResponse struct {
 
 // PrepareSensorUpload handles POST /api/v1/sessions/:session_id/sensor-upload
 func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
-	sessionID := c.Param("session_id")
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
 		return
 	}
 
@@ -357,9 +357,9 @@ func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
 
 // CompleteSensorUpload handles POST /api/v1/sessions/:session_id/sensor-complete
 func (ctl *Controller) CompleteSensorUpload(c *gin.Context) {
-	sessionID := c.Param("session_id")
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
 		return
 	}
 
@@ -582,9 +582,9 @@ func (ctl *Controller) CompleteSensorUpload(c *gin.Context) {
 
 // GetSensorStatus handles GET /api/v1/sessions/:session_id/sensor-status
 func (ctl *Controller) GetSensorStatus(c *gin.Context) {
-	sessionID := c.Param("session_id")
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
 		return
 	}
 
