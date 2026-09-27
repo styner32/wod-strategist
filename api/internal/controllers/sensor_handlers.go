@@ -782,4 +782,3 @@ func (ctl *Controller) ReprocessSensor(c *gin.Context) {
 		State:     db.SensorStatePending,
 	})
 }
-
