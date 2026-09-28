@@ -985,6 +985,11 @@ var _ = Describe("Controller handlers", func() {
 						{"name": "videos/WOD-2026-03-30-10-34_merged_20260330110000.mp4", "timeCreated": "2026-03-30T11:00:00Z"},
 						{"name": "videos/session-1_video.mp4", "timeCreated": "2026-03-30T09:00:00Z"},
 						{"name": "videos/session-1_hardsubbed_20260330100500.mp4", "timeCreated": "2026-03-30T10:05:00Z"},
+						{"name": "videos/7/session-1/apple_ai_01.json", "timeCreated": "2026-09-21T12:00:00Z"},
+						{"name": "videos/7/session-1/apple_ai_01_frame_1.jpg", "timeCreated": "2026-09-21T12:00:00Z"},
+						{"name": "videos/7/session-1/sensor_telemetry_v1.ndjson", "timeCreated": "2026-09-21T12:00:00Z"},
+						{"name": "videos/7/artifacts-only/apple_ai_02.json", "timeCreated": "2026-09-21T12:00:00Z"},
+						{"name": "videos/WOD-2026-03-30-10-34_apple_ai_03.json", "timeCreated": "2026-09-21T12:00:00Z"},
 					},
 				})
 

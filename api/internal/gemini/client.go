@@ -198,12 +198,13 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 		APIKey:     apiKey,
 		Backend:    genai.BackendGeminiAPI,
 		HTTPClient: &wrappedHTTPClient,
+		// v1.71 adds automatic retries. Preserve the existing worker-owned retry
+		// policy and avoid hidden duplicate inference requests.
+		HTTPOptions: genai.HTTPOptions{RetryOptions: &genai.HTTPRetryOptions{Attempts: genai.Ptr(int32(1))}},
 	}
 	if options.BaseURL != "" || options.APIVersion != "" {
-		config.HTTPOptions = genai.HTTPOptions{
-			BaseURL:    options.BaseURL,
-			APIVersion: options.APIVersion,
-		}
+		config.HTTPOptions.BaseURL = options.BaseURL
+		config.HTTPOptions.APIVersion = options.APIVersion
 	}
 
 	client, err := genai.NewClient(ctx, config)

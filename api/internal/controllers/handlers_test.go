@@ -115,6 +115,26 @@ var _ = Describe("validation helpers", func() {
 })
 
 var _ = Describe("asset helpers", func() {
+	DescribeTable("excludes Apple AI and sensor artifacts from video assets",
+		func(prefix string) {
+			assets := buildVideoAssets("WOD-2026-03-30-10-34", "test-bucket", []storage.ObjectInfo{
+				{Name: prefix + "chunk_001.mp4"},
+				{Name: prefix + "chunk_002.MOV"},
+				{Name: prefix + "apple_ai_01.json"},
+				{Name: prefix + "apple_ai_01_frame_1.jpg"},
+				{Name: prefix + "sensor_telemetry_v1.ndjson"},
+				{Name: prefix + "preview.png"},
+				{Name: prefix + "_merged_metadata.json"},
+			})
+			Expect(assets).To(HaveLen(2))
+			for _, asset := range assets {
+				Expect(asset.Kind).To(Equal("chunk"))
+			}
+		},
+		Entry("nested session folder", "videos/7/WOD-2026-03-30-10-34/"),
+		Entry("legacy flat prefix", "videos/WOD-2026-03-30-10-34_"),
+	)
+
 	It("labels encoded uploaded videos and exposes a public URL", func() {
 		assets := buildVideoAssets("WOD-2026-03-30-10-34", "wod-strategist-uploads-dev", []storage.ObjectInfo{
 			{

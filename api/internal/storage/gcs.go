@@ -202,3 +202,12 @@ func ParseGCSURI(uri string) (bucket, object string, err error) {
 	}
 	return parts[0], parts[1], nil
 }
+
+// DeleteObject is idempotent so a partially completed session cleanup can resume.
+func (c *Client) DeleteObject(ctx context.Context, objectName string) error {
+	err := c.client.Bucket(c.bucketName).Object(objectName).Delete(ctx)
+	if errors.Is(err, gcs.ErrObjectNotExist) {
+		return nil
+	}
+	return err
+}

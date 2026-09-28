@@ -20,7 +20,7 @@ require (
 	golang.org/x/crypto v0.50.0
 	golang.org/x/image v0.40.0
 	google.golang.org/api v0.257.0
-	google.golang.org/genai v1.43.0
+	google.golang.org/genai v1.71.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
 )
