@@ -13,6 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // VerifyHighlightsPayload is the payload for the highlight:verify task.
@@ -267,15 +268,21 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 
 	// 8. Persist only verified observations and rebuild their parent events. The
 	// legacy flag remains false if any original observation was rejected or omitted.
-	if err := w.DB.Model(&db.AnalysisResult{}).
-		Where("id = ?", analysisResult.ID).
-		Updates(map[string]any{
-			"highlight_segments": MarshalHighlightSegments(verifiedSegments),
-			"verified":           allVerified,
-		}).Error; err != nil {
+	if err := w.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&db.AnalysisResult{}).
+			Where("id = ?", analysisResult.ID).
+			Updates(map[string]any{
+				"highlight_segments": MarshalHighlightSegments(verifiedSegments),
+				"verified":           allVerified,
+			}).Error; err != nil {
+			return err
+		}
+		return w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
+	}); err != nil {
 		return fmt.Errorf("failed to update verified highlights: %w", err)
 	}
 
+	_, _ = w.ScheduleAnalysisEnrichment(ctx, p.SessionID, w.AgenticHighlightsEnabled, false)
 	w.logger.Info("Highlight verification completed",
 		zap.String("session_id", p.SessionID),
 		zap.Bool("all_verified", allVerified),

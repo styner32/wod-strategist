@@ -40,6 +40,7 @@ export interface SessionFatigue {
 }
 
 export interface AnalysisResult {
+  analysis_summary?: import("./enrichment").AnalysisSummary;
   heart_rate?: HeartRateSummary;
   id: number;
   session_id: string;

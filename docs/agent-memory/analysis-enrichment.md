@@ -1,0 +1,13 @@
+# Analysis summary and Agentic highlights
+
+- Migration 000052 adds `analysis_results.analysis_summary` and `agentic_highlight_analysis`, JSONB NOT NULL DEFAULT '{}'. Up/down files are required; apply migration before API/worker rollout.
+- `ENABLE_AGENTIC_HIGHLIGHTS` defaults false on API and worker. Summary generation is text-only and independent of the Agentic flag. No automatic backfill: recovery only scans already queued state.
+- Routes: owned GET/POST `/sessions/:session_id/agentic-highlights`, POST `/sessions/:session_id/analysis-summary`. GET never starts inference. POST on an active source returns its existing run ID.
+- `analysis:enrichment` phases: summary, prepare, highlight, cleanup. State in JSONB is the durable outbox. Worker recovery reconciles every 30 seconds; row locks claim tasks, MaxRetry(0), 10-minute generation deadline, 13-minute interrupted-work detection. Interrupted generation is never automatically replayed.
+- One full Files upload is shared sequentially by independent highlight streams. Settings: gemini-3.8-flash, HIGH thinking, MEDIA_RESOLUTION_LOW. No FPS or video offsets. Full video is accessible to the model; prompt windows do not enforce navigation bounds.
+- Source hash includes original output, highlights and persisted target appearance. Stale workers cannot promote results. Reruns retain last successes only for the same fingerprint. New uploads are journaled before Files polling; only owned uploads are deleted.
+- Existing `highlight:verify`, highlights, output, score and verified remain independent. New analysis completion, reanalysis apply and verification persist the outbox in the same transaction as their writes, and publish queue tasks after commit.
+- Summary uses stored text and successful additional observations, preserves uncertainty/conflict, and never sends a video. A failed summary retains last successful content. A fully failed Agentic batch retains the base summary.
+- Public results omit Files identifiers, raw SSE, request bytes and thoughts. Nullable usage fields remain null. Explicit MEDIA_PROCESSING call+response is required for `agentic_observed`; an HTTP 200 does not establish navigation.
+- `AnalysisMarkdown` renders with react-markdown/remark-gfm, no raw HTML. Internal blocks are removed for display only; `AnalysisOriginal` preserves stored text. Segment mapping accepts only server-generated headings outside fenced code and one unambiguous containing interval.
+- Deployment order: migrate, deploy API/worker/web with flag false, verify ownership/status/rendering, then explicitly enable flag for new analyses. Do not mass-enqueue historical sessions.

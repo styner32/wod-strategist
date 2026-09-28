@@ -103,6 +103,10 @@ resource "google_cloud_run_v2_service" "api" {
         value = tostring(var.enable_chunk_reanalysis)
       }
       env {
+        name  = "ENABLE_AGENTIC_HIGHLIGHTS"
+        value = tostring(var.enable_agentic_highlights)
+      }
+      env {
         name  = "ENABLE_SESSION_REANALYSIS"
         value = tostring(var.enable_session_reanalysis)
       }
@@ -184,6 +188,10 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       env {
         name  = "ENABLE_CONTEXTUAL_COACHING"
         value = tostring(var.enable_contextual_coaching)
+      }
+      env {
+        name  = "ENABLE_AGENTIC_HIGHLIGHTS"
+        value = tostring(var.enable_agentic_highlights)
       }
       env {
         name  = "ENABLE_ACTIVITY_COUNTING"

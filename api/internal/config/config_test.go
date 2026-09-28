@@ -30,6 +30,16 @@ var _ = Describe("InitServer", func() {
 		setEnv("JWT_SIGNING_SECRET", "test-jwt-siging-secret")
 	})
 
+	It("keeps Agentic highlights disabled by default and enables only an explicit true value", func() {
+		setEnv("ENABLE_AGENTIC_HIGHLIGHTS", "")
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.AgenticHighlightsEnabled).To(BeFalse())
+		setEnv("ENABLE_AGENTIC_HIGHLIGHTS", "true")
+		cfg, err = config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.AgenticHighlightsEnabled).To(BeTrue())
+	})
 	It("returns config with the default port when PORT is unset", func() {
 		setEnv("PORT", "")
 

@@ -64,7 +64,7 @@ function parseAnalysisOutput(output: string): {
   try {
     const parsed = JSON.parse(output);
     return {
-      summary: parsed.overall_summary || parsed.summary,
+      summary: parsed.overall_summary,
       workoutType: parsed.workout_type,
     };
   } catch {
@@ -74,6 +74,7 @@ function parseAnalysisOutput(output: string): {
 
 function HistoryCard({ result }: { result: AnalysisResult }) {
   const parsed = parseAnalysisOutput(result.output || "{}");
+  parsed.summary = result.analysis_summary?.result?.overview ?? result.analysis_summary?.last_success?.overview ?? parsed.summary;
   const stretchCount = useMemo(() => {
     if (!result.stretch_recommendations) return 0;
     try {
@@ -122,6 +123,9 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 mb-2">
+        {result.analysis_summary?.status && (
+          <span className="text-xs text-text-secondary">요약 {result.analysis_summary.status === "completed" ? "완료" : result.analysis_summary.status === "pending" || result.analysis_summary.status === "running" ? "생성 중" : "확인 필요"}</span>
+        )}
         {parsed.workoutType && (
           <span className="inline-block text-xs bg-bg-secondary text-text-secondary px-2 py-0.5 rounded-md">
             {parsed.workoutType}

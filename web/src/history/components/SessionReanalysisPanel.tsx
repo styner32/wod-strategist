@@ -1,3 +1,4 @@
+import { AnalysisOriginal } from "./AnalysisMarkdown";
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import {
@@ -257,9 +258,9 @@ export function SessionReanalysisPanel({
               <span className="text-text-secondary">{originalAnalysis.wod_description}</span>
             </div>
           )}
-          <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap font-sans text-xs leading-relaxed text-text-secondary">
+          <AnalysisOriginal text=
             {originalAnalysis?.output || 'No original analysis is available.'}
-          </pre>
+          />
         </article>
 
         <article className="min-w-0 rounded-lg border border-border bg-bg-secondary/60 p-4 flex flex-col justify-between">
@@ -280,10 +281,10 @@ export function SessionReanalysisPanel({
                 <span className="text-text-secondary">{selectedRun.wod_description}</span>
               </div>
             )}
-            <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap font-sans text-xs leading-relaxed text-text-secondary">
+            <AnalysisOriginal text=
               {selectedRun?.candidate?.output
                 || (selectedRun && !isTerminal(selectedRun.status) ? 'Analysis is in progress…' : 'No candidate has been generated.')}
-            </pre>
+            />
             {selectedRun && (
               <dl className="mt-3 grid grid-cols-2 gap-2 border-t border-border pt-3 text-xs">
                 <div><dt className="text-text-muted">Model</dt><dd className="text-text-primary">{selectedRun.model || '—'}</dd></div>

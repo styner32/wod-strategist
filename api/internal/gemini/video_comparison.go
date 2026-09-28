@@ -96,7 +96,7 @@ func NewComparisonClient(ctx context.Context, options Options) (*Client, error) 
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	hc.Transport = comparisonTransport{base: streamComparisonTransport{base: base}}
+	hc.Transport = comparisonTransport{base: base}
 	options.HTTPClient = hc
 	options.Model = ModelFlash38
 	return NewClientWithOptions(ctx, zap.NewNop(), options)

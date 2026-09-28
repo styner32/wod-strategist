@@ -260,7 +260,7 @@ func (w *Worker) resolveVideoAnalysisProfile(ctx context.Context, sessionID stri
 }
 
 func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnalysisPayload, result *db.AnalysisResult) error {
-	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var session db.Session
 		var sessionCreatedAt *time.Time
 		if err := tx.Select("created_at").Where("session_id = ?", p.SessionID).First(&session).Error; err == nil {
@@ -281,7 +281,10 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 					result.WorkoutAtSource = &source
 				}
 			}
-			return tx.Create(result).Error
+			if err := tx.Create(result).Error; err != nil {
+				return err
+			}
+			return w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
 		}
 		if err != nil {
 			return err
@@ -292,9 +295,9 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 		}
 
 		updates := map[string]any{
-			"status":                   result.Status,
-			"output":                   result.Output,
-			"analysis_type":            result.AnalysisType,
+			"status":                  result.Status,
+			"output":                  result.Output,
+			"analysis_type":           result.AnalysisType,
 			"highlight_segments":      result.HighlightSegments,
 			"wod_description":         result.WODDescription,
 			"session_score":           result.SessionScore,
@@ -302,11 +305,11 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 			"mobility_observations":   result.MobilityObservations,
 			"stretch_recommendations": result.StretchRecommendations,
 			"available_videos":        result.AvailableVideos,
-			"gemini_file_uri":          result.GeminiFileURI,
-			"gemini_file_name":         result.GeminiFileName,
-			"gemini_mime_type":         result.GeminiMIMEType,
-			"gemini_file_expires_at":    result.GeminiFileExpiresAt,
-			"updated_at":               time.Now(),
+			"gemini_file_uri":         result.GeminiFileURI,
+			"gemini_file_name":        result.GeminiFileName,
+			"gemini_mime_type":        result.GeminiMIMEType,
+			"gemini_file_expires_at":  result.GeminiFileExpiresAt,
+			"updated_at":              time.Now(),
 		}
 
 		if existing.WorkoutAt == nil {
@@ -317,8 +320,19 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 			}
 		}
 
-		return tx.Model(&existing).Updates(updates).Error
+		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		return w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
 	})
+
+	if err == nil {
+		_, scheduleErr := w.ScheduleAnalysisEnrichment(ctx, p.SessionID, w.AgenticHighlightsEnabled, false)
+		if scheduleErr != nil {
+			w.logger.Warn("could not schedule analysis enrichment", zap.Error(scheduleErr))
+		}
+	}
+	return err
 }
 
 func (w *Worker) persistVideoAnalysisFailed(ctx context.Context, p VideoAnalysisPayload, failedResult *db.AnalysisResult) error {

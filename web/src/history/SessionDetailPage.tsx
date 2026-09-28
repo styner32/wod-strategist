@@ -1,3 +1,4 @@
+import { AnalysisOverview } from "./components/AnalysisOverview";
 import { OnDeviceAiPanel } from "./components/OnDeviceAiPanel";
 import { ActivitySummaryPanel } from "./components/ActivitySummaryPanel";
 import { HeartRateSummaryPanel } from "./components/HeartRateSummaryPanel";
@@ -36,11 +37,10 @@ import {
   type FeedbackDialogValue,
 } from "./components/FeedbackDialog";
 import { GuidanceTimeline } from "./components/GuidanceTimeline";
-import { HighlightEventCard } from "./components/HighlightEventCard";
+
 import { SessionCostCard } from "./components/SessionCostCard";
 import { SessionReanalysisPanel } from "./components/SessionReanalysisPanel";
 import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
-import { getHighlightSeekTime, parseHighlightSegments } from "./highlights";
 import { sensorTimelinePollInterval, sensorTimelineQueryKey } from "./timelineUtils";
 
 function formatDate(dateStr: string) {
@@ -63,8 +63,6 @@ const VIDEO_KIND_LABELS: Record<
 };
 
 const VIDEO_KINDS: VideoKind[] = ["merged", "hardsubbed", "encoded"];
-
-const SIDEBAR_HIGHLIGHT_PREVIEW_COUNT = 3;
 
 async function loadTargetVideo(
   sessionId: string,
@@ -170,8 +168,8 @@ export function SessionDetailPage() {
   const sensorPollingBudget = useRef({ sessionKey: "", startedAtMs: 0 });
   const [currentTime, setCurrentTime] = useState(0);
   const [selectedKind, setSelectedKind] = useState<VideoKind>();
-  const [showFullAnalysis, setShowFullAnalysis] = useState(false);
-  const [showAllHighlights, setShowAllHighlights] = useState(false);
+
+
   const [selectedChunkId, setSelectedChunkId] = useState<number>();
   const [selectedReanalysisChunkIds, setSelectedReanalysisChunkIds] = useState<
     Set<number>
@@ -735,21 +733,6 @@ export function SessionDetailPage() {
       retry: false,
     });
 
-  const parsedOutput = (() => {
-    try {
-      return analysis?.output ? JSON.parse(analysis.output) : null;
-    } catch {
-      return null;
-    }
-  })();
-  const highlightSegments = useMemo(
-    () => parseHighlightSegments(analysis?.highlight_segments),
-    [analysis?.highlight_segments],
-  );
-  const visibleHighlightSegments = showAllHighlights
-    ? highlightSegments
-    : highlightSegments.slice(0, SIDEBAR_HIGHLIGHT_PREVIEW_COUNT);
-
   // Track video playback position
   const handleTimeUpdate = useCallback(() => {
     if (videoRef.current) {
@@ -771,19 +754,6 @@ export function SessionDetailPage() {
       videoRef.current.currentTime = time;
     }
   }, []);
-
-  const handleHighlightSeek = useCallback(
-    (startSeconds: number, version?: number) => {
-      const targetSeconds = getHighlightSeekTime(
-        startSeconds,
-        videoRef.current?.duration,
-        version,
-      );
-      handleSeek(targetSeconds);
-      videoRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    },
-    [handleSeek],
-  );
 
   if (analysisLoading) {
     return (
@@ -820,7 +790,7 @@ export function SessionDetailPage() {
       {/* Side-by-side layout: Video + Guidance */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Left: Video player (3/5 width) */}
-        <div className="lg:col-span-3 space-y-4">
+        <div className="min-w-0 lg:col-span-3 space-y-4">
           <div className="bg-bg-elevated border border-border rounded-xl overflow-hidden">
             {videoUrl?.download_url ? (
               <video
@@ -1071,84 +1041,7 @@ export function SessionDetailPage() {
                 {feedbackError(feedbackMutation.error)}
               </p>
             )}
-            {parsedOutput ? (
-              <div className="space-y-4">
-                {parsedOutput.overall_summary && (
-                  <div>
-                    <h3 className="text-sm font-medium text-text-secondary mb-1">
-                      Summary
-                    </h3>
-                    <p className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap">
-                      {parsedOutput.overall_summary}
-                    </p>
-                  </div>
-                )}
-                {parsedOutput.coaching_feedback && (
-                  <div>
-                    <h3 className="text-sm font-medium text-text-secondary mb-1">
-                      Coaching Feedback
-                    </h3>
-                    <p className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap">
-                      {parsedOutput.coaching_feedback}
-                    </p>
-                  </div>
-                )}
-                {parsedOutput.key_observations && (
-                  <div>
-                    <h3 className="text-sm font-medium text-text-secondary mb-1">
-                      Key Observations
-                    </h3>
-                    <ul className="text-text-primary text-sm space-y-1">
-                      {(Array.isArray(parsedOutput.key_observations)
-                        ? parsedOutput.key_observations
-                        : []
-                      ).map((obs: string, i: number) => (
-                        <li key={i} className="flex gap-2">
-                          <span className="text-accent mt-1">•</span>
-                          <span>{obs}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            ) : analysis?.output ? (
-              (() => {
-                const lines = analysis.output.split("\n");
-                const isTruncated = lines.length > 10;
-                const displayedText =
-                  showFullAnalysis || !isTruncated
-                    ? analysis.output
-                    : lines.slice(0, 10).join("\n") + "\n...";
-                return (
-                  <div className="bg-bg-secondary p-4 rounded-xl border border-border">
-                    <div className="text-text-primary text-sm leading-relaxed whitespace-pre-wrap font-sans">
-                      {displayedText}
-                    </div>
-                    {isTruncated && (
-                      <button
-                        onClick={() => setShowFullAnalysis(!showFullAnalysis)}
-                        className="mt-3 text-sm font-semibold text-accent hover:underline transition-colors cursor-pointer"
-                      >
-                        {showFullAnalysis ? "Show Less" : "Show More"}
-                      </button>
-                    )}
-                  </div>
-                );
-              })()
-            ) : analysis?.status?.toLowerCase() === "completed" ? (
-              <p className="text-text-muted text-sm">
-                Analysis output not available.
-              </p>
-            ) : analysis?.status?.toLowerCase() === "processing" ||
-              analysis?.status?.toLowerCase() === "pending" ? (
-              <div className="flex items-center gap-3 text-text-secondary">
-                <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm">Analysis in progress...</span>
-              </div>
-            ) : (
-              <p className="text-text-muted text-sm">No analysis data.</p>
-            )}
+            {analysis && <AnalysisOverview analysis={analysis} seek={handleTimelineSeek} />}
           </div>
         </div>
 
@@ -1282,66 +1175,6 @@ export function SessionDetailPage() {
               onReanalyze={requestReanalysis}
               onToggleReanalysisSelection={toggleReanalysisSelection}
             />
-
-            {highlightSegments.length > 0 && (
-              <section
-                className="rounded-xl border border-border bg-bg-elevated p-4"
-                aria-labelledby="selected-highlights-heading"
-              >
-                <div className="mb-3 flex items-start justify-between gap-3">
-                  <div>
-                    <h2
-                      id="selected-highlights-heading"
-                      className="text-lg font-semibold text-text-primary"
-                    >
-                      Selected Highlights
-                    </h2>
-                    <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                      Select an event to play its context. Legacy highlights
-                      retain their 5-second lead-in.
-                    </p>
-                  </div>
-                  <span className="shrink-0 rounded-md bg-bg-tertiary px-2 py-1 text-xs font-medium text-text-secondary">
-                    {visibleHighlightSegments.length}/{highlightSegments.length}
-                  </span>
-                </div>
-
-                <div id="selected-highlights-list" className="space-y-2">
-                  {visibleHighlightSegments.map((highlight, index) => {
-                    const isActive =
-                      currentTime >= highlight.startSeconds &&
-                      currentTime <= highlight.endSeconds;
-
-                    return (
-                      <HighlightEventCard
-                        key={`${highlight.startSeconds}-${highlight.endSeconds}-${index}`}
-                        highlight={highlight}
-                        isActive={isActive}
-                        disabled={!videoUrl?.download_url}
-                        onSelect={() =>
-                          handleHighlightSeek(
-                            highlight.startSeconds,
-                            highlight.version,
-                          )
-                        }
-                      />
-                    );
-                  })}
-                </div>
-
-                {highlightSegments.length > SIDEBAR_HIGHLIGHT_PREVIEW_COUNT && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllHighlights((current) => !current)}
-                    aria-expanded={showAllHighlights}
-                    aria-controls="selected-highlights-list"
-                    className="mt-3 w-full rounded-lg border border-border px-3 py-2 text-sm font-semibold text-accent transition-colors hover:border-accent/40 hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent"
-                  >
-                    {showAllHighlights ? "Show Less" : "Show More"}
-                  </button>
-                )}
-              </section>
-            )}
 
             {stretchRecommendations.length > 0 && (
               <section className="rounded-xl border border-border bg-bg-elevated p-4">

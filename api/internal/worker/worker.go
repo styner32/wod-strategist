@@ -163,9 +163,12 @@ type GeminiClient interface {
 
 	// Two-pass analysis: upload → index (Flash) → per-segment analysis (Pro)
 	UploadVideo(ctx context.Context, filePath string) (*gemini.UploadResult, error)
+	UploadVideoWithObserver(ctx context.Context, filePath string, onUploaded func(*gemini.UploadResult) error) (*gemini.UploadResult, error)
 	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *gemini.TokenUsage, error)
+
+	AnalyzeHighlightAgentic(ctx context.Context, fileURI, mimeType, prompt string) gemini.StreamComparisonResult
 
 	// Lightweight Flash model query (e.g. verification)
 	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
@@ -193,6 +196,7 @@ const (
 
 // Worker holds all dependencies shared across task handlers.
 type Worker struct {
+	AgenticHighlightsEnabled  bool
 	CaptureFeedbackEnabled    bool
 	ContextualCoachingEnabled bool
 	ActivityCountingEnabled   bool

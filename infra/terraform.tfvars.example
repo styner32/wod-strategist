@@ -22,3 +22,6 @@ enable_activity_counting   = false
 # Gemini thinking levels (LOW, MEDIUM, HIGH)
 gemini_thinking_chunk = "LOW"
 gemini_thinking_level = "HIGH"
+
+# Apply migration 000052 before enabling additional paid highlight observations.
+enable_agentic_highlights = false

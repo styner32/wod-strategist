@@ -91,20 +91,22 @@ const (
 )
 
 type AnalysisResult struct {
-	ID                  uint       `gorm:"primaryKey" json:"id"`
-	SessionID           string     `gorm:"uniqueIndex;not null" json:"session_id"`
-	ProfileID           uint       `gorm:"index;not null" json:"profile_id"`
-	AnalysisType        string     `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
-	Status              string     `json:"status"`                           // PENDING, COMPLETED, FAILED
-	Output              string     `json:"output"`
-	InjuryOutput        string     `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
-	InjuryOutputAlt     string     `json:"-"`
-	GeminiFileURI       string     `json:"-"`
-	GeminiFileName      string     `json:"-"`
-	GeminiMIMEType      string     `json:"-"`
-	GeminiFileExpiresAt *time.Time `json:"-"`
-	HighlightSegments   string     `json:"highlight_segments"` // JSON array of highlight segments
-	Verified            *bool      `json:"verified,omitempty"` // nil=unchecked, true=confirmed, false=hallucination detected
+	AnalysisSummary          JSONDocument `json:"analysis_summary"`
+	AgenticHighlightAnalysis JSONDocument `json:"-"`
+	ID                       uint         `gorm:"primaryKey" json:"id"`
+	SessionID                string       `gorm:"uniqueIndex;not null" json:"session_id"`
+	ProfileID                uint         `gorm:"index;not null" json:"profile_id"`
+	AnalysisType             string       `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
+	Status                   string       `json:"status"`                           // PENDING, COMPLETED, FAILED
+	Output                   string       `json:"output"`
+	InjuryOutput             string       `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
+	InjuryOutputAlt          string       `json:"-"`
+	GeminiFileURI            string       `json:"-"`
+	GeminiFileName           string       `json:"-"`
+	GeminiMIMEType           string       `json:"-"`
+	GeminiFileExpiresAt      *time.Time   `json:"-"`
+	HighlightSegments        string       `json:"highlight_segments"` // JSON array of highlight segments
+	Verified                 *bool        `json:"verified,omitempty"` // nil=unchecked, true=confirmed, false=hallucination detected
 	// WODDescription is the user-supplied workout descriptor (e.g. "Fran", "For Time: 5 rounds of...").
 	// Injected into analysis prompts to enable benchmark comparison and WOD-type-aware scoring.
 	WODDescription string `gorm:"type:text;not null;default:''" json:"wod_description,omitempty"`

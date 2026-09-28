@@ -79,6 +79,7 @@ type VerifyHighlightsTaskFactory func(sessionID string) (*asynq.Task, error)
 type HardSubTaskFactory func(sessionID string, profileID uint, enableTTS bool) (*asynq.Task, error)
 
 type Config struct {
+	EnableAgenticHighlights bool
 	DB                      *gorm.DB
 	QueueClient             QueueClient
 	AnalysisResults         AnalysisResultRepository
@@ -100,6 +101,7 @@ type Config struct {
 }
 
 type Controller struct {
+	enableAgenticHighlights bool
 	db                      *gorm.DB
 	queueClient             QueueClient
 	analysisResults         AnalysisResultRepository
@@ -180,5 +182,6 @@ func New(config Config) (*Controller, error) {
 		newGenerateHardSub:      hardSubFactory,
 		enableChunkReanalysis:   config.EnableChunkReanalysis,
 		enableSessionReanalysis: config.EnableSessionReanalysis,
+		enableAgenticHighlights: config.EnableAgenticHighlights,
 	}, nil
 }

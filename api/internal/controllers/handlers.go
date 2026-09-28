@@ -433,7 +433,7 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, normalizeHighlightResultsForResponseWithSchema(results, workoutLoadSchemaVersion(c)))
+	c.JSON(http.StatusOK, compactAnalysisSummaries(normalizeHighlightResultsForResponseWithSchema(results, workoutLoadSchemaVersion(c))))
 }
 
 func (ctl *Controller) ArchiveHistory(c *gin.Context) {

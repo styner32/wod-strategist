@@ -192,7 +192,7 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 	if baseTransport == nil {
 		baseTransport = http.DefaultTransport
 	}
-	wrappedHTTPClient.Transport = exactSegmentOffsetsTransport{base: baseTransport}
+	wrappedHTTPClient.Transport = exactSegmentOffsetsTransport{base: streamComparisonTransport{base: baseTransport}}
 
 	config := &genai.ClientConfig{
 		APIKey:     apiKey,
@@ -595,6 +595,12 @@ type UploadResult struct {
 // UploadVideo uploads a local file to the Gemini Files API and polls until it's
 // ACTIVE. The caller should defer DeleteFile(result.FileName) after use.
 func (c *Client) UploadVideo(ctx context.Context, filePath string) (*UploadResult, error) {
+	return c.UploadVideoWithObserver(ctx, filePath, nil)
+}
+
+// UploadVideoWithObserver journals file ownership immediately after upload,
+// before potentially long Files processing. It never retries generation.
+func (c *Client) UploadVideoWithObserver(ctx context.Context, filePath string, onUploaded func(*UploadResult) error) (*UploadResult, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file %s: %w", filePath, err)
@@ -639,6 +645,15 @@ func (c *Client) UploadVideo(ctx context.Context, filePath string) (*UploadResul
 		return nil, fmt.Errorf("failed to upload file (%s): %w", formatFileSize(fileSizeBytes), err)
 	}
 
+	if onUploaded != nil {
+		uploaded := &UploadResult{FileName: uploadResult.Name, FileURI: uploadResult.URI, MIMEType: mimeType}
+		if err := onUploaded(uploaded); err != nil {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+			defer cancel()
+			_ = c.DeleteFile(cleanupCtx, uploadResult.Name)
+			return uploaded, fmt.Errorf("journal uploaded file: %w", err)
+		}
+	}
 	c.logger.Info("File uploaded, polling for ACTIVE",
 		zap.String("file_name", uploadResult.Name),
 		zap.String("file_uri", uploadResult.URI),
@@ -979,7 +994,7 @@ func (c *Client) ParseText(ctx context.Context, prompt string) (string, *TokenUs
 		return "", nil, fmt.Errorf("failed to parse text: %w", err)
 	}
 
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+	if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0] == nil || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
 		return "", nil, fmt.Errorf("no content from text parsing")
 	}
 
@@ -987,7 +1002,9 @@ func (c *Client) ParseText(ctx context.Context, prompt string) (string, *TokenUs
 
 	var result string
 	for _, part := range resp.Candidates[0].Content.Parts {
-		result += part.Text
+		if part != nil && !part.Thought {
+			result += part.Text
+		}
 	}
 
 	c.logger.Info("Text parsed", zap.Int("response_length", len(result)))

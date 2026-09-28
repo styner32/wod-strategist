@@ -87,10 +87,12 @@ func main() {
 	w.CaptureFeedbackEnabled = cfg.CaptureFeedbackEnabled
 	w.ContextualCoachingEnabled = cfg.ContextualCoachingEnabled
 	w.ActivityCountingEnabled = cfg.ActivityCountingEnabled
+	w.AgenticHighlightsEnabled = cfg.AgenticHighlightsEnabled
 	w.UseCache = cfg.UseCache
 	w.PipelineMode = worker.PipelineMode(cfg.PipelineMode)
 
 	mux := asynq.NewServeMux()
+	mux.HandleFunc(worker.TypeAnalysisEnrichment, w.HandleAnalysisEnrichmentTask)
 	mux.HandleFunc(worker.TypeVideoAnalysis, w.HandleVideoAnalysisTask)
 	mux.HandleFunc(worker.TypeChunkAnalysis, w.HandleChunkAnalysisTask)
 	mux.HandleFunc(worker.TypeChunkAnalysisWithSession, w.HandleChunkAnalysisWithSessionTask)
@@ -111,6 +113,7 @@ func main() {
 	defer cancelRecovery()
 	recoveryMgr := worker.NewSensorRecoveryManager(dbConn, queueClient, logger.Log)
 	go recoveryMgr.Start(recoveryCtx, 10*time.Second)
+	go w.RunEnrichmentRecovery(recoveryCtx)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server")
