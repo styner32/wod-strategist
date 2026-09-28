@@ -1,3 +1,4 @@
+import { EnvironmentHistoryCard } from "../../environment/EnvironmentCard";
 import { ActivitySummaryCard } from "./ActivitySummaryCard";
 import { HeartRateSummaryCard } from "./HeartRateSummaryCard";
 import { t } from "@/features/i18n";
@@ -654,6 +655,7 @@ function HistoryCard({
         </View>
 
         <HeartRateSummaryCard summary={item.heart_rate} />
+        <EnvironmentHistoryCard sessionId={item.session_id} profileId={item.profile_id} />
         <ActivitySummaryCard sessionId={item.session_id} profileId={item.profile_id} />
 
         {/* Content */}

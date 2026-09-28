@@ -86,6 +86,7 @@ Path construction:
 Rules:
 - Always pass `profile_id` when calling `buildVideoObjectName()` or any upload/download API.
 - Place new session-scoped assets under `videos/{pid}/{sid}/`, never in a separate top-level prefix.
+- A session folder is a mixed asset container: Apple AI `apple_ai_*.json`/JPEG and sensor NDJSON can coexist with video. `listOriginalChunks` and developer catalog/asset listings must filter `.mp4`/`.mov` (case-insensitive) before treating objects as videos. Non-video assets must not affect chunk counts, video links, session ordering or create video-only catalog entries. Moving evidence to a child folder alone would not replace this filter because GCS prefix listings are recursive.
 - Preserve both layouts unless a migration is explicitly requested.
 
 ## Capture time versus media time
@@ -102,3 +103,5 @@ Rules:
   durations. Never copy capture-clock values onto `merged.mp4`.
 - If reconstruction is impossible, a retained chunk object may be used as the
   exact whole-video fallback (`0..probed duration`).
+
+- The optional environment journal stores `environment_*` JSON/JPEG/m4a/NDJSON under the same `videos/{pid}/{sid}/` prefix. Upload evidence before manifests, only after recording. `DELETE /sessions/:session_id/environment?profile_id=...` removes only this journal after profile ownership verification; video and sensor files remain. See [environment-observation.md](environment-observation.md).

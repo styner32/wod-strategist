@@ -1,3 +1,7 @@
+import { appleEnvironment, environmentNativeAvailable } from "../../modules/apple-on-device-ai";
+import { flushEnvironmentUploads } from "../../features/environment/store";
+import { useEnvironmentRecorder } from "../../features/environment/useEnvironmentRecorder";
+import { EnvironmentLiveCard } from "../../features/environment/EnvironmentCard";
 import { useLiveWorkoutFeedback } from "../../features/wod/useLiveWorkoutFeedback";
 import { ActivitySummaryContent } from "../../features/wod/ui/ActivitySummaryCard";
 import { useIsFocused } from "expo-router/react-navigation";
@@ -5,7 +9,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as MediaLibrary from "expo-media-library/legacy";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -44,6 +48,10 @@ import {
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { EnergyMonitor } from "../../features/ai-coach/ui/EnergyMonitor";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
+import { AppleAiFeedbackCard } from "../../features/ai-coach/ui/AppleAiFeedbackCard";
+import { useAppleAiFeedback } from "../../features/ai-coach/useAppleAiFeedback";
+import { saveAppleAiObservation, flushAppleAiUploads } from "../../features/ai-coach/appleAiUpload";
+import type { AppleAiObservation } from "../../features/ai-coach/appleAiObservation";
 import { TelemetryRecorder } from "../../features/debug/telemetryRecorder";
 import {
   enqueueUpload as enqueueDebugUpload,
@@ -60,7 +68,7 @@ import {
 import { createChunkRecordingCompletion } from "../../features/wod/chunkRecordingCompletion";
 
 import { useAuthStore } from "@/features/auth/useAuthStore";
-import { t } from "@/features/i18n";
+import { t, useLocale } from "@/features/i18n";
 import { useMergeStatus } from "@/store/useMergeStatus";
 import { useProfileStore } from "@/store/useProfileStore";
 
@@ -83,12 +91,17 @@ function formatElapsed(ms: number): string {
 }
 
 export default function VisionTestPage() {
+  const locale = useLocale();
   const {
     resolution = "720p",
     movements = "",
     injuries = "",
     workoutType: workoutTypeParam,
     autoRecord,
+    onDeviceAi: onDeviceAiParam,
+    environmentObservation: environmentObservationParam,
+    environmentAnalysis: environmentAnalysisParam,
+    observationIntervalSeconds,
     showSkeleton: showSkeletonParam,
     lowFps: lowFpsParam,
 
@@ -106,6 +119,10 @@ export default function VisionTestPage() {
     injuries?: string;
     workoutType?: string;
     autoRecord?: string;
+    onDeviceAi?: string;
+    environmentObservation?: string;
+    environmentAnalysis?: string;
+    observationIntervalSeconds?: string;
     showSkeleton?: string;
     lowFps?: string;
     skipCompression?: string;
@@ -120,6 +137,9 @@ export default function VisionTestPage() {
 
   const landscapeMode = landscapeModeParam === "true";
   const previewOnly = previewOnlyParam === "true";
+  const onDeviceAi = onDeviceAiParam === "true";
+  const environmentEnabled = environmentObservationParam === "true" && !previewOnly;
+  const environment = useEnvironmentRecorder(environmentEnabled);
   const zoomMode = zoomModeParam === "true";
   const aspectRatio = (aspectRatioParam === "4:3" ? "4:3" : "16:9") as
     | "4:3"
@@ -272,11 +292,25 @@ export default function VisionTestPage() {
     task().finally(() => setInflightUploads((prev) => Math.max(0, prev - 1)));
   };
 
-  // 720p or 1080p format based on user/platform selection
+  // 720p, 1080p, or 2160p (4K) format based on user selection; keep targetFps at 30 (or 24 for lowFps)
   const format = useCameraFormat(device, [
     { videoResolution: { width: targetWidth, height: targetHeight } },
     { fps: targetFps },
   ]);
+
+  const videoStabilizationMode = useMemo(() => {
+    if (!format) return undefined;
+    if (format.videoStabilizationModes.includes("cinematic-extended")) {
+      return "cinematic-extended";
+    }
+    if (format.videoStabilizationModes.includes("cinematic")) {
+      return "cinematic";
+    }
+    if (format.videoStabilizationModes.includes("auto")) {
+      return "auto";
+    }
+    return undefined;
+  }, [format]);
 
   const [mediaPermission, requestMediaPermission] =
     MediaLibrary.usePermissions();
@@ -288,6 +322,34 @@ export default function VisionTestPage() {
   const [mergeChunkTotal, setMergeChunkTotal] = useState(0);
   const mergeShimmerAnim = useRef(new Animated.Value(0)).current;
   const [isCameraReady, setIsCameraReady] = useState(false);
+
+  const captureAppleAiFrame = useCallback(async () => {
+    if (!camera.current) throw new Error("Camera unavailable");
+    return camera.current.takeSnapshot({ quality: 80 });
+  }, []);
+  // Capture identity by value: a cancelled old request may finish during a new recording.
+  const archiveProfileId = capturedProfileIdRef.current;
+  const archiveStartedAt = recordingStartTime.current;
+  const archiveAppleAiObservation = useCallback(async (observation: AppleAiObservation) => {
+    if (archiveProfileId === null) throw new Error("Missing recording profile");
+    await saveAppleAiObservation(observation, archiveProfileId, archiveStartedAt);
+  }, [archiveProfileId, archiveStartedAt]);
+  const appleAi = useAppleAiFeedback({
+    enabled: onDeviceAi && !previewOnly,
+    running: isRecording && !isPaused && !isSaving && isCameraActive && isCameraReady,
+    foreground: isCameraActive,
+    sessionId: sessionIdRef.current,
+    wodDescription,
+    movements,
+    appearanceHints,
+    language: locale,
+    capture: captureAppleAiFrame,
+    onObservation: archiveAppleAiObservation,
+  });
+  const stopAppleAi = appleAi.stop;
+  useEffect(() => () => {
+    void stopAppleAi().then(flushAppleAiUploads).catch(() => {});
+  }, [stopAppleAi]);
   const [chunkCount, setChunkCount] = useState(0);
 
   // Elapsed timer for recording with Pause/Resume support
@@ -317,6 +379,7 @@ export default function VisionTestPage() {
     return () => {
       subscription.remove();
       useAuthStore.getState().setRecordingActive(false);
+      void flushEnvironmentUploads().catch(() => {});
     };
   }, []);
 
@@ -551,6 +614,10 @@ export default function VisionTestPage() {
           // Always track chunk path for local merge (gallery save),
           // even if recording has stopped (orphan chunk).
           chunkPaths.current.push(video.path);
+          environment.event("existing_sensors", { hr: getReading().bpm ?? null, hrSource: "BLE",
+            moveNet: getLatestMotion(), sensorFiles: "existing_session_sensor_telemetry", source: "existing_enabled_providers" });
+          environment.offerChunk({ path: video.path, captureStart: chunkStartTime.current, captureEnd: chunkEndTime,
+            durationMs: video.duration * 1000, index: uploadedChunkCount.current + 1 });
 
           const { total: totalFrames, workout: workoutFrames } =
             resetFrameCounts();
@@ -674,6 +741,7 @@ export default function VisionTestPage() {
           }
         },
         onRecordingError: (error) => {
+          void environment.stop("recording_error").catch(() => {});
           isChunkRecordingActive.current = false;
           finalChunkPending.current = false;
           finishChunk(null);
@@ -699,6 +767,7 @@ export default function VisionTestPage() {
     } catch (e) {
       isChunkRecordingActive.current = false;
       finishChunk(null);
+      void environment.stop("recording_error").catch(() => {});
       console.error("Failed to start chunk recording:", e);
     }
   };
@@ -820,6 +889,10 @@ export default function VisionTestPage() {
         return;
       }
 
+      // Resolve the OS location prompt before recording: permission UI may background the camera.
+      if (environmentEnabled && environmentNativeAvailable) {
+        await appleEnvironment.requestEnvironmentLocationPermission().catch(() => {});
+      }
       resetQuality();
       bpmRef.current = 0;
       chunkMaxBpmRef.current = 0;
@@ -839,6 +912,16 @@ export default function VisionTestPage() {
       finalChunkPending.current = false;
       outstandingUploads.current = 0;
       uploadedChunkCount.current = 0;
+
+      environment.start({ sessionId: sessionIdRef.current, profileId: profileId!, startedAt: recordingStartTime.current },
+        { wodDescription, movements, appearanceHints: appearanceHints ?? "", language: locale },
+        { resolution, lowFps, showSkeleton, onDeviceAi, zoomMode, aspectRatio, landscapeMode,
+          observationIntervalSeconds: Number(observationIntervalSeconds) || 60,
+          environmentAnalysis: environmentAnalysisParam !== "false",
+          fps: targetFps, videoHdr: false, bufferCompression: false, audio: hasMicPermission, zoom: zoomMode ? 0.1 : 0,
+          deviceId: device?.id ?? null, physicalDevices: device?.physicalDevices ?? [],
+          format: format ? { width: format.videoWidth, height: format.videoHeight } : null,
+          exposure: "unavailable", focus: "unavailable" });
 
       // Start debug telemetry recording (1Hz sampling)
       TelemetryRecorder.start(sessionIdRef.current, profileId!);
@@ -882,11 +965,13 @@ export default function VisionTestPage() {
       setIsRecording(false);
       setIsPaused(false);
       useAuthStore.getState().setRecordingActive(false);
+      void flushEnvironmentUploads().catch(() => {});
       isRecordingChunks.current = false;
       finalChunkPending.current = false;
       accumulatedMs.current = 0;
       segmentStartTime.current = 0;
       setElapsedMs(0);
+      void environment.stop("start_error").catch(() => {});
       void TelemetryRecorder.stop().catch(() => {});
       void PolarSensorRecorder.stop().catch(() => {});
       Alert.alert("녹화 시작 실패", "녹화를 시작할 수 없습니다.");
@@ -897,6 +982,8 @@ export default function VisionTestPage() {
 
   const handlePauseRecording = async () => {
     if (!isRecording || isPaused) return;
+    void appleAi.stop().then(flushAppleAiUploads).catch(() => {});
+    void environment.pause()?.catch(() => {});
     console.log("⏸️ Pausing recording...");
 
     if (segmentStartTime.current > 0) {
@@ -917,6 +1004,7 @@ export default function VisionTestPage() {
     segmentStartTime.current = Date.now();
     setIsPaused(false);
     PolarSensorRecorder.resume();
+    environment.resume();
     resetQuality();
     startChunkRecording();
     console.log("▶️ Recording resumed");
@@ -924,9 +1012,11 @@ export default function VisionTestPage() {
 
   const handleStopRecording = async () => {
     if (!isRecording) return;
+    void appleAi.stop().then(flushAppleAiUploads).catch(() => {});
 
     try {
       setIsSaving(true);
+      const environmentStopped = environment.stop().catch(() => {});
 
       if (!isPaused && segmentStartTime.current > 0) {
         accumulatedMs.current += Date.now() - segmentStartTime.current;
@@ -944,6 +1034,7 @@ export default function VisionTestPage() {
         }
       }
 
+      await environmentStopped;
       setIsRecording(false);
       setIsPaused(false);
 
@@ -1052,6 +1143,7 @@ export default function VisionTestPage() {
             setRecordingActive,
           } = useAuthStore.getState();
           setRecordingActive(false);
+          void flushEnvironmentUploads().catch(() => {});
           if (sessionExpiredDuringRecording) {
             Alert.alert(
               t("auth.sessionExpiredDuringWorkoutTitle"),
@@ -1151,6 +1243,7 @@ export default function VisionTestPage() {
           setRecordingActive,
         } = useAuthStore.getState();
         setRecordingActive(false);
+        void flushEnvironmentUploads().catch(() => {});
         if (sessionExpiredDuringRecording) {
           Alert.alert(
             t("auth.sessionExpiredDuringWorkoutTitle"),
@@ -1248,8 +1341,12 @@ export default function VisionTestPage() {
         fps={targetFps}
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
+        // MoveNet's resize plugin requires uncompressed 8-bit frames, including at 4K.
+        videoHdr={false}
+        enableBufferCompression={false}
         video={true}
         audio={hasMicPermission}
+        videoStabilizationMode={videoStabilizationMode}
         zoom={zoomMode ? 0.1 : 0}
         onInitialized={() => setIsCameraReady(true)}
         onError={(error) => {
@@ -1417,6 +1514,8 @@ export default function VisionTestPage() {
                   resolution,
                   skipCompression ? "raw" : "compress",
                   showSkeleton ? "skel" : "no-skel",
+                  onDeviceAi ? `apple-ai:${appleAi.status}` : "apple-ai:off",
+                  environmentEnabled ? `environment:${environment.status}:${environment.record?.questionId ?? "-"}:${environment.record?.outcome === "success" && environment.record?.source === "FoundationModels" ? "review_needed" : "-"}` : "environment:off",
                   serialUpload ? "serial" : "parallel",
                   landscapeMode ? "land" : "port",
                   zoomMode ? "zoom:0.1" : "zoom:0",
@@ -1484,16 +1583,23 @@ export default function VisionTestPage() {
       </View>
 
       {/* Chunk Feedback Overlay */}
-      {isRecording && !previewOnly && (chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
+      {isRecording && !previewOnly && (environmentEnabled || onDeviceAi || chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
         <View
           style={[
             styles.feedbackOverlay,
             applyLandscapeStyles && styles.feedbackOverlayLandscape,
+            onDeviceAi && { backgroundColor: "transparent", paddingHorizontal: 0, paddingVertical: 0 },
           ]}
         >
-          {liveFeedback.captureAdvice && <Text style={[styles.feedbackText, { color: "#ffd28a" }]}>{t("activity.camera")}: {liveFeedback.captureAdvice}</Text>}
-          {chunkFeedback && <Text style={styles.feedbackText}>{chunkFeedback}</Text>}
-          <ActivitySummaryContent summary={liveFeedback.summary} compact />
+          {(chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
+            <View style={onDeviceAi ? { backgroundColor: "rgba(255, 0, 0, 0.8)", borderRadius: 8, padding: 12 } : undefined}>
+              {liveFeedback.captureAdvice && <Text style={[styles.feedbackText, { color: "#ffd28a" }]}>{t("activity.camera")}: {liveFeedback.captureAdvice}</Text>}
+              {chunkFeedback && <Text style={styles.feedbackText}>{chunkFeedback}</Text>}
+              <ActivitySummaryContent summary={liveFeedback.summary} compact />
+            </View>
+          )}
+          {environmentEnabled && <EnvironmentLiveCard status={environment.status} record={environment.record} />}
+          {onDeviceAi && <AppleAiFeedbackCard status={appleAi.status} error={appleAi.error} result={appleAi.result} archiveError={appleAi.archiveError} />}
         </View>
       )}
 

@@ -1,3 +1,4 @@
+import { OnDeviceAiPanel } from "./components/OnDeviceAiPanel";
 import { ActivitySummaryPanel } from "./components/ActivitySummaryPanel";
 import { HeartRateSummaryPanel } from "./components/HeartRateSummaryPanel";
 import { SensorTimelinePanel } from "./components/SensorTimelinePanel";
@@ -1514,6 +1515,8 @@ export function SessionDetailPage() {
           />
         </div>
       )}
+
+      {sessionId && profileId && <OnDeviceAiPanel key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} />}
 
       {/* Chunk metrics chart — full width below */}
       {chunks.length > 0 && (

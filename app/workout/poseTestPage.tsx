@@ -120,6 +120,9 @@ export default function PoseTestPage() {
         fps={30}
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
+        // Keep the same uncompressed 8-bit input required by MoveNet in recording.
+        videoHdr={false}
+        enableBufferCompression={false}
         video={true}
         audio={false}
       />

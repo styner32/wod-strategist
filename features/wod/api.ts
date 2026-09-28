@@ -351,13 +351,23 @@ export async function uploadSensorToGcs(
   fileUri: string,
   requiredHeaders?: Record<string, string>,
 ): Promise<void> {
+  return uploadSessionAssetToGcs(uploadUrl, fileUri, "application/x-ndjson", requiredHeaders);
+}
+
+/** Stream a session asset after checking the file, without constructing a background upload task. */
+export async function uploadSessionAssetToGcs(
+  uploadUrl: string,
+  fileUri: string,
+  mimeType: string,
+  requiredHeaders?: Record<string, string>,
+): Promise<void> {
   const info = await getInfoAsync(fileUri);
   if (!info.exists || info.isDirectory) {
-    throw new Error("Sensor upload file is missing or is not a regular file");
+    throw new Error("Session asset upload file is missing or is not a regular file");
   }
 
   const headers = {
-    "Content-Type": "application/x-ndjson",
+    "Content-Type": mimeType,
     ...(requiredHeaders || {}),
   };
 
@@ -375,13 +385,13 @@ export async function uploadSensorToGcs(
 
   if (!response) {
     throw new Error(
-      "Failed to upload sensor telemetry to GCS: No response from upload task.",
+      "Failed to upload session asset to GCS: No response from upload task.",
     );
   }
 
   if (response.status < 200 || response.status >= 300) {
     const err: any = new Error(
-      `Failed to upload sensor telemetry to GCS: HTTP ${response.status} ${response.body || ""}`,
+      `Failed to upload session asset to GCS: HTTP ${response.status} ${response.body || ""}`,
     );
     err.status = response.status;
     err.body = response.body;

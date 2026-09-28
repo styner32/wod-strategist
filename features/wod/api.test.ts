@@ -6,6 +6,7 @@ import {
   getUploadUrl,
   uploadToGcs,
   uploadSensorToGcs,
+  uploadSessionAssetToGcs,
   notifyUploadComplete,
   processWorkoutVideo,
   parseWorkoutImage,
@@ -68,7 +69,7 @@ describe("API Client Methods", () => {
     ])("rejects invalid source %j before starting a native upload", async (info) => {
       mockGetInfoAsync.mockResolvedValueOnce(info);
       await expect(uploadSensorToGcs("https://gcs.fake/upload", "file:///missing.ndjson"))
-        .rejects.toThrow("Sensor upload file is missing");
+        .rejects.toThrow("Session asset upload file is missing");
       expect(mockSensorUploadAsync).not.toHaveBeenCalled();
       expect(mockCreateUploadTask).not.toHaveBeenCalled();
     });
@@ -97,6 +98,14 @@ describe("API Client Methods", () => {
       mockSensorUploadAsync.mockResolvedValueOnce({ status: 412, body: "Precondition Failed" });
       await expect(uploadSensorToGcs("https://gcs.fake/upload", "file:///sensor.ndjson"))
         .rejects.toMatchObject({ status: 412, body: "Precondition Failed" });
+    });
+
+    it.each(['image/jpeg', 'application/json'])("uploads Apple AI assets with %s content type", async mime => {
+      await uploadSessionAssetToGcs('https://gcs.fake/upload', 'file:///evidence', mime);
+      expect(mockSensorUploadAsync).toHaveBeenCalledWith('https://gcs.fake/upload', 'file:///evidence', {
+        httpMethod: 'PUT', headers: { 'Content-Type': mime }, uploadType: FileSystemUploadType.BINARY_CONTENT,
+      });
+      expect(mockCreateUploadTask).not.toHaveBeenCalled();
     });
   });
   
@@ -344,4 +353,3 @@ describe("API Client Methods", () => {
     });
   });
 });
-

@@ -1,3 +1,4 @@
+import { flushEnvironmentUploads } from "@/features/environment/store";
 // src/app/_layout.tsx
 import 'react-native-get-random-values'; // Must be first — polyfills crypto.getRandomValues for ULID
 import 'react-native-worklets-core';
@@ -8,6 +9,7 @@ import { t, useLocale } from "@/features/i18n";
 import { useAuthStore } from "@/features/auth/useAuthStore";
 import { useProfileStore } from "@/store/useProfileStore";
 import { flushPendingUploads } from "@/features/debug/telemetryUpload";
+import { flushAppleAiUploads } from "@/features/ai-coach/appleAiUpload";
 import {
   flushSensorUploads,
   startPeriodicSensorUpload,
@@ -16,7 +18,7 @@ import { Redirect, Stack } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 export default function RootLayout() {
@@ -38,9 +40,15 @@ export default function RootLayout() {
       useProfileStore.getState().hydrate();
       flushPendingUploads().catch(() => {});
       flushSensorUploads().catch(() => {});
+      flushAppleAiUploads().catch(() => {});
+      flushEnvironmentUploads().catch(() => {});
+      const appleAiRetry = AppState.addEventListener("change", state => {
+        if (state === "active") { flushAppleAiUploads().catch(() => {}); flushEnvironmentUploads().catch(() => {}); }
+      });
       const stopPeriodic = startPeriodicSensorUpload(30000);
       return () => {
         stopPeriodic();
+        appleAiRetry.remove();
       };
     }
   }, [isLoggedIn]);

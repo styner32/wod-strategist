@@ -1,7 +1,8 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { validateStoredToken } from "@/features/auth/jwt";
 import { useAuthStore } from "@/features/auth/useAuthStore";
-import { t } from "@/features/i18n";
+import { t, useLocale } from "@/features/i18n";
+import { appleOnDeviceAi } from "@/modules/apple-on-device-ai";
 import {
   fetchMovementGroups,
   fetchPreWodAdvice,
@@ -13,11 +14,13 @@ import {
 import { PreWodStrategyCard } from "@/features/wod/ui/PreWodStrategyCard";
 import { RelatedWodsCard } from "@/features/wod/ui/RelatedWodsCard";
 import { WORKOUT_TYPES, type WorkoutType } from "@/features/wod/workoutType";
+import { supports4K30Fps } from "@/features/video/cameraCapability";
 import { useActiveProfile } from "@/store/useProfileStore";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
+import { useCameraDevice } from "react-native-vision-camera";
 import {
   ActivityIndicator,
   Alert,
@@ -40,6 +43,10 @@ const VIDEO_PREFS_KEY = "wod_video_preferences";
 const ALL_FILTER = "All";
 
 interface VideoPreferences {
+  onDeviceAi: boolean;
+  environmentObservation: boolean;
+  environmentAnalysis: boolean;
+  observationIntervalSeconds: 30 | 60 | 120;
   showSkeleton: boolean;
   lowFps: boolean;
   skipCompression: boolean;
@@ -54,6 +61,10 @@ interface VideoPreferences {
 function getDefaultVideoPrefs(): VideoPreferences {
   const isAndroid = Platform.OS === "android";
   return {
+    onDeviceAi: false,
+    environmentObservation: false,
+    environmentAnalysis: true,
+    observationIntervalSeconds: 60,
     showSkeleton: !isAndroid,
     lowFps: isAndroid,
     skipCompression: isAndroid,
@@ -83,6 +94,8 @@ function getCategoryIcon(category: string): string {
 }
 
 export default function WorkoutSetup() {
+  const locale = useLocale();
+  const [appleAiAvailability, setAppleAiAvailability] = useState("checking");
   const [workoutType, setWorkoutType] = useState<WorkoutType>("wod");
   const activeProfile = useActiveProfile();
 
@@ -92,6 +105,16 @@ export default function WorkoutSetup() {
   );
   const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [advancedExpanded, setAdvancedExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!videoPrefs.onDeviceAi) return;
+    let cancelled = false;
+    setAppleAiAvailability("checking");
+    appleOnDeviceAi.getAvailability(locale)
+      .then((status) => { if (!cancelled) setAppleAiAvailability(status); })
+      .catch(() => { if (!cancelled) setAppleAiAvailability("unavailable"); });
+    return () => { cancelled = true; };
+  }, [videoPrefs.onDeviceAi, locale]);
 
   // Movements
   const [movementGroups, setMovementGroups] = useState<MovementGroup[]>([]);
@@ -125,6 +148,16 @@ export default function WorkoutSetup() {
       })
       .finally(() => setPrefsLoaded(true));
   }, []);
+
+  const backDevice = useCameraDevice("back");
+  const is4KCapable = useMemo(() => supports4K30Fps(backDevice), [backDevice]);
+
+  // Graceful degradation: if saved pref is 2160p but current device does not support 4K 30fps, fallback to 1080p
+  useEffect(() => {
+    if (prefsLoaded && !is4KCapable && videoPrefs.resolution === "2160p") {
+      setVideoPrefs((prev) => ({ ...prev, resolution: "1080p" }));
+    }
+  }, [prefsLoaded, is4KCapable, videoPrefs.resolution]);
 
   // Load movement groups
   useEffect(() => {
@@ -382,6 +415,10 @@ export default function WorkoutSetup() {
         wodDescription: wodDescription.trim(),
         ...(appearanceHints ? { appearanceHints } : {}),
         autoRecord: videoPrefs.autoRecord ? "true" : "false",
+        onDeviceAi: videoPrefs.onDeviceAi ? "true" : "false",
+        environmentObservation: videoPrefs.environmentObservation ? "true" : "false",
+        environmentAnalysis: videoPrefs.environmentAnalysis ? "true" : "false",
+        observationIntervalSeconds: String(videoPrefs.observationIntervalSeconds),
         showSkeleton: videoPrefs.showSkeleton ? "true" : "false",
         lowFps: videoPrefs.lowFps ? "true" : "false",
         skipCompression: videoPrefs.skipCompression ? "true" : "false",
@@ -455,6 +492,10 @@ export default function WorkoutSetup() {
         zoomMode: videoPrefs.zoomMode ? "true" : "false",
         aspectRatio: videoPrefs.aspectRatio,
         previewOnly: "true",
+        onDeviceAi: videoPrefs.onDeviceAi ? "true" : "false",
+        environmentObservation: videoPrefs.environmentObservation ? "true" : "false",
+        environmentAnalysis: videoPrefs.environmentAnalysis ? "true" : "false",
+        observationIntervalSeconds: String(videoPrefs.observationIntervalSeconds),
       },
     });
   };
@@ -920,10 +961,10 @@ export default function WorkoutSetup() {
               }}
             >
               <Text style={[styles.sectionLabel, { marginTop: 0 }]}>
-                오늘의 착장 / 외형 (선택)
+                {t("appleAi.appearanceLabel")}
               </Text>
               <Text style={{ color: "#888", fontSize: 12, marginBottom: 10 }}>
-                실시간 인물 식별 보조 정보
+                {t("appleAi.appearanceHelp")}
               </Text>
               <TextInput
                 style={{
@@ -933,11 +974,20 @@ export default function WorkoutSetup() {
                   borderRadius: 8,
                   fontSize: 14,
                 }}
-                placeholder="예: 검은 반팔, 회색 반바지, 무릎보호대"
+                placeholder={t("appleAi.appearancePlaceholder")}
+                accessibilityLabel={t("appleAi.appearanceLabel")}
+                maxLength={300}
                 placeholderTextColor="#555"
                 value={sessionAppearance}
                 onChangeText={setSessionAppearance}
               />
+              {(videoPrefs.onDeviceAi || (videoPrefs.environmentObservation && videoPrefs.environmentAnalysis)) && <Text style={{ color: "#a4d7ff", fontSize: 12, marginTop: 10 }}>
+                {t("environment.contextPreview", {
+                  appearance: sessionAppearance.trim() || t("environment.targetMissing"),
+                  movements: selectedMovements.join(", ") || t("appleAi.contextUnspecified"),
+                  wod: wodDescription.trim() || t("appleAi.contextUnspecified"),
+                })}
+              </Text>}
             </View>
             <PreWodStrategyCard advice={preWodAdvice} loading={adviceLoading} />
             <RelatedWodsCard related={relatedWods} />
@@ -954,6 +1004,45 @@ export default function WorkoutSetup() {
             </TouchableOpacity>
             {advancedExpanded && (
               <View style={styles.advancedSection}>
+                <View style={styles.optionRow}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={styles.optionLabel}>{t("environment.option")}</Text>
+                    <Text style={{ color: "#999", fontSize: 12, marginTop: 4 }}>{t("environment.description")}</Text>
+                  </View>
+                  <Switch accessibilityLabel={t("environment.option")} value={videoPrefs.environmentObservation}
+                    onValueChange={(v) => updatePref("environmentObservation", v)} />
+                </View>
+                {videoPrefs.environmentObservation && <View style={styles.optionRow}>
+                  <View style={{ flex:1 }}><Text style={styles.optionLabel}>{t("environment.analysisOption")}</Text>
+                    <Text style={{color:'#999',fontSize:12}}>{t("environment.measurementsOnly")}</Text></View>
+                  <Switch value={videoPrefs.environmentAnalysis} onValueChange={v => updatePref("environmentAnalysis",v)} accessibilityLabel={t("environment.analysisOption")} />
+                </View>}
+                {videoPrefs.environmentObservation && <View style={styles.optionRow}>
+                  <Text style={styles.optionLabel}>{t("environment.interval")}</Text>
+                  <View style={styles.toggleGroup}>{([30,60,120] as const).map(seconds =>
+                    <TouchableOpacity key={seconds} style={[styles.toggleBtn, videoPrefs.observationIntervalSeconds === seconds && styles.toggleActive]}
+                      onPress={() => updatePref("observationIntervalSeconds", seconds)}>
+                      <Text style={styles.optionLabel}>{t("environment.seconds", { count: seconds })}</Text>
+                    </TouchableOpacity>)}</View>
+                </View>}
+                <View style={styles.optionRow}>
+                  <View style={{ flex: 1, paddingRight: 12 }}>
+                    <Text style={styles.optionLabel}>{t("appleAi.option")}</Text>
+                    <Text style={{ color: "#999", fontSize: 12, marginTop: 4 }}>
+                      {t("appleAi.description")}
+                    </Text>
+                    {(videoPrefs.onDeviceAi || (videoPrefs.environmentObservation && videoPrefs.environmentAnalysis)) && <Text style={{ color: "#a4d7ff", fontSize: 12, marginTop: 4 }}>
+                      {t(`appleAi.status.${appleAiAvailability}`)}
+                    </Text>}
+                  </View>
+                  <Switch
+                    accessibilityLabel={t("appleAi.option")}
+                    value={videoPrefs.onDeviceAi}
+                    onValueChange={(v) => updatePref("onDeviceAi", v)}
+                    trackColor={{ false: "#767577", true: "#81b0ff" }}
+                    thumbColor={videoPrefs.onDeviceAi ? "#f5dd4b" : "#f4f3f4"}
+                  />
+                </View>
                 <View style={styles.optionRow}>
                   <Text style={styles.optionLabel}>
                     {t("setup.resolution")}
@@ -978,8 +1067,50 @@ export default function WorkoutSetup() {
                     >
                       <Text style={styles.toggleText}>1080p</Text>
                     </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.toggleBtn,
+                        videoPrefs.resolution === "2160p" &&
+                          styles.toggleActive,
+                        !is4KCapable && styles.toggleDisabled,
+                      ]}
+                      onPress={() => {
+                        if (!is4KCapable) {
+                          Alert.alert(
+                            t("setup.resolution"),
+                            t("setup.resolution4kUnsupportedAlert"),
+                          );
+                          return;
+                        }
+                        updatePref("resolution", "2160p");
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.toggleText,
+                          !is4KCapable && styles.toggleTextDisabled,
+                        ]}
+                      >
+                        {t("setup.resolution4k")}
+                      </Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
+                {(videoPrefs.resolution === "2160p" || !is4KCapable) && (
+                  <View style={styles.resolutionBadgeContainer}>
+                    <Text
+                      style={
+                        videoPrefs.resolution === "2160p"
+                          ? styles.resolutionBadge
+                          : styles.resolutionOptimizedBadge
+                      }
+                    >
+                      {videoPrefs.resolution === "2160p"
+                        ? t("setup.resolution4kBadge")
+                        : t("setup.resolutionOptimizedBadge")}
+                    </Text>
+                  </View>
+                )}
                 <View style={[styles.optionRow, { marginTop: 16 }]}>
                   <View>
                     <Text style={styles.optionLabel}>
@@ -1294,7 +1425,24 @@ const styles = StyleSheet.create({
   },
   toggleBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6 },
   toggleActive: { backgroundColor: "#2D3748" },
+  toggleDisabled: { opacity: 0.35 },
   toggleText: { color: "#C8D0DA", fontWeight: "bold", fontSize: 13 },
+  toggleTextDisabled: { color: "#5A6578" },
+  resolutionBadgeContainer: {
+    alignItems: "flex-end",
+    marginTop: 2,
+    marginBottom: 8,
+  },
+  resolutionBadge: {
+    color: "#00E5FF",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  resolutionOptimizedBadge: {
+    color: "#8B9BB4",
+    fontSize: 11,
+    fontWeight: "500",
+  },
 
   // Bottom bar
   bottomBar: {
