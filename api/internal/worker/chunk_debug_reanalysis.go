@@ -235,6 +235,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 	analysis, usage, err := w.GeminiClient.AnalyzeSegmentWithModel(
 		ctx, file.URI, chunkDebugMIMEType(file.MIMEType), media.Start, media.End, prompt, selectedModel,
 	)
+	w.saveTokenUsage(target.SessionID, target.ProfileID, "chunk:reanalysis", usage)
 	if err != nil || strings.TrimSpace(analysis) == "" {
 		if err == nil {
 			err = errors.New("Gemini returned an empty chunk re-analysis")
@@ -262,7 +263,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 		candidateTokens = usage.CandidateTokens
 		totalTokens = usage.TotalTokens
 	}
-	w.saveTokenUsage(target.SessionID, target.ProfileID, "chunk:reanalysis", usage)
+
 	w.recordStageMetrics(target.SessionID, target.ProfileID, "chunk_reanalysis", "current", 1, 0, uploadBytes, time.Since(started))
 
 	if err := w.completeChunkDebugRun(ctx, run.ID, db.ChunkReanalysisStatusCompleted, started, map[string]any{

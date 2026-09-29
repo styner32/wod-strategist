@@ -2,11 +2,13 @@ package controllers
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/worker"
 	"net/http"
+	"strings"
 )
 
 func (ctl *Controller) enrichmentWorker() *worker.Worker {
@@ -40,6 +42,7 @@ func (ctl *Controller) GetAgenticHighlights(c *gin.Context) {
 	state.MIMEType = ""
 	state.OwnedUpload = false
 	state.CleanupPending = false
+	state.CleanupAttempts = 0
 	c.JSON(http.StatusOK, gin.H{"enabled": ctl.enableAgenticHighlights, "analysis": state, "summary": a.AnalysisSummary})
 }
 func (ctl *Controller) CreateAgenticHighlights(c *gin.Context) { ctl.createEnrichment(c, true) }
@@ -67,6 +70,10 @@ func (ctl *Controller) createEnrichment(c *gin.Context, agentic bool) {
 		return
 	}
 	id, err := ctl.enrichmentWorker().ScheduleAnalysisEnrichment(c.Request.Context(), sessionID, agentic, true)
+	if errors.Is(err, worker.ErrEnrichmentCleanupPending) {
+		c.JSON(http.StatusConflict, gin.H{"error": "이전 추가 분석의 업로드를 정리하는 중입니다. 잠시 후 다시 시도하세요."})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "completed analysis with valid highlights required"})
 		return
@@ -78,11 +85,22 @@ func compactAnalysisSummaries(results []db.AnalysisResult) []db.AnalysisResult {
 	for i := range results {
 		var s worker.AnalysisSummary
 		if json.Unmarshal(results[i].AnalysisSummary, &s) == nil {
+			// Omit empty fields so clients fall back to the legacy overall_summary.
+			compact := map[string]any{}
+			if s.Status != "" {
+				compact["status"] = s.Status
+			}
 			overview := ""
 			if s.Result != nil {
 				overview = s.Result.Overview
 			}
-			raw, _ := json.Marshal(map[string]any{"status": s.Status, "result": map[string]string{"overview": overview}})
+			if strings.TrimSpace(overview) == "" && s.LastSuccess != nil {
+				overview = s.LastSuccess.Overview
+			}
+			if strings.TrimSpace(overview) != "" {
+				compact["result"] = map[string]string{"overview": overview}
+			}
+			raw, _ := json.Marshal(compact)
 			results[i].AnalysisSummary = db.JSONDocument(raw)
 		}
 	}

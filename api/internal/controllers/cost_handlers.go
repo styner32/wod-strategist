@@ -70,15 +70,18 @@ func (ctl *Controller) GetTotalCost(c *gin.Context) {
 		}
 	}
 
-	if len(profileIDs) == 0 {
-		c.JSON(http.StatusOK, cost.TotalCostResponse{})
-		return
-	}
-
 	query := ctl.db.WithContext(c.Request.Context()).Model(&db.TokenUsage{}).
-		Select("model, SUM(prompt_tokens) as prompt_tokens, SUM(candidate_tokens) as candidate_tokens, SUM(total_tokens) as total_tokens").
-		Where("profile_id IN ?", profileIDs).
-		Group("model")
+		Select(`model, SUM(prompt_tokens) as prompt_tokens, SUM(candidate_tokens) as candidate_tokens, SUM(total_tokens) as total_tokens,
+   SUM(COALESCE((usage_metadata->>'thoughtsTokenCount')::bigint,0)) as thinking_tokens,
+   SUM(COALESCE((usage_metadata->>'toolUsePromptTokenCount')::bigint,0)) as tool_use_tokens,
+   SUM(COALESCE((usage_metadata->>'cachedContentTokenCount')::bigint,0)) as cached_tokens,
+   COUNT(*) FILTER (WHERE usage_metadata IS NOT NULL AND (usage_metadata->>'promptTokenCount' IS NULL OR usage_metadata->>'candidatesTokenCount' IS NULL OR usage_metadata->>'totalTokenCount' IS NULL)) as unmeasured_calls,
+ COUNT(*) FILTER (WHERE lower(trim(model)) LIKE 'lyria-%') as unpriced_calls`).Group("model")
+	if pidStr != "" {
+		query = query.Where("profile_id IN ?", profileIDs)
+	} else {
+		query = query.Where("profile_id IN ? OR user_id = ?", profileIDs, userID)
+	}
 
 	var aggs []cost.ModelTokenAggregate
 	if err := query.Scan(&aggs).Error; err != nil {

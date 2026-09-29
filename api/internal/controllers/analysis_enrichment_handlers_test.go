@@ -67,5 +67,20 @@ func enrichmentRouteSpecs(method, suffix string) {
 }
 
 var _ = Describe("GET /api/v1/sessions/:session_id/agentic-highlights", func() { enrichmentRouteSpecs(http.MethodGet, "agentic-highlights") })
-var _ = Describe("POST /api/v1/sessions/:session_id/agentic-highlights", func() { enrichmentRouteSpecs(http.MethodPost, "agentic-highlights") })
+var _ = Describe("POST /api/v1/sessions/:session_id/agentic-highlights", func() {
+	enrichmentRouteSpecs(http.MethodPost, "agentic-highlights")
+	It("rejects a rerun while the previous upload cleanup is pending", func() {
+		var owner db.User
+		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		Expect(dbConn.First(&owner, p.UserID).Error).To(Succeed())
+		sessionID := "WOD-20260928-01JAPICLEANUP0000000000000"
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sessionID, ProfileID: p.ID, WorkoutType: "wod"})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: sessionID, ProfileID: p.ID, Status: "COMPLETED", Output: "stored analysis", AgenticHighlightAnalysis: db.JSONDocument(`{"run_id":"old","status":"failed","cleanup_pending":true,"owned_upload":true,"file_name":"files/owned"}`)})
+		router := newTestRouterWithAuthService(controllers.Config{QueueClient: testhelpers.NewQueueClient(), EnableAgenticHighlights: true})
+		r := httptest.NewRecorder()
+		router.ServeHTTP(r, newAuthorizedJSONRequest(http.MethodPost, fmt.Sprintf("/api/v1/sessions/%s/agentic-highlights", sessionID), "{}", &owner))
+		Expect(r.Code).To(Equal(http.StatusConflict), r.Body.String())
+		Expect(r.Body.String()).To(ContainSubstring("정리"))
+	})
+})
 var _ = Describe("POST /api/v1/sessions/:session_id/analysis-summary", func() { enrichmentRouteSpecs(http.MethodPost, "analysis-summary") })

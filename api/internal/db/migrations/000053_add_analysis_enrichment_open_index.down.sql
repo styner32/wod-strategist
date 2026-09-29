@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_analysis_results_enrichment_open;

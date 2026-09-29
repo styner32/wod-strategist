@@ -86,18 +86,8 @@ func (t comparisonTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 // NewComparisonClient shares the existing SDK configuration and Files lifecycle;
-// its context-scoped recorder is used only by CompareVideoMode.
+// its per-request recorder is also used for normal generation usage accounting.
 func NewComparisonClient(ctx context.Context, options Options) (*Client, error) {
-	hc := &http.Client{}
-	if options.HTTPClient != nil {
-		*hc = *options.HTTPClient
-	}
-	base := hc.Transport
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	hc.Transport = comparisonTransport{base: base}
-	options.HTTPClient = hc
 	options.Model = ModelFlash38
 	return NewClientWithOptions(ctx, zap.NewNop(), options)
 }

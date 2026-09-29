@@ -104,6 +104,9 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 
 	AfterEach(func() {
 		pending, err := inspector.ListPendingTasks("default")
+		if errors.Is(err, asynq.ErrQueueNotFound) {
+			return
+		}
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pending).To(BeEmpty(), "session re-analysis must not enqueue derived output")
 	})

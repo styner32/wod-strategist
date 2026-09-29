@@ -143,9 +143,9 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		promptRecord.WriteString(indexPrompt)
 		indexOutput, usage, indexErr := w.GeminiClient.IndexVideo(ctx, file.URI, chunkDebugMIMEType(file.MIMEType), indexPrompt)
 		apiCalls++
+		w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", usage)
+		addSessionDebugUsage(&aggregate, usage)
 		if indexErr == nil {
-			w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", usage)
-			addSessionDebugUsage(&aggregate, usage)
 			segments = parseSegments(indexOutput)
 			if file.Duration > 0 {
 				segments = filterSessionDebugSegments(segments, file.Duration)
@@ -220,6 +220,8 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
 		analysis, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(ctx, file.URI, chunkDebugMIMEType(file.MIMEType), start, end, prompt, selectedModel)
 		apiCalls++
+		w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", usage)
+		addSessionDebugUsage(&aggregate, usage)
 		if callErr != nil || strings.TrimSpace(analysis) == "" {
 			if callErr == nil {
 				callErr = errors.New("empty session debug segment result")
@@ -228,8 +230,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			return w.failSessionDebugRun(ctx, run.ID, retryCount, started,
 				"The analyzer could not complete every workout segment.", callErr)
 		}
-		w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", usage)
-		addSessionDebugUsage(&aggregate, usage)
+
 		if usage != nil && usage.Model != "" {
 			model = usage.Model
 		}

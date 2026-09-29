@@ -506,12 +506,11 @@ func (w *Worker) recommendStretches(ctx context.Context, profileID uint, session
 
 	prompt := BuildStretchRecommendationPrompt(assessableCurrent, history, injuries, catalogNames)
 	output, usage, parseErr := w.GeminiClient.ParseText(ctx, prompt)
+	w.saveTokenUsage(sessionID, profileID, "session:stretch-recommendations", usage)
 	if parseErr != nil {
 		w.logger.Error("Gemini parseText failed for stretch recommendations", zap.Error(parseErr))
 		return "[]"
 	}
-
-	w.saveTokenUsage(sessionID, profileID, "session:stretch-recommendations", usage)
 
 	parsed := parseStretchRecommendations(output)
 	sanitized := w.sanitizeAndPersistStretchRecommendations(ctx, parsed, assessableCurrent, history, resolver)

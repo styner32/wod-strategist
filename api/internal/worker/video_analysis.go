@@ -284,7 +284,8 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 			if err := tx.Create(result).Error; err != nil {
 				return err
 			}
-			return w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
+			w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
+			return nil
 		}
 		if err != nil {
 			return err
@@ -323,14 +324,12 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
 			return err
 		}
-		return w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
+		w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
+		return nil
 	})
 
 	if err == nil {
-		_, scheduleErr := w.ScheduleAnalysisEnrichment(ctx, p.SessionID, w.AgenticHighlightsEnabled, false)
-		if scheduleErr != nil {
-			w.logger.Warn("could not schedule analysis enrichment", zap.Error(scheduleErr))
-		}
+		w.PublishEnrichmentOutbox(ctx, p.SessionID)
 	}
 	return err
 }
@@ -685,11 +684,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 
 		apiCalls++
 		indexOutput, indexUsage, indexErr := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, w.buildIndexPrompt(p, upload.VideoDuration))
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:index", indexUsage)
 		if indexErr != nil {
 			return fmt.Errorf("failed to index video: %w", indexErr)
 		}
-
-		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:index", indexUsage)
 
 		segments = parseSegments(indexOutput)
 
@@ -725,13 +723,13 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 
 		apiCalls++
 		triagedSegments, triageUsage, triageErr := w.triageSegments(ctx, upload, segments, maxSegs, p.WorkoutType)
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:triage", triageUsage)
 		if triageErr != nil {
 			w.logger.Warn("Segment triage failed, using first N segments",
 				zap.Error(triageErr),
 				zap.Int("fallback_count", maxSegs))
 			segments = segments[:maxSegs]
 		} else {
-			w.saveTokenUsage(p.SessionID, p.ProfileID, "video:triage", triageUsage)
 			segments = triagedSegments
 		}
 
@@ -777,6 +775,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
 			ctx, upload.FileURI, upload.MIMEType, start, end, segPrompt,
 		)
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", segUsage)
 		if err != nil {
 			w.logger.Error("Segment analysis failed, skipping",
 				zap.Int("segment", i+1),
@@ -785,7 +784,6 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			continue
 		}
 
-		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", segUsage)
 		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(segAnalysis, highlightSource{
 			Index:           i,
 			Start:           start.Seconds(),
@@ -1197,7 +1195,7 @@ func (w *Worker) triageSegments(ctx context.Context, upload *gemini.UploadResult
 
 	triageOutput, triageUsage, err := w.GeminiClient.IndexVideo(ctx, upload.FileURI, upload.MIMEType, triagePrompt)
 	if err != nil {
-		return nil, nil, fmt.Errorf("triage model call failed: %w", err)
+		return nil, triageUsage, fmt.Errorf("triage model call failed: %w", err)
 	}
 
 	selected := parseTriagedSegments(triageOutput, segments, maxSegs)

@@ -157,6 +157,8 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 		WorkoutAtSource:        resultAttr.WorkoutAtSource,
 		ArchivedAt:             resultAttr.ArchivedAt,
 	}
+	result.AnalysisSummary = resultAttr.AnalysisSummary
+	result.AgenticHighlightAnalysis = resultAttr.AgenticHighlightAnalysis
 	if result.AnalysisType == "" {
 		result.AnalysisType = db.AnalysisTypeWOD
 	}
@@ -403,6 +405,7 @@ func CreateStretchAlias(dbConn *gorm.DB, aliasAttr *db.StretchAlias) db.StretchA
 
 func CreateTokenUsage(dbConn *gorm.DB, usageAttr *db.TokenUsage) db.TokenUsage {
 	u := db.TokenUsage{
+		UsageMetadata: usageAttr.UsageMetadata, RequestKey: usageAttr.RequestKey, UserID: usageAttr.UserID,
 		SessionID:       usageAttr.SessionID,
 		ProfileID:       usageAttr.ProfileID,
 		TaskType:        usageAttr.TaskType,

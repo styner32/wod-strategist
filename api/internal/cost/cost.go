@@ -1,10 +1,12 @@
 package cost
 
 import (
+	"encoding/json"
 	"math"
 	"strings"
 
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 )
 
 const KRWPerUSD = 1380.0
@@ -61,6 +63,10 @@ func RoundKRW(krw float64) float64 {
 }
 
 func CalculateTokensCost(model string, promptTokens, candidateTokens int64) (float64, float64) {
+	// Lyria is priced per generation, not using the fallback text-token rate.
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "lyria-") {
+		return 0, 0
+	}
 	rate := GetModelRate(model)
 	promptUSD := (float64(promptTokens) / 1000000.0) * rate.PromptPerMillion
 	candidateUSD := (float64(candidateTokens) / 1000000.0) * rate.CandidatePerMillion
@@ -70,6 +76,11 @@ func CalculateTokensCost(model string, promptTokens, candidateTokens int64) (flo
 }
 
 type BreakdownItem struct {
+	UnpricedCalls   int64   `json:"unpriced_calls"`
+	ThinkingTokens  int64   `json:"thinking_tokens"`
+	ToolUseTokens   int64   `json:"tool_use_tokens"`
+	CachedTokens    int64   `json:"cached_tokens"`
+	UnmeasuredCalls int64   `json:"unmeasured_calls"`
 	Key             string  `json:"key"`
 	PromptTokens    int64   `json:"prompt_tokens"`
 	CandidateTokens int64   `json:"candidate_tokens"`
@@ -79,6 +90,11 @@ type BreakdownItem struct {
 }
 
 type SessionCostResponse struct {
+	UnpricedCalls   int64           `json:"unpriced_calls"`
+	ThinkingTokens  int64           `json:"thinking_tokens"`
+	ToolUseTokens   int64           `json:"tool_use_tokens"`
+	CachedTokens    int64           `json:"cached_tokens"`
+	UnmeasuredCalls int64           `json:"unmeasured_calls"`
 	SessionID       string          `json:"session_id"`
 	PromptTokens    int64           `json:"prompt_tokens"`
 	CandidateTokens int64           `json:"candidate_tokens"`
@@ -90,6 +106,11 @@ type SessionCostResponse struct {
 }
 
 type TotalCostResponse struct {
+	UnpricedCalls   int64   `json:"unpriced_calls"`
+	ThinkingTokens  int64   `json:"thinking_tokens"`
+	ToolUseTokens   int64   `json:"tool_use_tokens"`
+	CachedTokens    int64   `json:"cached_tokens"`
+	UnmeasuredCalls int64   `json:"unmeasured_calls"`
 	PromptTokens    int64   `json:"prompt_tokens"`
 	CandidateTokens int64   `json:"candidate_tokens"`
 	TotalTokens     int64   `json:"total_tokens"`
@@ -98,6 +119,11 @@ type TotalCostResponse struct {
 }
 
 type ModelTokenAggregate struct {
+	UnpricedCalls   int64  `json:"unpriced_calls"`
+	ThinkingTokens  int64  `json:"thinking_tokens"`
+	ToolUseTokens   int64  `json:"tool_use_tokens"`
+	CachedTokens    int64  `json:"cached_tokens"`
+	UnmeasuredCalls int64  `json:"unmeasured_calls"`
 	Model           string `json:"model"`
 	PromptTokens    int64  `json:"prompt_tokens"`
 	CandidateTokens int64  `json:"candidate_tokens"`
@@ -109,12 +135,14 @@ func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostR
 	var totalCandidate int64
 	var totalTokens int64
 	var totalUSD float64
+	var thinking, tool, cached, unmeasured, unpriced int64
 
 	type keyStats struct {
-		promptTokens    int64
-		candidateTokens int64
-		totalTokens     int64
-		costUSD         float64
+		thinking, tool, cached, unmeasured, unpriced int64
+		promptTokens                                 int64
+		candidateTokens                              int64
+		totalTokens                                  int64
+		costUSD                                      float64
 	}
 
 	byTask := make(map[string]*keyStats)
@@ -128,7 +156,17 @@ func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostR
 		p := int64(u.PromptTokens)
 		c := int64(u.CandidateTokens)
 		tot := int64(u.TotalTokens)
-		usd, _ := CalculateTokensCost(u.Model, p, c)
+		t, v, cache, missing := UsageExtras(u)
+		unknownPrice := int64(0)
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(u.Model)), "lyria-") {
+			unknownPrice = 1
+		}
+		unpriced += unknownPrice
+		thinking += t
+		tool += v
+		cached += cache
+		unmeasured += missing
+		usd, _ := CalculateTokensCost(u.Model, p+v, c+t)
 
 		totalPrompt += p
 		totalCandidate += c
@@ -145,6 +183,11 @@ func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostR
 		ts.candidateTokens += c
 		ts.totalTokens += tot
 		ts.costUSD += usd
+		ts.thinking += t
+		ts.tool += v
+		ts.cached += cache
+		ts.unmeasured += missing
+		ts.unpriced += unknownPrice
 
 		// Model breakdown
 		normModel := strings.ToLower(strings.TrimSpace(u.Model))
@@ -160,6 +203,11 @@ func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostR
 		ms.candidateTokens += c
 		ms.totalTokens += tot
 		ms.costUSD += usd
+		ms.thinking += t
+		ms.tool += v
+		ms.cached += cache
+		ms.unmeasured += missing
+		ms.unpriced += unknownPrice
 	}
 
 	taskItems := make([]BreakdownItem, 0, len(taskKeys))
@@ -167,7 +215,7 @@ func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostR
 		s := byTask[k]
 		costUSD := RoundUSD(s.costUSD)
 		costKRW := RoundKRW(costUSD * KRWPerUSD)
-		taskItems = append(taskItems, BreakdownItem{
+		taskItems = append(taskItems, BreakdownItem{ThinkingTokens: s.thinking, ToolUseTokens: s.tool, CachedTokens: s.cached, UnmeasuredCalls: s.unmeasured, UnpricedCalls: s.unpriced,
 			Key:             k,
 			PromptTokens:    s.promptTokens,
 			CandidateTokens: s.candidateTokens,
@@ -182,7 +230,7 @@ func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostR
 		s := byModel[k]
 		costUSD := RoundUSD(s.costUSD)
 		costKRW := RoundKRW(costUSD * KRWPerUSD)
-		modelItems = append(modelItems, BreakdownItem{
+		modelItems = append(modelItems, BreakdownItem{ThinkingTokens: s.thinking, ToolUseTokens: s.tool, CachedTokens: s.cached, UnmeasuredCalls: s.unmeasured, UnpricedCalls: s.unpriced,
 			Key:             k,
 			PromptTokens:    s.promptTokens,
 			CandidateTokens: s.candidateTokens,
@@ -195,7 +243,7 @@ func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostR
 	costUSD := RoundUSD(totalUSD)
 	costKRW := RoundKRW(costUSD * KRWPerUSD)
 
-	return SessionCostResponse{
+	return SessionCostResponse{ThinkingTokens: thinking, ToolUseTokens: tool, CachedTokens: cached, UnmeasuredCalls: unmeasured, UnpricedCalls: unpriced,
 		SessionID:       sessionID,
 		PromptTokens:    totalPrompt,
 		CandidateTokens: totalCandidate,
@@ -212,12 +260,23 @@ func CalculateTotalCost(usages []db.TokenUsage) TotalCostResponse {
 	var totalCandidate int64
 	var totalTokens int64
 	var totalUSD float64
+	var thinking, tool, cached, unmeasured, unpriced int64
 
 	for _, u := range usages {
 		p := int64(u.PromptTokens)
 		c := int64(u.CandidateTokens)
 		tot := int64(u.TotalTokens)
-		usd, _ := CalculateTokensCost(u.Model, p, c)
+		t, v, cache, missing := UsageExtras(u)
+		unknownPrice := int64(0)
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(u.Model)), "lyria-") {
+			unknownPrice = 1
+		}
+		unpriced += unknownPrice
+		thinking += t
+		tool += v
+		cached += cache
+		unmeasured += missing
+		usd, _ := CalculateTokensCost(u.Model, p+v, c+t)
 
 		totalPrompt += p
 		totalCandidate += c
@@ -228,7 +287,7 @@ func CalculateTotalCost(usages []db.TokenUsage) TotalCostResponse {
 	costUSD := RoundUSD(totalUSD)
 	costKRW := RoundKRW(costUSD * KRWPerUSD)
 
-	return TotalCostResponse{
+	return TotalCostResponse{ThinkingTokens: thinking, ToolUseTokens: tool, CachedTokens: cached, UnmeasuredCalls: unmeasured, UnpricedCalls: unpriced,
 		PromptTokens:    totalPrompt,
 		CandidateTokens: totalCandidate,
 		TotalTokens:     totalTokens,
@@ -242,9 +301,15 @@ func CalculateTotalCostFromAggregates(aggregates []ModelTokenAggregate) TotalCos
 	var totalCandidate int64
 	var totalTokens int64
 	var totalUSD float64
+	var thinking, tool, cached, unmeasured, unpriced int64
 
 	for _, a := range aggregates {
-		usd, _ := CalculateTokensCost(a.Model, a.PromptTokens, a.CandidateTokens)
+		thinking += a.ThinkingTokens
+		tool += a.ToolUseTokens
+		cached += a.CachedTokens
+		unmeasured += a.UnmeasuredCalls
+		unpriced += a.UnpricedCalls
+		usd, _ := CalculateTokensCost(a.Model, a.PromptTokens+a.ToolUseTokens, a.CandidateTokens+a.ThinkingTokens)
 		totalPrompt += a.PromptTokens
 		totalCandidate += a.CandidateTokens
 		totalTokens += a.TotalTokens
@@ -254,11 +319,37 @@ func CalculateTotalCostFromAggregates(aggregates []ModelTokenAggregate) TotalCos
 	costUSD := RoundUSD(totalUSD)
 	costKRW := RoundKRW(costUSD * KRWPerUSD)
 
-	return TotalCostResponse{
+	return TotalCostResponse{ThinkingTokens: thinking, ToolUseTokens: tool, CachedTokens: cached, UnmeasuredCalls: unmeasured, UnpricedCalls: unpriced,
 		PromptTokens:    totalPrompt,
 		CandidateTokens: totalCandidate,
 		TotalTokens:     totalTokens,
 		CostUSD:         costUSD,
 		CostKRW:         costKRW,
 	}
+}
+
+// UsageExtras returns measured subtotals. Cached tokens are a subset of prompt
+// tokens and must never be added a second time. Missing fields remain nullable
+// in the ledger; unmeasured calls flag that these sums are incomplete.
+func UsageExtras(u db.TokenUsage) (thinking, tool, cached, unmeasured int64) {
+	if len(u.UsageMetadata) == 0 {
+		return
+	} // legacy row, no finer metadata retained
+	var d gemini.ComparisonUsage
+	if json.Unmarshal(u.UsageMetadata, &d) != nil {
+		return 0, 0, 0, 1
+	}
+	if d.Thinking != nil {
+		thinking = *d.Thinking
+	}
+	if d.ToolUse != nil {
+		tool = *d.ToolUse
+	}
+	if d.Cached != nil {
+		cached = *d.Cached
+	}
+	if d.Input == nil || d.Output == nil || d.Total == nil {
+		unmeasured = 1
+	}
+	return
 }

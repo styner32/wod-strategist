@@ -16,6 +16,7 @@ import (
 	gcs "cloud.google.com/go/storage"
 
 	"github.com/hibiken/asynq"
+	"github.com/wod-strategist/api/internal/cost"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"go.uber.org/zap"
@@ -159,7 +160,7 @@ type GeminiClient interface {
 	DeleteFile(ctx context.Context, name string) error
 	FileExists(ctx context.Context, name string) (bool, error)
 	FileVideoDuration(ctx context.Context, name string) (time.Duration, bool, error)
-	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error
+	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) (*gemini.TokenUsage, error)
 
 	// Two-pass analysis: upload → index (Flash) → per-segment analysis (Pro)
 	UploadVideo(ctx context.Context, filePath string) (*gemini.UploadResult, error)
@@ -229,23 +230,12 @@ func NewWorker(db *gorm.DB, storageClient StorageClient, bucketName string, gemi
 // saveTokenUsage persists a Gemini API token usage record to the DB.
 // Silently logs errors — token tracking should never block the main workflow.
 func (w *Worker) saveTokenUsage(sessionID string, profileID uint, taskType string, usage *gemini.TokenUsage) {
-	if usage == nil || w.DB == nil {
-		return
-	}
-	record := &db.TokenUsage{
-		SessionID:       sessionID,
-		TaskType:        taskType,
-		Model:           usage.Model,
-		PromptTokens:    usage.PromptTokens,
-		CandidateTokens: usage.CandidateTokens,
-		TotalTokens:     usage.TotalTokens,
-	}
-	record.ProfileID = profileID
-	if err := w.DB.Create(record).Error; err != nil {
-		w.logger.Error("Failed to save token usage",
-			zap.String("session_id", sessionID),
-			zap.String("task_type", taskType),
-			zap.Error(err))
+	w.saveTokenUsageForRequest(sessionID, profileID, taskType, "", usage)
+}
+
+func (w *Worker) saveTokenUsageForRequest(sessionID string, profileID uint, taskType, requestKey string, usage *gemini.TokenUsage) {
+	if err := cost.RecordUsage(w.DB, sessionID, profileID, 0, taskType, requestKey, usage); err != nil {
+		w.logger.Error("Failed to save token usage", zap.String("session_id", sessionID), zap.String("task_type", taskType), zap.Error(err))
 	}
 }
 

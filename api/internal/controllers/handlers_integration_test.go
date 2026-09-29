@@ -666,6 +666,26 @@ var _ = Describe("Controller handlers", func() {
 			Expect(results[0]["available_videos"]).To(ContainElement("merged"))
 		})
 
+		It("omits empty analysis summary fields so clients keep the legacy overview", func() {
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: "summary-empty", Status: "COMPLETED", Output: `{"overall_summary":"legacy"}`, ProfileID: profileID})
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: "summary-failed", Status: "COMPLETED", Output: "ok", ProfileID: profileID, AnalysisSummary: db.JSONDocument(`{"status":"failed","last_success":{"overview":"kept"}}`)})
+
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=%d", profileID), nil)
+			authorizeRequest(req)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+			var results []map[string]any
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			summaries := map[string]any{}
+			for _, r := range results {
+				summaries[r["session_id"].(string)] = r["analysis_summary"]
+			}
+			Expect(summaries["summary-empty"]).To(Equal(map[string]any{}))
+			Expect(summaries["summary-failed"]).To(Equal(map[string]any{"status": "failed", "result": map[string]any{"overview": "kept"}}))
+		})
+
 		It("returns recent history and enforces the limit", func() {
 			// Seed one result so we get a non-empty response.
 			Expect(dbConn.Create(&db.AnalysisResult{
