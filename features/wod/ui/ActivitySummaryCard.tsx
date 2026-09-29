@@ -8,16 +8,16 @@ export function ActivitySummaryContent({ summary, compact = false }: { summary: 
   useLocale();
   const [showGaps, setShowGaps] = useState(false);
   if (!summary?.available) return null;
-  return <View style={{ padding: 12, borderRadius: 10, backgroundColor: "#172435", gap: 5 }}>
-    <Text style={{ color: "#fff", fontWeight: "600" }}>{t("activity.title")}</Text>
-    <Text style={{ color: "#b9d8ff" }}>{t(`activity.state.${summary.review_state}`)}</Text>
-    {(compact ? summary.movements.slice(-3) : summary.movements).map(item => <Text key={`${item.movement}/${item.unit}`} style={{ color: "#fff" }}>
+  return <View style={{ padding: compact ? 8 : 12, borderRadius: 8, backgroundColor: "#172435", gap: compact ? 3 : 5 }}>
+    <Text style={{ color: "#fff", fontWeight: "600", fontSize: compact ? 12 : 14 }}>{t("activity.title")}</Text>
+    <Text style={{ color: "#b9d8ff", fontSize: compact ? 11 : 13 }}>{t(`activity.state.${summary.review_state}`)}</Text>
+    {(compact ? summary.movements.slice(-3) : summary.movements).map(item => <Text key={`${item.movement}/${item.unit}`} style={{ color: "#fff", fontSize: compact ? 12 : 14 }}>
       {item.movement}: {item.unit === "reps" ? t("activity.reps", { count: item.count }) : t("activity.seconds", { count: Math.round(item.seconds * 10) / 10 })}
     </Text>)}
-    {summary.movements.length === 0 && <Text style={{ color: "#b9d8ff" }}>{t("activity.noEvidence")}</Text>}
-    {compact && summary.movements.length > 3 && <Text style={{ color: "#b9d8ff" }}>{t("activity.more", { count: summary.movements.length - 3 })}</Text>}
+    {summary.movements.length === 0 && <Text style={{ color: "#b9d8ff", fontSize: compact ? 11 : 13 }}>{t("activity.noEvidence")}</Text>}
+    {compact && summary.movements.length > 3 && <Text style={{ color: "#b9d8ff", fontSize: 11 }}>{t("activity.more", { count: summary.movements.length - 3 })}</Text>}
     {summary.unassessed.length > 0 && <TouchableOpacity disabled={compact} onPress={() => setShowGaps(value => !value)} accessibilityRole="button">
-      <Text style={{ color: "#ffd28a" }}>{t("activity.gaps", { count: summary.unassessed.length })}</Text>
+      <Text style={{ color: "#ffd28a", fontSize: compact ? 11 : 13 }}>{t("activity.gaps", { count: summary.unassessed.length })}</Text>
     </TouchableOpacity>}
     {!compact && showGaps && summary.unassessed.map((gap, index) => <Text key={index} style={{ color: "#ffd28a", fontSize: 12 }}>
       {t(gap.clock === "media" ? "activity.mediaTime" : gap.clock === "chunk" ? "activity.chunkTime" : "activity.captureTime")}: {gap.start_secs == null || gap.end_secs == null ? t("activity.unknownTime") : `${gap.start_secs.toFixed(1)}–${gap.end_secs.toFixed(1)}s`}

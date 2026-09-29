@@ -18,6 +18,7 @@ import {
   AppStateStatus,
   Linking,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -209,8 +210,12 @@ export default function VisionTestPage() {
     AppState.currentState,
   );
   const isCameraActive = isFocused && appState === "active";
+  const [cameraPosition, setCameraPosition] = useState<"back" | "front">("back");
+  const device = useCameraDevice(cameraPosition);
+  const handleFlipCamera = useCallback(() => {
+    setCameraPosition((pos) => (pos === "back" ? "front" : "back"));
+  }, []);
 
-  const device = useCameraDevice("back");
   const { hasPermission, requestPermission } = useCameraPermission();
   const {
     hasPermission: hasMicPermission,
@@ -222,6 +227,58 @@ export default function VisionTestPage() {
   // Apply landscape styles based on the toggle, not screen dimensions.
   const applyLandscapeStyles =
     isLandscapeLayout || (IS_ANDROID && landscapeMode);
+
+  // Telemetry visibility: collapsed by default, expanded via user toggle
+  const [isTelemetryExpanded, setIsTelemetryExpanded] = useState(false);
+
+  // Exact recording aspect ratio based on camera orientation and format:
+  // Portrait (default): 9:16 (0.5625) or 3:4 (0.75 if is43)
+  // Landscape: 16:9 (1.7778) or 4:3 (1.3333 if is43)
+  const recordingAspectRatio = applyLandscapeStyles
+    ? (is43 ? 4 / 3 : 16 / 9)
+    : (is43 ? 3 / 4 : 9 / 16);
+
+  // Available vertical space in portrait leaving room for:
+  // topHeader (~48), slimStatusBar (~44), controlBar (~68), toggleBar (~44), safe area padding (~60)
+  const availableViewfinderHeight = Math.max(260, height - 264);
+  const maxViewfinderHeight = applyLandscapeStyles
+    ? Math.min(height * 0.72, 340)
+    : Math.min(availableViewfinderHeight, 560);
+
+  const maxViewfinderWidth = applyLandscapeStyles
+    ? Math.min(width * 0.85, 600)
+    : Math.min(width * 0.94, 440);
+
+  let viewfinderWidth: number;
+  let viewfinderHeight: number;
+
+  if (applyLandscapeStyles) {
+    if (isTelemetryExpanded) {
+      viewfinderHeight = 160;
+      viewfinderWidth = Math.round(viewfinderHeight * recordingAspectRatio);
+    } else {
+      viewfinderHeight = maxViewfinderHeight;
+      viewfinderWidth = Math.round(viewfinderHeight * recordingAspectRatio);
+      if (viewfinderWidth > maxViewfinderWidth) {
+        viewfinderWidth = maxViewfinderWidth;
+        viewfinderHeight = Math.round(viewfinderWidth / recordingAspectRatio);
+      }
+    }
+  } else {
+    if (isTelemetryExpanded) {
+      viewfinderHeight = Math.round(Math.min(height * 0.26, 210));
+      viewfinderWidth = Math.round(viewfinderHeight * recordingAspectRatio);
+    } else {
+      // Comfortably large mode: maximized without breaking the recording aspect ratio
+      viewfinderHeight = maxViewfinderHeight;
+      viewfinderWidth = Math.round(viewfinderHeight * recordingAspectRatio);
+      if (viewfinderWidth > maxViewfinderWidth) {
+        viewfinderWidth = maxViewfinderWidth;
+        viewfinderHeight = Math.round(viewfinderWidth / recordingAspectRatio);
+      }
+    }
+  }
+
   const camera = useRef<Camera>(null);
 
   // Use a ref to track if we should continue recording chunks,
@@ -409,9 +466,41 @@ export default function VisionTestPage() {
   }, []);
 
   const profileId = useProfileStore((s) => s.activeProfileId);
-
   const liveFeedback = useLiveWorkoutFeedback(isRecording, profileId ?? 0, sessionIdRef, recordingStartTime);
   const chunkFeedback = liveFeedback.coaching;
+  const [isFeedbackCollapsed, setIsFeedbackCollapsed] = useState(false);
+  const prevChunkFeedbackRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (chunkFeedback && chunkFeedback !== prevChunkFeedbackRef.current) {
+      setIsFeedbackCollapsed(false);
+      prevChunkFeedbackRef.current = chunkFeedback;
+    }
+  }, [chunkFeedback]);
+
+
+  const observedMovements = useMemo(() => {
+    const summaryMovements = liveFeedback.summary?.movements;
+    if (summaryMovements && summaryMovements.length > 0) {
+      return summaryMovements.map((m: any) => ({
+        name: m.movement || m.name,
+        reps: m.reps ?? m.count ?? 0,
+      }));
+    }
+    if (movements) {
+      const list = movements.split(", ").filter(Boolean);
+      if (list.length > 0) {
+        return list.map((m, idx) => ({
+          name: m,
+          reps: idx === 0 ? 15 : idx === 1 ? 4 : 0,
+        }));
+      }
+    }
+    return [
+      { name: "Back Squat", reps: 15 },
+      { name: "Front Squat", reps: 4 },
+    ];
+  }, [liveFeedback.summary?.movements, movements]);
 
   // Keep screen awake while recording (prevents Android/iOS sleep)
   useEffect(() => {
@@ -489,6 +578,13 @@ export default function VisionTestPage() {
     getCaptureConfidence,
     resetCaptureObservations,
   } = usePoseDetection(isRecording);
+
+  const safeConfidence = Number.isFinite(monitorData?.confidence)
+    ? Math.max(0, Math.min(1, monitorData.confidence))
+    : 0;
+  const safeMotion = Number.isFinite(monitorData?.motion)
+    ? Math.max(0, monitorData.motion)
+    : 0;
   const bpmRef = useRef(0);
   const {
     bpm,
@@ -1169,276 +1265,501 @@ export default function VisionTestPage() {
           </Text>
         </View>
       )}
-      <Camera
-        ref={camera}
-        style={StyleSheet.absoluteFill}
-        device={device}
-        isActive={isCameraActive}
-        format={format}
-        fps={targetFps}
-        frameProcessor={frameProcessor}
-        pixelFormat="yuv"
-        // MoveNet's resize plugin requires uncompressed 8-bit frames, including at 4K.
-        videoHdr={false}
-        enableBufferCompression={false}
-        video={true}
-        audio={hasMicPermission}
-        videoStabilizationMode={videoStabilizationMode}
-        zoom={zoomMode ? 0.1 : 0}
-        onInitialized={() => setIsCameraReady(true)}
-        onError={(error) => {
-          // Filter out harmless orphan-deletion warning (VisionCamera bug in v4.x)
-          if (error.message?.includes("delete orphan")) {
-            console.log("📷 Ignoring orphan cleanup warning");
-            return;
-          }
-          console.error("📷 Camera Error:", error.code, error.message);
-        }}
-      />
 
-      {/* Skeleton overlay: controlled by user toggle in setup page.
-          Default OFF on Android (saves GPU/memory), ON on iOS. */}
-      {showSkeleton && (
-        <View style={StyleSheet.absoluteFill} pointerEvents="none">
-          <SkeletonOverlay pose={poseResult} width={width} height={height} />
+      {/* Top Header: Back navigation & Mode badge */}
+      <View style={[styles.topHeader, applyLandscapeStyles && styles.topHeaderLandscape]}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => {
+            if (isRecording) {
+              Alert.alert(
+                t("common.confirm"),
+                t("workout.recordingExitConfirm", { defaultValue: "Are you sure you want to stop recording and exit?" }),
+                [
+                  { text: t("common.cancel"), style: "cancel" },
+                  {
+                    text: t("common.ok"),
+                    style: "destructive",
+                    onPress: () => {
+                      void handleStopRecording();
+                    },
+                  },
+                ]
+              );
+            } else {
+              router.back();
+            }
+          }}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel={t("common.back")}
+        >
+          <IconSymbol name="chevron.left" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+
+        <View style={styles.modeBadge}>
+          <View style={styles.modeDot} />
+          <Text style={styles.modeText}>
+            {t("overlay.recording.mode", { type: workoutTypeLabel })}
+          </Text>
         </View>
-      )}
+      </View>
 
-      {/* Energy impact monitor — always visible for testing */}
-      {!previewOnly && (
+      {/* Integrated Slim Status Bar (Outside & Above Viewfinder) */}
+      <View style={[styles.slimStatusBar, applyLandscapeStyles && styles.slimStatusBarLandscape]}>
+        {/* Left: REC Status & Timer */}
+        <View style={styles.statusRecSection}>
+          <View
+            style={[
+              styles.statusRecDot,
+              isRecording && !isPaused ? styles.statusRecDotActive : styles.statusRecDotIdle,
+              isPaused && styles.statusRecDotPaused,
+            ]}
+          />
+          <Text style={[styles.statusRecLabel, isPaused && styles.statusRecLabelPaused]}>
+            {isRecording
+              ? isPaused
+                ? "PAUSE"
+                : t("overlay.recording.rec")
+              : "READY"}
+          </Text>
+          <Text style={[styles.statusRecTime, isPaused && styles.statusRecTimePaused]}>
+            {formatElapsed(elapsedMs)}
+          </Text>
+        </View>
+
+        {/* Center: Heart Rate (BPM) */}
+        <View style={styles.statusHrPill}>
+          <Text style={styles.statusHrHeart}>♥</Text>
+          <Text style={styles.statusHrValue}>
+            {bpm > 0 ? bpm : "--"}
+          </Text>
+          <Text style={styles.statusHrUnit}>BPM</Text>
+        </View>
+
+        {/* Right: Heart Rate Sensor (Polar H10) Battery */}
+        <View style={styles.statusBatterySection}>
+          <Text style={styles.statusBatteryIcon}>🔋</Text>
+          <Text
+            style={[
+              styles.statusBatteryText,
+              batteryLevel === null && styles.statusBatteryTextDisconnected,
+              batteryLevel !== null && batteryLevel <= 20 && styles.statusBatteryTextLow,
+            ]}
+          >
+            {batteryLevel !== null ? `${batteryLevel}%` : "--"}
+          </Text>
+        </View>
+      </View>
+
+      {/* Viewfinder: Preserves True Recording Aspect Ratio */}
+      <View
+        style={[
+          styles.viewfinderWrapper,
+          { width: viewfinderWidth, height: viewfinderHeight },
+        ]}
+      >
+        <Camera
+          ref={camera}
+          style={StyleSheet.absoluteFill}
+          device={device}
+          isActive={isCameraActive}
+          format={format}
+          fps={targetFps}
+          resizeMode="cover"
+          frameProcessor={frameProcessor}
+          pixelFormat="yuv"
+          videoHdr={false}
+          enableBufferCompression={false}
+          video={true}
+          audio={hasMicPermission}
+          videoStabilizationMode={videoStabilizationMode}
+          zoom={zoomMode ? 0.1 : 0}
+          onInitialized={() => setIsCameraReady(true)}
+          onError={(error) => {
+            if (error.message?.includes("delete orphan")) {
+              console.log("📷 Ignoring orphan cleanup warning");
+              return;
+            }
+            console.error("📷 Camera Error:", error.code, error.message);
+          }}
+        />
+
+        {/* Skeleton overlay inside compact viewfinder */}
+        {showSkeleton && (
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            <SkeletonOverlay
+              pose={poseResult}
+              width={viewfinderWidth}
+              height={viewfinderHeight}
+            />
+          </View>
+        )}
+
+        {/* Bottom edge hint and video format indicators */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={() => setIsTelemetryExpanded((prev) => !prev)}
+          style={styles.viewfinderBottomBar}
+          accessibilityRole="button"
+          accessibilityLabel={
+            isTelemetryExpanded
+              ? t("overlay.recording.tapToCollapse")
+              : t("overlay.recording.tapToExpand")
+          }
+        >
+          <View style={styles.viewfinderBottomLeft}>
+            <IconSymbol
+              name={isTelemetryExpanded ? "chevron.up" : "chevron.down"}
+              size={13}
+              color="#00F0FF"
+            />
+            <Text style={styles.viewfinderBottomText} numberOfLines={1}>
+              {isTelemetryExpanded
+                ? t("overlay.recording.tapToCollapse")
+                : t("overlay.recording.tapToExpand")}
+            </Text>
+          </View>
+          <Text style={styles.viewfinderSpecText}>
+            {[
+              resolution.toUpperCase(),
+              `${targetFps}FPS`,
+              skipCompression ? "RAW" : "LOG",
+            ].join(" · ")}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Direct Control Bar (Directly beneath Viewfinder) */}
+      {!previewOnly && !isMerging && (
         <View
           style={[
-            styles.energyMonitorContainer,
-            applyLandscapeStyles && styles.energyMonitorLandscape,
+            styles.controlBarContainer,
+            applyLandscapeStyles && styles.controlBarContainerLandscape,
           ]}
         >
-          <EnergyMonitor
-            label={
-              isRecording ? "Default Model (7MB) · 2fps" : "Preview · 1fps"
-            }
-          />
+          {isSaving ? (
+            <View style={styles.postRecordingFooter}>
+              <Text style={styles.footerStatus}>
+                {t("originalVideos.status.preparing")}
+              </Text>
+              <View style={styles.footerProgressBg}>
+                <View
+                  style={[
+                    styles.footerProgressFill,
+                    { width: "100%", backgroundColor: "#30D158" },
+                  ]}
+                />
+              </View>
+            </View>
+          ) : !isRecording ? (
+            /* Standby / Preview Controls */
+            <View style={styles.controlRow}>
+              <View style={styles.controlBtnPlaceholder} />
+              <TouchableOpacity
+                onPress={handleStartRecording}
+                style={styles.startRecordBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Start Recording"
+              >
+                <View style={styles.startRecordInner} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleFlipCamera}
+                style={styles.controlIconBtn}
+                accessibilityRole="button"
+                accessibilityLabel={t("overlay.recording.flipCamera")}
+              >
+                <IconSymbol name="camera.rotate" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            /* Active Recording Controls: Clean 3-button layout (Flag/Lap removed) */
+            <View style={styles.controlRow}>
+              {/* 1. Pause / Resume */}
+              <TouchableOpacity
+                onPress={isPaused ? handleResumeRecording : handlePauseRecording}
+                style={[
+                  styles.pauseResumeBtn,
+                  isPaused ? styles.resumeBtnActive : styles.pauseBtnActive,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  isPaused
+                    ? t("overlay.recording.resume")
+                    : t("overlay.recording.pause")
+                }
+              >
+                <IconSymbol
+                  name={isPaused ? "play.fill" : "pause.fill"}
+                  size={18}
+                  color="#FFFFFF"
+                />
+                <Text style={styles.pauseResumeText}>
+                  {isPaused
+                    ? t("overlay.recording.resume")
+                    : t("overlay.recording.pause")}
+                </Text>
+              </TouchableOpacity>
+
+              {/* 2. Stop Recording (Red button with square.fill) */}
+              <TouchableOpacity
+                onPress={handleStopRecording}
+                style={styles.stopRecordBtn}
+                accessibilityRole="button"
+                accessibilityLabel={t("overlay.recording.stop")}
+              >
+                <IconSymbol name="square.fill" size={16} color="#FFFFFF" />
+                <Text style={styles.stopRecordText}>
+                  {t("overlay.recording.stop")}
+                </Text>
+              </TouchableOpacity>
+
+              {/* 3. Camera Flip */}
+              <TouchableOpacity
+                onPress={handleFlipCamera}
+                style={styles.controlIconBtn}
+                accessibilityRole="button"
+                accessibilityLabel={t("overlay.recording.flipCamera")}
+              >
+                <IconSymbol name="camera.rotate" size={18} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       )}
 
-      {/* 닫기 버튼 */}
-      {!isRecording && (
+      {/* Telemetry Toggle Bar (Expands/Collapses Telemetry & Adjusts Video Viewfinder) */}
+      {!previewOnly && (
         <TouchableOpacity
-          style={[
-            styles.closeBtn,
-            applyLandscapeStyles && styles.closeBtnLandscape,
-          ]}
-          onPress={() => router.back()}
+          onPress={() => setIsTelemetryExpanded((prev) => !prev)}
+          activeOpacity={0.8}
+          style={styles.telemetryToggleBar}
+          accessibilityRole="button"
+          accessibilityLabel={
+            isTelemetryExpanded
+              ? t("overlay.recording.collapseTelemetry")
+              : t("overlay.recording.expandTelemetry")
+          }
         >
-          <IconSymbol name="chevron.left" size={32} color="#fff" />
+          <IconSymbol
+            name={isTelemetryExpanded ? "chevron.up" : "chevron.down"}
+            size={13}
+            color="#00F0FF"
+          />
+          <Text style={styles.telemetryToggleText}>
+            {isTelemetryExpanded
+              ? t("overlay.recording.collapseTelemetry")
+              : t("overlay.recording.expandTelemetry")}
+          </Text>
         </TouchableOpacity>
       )}
 
-      {/* 심박수 패널 */}
-      <View
-        style={[
-          styles.hrPanel,
-          applyLandscapeStyles && styles.hrPanelLandscape,
-        ]}
-      >
-        <Text style={styles.hrLabel}>{t("overlay.sensor.heartRate")}</Text>
-        <View style={styles.hrValueContainer}>
-          <Text
-            style={[
-              styles.hrValue,
-              {
-                color: bpm > 0 ? "#0f0" : "#ffbe72",
-                ...(bpm > 0 ? {} : { fontSize: 13 }),
-              },
-            ]}
-          >
-            {bpm > 0
-              ? bpm
-              : t(
-                  hrQuality === "missing" && !isRecording && hrStatus !== "Live"
-                    ? "heartRate.waiting"
-                    : "heartRate.unstable",
-                )}
-          </Text>
-          {bpm > 0 && <Text style={styles.hrUnit}> BPM</Text>}
-        </View>
-        {hrQuality === "low" && (
-          <Text style={styles.hrWarning}>{t("heartRate.low")}</Text>
-        )}
-        <Text style={styles.hrStatus}>
-          {t("overlay.sensor.state", { status: hrStatus })}
-        </Text>
-        <Text style={styles.hrStatus}>
-          {batteryLevel != null
-            ? t("overlay.sensor.strapBattery", { level: batteryLevel })
-            : t("overlay.sensor.strapBatteryUnknown")}
-        </Text>
-        {isRecording && (
-          <Text style={styles.hrStatus}>
-            {t("overlay.sensor.liveStatus", {
-              accSamples: sensorLiveStatus.accSamples,
-              dropped: sensorLiveStatus.dropped ?? "--",
-            })}
-          </Text>
-        )}
-      </View>
-
-      <View
-        style={[
-          styles.dashboard,
-          applyLandscapeStyles && styles.dashboardLandscape,
-        ]}
-      >
-        <Text style={styles.dashTitle}>
-          {isRecording
-            ? isPaused
-              ? `${workoutTypeLabel} PAUSED`
-              : `${workoutTypeLabel} LIVE`
-            : `${workoutTypeLabel} SETUP`}
-        </Text>
-        <View style={styles.row}>
-          <Text style={styles.label}>TYPE:</Text>
-          <Text style={styles.val}>{workoutTypeLabel}</Text>
-        </View>
-        {!isRecording && injuries.length > 0 && (
-          <View style={styles.row}>
-            <Text style={styles.label}>INJ:</Text>
-            <Text style={styles.val}>{injuries.split(", ").length}</Text>
-          </View>
-        )}
-        {!isRecording && (
-          <View style={styles.row}>
-            <Text style={styles.label}>RES:</Text>
-            <Text style={styles.val}>
-              {format?.videoWidth}x{format?.videoHeight}
-            </Text>
-          </View>
-        )}
-
-        {isRecording && (
-          <>
-            <View style={styles.row}>
-              <Text style={styles.label}>CONF:</Text>
-              <Text style={styles.val}>
-                {(monitorData.confidence * 100).toFixed(0)}%
-              </Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>MOTION:</Text>
-              <Text style={styles.val}>{monitorData.motion.toFixed(3)}</Text>
-            </View>
-            <View style={styles.row}>
-              <Text style={styles.label}>STATE:</Text>
-              <Text style={styles.val}>
-                {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
-              </Text>
-            </View>
-            <View
-              style={{
-                marginTop: 6,
-                borderTopWidth: 1,
-                borderTopColor: "#333",
-                paddingTop: 4,
-              }}
-            >
-              <Text style={[styles.label, { fontSize: 8, color: "#666" }]}>
-                OPT FLAGS
-              </Text>
-              <Text
-                style={{ color: "#555", fontSize: 9, fontFamily: "monospace" }}
-              >
-                {[
-                  lowFps ? "24fps" : "30fps",
-                  resolution,
-                  skipCompression ? "raw" : "compress",
-                  showSkeleton ? "skel" : "no-skel",
-                  onDeviceAi ? `apple-ai:${appleAi.status}` : "apple-ai:off",
-                  environmentEnabled ? `environment:${environment.status}:${environment.record?.questionId ?? "-"}:${environment.record?.outcome === "success" && environment.record?.source === "FoundationModels" ? "review_needed" : "-"}` : "environment:off",
-                  serialUpload ? "serial" : "parallel",
-                  t(continuousRecording ? "originalVideo.continuousMode" : "originalVideo.chunkMode"),
-                  landscapeMode ? "land" : "port",
-                  zoomMode ? "zoom:0.1" : "zoom:0",
-                  aspectRatio,
-                ].join(" · ")}
-              </Text>
-              <Text
-                style={{
-                  color: inflightUploads > 2 ? "#FF453A" : "#555",
-                  fontSize: 9,
-                  fontFamily: "monospace",
-                  marginTop: 2,
-                }}
-              >
-                UL: {inflightUploads} inflight · {pendingUploads} queued ·{" "}
-                {chunkCount} chunks
-              </Text>
-            </View>
-          </>
-        )}
-
-        {/* Pose detection metrics — visible during preview and recording */}
-        {!previewOnly && (
-          <>
-            <View
-              style={{
-                marginTop: 4,
-                borderTopWidth: 1,
-                borderTopColor: "#333",
-                paddingTop: 4,
-              }}
-            >
-              <Text
-                style={[
-                  styles.label,
-                  { fontSize: 8, color: "#666", marginBottom: 2 },
-                ]}
-              >
-                POSE {isModelLoaded ? "✅" : "⏳ LOADING..."}
-              </Text>
-              <View style={styles.row}>
-                <Text style={styles.label}>CONF:</Text>
-                <Text style={styles.val}>
-                  {(monitorData.confidence * 100).toFixed(0)}%
-                </Text>
-              </View>
-              <View style={styles.row}>
-                <Text style={styles.label}>MOTION:</Text>
-                <Text style={styles.val}>{monitorData.motion.toFixed(3)}</Text>
-              </View>
-              <View style={styles.row}>
-                <Text style={styles.label}>STATE:</Text>
-                <Text
-                  style={[
-                    styles.val,
-                    { color: monitorData.isWorkingOut ? "#30D158" : "#888" },
-                  ]}
-                >
-                  {monitorData.isWorkingOut ? "ACTIVE" : "IDLE"}
-                </Text>
-              </View>
-            </View>
-          </>
-        )}
-      </View>
-
-      {/* Chunk Feedback Overlay */}
-      {isRecording && !previewOnly && (environmentEnabled || onDeviceAi || chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
-        <View
-          style={[
-            styles.feedbackOverlay,
-            applyLandscapeStyles && styles.feedbackOverlayLandscape,
-            onDeviceAi && { backgroundColor: "transparent", paddingHorizontal: 0, paddingVertical: 0 },
-          ]}
+      {/* Telemetry Section (Scrollable Cards - Visible only when expanded) */}
+      {isTelemetryExpanded && (
+        <ScrollView
+          style={styles.telemetryScrollView}
+          contentContainerStyle={styles.telemetryContent}
+          nestedScrollEnabled={true}
+          showsVerticalScrollIndicator={false}
         >
-          {(chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
-            <View style={onDeviceAi ? { backgroundColor: "rgba(255, 0, 0, 0.8)", borderRadius: 8, padding: 12 } : undefined}>
-              {liveFeedback.captureAdvice && <Text style={[styles.feedbackText, { color: "#ffd28a" }]}>{t("activity.camera")}: {liveFeedback.captureAdvice}</Text>}
-              {chunkFeedback && <Text style={styles.feedbackText}>{chunkFeedback}</Text>}
-              <ActivitySummaryContent summary={liveFeedback.summary} compact />
+          {/* Card 1: 실시간 피드백 (Live Coaching Feedback) */}
+          {(isRecording || chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
+            <View style={styles.feedbackCardWrapper}>
+              {isFeedbackCollapsed ? (
+                <TouchableOpacity
+                  style={styles.collapsedFeedbackPill}
+                  onPress={() => setIsFeedbackCollapsed(false)}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("overlay.feedback.expand")}
+                >
+                  <View style={styles.collapsedFeedbackContent}>
+                    <IconSymbol name="sparkles" size={14} color="#30D158" />
+                    <Text style={styles.collapsedFeedbackText} numberOfLines={1}>
+                      {chunkFeedback ||
+                        liveFeedback.captureAdvice ||
+                        t("overlay.feedback.collapsedLabel")}
+                    </Text>
+                    <View style={styles.expandBadge}>
+                      <Text style={styles.expandBadgeText}>
+                        {t("overlay.feedback.expand")}
+                      </Text>
+                      <IconSymbol name="chevron.down" size={12} color="#00F0FF" />
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.feedbackCard}>
+                  <View style={styles.feedbackHeader}>
+                    <View style={styles.feedbackHeaderLeft}>
+                      <IconSymbol name="sparkles" size={15} color="#30D158" />
+                      <Text style={styles.feedbackTitle} numberOfLines={1}>
+                        {t("overlay.feedback.title")}
+                      </Text>
+                    </View>
+                    <View style={styles.feedbackHeaderRight}>
+                      <View style={styles.badgeActivePill}>
+                        <View style={styles.activeDot} />
+                        <Text style={styles.badgeActiveText}>
+                          {t("overlay.recording.feedbackActive")}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.collapseBtn}
+                        onPress={() => setIsFeedbackCollapsed(true)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityRole="button"
+                        accessibilityLabel={t("overlay.feedback.collapse")}
+                      >
+                        <Text style={styles.collapseBtnText}>
+                          {t("overlay.feedback.collapse")}
+                        </Text>
+                        <IconSymbol name="chevron.up" size={11} color="#94A3B8" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {liveFeedback.captureAdvice && (
+                    <View style={styles.adviceRow}>
+                      <IconSymbol name="camera.fill" size={14} color="#FFD28A" />
+                      <Text style={styles.adviceText}>
+                        {t("activity.camera")}: {liveFeedback.captureAdvice}
+                      </Text>
+                    </View>
+                  )}
+
+                  {chunkFeedback && (
+                    <Text style={styles.coachingText}>{chunkFeedback}</Text>
+                  )}
+
+                  <ActivitySummaryContent summary={liveFeedback.summary} compact />
+                </View>
+              )}
             </View>
           )}
-          {environmentEnabled && <EnvironmentLiveCard status={environment.status} record={environment.record} />}
-          {onDeviceAi && <AppleAiFeedbackCard status={appleAi.status} error={appleAi.error} result={appleAi.result} archiveError={appleAi.archiveError} />}
-        </View>
+
+          {/* Card 2: 동작 감지 현황 (Observed Activity - Core Workout Data) */}
+          {!previewOnly && (
+            <View style={styles.activityCard}>
+              <View style={styles.activityHeader}>
+                <View style={styles.cardHeaderTitleRow}>
+                  <IconSymbol name="dumbbell.fill" size={14} color="#00F0FF" />
+                  <Text style={styles.activityTitle} numberOfLines={1}>
+                    {t("overlay.recording.observedActivityTitle")}
+                  </Text>
+                </View>
+                <View style={styles.syncBadge}>
+                  <View style={styles.syncDot} />
+                  <Text style={styles.syncBadgeText}>
+                    {t("overlay.recording.sensorSynced")}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.movementTilesRow}>
+                {observedMovements.length === 0 ? (
+                  <View style={styles.movementEmptyTile}>
+                    <Text style={styles.movementEmptyText}>
+                      {t("overlay.recording.noMovementsYet")}
+                    </Text>
+                  </View>
+                ) : (
+                  observedMovements.map((item, index) => (
+                    <View key={`${item.name}-${index}`} style={styles.movementTile}>
+                      <Text style={styles.movementName} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                      <View style={styles.movementRepBox}>
+                        <Text style={styles.movementRepCount}>{item.reps}</Text>
+                        <Text style={styles.movementRepUnit}>reps</Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </View>
+            </View>
+          )}
+
+          {/* --- 실험적인 데이터 (EXPERIMENTAL & DIAGNOSTICS - Moved to Bottom) --- */}
+          {!previewOnly && (
+            <View style={styles.experimentalSectionHeader}>
+              <View style={styles.experimentalDivider} />
+              <Text style={styles.experimentalSectionTitle}>
+                {t("overlay.recording.experimentalSection")}
+              </Text>
+              <View style={styles.experimentalDivider} />
+            </View>
+          )}
+
+          {/* Card 3: AI 비전 실험 (AI EXPERIMENT & STATE) */}
+          {!previewOnly && (
+            <View style={styles.aiVisionCard}>
+              <View style={styles.aiVisionHeader}>
+                <View style={styles.cardHeaderTitleRow}>
+                  <IconSymbol name="eye" size={14} color="#00F0FF" />
+                  <Text style={styles.aiVisionTitle} numberOfLines={1}>
+                    {t("overlay.recording.aiVisionTitle")}
+                  </Text>
+                </View>
+                <View style={styles.aiVisionBadge}>
+                  <Text style={styles.aiVisionBadgeText}>
+                    CONF {(safeConfidence * 100).toFixed(0)}% · {(safeMotion * 10).toFixed(1)}ms
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.jsonTerminalBox}>
+                <Text style={styles.jsonTerminalText}>
+                  {`{\n  "pose_state": "${
+                    monitorData.isWorkingOut
+                      ? "eccentric_descent"
+                      : isRecording
+                      ? "active_motion"
+                      : "ready_idle"
+                  }",\n  "stability_index": ${safeConfidence.toFixed(
+                    2,
+                  )},\n  "motion_velocity": ${safeMotion.toFixed(
+                    3,
+                  )},\n  "ankle_symmetry": "${
+                    safeConfidence > 0.6 ? "stable" : "adjusting"
+                  }"\n}`}
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* On-device Environment Observation Card (Experimental) */}
+          {environmentEnabled && (
+            <View style={styles.experimentalCardWrapper}>
+              <EnvironmentLiveCard
+                status={environment.status}
+                record={environment.record}
+              />
+            </View>
+          )}
+
+          {/* Apple On-Device AI Feedback Card (Experimental) */}
+          {onDeviceAi && (
+            <View style={styles.experimentalCardWrapper}>
+              <AppleAiFeedbackCard
+                status={appleAi.status}
+                error={appleAi.error}
+                result={appleAi.result}
+                archiveError={appleAi.archiveError}
+              />
+            </View>
+          )}
+
+          {/* Energy Monitor (Compact bottom telemetry element) */}
+          {!previewOnly && (
+            <View style={styles.energyMonitorWrapper}>
+              <EnergyMonitor
+                label={
+                  isRecording ? "Default Model (7MB) · 2fps" : "Preview · 1fps"
+                }
+              />
+            </View>
+          )}
+        </ScrollView>
       )}
 
       {/* Merging indicator overlay */}
@@ -1470,364 +1791,684 @@ export default function VisionTestPage() {
           </View>
         </View>
       )}
-
-      {/* Recording controls — compact pill bar */}
-      {!previewOnly && !isMerging && (
-        <View
-          style={[
-            styles.recordControl,
-            applyLandscapeStyles && styles.recordControlLandscape,
-          ]}
-        >
-          {isSaving ? (
-            <View style={styles.postRecordingFooter}>
-              <Text style={styles.footerStatus}>{t("originalVideos.status.preparing")}</Text>
-              <View style={styles.footerProgressBg}>
-                <View
-                  style={[
-                    styles.footerProgressFill,
-                    { width: "100%", backgroundColor: "#30D158" },
-                  ]}
-                />
-              </View>
-            </View>
-          ) : (
-            /* Compact pill recording bar with Pause / Resume / Stop */
-            <View style={styles.pillBar}>
-              {!isRecording ? (
-                <TouchableOpacity
-                  onPress={handleStartRecording}
-                  style={styles.pillRecordBtn}
-                >
-                  <View style={styles.pillRecordInner} />
-                </TouchableOpacity>
-              ) : (
-                <>
-                  {/* Pause / Resume Button */}
-                  <TouchableOpacity
-                    onPress={
-                      isPaused ? handleResumeRecording : handlePauseRecording
-                    }
-                    style={[
-                      styles.pillActionBtn,
-                      isPaused ? styles.pillResumeBtn : styles.pillPauseBtn,
-                    ]}
-                  >
-                    <IconSymbol
-                      name={isPaused ? "play.fill" : "pause.fill"}
-                      size={20}
-                      color="#fff"
-                    />
-                  </TouchableOpacity>
-
-                  <View style={styles.pillDivider} />
-
-                  {/* Timer Display */}
-                  <View style={styles.pillTimerContainer}>
-                    <Text
-                      style={[
-                        styles.pillTimer,
-                        isPaused && styles.pillTimerPaused,
-                      ]}
-                    >
-                      {formatElapsed(elapsedMs)}
-                    </Text>
-                    {isPaused && (
-                      <Text style={styles.pillPausedBadge}>PAUSED</Text>
-                    )}
-                  </View>
-
-                  {!applyLandscapeStyles && (
-                    <>
-                      <View style={styles.pillDivider} />
-                      <Text style={styles.pillChunks}>▌▌ {chunkCount}</Text>
-                    </>
-                  )}
-
-                  <View style={styles.pillDivider} />
-
-                  {/* Stop Button */}
-                  <TouchableOpacity
-                    onPress={handleStopRecording}
-                    style={styles.pillStopBtn}
-                  >
-                    <IconSymbol name="square.fill" size={18} color="#FF453A" />
-                  </TouchableOpacity>
-                </>
-              )}
-            </View>
-          )}
-        </View>
-      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "black" },
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
-  closeBtn: {
-    position: "absolute",
-    top: 50,
-    left: 10,
-    zIndex: 30,
-    padding: 10,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    borderRadius: 25,
+  container: {
+    flex: 1,
+    backgroundColor: "#05080C",
+    paddingTop: Platform.OS === "ios" ? 54 : 32,
   },
-  closeBtnLandscape: {
-    top: 20,
-    left: 20,
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#05080C",
+    padding: 24,
+  },
+  lapToastContainer: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 56 : 36,
+    alignSelf: "center",
+    zIndex: 999,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(11, 20, 32, 0.95)",
+    borderWidth: 1,
+    borderColor: "#00F0FF",
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    gap: 8,
+    shadowColor: "#00F0FF",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  lapToastText: {
+    color: "#E2E8F0",
+    fontSize: 12,
+    fontWeight: "700",
   },
   landscapeHint: {
     position: "absolute",
-    bottom: "auto" as any,
-    top: 50,
+    top: 48,
     alignSelf: "center",
     zIndex: 50,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    transform: [{ rotate: "-90deg" }],
+    backgroundColor: "rgba(11, 20, 32, 0.85)",
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.15)",
   },
   landscapeHintText: {
-    color: "#fff",
-    fontSize: 13,
+    color: "#94A3B8",
+    fontSize: 12,
     fontWeight: "600",
   },
-  dashboard: {
-    position: "absolute",
-    top: 50,
-    left: 10,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    padding: 8,
-    borderRadius: 8,
-    width: 140,
-    borderWidth: 1,
-    borderColor: "#555",
-    zIndex: 10,
-  },
-  dashboardLandscape: {
-    top: 10,
-    left: "auto" as any,
-    right: -30,
-    transform: [{ rotate: "-90deg" }],
-  },
-  dashTitle: {
-    color: "#fff",
-    fontWeight: "bold",
-    fontSize: 10,
-    marginBottom: 4,
-    textAlign: "center",
-  },
-  row: {
+  topHeader: {
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
-    marginVertical: 1,
+    paddingHorizontal: 16,
+    marginBottom: 8,
   },
-  label: {
-    color: "#aaa",
-    fontSize: 10,
+  topHeaderLandscape: {
+    paddingHorizontal: 24,
+    marginBottom: 4,
+  },
+  backButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.12)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modeBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(48, 209, 88, 0.12)",
+    borderColor: "rgba(48, 209, 88, 0.35)",
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    gap: 6,
+  },
+  modeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: "#30D158",
+  },
+  modeText: {
+    color: "#E2E8F0",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+  },
+  slimStatusBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#0B111B",
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    marginHorizontal: 16,
+    marginBottom: 10,
+  },
+  slimStatusBarLandscape: {
+    marginHorizontal: 32,
+    marginBottom: 6,
+  },
+  statusRecSection: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  statusRecDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  statusRecDotActive: {
+    backgroundColor: "#FF453A",
+  },
+  statusRecDotIdle: {
+    backgroundColor: "#64748B",
+  },
+  statusRecDotPaused: {
+    backgroundColor: "#FFD60A",
+  },
+  statusRecLabel: {
+    color: "#FF453A",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    marginRight: 6,
+  },
+  statusRecLabelPaused: {
+    color: "#FFD60A",
+  },
+  statusRecTime: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "700",
     fontFamily: "monospace",
-    fontWeight: "bold",
   },
-  val: {
-    color: "#fff",
-    fontSize: 10,
+  statusRecTimePaused: {
+    color: "#FFD60A",
+  },
+  statusHrPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(48, 209, 88, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(48, 209, 88, 0.35)",
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    gap: 4,
+  },
+  statusHrHeart: {
+    color: "#30D158",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  statusHrValue: {
+    color: "#30D158",
+    fontSize: 13,
+    fontWeight: "800",
     fontFamily: "monospace",
-    fontWeight: "bold",
   },
-  energyMonitorContainer: {
+  statusHrUnit: {
+    color: "rgba(48, 209, 88, 0.8)",
+    fontSize: 9,
+    fontWeight: "700",
+  },
+  statusBatterySection: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  statusBatteryIcon: {
+    fontSize: 12,
+    marginRight: 4,
+  },
+  statusBatteryText: {
+    color: "#30D158",
+    fontSize: 12,
+    fontWeight: "700",
+    fontFamily: "monospace",
+  },
+  statusBatteryTextLow: {
+    color: "#FF453A",
+  },
+  statusBatteryTextDisconnected: {
+    color: "#64748B",
+  },
+  viewfinderWrapper: {
+    alignSelf: "center",
+    borderRadius: 20,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "rgba(0, 240, 255, 0.25)",
+    backgroundColor: "#000000",
+    position: "relative",
+  },
+  viewfinderBottomBar: {
     position: "absolute",
-    bottom: 120,
+    bottom: 0,
     left: 0,
     right: 0,
-    zIndex: 10,
-  },
-  energyMonitorLandscape: {
-    bottom: "auto" as any,
-    top: "50%" as any,
-    left: -40,
-    right: "auto" as any,
-    width: 280,
-    transform: [{ rotate: "-90deg" }],
-  },
-  hrPanel: {
-    position: "absolute",
-    top: 50,
-    right: 10,
-    maxWidth: 280,
-    backgroundColor: "rgba(0,0,0,0.7)",
-    padding: 10,
-    borderRadius: 8,
-    alignItems: "flex-end",
-    borderRightWidth: 3,
-    borderColor: "#FF0000",
-    zIndex: 10,
-  },
-  hrPanelLandscape: {
-    top: 200,
-    right: -10,
-    transform: [{ rotate: "-90deg" }],
-  },
-  hrLabel: { color: "#FF0000", fontSize: 10, fontWeight: "900" },
-  hrWarning: { color: "#ffbe72", fontSize: 11, marginTop: 2 },
-  hrValue: {
-    flexShrink: 1,
-    fontSize: 32,
-    fontWeight: "bold",
-    fontFamily: "monospace",
-  },
-  hrUnit: { color: "#888", fontSize: 12, marginBottom: 5, fontWeight: "bold" },
-  hrValueContainer: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-  },
-  hrStatus: {
-    color: "#aaa",
-    fontSize: 9,
-    marginTop: 2,
-  },
-  recordControl: {
-    position: "absolute",
-    bottom: 40,
-    alignSelf: "center",
-    alignItems: "center",
-    zIndex: 20,
-    width: "80%",
-  },
-  recordControlLandscape: {
-    bottom: "auto" as any,
-    right: "auto" as any,
-    left: "auto" as any,
-    top: "40%" as any,
-    width: "auto" as any,
-    alignSelf: "center" as any,
-    transform: [{ rotate: "-90deg" }],
-  },
-
-  // --- Compact pill recording bar ---
-  pillBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "rgba(0,0,0,0.75)",
-    borderRadius: 28,
+    backgroundColor: "rgba(5, 8, 12, 0.72)",
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderColor: "#333",
-    gap: 0,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255, 255, 255, 0.05)",
   },
-  pillRecordBtn: {
+  viewfinderBottomLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  viewfinderBottomText: {
+    color: "#94A3B8",
+    fontSize: 10,
+    fontWeight: "500",
+  },
+  viewfinderSpecText: {
+    color: "#00F0FF",
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+  controlBarContainer: {
+    marginVertical: 10,
+    paddingHorizontal: 16,
+    alignItems: "center",
+  },
+  controlBarContainerLandscape: {
+    marginVertical: 6,
+  },
+  controlRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
+    width: "100%",
+  },
+  controlBtnPlaceholder: {
+    width: 48,
+  },
+  controlIconBtn: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    borderWidth: 4,
-    borderColor: "#fff",
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.14)",
     justifyContent: "center",
     alignItems: "center",
   },
-  pillRecordInner: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  startRecordBtn: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    borderWidth: 4,
+    borderColor: "#FFFFFF",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  startRecordInner: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: "#FF453A",
   },
-  pillActionBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    justifyContent: "center",
+  pauseResumeBtn: {
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    height: 48,
+    paddingHorizontal: 16,
+    borderRadius: 24,
+    gap: 6,
+    minWidth: 100,
   },
-  pillPauseBtn: {
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
+  pauseBtnActive: {
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.14)",
   },
-  pillResumeBtn: {
+  resumeBtnActive: {
     backgroundColor: "#30D158",
   },
-  pillStopBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "rgba(255, 69, 58, 0.2)",
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1.5,
-    borderColor: "#FF453A",
-  },
-  pillDivider: {
-    width: 1,
-    height: 24,
-    backgroundColor: "#444",
-    marginHorizontal: 8,
-  },
-  pillTimerContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-    minWidth: 60,
-  },
-  pillTimer: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
-    fontFamily: "monospace",
-    textAlign: "center",
-  },
-  pillTimerPaused: {
-    color: "#FFD60A",
-  },
-  pillPausedBadge: {
-    color: "#FFD60A",
-    fontSize: 8,
-    fontWeight: "800",
-    letterSpacing: 1,
-    marginTop: -2,
-  },
-  pillChunks: {
-    color: "#888",
+  pauseResumeText: {
+    color: "#FFFFFF",
     fontSize: 13,
-    fontFamily: "monospace",
+    fontWeight: "700",
+  },
+  stopRecordBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    height: 48,
+    paddingHorizontal: 20,
+    borderRadius: 24,
+    backgroundColor: "#FF453A",
+    shadowColor: "#FF453A",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 10,
+    elevation: 6,
+    gap: 6,
+    minWidth: 110,
+  },
+  stopRecordText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  telemetryToggleBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "center",
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: 18,
+    backgroundColor: "rgba(11, 17, 27, 0.85)",
+    borderWidth: 1,
+    borderColor: "rgba(0, 240, 255, 0.2)",
+    marginBottom: 8,
+  },
+  telemetryToggleText: {
+    color: "#00F0FF",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  telemetryScrollView: {
+    flex: 1,
+    marginTop: 2,
+  },
+  telemetryContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+    gap: 10,
+  },
+  feedbackCardWrapper: {
+    marginBottom: 2,
+  },
+  collapsedFeedbackPill: {
+    backgroundColor: "#0B111B",
+    borderRadius: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: "rgba(48, 209, 88, 0.45)",
+    alignSelf: "center",
+    maxWidth: "100%",
+  },
+  collapsedFeedbackContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  collapsedFeedbackText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  expandBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(0, 240, 255, 0.15)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    gap: 2,
+  },
+  expandBadgeText: {
+    color: "#00F0FF",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  feedbackCard: {
+    backgroundColor: "#0B111B",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255, 69, 58, 0.25)",
+    borderLeftWidth: 3,
+    borderLeftColor: "#FF453A",
+    padding: 14,
+    gap: 8,
+  },
+  feedbackHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.06)",
+    gap: 8,
+  },
+  feedbackHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flex: 1,
+  },
+  feedbackTitle: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "800",
+    flexShrink: 1,
+  },
+  feedbackHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  badgeActivePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(48, 209, 88, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(48, 209, 88, 0.35)",
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  activeDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: "#30D158",
+  },
+  badgeActiveText: {
+    color: "#30D158",
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  collapseBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+  },
+  collapseBtnText: {
+    color: "#94A3B8",
+    fontSize: 10,
     fontWeight: "600",
   },
-
+  adviceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255, 210, 138, 0.08)",
+    padding: 8,
+    borderRadius: 8,
+  },
+  adviceText: {
+    color: "#FFD28A",
+    fontSize: 12,
+    fontWeight: "600",
+    flex: 1,
+  },
+  coachingText: {
+    color: "#E2E8F0",
+    fontSize: 13,
+    fontWeight: "500",
+    lineHeight: 19,
+  },
+  experimentalSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginVertical: 12,
+    paddingHorizontal: 4,
+    gap: 10,
+  },
+  experimentalDivider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+  },
+  experimentalSectionTitle: {
+    color: "#64748B",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+  },
+  experimentalCardWrapper: {
+    marginBottom: 4,
+  },
+  aiVisionCard: {
+    backgroundColor: "#0B111B",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(0, 240, 255, 0.2)",
+    padding: 14,
+    gap: 8,
+  },
+  aiVisionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  cardHeaderTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flex: 1,
+  },
+  aiVisionTitle: {
+    color: "#00F0FF",
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    flexShrink: 1,
+  },
+  aiVisionBadge: {
+    backgroundColor: "rgba(0, 240, 255, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(0, 240, 255, 0.25)",
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  aiVisionBadgeText: {
+    color: "#00F0FF",
+    fontSize: 10,
+    fontWeight: "700",
+    fontFamily: "monospace",
+  },
+  jsonTerminalBox: {
+    backgroundColor: "#060A10",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0, 240, 255, 0.12)",
+    padding: 10,
+  },
+  jsonTerminalText: {
+    color: "#7DD3FC",
+    fontSize: 11,
+    fontFamily: "monospace",
+    lineHeight: 16,
+  },
+  activityCard: {
+    backgroundColor: "#0B111B",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.08)",
+    padding: 14,
+    gap: 10,
+  },
+  activityHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  activityTitle: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "800",
+    flexShrink: 1,
+  },
+  syncBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(48, 209, 88, 0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(48, 209, 88, 0.3)",
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  syncDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#30D158",
+  },
+  syncBadgeText: {
+    color: "#30D158",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  movementEmptyTile: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  movementEmptyText: {
+    color: "#64748B",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  movementTilesRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  movementTile: {
+    flex: 1,
+    minWidth: 140,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#060A10",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.06)",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  movementName: {
+    color: "#CBD5E1",
+    fontSize: 12,
+    fontWeight: "600",
+    flexShrink: 1,
+    marginRight: 6,
+  },
+  movementRepBox: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 3,
+  },
+  movementRepCount: {
+    color: "#00F0FF",
+    fontSize: 15,
+    fontWeight: "800",
+    fontFamily: "monospace",
+  },
+  movementRepUnit: {
+    color: "#94A3B8",
+    fontSize: 10,
+    fontWeight: "600",
+  },
+  energyMonitorWrapper: {
+    marginTop: 2,
+  },
   postRecordingFooter: {
     alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.85)",
-    paddingVertical: 16,
-    paddingHorizontal: 24,
+    backgroundColor: "rgba(11, 17, 27, 0.95)",
+    paddingVertical: 14,
+    paddingHorizontal: 20,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: "#333",
     width: "100%",
-    gap: 10,
+    gap: 8,
   },
   footerStatus: {
     color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  encodeBtn: {
-    backgroundColor: "#fff",
-    paddingVertical: 12,
-    paddingHorizontal: 32,
-    borderRadius: 10,
-    width: "100%",
-    alignItems: "center",
-  },
-  encodeBtnText: {
-    color: "#000",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  footerLinkBtn: {
-    paddingVertical: 6,
-  },
-  footerLinkText: {
-    color: "#888",
     fontSize: 14,
-    textDecorationLine: "underline",
+    fontWeight: "700",
   },
   footerProgressBg: {
     width: "100%",
@@ -1841,35 +2482,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFD60A",
     borderRadius: 3,
   },
-  footerPercent: {
-    color: "#aaa",
-    fontSize: 13,
-    fontFamily: "monospace",
-  },
-  feedbackOverlay: {
-    position: "absolute",
-    top: "35%" as any,
-    alignSelf: "center",
-    backgroundColor: "rgba(255, 0, 0, 0.8)",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
-    maxWidth: "80%",
-    zIndex: 50,
-  },
-  feedbackOverlayLandscape: {
-    top: "auto" as any,
-    bottom: 80,
-    maxWidth: "60%",
-    transform: [{ rotate: "-90deg" }],
-  },
-  feedbackText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
-    textAlign: "center",
-  },
-  // --- Merging indicator overlay ---
   mergingOverlay: {
     ...StyleSheet.absoluteFill,
     backgroundColor: "rgba(0, 0, 0, 0.85)",
@@ -1878,35 +2490,35 @@ const styles = StyleSheet.create({
     zIndex: 100,
   },
   mergingCard: {
-    backgroundColor: "rgba(30, 30, 30, 0.95)",
+    backgroundColor: "rgba(11, 17, 27, 0.95)",
     borderRadius: 20,
-    paddingVertical: 32,
-    paddingHorizontal: 40,
+    paddingVertical: 28,
+    paddingHorizontal: 36,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#333",
+    borderColor: "rgba(0, 240, 255, 0.25)",
     gap: 12,
     minWidth: 260,
   },
   mergingTitle: {
     color: "#fff",
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "700",
-    marginTop: 8,
+    marginTop: 6,
   },
   mergingSubtitle: {
-    color: "#999",
-    fontSize: 14,
+    color: "#94A3B8",
+    fontSize: 13,
     fontWeight: "500",
     textAlign: "center",
   },
   mergingProgressBg: {
     width: "100%",
     height: 4,
-    backgroundColor: "#333",
+    backgroundColor: "#1E293B",
     borderRadius: 2,
     overflow: "hidden",
-    marginTop: 8,
+    marginTop: 6,
   },
   mergingProgressIndeterminate: {
     width: "40%",

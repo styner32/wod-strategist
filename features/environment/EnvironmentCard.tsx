@@ -9,11 +9,14 @@ import { behaviors, type Behavior, type EnvironmentRecord, type EnvironmentSessi
 
 export function EnvironmentLiveCard({ status, record }: { status: string; record?: EnvironmentRecord }) {
   useLocale();
-  return <View style={styles.card}>
-    <Text style={styles.title}>{t('environment.title')} · {t(`environment.status.${status}`, { defaultValue: status })}</Text>
-    {record && <Text numberOfLines={4} style={styles.text}>{t(`environment.kind.${record.kind}`)} · {new Date(record.completedAt).toLocaleTimeString()}{'\n'}
+  return <View style={styles.liveCard}>
+    <View style={styles.liveHeaderRow}>
+      <Text style={styles.liveTitle}>{t('environment.title')}</Text>
+      <Text style={styles.liveStatus}>{t(`environment.status.${status}`, { defaultValue: status })}</Text>
+    </View>
+    {record && <Text numberOfLines={2} style={styles.liveText}>{t(`environment.kind.${record.kind}`)} · {new Date(record.completedAt).toLocaleTimeString()}{'\n'}
       {record.parsed?.facts.join(' ') || (record.kind === 'sound' ? t('environment.soundSaved') : record.raw || '')}</Text>}
-    {record?.questionId && <Text style={styles.text}>{t(`environment.questions.${record.questionId}`)} · {t('environment.reviewNeeded')}</Text>}
+    {record?.questionId && <Text style={styles.liveText}>{t(`environment.questions.${record.questionId}`)} · {t('environment.reviewNeeded')}</Text>}
   </View>;
 }
 export function EnvironmentHistoryCard({ sessionId, profileId }: { sessionId: string; profileId?: number }) {
@@ -167,6 +170,11 @@ function WeatherEvidence({ data }: { data?: Record<string, unknown> }) {
 }
 const styles = StyleSheet.create({
   card: { backgroundColor: '#253442', padding: 12, borderRadius: 10, marginVertical: 6 },
+  liveCard: { backgroundColor: '#1c2834', padding: 8, borderRadius: 8, marginVertical: 4, borderWidth: 1, borderColor: '#3d5266' },
+  liveHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  liveTitle: { color: '#cce9ff', fontWeight: '700', fontSize: 12 },
+  liveStatus: { color: '#8ec5fc', fontSize: 10, fontWeight: '600' },
+  liveText: { color: '#cbd5e1', fontSize: 11, lineHeight: 15, marginTop: 2 },
   title: { color: '#cce9ff', fontWeight: '600' }, text: { color: '#ddd', fontSize: 12, lineHeight: 18, marginVertical: 4 },
   link: { color: '#86ceff', fontSize: 13 }, button: { paddingVertical: 8, paddingRight: 12 },
   entry: { borderTopWidth: 1, borderColor: '#53616b', paddingVertical: 6 },

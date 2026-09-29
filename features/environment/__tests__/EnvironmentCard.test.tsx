@@ -1,6 +1,6 @@
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { EnvironmentHistoryCard } from '../EnvironmentCard';
+import { EnvironmentHistoryCard, EnvironmentLiveCard } from '../EnvironmentCard';
 import { listSessions, readRecords } from '../store';
 import { reanalyzeObservation, reviewObservation } from '../review';
 jest.mock('../store', () => ({ listSessions: jest.fn(async () => []), readRecords: jest.fn(async () => []), evidencePath:jest.fn(), deleteEnvironmentSession:jest.fn() }));
@@ -54,4 +54,10 @@ it('shows both original and reanalysis answers without starting another model re
   expect(view.getAllByText('Original answer').length).toBeGreaterThan(0);
   expect(view.getAllByText('New answer').length).toBeGreaterThan(0);
   expect(reanalyzeObservation).not.toHaveBeenCalled();
+});
+
+it('renders EnvironmentLiveCard with title and status', () => {
+  const view = render(<EnvironmentLiveCard status="waiting" />);
+  expect(view.getByText('environment.title')).toBeTruthy();
+  expect(view.getByText('environment.status.waiting')).toBeTruthy();
 });
