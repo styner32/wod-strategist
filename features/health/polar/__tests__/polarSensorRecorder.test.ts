@@ -20,6 +20,9 @@ jest.mock("expo-constants", () => ({
 
 jest.mock("react-native", () => ({
   Platform: { OS: "android" },
+  // Expo's lazy fetch polyfill can initialize during Jest teardown. Optional
+  // native modules are unavailable in this unit fixture, as on the Jest host.
+  TurboModuleRegistry: { get: jest.fn(() => null) },
 }));
 
 describe("PolarSensorRecorder", () => {

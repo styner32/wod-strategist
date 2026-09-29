@@ -117,7 +117,7 @@ variable "enable_activity_counting" {
 }
 
 variable "enable_agentic_highlights" {
-  description = "Enable independent Agentic highlight observations after migration 000052 and API/worker rollout"
+  description = "Enable paid Agentic highlight observations. Migrations 000052-000053 must be applied before the API/worker rollout regardless of this flag."
   type        = bool
-  default     = true
+  default     = false
 }

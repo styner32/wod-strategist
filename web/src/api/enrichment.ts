@@ -6,6 +6,7 @@ export interface SummaryContent {
   limitations: string[];
 }
 export interface AnalysisSummary {
+  run_id?: string;
   status?: string;
   stage?: string;
   updated_at?: string;

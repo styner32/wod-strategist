@@ -116,6 +116,7 @@ export function SessionReanalysisPanel({
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['session-analysis', sessionId] }),
         queryClient.invalidateQueries({ queryKey: ['analysis', sessionId] }),
+        queryClient.invalidateQueries({ queryKey: ['analysis-enrichment', sessionId] }),
         queryClient.invalidateQueries({ queryKey: ['session', sessionId] }),
         queryClient.invalidateQueries({ queryKey: ['history'] }),
         queryClient.invalidateQueries({ queryKey: ['session-reanalyses', sessionId] }),
@@ -258,9 +259,13 @@ export function SessionReanalysisPanel({
               <span className="text-text-secondary">{originalAnalysis.wod_description}</span>
             </div>
           )}
-          <AnalysisOriginal text=
-            {originalAnalysis?.output || 'No original analysis is available.'}
-          />
+          {originalAnalysis?.output ? (
+            <div className="max-h-96 overflow-auto">
+              <AnalysisOriginal text={originalAnalysis.output} defaultOpen />
+            </div>
+          ) : (
+            <p className="mt-3 text-xs text-text-secondary">No original analysis is available.</p>
+          )}
         </article>
 
         <article className="min-w-0 rounded-lg border border-border bg-bg-secondary/60 p-4 flex flex-col justify-between">
@@ -281,10 +286,15 @@ export function SessionReanalysisPanel({
                 <span className="text-text-secondary">{selectedRun.wod_description}</span>
               </div>
             )}
-            <AnalysisOriginal text=
-              {selectedRun?.candidate?.output
-                || (selectedRun && !isTerminal(selectedRun.status) ? 'Analysis is in progress…' : 'No candidate has been generated.')}
-            />
+            {selectedRun?.candidate?.output ? (
+              <div className="max-h-96 overflow-auto">
+                <AnalysisOriginal text={selectedRun.candidate.output} defaultOpen />
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-text-secondary">
+                {selectedRun && !isTerminal(selectedRun.status) ? 'Analysis is in progress…' : 'No candidate has been generated.'}
+              </p>
+            )}
             {selectedRun && (
               <dl className="mt-3 grid grid-cols-2 gap-2 border-t border-border pt-3 text-xs">
                 <div><dt className="text-text-muted">Model</dt><dd className="text-text-primary">{selectedRun.model || '—'}</dd></div>

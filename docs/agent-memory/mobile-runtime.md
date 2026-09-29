@@ -24,6 +24,7 @@ Android performance protections must be controlled by user-configurable flags, n
 - The `usePoseDetection.ts` throttle uses `runAtTargetFps()` from `react-native-vision-camera`. Do not remove it — it is the single most impactful fix for Android OOM.
 - The recording dashboard shows **OPT FLAGS** during recording. Keep this in sync when adding new flags.
 - `onDeviceAi` defaults OFF and controls the Apple Foundation Models feedback experiment independently of MoveNet. See [apple-on-device-ai.md](apple-on-device-ai.md) for the iOS 27 native build requirement, image sampling, cancellation, and power protection contract.
+- `continuousRecording` defaults OFF and is an experimental iOS recorder capability, separate from Android performance flags. See [original-video.md](original-video.md) for durable originals, automatic Photos saving, native source-versus-analysis completion and device acceptance requirements.
 
 ## BLE heart rate monitor
 BLE HR integration uses `react-native-ble-plx`.
@@ -44,8 +45,8 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - `react-native-ble-plx` v3.5.1+ is required — earlier versions crash on Android (RN 0.76+) when `Promise.reject` receives a `null` error code.
 
 ### Chunk heart rate sampling (Peak BPM)
-- Each 10-second chunk tracks the maximum (peak) heart rate received during that window via `chunkMaxBpmRef`.
-- When a chunk finishes (`onRecordingFinished`), `chunkPeakBpm` is sent to `processWorkoutChunk` as `heartRateBpm`, ensuring peak cardiovascular stress during exercise bursts is captured instead of momentary recovery dips.
+- Accepted readings are retained in `CaptureWindow` with their original `receivedAt` timestamps. Query each video's capture interval to send its peak as `heartRateBpm` to `processWorkoutChunk`.
+- Delayed segment/export callbacks must not reset a mutable current-chunk maximum: they may arrive during the next capture interval. Continuous iOS events carry native epoch start/end times; MoveNet observations use the same native clock anchor.
 - 1Hz telemetry recording continues to record instantaneous samples via `bpmRef.current`.
 
 ### Polar ACC packet timing

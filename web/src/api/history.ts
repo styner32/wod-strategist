@@ -464,6 +464,11 @@ export const historyApi = {
 };
 
 export interface CostBreakdownItem {
+  thinking_tokens?: number;
+  tool_use_tokens?: number;
+  cached_tokens?: number;
+  unmeasured_calls?: number;
+  unpriced_calls?: number;
   key: string;
   prompt_tokens: number;
   candidate_tokens: number;
@@ -473,6 +478,11 @@ export interface CostBreakdownItem {
 }
 
 export interface SessionCostResponse {
+  thinking_tokens?: number;
+  tool_use_tokens?: number;
+  cached_tokens?: number;
+  unmeasured_calls?: number;
+  unpriced_calls?: number;
   session_id: string;
   prompt_tokens: number;
   candidate_tokens: number;
@@ -484,6 +494,11 @@ export interface SessionCostResponse {
 }
 
 export interface TotalCostResponse {
+  thinking_tokens?: number;
+  tool_use_tokens?: number;
+  cached_tokens?: number;
+  unmeasured_calls?: number;
+  unpriced_calls?: number;
   prompt_tokens: number;
   candidate_tokens: number;
   total_tokens: number;

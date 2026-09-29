@@ -64,7 +64,7 @@ function parseAnalysisOutput(output: string): {
   try {
     const parsed = JSON.parse(output);
     return {
-      summary: parsed.overall_summary,
+      summary: parsed.overall_summary || parsed.summary,
       workoutType: parsed.workout_type,
     };
   } catch {
@@ -74,7 +74,8 @@ function parseAnalysisOutput(output: string): {
 
 function HistoryCard({ result }: { result: AnalysisResult }) {
   const parsed = parseAnalysisOutput(result.output || "{}");
-  parsed.summary = result.analysis_summary?.result?.overview ?? result.analysis_summary?.last_success?.overview ?? parsed.summary;
+  // `||`, not `??`: an empty overview must fall back to the legacy summary.
+  parsed.summary = result.analysis_summary?.result?.overview || result.analysis_summary?.last_success?.overview || parsed.summary;
   const stretchCount = useMemo(() => {
     if (!result.stretch_recommendations) return 0;
     try {
@@ -254,7 +255,7 @@ export function HistoryListPage() {
         )}
       </div>
 
-      {totalCost && totalCost.total_tokens > 0 && (
+      {totalCost && (totalCost.total_tokens > 0 || !!totalCost.unmeasured_calls || !!totalCost.unpriced_calls) && (
         <div className="bg-bg-elevated border border-border rounded-xl p-4 mb-6 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-bg-secondary flex items-center justify-center text-lg">
@@ -265,6 +266,8 @@ export function HistoryListPage() {
               <div className="flex items-baseline gap-2">
                 <span className="text-lg font-bold text-text-primary">
                   ${totalCost.cost_usd.toFixed(3)}
+                  {!!totalCost.unmeasured_calls && <span className="ml-2 text-xs text-warning">사용량 미제공 {totalCost.unmeasured_calls}건</span>}
+                  {!!totalCost.unpriced_calls && <span className="ml-2 text-xs text-warning">금액 미산정 {totalCost.unpriced_calls}건</span>}
                 </span>
                 <span className="text-xs font-medium text-text-muted">
                   (₩{Math.round(totalCost.cost_krw).toLocaleString()})

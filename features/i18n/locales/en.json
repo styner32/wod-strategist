@@ -280,7 +280,9 @@
     "addMoreMovements": "+ Add More",
     "noMovementsSelected": "No movements selected yet",
     "rawTextLabel": "Original Text",
-    "wodTextPlaceholder": "Describe today's workout...\ne.g. For Time: 21-15-9 Thrusters (43kg) + Pull-ups"
+    "wodTextPlaceholder": "Describe today's workout...\ne.g. For Time: 21-15-9 Thrusters (43kg) + Pull-ups",
+    "continuousRecording": "Continuous recording validation (experimental)",
+    "continuousRecordingHelp": "Keeps recording across 10-second boundaries. Off by default pending device validation. Test 720p/1080p first."
   },
   "upload": {
     "title": "Upload Video",
@@ -729,5 +731,48 @@
     "deleteHelp": "Delete on-device observations, evidence and reviews from this device and server. Workout videos and sensor data stay. Failed deletion is retried.",
     "analysisOption": "AI observations during recording",
     "measurementsOnly": "When off, record device state, motion and weather without AI inference."
+  },
+  "originalVideos": {
+    "title": "Originals on this device",
+    "description": "Save camera originals as one gallery video, separately from server-processed videos.",
+    "serverVersions": "Server-processed videos · quality may differ from camera originals.",
+    "retained": "Original files stay on this device until saving is confirmed.",
+    "retry": "Retry gallery save",
+    "alreadySaved": "Already saved",
+    "openSettings": "Photo permission settings",
+    "operationFailed": "Could not complete the operation. Original files are retained.",
+    "showError": "Show error details",
+    "hideError": "Hide error details",
+    "failureStage": {
+      "validation": "The original files could not be verified.",
+      "permission": "Photo permission could not be checked.",
+      "preparing": "Preparing the full original video failed, before saving to Photos.",
+      "gallery": "The full video was prepared, but saving to Photos failed."
+    },
+    "confirmSavedTitle": "Confirm gallery save",
+    "confirmSavedBody": "Choose this only after checking the full video in your gallery. App copies will then be cleaned up.",
+    "retryUncertainTitle": "Save to the gallery again?",
+    "retryUncertainBody": "The previous save result is unknown. Saving again may create a duplicate.",
+    "status": {
+      "recording": "Recording original",
+      "pending": "Waiting to save",
+      "preparing": "Preparing original-quality video",
+      "saving": "Saving to gallery",
+      "saved": "Saved to gallery",
+      "permission_denied": "Photo add permission is required.",
+      "failed": "Save failed. You can retry.",
+      "uncertain": "Saving was interrupted. Check your gallery first.",
+      "needs_attention": "The complete original could not be verified. Automatic saving has stopped."
+    },
+    "profile": "Profile %{id}"
+  },
+  "originalVideo": {
+    "captureFailedTitle": "Original recording needs attention",
+    "captureFailedBody": "Recording could not be completed. Captured originals are retained; check their status in History after ending the workout.",
+    "pendingTitle": "Original save pending",
+    "pendingBody": "Originals are retained on this device. Check Originals on this device in History to retry saving.",
+    "preparing": "Preparing %{count} originals for your gallery",
+    "continuousMode": "Continuous recording (experimental)",
+    "chunkMode": "10-second recordings"
   }
 }

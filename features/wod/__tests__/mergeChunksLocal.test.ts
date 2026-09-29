@@ -1,148 +1,88 @@
-/**
- * Unit tests for mergeChunksLocal.
- *
- * The native VideoMergerModule is mocked — we only test the TS wrapper logic:
- *   - validation (empty paths, missing files)
- *   - existing output cleanup
- *   - correct delegation to native mergeVideos
- *   - output path generation
- */
-
 const mockMergeVideos = jest.fn();
 const mockGetInfoAsync = jest.fn();
-const mockDeleteAsync = jest.fn().mockResolvedValue(undefined);
+const mockDeleteAsync = jest.fn();
 
 jest.mock("expo-file-system/legacy", () => ({
   documentDirectory: "/mock/documents/",
   getInfoAsync: (...args: unknown[]) => mockGetInfoAsync(...args),
   deleteAsync: (...args: unknown[]) => mockDeleteAsync(...args),
 }));
-
 jest.mock("@/modules/video-merger", () => ({
-  VideoMergerModule: {
-    mergeVideos: (...args: unknown[]) => mockMergeVideos(...args),
-  },
+  VideoMergerModule: { mergeVideos: (...args: unknown[]) => mockMergeVideos(...args) },
 }));
 
 import { mergeChunksLocal, mergedOutputPath } from "../mergeChunksLocal";
 
 beforeEach(() => {
-  jest.clearAllMocks();
-  // Default: all files exist, output does NOT exist
-  mockGetInfoAsync.mockResolvedValue({ exists: true });
-  mockMergeVideos.mockResolvedValue({ success: true, outputPath: "/out.mp4" });
+  jest.resetAllMocks();
+  mockGetInfoAsync.mockResolvedValue({ exists: true, size: 1024, isDirectory: false });
+  mockMergeVideos.mockImplementation(async (inputs: string[], outputPath: string) => ({
+    success: true, outputPath, inputCount: inputs.length, durationSeconds: 10,
+  }));
 });
 
 describe("mergeChunksLocal", () => {
-  it("throws if no chunk paths provided", async () => {
-    await expect(mergeChunksLocal([], "/out.mp4")).rejects.toThrow(
-      "no chunk paths provided",
-    );
+  it("rejects empty input without calling native code", async () => {
+    await expect(mergeChunksLocal([], "/out.mp4")).rejects.toThrow("no chunk paths");
+    expect(mockMergeVideos).not.toHaveBeenCalled();
   });
 
-  it("throws if a chunk file does not exist", async () => {
-    mockGetInfoAsync
-      .mockResolvedValueOnce({ exists: true }) // first chunk
-      .mockResolvedValueOnce({ exists: false }); // second chunk
-
-    await expect(
-      mergeChunksLocal(["/a.mp4", "/b.mp4"], "/out.mp4"),
-    ).rejects.toThrow("chunk not found: /b.mp4");
-  });
-
-  it("delegates to VideoMergerModule.mergeVideos", async () => {
-    // Output doesn't exist yet
-    mockGetInfoAsync.mockImplementation(async (path: string) => {
-      if (path === "/out.mp4") return { exists: false };
-      return { exists: true };
-    });
-
-    const result = await mergeChunksLocal(
-      ["/chunk0.mp4", "/chunk1.mp4"],
-      "/out.mp4",
-    );
-
-    expect(mockMergeVideos).toHaveBeenCalledWith(
-      ["/chunk0.mp4", "/chunk1.mp4"],
-      "/out.mp4",
-    );
-    expect(result).toBe("/out.mp4");
-  });
-
-  it("deletes existing output file before merging", async () => {
-    mockGetInfoAsync.mockImplementation(async (path: string) => {
-      // All files exist, including the output
-      return { exists: true };
-    });
-
-    await mergeChunksLocal(["/chunk0.mp4"], "/out.mp4");
-
-    expect(mockDeleteAsync).toHaveBeenCalledWith("/out.mp4", {
-      idempotent: true,
-    });
-    expect(mockMergeVideos).toHaveBeenCalled();
-  });
-
-  it("does not delete output if it does not exist", async () => {
-    mockGetInfoAsync.mockImplementation(async (path: string) => {
-      if (path === "/out.mp4") return { exists: false };
-      return { exists: true };
-    });
-
-    await mergeChunksLocal(["/chunk0.mp4"], "/out.mp4");
-
+  it.each([
+    [{ exists: false }, "chunk not found"],
+    [{ exists: true, size: 0 }, "empty or unreadable"],
+    [{ exists: true, size: 1024, isDirectory: true }, "empty or unreadable"],
+  ])("fails the whole merge for an invalid input %p without omitting it", async (invalid, reason) => {
+    mockGetInfoAsync.mockResolvedValueOnce({ exists: true, size: 1024 }).mockResolvedValueOnce(invalid);
+    await expect(mergeChunksLocal(["/valid.mov", "/bad.mov"], "/out.mp4")).rejects.toThrow(reason);
+    expect(mockMergeVideos).not.toHaveBeenCalled();
     expect(mockDeleteAsync).not.toHaveBeenCalled();
   });
 
-  it("propagates native merge errors", async () => {
-    mockGetInfoAsync.mockResolvedValue({ exists: true });
-    mockGetInfoAsync.mockImplementation(async (path: string) => {
-      if (path === "/out.mp4") return { exists: false };
-      return { exists: true };
-    });
-    mockMergeVideos.mockRejectedValue(new Error("native crash"));
-
-    await expect(mergeChunksLocal(["/chunk0.mp4"], "/out.mp4")).rejects.toThrow(
-      "native crash",
-    );
+  it("keeps all sources in order, including a small valid final chunk", async () => {
+    mockGetInfoAsync.mockImplementation(async (path: string) => ({ exists: true, size: path === "/tail.mov" ? 16 : 1024 }));
+    await expect(mergeChunksLocal(["/first.mov", "/tail.mov"], "/out.mp4")).resolves.toBe("/out.mp4");
+    expect(mockMergeVideos).toHaveBeenCalledWith(["/first.mov", "/tail.mov"], "/out.mp4");
+    expect(mockDeleteAsync).not.toHaveBeenCalled();
   });
 
-  it("filters out 0-byte chunks before calling native merger", async () => {
-    mockGetInfoAsync.mockImplementation(async (path: string) => {
-      if (path === "/chunk0.mp4") return { exists: true, size: 1024 };
-      if (path === "/chunk1.mp4") return { exists: true, size: 0 };
-      if (path === "/chunk2.mp4") return { exists: true, size: 2048 };
-      if (path === "/out.mp4") return { exists: false };
-      return { exists: true };
-    });
-
-    const result = await mergeChunksLocal(
-      ["/chunk0.mp4", "/chunk1.mp4", "/chunk2.mp4"],
-      "/out.mp4",
-    );
-
-    expect(mockMergeVideos).toHaveBeenCalledWith(
-      ["/chunk0.mp4", "/chunk2.mp4"],
-      "/out.mp4",
-    );
-    expect(result).toBe("/out.mp4");
+  it("preserves the existing output and sources through a failed merge and retry", async () => {
+    const files = new Map([["/chunk.mov", "source"], ["/out.mp4", "previous result"]]);
+    mockGetInfoAsync.mockImplementation(async (path: string) => ({ exists: files.has(path), size: files.get(path)?.length }));
+    mockDeleteAsync.mockImplementation(async (path: string) => files.delete(path));
+    mockMergeVideos.mockRejectedValueOnce(new Error("passthrough failed"));
+    await expect(mergeChunksLocal(["/chunk.mov"], "/out.mp4")).rejects.toThrow("passthrough failed");
+    expect(files.get("/out.mp4")).toBe("previous result");
+    expect(files.get("/chunk.mov")).toBe("source");
+    await expect(mergeChunksLocal(["/chunk.mov"], "/out.mp4")).resolves.toBe("/out.mp4");
+    expect(mockDeleteAsync).not.toHaveBeenCalled();
   });
 
-  it("throws if all chunk files are 0 bytes", async () => {
-    mockGetInfoAsync.mockImplementation(async (path: string) => {
-      if (path === "/out.mp4") return { exists: false };
-      return { exists: true, size: 0 };
-    });
+  it("checks and returns the actual MOV fallback URI instead of the requested MP4", async () => {
+    mockMergeVideos.mockResolvedValue({ success: true, outputPath: "file:///out.mov", inputCount: 1 });
+    await expect(mergeChunksLocal(["/chunk.mov"], "/out.mp4")).resolves.toBe("file:///out.mov");
+    expect(mockGetInfoAsync).toHaveBeenLastCalledWith("file:///out.mov");
+  });
 
-    await expect(
-      mergeChunksLocal(["/chunk0.mp4", "/chunk1.mp4"], "/out.mp4"),
-    ).rejects.toThrow("no valid non-empty chunk paths provided");
+  it.each([
+    { success: false, outputPath: "/out.mp4", inputCount: 1 },
+    { success: true, outputPath: "", inputCount: 1 },
+    { success: true, outputPath: "/out.mp4", inputCount: 0 },
+    { success: true, outputPath: "/out.mp4" },
+  ])("rejects an incomplete native result %p", async (result) => {
+    mockMergeVideos.mockResolvedValue(result);
+    await expect(mergeChunksLocal(["/chunk.mov"], "/out.mp4")).rejects.toThrow("preserve every input");
+    expect(mockDeleteAsync).not.toHaveBeenCalled();
+  });
+
+  it.each([{ exists: false }, { exists: true, size: 0 }])("rejects a missing or empty native output %p", async (output) => {
+    mockGetInfoAsync.mockResolvedValueOnce({ exists: true, size: 1024 }).mockResolvedValueOnce(output);
+    await expect(mergeChunksLocal(["/chunk.mov"], "/out.mp4")).rejects.toThrow("output is missing or empty");
+    expect(mockDeleteAsync).not.toHaveBeenCalled();
   });
 });
 
 describe("mergedOutputPath", () => {
-  it("generates a path in documentDirectory with session ID", () => {
-    const path = mergedOutputPath("WOD-20260428-ABC123");
-    expect(path).toBe("/mock/documents/merged_WOD-20260428-ABC123.mp4");
+  it("uses the persistent document directory", () => {
+    expect(mergedOutputPath("WOD-20260428-ABC123")).toBe("/mock/documents/merged_WOD-20260428-ABC123.mp4");
   });
 });

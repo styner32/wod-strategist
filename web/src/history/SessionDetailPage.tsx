@@ -41,6 +41,7 @@ import { GuidanceTimeline } from "./components/GuidanceTimeline";
 import { SessionCostCard } from "./components/SessionCostCard";
 import { SessionReanalysisPanel } from "./components/SessionReanalysisPanel";
 import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
+import { getHighlightSeekTime } from "./highlights";
 import { sensorTimelinePollInterval, sensorTimelineQueryKey } from "./timelineUtils";
 
 function formatDate(dateStr: string) {
@@ -755,6 +756,28 @@ export function SessionDetailPage() {
     }
   }, []);
 
+  // The analysis panel sits below the player, so bring the video into view.
+  const handleAnalysisSeek = useCallback(
+    (time: number) => {
+      handleTimelineSeek(time);
+      videoRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    },
+    [handleTimelineSeek],
+  );
+
+  const handleHighlightSeek = useCallback(
+    (startSeconds: number, version?: number) => {
+      const targetSeconds = getHighlightSeekTime(
+        startSeconds,
+        videoRef.current?.duration,
+        version,
+      );
+      handleSeek(targetSeconds);
+      videoRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    },
+    [handleSeek],
+  );
+
   if (analysisLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -1041,7 +1064,33 @@ export function SessionDetailPage() {
                 {feedbackError(feedbackMutation.error)}
               </p>
             )}
-            {analysis && <AnalysisOverview analysis={analysis} seek={handleTimelineSeek} />}
+            {analysis?.status?.toLowerCase() === "completed" ? (
+              <AnalysisOverview
+                analysis={analysis}
+                seek={handleAnalysisSeek}
+                seekHighlight={handleHighlightSeek}
+                canSeek={!!videoUrl?.download_url}
+              />
+            ) : analysis?.status?.toLowerCase() === "processing" ||
+              analysis?.status?.toLowerCase() === "pending" ? (
+              <div className="flex items-center gap-3 text-text-secondary">
+                <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm">Analysis in progress...</span>
+              </div>
+            ) : analysis?.output ? (
+              <div className="bg-bg-secondary p-4 rounded-xl border border-border">
+                {analysis.status?.toLowerCase() === "failed" && (
+                  <p role="status" className="mb-2 text-sm font-medium text-error">
+                    Analysis failed.
+                  </p>
+                )}
+                <div className="max-h-96 overflow-auto text-text-primary text-sm leading-relaxed whitespace-pre-wrap font-sans">
+                  {analysis.output}
+                </div>
+              </div>
+            ) : (
+              <p className="text-text-muted text-sm">No analysis data.</p>
+            )}
           </div>
         </div>
 

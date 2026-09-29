@@ -51,6 +51,7 @@ interface VideoPreferences {
   lowFps: boolean;
   skipCompression: boolean;
   serialUpload: boolean;
+  continuousRecording: boolean;
   resolution: "480p" | "720p" | "1080p" | "2160p";
   landscapeMode: boolean;
   autoRecord: boolean;
@@ -69,6 +70,7 @@ function getDefaultVideoPrefs(): VideoPreferences {
     lowFps: isAndroid,
     skipCompression: isAndroid,
     serialUpload: isAndroid,
+    continuousRecording: false,
     resolution: "720p",
     landscapeMode: false,
     autoRecord: true,
@@ -409,6 +411,7 @@ export default function WorkoutSetup() {
       pathname: "/workout/visionTestPage",
       params: {
         resolution: videoPrefs.resolution,
+        continuousRecording: videoPrefs.continuousRecording ? "true" : "false",
         workoutType,
         movements: selectedMovements.join(", "),
         injuries: injuries.join(", "),
@@ -486,6 +489,7 @@ export default function WorkoutSetup() {
       pathname: "/workout/visionTestPage",
       params: {
         resolution: videoPrefs.resolution,
+        continuousRecording: videoPrefs.continuousRecording ? "true" : "false",
         showSkeleton: videoPrefs.showSkeleton ? "true" : "false",
         lowFps: videoPrefs.lowFps ? "true" : "false",
         landscapeMode: videoPrefs.landscapeMode ? "true" : "false",
@@ -1043,6 +1047,16 @@ export default function WorkoutSetup() {
                     thumbColor={videoPrefs.onDeviceAi ? "#f5dd4b" : "#f4f3f4"}
                   />
                 </View>
+                {Platform.OS === "ios" && (
+                  <View style={styles.optionRow}>
+                    <View style={{ flex: 1, marginRight: 12 }}>
+                      <Text style={styles.optionLabel}>{t("setup.continuousRecording")}</Text>
+                      <Text style={{ color: "#aaa", fontSize: 12, marginTop: 4 }}>{t("setup.continuousRecordingHelp")}</Text>
+                    </View>
+                    <Switch value={videoPrefs.continuousRecording}
+                      onValueChange={(value) => updatePref("continuousRecording", value)} />
+                  </View>
+                )}
                 <View style={styles.optionRow}>
                   <Text style={styles.optionLabel}>
                     {t("setup.resolution")}

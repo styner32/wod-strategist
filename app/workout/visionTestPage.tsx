@@ -31,6 +31,8 @@ import {
   useCameraFormat,
   useCameraPermission,
   useMicrophonePermission,
+  type VideoSegment,
+  type VideoFile,
 } from "react-native-vision-camera";
 
 import { IconSymbol } from "@/components/ui/icon-symbol";
@@ -62,10 +64,13 @@ import {
   processWorkoutChunk,
 } from "../../features/wod/api";
 import {
-  mergeChunksLocal,
-  mergedOutputPath,
-} from "../../features/wod/mergeChunksLocal";
+  prepareOriginalSession, beginOriginalChunk, addOriginalChunk,
+  markOriginalRecordingStopped, finalizeAndSaveOriginal, holdOriginalFiles,
+  type OriginalSessionRef,
+} from "../../features/video/originalVideoStore";
+import { CaptureWindow } from "../../features/wod/captureWindow";
 import { createChunkRecordingCompletion } from "../../features/wod/chunkRecordingCompletion";
+import { recordingErrorMessage } from "../../features/wod/recordingErrorMessage";
 
 import { useAuthStore } from "@/features/auth/useAuthStore";
 import { t, useLocale } from "@/features/i18n";
@@ -75,7 +80,22 @@ import { useProfileStore } from "@/store/useProfileStore";
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 /** Upper bound on waiting for chunk uploads before the server merge fires. */
 const MERGE_UPLOAD_WAIT_MS = 90000;
+type OriginalCapture = {
+  ref: OriginalSessionRef;
+  startedAt: number;
+  order: number;
+  complete: boolean;
+  failure?: string;
+  failedUploads: number;
+  drains: Promise<void>[];
+  consumersFinished?: Promise<void>;
+  release: () => void;
+};
 const IS_ANDROID = Platform.OS === "android";
+
+function localPath(uri: string): string {
+  return decodeURIComponent(uri.replace(/^file:\/\//, ""));
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -107,6 +127,7 @@ export default function VisionTestPage() {
 
     skipCompression: skipCompressionParam,
     serialUpload: serialUploadParam,
+    continuousRecording: continuousRecordingParam,
     landscapeMode: landscapeModeParam,
     previewOnly: previewOnlyParam,
     zoomMode: zoomModeParam,
@@ -127,6 +148,7 @@ export default function VisionTestPage() {
     lowFps?: string;
     skipCompression?: string;
     serialUpload?: string;
+    continuousRecording?: string;
     landscapeMode?: string;
     previewOnly?: string;
     zoomMode?: string;
@@ -160,6 +182,9 @@ export default function VisionTestPage() {
       : IS_ANDROID;
   const serialUpload =
     serialUploadParam !== undefined ? serialUploadParam === "true" : IS_ANDROID;
+
+  // Experimental native capability. Remains opt-in until release/device acceptance.
+  const continuousRecording = Platform.OS === "ios" && continuousRecordingParam === "true";
 
   const workoutType = parseWorkoutType(workoutTypeParam);
   const workoutTypeLabel = formatWorkoutTypeLabel(workoutType).toUpperCase();
@@ -202,9 +227,6 @@ export default function VisionTestPage() {
   // Use a ref to track if we should continue recording chunks,
   // preventing stale state in closures/timeouts.
   const isRecordingChunks = useRef(false);
-  // The chunk flushed by an intentional stop/pause is a real chunk, not an
-  // orphan — it must still be uploaded even though chunking has stopped.
-  const finalChunkPending = useRef(false);
   // Chunks whose compress+upload work has not settled yet, and how many
   // actually entered the upload path this session.
   const outstandingUploads = useRef(0);
@@ -213,12 +235,19 @@ export default function VisionTestPage() {
   const chunkTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isChunkRecordingActive = useRef(false);
 
-  // Track frames during the current chunk to calculate workout confidence
-  // (counting now happens inside usePoseDetection's useRunOnJS callback,
-  // which is immune to React state batching — see resetFrameCounts below)
-
-  // Store chunk paths locally (Android: used as final video source)
-  const chunkPaths = useRef<string[]>([]);
+  // Camera originals and consumer ownership are independent from server analysis.
+  const originalCapture = useRef<OriginalCapture | null>(null);
+  const startingChunk = useRef<Promise<void> | null>(null);
+  const preparationQueue = useRef<Promise<void>>(Promise.resolve());
+  const stoppingWorkout = useRef(false);
+  const pauseTransition = useRef<Promise<unknown> | null>(null);
+  const unmountRecorder = useRef<() => void>(() => {});
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; unmountRecorder.current(); };
+  }, []);
+  const heartRateWindow = useRef(new CaptureWindow());
   // A timer-stopped chunk remains pending until the native finish callback.
   const pendingChunk = useRef<ReturnType<typeof createChunkRecordingCompletion> | null>(null);
 
@@ -228,8 +257,6 @@ export default function VisionTestPage() {
 
   // Track recording session start time for chunk timing
   const recordingStartTime = useRef<number>(0);
-  // Track individual chunk start time
-  const chunkStartTime = useRef<number>(0);
 
   // Polar sensor live collection stats (polled at 1Hz during recording)
   const [sensorLiveStatus, setSensorLiveStatus] = useState<{
@@ -281,7 +308,7 @@ export default function VisionTestPage() {
     }
     if (outstandingUploads.current > 0) {
       console.warn(
-        `⚠️ Merging with ${outstandingUploads.current} chunk upload(s) still in flight after ${timeoutMs}ms`,
+        `⚠️ Waiting ended with ${outstandingUploads.current} chunk upload(s) still in flight after ${timeoutMs}ms`,
       );
     }
   };
@@ -312,8 +339,6 @@ export default function VisionTestPage() {
     return undefined;
   }, [format]);
 
-  const [mediaPermission, requestMediaPermission] =
-    MediaLibrary.usePermissions();
 
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -459,12 +484,12 @@ export default function VisionTestPage() {
     poseResult,
     monitorData,
     isModelLoaded,
-    resetFrameCounts,
     getWorkoutConfidence,
     getLatestMotion,
+    getCaptureConfidence,
+    resetCaptureObservations,
   } = usePoseDetection(isRecording);
   const bpmRef = useRef(0);
-  const chunkMaxBpmRef = useRef(0);
   const {
     bpm,
     quality: hrQuality,
@@ -484,7 +509,7 @@ export default function VisionTestPage() {
         !isPaused &&
         isChunkRecordingActive.current
       ) {
-        chunkMaxBpmRef.current = Math.max(chunkMaxBpmRef.current, reading.bpm);
+        heartRateWindow.current.add(reading.receivedAt, reading.bpm);
       }
     },
   });
@@ -513,12 +538,9 @@ export default function VisionTestPage() {
   useEffect(() => {
     if (!hasPermission) requestPermission();
     if (!hasMicPermission) requestMicPermission();
-    if (!mediaPermission?.granted) requestMediaPermission();
   }, [
     hasPermission,
     hasMicPermission,
-    mediaPermission,
-    requestMediaPermission,
     requestMicPermission,
     requestPermission,
   ]);
@@ -542,334 +564,221 @@ export default function VisionTestPage() {
 
   // --- Chunk Recording Logic (Raw Camera) ---
 
-  const startChunkLoop = async () => {
-    if (!camera.current || !isRecordingChunks.current) return;
+  const finishOriginalConsumers = (capture: OriginalCapture) => {
+    if (!capture.consumersFinished) {
+      capture.consumersFinished = Promise.all(capture.drains).then(() => environment.stop())
+        .catch(console.warn).finally(capture.release);
+    }
+    return capture.consumersFinished;
+  };
 
+  const queueAnalysis = (capture: OriginalCapture, path: string, start: number, end: number, nativeClockOffsetMs?: number) => {
+    const startSecs = Math.max(0, (start - capture.startedAt) / 1000);
+    const endSecs = Math.max(startSecs, (end - capture.startedAt) / 1000);
+    const heartRateBpm = heartRateWindow.current.peak(start, end);
+    const workoutConfidence = getCaptureConfidence(start, end, nativeClockOffsetMs);
+    const release = holdOriginalFiles(capture.ref);
+    uploadedChunkCount.current += 1;
+    outstandingUploads.current += 1;
+    setChunkCount((count) => count + 1);
+    try {
+      environment.event("existing_sensors", { hr: getReading().bpm ?? null, hrSource: "BLE",
+        moveNet: getLatestMotion(), sensorFiles: "existing_session_sensor_telemetry", source: "existing_enabled_providers" });
+      environment.offerChunk({ path, captureStart: start, captureEnd: end,
+        durationMs: end - start, index: uploadedChunkCount.current });
+    } catch (error) { console.warn("Environment observation unavailable; original capture continues", error); }
+
+    // Serialize compression as well as native preparation; upload scheduling stays configurable.
+    preparationQueue.current = preparationQueue.current.then(async () => {
+      let uri = path;
+      try {
+        if (!skipCompression) uri = await Video.compress(path, { compressionMethod: "auto", maxSize: 720 });
+      } catch (error) {
+        capture.failedUploads += 1;
+        outstandingUploads.current -= 1;
+        release();
+        console.warn("Analysis compression failed; original retained", error);
+        return;
+      }
+      const upload = async () => {
+        try {
+          await processWorkoutChunk(uri, capture.ref.sessionId, {
+            movements: movements ? movements.split(", ") : [],
+            injuries: injuries ? injuries.split(", ") : [],
+            workoutType, profileId: capture.ref.profileId, startSecs, endSecs,
+            heartRateBpm, workoutConfidence, appearanceHints,
+          });
+        } catch (error) {
+          capture.failedUploads += 1;
+          console.warn("Analysis upload failed; gallery archive is independent", error);
+        } finally {
+          // Compressor may return its input. Never delete the original/analysis input here.
+          try {
+            if (localPath(uri) !== localPath(path)) {
+              const { File } = require("expo-file-system");
+              const file = new File(uri);
+              if (file.exists) file.delete();
+            }
+          } catch (_) { /* A leftover disposable copy is safe. */ }
+          outstandingUploads.current = Math.max(0, outstandingUploads.current - 1);
+          release();
+        }
+      };
+      if (serialUpload) enqueueUpload(upload);
+      else trackUpload(upload);
+    }).catch((error) => {
+      capture.failedUploads += 1;
+      outstandingUploads.current = Math.max(0, outstandingUploads.current - 1);
+      release();
+      console.warn("Analysis preparation failed; original retained", error);
+    });
+  };
+
+  async function startChunkLoop() {
+    const capture = originalCapture.current;
     const recordingCamera = camera.current;
-    const completion = createChunkRecordingCompletion(() => recordingCamera.stopRecording());
+    if (!recordingCamera || !capture || !isRecordingChunks.current) return;
+    const order = ++capture.order;
+    let finishPreparation!: () => void;
+    capture.drains.push(new Promise<void>((resolve) => { finishPreparation = resolve; }));
+    const completion = createChunkRecordingCompletion(
+      () => recordingCamera.stopRecording(), continuousRecording ? null : 5000,
+    );
     pendingChunk.current = completion;
     const finishChunk = (path: string | null) => {
       completion.finish(path);
       if (pendingChunk.current === completion) pendingChunk.current = null;
     };
-
-    try {
-      console.log("📷 Starting new chunk recording...");
-      isChunkRecordingActive.current = true;
-      chunkStartTime.current = Date.now();
-      // Only accepted measurements received inside this chunk may supply its peak.
-      chunkMaxBpmRef.current = 0;
-
-      camera.current.startRecording({
-        // Android: force mp4 + HEVC to reduce chunk size (12MB → ~2-4MB).
-        // iOS: use VisionCamera defaults.
-        ...(IS_ANDROID
-          ? { fileType: "mp4" as const, videoCodec: "h265" as const }
-          : {}),
-        onRecordingFinished: async (video) => {
-          console.log("📷 Chunk Finished:", video.path);
-          isChunkRecordingActive.current = false;
-
-          // Compute chunk timing relative to recording start
-          const chunkEndTime = Date.now();
-          const chunkDurationMs = chunkEndTime - chunkStartTime.current;
-          const isMicroChunk =
-            (typeof video.duration === "number" && video.duration < 0.2) ||
-            chunkDurationMs < 200;
-
-          if (isMicroChunk) {
-            console.log(
-              `⚠️ Micro-chunk discarded (duration=${video.duration}s, wall=${chunkDurationMs}ms): ${video.path}`,
-            );
-            try {
-              const { File: FSFile } = require("expo-file-system");
-              const f = new FSFile(video.path);
-              if (f.exists) f.delete();
-            } catch (_) {}
-
-            finishChunk(null);
-            finalChunkPending.current = false;
-
-            if (isRecordingChunks.current) {
-              if (IS_ANDROID) {
-                setTimeout(() => startChunkLoop(), 500);
-              } else {
-                startChunkLoop();
-              }
-            }
-            return;
-          }
-
-          const startSecs =
-            (chunkStartTime.current - recordingStartTime.current) / 1000;
-          const endSecs = (chunkEndTime - recordingStartTime.current) / 1000;
-
-          // Compute peak heart rate during this 10-second chunk
-          const chunkPeakBpm =
-            chunkMaxBpmRef.current > 0 ? chunkMaxBpmRef.current : undefined;
-          console.log(
-            `❤️ Chunk Heart Rate: peak=${chunkPeakBpm ?? 0} bpm, last=${bpmRef.current} bpm`,
-          );
-
-          // Always track chunk path for local merge (gallery save),
-          // even if recording has stopped (orphan chunk).
-          chunkPaths.current.push(video.path);
-          environment.event("existing_sensors", { hr: getReading().bpm ?? null, hrSource: "BLE",
-            moveNet: getLatestMotion(), sensorFiles: "existing_session_sensor_telemetry", source: "existing_enabled_providers" });
-          environment.offerChunk({ path: video.path, captureStart: chunkStartTime.current, captureEnd: chunkEndTime,
-            durationMs: video.duration * 1000, index: uploadedChunkCount.current + 1 });
-
-          const { total: totalFrames, workout: workoutFrames } =
-            resetFrameCounts();
-          const workoutConfidence =
-            totalFrames > 0 ? workoutFrames / totalFrames : 0.0;
-          console.log(
-            `📊 Chunk confidence: ${(workoutConfidence * 100).toFixed(1)}% (workout=${workoutFrames} / total=${totalFrames}) | UI_CONF=${(monitorData.confidence * 100).toFixed(1)}%`,
-          );
-
-          // A stop/pause flushes one last chunk — that one is legitimate and
-          // must be uploaded. Anything arriving after it is an orphan.
-          const isFinalChunk =
-            !isRecordingChunks.current && finalChunkPending.current;
-          if (isFinalChunk) {
-            finalChunkPending.current = false;
-          }
-
-          if (!isRecordingChunks.current && !isFinalChunk) {
-            console.log("⏹️ Orphan chunk after stop — skipping upload");
-          } else {
-            setChunkCount((prev) => prev + 1);
-            uploadedChunkCount.current += 1;
-            outstandingUploads.current += 1;
-
-            // Compress (iOS only) and Upload chunk to backend
-            try {
-              const sessionId = sessionIdRef.current;
-              const movementsArray = movements ? movements.split(", ") : [];
-              const injuriesArray = injuries ? injuries.split(", ") : [];
-
-              const doUpload = async (uri: string, shouldCleanup: boolean) => {
-                try {
-                  await processWorkoutChunk(uri, sessionId, {
-                    movements: movementsArray,
-                    injuries: injuriesArray,
-                    workoutType,
-                    profileId: profileId!,
-                    startSecs,
-                    endSecs,
-                    heartRateBpm: chunkPeakBpm,
-                    workoutConfidence,
-                    appearanceHints,
-                  });
-                  console.log("✅ Chunk uploaded to backend");
-                } catch (err) {
-                  console.error("Failed to upload chunk:", err);
-                } finally {
-                  if (shouldCleanup) {
-                    try {
-                      const { File: FSFile } = require("expo-file-system");
-                      const f = new FSFile(uri);
-                      if (f.exists) f.delete();
-                    } catch (_) {}
-                  }
-                  outstandingUploads.current = Math.max(
-                    0,
-                    outstandingUploads.current - 1,
-                  );
-                }
-              };
-
-              if (skipCompression) {
-                // Skip re-compression — upload raw chunk directly.
-                // shouldCleanup=false: raw chunks are kept for local merge (gallery save).
-                // cleanupMergedAndChunks handles deletion after the gallery decision.
-                const uploadTask = () => doUpload(video.path, false);
-                if (serialUpload) {
-                  enqueueUpload(uploadTask);
-                } else {
-                  trackUpload(uploadTask);
-                }
-              } else {
-                // Compress before upload, then dispatch.
-                // Raw chunk is kept for local merge — only the compressed copy
-                // is cleaned up after upload.
-                Video.compress(video.path, {
-                  compressionMethod: "auto",
-                  maxSize: 720,
-                })
-                  .then((compressedUri) => {
-                    // Upload the compressed file; delete it after upload completes.
-                    const uploadTask = () => doUpload(compressedUri, true);
-                    if (serialUpload) {
-                      enqueueUpload(uploadTask);
-                    } else {
-                      trackUpload(uploadTask);
-                    }
-                  })
-                  .catch((err) => {
-                    console.error("Failed to compress chunk:", err);
-                    outstandingUploads.current = Math.max(
-                      0,
-                      outstandingUploads.current - 1,
-                    );
-                  });
-              }
-            } catch (e) {
-              console.error("Failed to process chunk for upload:", e);
-              outstandingUploads.current = Math.max(
-                0,
-                outstandingUploads.current - 1,
-              );
-            }
-          }
-
-          // Paths and upload counters are registered before stop/pause can resume.
-          finishChunk(video.path);
-
-          // If still recording, start the next chunk after a short delay.
-          // The camera HAL (especially Samsung) needs time to finalize the
-          // previous recording before accepting a new startRecording() call.
-          // In release builds (no debug overhead), calling immediately causes
-          // a native crash (CameraDeviceClient BUFFER_ERROR / DEVICE_ERROR).
-          if (isRecordingChunks.current) {
-            if (IS_ANDROID) {
-              // Android: 500ms cooldown for camera HAL to finalize.
-              setTimeout(() => startChunkLoop(), 500);
-            } else {
-              startChunkLoop();
-            }
-          }
-        },
-        onRecordingError: (error) => {
-          void environment.stop("recording_error").catch(() => {});
-          isChunkRecordingActive.current = false;
-          finalChunkPending.current = false;
-          finishChunk(null);
-          console.error("📷 Chunk Recording Error:", error);
-        },
-      });
-
-      // Schedule stop
-      chunkTimer.current = setTimeout(async () => {
-        if (
-          isRecordingChunks.current &&
-          isChunkRecordingActive.current &&
-          camera.current
-        ) {
-          try {
-            isChunkRecordingActive.current = false;
-            await completion.stop();
-          } catch (e) {
-            console.error("Failed to stop chunk recording:", e);
-          }
-        }
-      }, CHUNK_DURATION_MS);
-    } catch (e) {
+    let captureFailed = false;
+    const failCapture = (error: unknown) => {
+      if (captureFailed) return;
+      captureFailed = true;
+      capture.complete = false;
+      capture.failure = recordingErrorMessage(error);
+      isRecordingChunks.current = false;
       isChunkRecordingActive.current = false;
       finishChunk(null);
-      void environment.stop("recording_error").catch(() => {});
-      console.error("Failed to start chunk recording:", e);
-    }
+      finishPreparation();
+      // Durable failure evidence also survives navigation or process termination.
+      void markOriginalRecordingStopped(capture.ref, { complete: false, reason: capture.failure }).catch(console.warn);
+      Alert.alert(t("originalVideo.captureFailedTitle"), `${t("originalVideo.captureFailedBody")}\n\n${capture.failure}`);
+      void handleStopRecording();
+    };
+    try {
+      const directory = await beginOriginalChunk(capture.ref, order);
+      if (!mounted.current) {
+        capture.complete = false;
+        capture.failure = "recording_screen_unmounted_before_capture";
+        finishChunk(null);
+        finishPreparation();
+        return;
+      }
+      const startedAt = Date.now();
+      isChunkRecordingActive.current = true;
+      let sourceRegistration: Promise<void> | undefined;
+      let sourceAccepted = false;
+      const registerSource = (video: VideoFile): Promise<void> => {
+        if (sourceRegistration) return sourceRegistration;
+        sourceRegistration = (async () => {
+          if (pendingChunk.current === completion) isChunkRecordingActive.current = false;
+          try {
+            await addOriginalChunk(capture.ref, { order, path: video.path, durationSecs: video.duration });
+            sourceAccepted = true;
+            if (video.segmented) {
+              if (video.droppedVideoFrames || video.droppedAudioBuffers || video.tailDrainTimedOut) {
+                capture.complete = false;
+                capture.failure = `capture dropped buffers: video=${video.droppedVideoFrames}, audio=${video.droppedAudioBuffers}, tailTimeout=${video.tailDrainTimedOut}`;
+              }
+            } else {
+              try { queueAnalysis(capture, video.path, startedAt, startedAt + video.duration * 1000); }
+              catch (error) { capture.failedUploads += 1; console.warn("Analysis unavailable; source retained", error); }
+            }
+            finishChunk(video.path);
+            if (!continuousRecording && isRecordingChunks.current && originalCapture.current === capture) {
+              const next = () => { startingChunk.current = startChunkLoop(); };
+              if (IS_ANDROID) setTimeout(next, 500);
+              else next();
+            }
+          } catch (error) { failCapture(error); }
+        })();
+        return sourceRegistration;
+      };
+      recordingCamera.startRecording({
+        path: localPath(directory),
+        ...(IS_ANDROID ? { fileType: "mp4" as const, videoCodec: "h265" as const } : {}),
+        ...(continuousRecording ? {
+          segmented: true,
+          onRecordingSourceFinalized: (video: VideoFile) => { void registerSource(video); },
+          onRecordingSegment: (segment: VideoSegment) => {
+            if (segment.status === "ready" && segment.path) {
+              try { queueAnalysis(capture, segment.path, segment.captureStartTimeMs, segment.captureEndTimeMs, segment.captureClockOffsetMs); }
+              catch (error) { capture.failedUploads += 1; console.warn("Analysis unavailable; source retained", error); }
+            } else {
+              capture.failedUploads += 1;
+              console.warn("Analysis fragment preparation failed; original writer continues", segment.error);
+            }
+          },
+        } : {}),
+        onRecordingFinished: async (video) => {
+          // The original may already be safely archived while analysis preparation drains.
+          await registerSource(video);
+          finishPreparation();
+        },
+        onRecordingError: (error) => {
+          // A previous run can finish derivative work after resume. Its late
+          // preparation error must not stop or clear the current original writer.
+          void (async () => {
+            await sourceRegistration;
+            if (sourceAccepted) {
+              capture.failedUploads += 1;
+              finishPreparation();
+              console.warn("Post-capture preparation failed; original is retained", error);
+            } else { failCapture(error); }
+          })();
+        },
+      });
+      if (!continuousRecording) {
+        chunkTimer.current = setTimeout(() => {
+          if (isRecordingChunks.current && pendingChunk.current === completion) {
+            void completion.stop().catch(failCapture);
+          }
+        }, CHUNK_DURATION_MS);
+      }
+    } catch (error) { failCapture(error); }
   };
 
   const startChunkRecording = () => {
     isRecordingChunks.current = true;
-    // A resumed recording is chunking again — no pending "final" chunk.
-    finalChunkPending.current = false;
-    startChunkLoop();
+    startingChunk.current = startChunkLoop();
   };
 
   const stopChunkRecording = async (): Promise<string | null> => {
     isRecordingChunks.current = false;
-    if (chunkTimer.current) {
-      clearTimeout(chunkTimer.current);
-      chunkTimer.current = null;
-    }
-
-    // Also wait when the timer has already requested native stop but the final
-    // callback has not arrived. Native stop completion is not file completion.
-    const finishingChunk = pendingChunk.current;
-    if (finishingChunk) {
-      finalChunkPending.current = true;
-      try {
-        isChunkRecordingActive.current = false;
-        return await finishingChunk.stop();
-      } catch (e) {
-        console.error("Failed to stop chunk recording:", e);
-      }
-    }
-
-    return null;
-  };
-
-  /**
-   * Delete all local chunk files and clear the paths array.
-   * Called on recording stop to prevent tmp/ from growing unbounded.
-   */
-  const cleanupChunkFiles = () => {
-    const paths = chunkPaths.current;
-    if (paths.length === 0) {
-      chunkPaths.current = [];
-      return;
-    }
-
-    console.log(`🗑️ Cleaning up ${paths.length} chunk files from tmp/`);
+    if (chunkTimer.current) { clearTimeout(chunkTimer.current); chunkTimer.current = null; }
+    // A folder/manifest write in progress must settle before requesting native stop.
+    await startingChunk.current;
+    const finishing = pendingChunk.current;
+    if (!finishing) return null;
     try {
-      const { File: FSFile } = require("expo-file-system");
-      for (const p of paths) {
-        try {
-          const f = new FSFile(p);
-          if (f.exists) {
-            f.delete();
-            console.log("🗑️ Deleted chunk:", p);
-          }
-        } catch (_) {}
+      const path = await finishing.stop();
+      if (!path && originalCapture.current) {
+        originalCapture.current.complete = false;
+        originalCapture.current.failure = "Native finalization did not confirm a complete source";
       }
-    } catch (e) {
-      console.warn("⚠️ Chunk cleanup error:", e);
-    }
-    chunkPaths.current = [];
-  };
-
-  /**
-   * Delete a snapshot of chunk files (does NOT touch chunkPaths ref).
-   * Used by the local merge flow which snapshots paths before clearing state.
-   */
-  const cleanupLocalChunkFiles = (paths: string[]) => {
-    try {
-      const { File: FSFile } = require("expo-file-system");
-      for (const p of paths) {
-        try {
-          const f = new FSFile(p);
-          if (f.exists) f.delete();
-        } catch (_) {}
+      return path;
+    } catch (error) {
+      if (originalCapture.current) {
+        originalCapture.current.complete = false;
+        originalCapture.current.failure = recordingErrorMessage(error);
       }
-      console.log(`🗑️ Cleaned up ${paths.length} chunk files`);
-    } catch (e) {
-      console.warn("⚠️ Chunk cleanup error:", e);
+      console.warn("Native stop failed; retaining source", error);
+      return null;
     }
-  };
-
-  /**
-   * Delete the merged output file + all source chunk files.
-   * Called after gallery save decision (save or discard).
-   */
-  const cleanupMergedAndChunks = (mergedPath: string, chunks: string[]) => {
-    try {
-      const { File: FSFile } = require("expo-file-system");
-      try {
-        const f = new FSFile(mergedPath);
-        if (f.exists) f.delete();
-        console.log("🗑️ Deleted merged file:", mergedPath);
-      } catch (_) {}
-    } catch (_) {}
-    cleanupLocalChunkFiles(chunks);
-    chunkPaths.current = [];
   };
 
   // --- Main Recording Logic ---
 
-  const handleStartRecording = async () => {
+  async function handleStartRecording() {
     if (isRecording || isStartingRecording.current) return;
     isStartingRecording.current = true;
 
@@ -893,9 +802,22 @@ export default function VisionTestPage() {
       if (environmentEnabled && environmentNativeAvailable) {
         await appleEnvironment.requestEnvironmentLocationPermission().catch(() => {});
       }
+      await MediaLibrary.requestPermissionsAsync(true).catch(() => {});
+      if (!mounted.current) return;
+      const sessionId = buildWorkoutSessionId(workoutType);
+      const ref = await prepareOriginalSession({ profileId, sessionId, mode: continuousRecording ? "continuous" : "chunks" });
+      if (!mounted.current) {
+        await markOriginalRecordingStopped(ref, { complete: false, reason: "recording_screen_unmounted_before_capture" });
+        return;
+      }
+      const startedAt = Date.now();
+      originalCapture.current = { ref, startedAt, order: 0, complete: true, failedUploads: 0, drains: [], release: holdOriginalFiles(ref) };
+      heartRateWindow.current.clear();
+      resetCaptureObservations();
+      stoppingWorkout.current = false;
       resetQuality();
       bpmRef.current = 0;
-      chunkMaxBpmRef.current = 0;
+      isRecordingRef.current = true;
       setIsRecording(true);
       setIsPaused(false);
       useAuthStore.getState().setRecordingActive(true);
@@ -905,11 +827,10 @@ export default function VisionTestPage() {
       console.log("✅ Recording Started (Chunk Streaming)");
 
       // Compute session ID once for the entire recording session
-      sessionIdRef.current = buildWorkoutSessionId(workoutType);
-      recordingStartTime.current = Date.now();
+      sessionIdRef.current = sessionId;
+      recordingStartTime.current = startedAt;
       capturedProfileIdRef.current = profileId!;
       setSensorLiveStatus({ accSamples: 0, dropped: null });
-      finalChunkPending.current = false;
       outstandingUploads.current = 0;
       uploadedChunkCount.current = 0;
 
@@ -957,31 +878,37 @@ export default function VisionTestPage() {
       // Record sequential chunks: each is uploaded for real-time analysis,
       // and raw chunk files are kept locally for gallery-save merge.
       startChunkRecording();
+      await startingChunk.current;
     } catch (error) {
       console.error("Recording Start Error:", error);
       // Roll back the optimistic "recording" state. Without this the UI and
       // the auth store stay in a recording state that no camera is backing,
       // and the `if (isRecording) return` guard blocks any retry.
+      isRecordingRef.current = false;
       setIsRecording(false);
       setIsPaused(false);
       useAuthStore.getState().setRecordingActive(false);
       void flushEnvironmentUploads().catch(() => {});
       isRecordingChunks.current = false;
-      finalChunkPending.current = false;
       accumulatedMs.current = 0;
       segmentStartTime.current = 0;
       setElapsedMs(0);
       void environment.stop("start_error").catch(() => {});
       void TelemetryRecorder.stop().catch(() => {});
       void PolarSensorRecorder.stop().catch(() => {});
-      Alert.alert("녹화 시작 실패", "녹화를 시작할 수 없습니다.");
+      const capture = originalCapture.current;
+      if (capture) {
+        await markOriginalRecordingStopped(capture.ref, { complete: false, reason: recordingErrorMessage(error) }).catch(console.warn);
+        capture.release();
+      }
+      Alert.alert(t("originalVideo.captureFailedTitle"), t("originalVideo.captureFailedBody"));
     } finally {
       isStartingRecording.current = false;
     }
   };
 
-  const handlePauseRecording = async () => {
-    if (!isRecording || isPaused) return;
+  async function handlePauseRecording() {
+    if (!isRecordingRef.current || isPausedRef.current || stoppingWorkout.current) return;
     void appleAi.stop().then(flushAppleAiUploads).catch(() => {});
     void environment.pause()?.catch(() => {});
     console.log("⏸️ Pausing recording...");
@@ -991,17 +918,22 @@ export default function VisionTestPage() {
       segmentStartTime.current = 0;
     }
 
+    isPausedRef.current = true;
     setIsPaused(true);
     PolarSensorRecorder.pause();
-    await stopChunkRecording();
+    pauseTransition.current = stopChunkRecording();
+    await pauseTransition.current;
     console.log("⏸️ Recording paused safely");
   };
 
-  const handleResumeRecording = () => {
-    if (!isRecording || !isPaused) return;
+  async function handleResumeRecording() {
+    if (!isRecording || !isPaused || stoppingWorkout.current) return;
+    await pauseTransition.current;
+    if (stoppingWorkout.current || !originalCapture.current?.complete || pendingChunk.current) return;
     console.log("▶️ Resuming recording...");
 
     segmentStartTime.current = Date.now();
+    isPausedRef.current = false;
     setIsPaused(false);
     PolarSensorRecorder.resume();
     environment.resume();
@@ -1010,37 +942,44 @@ export default function VisionTestPage() {
     console.log("▶️ Recording resumed");
   };
 
-  const handleStopRecording = async () => {
-    if (!isRecording) return;
+  async function handleStopRecording() {
+    if (!isRecordingRef.current || stoppingWorkout.current) return;
+    stoppingWorkout.current = true;
     void appleAi.stop().then(flushAppleAiUploads).catch(() => {});
 
     try {
       setIsSaving(true);
-      const environmentStopped = environment.stop().catch(() => {});
+      const capture = originalCapture.current;
+      // Sensor capture ends on its own clock at workout stop, independent of video export latency.
+      const sensorStopped = PolarSensorRecorder.stop().catch((error) => {
+        console.warn("sensor recorder stop failed", error); return null;
+      });
+      const telemetryStopped = TelemetryRecorder.stop().catch((error) => {
+        console.warn("telemetry stop failed", error); return null;
+      });
 
       if (!isPaused && segmentStartTime.current > 0) {
         accumulatedMs.current += Date.now() - segmentStartTime.current;
       }
       segmentStartTime.current = 0;
 
-      // Stop chunk recording if active and wait for last chunk to arrive
-      if (!isPaused) {
-        await stopChunkRecording();
+      await pauseTransition.current;
+      await stopChunkRecording();
+      if (capture) {
+        await markOriginalRecordingStopped(capture.ref, { complete: capture.complete, reason: capture.failure });
+        // Gallery export can start as soon as sources close. Pending derivatives/readers
+        // keep a hold until both native preparation and environment work have drained.
+        void finishOriginalConsumers(capture);
       } else {
-        isRecordingChunks.current = false;
-        if (chunkTimer.current) {
-          clearTimeout(chunkTimer.current);
-          chunkTimer.current = null;
-        }
+        void environment.stop().catch(console.warn);
       }
-
-      await environmentStopped;
+      isRecordingRef.current = false;
       setIsRecording(false);
       setIsPaused(false);
 
       // Stop debug telemetry and enqueue upload
       try {
-        const telemetryResult = await TelemetryRecorder.stop();
+        const telemetryResult = await telemetryStopped;
         if (telemetryResult) {
           await enqueueDebugUpload(
             telemetryResult.sessionId,
@@ -1054,7 +993,7 @@ export default function VisionTestPage() {
 
       // Stop Polar H10 sensor recording and enqueue upload
       try {
-        const sensorResult = await PolarSensorRecorder.stop();
+        const sensorResult = await sensorStopped;
         if (sensorResult && !sensorResult.complete) {
           // Still worth uploading — the file records its own write failures in
           // the footer, so downstream can tell a lossy session from a full one.
@@ -1084,7 +1023,7 @@ export default function VisionTestPage() {
       // before the user can background the app.
       // Use the ref, not `chunkCount` state: the final chunk increments it
       // inside an async callback that this closure may not have observed yet.
-      if (uploadedChunkCount.current > 0) {
+      if (capture?.complete && capture.order > 0) {
         const movementsArray = movements ? movements.split(", ") : [];
         const injuriesArray = injuries ? injuries.split(", ") : [];
 
@@ -1095,13 +1034,18 @@ export default function VisionTestPage() {
           // Merge only once every chunk has actually reached GCS. A fixed
           // delay merged incomplete sessions whenever compression or the
           // network ran long.
+          await Promise.all(capture.drains);
           await waitForOutstandingUploads(MERGE_UPLOAD_WAIT_MS);
           try {
+            if (uploadedChunkCount.current === 0 || outstandingUploads.current > 0 || capture.failedUploads > 0) {
+              console.warn("Server merge skipped because analysis inputs are incomplete");
+              return;
+            }
             await mergeChunks(sessionId, {
               workoutType,
               movements: movementsArray,
               injuries: injuriesArray,
-              profileId: profileId!,
+              profileId: capturedProfileIdRef.current!,
               wodDescription: wodDescription || undefined,
               appearanceHints,
             });
@@ -1114,160 +1058,53 @@ export default function VisionTestPage() {
         })(); // IIFE — fires immediately, does not block
       }
 
-      // --- Local merge for gallery save (both platforms) ---
-      // Snapshot chunk paths before clearing — we need them for the merge.
-      const localChunks = [...chunkPaths.current];
-
-      console.log(
-        `📦 Gallery save: ${localChunks.length} chunks, paths:`,
-        localChunks,
-      );
-
-      // Clean up state immediately so the UI reflects "stopped"
+      setMergeChunkTotal(capture?.order ?? 0);
+      setIsMerging(true);
+      // A failed capture has no verified complete original to save. Its failure
+      // was already reported; do not turn it into a misleading gallery wait.
+      const result = capture?.complete ? await finalizeAndSaveOriginal(capture.ref) : null;
+      setIsMerging(false);
       setChunkCount(0);
-      setIsSaving(false);
-
-      if (localChunks.length > 0) {
-        // Merge chunks locally → prompt gallery save → then cleanup
-        const outPath = mergedOutputPath(sessionId);
-        console.log(`📦 Merge output path: ${outPath}`);
-
-        // Show merging indicator
-        setMergeChunkTotal(localChunks.length);
-        setIsMerging(true);
-
-        const handlePostWorkoutAuthCheck = () => {
-          const {
-            sessionExpiredDuringRecording,
-            finishDeferredUnauthorized,
-            setRecordingActive,
-          } = useAuthStore.getState();
-          setRecordingActive(false);
-          void flushEnvironmentUploads().catch(() => {});
-          if (sessionExpiredDuringRecording) {
-            Alert.alert(
-              t("auth.sessionExpiredDuringWorkoutTitle"),
-              t("auth.sessionExpiredDuringWorkoutMessage"),
-              [
-                {
-                  text: t("common.ok"),
-                  onPress: () => {
-                    finishDeferredUnauthorized();
-                  },
-                },
-              ],
-            );
-          } else {
-            router.replace("/history" as any);
-          }
-        };
-
-        // Show the gallery save alert after merge completes.
-        // The alert is shown BEFORE navigating so it stays visible.
-        const performMergeAndPrompt = async () => {
-          try {
-            console.log(
-              `🎬 Starting local merge of ${localChunks.length} chunks...`,
-            );
-            await mergeChunksLocal(localChunks, outPath);
-            console.log(`🎬 Local merge succeeded, showing gallery save alert`);
-
-            setIsMerging(false);
-
-            Alert.alert(
-              "갤러리에 저장하시겠습니까?",
-              "운동 영상이 이미 업로드되었습니다. 기기 갤러리에도 저장하시겠습니까?",
-              [
-                {
-                  text: "아니오",
-                  style: "cancel",
-                  onPress: () => {
-                    // Keep merged file in app container (documentDirectory)
-                    // for later access — only clean up raw chunk files.
-                    cleanupLocalChunkFiles(localChunks);
-                    chunkPaths.current = [];
-                    handlePostWorkoutAuthCheck();
-                  },
-                },
-                {
-                  text: "저장",
-                  onPress: () => {
-                    MediaLibrary.saveToLibraryAsync(outPath)
-                      .then(() => {
-                        console.log("📱 Saved merged video to gallery");
-                        // Safe to delete both merged and chunks since it's fully saved in gallery
-                        cleanupMergedAndChunks(outPath, localChunks);
-                        handlePostWorkoutAuthCheck();
-                      })
-                      .catch((e) => {
-                        console.warn("⚠️ Gallery save failed:", e);
-                        // Save failed! Keep the merged file, only delete the raw chunks.
-                        cleanupLocalChunkFiles(localChunks);
-                        chunkPaths.current = [];
-                        Alert.alert(
-                          "저장 실패",
-                          "갤러리에 저장하지 못했습니다. 하지만 병합된 파일은 안전하게 보관되어 있습니다. Files 앱에서 직접 가져오실 수 있습니다.",
-                          [
-                            {
-                              text: "확인",
-                              onPress: () => handlePostWorkoutAuthCheck(),
-                            },
-                          ],
-                        );
-                      });
-                  },
-                },
-              ],
-            );
-          } catch (mergeErr) {
-            console.warn("⚠️ Local merge failed:", mergeErr);
-            setIsMerging(false);
-
-            // CRITICAL: DO NOT delete local chunks on merge failure!
-            // Instead, keep them in cache/tmp, alert the user, and navigate to history.
-            Alert.alert(
-              "로컬 병합 실패",
-              "비디오 조각 병합에 실패했습니다. 하지만 촬영된 원본 비디오 조각들은 삭제되지 않고 안전하게 보관되었습니다. 디버그 메뉴에서 PC로 내보낼 수 있습니다.",
-              [{ text: "확인", onPress: () => handlePostWorkoutAuthCheck() }],
-            );
-          }
-        };
-
-        // Fire merge+prompt immediately (don't await — alert handles navigation)
-        performMergeAndPrompt();
+      const { sessionExpiredDuringRecording, finishDeferredUnauthorized, setRecordingActive } = useAuthStore.getState();
+      setRecordingActive(false);
+      void flushEnvironmentUploads().catch(() => {});
+      if (capture?.complete && result?.status !== "saved") {
+        Alert.alert(t("originalVideo.pendingTitle"), t("originalVideo.pendingBody"));
+      }
+      if (sessionExpiredDuringRecording) {
+        Alert.alert(t("auth.sessionExpiredDuringWorkoutTitle"), t("auth.sessionExpiredDuringWorkoutMessage"),
+          [{ text: t("common.ok"), onPress: finishDeferredUnauthorized }]);
       } else {
-        console.log("📦 No local chunks — skipping gallery save");
-        const {
-          sessionExpiredDuringRecording,
-          finishDeferredUnauthorized,
-          setRecordingActive,
-        } = useAuthStore.getState();
-        setRecordingActive(false);
-        void flushEnvironmentUploads().catch(() => {});
-        if (sessionExpiredDuringRecording) {
-          Alert.alert(
-            t("auth.sessionExpiredDuringWorkoutTitle"),
-            t("auth.sessionExpiredDuringWorkoutMessage"),
-            [
-              {
-                text: t("common.ok"),
-                onPress: () => {
-                  finishDeferredUnauthorized();
-                },
-              },
-            ],
-          );
-        } else {
-          router.replace("/history" as any);
-        }
+        router.replace("/history" as any);
       }
     } catch (error) {
       console.error("Recording Stop Error:", error);
-      Alert.alert("Error", "Failed to save recording.");
+      Alert.alert(t("originalVideo.pendingTitle"), t("originalVideo.pendingBody"));
+      useAuthStore.getState().setRecordingActive(false);
+      router.replace("/history" as any);
     } finally {
+      const capture = originalCapture.current;
+      if (capture) void finishOriginalConsumers(capture);
+      setIsMerging(false);
       setIsSaving(false);
     }
   };
+
+  useEffect(() => {
+    unmountRecorder.current = () => {
+    isRecordingChunks.current = false;
+    if (chunkTimer.current) clearTimeout(chunkTimer.current);
+    const capture = originalCapture.current;
+    if (!capture) return;
+    void (async () => {
+      try {
+        await stopChunkRecording();
+        await markOriginalRecordingStopped(capture.ref, { complete: false, reason: "recording_screen_unmounted" });
+      } catch (error) { console.warn("Original recovery required after leaving recording", error); }
+      finally { void finishOriginalConsumers(capture); }
+    })();
+    };
+  });
 
   if (!hasPermission || !hasMicPermission) {
     return (
@@ -1517,6 +1354,7 @@ export default function VisionTestPage() {
                   onDeviceAi ? `apple-ai:${appleAi.status}` : "apple-ai:off",
                   environmentEnabled ? `environment:${environment.status}:${environment.record?.questionId ?? "-"}:${environment.record?.outcome === "success" && environment.record?.source === "FoundationModels" ? "review_needed" : "-"}` : "environment:off",
                   serialUpload ? "serial" : "parallel",
+                  t(continuousRecording ? "originalVideo.continuousMode" : "originalVideo.chunkMode"),
                   landscapeMode ? "land" : "port",
                   zoomMode ? "zoom:0.1" : "zoom:0",
                   aspectRatio,
@@ -1608,9 +1446,9 @@ export default function VisionTestPage() {
         <View style={styles.mergingOverlay}>
           <View style={styles.mergingCard}>
             <ActivityIndicator size="large" color="#30D158" />
-            <Text style={styles.mergingTitle}>영상 병합 중...</Text>
+            <Text style={styles.mergingTitle}>{t("originalVideos.title")}</Text>
             <Text style={styles.mergingSubtitle}>
-              {mergeChunkTotal}개 클립을 합치고 있습니다
+              {t("originalVideo.preparing", { count: mergeChunkTotal })}
             </Text>
             <View style={styles.mergingProgressBg}>
               <Animated.View
@@ -1643,7 +1481,7 @@ export default function VisionTestPage() {
         >
           {isSaving ? (
             <View style={styles.postRecordingFooter}>
-              <Text style={styles.footerStatus}>Saving...</Text>
+              <Text style={styles.footerStatus}>{t("originalVideos.status.preparing")}</Text>
               <View style={styles.footerProgressBg}>
                 <View
                   style={[

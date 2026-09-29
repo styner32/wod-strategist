@@ -2,6 +2,7 @@ import { EnvironmentHistoryCard } from "../../environment/EnvironmentCard";
 import { ActivitySummaryCard } from "./ActivitySummaryCard";
 import { HeartRateSummaryCard } from "./HeartRateSummaryCard";
 import { t } from "@/features/i18n";
+import { OriginalVideosPending } from "@/features/video/OriginalVideosPending";
 import * as FileSystem from "expo-file-system/legacy";
 import * as MediaLibrary from "expo-media-library/legacy";
 import { router } from "expo-router";
@@ -794,6 +795,10 @@ function HistoryCard({
         {isCompleted &&
           item.analysis_type !== "injury_supplement" &&
           availableVideos.length > 0 && (
+            <>
+              <Text style={{ color: dateColor, fontSize: 12, marginBottom: 6 }}>
+                {t("originalVideos.serverVersions")}
+              </Text>
             <View style={styles.downloadRow}>
               {availableVideos.includes("merged") && (
                 <TouchableOpacity
@@ -851,6 +856,7 @@ function HistoryCard({
                 </TouchableOpacity>
               )}
             </View>
+            </>
           )}
 
         {/* Create Guided Video button — when completed but no hardsubbed version */}
@@ -1538,17 +1544,21 @@ export function HistoryList({
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#64D2FF" />
-        <Text style={styles.loadingText}>
-          {t("historyList.loadingHistory")}
-        </Text>
-      </View>
+      <>
+        <OriginalVideosPending />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#64D2FF" />
+          <Text style={styles.loadingText}>
+            {t("historyList.loadingHistory")}
+          </Text>
+        </View>
+      </>
     );
   }
 
   return (
     <>
+      <OriginalVideosPending />
       <MergeBanner />
       <ProcessingSection items={pendingItems} />
       <SectionList

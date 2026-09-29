@@ -36,9 +36,18 @@ export function AnalysisMarkdown({ text }: { text: string }) {
     </div>
   );
 }
-export function AnalysisOriginal({ text }: { text: string }) {
+export function AnalysisOriginal({
+  text,
+  defaultOpen = false,
+}: {
+  text: string;
+  defaultOpen?: boolean;
+}) {
   return (
-    <details className="mt-5 min-w-0 rounded-lg border border-border p-3">
+    <details
+      className="mt-5 min-w-0 rounded-lg border border-border p-3"
+      open={defaultOpen}
+    >
       <summary className="cursor-pointer text-sm text-text-secondary">
         원문 보기
       </summary>

@@ -1,5 +1,10 @@
-import { useId, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useMemo, useState } from "react";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type { AnalysisResult } from "../../api/history";
 import {
   enrichmentPending,
@@ -40,9 +45,11 @@ const button =
 function AdditionalObservation({
   observation,
   seek,
+  canSeek,
 }: {
   observation: AgenticObservation;
   seek: (time: number) => void;
+  canSeek: boolean;
 }) {
   const target: Record<string, string> = {
     confirmed: "대상 식별됨",
@@ -68,7 +75,11 @@ function AdditionalObservation({
       <AnalysisMarkdown text={observation.continuity} />
       {observation.evidence?.map((e, i) => (
         <div key={i}>
-          <button className={button} onClick={() => seek(e.start)}>
+          <button
+            className={button}
+            disabled={!canSeek}
+            onClick={() => seek(e.start)}
+          >
             {formatHighlightTimestamp(e.start)}–
             {formatHighlightTimestamp(e.end)} 이동
           </button>
@@ -92,18 +103,31 @@ function AdditionalObservation({
 export function AnalysisOverview({
   analysis,
   seek,
+  seekHighlight,
+  canSeek,
 }: {
   analysis: AnalysisResult;
+  /** Seeks to an exact timestamp (observations and evidence). */
   seek: (time: number) => void;
+  /** Seeks to a highlight start, applying the legacy pre-roll. */
+  seekHighlight: (startSeconds: number, version?: number) => void;
+  canSeek: boolean;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const id = useId();
   const client = useQueryClient();
-  const key = ["analysis-enrichment", analysis.session_id, analysis.updated_at, analysis.highlight_segments];
+  // Not keyed on updated_at: unrelated row writes must not reset the query.
+  // Callers that change the output invalidate ["analysis-enrichment", sessionId].
+  const key = [
+    "analysis-enrichment",
+    analysis.session_id,
+    analysis.highlight_segments,
+  ];
   const query = useQuery({
     queryKey: key,
     queryFn: () => getEnrichment(analysis.session_id),
     enabled: analysis.status.toLowerCase() === "completed",
+    placeholderData: keepPreviousData,
     retry: false,
     refetchInterval: (q) =>
       enrichmentPending(q.state.data?.analysis.status) ||
@@ -120,6 +144,17 @@ export function AnalysisOverview({
   const content = summary?.result ?? summary?.last_success;
   const legacy = legacyOverallSummary(analysis.output);
   const batch = query.data?.analysis;
+  const costRevision = JSON.stringify([
+    summary?.run_id, summary?.status, summary?.updated_at,
+    batch?.run_id, batch?.status,
+    batch?.items?.map((item) => [item.key, item.status]),
+  ]);
+  const hasEnrichment = Boolean(query.data);
+  useEffect(() => {
+    if (!hasEnrichment) return;
+    void client.invalidateQueries({ queryKey: ["session-cost", analysis.session_id] });
+    void client.invalidateQueries({ queryKey: ["total-cost"] });
+  }, [client, analysis.session_id, costRevision, hasEnrichment]);
   const highlights = useMemo(
     () => parseHighlightSegments(analysis.highlight_segments),
     [analysis.highlight_segments],
@@ -306,6 +341,7 @@ export function AnalysisOverview({
                         <div key={i} className="mt-3">
                           <button
                             className={button}
+                            disabled={!canSeek}
                             onClick={() => seek(o.startSeconds)}
                           >
                             {o.startLabel}–{o.endLabel} 이동
@@ -331,6 +367,7 @@ export function AnalysisOverview({
                           <AdditionalObservation
                             observation={observation}
                             seek={seek}
+                            canSeek={canSeek}
                           />
                         </>
                       ) : (
@@ -380,7 +417,8 @@ export function AnalysisOverview({
                   )}
                   <button
                     className={`${button} mt-4`}
-                    onClick={() => seek(h.startSeconds)}
+                    disabled={!canSeek}
+                    onClick={() => seekHighlight(h.startSeconds, h.version)}
                   >
                     이 구간으로 영상 이동
                   </button>
