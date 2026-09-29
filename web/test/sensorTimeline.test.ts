@@ -116,6 +116,52 @@ describe('sensor timeline rendering and selection', () => {
     expect(markup).toContain('00:00 – 00:10');
     expect(markup).not.toContain('센서 시계열 데이터가 없습니다.');
   });
+
+  it('renders reprocess button on failure when onReprocess callback is supplied', () => {
+    const response: SensorTimelineResponse = {
+      status: 'failed',
+      timeline: null,
+      video_mapping: { kind: 'merged', method: 'chunk_linear', segments: [] },
+    };
+    const onReprocess = jest.fn();
+    const markup = renderToStaticMarkup(createElement(SensorTimelinePanel, {
+      timelineResponse: response,
+      onReprocess,
+      isReprocessing: false,
+    }));
+    expect(markup).toContain('센서 데이터 재처리');
+    expect(markup).toContain('센서 시계열 처리에 실패했습니다.');
+    expect(markup).not.toContain('disabled=""');
+  });
+
+  it('renders disabled reprocessing label when reprocess is pending', () => {
+    const response: SensorTimelineResponse = {
+      status: 'failed',
+      timeline: null,
+      video_mapping: { kind: 'merged', method: 'chunk_linear', segments: [] },
+    };
+    const onReprocess = jest.fn();
+    const markup = renderToStaticMarkup(createElement(SensorTimelinePanel, {
+      timelineResponse: response,
+      onReprocess,
+      isReprocessing: true,
+    }));
+    expect(markup).toContain('재처리 요청 중...');
+    expect(markup).toContain('disabled=""');
+  });
+
+  it('omits reprocess button when onReprocess callback is not supplied', () => {
+    const response: SensorTimelineResponse = {
+      status: 'failed',
+      timeline: null,
+      video_mapping: { kind: 'merged', method: 'chunk_linear', segments: [] },
+    };
+    const markup = renderToStaticMarkup(createElement(SensorTimelinePanel, {
+      timelineResponse: response,
+    }));
+    expect(markup).toContain('센서 시계열 처리에 실패했습니다.');
+    expect(markup).not.toContain('센서 데이터 재처리');
+  });
 });
 
 describe('late video mapping query updates', () => {

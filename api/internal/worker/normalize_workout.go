@@ -157,15 +157,12 @@ func (w *Worker) normalizeWorkout(ctx context.Context, sessionID string, profile
 	gender := w.lookupGender(profileID)
 	prompt := BuildNormalizedWorkoutPrompt(trimmedDesc, hints, gender)
 	raw, usage, err := w.GeminiClient.ParseText(ctx, prompt)
+	w.saveTokenUsage(sessionID, profileID, "session:normalize-workout", usage)
 	if err != nil {
 		w.logger.Warn("Failed to parse text for workout normalization",
 			zap.String("session_id", sessionID),
 			zap.Error(err))
 		return ""
-	}
-
-	if usage != nil {
-		w.saveTokenUsage(sessionID, profileID, "session:normalize-workout", usage)
 	}
 
 	movements, err := ParseNormalizedWorkoutOutput(raw)

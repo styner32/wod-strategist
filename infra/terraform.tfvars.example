@@ -13,6 +13,16 @@ pipeline_mode        = "legacy"
 enable_chunk_reanalysis   = false
 enable_session_reanalysis = false
 
+# Independent live feedback features for new mobile recordings (worker only).
+# Set each flag to true to enable it; contextual coaching and count review add AI requests.
+enable_capture_feedback    = false
+enable_contextual_coaching = false
+enable_activity_counting   = false
+
 # Gemini thinking levels (LOW, MEDIUM, HIGH)
 gemini_thinking_chunk = "LOW"
 gemini_thinking_level = "HIGH"
+
+# Migrations 000052-000053 must be applied before deploying the API/worker,
+# whatever this flag is. It only gates additional paid highlight observations.
+enable_agentic_highlights = false

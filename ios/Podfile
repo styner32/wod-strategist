@@ -16,10 +16,12 @@ def ccache_enabled?(podfile_properties)
 end
 
 ENV['EX_DEV_CLIENT_NETWORK_INSPECTOR'] ||= podfile_properties['EX_DEV_CLIENT_NETWORK_INSPECTOR']
-ENV['RCT_USE_RN_DEP'] ||= '1' if podfile_properties['ios.buildReactNativeFromSource'] != 'true'
-ENV['RCT_USE_PREBUILT_RNCORE'] ||= '1' if podfile_properties['ios.buildReactNativeFromSource'] != 'true'
-ENV['RCT_HERMES_V1_ENABLED'] ||= '1' if podfile_properties['expo.useHermesV1'] == 'true'
-platform :ios, podfile_properties['ios.deploymentTarget'] || '15.1'
+ENV['RCT_USE_RN_DEP'] ||= podfile_properties['ios.buildReactNativeFromSource'] == 'true' ? '0' : '1'
+ENV['RCT_USE_PREBUILT_RNCORE'] ||= podfile_properties['ios.buildReactNativeFromSource'] == 'true' ? '0' : '1'
+ENV['RCT_HERMES_V1_ENABLED'] ||= '0' if podfile_properties['expo.useHermesV1'] == 'false'
+ENV['EXPO_USE_PRECOMPILED_MODULES'] = '0' if podfile_properties['EXPO_USE_PRECOMPILED_MODULES'] == 'false'
+ENV['EXPO_USE_PRECOMPILED_MODULES'] ||= '1'
+platform :ios, podfile_properties['ios.deploymentTarget'] || '16.4'
 
 prepare_react_native_project!
 
@@ -63,13 +65,14 @@ target 'WODStrategist' do
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
 
-    # Only update targets with an old/incompatible deployment target (e.g. < 12.0)
+    # Only update targets with an old/incompatible deployment target (e.g. < 15.0)
     # This prevents rebuilding all modern pods, avoiding massive compilation memory spikes.
-    deployment_target = podfile_properties['ios.deploymentTarget'] || '15.1'
+    deployment_target = podfile_properties['ios.deploymentTarget'] || '16.4'
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |config|
+        config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
         current_target = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
-        if current_target && current_target.to_f < 12.0
+        if current_target && current_target.to_f < 15.0
           config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = deployment_target
         end
       end

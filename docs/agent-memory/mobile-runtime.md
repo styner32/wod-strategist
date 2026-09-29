@@ -16,13 +16,15 @@ Android performance protections must be controlled by user-configurable flags, n
 
 | Optimization | File | Android | iOS |
 |---|---|---|---|
-| Inference FPS throttle | `usePoseDetection.ts` | 5 fps | 15 fps |
+| MoveNet inference FPS throttle | `usePoseDetection.ts` | 2 fps recording / 1 fps preview | 2 fps recording / 1 fps preview |
 | `android:largeHeap` | `AndroidManifest.xml` | `true` | N/A |
 
 ### Rules
 - Do NOT hardcode `IS_ANDROID` for feature gating in `visionTestPage.tsx` — use the route-param configuration pattern.
 - The `usePoseDetection.ts` throttle uses `runAtTargetFps()` from `react-native-vision-camera`. Do not remove it — it is the single most impactful fix for Android OOM.
 - The recording dashboard shows **OPT FLAGS** during recording. Keep this in sync when adding new flags.
+- `onDeviceAi` defaults OFF and controls the Apple Foundation Models feedback experiment independently of MoveNet. See [apple-on-device-ai.md](apple-on-device-ai.md) for the iOS 27 native build requirement, image sampling, cancellation, and power protection contract.
+- `continuousRecording` defaults OFF and is an experimental iOS recorder capability, separate from Android performance flags. See [original-video.md](original-video.md) for durable originals, automatic Photos saving, native source-versus-analysis completion and device acceptance requirements.
 
 ## BLE heart rate monitor
 BLE HR integration uses `react-native-ble-plx`.
@@ -43,14 +45,18 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - `react-native-ble-plx` v3.5.1+ is required — earlier versions crash on Android (RN 0.76+) when `Promise.reject` receives a `null` error code.
 
 ### Chunk heart rate sampling (Peak BPM)
-- Each 10-second chunk tracks the maximum (peak) heart rate received during that window via `chunkMaxBpmRef`.
-- When a chunk finishes (`onRecordingFinished`), `chunkPeakBpm` is sent to `processWorkoutChunk` as `heartRateBpm`, ensuring peak cardiovascular stress during exercise bursts is captured instead of momentary recovery dips.
+- Accepted readings are retained in `CaptureWindow` with their original `receivedAt` timestamps. Query each video's capture interval to send its peak as `heartRateBpm` to `processWorkoutChunk`.
+- Delayed segment/export callbacks must not reset a mutable current-chunk maximum: they may arrive during the next capture interval. Continuous iOS events carry native epoch start/end times; MoveNet observations use the same native clock anchor.
 - 1Hz telemetry recording continues to record instantaneous samples via `bpmRef.current`.
 
 ### Polar ACC packet timing
 - `parseAccPacket` accepts device-derived `dt` only within 10% of `1000 / accHz` (the negotiated rate), allowing the observed 19.53ms interval at 50Hz.
 - A rejected delta uses `lastSampleIntervalMs`, or the nominal interval before a valid measurement exists. Do not stretch samples across packet loss using a fixed upper limit such as 60ms.
 - Reset the measured interval with the clock anchor on a new stream; stop/disconnect also clears it. This heuristic cannot detect every small partial-packet loss without a sequence counter.
+
+## iOS scene lifecycle
+
+- See [ios-scene-lifecycle.md](ios-scene-lifecycle.md) for Expo SDK 57 / Xcode 27 scene ownership, the iOS 16.4 minimum, native regeneration checks and dependency compatibility patches.
 
 ## iOS sensor upload startup safety
 - A reinstall can change the absolute `file:///var/mobile/Containers/Data/Application/{UUID}/Documents/` prefix while retaining the files. `loadQueue()` rebases saved `Documents/sensor/*.ndjson` paths against the current `documentDirectory`, including backup recovery, without changing request IDs or upload stages.
@@ -70,3 +76,17 @@ Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/
 
 - See [heart-rate-quality.md](heart-rate-quality.md) for version 2 contact/drop filtering, raw versus accepted BPM, request version pinning, response-only summaries, and device acceptance status.
 - Chunk peaks now update synchronously from accepted readings; stale/invalid fallback BPM is omitted. A stable BPM below 55 is warned about, not discarded solely for being low.
+
+## Camera capability detection and 4K recording
+
+- **Capability-Driven**: Do NOT hardcode device models for high-resolution features. Check `device.formats` at runtime via `supports4K30Fps()` (`features/video/cameraCapability.ts`).
+- **30fps Invariant**: Recording remains at 30fps (or 24fps when `lowFps` is enabled) even when 4K (2160p) is selected.
+- **Graceful Degradation**: If 2160p is persisted from a previous device session but the current device lacks 4K 30fps support, auto-fallback to 1080p (`resolveSafeResolution`).
+- **Frame Processor Compatibility**: Recording and pose-test cameras explicitly use `pixelFormat="yuv"`, `videoHdr={false}`, and `enableBufferCompression={false}`. The installed `vision-camera-resize-plugin` accepts uncompressed 8-bit YUV/BGRA only; HDR selects 10-bit YUV and throws `Invalid PixelFormat`, even if `supportsVideoHdr` is true. Do not prefer HDR in format selection or enable it while using this processor. This preserves 4K resolution with SDR; buffer compression is unrelated to the saved-video `skipCompression` option.
+- **Stabilization**: Cinematic stabilization (`cinematic-extended` or `cinematic`) is preferred when available in `videoStabilizationModes`.
+- **Inference Throttle Safety**: Production MoveNet frame processing uses `runAtTargetFps()` at 2 fps during recording and 1 fps in preview, regardless of resolution. The pose test page can explicitly request a higher rate. The Apple AI experiment has a separate image-sampling schedule and does not change MoveNet's throttle.
+
+### Environment observation journal
+- Optional `environmentObservation` / `environmentAnalysis` / `observationIntervalSeconds` (30/60/120) are passed from setup. Defaults: off / true / 60. Existing saved 30/60/120 choices are preserved.
+- `OPT FLAGS` includes `environment:<status>:<questionId|->:<review_needed|->`. Uses completed video chunks; never add another live frame processor for this journal.
+- See [environment-observation.md](environment-observation.md) for source separation, shared AI slot, evidence uploads, review, and device validation boundaries.

@@ -94,6 +94,8 @@ type MergeChunksResponse struct {
 }
 
 type ChunkCompleteRequest struct {
+	LiveAnalysisVersion int `json:"live_analysis_version,omitempty"`
+
 	SessionID         string   `json:"session_id"`
 	GCSURI            string   `json:"gcs_uri"`
 	Movements         []string `json:"movements"`

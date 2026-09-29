@@ -29,6 +29,60 @@ var _ = Describe("Sensor quality worker", func() {
 		}
 	})
 	BeforeEach(func() { testhelpers.CleanupDB(conn) })
+	It("completes trailing HR files using the sensor footer even when video chunks are incomplete", func() {
+		profile := testhelpers.CreateProfile(conn, &db.Profile{})
+		sid := "WOD-20260915-sensor-footer"
+		content := fmt.Sprintf(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"%s","profile_id":%d,"clock_source":"capture_clock","base_epoch_ms":1000}`+"\n", sid, profile.ID)
+		for ms := 0; ms <= 10000; ms += 1000 {
+			content += fmt.Sprintf("{\"k\":\"hr\",\"t\":%d,\"bpm\":150}\n", ms)
+		}
+		content += "{\"k\":\"hr\",\"t\":10250,\"bpm\":240}\n{\"k\":\"end\",\"t\":10000}\n"
+
+		// Only the first half of the video has an analysis result so far.
+		start, end := 0.0, 5.0
+		testhelpers.CreateChunkAnalysisResult(conn, &db.ChunkAnalysisResult{
+			SessionID: sid, ProfileID: profile.ID, FilePath: fmt.Sprintf("videos/%d/%s/chunk_0.mp4", profile.ID, sid),
+			Status: "COMPLETED", StartSecs: &start, EndSecs: &end,
+		})
+		object := fmt.Sprintf("videos/%d/%s/sensor_telemetry_v1_r.ndjson", profile.ID, sid)
+		digest := sha256.Sum256([]byte(content))
+		proc := worker.SensorProcessingRecord{RequestID: "r", ObjectName: object, TargetGeneration: "100", SizeBytes: int64(len(content)), SHA256: hex.EncodeToString(digest[:])}
+		proc.CalculationInputs.CalculationVersion = 2
+		raw, err := json.Marshal(proc)
+		Expect(err).NotTo(HaveOccurred())
+		row := testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
+			SessionID: sid, ProfileID: profile.ID, Status: "PENDING", SensorState: db.SensorStatePending,
+			SensorVersion: 1, SensorProcessing: db.JSONDocument(raw),
+		})
+		transport := testhelpers.NewMockTransport()
+		testhelpers.MockGCSDownloadWithBody(transport, "gs://test-bucket/"+object, []byte(content))
+		storage, err := testhelpers.NewStorageClient("test-bucket", transport)
+		Expect(err).NotTo(HaveOccurred())
+		w := worker.NewWorker(conn, storage, "test-bucket", nil, nil, zap.NewNop())
+		task, err := worker.NewSensorTelemetryTask(row.ID, profile.ID, "r", 1)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(w.HandleSensorTelemetryTask(context.Background(), task)).To(Succeed())
+
+		var updated db.AnalysisResult
+		Expect(conn.First(&updated, row.ID).Error).To(Succeed())
+		Expect(updated.SensorState).To(Equal(db.SensorStateCompleted))
+		Expect(updated.SensorNextAttemptAt).To(BeNil())
+		var summary sensor.SensorSummaryResult
+		Expect(json.Unmarshal(updated.SensorSummary, &summary)).To(Succeed())
+		Expect(summary.Quality.IsComplete).To(BeTrue())
+		Expect(summary.Quality.Errors).To(BeEmpty())
+		Expect(summary.Quality.Warnings).To(ContainElement(ContainSubstring("HR timestamp 10250.000000 exceeds end 10000.000000; trimmed")))
+		Expect(summary.Metrics.DurationSeconds).To(Equal(10.0))
+		Expect(summary.Metrics.HR.ValidSeconds).To(Equal(10.0))
+		Expect(summary.Metrics.HR.PeakBPM).To(HaveValue(Equal(150)))
+		var timeline sensor.SensorTimelineData
+		Expect(json.Unmarshal(updated.SensorTimeline, &timeline)).To(Succeed())
+		Expect(timeline.DurationMs).To(Equal(int64(10000)))
+		Expect(timeline.Points).To(HaveLen(10))
+		Expect(timeline.Points[9].EndMs).To(Equal(int64(10000)))
+		Expect(timeline.Points[9].HeartRateBPM.Value).To(HaveValue(Equal(150.0)))
+		Expect(transport.Verify()).To(Succeed())
+	})
 	It("persists the pinned summary and isolates optional timeline failures", func() {
 		profile := testhelpers.CreateProfile(conn, &db.Profile{})
 		for i, tc := range []struct {

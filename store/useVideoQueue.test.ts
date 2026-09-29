@@ -1,3 +1,5 @@
+import { Alert } from "react-native";
+import { waitFor } from "@testing-library/react-native";
 import { useVideoQueue, type VideoItem } from "./useVideoQueue";
 
 // ==========================================
@@ -51,13 +53,11 @@ jest.mock("@/features/wod/api", () => ({
 }));
 
 const mockSaveToLibraryAsync = jest.fn();
-jest.mock("expo-media-library", () => ({
+jest.mock("expo-media-library/legacy", () => ({
   saveToLibraryAsync: (...args: any[]) => mockSaveToLibraryAsync(...args),
 }));
 
-jest.mock("react-native", () => ({
-  Alert: { alert: jest.fn() },
-}));
+jest.spyOn(Alert, "alert").mockImplementation(() => {});
 
 // ==========================================
 // Helpers
@@ -89,7 +89,8 @@ describe("useVideoQueue", () => {
     useVideoQueue.setState({ items: [] });
     jest.clearAllMocks();
     mockFileDelete.mockClear();
-    mockFileMove.mockClear();
+    mockFileMove.mockReset().mockResolvedValue(undefined);
+    mockFileCopy.mockReset().mockResolvedValue(undefined);
     mockSaveToLibraryAsync.mockClear();
   });
 
@@ -167,6 +168,40 @@ describe("useVideoQueue", () => {
       const items = getItems();
       expect(items[0].status).toBe("RECORDED");
       expect(items[0].error).toContain("Compress failed");
+    });
+  });
+
+  describe("asynchronous encoded-file preparation", () => {
+    it.each(["copy", "move"] as const)("waits for %s before marking the video ready", async (operation) => {
+      const rawUri = "file:///raw/video.mp4";
+      mockCompress.mockResolvedValue(operation === "copy" ? rawUri : "file:///compressed/video.mp4");
+      const fileOperation = operation === "copy" ? mockFileCopy : mockFileMove;
+      let finish!: () => void;
+      fileOperation.mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+
+      const id = getStore().enqueue(rawUri, defaultMetadata);
+      getStore().startEncoding(id);
+      await waitFor(() => expect(fileOperation).toHaveBeenCalled());
+      expect(getItems()[0].status).toBe("ENCODING");
+      expect(getItems()[0].compressedUri).toBeUndefined();
+
+      finish();
+      await waitFor(() => expect(getItems()[0].status).toBe("ENCODED"));
+      expect(getItems()[0].compressedUri).toMatch(/_encoded\.mp4$/);
+    });
+
+    it.each(["copy", "move"] as const)("retains the usable original URI when %s rejects", async (operation) => {
+      const rawUri = "file:///raw/video.mp4";
+      const compressedUri = operation === "copy" ? rawUri : "file:///compressed/video.mp4";
+      mockCompress.mockResolvedValue(compressedUri);
+      const fileOperation = operation === "copy" ? mockFileCopy : mockFileMove;
+      fileOperation.mockRejectedValueOnce(new Error("File operation failed"));
+
+      const id = getStore().enqueue(rawUri, defaultMetadata);
+      getStore().startEncoding(id);
+      await waitFor(() => expect(getItems()[0].status).toBe("ENCODED"));
+      expect(getItems()[0].compressedUri).toBe(compressedUri);
+      expect(mockFileDelete).not.toHaveBeenCalled();
     });
   });
 

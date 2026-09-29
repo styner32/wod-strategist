@@ -651,3 +651,135 @@ func (ctl *Controller) GetSensorStatus(c *gin.Context) {
 		Retryable:     retryable,
 	})
 }
+
+type ReprocessSensorRequest struct {
+	ProfileID uint `json:"profile_id"`
+}
+
+type ReprocessSensorResponse struct {
+	Accepted  bool   `json:"accepted"`
+	SessionID string `json:"session_id"`
+	State     string `json:"state"`
+}
+
+// ReprocessSensor handles POST /api/v1/sessions/:session_id/sensor-reprocess
+func (ctl *Controller) ReprocessSensor(c *gin.Context) {
+	sessionID := c.Param("session_id")
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+
+	var req ReprocessSensorRequest
+	_ = c.ShouldBindJSON(&req)
+	if req.ProfileID == 0 {
+		if pStr := c.Query("profile_id"); pStr != "" {
+			if pVal, err := strconv.ParseUint(pStr, 10, 32); err == nil {
+				req.ProfileID = uint(pVal)
+			}
+		}
+	}
+	if req.ProfileID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+
+	userID := UserIDFromContext(c)
+	ctx := c.Request.Context()
+
+	status, authErr := ctl.verifySensorSessionOwnership(ctx, ctl.db, sessionID, req.ProfileID, userID)
+	if authErr != nil {
+		c.JSON(status, gin.H{"error": authErr.Error()})
+		return
+	}
+
+	var row db.AnalysisResult
+	var processing SensorProcessingData
+
+	txErr := ctl.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		_ = tx.Exec("SET LOCAL lock_timeout = '500ms'").Error
+		_ = tx.Exec("SET LOCAL statement_timeout = '2s'").Error
+
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("session_id = ? AND archived_at IS NULL", sessionID).
+			First(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+				return err
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "database error"})
+			return err
+		}
+
+		if row.ProfileID != req.ProfileID {
+			c.JSON(http.StatusConflict, gin.H{"error": "session belongs to another profile", "error_code": "PROFILE_MISMATCH"})
+			return errors.New("profile mismatch")
+		}
+
+		if row.SensorVersion == 0 || len(row.SensorProcessing) == 0 || string(row.SensorProcessing) == "{}" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "no sensor telemetry recorded for session", "error_code": "NO_SENSOR_DATA"})
+			return errors.New("no sensor data")
+		}
+
+		if err := json.Unmarshal(row.SensorProcessing, &processing); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "corrupt sensor processing record"})
+			return err
+		}
+
+		if processing.TargetGeneration == nil || *processing.TargetGeneration == "" || processing.ObjectName == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "sensor telemetry upload is not complete", "error_code": "UPLOAD_INCOMPLETE"})
+			return errors.New("upload incomplete")
+		}
+
+		now := time.Now().UTC()
+		if row.SensorState == db.SensorStateRunning && row.SensorNextAttemptAt != nil && now.Before(*row.SensorNextAttemptAt) {
+			c.JSON(http.StatusConflict, gin.H{"error": "sensor processing is already running", "error_code": "SENSOR_ALREADY_RUNNING"})
+			return errors.New("already running")
+		}
+
+		// Reset execution attempts, lease, and error code
+		processing.Attempts = 0
+		processing.LeaseToken = nil
+		processing.LeaseStartedAt = nil
+		processing.LastErrorCode = nil
+		processing.LastErrorMsg = nil
+		processing.RetryNotBefore = nil
+
+		procJSON, err := json.Marshal(processing)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to serialize sensor processing"})
+			return err
+		}
+
+		nextAttempt := now
+		return tx.Model(&row).Updates(map[string]any{
+			"sensor_state":           db.SensorStatePending,
+			"sensor_processing":      db.JSONDocument(procJSON),
+			"sensor_next_attempt_at": &nextAttempt,
+			"updated_at":             now,
+		}).Error
+	})
+
+	if txErr != nil {
+		return
+	}
+
+	// Enqueue task to asynq sensor queue
+	if ctl.queueClient != nil {
+		task, taskErr := worker.NewSensorTelemetryTask(row.ID, req.ProfileID, processing.RequestID, row.SensorVersion)
+		if taskErr == nil {
+			if _, enqErr := ctl.queueClient.Enqueue(task, asynq.Queue(worker.SensorQueueName), asynq.MaxRetry(0)); enqErr != nil {
+				logger.Log.Warn("failed to enqueue sensor telemetry task immediately on reprocess (recovery loop will handle it)",
+					zap.Uint("analysis_result_id", row.ID),
+					zap.Error(enqErr))
+			}
+		}
+	}
+
+	c.JSON(http.StatusAccepted, ReprocessSensorResponse{
+		Accepted:  true,
+		SessionID: sessionID,
+		State:     db.SensorStatePending,
+	})
+}
+

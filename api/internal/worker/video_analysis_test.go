@@ -681,7 +681,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		// Give asynq a moment to flush to Redis, then inspect.
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(pending).To(HaveLen(2))
+		Expect(pending).To(HaveLen(3))
 		var injuryTask *asynq.TaskInfo
 		var taskTypes []string
 		for _, info := range pending {
@@ -690,7 +690,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 				injuryTask = info
 			}
 		}
-		Expect(taskTypes).To(ConsistOf(TypeInjuryAnalysis, TypeGenerateHardSub))
+		Expect(taskTypes).To(ConsistOf(TypeInjuryAnalysis, TypeGenerateHardSub, TypeAnalysisEnrichment))
 		Expect(injuryTask).NotTo(BeNil())
 
 		var injPayload InjuryAnalysisPayload
@@ -716,8 +716,8 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		// Hardsub is enqueued, but no injury follow-up is created.
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(pending).To(HaveLen(1))
-		Expect(pending[0].Type).To(Equal(TypeGenerateHardSub))
+		Expect(pending).To(HaveLen(2))
+		Expect([]string{pending[0].Type, pending[1].Type}).To(ConsistOf(TypeGenerateHardSub, TypeAnalysisEnrichment))
 	})
 
 	It("returns an error and saves no record when Gemini returns empty analysis", func() {
@@ -1033,9 +1033,9 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
-		// Only hardsub:generate should be enqueued (no injury task)
-		Expect(pending).To(HaveLen(1))
-		Expect(pending[0].Type).To(Equal("hardsub:generate"))
+		// Hardsub and text summary are enqueued; no injury task.
+		Expect(pending).To(HaveLen(2))
+		Expect([]string{pending[0].Type, pending[1].Type}).To(ConsistOf(TypeGenerateHardSub, TypeAnalysisEnrichment))
 	})
 
 	It("enqueues injury task with file URI and does NOT delete file", func() {
@@ -1060,7 +1060,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(pending).To(HaveLen(2))
+		Expect(pending).To(HaveLen(3))
 		var injuryTask *asynq.TaskInfo
 		var taskTypes []string
 		for _, info := range pending {
@@ -1069,7 +1069,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 				injuryTask = info
 			}
 		}
-		Expect(taskTypes).To(ConsistOf(TypeInjuryAnalysis, TypeGenerateHardSub))
+		Expect(taskTypes).To(ConsistOf(TypeInjuryAnalysis, TypeGenerateHardSub, TypeAnalysisEnrichment))
 		Expect(injuryTask).NotTo(BeNil())
 
 		var injPayload InjuryAnalysisPayload

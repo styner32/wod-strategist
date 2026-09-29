@@ -1,3 +1,4 @@
+import { activitySummaryPath, type ActivitySummary, type CaptureAssessment, type ContextualCoaching, type MovementObservations } from "../../shared/activity";
 import {
   createUploadTask,
   FileSystemUploadType,
@@ -16,6 +17,19 @@ const API_BASE_URL =
 // ==========================================
 // Core API Client
 // ==========================================
+
+async function notifyUnauthorized(): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const authStoreModule = require("@/features/auth/useAuthStore");
+    authStoreModule.useAuthStore?.getState().handleUnauthorized();
+  } catch {
+    try {
+      const { useAuthStore } = await import("@/features/auth/useAuthStore");
+      useAuthStore.getState().handleUnauthorized();
+    } catch {}
+  }
+}
 
 export interface ApiRequestOptions extends RequestInit {
   bodyPayload?: any; // JSON body
@@ -52,9 +66,7 @@ export async function apiClient<T = any>(
   });
 
   if (res.status === 401) {
-    // Lazy import to avoid circular dependency
-    const { useAuthStore } = await import("@/features/auth/useAuthStore");
-    useAuthStore.getState().handleUnauthorized();
+    await notifyUnauthorized();
     throw new Error("Unauthorized");
   }
 
@@ -109,6 +121,9 @@ export type UploadCompleteResponse = Required<
 >;
 
 export interface ChunkAnalysisResult {
+ capture_assessment?: CaptureAssessment | null;
+ contextual_coaching?: ContextualCoaching | null;
+ movement_observations?: MovementObservations | null;
   id: number;
   session_id: string;
   status: string;
@@ -122,8 +137,9 @@ export interface ChunkAnalysisResult {
 
 export async function fetchChunkAnalysis(
   sessionId: string,
+ signal?: AbortSignal,
 ): Promise<ChunkAnalysisResult[]> {
-  return apiClient<ChunkAnalysisResult[]>(`/chunk-analysis/${sessionId}`);
+  return apiClient<ChunkAnalysisResult[]>(`/chunk-analysis/${sessionId}`, { signal });
 }
 
 export async function fetchMovements(): Promise<string[]> {
@@ -335,13 +351,23 @@ export async function uploadSensorToGcs(
   fileUri: string,
   requiredHeaders?: Record<string, string>,
 ): Promise<void> {
+  return uploadSessionAssetToGcs(uploadUrl, fileUri, "application/x-ndjson", requiredHeaders);
+}
+
+/** Stream a session asset after checking the file, without constructing a background upload task. */
+export async function uploadSessionAssetToGcs(
+  uploadUrl: string,
+  fileUri: string,
+  mimeType: string,
+  requiredHeaders?: Record<string, string>,
+): Promise<void> {
   const info = await getInfoAsync(fileUri);
   if (!info.exists || info.isDirectory) {
-    throw new Error("Sensor upload file is missing or is not a regular file");
+    throw new Error("Session asset upload file is missing or is not a regular file");
   }
 
   const headers = {
-    "Content-Type": "application/x-ndjson",
+    "Content-Type": mimeType,
     ...(requiredHeaders || {}),
   };
 
@@ -359,13 +385,13 @@ export async function uploadSensorToGcs(
 
   if (!response) {
     throw new Error(
-      "Failed to upload sensor telemetry to GCS: No response from upload task.",
+      "Failed to upload session asset to GCS: No response from upload task.",
     );
   }
 
   if (response.status < 200 || response.status >= 300) {
     const err: any = new Error(
-      `Failed to upload sensor telemetry to GCS: HTTP ${response.status} ${response.body || ""}`,
+      `Failed to upload session asset to GCS: HTTP ${response.status} ${response.body || ""}`,
     );
     err.status = response.status;
     err.body = response.body;
@@ -451,6 +477,7 @@ export async function notifyChunkUploadComplete(
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
     bodyPayload: {
+      live_analysis_version: 1,
       session_id: sessionId,
       gcs_uri: gcsUri,
       movements,
@@ -808,47 +835,43 @@ export async function parseWorkoutImage(
 ): Promise<ParseWorkoutImageResponse> {
   const url = `${API_BASE_URL}/parse-workout-image`;
 
-  const formData = new FormData();
   const filename = imageUri.split("/").pop() || "whiteboard.jpg";
   const ext = filename.split(".").pop()?.toLowerCase();
   const mimeType = ext === "png" ? "image/png" : "image/jpeg";
 
-  formData.append("image", {
-    uri: imageUri,
-    name: filename,
-    type: mimeType,
-  } as any);
-
   const headers: Record<string, string> = {};
-
   const token = await getToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(url, {
-    method: "POST",
+  const response = await uploadAsync(url, imageUri, {
+    httpMethod: "POST",
+    uploadType: FileSystemUploadType.MULTIPART,
+    fieldName: "image",
+    mimeType,
     headers,
-    body: formData,
   });
 
-  if (res.status === 401) {
-    const { useAuthStore } = await import("@/features/auth/useAuthStore");
-    useAuthStore.getState().handleUnauthorized();
+  if (response.status === 401) {
+    await notifyUnauthorized();
     throw new Error("Unauthorized");
   }
 
-  if (!res.ok) {
-    let errorText = res.statusText;
+  if (response.status < 200 || response.status >= 300) {
+    let errorMsg = `API Error [${response.status}]`;
     try {
-      errorText = await res.text();
-    } catch {}
-    throw new Error(
-      `API Error [${res.status}]: ${errorText || res.statusText}`,
-    );
+      const parsed = JSON.parse(response.body);
+      if (parsed.error) {
+        errorMsg = parsed.error;
+      }
+    } catch {
+      if (response.body) errorMsg += `: ${response.body}`;
+    }
+    throw new Error(errorMsg);
   }
 
-  return res.json() as Promise<ParseWorkoutImageResponse>;
+  return JSON.parse(response.body) as ParseWorkoutImageResponse;
 }
 
 // ==========================================
@@ -866,47 +889,43 @@ export async function parseAppearanceImage(
 ): Promise<{ appearance: string }> {
   const url = `${API_BASE_URL}/appearance-from-image`;
 
-  const formData = new FormData();
   const filename = imageUri.split("/").pop() || "person.jpg";
   const ext = filename.split(".").pop()?.toLowerCase();
   const mimeType = ext === "png" ? "image/png" : "image/jpeg";
 
-  formData.append("image", {
-    uri: imageUri,
-    name: filename,
-    type: mimeType,
-  } as any);
-
   const headers: Record<string, string> = {};
-
   const token = await getToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(url, {
-    method: "POST",
+  const response = await uploadAsync(url, imageUri, {
+    httpMethod: "POST",
+    uploadType: FileSystemUploadType.MULTIPART,
+    fieldName: "image",
+    mimeType,
     headers,
-    body: formData,
   });
 
-  if (res.status === 401) {
-    const { useAuthStore } = await import("@/features/auth/useAuthStore");
-    useAuthStore.getState().handleUnauthorized();
+  if (response.status === 401) {
+    await notifyUnauthorized();
     throw new Error("Unauthorized");
   }
 
-  if (!res.ok) {
-    let errorText = res.statusText;
+  if (response.status < 200 || response.status >= 300) {
+    let errorMsg = `API Error [${response.status}]`;
     try {
-      errorText = await res.text();
-    } catch {}
-    throw new Error(
-      `API Error [${res.status}]: ${errorText || res.statusText}`,
-    );
+      const parsed = JSON.parse(response.body);
+      if (parsed.error) {
+        errorMsg = parsed.error;
+      }
+    } catch {
+      if (response.body) errorMsg += `: ${response.body}`;
+    }
+    throw new Error(errorMsg);
   }
 
-  return res.json() as Promise<{ appearance: string }>;
+  return JSON.parse(response.body) as { appearance: string };
 }
 
 // ==========================================
@@ -1028,4 +1047,8 @@ export async function fetchPreWodAdvice(
     method: "POST",
     bodyPayload: req,
   });
+}
+
+export function fetchActivitySummary(sessionId: string, profileId: number, signal?: AbortSignal): Promise<ActivitySummary> {
+ return apiClient<ActivitySummary>(activitySummaryPath(sessionId, profileId), { signal });
 }

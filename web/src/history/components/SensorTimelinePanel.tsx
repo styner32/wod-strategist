@@ -18,6 +18,8 @@ export interface SensorTimelinePanelProps {
   currentTime?: number;
   onSeekMedia?: (mediaSec: number) => void;
   isMergedVideo?: boolean;
+  onReprocess?: () => Promise<void> | void;
+  isReprocessing?: boolean;
 }
 
 function getStatusLabel(status?: string): string {
@@ -42,6 +44,8 @@ export function SensorTimelinePanel({
   currentTime,
   onSeekMedia,
   isMergedVideo = true,
+  onReprocess,
+  isReprocessing,
 }: SensorTimelinePanelProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
@@ -366,8 +370,23 @@ export function SensorTimelinePanel({
         className="rounded-xl border border-border bg-bg-elevated p-5 mb-6"
         aria-label={labels.title}
       >
-        <h2 className="font-semibold text-text-primary mb-2">{labels.title}</h2>
-        <p className="text-sm text-error">{labels.failed}</p>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="font-semibold text-text-primary">{labels.title}</h2>
+          <span className="inline-flex rounded-md bg-error/20 px-2 py-0.5 text-xs font-medium text-error">
+            Failed
+          </span>
+        </div>
+        <p className="text-sm text-error mb-3">{labels.failed}</p>
+        {onReprocess && (
+          <button
+            type="button"
+            onClick={() => void onReprocess()}
+            disabled={isReprocessing}
+            className="inline-flex items-center rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/90 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-accent cursor-pointer"
+          >
+            {isReprocessing ? labels.reprocessing : labels.reprocess}
+          </button>
+        )}
       </section>
     );
   }

@@ -39,6 +39,10 @@ const MAPPING = {
   'play.fill': 'play-arrow',
   'pause.fill': 'pause',
   'square.fill': 'stop',
+  'chevron.down': 'expand-more',
+  'chevron.up': 'expand-less',
+  'sparkles': 'auto-awesome',
+  'flag.fill': 'flag',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**

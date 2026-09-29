@@ -278,11 +278,11 @@ func (w *Worker) runInjuryVariant(ctx context.Context, p InjuryAnalysisPayload,
 
 		analysis, usage, err := w.GeminiClient.AnalyzeSegment(
 			ctx, p.GeminiFileURI, p.GeminiMIMEType, 0, 0, basePrompt)
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment:"+variant, usage)
 		if err != nil {
 			w.logger.Error("Full injury analysis failed", zap.String("variant", variant), zap.Error(err))
 			return ""
 		}
-		w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment:"+variant, usage)
 		w.recordStageMetrics(p.SessionID, p.ProfileID, "injury_analysis", variant, 1, 0, 0, time.Since(started))
 		return analysis
 	}
@@ -303,12 +303,12 @@ func (w *Worker) runInjuryVariant(ctx context.Context, p InjuryAnalysisPayload,
 		segAnalysis, usage, err := w.GeminiClient.AnalyzeSegment(
 			ctx, p.GeminiFileURI, p.GeminiMIMEType,
 			time.Duration(iv.StartSecs)*time.Second, time.Duration(iv.EndSecs)*time.Second, segPrompt)
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment:"+variant, usage)
 		if err != nil {
 			w.logger.Error("Injury segment analysis failed",
 				zap.String("variant", variant), zap.Error(err))
 			continue
 		}
-		w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment:"+variant, usage)
 		sb.WriteString(fmt.Sprintf("\n\n---\n## 부상 분석 구간 %d: %s ~ %s\n\n%s",
 			i+1, startStr, endStr, segAnalysis))
 	}

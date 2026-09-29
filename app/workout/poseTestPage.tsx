@@ -19,7 +19,7 @@ import {
   useCameraPermission,
 } from 'react-native-vision-camera';
 import { router } from 'expo-router';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused } from 'expo-router/react-navigation';
 
 import { usePoseDetection, HEAVY_MODEL } from '../../features/ai-coach/frame-processors/usePoseDetection';
 import { KeypointLabelOverlay, KEYPOINT_NAMES, KEYPOINT_COLORS, MIN_SCORE } from '../../features/ai-coach/ui/KeypointLabelOverlay';
@@ -120,6 +120,9 @@ export default function PoseTestPage() {
         fps={30}
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
+        // Keep the same uncompressed 8-bit input required by MoveNet in recording.
+        videoHdr={false}
+        enableBufferCompression={false}
         video={true}
         audio={false}
       />

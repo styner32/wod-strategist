@@ -258,6 +258,9 @@ func (ctl *Controller) collectSessionCatalog(ctx context.Context) (SessionCatalo
 	}
 
 	for _, info := range videoInfos {
+		if !isVideoAssetObject(info.Name) {
+			continue
+		}
 		sessionID := sessionIDFromObjectName(info.Name)
 		if sessionID == "" {
 			continue
@@ -372,12 +375,26 @@ func hasSubtitleContent(chunks []db.ChunkAnalysisResult) bool {
 	return false
 }
 
+// Session folders also contain Apple AI JPEG/JSON and sensor telemetry.
+// Match the merge worker's video extensions before counting or exposing assets.
+func isVideoAssetObject(objectName string) bool {
+	switch strings.ToLower(filepath.Ext(objectName)) {
+	case ".mp4", ".mov":
+		return true
+	default:
+		return false
+	}
+}
+
 func buildVideoAssets(sessionID string, bucketName string, infos []storage.ObjectInfo) []sessionAsset {
 	var chunkAssets []sessionAsset
 	var mergedAsset *sessionAsset
 	var hardsubbedAsset *sessionAsset
 
 	for _, info := range infos {
+		if !isVideoAssetObject(info.Name) {
+			continue
+		}
 		base := filepath.Base(info.Name)
 
 		// Check new nested layout: videos/{pid}/{sid}/{file}

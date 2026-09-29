@@ -1,0 +1,1422 @@
+diff --git a/node_modules/react-native-vision-camera/android/src/main/java/com/mrousavy/camera/core/types/RecordVideoOptions.kt b/node_modules/react-native-vision-camera/android/src/main/java/com/mrousavy/camera/core/types/RecordVideoOptions.kt
+index 1fca870..cdf0ce4 100644
+--- a/node_modules/react-native-vision-camera/android/src/main/java/com/mrousavy/camera/core/types/RecordVideoOptions.kt
++++ b/node_modules/react-native-vision-camera/android/src/main/java/com/mrousavy/camera/core/types/RecordVideoOptions.kt
+@@ -9,6 +9,7 @@ class RecordVideoOptions(val file: OutputFile, val videoCodec: VideoCodec) {
+ 
+   companion object {
+     fun fromJSValue(context: Context, map: ReadableMap): RecordVideoOptions {
++      require(!map.hasKey("segmented") || !map.getBoolean("segmented")) { "Segmented recording is only supported on iOS." }
+       val directory = if (map.hasKey("path")) FileUtils.getDirectory(map.getString("path")) else context.cacheDir
+       val fileType = if (map.hasKey("fileType")) VideoFileType.fromUnionValue(map.getString("fileType")) else VideoFileType.MOV
+       val videoCodec = if (map.hasKey("videoCodec")) VideoCodec.fromUnionValue(map.getString("videoCodec")) else VideoCodec.H264
+diff --git a/node_modules/react-native-vision-camera/ios/Core/CameraSession+Audio.swift b/node_modules/react-native-vision-camera/ios/Core/CameraSession+Audio.swift
+index 3d67c8c..9170e4b 100644
+--- a/node_modules/react-native-vision-camera/ios/Core/CameraSession+Audio.swift
++++ b/node_modules/react-native-vision-camera/ios/Core/CameraSession+Audio.swift
+@@ -79,7 +79,7 @@ extension CameraSession {
+       let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+       if options.contains(.shouldResume) {
+         // Try resuming if possible
+-        let isRecording = recordingSession != nil
++        let isRecording = recordingSession != nil || segmentedRecordingSession != nil
+         if isRecording {
+           CameraQueues.audioQueue.async {
+             VisionLogger.log(level: .info, message: "Resuming interrupted Audio Session...")
+diff --git a/node_modules/react-native-vision-camera/ios/Core/CameraSession+Video.swift b/node_modules/react-native-vision-camera/ios/Core/CameraSession+Video.swift
+index 8e57710..41f3f43 100644
+--- a/node_modules/react-native-vision-camera/ios/Core/CameraSession+Video.swift
++++ b/node_modules/react-native-vision-camera/ios/Core/CameraSession+Video.swift
+@@ -18,6 +18,8 @@ extension CameraSession {
+    */
+   func startRecording(options: RecordVideoOptions,
+                       onVideoRecorded: @escaping (_ video: Video) -> Void,
++                      onSourceFinalized: @escaping ([String: Any]) -> Void,
++                      onSegment: @escaping ([String: Any]) -> Void,
+                       onError: @escaping (_ error: CameraError) -> Void) {
+     // Run on Camera Queue
+     CameraQueues.cameraQueue.async {
+@@ -34,7 +36,20 @@ extension CameraSession {
+         return
+       }
+ 
++      guard self.recordingSession == nil, self.segmentedRecordingSession == nil, self.pendingSegmentedRecording == nil else {
++        onError(.capture(.recordingInProgress))
++        return
++      }
+       let enableAudio = self.configuration?.audio != .disabled
++      if options.segmented {
++        if #available(iOS 14.0, *) {
++          self.startSegmentedRecording(options: options, videoOutput: videoOutput, enableAudio: enableAudio,
++                                       onVideoRecorded: onVideoRecorded, onSourceFinalized: onSourceFinalized, onSegment: onSegment, onError: onError)
++        } else {
++          onError(.parameter(.unsupportedOutput(outputDescriptor: "segmented recording requires iOS 14 or newer")))
++        }
++        return
++      }
+ 
+       // Callback for when the recording ends
+       let onFinish = { (recordingSession: RecordingSession, status: AVAssetWriter.Status, error: Error?) in
+@@ -144,6 +159,14 @@ extension CameraSession {
+   func stopRecording(promise: Promise) {
+     CameraQueues.cameraQueue.async {
+       withPromise(promise) {
++        if let pending = self.pendingSegmentedRecording {
++          pending.cancel(CameraError.capture(.recordingCanceled))
++          return nil
++        }
++        if let segmented = self.segmentedRecordingSession {
++          segmented.stop()
++          return nil
++        }
+         guard let recordingSession = self.recordingSession else {
+           throw CameraError.capture(.noRecordingInProgress)
+         }
+@@ -167,6 +190,9 @@ extension CameraSession {
+   func pauseRecording(promise: Promise) {
+     CameraQueues.cameraQueue.async {
+       withPromise(promise) {
++        if self.segmentedRecordingSession != nil {
++          throw CameraError.parameter(.unsupportedOutput(outputDescriptor: "Use stopRecording and a new segmented run to pause"))
++        }
+         guard let recordingSession = self.recordingSession else {
+           throw CameraError.capture(.noRecordingInProgress)
+         }
+@@ -182,6 +208,9 @@ extension CameraSession {
+   func resumeRecording(promise: Promise) {
+     CameraQueues.cameraQueue.async {
+       withPromise(promise) {
++        if self.segmentedRecordingSession != nil {
++          throw CameraError.parameter(.unsupportedOutput(outputDescriptor: "Use stopRecording and a new segmented run to resume"))
++        }
+         guard let recordingSession = self.recordingSession else {
+           throw CameraError.capture(.noRecordingInProgress)
+         }
+@@ -190,4 +219,102 @@ extension CameraSession {
+       }
+     }
+   }
++  @available(iOS 14.0, *)
++  private func startSegmentedRecording(options: RecordVideoOptions, videoOutput: AVCaptureVideoDataOutput,
++                                      enableAudio: Bool, onVideoRecorded: @escaping (Video) -> Void,
++                                      onSourceFinalized: @escaping ([String: Any]) -> Void,
++                                      onSegment: @escaping ([String: Any]) -> Void,
++                                      onError: @escaping (CameraError) -> Void) {
++    guard enableAudio else {
++      createSegmentedRecording(options: options, videoOutput: videoOutput, audio: nil,
++        onVideoRecorded: onVideoRecorded, onSourceFinalized: onSourceFinalized, onSegment: onSegment, onError: onError)
++      return
++    }
++    let pending = SegmentedAudioStartup(queue: CameraQueues.cameraQueue) { pending, result in
++      guard self.pendingSegmentedRecording === pending else { return }
++      CameraQueues.audioQueue.sync {
++        if self.segmentedAudioStartup === pending { self.segmentedAudioStartup = nil }
++        if case .failure = result { self.deactivateAudioSession() }
++      }
++      self.pendingSegmentedRecording = nil
++      switch result {
++      case .success(let audio):
++        self.createSegmentedRecording(options: options, videoOutput: videoOutput, audio: audio,
++          onVideoRecorded: onVideoRecorded, onSourceFinalized: onSourceFinalized, onSegment: onSegment, onError: onError)
++      case .failure(let error):
++        if let cameraError = error as? CameraError { onError(cameraError) }
++        else { onError(.capture(.createRecorderError(message: error.localizedDescription))) }
++      }
++    }
++    pendingSegmentedRecording = pending
++    CameraQueues.audioQueue.async {
++      self.segmentedAudioStartup = pending
++      do {
++        guard self.audioDeviceInput != nil, self.audioOutput != nil else {
++          throw CameraError.capture(.createRecorderError(message: "Microphone input/output is not configured"))
++        }
++        try self.activateAudioSession()
++      } catch { pending.fail(error) }
++    }
++  }
++
++  @available(iOS 14.0, *)
++  private func createSegmentedRecording(options: RecordVideoOptions, videoOutput: AVCaptureVideoDataOutput,
++                                       audio: SegmentedAudioConfiguration?, onVideoRecorded: @escaping (Video) -> Void,
++                                       onSourceFinalized: @escaping ([String: Any]) -> Void,
++                                       onSegment: @escaping ([String: Any]) -> Void,
++                                       onError: @escaping (CameraError) -> Void) {
++    let enableAudio = audio != nil
++    do {
++      let orientation = outputOrientation.relativeTo(orientation: videoOutput.orientation)
++      let videoSettings = try videoOutput.recommendedVideoSettings(forOptions: options)
++      weak var identity: SegmentedRecordingSession?
++      var wasCanceled = false
++      let completion = SegmentedRecordingCompletion(queue: CameraQueues.cameraQueue,
++        releaseActive: { [weak self] released in
++          guard let self, let identity, self.segmentedRecordingSession === identity else { released(); return }
++          wasCanceled = self.didCancelRecording
++          let clearIdentity = {
++            CameraQueues.cameraQueue.async {
++              if self.segmentedRecordingSession === identity { self.segmentedRecordingSession = nil }
++              released()
++            }
++          }
++          // A new run becomes available only after this run's audio shutdown finishes.
++          if enableAudio {
++            CameraQueues.audioQueue.async { self.deactivateAudioSession(); clearIdentity() }
++          } else { clearIdentity() }
++        }, onSource: onSourceFinalized, onFinish: { result, error in
++          // This run may finish preparing clips after a newer run has already started.
++          // Always deliver its completion; never touch the newer capture/audio identity.
++          if let error {
++            onError(.capture(.unknown(message: "Segmented original retained at \(options.path.path): \(error.localizedDescription)")))
++          } else if wasCanceled {
++            onError(.capture(.recordingCanceled))
++          } else {
++            let video = Video(path: options.path.absoluteString, duration: result["duration"] as? Double ?? 0,
++              size: CGSize(width: result["width"] as? Double ?? 0, height: result["height"] as? Double ?? 0),
++              segmentedDetails: result)
++            onVideoRecorded(video)
++          }
++        })
++      let session = try SegmentedRecordingSession(sourceURL: options.path, videoSettings: videoSettings,
++        audioSettings: audio?.settings, audioFormat: audio?.format, transform: orientation.affineTransform,
++        metadata: metadataProvider.createVideoMetadata(), clock: captureSession.clock,
++        frameDuration: videoDeviceInput?.device.activeVideoMinFrameDuration ?? .invalid,
++        onSegment: onSegment, onSourceFinalized: completion.sourceFinalized,
++        onFinish: { result, error in completion.drained(result, error: error) })
++      identity = session
++      try session.start()
++      didCancelRecording = false
++      segmentedRecordingSession = session
++    } catch let error as CameraError {
++      if enableAudio { CameraQueues.audioQueue.sync { self.deactivateAudioSession() } }
++      onError(error)
++    } catch {
++      if enableAudio { CameraQueues.audioQueue.sync { self.deactivateAudioSession() } }
++      onError(.capture(.createRecorderError(message: "Segmented recording could not start: \(error.localizedDescription)")))
++    }
++  }
++
+ }
+diff --git a/node_modules/react-native-vision-camera/ios/Core/CameraSession.swift b/node_modules/react-native-vision-camera/ios/Core/CameraSession.swift
+index 10b0f33..9a0f3a1 100644
+--- a/node_modules/react-native-vision-camera/ios/Core/CameraSession.swift
++++ b/node_modules/react-native-vision-camera/ios/Core/CameraSession.swift
+@@ -31,6 +31,9 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
+   // State
+   var metadataProvider = MetadataProvider()
+   var recordingSession: RecordingSession?
++  var segmentedRecordingSession: SegmentedRecording?
++  var pendingSegmentedRecording: SegmentedAudioStartup? // camera queue
++  var segmentedAudioStartup: SegmentedAudioStartup? // audio queue
+   var didCancelRecording = false
+   var orientationManager = OrientationManager()
+ 
+@@ -276,7 +279,12 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
+     }
+   }
+ 
++  public final func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
++    if output is AVCaptureVideoDataOutput { segmentedRecordingSession?.recordCaptureDrop(buffer: sampleBuffer) }
++  }
++
+   private final func onVideoFrame(sampleBuffer: CMSampleBuffer, orientation: Orientation, isMirrored: Bool) {
++    segmentedRecordingSession?.append(buffer: sampleBuffer, isVideo: true)
+     if let recordingSession {
+       do {
+         // Write the Video Buffer to the .mov/.mp4 file
+@@ -295,6 +303,16 @@ final class CameraSession: NSObject, AVCaptureVideoDataOutputSampleBufferDelegat
+   }
+ 
+   private final func onAudioFrame(sampleBuffer: CMSampleBuffer) {
++    if let segmentedAudioStartup {
++      segmentedAudioStartup.receive(sampleBuffer,
++        recommended: audioOutput?.recommendedAudioSettingsForAssetWriter(writingTo: .mp4))
++      return
++    }
++    if let segmentedRecordingSession {
++      audioCaptureSession.synchronizeBuffer(sampleBuffer, toSession: captureSession)
++      segmentedRecordingSession.append(buffer: sampleBuffer, isVideo: false)
++      return
++    }
+     if let recordingSession {
+       do {
+         // Synchronize the Audio Buffer with the Video Session's time because it's two separate
+diff --git a/node_modules/react-native-vision-camera/ios/Core/RecordingSession.swift b/node_modules/react-native-vision-camera/ios/Core/RecordingSession.swift
+index adee189..a843bbe 100644
+--- a/node_modules/react-native-vision-camera/ios/Core/RecordingSession.swift
++++ b/node_modules/react-native-vision-camera/ios/Core/RecordingSession.swift
+@@ -26,6 +26,7 @@ final class RecordingSession {
+   private var audioTrack: Track?
+   private let completionHandler: (RecordingSession, AVAssetWriter.Status, Error?) -> Void
+   private var isFinishing = false
++  private var didRequestStop = false
+ 
+   private let lock = DispatchSemaphore(value: 1)
+ 
+@@ -179,6 +180,9 @@ final class RecordingSession {
+       lock.signal()
+     }
+ 
++    guard !didRequestStop, !isFinishing else { return }
++    didRequestStop = true
++
+     VisionLogger.log(level: .info, message: "Stopping Asset Writer with status \"\(assetWriter.status.descriptor)\"...")
+ 
+     // Stop both tracks
+@@ -279,6 +283,14 @@ final class RecordingSession {
+       lock.signal()
+     }
+ 
++    guard !isFinishing else {
++      // We're already finishing - there was a second call to this method.
++      VisionLogger.log(level: .warning, message: "Tried calling finish() twice!")
++      return
++    }
++
++    isFinishing = true
++
+     VisionLogger.log(level: .info, message: "Stopping AssetWriter with status \"\(assetWriter.status.descriptor)\"...")
+ 
+     guard let videoTrack,
+@@ -296,13 +308,6 @@ final class RecordingSession {
+       return
+     }
+ 
+-    guard !isFinishing else {
+-      // We're already finishing - there was a second call to this method.
+-      VisionLogger.log(level: .warning, message: "Tried calling finish() twice!")
+-      return
+-    }
+-
+-    isFinishing = true
+ 
+     // End the session at the last video frame's timestamp.
+     // If there are audio frames after this timestamp, they will be cut off.
+diff --git a/node_modules/react-native-vision-camera/ios/Core/SegmentedRecordingSession.swift b/node_modules/react-native-vision-camera/ios/Core/SegmentedRecordingSession.swift
+new file mode 100644
+index 0000000..a86f31d
+--- /dev/null
++++ b/node_modules/react-native-vision-camera/ios/Core/SegmentedRecordingSession.swift
+@@ -0,0 +1,550 @@
++// WOD experimental recording: one encoder, durable source, independent analysis derivatives.
++// Kept separate from RecordingSession so the default VisionCamera path is unchanged.
++import AVFoundation
++import Foundation
++import UniformTypeIdentifiers
++
++protocol SegmentedRecording: AnyObject {
++  func append(buffer: CMSampleBuffer, isVideo: Bool)
++  func stop()
++  func recordCaptureDrop(buffer: CMSampleBuffer)
++}
++
++// Encoder settings come from delivered microphone PCM, not the device's nominal format.
++struct SegmentedAudioConfiguration {
++  let format: CMFormatDescription
++  let settings: [String: Any]
++
++  init(format: CMFormatDescription, recommended: [String: Any]?) throws {
++    guard CMFormatDescriptionGetMediaType(format) == kCMMediaType_Audio,
++          let description = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
++          description.mSampleRate.isFinite, description.mSampleRate > 0,
++          description.mChannelsPerFrame > 0 else {
++      throw NSError(domain: "SegmentedAudioStartup", code: 1,
++                    userInfo: [NSLocalizedDescriptionKey: "Microphone delivered an invalid audio format"])
++    }
++    self.format = format
++    if let recommended, !recommended.isEmpty {
++      settings = recommended
++    } else {
++      // Some capture outputs do not supply MP4 recommendations. This is the
++      // initial camera encode; retain the actual input rate and channel count.
++      settings = [AVFormatIDKey: kAudioFormatMPEG4AAC,
++                  AVSampleRateKey: description.mSampleRate,
++                  AVNumberOfChannelsKey: description.mChannelsPerFrame,
++                  AVEncoderBitRateKey: min(320000, 128000 * Int(description.mChannelsPerFrame))]
++    }
++  }
++}
++
++// Exactly one startup outcome, serialized with camera start/stop. The audio
++// delegate only offers real buffers; it never blocks waiting for camera work.
++final class SegmentedAudioStartup {
++  private let queue: DispatchQueue
++  private var completion: ((SegmentedAudioStartup, Result<SegmentedAudioConfiguration, Error>) -> Void)?
++
++  init(queue: DispatchQueue, timeout: Double = 5,
++       completion: @escaping (SegmentedAudioStartup, Result<SegmentedAudioConfiguration, Error>) -> Void) {
++    self.queue = queue
++    self.completion = completion
++    queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
++      self?.finish(.failure(NSError(domain: "SegmentedAudioStartup", code: 2,
++        userInfo: [NSLocalizedDescriptionKey: "Microphone produced no usable audio buffer before startup timeout"])))
++    }
++  }
++
++  func receive(_ buffer: CMSampleBuffer, recommended: [String: Any]?) {
++    guard CMSampleBufferDataIsReady(buffer), CMSampleBufferGetNumSamples(buffer) > 0,
++          let format = CMSampleBufferGetFormatDescription(buffer) else { return }
++    let result = Result { try SegmentedAudioConfiguration(format: format, recommended: recommended) }
++    queue.async { self.finish(result) }
++  }
++
++  func fail(_ error: Error) {
++    queue.async { self.finish(.failure(error)) }
++  }
++
++  // Call on the camera queue so a stop already being handled wins over queued audio.
++  func cancel(_ error: Error) { finish(.failure(error)) }
++
++  private func finish(_ result: Result<SegmentedAudioConfiguration, Error>) {
++    let callback = completion
++    completion = nil
++    callback?(self, result)
++  }
++}
++
++// Release the active capture/audio identity when its source is closed, while keeping
++// its later analysis-drained callback alive. All coordinator state belongs to queue.
++final class SegmentedRecordingCompletion {
++  private let queue: DispatchQueue
++  private let releaseActive: (@escaping () -> Void) -> Void
++  private let onSource: ([String: Any]) -> Void
++  private let onFinish: ([String: Any], Error?) -> Void
++  private var source: [String: Any]?
++  private var terminal: ([String: Any], Error?)?
++  private var releaseStarted = false
++  private var released = false
++  private var sourceDelivered = false
++  private var finishDelivered = false
++
++  init(queue: DispatchQueue, releaseActive: @escaping (@escaping () -> Void) -> Void,
++       onSource: @escaping ([String: Any]) -> Void,
++       onFinish: @escaping ([String: Any], Error?) -> Void) {
++    self.queue = queue; self.releaseActive = releaseActive
++    self.onSource = onSource; self.onFinish = onFinish
++  }
++
++  func sourceFinalized(_ value: [String: Any]) {
++    queue.async { self.source = value; self.releaseOnce(); self.deliver() }
++  }
++
++  func drained(_ value: [String: Any], error: Error?) {
++    queue.async { self.terminal = (value, error); self.releaseOnce(); self.deliver() }
++  }
++
++  private func releaseOnce() {
++    guard !releaseStarted else { return }
++    releaseStarted = true
++    releaseActive {
++      self.queue.async { self.released = true; self.deliver() }
++    }
++  }
++
++  private func deliver() {
++    guard released else { return }
++    if let source, !sourceDelivered { sourceDelivered = true; onSource(source) }
++    if let terminal, !finishDelivered { finishDelivered = true; onFinish(terminal.0, terminal.1) }
++  }
++}
++
++@available(iOS 14.0, macOS 11.0, *)
++final class SegmentedRecordingSession: NSObject, SegmentedRecording, AVAssetWriterDelegate, @unchecked Sendable {
++  private let writer: AVAssetWriter
++  private let videoInput: AVAssetWriterInput
++  private let audioInput: AVAssetWriterInput?
++  private let clock: CMClock
++  private let sourceURL: URL
++  private let analysisDirectory: URL
++  private let sourceFile: FileHandle
++  private let onSegment: ([String: Any]) -> Void
++  private let onSourceFinalized: ([String: Any]) -> Void
++  private let onFinish: ([String: Any], Error?) -> Void
++  private let state = NSRecursiveLock()
++  private let archiveQueue = DispatchQueue(label: "wod.recording.archive", qos: .userInitiated)
++  private let preparationQueue = DispatchQueue(label: "wod.recording.analysis", qos: .utility)
++  // Apple HLS stores AAC priming before the first PCM PTS; keep that decode time positive.
++  private let mediaTimeOffset = CMTime(seconds: 10, preferredTimescale: 60000)
++  private var clockAnchor = CMTime.zero
++  private var epochAnchorMs = 0.0
++  private var started = false
++  private var finishing = false
++  private var stopTime: CMTime?
++  private var crossedVideoEnd = false
++  private var crossedAudioEnd = false
++  private var latency = 0.0
++  private var firstVideoTime: CMTime?
++  private var lastVideoEnd = CMTime.zero
++  private var droppedVideoFrames = 0
++  private var droppedAudioBuffers = 0
++  private var tailDrainTimedOut = false
++  private var pendingArchiveBytes = 0
++  private var fatalError: Error?
++  // Only archiveQueue owns these; preparation tasks receive immutable copies.
++  private var initializationLength: UInt64 = 0
++  private var committedLength: UInt64 = 0
++  private var entries: [[String: Any]] = []
++  private var preparedEvents: [[String: Any]] = []
++  private var failedSegmentCount = 0
++  private let size: CGSize
++  private let transform: CGAffineTransform
++  private let nominalFrameDuration: CMTime
++
++  init(sourceURL: URL, videoSettings: [String: Any], audioSettings: [String: Any]?,
++       audioFormat: CMFormatDescription?, transform: CGAffineTransform,
++       metadata: [AVMetadataItem], clock: CMClock, frameDuration: CMTime, interval: Double = 10,
++       onSegment: @escaping ([String: Any]) -> Void,
++       onSourceFinalized: @escaping ([String: Any]) -> Void = { _ in },
++       onFinish: @escaping ([String: Any], Error?) -> Void) throws {
++    self.sourceURL = sourceURL
++    self.clock = clock
++    self.onSegment = onSegment
++    self.onFinish = onFinish
++    self.onSourceFinalized = onSourceFinalized
++    self.transform = transform
++    size = CGSize(width: (videoSettings[AVVideoWidthKey] as? NSNumber)?.doubleValue ?? 0,
++                  height: (videoSettings[AVVideoHeightKey] as? NSNumber)?.doubleValue ?? 0)
++    guard frameDuration.isNumeric, frameDuration > .zero else {
++      throw Self.failure("Configured capture frame duration is unavailable")
++    }
++    nominalFrameDuration = frameDuration
++    analysisDirectory = sourceURL.deletingLastPathComponent().appendingPathComponent("analysis", isDirectory: true)
++    try FileManager.default.createDirectory(at: analysisDirectory, withIntermediateDirectories: true)
++    guard !FileManager.default.fileExists(atPath: sourceURL.path),
++          FileManager.default.createFile(atPath: sourceURL.path, contents: nil) else {
++      throw Self.failure("Original source already exists or cannot be created")
++    }
++    sourceFile = try FileHandle(forWritingTo: sourceURL)
++    writer = AVAssetWriter(contentType: .mpeg4Movie)
++    writer.outputFileTypeProfile = .mpeg4AppleHLS
++    writer.preferredOutputSegmentInterval = CMTime(seconds: interval, preferredTimescale: 60000)
++    writer.initialSegmentStartTime = mediaTimeOffset
++    writer.metadata = metadata
++    videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
++    videoInput.expectsMediaDataInRealTime = true
++    videoInput.transform = transform
++    guard writer.canAdd(videoInput) else { throw Self.failure("Video encoder settings unsupported") }
++    writer.add(videoInput)
++    if let audioFormat {
++      // Numeric-interval segmentation supports encoding A/V together, not an audio passthrough input.
++      guard let audioSettings else { throw Self.failure("Missing audio encoding settings") }
++      let input = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings, sourceFormatHint: audioFormat)
++      input.expectsMediaDataInRealTime = true
++      guard writer.canAdd(input) else { throw Self.failure("Audio encoder settings unsupported") }
++      writer.add(input)
++      audioInput = input
++    } else {
++      audioInput = nil
++    }
++    super.init()
++    writer.delegate = self
++  }
++
++  func start() throws {
++    state.lock(); defer { state.unlock() }
++    // Map the native capture clock once. Callback/processing latency never changes this anchor.
++    clockAnchor = CMClockGetTime(clock)
++    epochAnchorMs = Date().timeIntervalSince1970 * 1000
++    guard writer.startWriting() else { throw writer.error ?? Self.failure("Encoder did not start") }
++    writer.startSession(atSourceTime: .zero)
++    started = true
++  }
++
++  func append(buffer: CMSampleBuffer, isVideo: Bool) {
++    state.lock(); defer { state.unlock() }
++    guard started, !finishing else { return }
++    let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
++    guard pts.isNumeric else { recordDrop(isVideo); return }
++    latency = max(latency, max(0, (CMClockGetTime(clock) - pts).seconds))
++    let relative = pts - clockAnchor
++    // Stabilization can deliver pre-start samples. They do not belong to this active run.
++    guard relative >= .zero else { return }
++    if let stopTime, pts > stopTime {
++      if isVideo { crossedVideoEnd = true } else { crossedAudioEnd = true }
++      if crossedVideoEnd && (audioInput == nil || crossedAudioEnd) { finishLocked() }
++      return
++    }
++    guard let input = isVideo ? videoInput : audioInput else { return }
++    guard input.isReadyForMoreMediaData else {
++      // Never block the capture queue or retain an unbounded list of raw 4K frames.
++      // These counters make the experimental source explicitly incomplete to the caller.
++      recordDrop(isVideo)
++      if writer.status == .failed { fatalError = writer.error; finishLocked() }
++      return
++    }
++    do {
++      let sample = try Self.rebase(buffer, by: clockAnchor - mediaTimeOffset)
++      guard input.append(sample) else {
++        recordDrop(isVideo)
++        if writer.status == .failed { fatalError = writer.error; finishLocked() }
++        return
++      }
++      if isVideo {
++        if firstVideoTime == nil { firstVideoTime = relative }
++        let duration = CMSampleBufferGetDuration(buffer)
++        let sampleDuration = duration.isNumeric && duration > .zero ? duration : nominalFrameDuration
++        lastVideoEnd = max(lastVideoEnd, relative + sampleDuration)
++      }
++    } catch {
++      recordDrop(isVideo)
++      fatalError = error
++      finishLocked()
++    }
++  }
++
++  func recordCaptureDrop(buffer: CMSampleBuffer) {
++    state.lock(); defer { state.unlock() }
++    let pts = CMSampleBufferGetPresentationTimeStamp(buffer)
++    guard started, !finishing, pts.isNumeric, pts >= clockAnchor,
++          stopTime == nil || pts <= stopTime! else { return }
++    droppedVideoFrames += 1
++  }
++
++  func stop() {
++    state.lock(); defer { state.unlock() }
++    guard started, !finishing, stopTime == nil else { return }
++    stopTime = CMClockGetTime(clock)
++    // Drain frames captured before stop even when stabilization delays their delivery.
++    let drainDeadline = min(10, max(0.5, latency * 2 + 0.25))
++    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + drainDeadline) {
++      self.state.lock(); defer { self.state.unlock() }
++      if !self.finishing {
++        self.tailDrainTimedOut = !(self.crossedVideoEnd && (self.audioInput == nil || self.crossedAudioEnd))
++        self.finishLocked()
++      }
++    }
++  }
++
++  private func recordDrop(_ isVideo: Bool) {
++    if isVideo { droppedVideoFrames += 1 } else { droppedAudioBuffers += 1 }
++  }
++
++  // Called with state held, after append has returned. No subsequent input is admitted.
++  private func finishLocked() {
++    guard !finishing else { return }
++    finishing = true
++    if writer.status == .writing {
++      videoInput.markAsFinished()
++      audioInput?.markAsFinished()
++      // Do not end at last PTS: that would trim the final sample's presentation duration.
++      writer.finishWriting { self.drainOutputs() }
++    } else {
++      drainOutputs()
++    }
++  }
++
++  private func drainOutputs() {
++    // finishWriting has emitted its tail. This fence persists all delegate output before
++    // waiting for the independent preparation queue and reporting the terminal callback.
++    archiveQueue.async {
++      do { try self.sourceFile.synchronize(); try self.sourceFile.close() }
++      catch { self.setFatal(error) }
++      let (metadata, error) = self.result()
++      do { try self.writeManifest(terminal: metadata, error: error) }
++      catch { self.setFatal(error) }
++      let (confirmedMetadata, confirmedError) = self.result()
++      if confirmedError == nil { self.onSourceFinalized(confirmedMetadata) }
++      self.preparationQueue.async {
++        self.archiveQueue.async {
++          let (metadata, error) = self.result()
++          do { try self.writeManifest(terminal: metadata, error: error) }
++          catch { self.onFinish(metadata, error); return }
++          self.onFinish(metadata, error)
++        }
++      }
++    }
++  }
++
++  // Called on archiveQueue; only capture counters require the state lock.
++  private func result() -> ([String: Any], Error?) {
++    state.lock(); defer { state.unlock() }
++    let start = firstVideoTime ?? .zero
++    let error = fatalError ?? writer.error ??
++      (writer.status == .completed && firstVideoTime != nil ? nil : Self.failure("Original recording is incomplete"))
++    return (["segmented": true, "path": sourceURL.absoluteString,
++      "duration": max(0, (lastVideoEnd - start).seconds), "width": size.width, "height": size.height,
++      "captureStartTimeMs": epochAnchorMs + start.seconds * 1000,
++      "captureEndTimeMs": epochAnchorMs + lastVideoEnd.seconds * 1000,
++      "captureClockOffsetMs": epochAnchorMs - clockAnchor.seconds * 1000,
++      "segments": preparedEvents.map { event in
++        var terminalEvent = event
++        terminalEvent["isLast"] = (event["index"] as? Int) == entries.count
++        return terminalEvent
++      }, "segmentCount": entries.count, "failedSegmentCount": failedSegmentCount,
++      "droppedVideoFrames": droppedVideoFrames, "droppedAudioBuffers": droppedAudioBuffers,
++      "tailDrainTimedOut": tailDrainTimedOut], error)
++  }
++
++  func assetWriter(_ writer: AVAssetWriter, didOutputSegmentData data: Data,
++                   segmentType: AVAssetSegmentType, segmentReport: AVAssetSegmentReport?) {
++    let segmentLength = data.count
++    let videoReport = segmentReport?.trackReports.first(where: { $0.mediaType == .video })
++    let start = videoReport?.earliestPresentationTimeStamp
++    let duration = videoReport?.duration
++    state.lock()
++    pendingArchiveBytes += data.count
++    let overwhelmed = pendingArchiveBytes > 128 * 1024 * 1024
++    state.unlock()
++    // Delegate output is immutable compressed data; no raw frame or export work is held here.
++    archiveQueue.async {
++      defer {
++        self.state.lock(); self.pendingArchiveBytes -= data.count; self.state.unlock()
++      }
++      do {
++        let offset = self.committedLength
++        try self.sourceFile.write(contentsOf: data)
++        try self.sourceFile.synchronize()
++        self.committedLength += UInt64(data.count)
++        if segmentType == .initialization {
++          self.initializationLength = UInt64(data.count)
++          try self.writeManifest()
++          return
++        }
++        guard segmentType == .separable else { throw Self.failure("Unknown fragment type") }
++        let index = self.entries.count + 1
++        guard let start, let duration, start.isNumeric, duration.isNumeric, duration > .zero else {
++          throw Self.failure("Fragment lacks native video timing")
++        }
++        let entry: [String: Any] = ["index": index, "offset": offset, "length": data.count,
++                                  "startSeconds": start.seconds, "durationSeconds": duration.seconds]
++        self.entries.append(entry)
++        try self.writeManifest()
++        let initializationLength = self.initializationLength
++        self.preparationQueue.async {
++          var event: [String: Any] = ["sourcePath": self.sourceURL.absoluteString, "index": index,
++            "duration": duration.seconds,
++            "captureStartTimeMs": self.epochAnchorMs + (start - self.mediaTimeOffset).seconds * 1000,
++            "captureEndTimeMs": self.epochAnchorMs + (start + duration - self.mediaTimeOffset).seconds * 1000,
++            "captureClockOffsetMs": self.epochAnchorMs - self.clockAnchor.seconds * 1000]
++          do {
++            let output = try self.prepareAnalysis(index: index, offset: offset, length: segmentLength,
++                                                  initializationLength: initializationLength,
++                                                  start: start, duration: duration)
++            event["status"] = "ready"
++            event["path"] = output.absoluteString
++          } catch {
++            event["status"] = "failed"
++            event["error"] = error.localizedDescription
++            self.archiveQueue.sync { self.failedSegmentCount += 1 }
++          }
++          self.archiveQueue.sync { self.preparedEvents.append(event) }
++          self.onSegment(event)
++        }
++      } catch {
++        // Preserve every already-committed byte. Fatal archive errors terminate input;
++        // analysis-only failures above never stop the source encoder.
++        self.setFatal(error)
++        DispatchQueue.global(qos: .userInitiated).async {
++          self.state.lock(); defer { self.state.unlock() }; self.finishLocked()
++        }
++      }
++    }
++    if overwhelmed {
++      setFatal(Self.failure("Original storage cannot keep up with capture; saved source retained"))
++      DispatchQueue.global(qos: .userInitiated).async {
++        self.state.lock(); defer { self.state.unlock() }; self.finishLocked()
++      }
++    }
++  }
++
++  private func prepareAnalysis(index: Int, offset: UInt64, length: Int, initializationLength: UInt64,
++                               start: CMTime, duration: CMTime) throws -> URL {
++    guard initializationLength > 0 else { throw Self.failure("Missing initialization fragment") }
++    let stem = sourceURL.deletingPathExtension().lastPathComponent + "-segment-\(index)"
++    let fragment = analysisDirectory.appendingPathComponent(stem + "-fragment.mp4")
++    let output = analysisDirectory.appendingPathComponent(stem + ".mp4")
++    guard !FileManager.default.fileExists(atPath: output.path) else { throw Self.failure("Analysis destination exists") }
++    FileManager.default.createFile(atPath: fragment.path, contents: nil)
++    let destination = try FileHandle(forWritingTo: fragment)
++    let original = try FileHandle(forReadingFrom: sourceURL)
++    do {
++      try Self.copy(from: original, to: destination, offset: 0, length: initializationLength)
++      try Self.copy(from: original, to: destination, offset: offset, length: UInt64(length))
++      try destination.close(); try original.close()
++    } catch { try? destination.close(); try? original.close(); throw error }
++    defer { try? FileManager.default.removeItem(at: fragment) }
++    let asset = AVURLAsset(url: fragment, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
++    guard let video = asset.tracks(withMediaType: .video).first else { throw Self.failure("Fragment has no video") }
++    let composition = AVMutableComposition()
++    guard let target = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
++      throw Self.failure("Cannot create analysis video track")
++    }
++    // AVURLAsset normalizes an isolated HLS fragment to its local movie timeline.
++    // The segment report remains in encoder time and is used only for capture metadata.
++    let sourceRange = video.timeRange
++    try target.insertTimeRange(sourceRange, of: video, at: .zero)
++    target.preferredTransform = video.preferredTransform
++    let sourceAudio = asset.tracks(withMediaType: .audio).first
++    if let sourceAudio {
++      let audioRange = CMTimeRangeGetIntersection(sourceRange, otherRange: sourceAudio.timeRange)
++      if audioRange.duration > .zero {
++        guard let audio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
++          throw Self.failure("Cannot create analysis audio track")
++        }
++        try audio.insertTimeRange(audioRange, of: sourceAudio, at: audioRange.start - sourceRange.start)
++      }
++    }
++    guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetPassthrough),
++          exporter.supportedFileTypes.contains(.mp4) else { throw Self.failure("MP4 passthrough is unsupported") }
++    exporter.outputURL = output
++    exporter.outputFileType = .mp4
++    let done = DispatchSemaphore(value: 0)
++    exporter.exportAsynchronously { done.signal() }
++    if done.wait(timeout: .now() + 30) == .timedOut {
++      exporter.cancelExport()
++      _ = done.wait(timeout: .now() + 5)
++      throw Self.failure("Analysis packaging timed out; original source retained")
++    }
++    guard exporter.status == .completed else {
++      try? FileManager.default.removeItem(at: output)
++      throw exporter.error ?? Self.failure("Analysis packaging failed")
++    }
++    do {
++      let result = AVURLAsset(url: output, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
++      guard let resultVideo = result.tracks(withMediaType: .video).first,
++            result.duration.isNumeric, result.duration > .zero else { throw Self.failure("Analysis video is empty") }
++      let before = try Self.sampleCount(asset: asset, track: video, range: sourceRange)
++      let after = try Self.sampleCount(asset: result, track: resultVideo, range: nil)
++      guard before > 0, before == after else { throw Self.failure("Analysis packaging changed video sample count") }
++      if sourceAudio != nil && result.tracks(withMediaType: .audio).isEmpty {
++        throw Self.failure("Analysis packaging lost audio")
++      }
++      return output
++    } catch { try? FileManager.default.removeItem(at: output); throw error }
++  }
++
++  private func writeManifest(terminal: [String: Any]? = nil, error: Error? = nil) throws {
++    var manifest: [String: Any] = ["version": 1, "sourcePath": sourceURL.lastPathComponent,
++      "committedBytes": committedLength, "initializationBytes": initializationLength,
++      "mediaTimeOffsetSeconds": mediaTimeOffset.seconds,
++      "clock": "native_capture_clock_anchored_epoch_ms", "epochAnchorMs": epochAnchorMs,
++      "segments": entries, "complete": terminal != nil && error == nil &&
++        (terminal?["droppedVideoFrames"] as? Int ?? 0) == 0 &&
++        (terminal?["droppedAudioBuffers"] as? Int ?? 0) == 0 &&
++        (terminal?["tailDrainTimedOut"] as? Bool ?? false) == false]
++    if let terminal { manifest["result"] = terminal }
++    if let error { manifest["error"] = error.localizedDescription }
++    let data = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
++    try data.write(to: sourceURL.appendingPathExtension("segments.json"), options: .atomic)
++  }
++
++  private func setFatal(_ error: Error) {
++    state.lock(); if fatalError == nil { fatalError = error }; state.unlock()
++  }
++
++  private static func rebase(_ buffer: CMSampleBuffer, by offset: CMTime) throws -> CMSampleBuffer {
++    var count = 0
++    var status = CMSampleBufferGetSampleTimingInfoArray(buffer, entryCount: 0, arrayToFill: nil, entriesNeededOut: &count)
++    guard status == noErr else { throw failure("Cannot read sample timing") }
++    var timing = Array(repeating: CMSampleTimingInfo(), count: count)
++    status = CMSampleBufferGetSampleTimingInfoArray(buffer, entryCount: count, arrayToFill: &timing, entriesNeededOut: &count)
++    guard status == noErr else { throw failure("Cannot copy sample timing") }
++    for index in timing.indices {
++      timing[index].presentationTimeStamp = timing[index].presentationTimeStamp - offset
++      if timing[index].decodeTimeStamp.isNumeric { timing[index].decodeTimeStamp = timing[index].decodeTimeStamp - offset }
++    }
++    var copy: CMSampleBuffer?
++    status = CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault, sampleBuffer: buffer,
++      sampleTimingEntryCount: count, sampleTimingArray: &timing, sampleBufferOut: &copy)
++    guard status == noErr, let copy else { throw failure("Cannot rebase sample timing") }
++    return copy
++  }
++
++  private static func copy(from source: FileHandle, to destination: FileHandle, offset: UInt64, length: UInt64) throws {
++    try source.seek(toOffset: offset)
++    var remaining = length
++    while remaining > 0 {
++      let data = try source.read(upToCount: Int(min(remaining, 1024 * 1024))) ?? Data()
++      guard !data.isEmpty else { throw failure("Incomplete persisted fragment") }
++      try destination.write(contentsOf: data)
++      remaining -= UInt64(data.count)
++    }
++  }
++
++  private static func sampleCount(asset: AVAsset, track: AVAssetTrack, range: CMTimeRange?) throws -> Int {
++    let reader = try AVAssetReader(asset: asset)
++    if let range { reader.timeRange = range }
++    let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
++    output.alwaysCopiesSampleData = false
++    reader.add(output)
++    guard reader.startReading() else { throw reader.error ?? failure("Cannot read compressed samples") }
++    var count = 0
++    while let buffer = output.copyNextSampleBuffer() { count += CMSampleBufferGetNumSamples(buffer) }
++    guard reader.status == .completed else { throw reader.error ?? failure("Compressed sample read failed") }
++    return count
++  }
++
++  private static func failure(_ message: String) -> NSError {
++    NSError(domain: "WODSegmentedRecording", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
++  }
++}
+diff --git a/node_modules/react-native-vision-camera/ios/Core/Types/RecordVideoOptions.swift b/node_modules/react-native-vision-camera/ios/Core/Types/RecordVideoOptions.swift
+index d12e05e..611c513 100644
+--- a/node_modules/react-native-vision-camera/ios/Core/Types/RecordVideoOptions.swift
++++ b/node_modules/react-native-vision-camera/ios/Core/Types/RecordVideoOptions.swift
+@@ -14,6 +14,8 @@ struct RecordVideoOptions {
+   var flash: Torch = .off
+   var codec: AVVideoCodecType?
+   var path: URL
++  var segmented = false
++  var segmentedRecordingId: String?
+   /**
+    * Full Bit-Rate override for the Video Encoder, in Megabits per second (Mbps)
+    */
+@@ -29,6 +31,14 @@ struct RecordVideoOptions {
+     if let fileTypeOption = dictionary["fileType"] as? String {
+       fileType = try AVFileType(withString: fileTypeOption)
+     }
++    segmented = dictionary["segmented"] as? Bool ?? false
++    segmentedRecordingId = dictionary["segmentedRecordingId"] as? String
++    if segmented {
++      guard dictionary["path"] is String, segmentedRecordingId != nil else {
++        throw CameraError.parameter(.invalidCombination(provided: "segmented", missing: "persistent path and recording identity"))
++      }
++      fileType = .mp4
++    }
+     // Flash
+     if let flashOption = dictionary["flash"] as? String {
+       flash = try Torch(jsValue: flashOption)
+diff --git a/node_modules/react-native-vision-camera/ios/Core/Types/Video.swift b/node_modules/react-native-vision-camera/ios/Core/Types/Video.swift
+index dd40ae7..a6ecc79 100644
+--- a/node_modules/react-native-vision-camera/ios/Core/Types/Video.swift
++++ b/node_modules/react-native-vision-camera/ios/Core/Types/Video.swift
+@@ -22,13 +22,16 @@ struct Video {
+    * The size of the video, in pixels.
+    */
+   var size: CGSize
++  var segmentedDetails: [String: Any]? = nil
+ 
+   func toJSValue() -> NSDictionary {
+-    return [
++    var result: [String: Any] = [
+       "path": path,
+       "duration": duration,
+       "width": size.width,
+       "height": size.height,
+     ]
++    if let segmentedDetails { result.merge(segmentedDetails) { _, new in new } }
++    return result as NSDictionary
+   }
+ }
+diff --git a/node_modules/react-native-vision-camera/ios/React/CameraView+RecordVideo.swift b/node_modules/react-native-vision-camera/ios/React/CameraView+RecordVideo.swift
+index 913d420..80394f3 100644
+--- a/node_modules/react-native-vision-camera/ios/React/CameraView+RecordVideo.swift
++++ b/node_modules/react-native-vision-camera/ios/React/CameraView+RecordVideo.swift
+@@ -24,10 +24,20 @@ extension CameraView: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAud
+       cameraSession.startRecording(
+         options: options,
+         onVideoRecorded: { video in
+-          callback.resolve(video.toJSValue())
++          DispatchQueue.main.async { callback.resolve(video.toJSValue()) }
++        },
++        onSourceFinalized: { source in
++          var event = source
++          event["recordingId"] = options.segmentedRecordingId
++          DispatchQueue.main.async { self.onRecordingSourceFinalizedEvent?(event) }
++        },
++        onSegment: { segment in
++          var event = segment
++          event["recordingId"] = options.segmentedRecordingId
++          DispatchQueue.main.async { self.onRecordingSegmentEvent?(event) }
+         },
+         onError: { error in
+-          callback.reject(error: error)
++          DispatchQueue.main.async { callback.reject(error: error) }
+         }
+       )
+     } catch {
+diff --git a/node_modules/react-native-vision-camera/ios/React/CameraView.swift b/node_modules/react-native-vision-camera/ios/React/CameraView.swift
+index c773975..55440cb 100644
+--- a/node_modules/react-native-vision-camera/ios/React/CameraView.swift
++++ b/node_modules/react-native-vision-camera/ios/React/CameraView.swift
+@@ -69,6 +69,8 @@ public final class CameraView: UIView, CameraSessionDelegate, PreviewViewDelegat
+   }
+ 
+   // events
++  @objc var onRecordingSourceFinalizedEvent: RCTDirectEventBlock?
++  @objc var onRecordingSegmentEvent: RCTDirectEventBlock?
+   @objc var onInitializedEvent: RCTDirectEventBlock?
+   @objc var onErrorEvent: RCTDirectEventBlock?
+   @objc var onStartedEvent: RCTDirectEventBlock?
+@@ -136,6 +138,13 @@ public final class CameraView: UIView, CameraSessionDelegate, PreviewViewDelegat
+       }
+     } else {
+       fpsSampleCollector.stop()
++      // React can clear its ref before JS unmount cleanup calls stopRecording.
++      // A detached recorder must still close its file and deliver the retained callback.
++      CameraQueues.cameraQueue.async {
++        self.cameraSession.pendingSegmentedRecording?.cancel(CameraError.capture(.recordingCanceled))
++        self.cameraSession.segmentedRecordingSession?.stop()
++        self.cameraSession.recordingSession?.stop()
++      }
+     }
+   }
+ 
+diff --git a/node_modules/react-native-vision-camera/ios/React/CameraViewManager.m b/node_modules/react-native-vision-camera/ios/React/CameraViewManager.m
+index 527c9bc..590fc37 100644
+--- a/node_modules/react-native-vision-camera/ios/React/CameraViewManager.m
++++ b/node_modules/react-native-vision-camera/ios/React/CameraViewManager.m
+@@ -57,6 +57,8 @@ RCT_EXPORT_VIEW_PROPERTY(enableZoomGesture, BOOL);
+ RCT_EXPORT_VIEW_PROPERTY(outputOrientation, NSString);
+ RCT_EXPORT_VIEW_PROPERTY(resizeMode, NSString);
+ // Camera View Events
++RCT_REMAP_VIEW_PROPERTY(onRecordingSourceFinalized, onRecordingSourceFinalizedEvent, RCTDirectEventBlock);
++RCT_REMAP_VIEW_PROPERTY(onRecordingSegment, onRecordingSegmentEvent, RCTDirectEventBlock);
+ RCT_REMAP_VIEW_PROPERTY(onError, onErrorEvent, RCTDirectEventBlock);
+ RCT_REMAP_VIEW_PROPERTY(onInitialized, onInitializedEvent, RCTDirectEventBlock);
+ RCT_REMAP_VIEW_PROPERTY(onStarted, onStartedEvent, RCTDirectEventBlock);
+diff --git a/node_modules/react-native-vision-camera/lib/commonjs/Camera.js b/node_modules/react-native-vision-camera/lib/commonjs/Camera.js
+index 4c04727..cb2cd58 100644
+--- a/node_modules/react-native-vision-camera/lib/commonjs/Camera.js
++++ b/node_modules/react-native-vision-camera/lib/commonjs/Camera.js
+@@ -62,6 +62,26 @@ class Camera extends _react.default.PureComponent {
+   static displayName = 'Camera';
+   /** @internal */
+   displayName = Camera.displayName;
++  segmentCallbacks = new Map();
++  deliveredSegments = new Map();
++  sourceCallbacks = new Map();
++  recordingRequest = 0;
++  segmentSequence = 0;
++  onRecordingSegment = event => {
++    const { recordingId, ...segment } = event.nativeEvent;
++    this.deliverSegment(recordingId, segment);
++  };
++  deliverSegment(recordingId, segment) {
++    const callback = this.segmentCallbacks.get(recordingId);
++    const delivered = this.deliveredSegments.get(recordingId);
++    if (!callback || !delivered || delivered.has(segment.index)) return;
++    delivered.add(segment.index);
++    callback(segment);
++  }
++  onRecordingSourceFinalized = event => {
++    const { recordingId, ...video } = event.nativeEvent;
++    this.sourceCallbacks.get(recordingId)?.(video);
++  };
+   isNativeViewMounted = false;
+   lastUIRotation = undefined;
+   rotationHelper = new _RotationHelper.RotationHelper();
+@@ -176,9 +196,20 @@ class Camera extends _react.default.PureComponent {
+     const {
+       onRecordingError,
+       onRecordingFinished,
++      onRecordingSegment,
++      onRecordingSourceFinalized,
+       ...passThruOptions
+     } = options;
+     if (typeof onRecordingError !== 'function' || typeof onRecordingFinished !== 'function') throw new _CameraError.CameraRuntimeError('parameter/invalid-parameter', 'The onRecordingError or onRecordingFinished functions were not set!');
++    if (options.segmented && _reactNative.Platform.OS !== 'ios') throw new _CameraError.CameraRuntimeError('parameter/invalid-parameter', 'Segmented recording is only supported on iOS.');
++    if (options.segmented && (!options.path || typeof onRecordingSegment !== 'function')) throw new _CameraError.CameraRuntimeError('parameter/invalid-parameter', 'Segmented recording requires a persistent path and onRecordingSegment callback.');
++    const recordingRequest = ++this.recordingRequest;
++    const segmentedRecordingId = options.segmented ? `${Date.now()}-${++this.segmentSequence}` : undefined;
++    if (segmentedRecordingId && onRecordingSegment) {
++      this.segmentCallbacks.set(segmentedRecordingId, onRecordingSegment);
++      this.deliveredSegments.set(segmentedRecordingId, new Set());
++    }
++    if (segmentedRecordingId && onRecordingSourceFinalized) this.sourceCallbacks.set(segmentedRecordingId, onRecordingSourceFinalized);
+     if (options.flash === 'on') {
+       // Enable torch for video recording
+       this.setState({
+@@ -186,20 +217,27 @@ class Camera extends _react.default.PureComponent {
+       });
+     }
+     const onRecordCallback = (video, error) => {
+-      if (this.state.isRecordingWithFlash) {
++      if (this.state.isRecordingWithFlash && recordingRequest === this.recordingRequest) {
+         // disable torch again if it was enabled
+         this.setState({
+           isRecordingWithFlash: false
+         });
+       }
++      if (segmentedRecordingId) {
++        for (const segment of video?.segments ?? []) this.deliverSegment(segmentedRecordingId, segment);
++        this.segmentCallbacks.delete(segmentedRecordingId);
++        this.sourceCallbacks.delete(segmentedRecordingId);
++        this.deliveredSegments.delete(segmentedRecordingId);
++      }
+       if (error != null) return onRecordingError(error);
+       if (video != null) return onRecordingFinished(video);
+     };
+-    const nativeRecordVideoOptions = passThruOptions;
++    const nativeRecordVideoOptions = { ...passThruOptions, segmentedRecordingId };
+     try {
+       // TODO: Use TurboModules to make this awaitable.
+       _NativeCameraModule.CameraModule.startRecording(this.handle, nativeRecordVideoOptions, onRecordCallback);
+     } catch (e) {
++      if (segmentedRecordingId) { this.segmentCallbacks.delete(segmentedRecordingId); this.sourceCallbacks.delete(segmentedRecordingId); this.deliveredSegments.delete(segmentedRecordingId); }
+       throw (0, _CameraError.tryParseNativeCameraError)(e);
+     }
+   }
+@@ -624,6 +662,8 @@ class Camera extends _react.default.PureComponent {
+       onViewReady: this.onViewReady,
+       onAverageFpsChanged: enableFpsGraph ? this.onAverageFpsChanged : undefined,
+       onInitialized: this.onInitialized,
++      onRecordingSegment: _reactNative.Platform.OS === 'ios' ? this.onRecordingSegment : undefined,
++      onRecordingSourceFinalized: _reactNative.Platform.OS === 'ios' ? this.onRecordingSourceFinalized : undefined,
+       onCodeScanned: this.onCodeScanned,
+       onStarted: this.onStarted,
+       onStopped: this.onStopped,
+diff --git a/node_modules/react-native-vision-camera/lib/module/Camera.js b/node_modules/react-native-vision-camera/lib/module/Camera.js
+index e97f27c..105ea91 100644
+--- a/node_modules/react-native-vision-camera/lib/module/Camera.js
++++ b/node_modules/react-native-vision-camera/lib/module/Camera.js
+@@ -1,6 +1,6 @@
+ function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
+ import React from 'react';
+-import { findNodeHandle, StyleSheet } from 'react-native';
++import { findNodeHandle, Platform, StyleSheet } from 'react-native';
+ import { CameraRuntimeError, tryParseNativeCameraError, isErrorWithCause } from './CameraError';
+ import { CameraModule } from './NativeCameraModule';
+ import { VisionCameraProxy } from './frame-processors/VisionCameraProxy';
+@@ -56,6 +56,26 @@ export class Camera extends React.PureComponent {
+   static displayName = 'Camera';
+   /** @internal */
+   displayName = Camera.displayName;
++  segmentCallbacks = new Map();
++  deliveredSegments = new Map();
++  sourceCallbacks = new Map();
++  recordingRequest = 0;
++  segmentSequence = 0;
++  onRecordingSegment = event => {
++    const { recordingId, ...segment } = event.nativeEvent;
++    this.deliverSegment(recordingId, segment);
++  };
++  deliverSegment(recordingId, segment) {
++    const callback = this.segmentCallbacks.get(recordingId);
++    const delivered = this.deliveredSegments.get(recordingId);
++    if (!callback || !delivered || delivered.has(segment.index)) return;
++    delivered.add(segment.index);
++    callback(segment);
++  }
++  onRecordingSourceFinalized = event => {
++    const { recordingId, ...video } = event.nativeEvent;
++    this.sourceCallbacks.get(recordingId)?.(video);
++  };
+   isNativeViewMounted = false;
+   lastUIRotation = undefined;
+   rotationHelper = new RotationHelper();
+@@ -170,9 +190,20 @@ export class Camera extends React.PureComponent {
+     const {
+       onRecordingError,
+       onRecordingFinished,
++      onRecordingSegment,
++      onRecordingSourceFinalized,
+       ...passThruOptions
+     } = options;
+     if (typeof onRecordingError !== 'function' || typeof onRecordingFinished !== 'function') throw new CameraRuntimeError('parameter/invalid-parameter', 'The onRecordingError or onRecordingFinished functions were not set!');
++    if (options.segmented && Platform.OS !== 'ios') throw new CameraRuntimeError('parameter/invalid-parameter', 'Segmented recording is only supported on iOS.');
++    if (options.segmented && (!options.path || typeof onRecordingSegment !== 'function')) throw new CameraRuntimeError('parameter/invalid-parameter', 'Segmented recording requires a persistent path and onRecordingSegment callback.');
++    const recordingRequest = ++this.recordingRequest;
++    const segmentedRecordingId = options.segmented ? `${Date.now()}-${++this.segmentSequence}` : undefined;
++    if (segmentedRecordingId && onRecordingSegment) {
++      this.segmentCallbacks.set(segmentedRecordingId, onRecordingSegment);
++      this.deliveredSegments.set(segmentedRecordingId, new Set());
++    }
++    if (segmentedRecordingId && onRecordingSourceFinalized) this.sourceCallbacks.set(segmentedRecordingId, onRecordingSourceFinalized);
+     if (options.flash === 'on') {
+       // Enable torch for video recording
+       this.setState({
+@@ -180,20 +211,27 @@ export class Camera extends React.PureComponent {
+       });
+     }
+     const onRecordCallback = (video, error) => {
+-      if (this.state.isRecordingWithFlash) {
++      if (this.state.isRecordingWithFlash && recordingRequest === this.recordingRequest) {
+         // disable torch again if it was enabled
+         this.setState({
+           isRecordingWithFlash: false
+         });
+       }
++      if (segmentedRecordingId) {
++        for (const segment of video?.segments ?? []) this.deliverSegment(segmentedRecordingId, segment);
++        this.segmentCallbacks.delete(segmentedRecordingId);
++        this.sourceCallbacks.delete(segmentedRecordingId);
++        this.deliveredSegments.delete(segmentedRecordingId);
++      }
+       if (error != null) return onRecordingError(error);
+       if (video != null) return onRecordingFinished(video);
+     };
+-    const nativeRecordVideoOptions = passThruOptions;
++    const nativeRecordVideoOptions = { ...passThruOptions, segmentedRecordingId };
+     try {
+       // TODO: Use TurboModules to make this awaitable.
+       CameraModule.startRecording(this.handle, nativeRecordVideoOptions, onRecordCallback);
+     } catch (e) {
++      if (segmentedRecordingId) { this.segmentCallbacks.delete(segmentedRecordingId); this.sourceCallbacks.delete(segmentedRecordingId); this.deliveredSegments.delete(segmentedRecordingId); }
+       throw tryParseNativeCameraError(e);
+     }
+   }
+@@ -618,6 +656,8 @@ export class Camera extends React.PureComponent {
+       onViewReady: this.onViewReady,
+       onAverageFpsChanged: enableFpsGraph ? this.onAverageFpsChanged : undefined,
+       onInitialized: this.onInitialized,
++      onRecordingSegment: Platform.OS === 'ios' ? this.onRecordingSegment : undefined,
++      onRecordingSourceFinalized: Platform.OS === 'ios' ? this.onRecordingSourceFinalized : undefined,
+       onCodeScanned: this.onCodeScanned,
+       onStarted: this.onStarted,
+       onStopped: this.onStopped,
+diff --git a/node_modules/react-native-vision-camera/lib/typescript/NativeCameraView.d.ts b/node_modules/react-native-vision-camera/lib/typescript/NativeCameraView.d.ts
+index cbd641a..e8fb5e0 100644
+--- a/node_modules/react-native-vision-camera/lib/typescript/NativeCameraView.d.ts
++++ b/node_modules/react-native-vision-camera/lib/typescript/NativeCameraView.d.ts
+@@ -1,3 +1,4 @@
++import type { VideoFile, VideoSegment } from './types/VideoFile';
+ import type { NativeSyntheticEvent } from 'react-native';
+ import type { ErrorWithCause } from './CameraError';
+ import type { CameraProps, OnShutterEvent } from './types/CameraProps';
+@@ -29,6 +30,8 @@ export type NativeCameraViewProps = Omit<CameraProps, 'device' | 'onInitialized'
+     maxFps?: number;
+     videoBitRateOverride?: number;
+     videoBitRateMultiplier?: number;
++    onRecordingSegment?: (event: NativeSyntheticEvent<VideoSegment & { recordingId: string }>) => void;
++    onRecordingSourceFinalized?: (event: NativeSyntheticEvent<VideoFile & { recordingId: string }>) => void;
+     onViewReady: (event: NativeSyntheticEvent<void>) => void;
+     onAverageFpsChanged?: (event: NativeSyntheticEvent<AverageFpsChangedEvent>) => void;
+     onInitialized?: (event: NativeSyntheticEvent<void>) => void;
+diff --git a/node_modules/react-native-vision-camera/lib/typescript/types/VideoFile.d.ts b/node_modules/react-native-vision-camera/lib/typescript/types/VideoFile.d.ts
+index 32382dc..e2a9128 100644
+--- a/node_modules/react-native-vision-camera/lib/typescript/types/VideoFile.d.ts
++++ b/node_modules/react-native-vision-camera/lib/typescript/types/VideoFile.d.ts
+@@ -1,6 +1,29 @@
+ import type { CameraCaptureError } from '../CameraError';
+ import type { TemporaryFile } from './TemporaryFile';
++/** One finalized analysis derivative; the full-quality source remains separate. */
++export interface VideoSegment {
++  status: 'ready' | 'failed'
++  sourcePath: string
++  index: number
++  /** Final VideoFile.segments always marks the final index; live events may omit this. */
++  isLast?: boolean
++  path?: string
++  duration: number
++  captureStartTimeMs: number
++  captureEndTimeMs: number
++  /** Add to Frame.timestamp (native capture milliseconds) to obtain epoch milliseconds. */
++  captureClockOffsetMs: number
++  error?: string
++}
++
+ export interface RecordVideoOptions {
++  /** Experimental iOS-only continuous encoder. Defaults to false. Requires a persistent path. */
++  segmented?: boolean
++  /** Fires for each prepared video segment, including preparation failures. */
++  onRecordingSegment?: (segment: VideoSegment) => void
++  /** Source is durable and closed; analysis preparations may still be running. */
++  onRecordingSourceFinalized?: (video: VideoFile) => void
++
+     /**
+      * Set the video flash mode. Natively, this just enables the torch while recording.
+      */
+@@ -39,6 +62,19 @@ export interface RecordVideoOptions {
+  * Related: {@linkcode Camera.startRecording | Camera.startRecording()}, {@linkcode Camera.stopRecording | Camera.stopRecording()}
+  */
+ export interface VideoFile extends TemporaryFile {
++  /** Present only for the experimental segmented source recording. */
++  segmented?: true
++  captureStartTimeMs?: number
++  captureEndTimeMs?: number
++  captureClockOffsetMs?: number
++  /** Terminal delivery fallback for any delayed native segment event. */
++  segments?: VideoSegment[]
++  segmentCount?: number
++  failedSegmentCount?: number
++  droppedVideoFrames?: number
++  droppedAudioBuffers?: number
++  tailDrainTimedOut?: boolean
++
+     /**
+      * Represents the duration of the video, in seconds.
+      */
+diff --git a/node_modules/react-native-vision-camera/src/Camera.tsx b/node_modules/react-native-vision-camera/src/Camera.tsx
+index afe056a..839cc93 100644
+--- a/node_modules/react-native-vision-camera/src/Camera.tsx
++++ b/node_modules/react-native-vision-camera/src/Camera.tsx
+@@ -1,5 +1,5 @@
+ import React from 'react'
+-import { findNodeHandle, StyleSheet } from 'react-native'
++import { findNodeHandle, Platform, StyleSheet } from 'react-native'
+ import type { CameraDevice } from './types/CameraDevice'
+ import type { CameraCaptureError } from './CameraError'
+ import { CameraRuntimeError, tryParseNativeCameraError, isErrorWithCause } from './CameraError'
+@@ -7,7 +7,7 @@ import type { CameraProps, DrawableFrameProcessor, OnShutterEvent, ReadonlyFrame
+ import { CameraModule } from './NativeCameraModule'
+ import type { PhotoFile, TakePhotoOptions } from './types/PhotoFile'
+ import type { Point } from './types/Point'
+-import type { RecordVideoOptions, VideoFile } from './types/VideoFile'
++import type { RecordVideoOptions, VideoFile, VideoSegment } from './types/VideoFile'
+ import { VisionCameraProxy } from './frame-processors/VisionCameraProxy'
+ import { CameraDevices } from './CameraDevices'
+ import type { EmitterSubscription, NativeSyntheticEvent, NativeMethods } from 'react-native'
+@@ -30,7 +30,7 @@ import { RotationHelper } from './RotationHelper'
+ export type CameraPermissionStatus = 'granted' | 'not-determined' | 'denied' | 'restricted'
+ export type CameraPermissionRequestResult = 'granted' | 'denied'
+ 
+-type NativeRecordVideoOptions = Omit<RecordVideoOptions, 'onRecordingError' | 'onRecordingFinished'>
++type NativeRecordVideoOptions = Omit<RecordVideoOptions, 'onRecordingError' | 'onRecordingFinished' | 'onRecordingSegment' | 'onRecordingSourceFinalized'> & { segmentedRecordingId?: string }
+ type RefType = React.Component<NativeCameraViewProps> & Readonly<NativeMethods>
+ interface CameraState {
+   isRecordingWithFlash: boolean
+@@ -80,6 +80,26 @@ export class Camera extends React.PureComponent<CameraProps, CameraState> {
+   static displayName = 'Camera'
+   /** @internal */
+   displayName = Camera.displayName
++  private segmentCallbacks = new Map<string, (segment: VideoSegment) => void>()
++  private deliveredSegments = new Map<string, Set<number>>()
++  private sourceCallbacks = new Map<string, (video: VideoFile) => void>()
++  private onRecordingSourceFinalized = (event: NativeSyntheticEvent<VideoFile & { recordingId: string }>): void => {
++    const { recordingId, ...video } = event.nativeEvent
++    this.sourceCallbacks.get(recordingId)?.(video)
++  }
++  private recordingRequest = 0
++  private segmentSequence = 0
++  private onRecordingSegment = (event: NativeSyntheticEvent<VideoSegment & { recordingId: string }>): void => {
++    const { recordingId, ...segment } = event.nativeEvent
++    this.deliverSegment(recordingId, segment)
++  }
++  private deliverSegment(recordingId: string, segment: VideoSegment): void {
++    const callback = this.segmentCallbacks.get(recordingId)
++    const delivered = this.deliveredSegments.get(recordingId)
++    if (!callback || !delivered || delivered.has(segment.index)) return
++    delivered.add(segment.index)
++    callback(segment)
++  }
+   private lastFrameProcessor: ((frame: Frame) => void) | undefined
+   private isNativeViewMounted = false
+   private lastUIRotation: number | undefined = undefined
+@@ -201,9 +221,20 @@ export class Camera extends React.PureComponent<CameraProps, CameraState> {
+    * ```
+    */
+   public startRecording(options: RecordVideoOptions): void {
+-    const { onRecordingError, onRecordingFinished, ...passThruOptions } = options
++    const { onRecordingError, onRecordingFinished, onRecordingSegment, onRecordingSourceFinalized, ...passThruOptions } = options
++    if (options.segmented && Platform.OS !== 'ios')
++      throw new CameraRuntimeError('parameter/invalid-parameter', 'Segmented recording is only supported on iOS.')
++    if (options.segmented && (!options.path || typeof onRecordingSegment !== 'function'))
++      throw new CameraRuntimeError('parameter/invalid-parameter', 'Segmented recording requires a persistent path and onRecordingSegment callback.')
+     if (typeof onRecordingError !== 'function' || typeof onRecordingFinished !== 'function')
+       throw new CameraRuntimeError('parameter/invalid-parameter', 'The onRecordingError or onRecordingFinished functions were not set!')
++    const recordingRequest = ++this.recordingRequest
++    const segmentedRecordingId = options.segmented ? `${Date.now()}-${++this.segmentSequence}` : undefined
++    if (segmentedRecordingId && onRecordingSegment) {
++      this.segmentCallbacks.set(segmentedRecordingId, onRecordingSegment)
++      this.deliveredSegments.set(segmentedRecordingId, new Set())
++    }
++    if (segmentedRecordingId && onRecordingSourceFinalized) this.sourceCallbacks.set(segmentedRecordingId, onRecordingSourceFinalized)
+ 
+     if (options.flash === 'on') {
+       // Enable torch for video recording
+@@ -213,22 +244,29 @@ export class Camera extends React.PureComponent<CameraProps, CameraState> {
+     }
+ 
+     const onRecordCallback = (video?: VideoFile, error?: CameraCaptureError): void => {
+-      if (this.state.isRecordingWithFlash) {
++      if (this.state.isRecordingWithFlash && recordingRequest === this.recordingRequest) {
+         // disable torch again if it was enabled
+         this.setState({
+           isRecordingWithFlash: false,
+         })
+       }
+ 
++      if (segmentedRecordingId) {
++        for (const segment of video?.segments ?? []) this.deliverSegment(segmentedRecordingId, segment)
++        this.segmentCallbacks.delete(segmentedRecordingId)
++        this.sourceCallbacks.delete(segmentedRecordingId)
++        this.deliveredSegments.delete(segmentedRecordingId)
++      }
+       if (error != null) return onRecordingError(error)
+       if (video != null) return onRecordingFinished(video)
+     }
+ 
+-    const nativeRecordVideoOptions: NativeRecordVideoOptions = passThruOptions
++    const nativeRecordVideoOptions: NativeRecordVideoOptions = { ...passThruOptions, segmentedRecordingId }
+     try {
+       // TODO: Use TurboModules to make this awaitable.
+       CameraModule.startRecording(this.handle, nativeRecordVideoOptions, onRecordCallback)
+     } catch (e) {
++      if (segmentedRecordingId) { this.segmentCallbacks.delete(segmentedRecordingId); this.sourceCallbacks.delete(segmentedRecordingId); this.deliveredSegments.delete(segmentedRecordingId) }
+       throw tryParseNativeCameraError(e)
+     }
+   }
+@@ -658,6 +696,8 @@ export class Camera extends React.PureComponent<CameraProps, CameraState> {
+         onViewReady={this.onViewReady}
+         onAverageFpsChanged={enableFpsGraph ? this.onAverageFpsChanged : undefined}
+         onInitialized={this.onInitialized}
++        onRecordingSegment={Platform.OS === 'ios' ? this.onRecordingSegment : undefined}
++        onRecordingSourceFinalized={Platform.OS === 'ios' ? this.onRecordingSourceFinalized : undefined}
+         onCodeScanned={this.onCodeScanned}
+         onStarted={this.onStarted}
+         onStopped={this.onStopped}
+diff --git a/node_modules/react-native-vision-camera/src/NativeCameraView.ts b/node_modules/react-native-vision-camera/src/NativeCameraView.ts
+index b53009c..413fefe 100644
+--- a/node_modules/react-native-vision-camera/src/NativeCameraView.ts
++++ b/node_modules/react-native-vision-camera/src/NativeCameraView.ts
+@@ -4,6 +4,7 @@ import type { ErrorWithCause } from './CameraError'
+ import type { CameraProps, OnShutterEvent } from './types/CameraProps'
+ import type { Code, CodeScanner, CodeScannerFrame } from './types/CodeScanner'
+ import type { Orientation } from './types/Orientation'
++import type { VideoSegment, VideoFile } from './types/VideoFile'
+ 
+ export interface OnCodeScannedEvent {
+   codes: Code[]
+@@ -44,6 +45,8 @@ export type NativeCameraViewProps = Omit<
+   maxFps?: number
+   videoBitRateOverride?: number
+   videoBitRateMultiplier?: number
++  onRecordingSegment?: (event: NativeSyntheticEvent<VideoSegment & { recordingId: string }>) => void
++  onRecordingSourceFinalized?: (event: NativeSyntheticEvent<VideoFile & { recordingId: string }>) => void
+   // private events
+   onViewReady: (event: NativeSyntheticEvent<void>) => void
+   onAverageFpsChanged?: (event: NativeSyntheticEvent<AverageFpsChangedEvent>) => void
+diff --git a/node_modules/react-native-vision-camera/src/types/VideoFile.ts b/node_modules/react-native-vision-camera/src/types/VideoFile.ts
+index 6391df7..b942181 100644
+--- a/node_modules/react-native-vision-camera/src/types/VideoFile.ts
++++ b/node_modules/react-native-vision-camera/src/types/VideoFile.ts
+@@ -1,7 +1,30 @@
+ import type { CameraCaptureError } from '../CameraError'
+ import type { TemporaryFile } from './TemporaryFile'
+ 
++/** One finalized analysis derivative; the full-quality source remains separate. */
++export interface VideoSegment {
++  status: 'ready' | 'failed'
++  sourcePath: string
++  index: number
++  /** Final VideoFile.segments always marks the final index; live events may omit this. */
++  isLast?: boolean
++  path?: string
++  duration: number
++  captureStartTimeMs: number
++  captureEndTimeMs: number
++  /** Add to Frame.timestamp (native capture milliseconds) to obtain epoch milliseconds. */
++  captureClockOffsetMs: number
++  error?: string
++}
++
+ export interface RecordVideoOptions {
++  /** Experimental iOS-only continuous encoder. Defaults to false. Requires a persistent path. */
++  segmented?: boolean
++  /** Fires for each prepared video segment, including preparation failures. */
++  onRecordingSegment?: (segment: VideoSegment) => void
++  /** Source is durable and closed; analysis preparations may still be running. */
++  onRecordingSourceFinalized?: (video: VideoFile) => void
++
+   /**
+    * Set the video flash mode. Natively, this just enables the torch while recording.
+    */
+@@ -41,6 +64,19 @@ export interface RecordVideoOptions {
+  * Related: {@linkcode Camera.startRecording | Camera.startRecording()}, {@linkcode Camera.stopRecording | Camera.stopRecording()}
+  */
+ export interface VideoFile extends TemporaryFile {
++  /** Present only for the experimental segmented source recording. */
++  segmented?: true
++  captureStartTimeMs?: number
++  captureEndTimeMs?: number
++  captureClockOffsetMs?: number
++  /** Terminal delivery fallback for any delayed native segment event. */
++  segments?: VideoSegment[]
++  segmentCount?: number
++  failedSegmentCount?: number
++  droppedVideoFrames?: number
++  droppedAudioBuffers?: number
++  tailDrainTimedOut?: boolean
++
+   /**
+    * Represents the duration of the video, in seconds.
+    */

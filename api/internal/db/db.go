@@ -91,20 +91,22 @@ const (
 )
 
 type AnalysisResult struct {
-	ID                  uint       `gorm:"primaryKey" json:"id"`
-	SessionID           string     `gorm:"uniqueIndex;not null" json:"session_id"`
-	ProfileID           uint       `gorm:"index;not null" json:"profile_id"`
-	AnalysisType        string     `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
-	Status              string     `json:"status"`                           // PENDING, COMPLETED, FAILED
-	Output              string     `json:"output"`
-	InjuryOutput        string     `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
-	InjuryOutputAlt     string     `json:"-"`
-	GeminiFileURI       string     `json:"-"`
-	GeminiFileName      string     `json:"-"`
-	GeminiMIMEType      string     `json:"-"`
-	GeminiFileExpiresAt *time.Time `json:"-"`
-	HighlightSegments   string     `json:"highlight_segments"` // JSON array of highlight segments
-	Verified            *bool      `json:"verified,omitempty"` // nil=unchecked, true=confirmed, false=hallucination detected
+	AnalysisSummary          JSONDocument `json:"analysis_summary"`
+	AgenticHighlightAnalysis JSONDocument `json:"-"`
+	ID                       uint         `gorm:"primaryKey" json:"id"`
+	SessionID                string       `gorm:"uniqueIndex;not null" json:"session_id"`
+	ProfileID                uint         `gorm:"index;not null" json:"profile_id"`
+	AnalysisType             string       `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
+	Status                   string       `json:"status"`                           // PENDING, COMPLETED, FAILED
+	Output                   string       `json:"output"`
+	InjuryOutput             string       `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
+	InjuryOutputAlt          string       `json:"-"`
+	GeminiFileURI            string       `json:"-"`
+	GeminiFileName           string       `json:"-"`
+	GeminiMIMEType           string       `json:"-"`
+	GeminiFileExpiresAt      *time.Time   `json:"-"`
+	HighlightSegments        string       `json:"highlight_segments"` // JSON array of highlight segments
+	Verified                 *bool        `json:"verified,omitempty"` // nil=unchecked, true=confirmed, false=hallucination detected
 	// WODDescription is the user-supplied workout descriptor (e.g. "Fran", "For Time: 5 rounds of...").
 	// Injected into analysis prompts to enable benchmark comparison and WOD-type-aware scoring.
 	WODDescription string `gorm:"type:text;not null;default:''" json:"wod_description,omitempty"`
@@ -140,17 +142,17 @@ type FatigueGuidance struct {
 }
 
 type SessionFatigue struct {
-	Status                 string            `json:"status,omitempty"` // available, insufficient_evidence
-	LoadCalculationVersion int               `json:"load_calculation_version,omitempty"`
-	SensorStatus           string            `json:"sensor_status,omitempty"` // none, applied, failed, pending
-	HeartRateAdjusted      bool              `json:"heart_rate_adjusted"`
-	OverallScore           int               `json:"overall_score,omitempty"`
-	State                  string            `json:"state,omitempty"`
-	StateKO                string            `json:"state_ko,omitempty"`
-	AdviceCode             string            `json:"advice_code,omitempty"`
-	FocusMuscles           []string          `json:"focus_muscles,omitempty"`
-	Muscles                map[string]int    `json:"muscles,omitempty"`
-	Guidance               *FatigueGuidance  `json:"guidance,omitempty"`
+	Status                 string           `json:"status,omitempty"` // available, insufficient_evidence
+	LoadCalculationVersion int              `json:"load_calculation_version,omitempty"`
+	SensorStatus           string           `json:"sensor_status,omitempty"` // none, applied, failed, pending
+	HeartRateAdjusted      bool             `json:"heart_rate_adjusted"`
+	OverallScore           int              `json:"overall_score,omitempty"`
+	State                  string           `json:"state,omitempty"`
+	StateKO                string           `json:"state_ko,omitempty"`
+	AdviceCode             string           `json:"advice_code,omitempty"`
+	FocusMuscles           []string         `json:"focus_muscles,omitempty"`
+	Muscles                map[string]int   `json:"muscles,omitempty"`
+	Guidance               *FatigueGuidance `json:"guidance,omitempty"`
 }
 
 type NormalizedMovement struct {
@@ -177,6 +179,10 @@ type HighlightResult struct {
 }
 
 type ChunkAnalysisResult struct {
+	CaptureAssessment    NullableJSONDocument `json:"capture_assessment,omitempty" swaggertype:"object"`
+	ContextualCoaching   NullableJSONDocument `json:"contextual_coaching,omitempty" swaggertype:"object"`
+	MovementObservations NullableJSONDocument `json:"movement_observations,omitempty" swaggertype:"object"`
+
 	ID                uint      `gorm:"primaryKey" json:"id"`
 	SessionID         string    `gorm:"index;not null" json:"session_id"`
 	ProfileID         uint      `gorm:"index;not null" json:"profile_id"`
@@ -200,15 +206,18 @@ type ChunkAnalysisResult struct {
 }
 
 type TokenUsage struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
-	SessionID       string    `gorm:"index;not null" json:"session_id"`
-	ProfileID       uint      `gorm:"index;not null" json:"profile_id"`
-	TaskType        string    `gorm:"not null" json:"task_type"` // chunk:analysis, video:index, video:segment, etc.
-	Model           string    `gorm:"not null" json:"model"`     // gemini-3.1-pro-preview, gemini-3.5-flash-lite, gemini-3.8-flash
-	PromptTokens    int32     `gorm:"not null;default:0" json:"prompt_tokens"`
-	CandidateTokens int32     `gorm:"not null;default:0" json:"candidate_tokens"`
-	TotalTokens     int32     `gorm:"not null;default:0" json:"total_tokens"`
-	CreatedAt       time.Time `json:"created_at"`
+	ID              uint                 `gorm:"primaryKey" json:"id"`
+	SessionID       string               `gorm:"index;not null" json:"session_id"`
+	ProfileID       uint                 `gorm:"index;not null" json:"profile_id"`
+	TaskType        string               `gorm:"not null" json:"task_type"` // chunk:analysis, video:index, video:segment, etc.
+	Model           string               `gorm:"not null" json:"model"`     // gemini-3.1-pro-preview, gemini-3.5-flash-lite, gemini-3.8-flash
+	PromptTokens    int64                `gorm:"not null;default:0" json:"prompt_tokens"`
+	CandidateTokens int64                `gorm:"not null;default:0" json:"candidate_tokens"`
+	TotalTokens     int64                `gorm:"not null;default:0" json:"total_tokens"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UsageMetadata   NullableJSONDocument `json:"usage_metadata"`
+	RequestKey      *string              `json:"request_key,omitempty"`
+	UserID          *uint                `json:"user_id,omitempty"`
 }
 
 const (
@@ -224,6 +233,8 @@ func (s SessionStatus) String() string {
 }
 
 type Session struct {
+	ActivitySummary NullableJSONDocument `json:"activity_summary,omitempty" swaggertype:"object"`
+
 	ID             uint          `gorm:"primaryKey" json:"id"`
 	SessionID      string        `gorm:"uniqueIndex;not null" json:"session_id"`
 	Status         SessionStatus `json:"status"` // started, completed, failed

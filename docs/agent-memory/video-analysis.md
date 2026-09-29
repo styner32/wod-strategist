@@ -1,5 +1,9 @@
 # Video Analysis Memory
 
+For the local SDK v1.71 Static/Agentic experiment, see
+[`video-mode-comparison.md`](video-mode-comparison.md). Production processing
+modes and the 5 FPS segment-analysis path are unchanged.
+
 ## Active remediation plan
 
 The source-level review and ordered implementation plan live in

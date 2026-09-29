@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { File } from "expo-file-system";
-import * as MediaLibrary from "expo-media-library";
+import * as MediaLibrary from "expo-media-library/legacy";
 import { Video } from "react-native-compressor";
 import { Alert } from "react-native";
 import { create } from "zustand";
@@ -348,11 +348,11 @@ async function _runEncoding(
 
       if (isSamePath) {
         // Same path: COPY instead of move to preserve the raw file
-        srcFile.copy(new File(destPath));
+        await srcFile.copy(new File(destPath));
         console.log("📝 Copied raw file to encoded path (no-op compression):", destPath);
       } else {
         // Different path: safe to move the compressed file
-        srcFile.move(new File(destPath));
+        await srcFile.move(new File(destPath));
         console.log("📝 Renamed encoded file to:", destPath);
       }
       compressedUri = destPath;

@@ -40,6 +40,7 @@ export interface SessionFatigue {
 }
 
 export interface AnalysisResult {
+  analysis_summary?: import("./enrichment").AnalysisSummary;
   heart_rate?: HeartRateSummary;
   id: number;
   session_id: string;
@@ -454,9 +455,20 @@ export const historyApi = {
     api.get<SensorTimelineResponse>(
       `/sessions/${encodeURIComponent(sessionId)}/sensor-timeline?profile_id=${profileId}`,
     ),
+
+  reprocessSensor: (sessionId: string, profileId: number) =>
+    api.post<{ accepted: boolean; session_id: string; state: string }>(
+      `/sessions/${encodeURIComponent(sessionId)}/sensor-reprocess`,
+      { profile_id: profileId },
+    ),
 };
 
 export interface CostBreakdownItem {
+  thinking_tokens?: number;
+  tool_use_tokens?: number;
+  cached_tokens?: number;
+  unmeasured_calls?: number;
+  unpriced_calls?: number;
   key: string;
   prompt_tokens: number;
   candidate_tokens: number;
@@ -466,6 +478,11 @@ export interface CostBreakdownItem {
 }
 
 export interface SessionCostResponse {
+  thinking_tokens?: number;
+  tool_use_tokens?: number;
+  cached_tokens?: number;
+  unmeasured_calls?: number;
+  unpriced_calls?: number;
   session_id: string;
   prompt_tokens: number;
   candidate_tokens: number;
@@ -477,6 +494,11 @@ export interface SessionCostResponse {
 }
 
 export interface TotalCostResponse {
+  thinking_tokens?: number;
+  tool_use_tokens?: number;
+  cached_tokens?: number;
+  unmeasured_calls?: number;
+  unpriced_calls?: number;
   prompt_tokens: number;
   candidate_tokens: number;
   total_tokens: number;

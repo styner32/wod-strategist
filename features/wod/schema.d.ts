@@ -63,7 +63,12 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody: components["requestBodies"]["controllers.CompleteUploadRequest"];
+            /** @description Upload metadata */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.ChunkCompleteRequest"];
+                };
+            };
             responses: {
                 /** @description Accepted */
                 202: {
@@ -900,6 +905,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{session_id}/activity-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get observed workout activity */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Owned profile ID */
+                    profile_id: number;
+                };
+                header?: never;
+                path: {
+                    /** @description Session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["activity.Summary"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/subtitles/:session_id": {
         parameters: {
             query?: never;
@@ -971,7 +1018,12 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody: components["requestBodies"]["controllers.CompleteUploadRequest"];
+            /** @description Upload metadata */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.CompleteUploadRequest"];
+                };
+            };
             responses: {
                 /** @description Accepted */
                 202: {
@@ -1210,11 +1262,81 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        "activity.Gap": {
+            chunk_id?: number;
+            clock?: string;
+            end_secs?: number;
+            reason?: string;
+            start_secs?: number;
+        };
+        "activity.Interval": {
+            end_secs?: number;
+            reason?: string;
+            start_secs?: number;
+        };
+        "activity.Observation": {
+            complete?: boolean;
+            end_secs?: number;
+            evidence?: string;
+            movement?: string;
+            start_secs?: number;
+            /** @description reps or seconds */
+            unit?: string;
+        };
+        "activity.Observations": {
+            /** @description exercise, rest, unknown */
+            activity_state?: string;
+            duration_secs?: number;
+            events?: components["schemas"]["activity.Observation"][];
+            /** @description identified, ambiguous, not_visible, unknown */
+            target_state?: string;
+            unassessed?: components["schemas"]["activity.Interval"][];
+            version?: number;
+        };
+        "activity.ReviewedChunk": {
+            chunk_id?: number;
+            observations?: components["schemas"]["activity.Observations"];
+            state?: string;
+        };
+        "activity.Summary": {
+            available?: boolean;
+            coverage_scope?: string;
+            media_generation?: string;
+            movements?: components["schemas"]["activity.Total"][];
+            review_state?: string;
+            review_version?: number;
+            reviews?: components["schemas"]["activity.ReviewedChunk"][];
+            source_version?: string;
+            unassessed?: components["schemas"]["activity.Gap"][];
+            version?: number;
+        };
+        "activity.Total": {
+            count?: number;
+            movement?: string;
+            seconds?: number;
+            unit?: string;
+        };
         "controllers.ChunkAnalysisSummaryResponse": {
             completed?: number;
             failed?: number;
             pending?: number;
             total?: number;
+        };
+        "controllers.ChunkCompleteRequest": {
+            appearance_hints?: string;
+            end_secs?: number;
+            gcs_uri?: string;
+            heart_rate_bpm?: number;
+            injuries?: string[];
+            live_analysis_version?: number;
+            movements?: string[];
+            profile_id?: number;
+            session_id?: string;
+            start_secs?: number;
+            /** @description e.g. "Fran" or "For Time: 5 rounds of..." */
+            wod_description?: string;
+            workout_confidence?: number;
+            workout_type?: string;
         };
         "controllers.CompleteUploadRequest": {
             enable_tts?: boolean;
@@ -1370,6 +1492,8 @@ export interface components {
             session_id?: string;
         };
         "db.ChunkAnalysisResult": {
+            capture_assessment?: Record<string, never>;
+            contextual_coaching?: Record<string, never>;
             created_at?: string;
             end_secs?: number;
             /** @description detected movement (e.g. "Snatch", "Pull-up") */
@@ -1378,6 +1502,7 @@ export interface components {
             /** @description BLE heart rate at chunk capture time (0 = unavailable) */
             heart_rate_bpm?: number;
             id?: number;
+            movement_observations?: Record<string, never>;
             /** @description JSON: estimated workout metrics for benchmarking */
             observed_signals?: string;
             output?: string;
@@ -1411,6 +1536,7 @@ export interface components {
             title?: string;
             updated_at?: string;
         };
+
         "controllers.RelatedWODQuery": {
             movement?: string;
             source_session_id?: string;
@@ -1445,14 +1571,7 @@ export interface components {
     };
     responses: never;
     parameters: never;
-    requestBodies: {
-        /** @description Upload metadata */
-        "controllers.CompleteUploadRequest": {
-            content: {
-                "application/json": components["schemas"]["controllers.CompleteUploadRequest"];
-            };
-        };
-    };
+    requestBodies: never;
     headers: never;
     pathItems: never;
 }

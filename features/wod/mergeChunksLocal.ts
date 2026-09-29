@@ -1,13 +1,10 @@
-import {
-  deleteAsync,
-  documentDirectory,
-  getInfoAsync,
-} from "expo-file-system/legacy";
+import { documentDirectory, getInfoAsync } from "expo-file-system/legacy";
 
 import { VideoMergerModule } from "@/modules/video-merger";
 
 /**
- * Merge an ordered list of chunk files into a single output MP4.
+ * Merge every ordered chunk without deleting sources or a previous result.
+ * iOS can return a MOV when the source codecs cannot pass through to MP4.
  *
  * @param chunkPaths Absolute file paths to the source chunks, in order.
  * @param outputPath Absolute file path for the merged result.
@@ -22,39 +19,35 @@ export async function mergeChunksLocal(
     throw new Error("mergeChunksLocal: no chunk paths provided");
   }
 
-  // Validate all chunks exist and filter out empty 0-byte chunks before attempting merge
-  const validChunkPaths: string[] = [];
   for (const p of chunkPaths) {
     const info = await getInfoAsync(p);
     if (!info.exists) {
       throw new Error(`mergeChunksLocal: chunk not found: ${p}`);
     }
-    if (info.size === 0) {
-      console.warn(`mergeChunksLocal: skipping 0-byte chunk: ${p}`);
-      continue;
+    if (info.isDirectory || info.size === 0) {
+      throw new Error(`mergeChunksLocal: chunk is empty or unreadable: ${p}`);
     }
-    validChunkPaths.push(p);
   }
 
-  if (validChunkPaths.length === 0) {
-    throw new Error(
-      "mergeChunksLocal: no valid non-empty chunk paths provided",
-    );
-  }
-
-  // Remove existing output file if present
-  const outputInfo = await getInfoAsync(outputPath);
-  if (outputInfo.exists) {
-    await deleteAsync(outputPath, { idempotent: true });
-  }
-
-  console.log(`🎬 Merging ${validChunkPaths.length} chunks → ${outputPath}`);
+  // Native code validates a unique temporary sibling before replacing a result.
+  // Never pre-delete it here: a retry may fail.
+  console.log(`🎬 Merging ${chunkPaths.length} chunks → ${outputPath}`);
   const start = Date.now();
 
   const result = await VideoMergerModule.mergeVideos(
-    validChunkPaths,
+    chunkPaths,
     outputPath,
   );
+
+  // Older native binaries can silently omit a chunk. Require the new native
+  // completion evidence before the retention store may publish/clean originals.
+  if (!result.success || !result.outputPath || result.inputCount !== chunkPaths.length) {
+    throw new Error("mergeChunksLocal: native merger did not preserve every input");
+  }
+  const outputInfo = await getInfoAsync(result.outputPath);
+  if (!outputInfo.exists || outputInfo.isDirectory || outputInfo.size === 0) {
+    throw new Error("mergeChunksLocal: native output is missing or empty");
+  }
 
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   console.log(`🎬 Merge complete in ${elapsed}s → ${result.outputPath}`);

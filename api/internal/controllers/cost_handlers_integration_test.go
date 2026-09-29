@@ -122,6 +122,29 @@ var _ = Describe("GET /api/v1/analytics/cost", func() {
 		router = newTestRouterWithAuthService(controllers.Config{})
 	})
 
+	It("includes account-only usage without leaking it into a selected profile or another user", func() {
+		other := testhelpers.CreateUser(dbConn, &db.User{Username: "other-account"})
+		testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{UserID: &user.ID, TaskType: "image:workout", Model: "gemini-3.8-flash", PromptTokens: 100, CandidateTokens: 20, TotalTokens: 460, UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":40,"toolUsePromptTokenCount":300,"cachedContentTokenCount":50,"totalTokenCount":460}`)})
+		testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{UserID: &other.ID, TaskType: "image:workout", Model: "gemini-3.8-flash", TotalTokens: 9999})
+		req := newAuthorizedJSONRequest(http.MethodGet, "/api/v1/analytics/cost", "", &user)
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		Expect(resp.Code).To(Equal(http.StatusOK))
+		var total cost.TotalCostResponse
+		Expect(json.Unmarshal(resp.Body.Bytes(), &total)).To(Succeed())
+		Expect(total.TotalTokens).To(Equal(int64(460)))
+		Expect(total.ThinkingTokens).To(Equal(int64(40)))
+		Expect(total.ToolUseTokens).To(Equal(int64(300)))
+		expected, _ := cost.CalculateTokensCost("gemini-3.8-flash", 400, 60)
+		Expect(total.CostUSD).To(Equal(expected))
+		req = newAuthorizedJSONRequest(http.MethodGet, fmt.Sprintf("/api/v1/analytics/cost?profile_id=%d", profile1.ID), "", &user)
+		resp = httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		Expect(resp.Code).To(Equal(http.StatusOK))
+		Expect(json.Unmarshal(resp.Body.Bytes(), &total)).To(Succeed())
+		Expect(total.TotalTokens).To(BeZero())
+	})
+
 	It("returns cumulative totals across all user sessions and profiles", func() {
 		testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{
 			SessionID:       "WOD-1",

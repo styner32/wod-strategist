@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+repo_dir="$(cd "$(dirname "$0")/../.." && pwd)"
+build_dir="$(mktemp -d /private/tmp/wod-native-video-tests.XXXXXX)"
+camera_core="$repo_dir/node_modules/react-native-vision-camera/ios/Core"
+recorder="$camera_core/SegmentedRecordingSession.swift"
+fixtures="$repo_dir/scripts/native-video-tests/SyntheticMediaFixtures.swift"
+node --test "$repo_dir/scripts/native-video-tests/segment-callbacks.test.cjs"
+swiftc -swift-version 5 -suppress-warnings -module-cache-path "$build_dir/module-cache" "$recorder" "$fixtures" "$repo_dir/scripts/native-video-tests/SegmentedAudioStartupSmoke.swift" -o "$build_dir/audio-startup"
+"$build_dir/audio-startup"
+swiftc -swift-version 5 -suppress-warnings -module-cache-path "$build_dir/module-cache" "$recorder" "$repo_dir/scripts/native-video-tests/SegmentedLifecycleSmoke.swift" -o "$build_dir/lifecycle"
+"$build_dir/lifecycle"
+swiftc -swift-version 5 -suppress-warnings -module-cache-path "$build_dir/module-cache" "$recorder" "$fixtures" "$repo_dir/scripts/native-video-tests/SegmentedRecordingSmoke.swift" -o "$build_dir/recording"
+"$build_dir/recording"
+swiftc -swift-version 5 -suppress-warnings -module-cache-path "$build_dir/module-cache" "$fixtures" "$repo_dir/scripts/native-video-tests/LegacyRecordingSmoke.swift" "$camera_core/RecordingSession.swift" "$camera_core/Recording/Track.swift" "$camera_core/Recording/TrackTimeline.swift" "$camera_core/Recording/TimelineEvent.swift" "$camera_core/Extensions/CMTime+inverted.swift" "$camera_core/Extensions/CMSampleBuffer+copyWithTimestampOffset.swift" "$camera_core/Parsers/AVAssetWriter.Status+descriptor.swift" -o "$build_dir/legacy"
+"$build_dir/legacy"

@@ -124,7 +124,8 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 	// 4. Gemini call: ONLY when evidence_status == "complete"
 	if readiness.EvidenceStatus == "complete" && ctl.textParser != nil {
 		prompt := fatigue.BuildPreWODAdvicePrompt(readiness, *profile, req.WODDescription, req.Movements, injuries)
-		rawResp, _, geminiErr := ctl.textParser.ParseText(ctx, prompt)
+		rawResp, usage, geminiErr := ctl.textParser.ParseText(ctx, prompt)
+		ctl.recordTokenUsage(c, req.ProfileID, "strategy:pre-wod", usage)
 		if geminiErr == nil && rawResp != "" {
 			match := jsonBlockRegex.FindString(rawResp)
 			if match != "" {
