@@ -58,6 +58,13 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 
 - See [ios-scene-lifecycle.md](ios-scene-lifecycle.md) for Expo SDK 57 / Xcode 27 scene ownership, the iOS 16.4 minimum, native regeneration checks and dependency compatibility patches.
 
+## Recording screen orientation
+
+- `RootLayout` sets `OrientationLock.PORTRAIT_UP`. On iOS, `visionTestPage.tsx` must override it on every focus: use `OrientationLock.DEFAULT` for device-driven rotation, or `LANDSCAPE` when `landscapeMode=true`. Omitting the default override leaves ordinary recordings locked in portrait. Restore `PORTRAIT_UP` on blur and report rejected orientation requests.
+- Use current window dimensions for the iOS layout. Size the viewfinder within its measured flex area after safe-area insets and recording controls; rotation must not remount the camera or restart recording.
+- In a physically landscape window (`width > height`), put header/status in one row and the camera beside a controls/telemetry sidebar. Expanded telemetry must not share the camera's vertical space or impose the portrait thumbnail height cap. Keep the same camera subtree across orientation/toggle changes.
+- Android retains the existing portrait Activity restriction for CameraX; `landscapeMode` uses the sideways-mount layout there. JavaScript tests do not establish physical-device rotation or capture continuity.
+
 ## iOS sensor upload startup safety
 - A reinstall can change the absolute `file:///var/mobile/Containers/Data/Application/{UUID}/Documents/` prefix while retaining the files. `loadQueue()` rebases saved `Documents/sensor/*.ndjson` paths against the current `documentDirectory`, including backup recovery, without changing request IDs or upload stages.
 - Check `getInfoAsync(filePath)` before `PREPARE_PENDING` / `PUT_PENDING`. Missing files or directories become `NEEDS_ATTENTION`; retain the queue entry. `COMPLETE_PENDING` must still reconcile with the server even if the local file is absent.

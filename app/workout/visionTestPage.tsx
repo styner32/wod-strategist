@@ -26,6 +26,7 @@ import {
   View,
 } from "react-native";
 import { Video } from "react-native-compressor";
+import { SafeAreaView } from "react-native-safe-area-context";
 import {
   Camera,
   useCameraDevice,
@@ -238,46 +239,19 @@ export default function VisionTestPage() {
     ? (is43 ? 4 / 3 : 16 / 9)
     : (is43 ? 3 / 4 : 9 / 16);
 
-  // Available vertical space in portrait leaving room for:
-  // topHeader (~48), slimStatusBar (~44), controlBar (~68), toggleBar (~44), safe area padding (~60)
-  const availableViewfinderHeight = Math.max(260, height - 264);
-  const maxViewfinderHeight = applyLandscapeStyles
-    ? Math.min(height * 0.72, 340)
-    : Math.min(availableViewfinderHeight, 560);
-
-  const maxViewfinderWidth = applyLandscapeStyles
-    ? Math.min(width * 0.85, 600)
-    : Math.min(width * 0.94, 440);
-
-  let viewfinderWidth: number;
-  let viewfinderHeight: number;
-
-  if (applyLandscapeStyles) {
-    if (isTelemetryExpanded) {
-      viewfinderHeight = 160;
-      viewfinderWidth = Math.round(viewfinderHeight * recordingAspectRatio);
-    } else {
-      viewfinderHeight = maxViewfinderHeight;
-      viewfinderWidth = Math.round(viewfinderHeight * recordingAspectRatio);
-      if (viewfinderWidth > maxViewfinderWidth) {
-        viewfinderWidth = maxViewfinderWidth;
-        viewfinderHeight = Math.round(viewfinderWidth / recordingAspectRatio);
-      }
-    }
-  } else {
-    if (isTelemetryExpanded) {
-      viewfinderHeight = Math.round(Math.min(height * 0.26, 210));
-      viewfinderWidth = Math.round(viewfinderHeight * recordingAspectRatio);
-    } else {
-      // Comfortably large mode: maximized without breaking the recording aspect ratio
-      viewfinderHeight = maxViewfinderHeight;
-      viewfinderWidth = Math.round(viewfinderHeight * recordingAspectRatio);
-      if (viewfinderWidth > maxViewfinderWidth) {
-        viewfinderWidth = maxViewfinderWidth;
-        viewfinderHeight = Math.round(viewfinderWidth / recordingAspectRatio);
-      }
-    }
-  }
+  // Flex layout reserves the measured header, controls and safe areas first.
+  // Only the remaining camera area participates in aspect-ratio sizing.
+  const [viewfinderSpace, setViewfinderSpace] = useState({ width: 0, height: 0 });
+  // Landscape uses a side panel, so telemetry must not halve the camera height.
+  const maxViewfinderHeight = isLandscapeLayout
+    ? viewfinderSpace.height
+    : (isTelemetryExpanded ? 210 : 560);
+  const viewfinderWidth = Math.max(0, Math.min(
+    viewfinderSpace.width,
+    isLandscapeLayout ? viewfinderSpace.width : 440,
+    Math.min(viewfinderSpace.height, maxViewfinderHeight) * recordingAspectRatio,
+  ));
+  const viewfinderHeight = viewfinderWidth / recordingAspectRatio;
 
   const camera = useRef<Camera>(null);
 
@@ -479,28 +453,9 @@ export default function VisionTestPage() {
   }, [chunkFeedback]);
 
 
-  const observedMovements = useMemo(() => {
-    const summaryMovements = liveFeedback.summary?.movements;
-    if (summaryMovements && summaryMovements.length > 0) {
-      return summaryMovements.map((m: any) => ({
-        name: m.movement || m.name,
-        reps: m.reps ?? m.count ?? 0,
-      }));
-    }
-    if (movements) {
-      const list = movements.split(", ").filter(Boolean);
-      if (list.length > 0) {
-        return list.map((m, idx) => ({
-          name: m,
-          reps: idx === 0 ? 15 : idx === 1 ? 4 : 0,
-        }));
-      }
-    }
-    return [
-      { name: "Back Squat", reps: 15 },
-      { name: "Front Squat", reps: 4 },
-    ];
-  }, [liveFeedback.summary?.movements, movements]);
+  const observedMovements = liveFeedback.summary?.available
+    ? liveFeedback.summary.movements
+    : [];
 
   // Keep screen awake while recording (prevents Android/iOS sleep)
   useEffect(() => {
@@ -545,23 +500,25 @@ export default function VisionTestPage() {
     }
   }, [isMerging]);
 
-  // Orientation lock: landscape mode from setup page
-  // iOS: lock to landscape (works perfectly with AVCaptureSession)
+  // Override the app's portrait lock for the lifetime of the recording screen.
+  // iOS: follow device rotation unless landscape was explicitly selected.
   // Android: keep portrait — CameraX breaks when Activity rotates via configChanges.
   //   Instead, the user mounts their phone sideways. The camera sensor is physically
   //   landscape, so content is captured wide. UI shows a mounting hint.
   useFocusEffect(
     useCallback(() => {
-      if (landscapeMode && !IS_ANDROID) {
-        ScreenOrientation.lockAsync(
-          ScreenOrientation.OrientationLock.LANDSCAPE,
-        );
+      if (!IS_ANDROID) {
+        void ScreenOrientation.lockAsync(
+          landscapeMode
+            ? ScreenOrientation.OrientationLock.LANDSCAPE
+            : ScreenOrientation.OrientationLock.DEFAULT,
+        ).catch((error) => console.warn("Recording screen orientation failed", error));
       }
       return () => {
         if (!IS_ANDROID) {
-          ScreenOrientation.lockAsync(
+          void ScreenOrientation.lockAsync(
             ScreenOrientation.OrientationLock.PORTRAIT_UP,
-          );
+          ).catch((error) => console.warn("Restoring portrait orientation failed", error));
         }
       };
     }, [landscapeMode]),
@@ -1256,7 +1213,7 @@ export default function VisionTestPage() {
     );
 
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container}>
       {/* Android: hint to mount phone sideways when landscape mode is on */}
       {IS_ANDROID && landscapeMode && !isRecording && (
         <View style={styles.landscapeHint}>
@@ -1266,501 +1223,533 @@ export default function VisionTestPage() {
         </View>
       )}
 
-      {/* Top Header: Back navigation & Mode badge */}
-      <View style={[styles.topHeader, applyLandscapeStyles && styles.topHeaderLandscape]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => {
-            if (isRecording) {
-              Alert.alert(
-                t("common.confirm"),
-                t("workout.recordingExitConfirm", { defaultValue: "Are you sure you want to stop recording and exit?" }),
-                [
-                  { text: t("common.cancel"), style: "cancel" },
-                  {
-                    text: t("common.ok"),
-                    style: "destructive",
-                    onPress: () => {
-                      void handleStopRecording();
+      <View testID="recording-chrome" style={isLandscapeLayout && styles.chromeLandscape}>
+        {/* Top Header: Back navigation & Mode badge */}
+        <View style={[styles.topHeader, isLandscapeLayout && styles.topHeaderLandscape]}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => {
+              if (isRecording) {
+                Alert.alert(
+                  t("common.confirm"),
+                  t("workout.recordingExitConfirm", { defaultValue: "Are you sure you want to stop recording and exit?" }),
+                  [
+                    { text: t("common.cancel"), style: "cancel" },
+                    {
+                      text: t("common.ok"),
+                      style: "destructive",
+                      onPress: () => {
+                        void handleStopRecording();
+                      },
                     },
-                  },
-                ]
-              );
-            } else {
-              router.back();
-            }
-          }}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          accessibilityRole="button"
-          accessibilityLabel={t("common.back")}
-        >
-          <IconSymbol name="chevron.left" size={24} color="#FFFFFF" />
-        </TouchableOpacity>
-
-        <View style={styles.modeBadge}>
-          <View style={styles.modeDot} />
-          <Text style={styles.modeText}>
-            {t("overlay.recording.mode", { type: workoutTypeLabel })}
-          </Text>
-        </View>
-      </View>
-
-      {/* Integrated Slim Status Bar (Outside & Above Viewfinder) */}
-      <View style={[styles.slimStatusBar, applyLandscapeStyles && styles.slimStatusBarLandscape]}>
-        {/* Left: REC Status & Timer */}
-        <View style={styles.statusRecSection}>
-          <View
-            style={[
-              styles.statusRecDot,
-              isRecording && !isPaused ? styles.statusRecDotActive : styles.statusRecDotIdle,
-              isPaused && styles.statusRecDotPaused,
-            ]}
-          />
-          <Text style={[styles.statusRecLabel, isPaused && styles.statusRecLabelPaused]}>
-            {isRecording
-              ? isPaused
-                ? "PAUSE"
-                : t("overlay.recording.rec")
-              : "READY"}
-          </Text>
-          <Text style={[styles.statusRecTime, isPaused && styles.statusRecTimePaused]}>
-            {formatElapsed(elapsedMs)}
-          </Text>
-        </View>
-
-        {/* Center: Heart Rate (BPM) */}
-        <View style={styles.statusHrPill}>
-          <Text style={styles.statusHrHeart}>♥</Text>
-          <Text style={styles.statusHrValue}>
-            {bpm > 0 ? bpm : "--"}
-          </Text>
-          <Text style={styles.statusHrUnit}>BPM</Text>
-        </View>
-
-        {/* Right: Heart Rate Sensor (Polar H10) Battery */}
-        <View style={styles.statusBatterySection}>
-          <Text style={styles.statusBatteryIcon}>🔋</Text>
-          <Text
-            style={[
-              styles.statusBatteryText,
-              batteryLevel === null && styles.statusBatteryTextDisconnected,
-              batteryLevel !== null && batteryLevel <= 20 && styles.statusBatteryTextLow,
-            ]}
+                  ]
+                );
+              } else {
+                router.back();
+              }
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel={t("common.back")}
           >
-            {batteryLevel !== null ? `${batteryLevel}%` : "--"}
-          </Text>
-        </View>
-      </View>
+            <IconSymbol name="chevron.left" size={24} color="#FFFFFF" />
+          </TouchableOpacity>
 
-      {/* Viewfinder: Preserves True Recording Aspect Ratio */}
-      <View
-        style={[
-          styles.viewfinderWrapper,
-          { width: viewfinderWidth, height: viewfinderHeight },
-        ]}
-      >
-        <Camera
-          ref={camera}
-          style={StyleSheet.absoluteFill}
-          device={device}
-          isActive={isCameraActive}
-          format={format}
-          fps={targetFps}
-          resizeMode="cover"
-          frameProcessor={frameProcessor}
-          pixelFormat="yuv"
-          videoHdr={false}
-          enableBufferCompression={false}
-          video={true}
-          audio={hasMicPermission}
-          videoStabilizationMode={videoStabilizationMode}
-          zoom={zoomMode ? 0.1 : 0}
-          onInitialized={() => setIsCameraReady(true)}
-          onError={(error) => {
-            if (error.message?.includes("delete orphan")) {
-              console.log("📷 Ignoring orphan cleanup warning");
-              return;
-            }
-            console.error("📷 Camera Error:", error.code, error.message);
-          }}
-        />
-
-        {/* Skeleton overlay inside compact viewfinder */}
-        {showSkeleton && (
-          <View style={StyleSheet.absoluteFill} pointerEvents="none">
-            <SkeletonOverlay
-              pose={poseResult}
-              width={viewfinderWidth}
-              height={viewfinderHeight}
-            />
-          </View>
-        )}
-
-        {/* Bottom edge hint and video format indicators */}
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={() => setIsTelemetryExpanded((prev) => !prev)}
-          style={styles.viewfinderBottomBar}
-          accessibilityRole="button"
-          accessibilityLabel={
-            isTelemetryExpanded
-              ? t("overlay.recording.tapToCollapse")
-              : t("overlay.recording.tapToExpand")
-          }
-        >
-          <View style={styles.viewfinderBottomLeft}>
-            <IconSymbol
-              name={isTelemetryExpanded ? "chevron.up" : "chevron.down"}
-              size={13}
-              color="#00F0FF"
-            />
-            <Text style={styles.viewfinderBottomText} numberOfLines={1}>
-              {isTelemetryExpanded
-                ? t("overlay.recording.tapToCollapse")
-                : t("overlay.recording.tapToExpand")}
+          <View style={styles.modeBadge}>
+            <View style={styles.modeDot} />
+            <Text style={styles.modeText}>
+              {t("overlay.recording.mode", { type: workoutTypeLabel })}
             </Text>
           </View>
-          <Text style={styles.viewfinderSpecText}>
-            {[
-              resolution.toUpperCase(),
-              `${targetFps}FPS`,
-              skipCompression ? "RAW" : "LOG",
-            ].join(" · ")}
-          </Text>
-        </TouchableOpacity>
+        </View>
+
+        {/* Integrated Slim Status Bar (Outside & Above Viewfinder) */}
+        <View style={[styles.slimStatusBar, isLandscapeLayout && styles.slimStatusBarLandscape]}>
+          {/* Left: REC Status & Timer */}
+          <View style={styles.statusRecSection}>
+            <View
+              style={[
+                styles.statusRecDot,
+                isRecording && !isPaused ? styles.statusRecDotActive : styles.statusRecDotIdle,
+                isPaused && styles.statusRecDotPaused,
+              ]}
+            />
+            <Text style={[styles.statusRecLabel, isPaused && styles.statusRecLabelPaused]}>
+              {isRecording
+                ? isPaused
+                  ? "PAUSE"
+                  : t("overlay.recording.rec")
+                : "READY"}
+            </Text>
+            <Text style={[styles.statusRecTime, isPaused && styles.statusRecTimePaused]}>
+              {formatElapsed(elapsedMs)}
+            </Text>
+          </View>
+
+          {/* Center: Heart Rate (BPM) */}
+          <View style={styles.statusHrPill}>
+            <Text style={styles.statusHrHeart}>♥</Text>
+            <Text style={styles.statusHrValue}>
+              {bpm > 0 ? bpm : "--"}
+            </Text>
+            <Text style={styles.statusHrUnit}>BPM</Text>
+          </View>
+
+          {/* Right: Heart Rate Sensor (Polar H10) Battery */}
+          <View style={styles.statusBatterySection}>
+            <Text style={styles.statusBatteryIcon}>🔋</Text>
+            <Text
+              style={[
+                styles.statusBatteryText,
+                batteryLevel === null && styles.statusBatteryTextDisconnected,
+                batteryLevel !== null && batteryLevel <= 20 && styles.statusBatteryTextLow,
+              ]}
+            >
+              {batteryLevel !== null ? `${batteryLevel}%` : "--"}
+            </Text>
+          </View>
+        </View>
+
       </View>
 
-      {/* Direct Control Bar (Directly beneath Viewfinder) */}
-      {!previewOnly && !isMerging && (
+      <View testID="recording-body" style={[styles.recordingBody, isLandscapeLayout && styles.recordingBodyLandscape]}>
+        {/* Keep this camera subtree mounted when changing orientation or telemetry. */}
         <View
+          testID="recording-viewfinder-space"
           style={[
-            styles.controlBarContainer,
-            applyLandscapeStyles && styles.controlBarContainerLandscape,
+            styles.viewfinderSpace,
+            isLandscapeLayout && styles.viewfinderSpaceLandscape,
+            !isLandscapeLayout && isTelemetryExpanded && styles.viewfinderSpaceCompact,
           ]}
+          onLayout={({ nativeEvent: { layout } }) => {
+            setViewfinderSpace({ width: layout.width, height: layout.height });
+          }}
         >
-          {isSaving ? (
-            <View style={styles.postRecordingFooter}>
-              <Text style={styles.footerStatus}>
-                {t("originalVideos.status.preparing")}
-              </Text>
-              <View style={styles.footerProgressBg}>
-                <View
-                  style={[
-                    styles.footerProgressFill,
-                    { width: "100%", backgroundColor: "#30D158" },
-                  ]}
+          <View
+            testID="recording-viewfinder"
+            style={[
+              styles.viewfinderWrapper,
+              { width: viewfinderWidth, height: viewfinderHeight },
+            ]}
+          >
+            <Camera
+              ref={camera}
+              style={StyleSheet.absoluteFill}
+              device={device}
+              isActive={isCameraActive}
+              format={format}
+              fps={targetFps}
+              resizeMode="cover"
+              frameProcessor={frameProcessor}
+              pixelFormat="yuv"
+              videoHdr={false}
+              enableBufferCompression={false}
+              video={true}
+              audio={hasMicPermission}
+              videoStabilizationMode={videoStabilizationMode}
+              zoom={zoomMode ? 0.1 : 0}
+              onInitialized={() => setIsCameraReady(true)}
+              onError={(error) => {
+                if (error.message?.includes("delete orphan")) {
+                  console.log("📷 Ignoring orphan cleanup warning");
+                  return;
+                }
+                console.error("📷 Camera Error:", error.code, error.message);
+              }}
+            />
+
+            {/* Skeleton overlay inside compact viewfinder */}
+            {showSkeleton && (
+              <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                <SkeletonOverlay
+                  pose={poseResult}
+                  width={viewfinderWidth}
+                  height={viewfinderHeight}
                 />
               </View>
-            </View>
-          ) : !isRecording ? (
-            /* Standby / Preview Controls */
-            <View style={styles.controlRow}>
-              <View style={styles.controlBtnPlaceholder} />
-              <TouchableOpacity
-                onPress={handleStartRecording}
-                style={styles.startRecordBtn}
-                accessibilityRole="button"
-                accessibilityLabel="Start Recording"
-              >
-                <View style={styles.startRecordInner} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleFlipCamera}
-                style={styles.controlIconBtn}
-                accessibilityRole="button"
-                accessibilityLabel={t("overlay.recording.flipCamera")}
-              >
-                <IconSymbol name="camera.rotate" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-          ) : (
-            /* Active Recording Controls: Clean 3-button layout (Flag/Lap removed) */
-            <View style={styles.controlRow}>
-              {/* 1. Pause / Resume */}
-              <TouchableOpacity
-                onPress={isPaused ? handleResumeRecording : handlePauseRecording}
-                style={[
-                  styles.pauseResumeBtn,
-                  isPaused ? styles.resumeBtnActive : styles.pauseBtnActive,
-                ]}
-                accessibilityRole="button"
-                accessibilityLabel={
-                  isPaused
-                    ? t("overlay.recording.resume")
-                    : t("overlay.recording.pause")
-                }
-              >
+            )}
+
+            {/* Bottom edge hint and video format indicators */}
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => setIsTelemetryExpanded((prev) => !prev)}
+              style={styles.viewfinderBottomBar}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isTelemetryExpanded
+                  ? t("overlay.recording.tapToCollapse")
+                  : t("overlay.recording.tapToExpand")
+              }
+            >
+              <View style={styles.viewfinderBottomLeft}>
                 <IconSymbol
-                  name={isPaused ? "play.fill" : "pause.fill"}
-                  size={18}
-                  color="#FFFFFF"
+                  name={isTelemetryExpanded ? "chevron.up" : "chevron.down"}
+                  size={13}
+                  color="#00F0FF"
                 />
-                <Text style={styles.pauseResumeText}>
-                  {isPaused
-                    ? t("overlay.recording.resume")
-                    : t("overlay.recording.pause")}
+                <Text style={styles.viewfinderBottomText} numberOfLines={1}>
+                  {isLandscapeLayout
+                    ? t(isTelemetryExpanded ? "overlay.recording.hideTelemetry" : "overlay.recording.showTelemetry")
+                    : t(isTelemetryExpanded ? "overlay.recording.tapToCollapse" : "overlay.recording.tapToExpand")}
                 </Text>
-              </TouchableOpacity>
-
-              {/* 2. Stop Recording (Red button with square.fill) */}
-              <TouchableOpacity
-                onPress={handleStopRecording}
-                style={styles.stopRecordBtn}
-                accessibilityRole="button"
-                accessibilityLabel={t("overlay.recording.stop")}
-              >
-                <IconSymbol name="square.fill" size={16} color="#FFFFFF" />
-                <Text style={styles.stopRecordText}>
-                  {t("overlay.recording.stop")}
-                </Text>
-              </TouchableOpacity>
-
-              {/* 3. Camera Flip */}
-              <TouchableOpacity
-                onPress={handleFlipCamera}
-                style={styles.controlIconBtn}
-                accessibilityRole="button"
-                accessibilityLabel={t("overlay.recording.flipCamera")}
-              >
-                <IconSymbol name="camera.rotate" size={18} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-          )}
+              </View>
+              <Text style={styles.viewfinderSpecText}>
+                {[
+                  resolution.toUpperCase(),
+                  `${targetFps}FPS`,
+                  skipCompression ? "RAW" : "LOG",
+                ].join(" · ")}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      )}
 
-      {/* Telemetry Toggle Bar (Expands/Collapses Telemetry & Adjusts Video Viewfinder) */}
-      {!previewOnly && (
-        <TouchableOpacity
-          onPress={() => setIsTelemetryExpanded((prev) => !prev)}
-          activeOpacity={0.8}
-          style={styles.telemetryToggleBar}
-          accessibilityRole="button"
-          accessibilityLabel={
-            isTelemetryExpanded
-              ? t("overlay.recording.collapseTelemetry")
-              : t("overlay.recording.expandTelemetry")
-          }
+        <View
+          testID="recording-sidebar"
+          style={[
+            isLandscapeLayout
+              ? styles.recordingSidebarLandscape
+              : isTelemetryExpanded && styles.recordingSidebarExpanded,
+            isLandscapeLayout && { width: isTelemetryExpanded ? "36%" : 92, minWidth: isTelemetryExpanded ? 176 : 92, maxWidth: 280 },
+          ]}
         >
-          <IconSymbol
-            name={isTelemetryExpanded ? "chevron.up" : "chevron.down"}
-            size={13}
-            color="#00F0FF"
-          />
-          <Text style={styles.telemetryToggleText}>
-            {isTelemetryExpanded
-              ? t("overlay.recording.collapseTelemetry")
-              : t("overlay.recording.expandTelemetry")}
-          </Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Telemetry Section (Scrollable Cards - Visible only when expanded) */}
-      {isTelemetryExpanded && (
-        <ScrollView
-          style={styles.telemetryScrollView}
-          contentContainerStyle={styles.telemetryContent}
-          nestedScrollEnabled={true}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Card 1: 실시간 피드백 (Live Coaching Feedback) */}
-          {(isRecording || chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
-            <View style={styles.feedbackCardWrapper}>
-              {isFeedbackCollapsed ? (
-                <TouchableOpacity
-                  style={styles.collapsedFeedbackPill}
-                  onPress={() => setIsFeedbackCollapsed(false)}
-                  activeOpacity={0.8}
-                  accessibilityRole="button"
-                  accessibilityLabel={t("overlay.feedback.expand")}
-                >
-                  <View style={styles.collapsedFeedbackContent}>
-                    <IconSymbol name="sparkles" size={14} color="#30D158" />
-                    <Text style={styles.collapsedFeedbackText} numberOfLines={1}>
-                      {chunkFeedback ||
-                        liveFeedback.captureAdvice ||
-                        t("overlay.feedback.collapsedLabel")}
-                    </Text>
-                    <View style={styles.expandBadge}>
-                      <Text style={styles.expandBadgeText}>
-                        {t("overlay.feedback.expand")}
-                      </Text>
-                      <IconSymbol name="chevron.down" size={12} color="#00F0FF" />
-                    </View>
+          {/* Controls remain outside the scrolling telemetry panel. */}
+          {!previewOnly && !isMerging && (
+            <View
+              style={[
+                styles.controlBarContainer,
+                isLandscapeLayout && styles.controlBarContainerLandscape,
+              ]}
+            >
+              {isSaving ? (
+                <View style={styles.postRecordingFooter}>
+                  <Text style={styles.footerStatus}>
+                    {t("originalVideos.status.preparing")}
+                  </Text>
+                  <View style={styles.footerProgressBg}>
+                    <View
+                      style={[
+                        styles.footerProgressFill,
+                        { width: "100%", backgroundColor: "#30D158" },
+                      ]}
+                    />
                   </View>
-                </TouchableOpacity>
+                </View>
+              ) : !isRecording ? (
+                /* Standby / Preview Controls */
+                <View style={[styles.controlRow, isLandscapeLayout && !isTelemetryExpanded && styles.controlColumn]}>
+                  {!isLandscapeLayout && <View style={styles.controlBtnPlaceholder} />}
+                  <TouchableOpacity
+                    onPress={handleStartRecording}
+                    style={styles.startRecordBtn}
+                    accessibilityRole="button"
+                    accessibilityLabel="Start Recording"
+                  >
+                    <View style={styles.startRecordInner} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={handleFlipCamera}
+                    style={styles.controlIconBtn}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("overlay.recording.flipCamera")}
+                  >
+                    <IconSymbol name="camera.rotate" size={20} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
               ) : (
-                <View style={styles.feedbackCard}>
-                  <View style={styles.feedbackHeader}>
-                    <View style={styles.feedbackHeaderLeft}>
-                      <IconSymbol name="sparkles" size={15} color="#30D158" />
-                      <Text style={styles.feedbackTitle} numberOfLines={1}>
-                        {t("overlay.feedback.title")}
-                      </Text>
-                    </View>
-                    <View style={styles.feedbackHeaderRight}>
-                      <View style={styles.badgeActivePill}>
-                        <View style={styles.activeDot} />
-                        <Text style={styles.badgeActiveText}>
-                          {t("overlay.recording.feedbackActive")}
-                        </Text>
-                      </View>
-                      <TouchableOpacity
-                        style={styles.collapseBtn}
-                        onPress={() => setIsFeedbackCollapsed(true)}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        accessibilityRole="button"
-                        accessibilityLabel={t("overlay.feedback.collapse")}
-                      >
-                        <Text style={styles.collapseBtnText}>
-                          {t("overlay.feedback.collapse")}
-                        </Text>
-                        <IconSymbol name="chevron.up" size={11} color="#94A3B8" />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
+                /* Active Recording Controls: Clean 3-button layout (Flag/Lap removed) */
+                <View style={[styles.controlRow, isLandscapeLayout && !isTelemetryExpanded && styles.controlColumn]}>
+                  {/* 1. Pause / Resume */}
+                  <TouchableOpacity
+                    onPress={isPaused ? handleResumeRecording : handlePauseRecording}
+                    style={[
+                      styles.pauseResumeBtn,
+                      isPaused ? styles.resumeBtnActive : styles.pauseBtnActive,
+                      isLandscapeLayout && styles.landscapeActionBtn,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      isPaused
+                        ? t("overlay.recording.resume")
+                        : t("overlay.recording.pause")
+                    }
+                  >
+                    <IconSymbol
+                      name={isPaused ? "play.fill" : "pause.fill"}
+                      size={18}
+                      color="#FFFFFF"
+                    />
+                    {!isLandscapeLayout && <Text style={styles.pauseResumeText}>
+                      {isPaused
+                        ? t("overlay.recording.resume")
+                        : t("overlay.recording.pause")}
+                    </Text>}
+                  </TouchableOpacity>
 
-                  {liveFeedback.captureAdvice && (
-                    <View style={styles.adviceRow}>
-                      <IconSymbol name="camera.fill" size={14} color="#FFD28A" />
-                      <Text style={styles.adviceText}>
-                        {t("activity.camera")}: {liveFeedback.captureAdvice}
-                      </Text>
-                    </View>
-                  )}
+                  {/* 2. Stop Recording (Red button with square.fill) */}
+                  <TouchableOpacity
+                    onPress={handleStopRecording}
+                    style={[styles.stopRecordBtn, isLandscapeLayout && styles.landscapeActionBtn]}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("overlay.recording.stop")}
+                  >
+                    <IconSymbol name="square.fill" size={16} color="#FFFFFF" />
+                    {!isLandscapeLayout && <Text style={styles.stopRecordText}>
+                      {t("overlay.recording.stop")}
+                    </Text>}
+                  </TouchableOpacity>
 
-                  {chunkFeedback && (
-                    <Text style={styles.coachingText}>{chunkFeedback}</Text>
-                  )}
-
-                  <ActivitySummaryContent summary={liveFeedback.summary} compact />
+                  {/* 3. Camera Flip */}
+                  <TouchableOpacity
+                    onPress={handleFlipCamera}
+                    style={styles.controlIconBtn}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("overlay.recording.flipCamera")}
+                  >
+                    <IconSymbol name="camera.rotate" size={18} color="#FFFFFF" />
+                  </TouchableOpacity>
                 </View>
               )}
             </View>
           )}
 
-          {/* Card 2: 동작 감지 현황 (Observed Activity - Core Workout Data) */}
+          {/* Telemetry Toggle Bar (Expands/Collapses Telemetry & Adjusts Video Viewfinder) */}
           {!previewOnly && (
-            <View style={styles.activityCard}>
-              <View style={styles.activityHeader}>
-                <View style={styles.cardHeaderTitleRow}>
-                  <IconSymbol name="dumbbell.fill" size={14} color="#00F0FF" />
-                  <Text style={styles.activityTitle} numberOfLines={1}>
-                    {t("overlay.recording.observedActivityTitle")}
-                  </Text>
-                </View>
-                <View style={styles.syncBadge}>
-                  <View style={styles.syncDot} />
-                  <Text style={styles.syncBadgeText}>
-                    {t("overlay.recording.sensorSynced")}
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.movementTilesRow}>
-                {observedMovements.length === 0 ? (
-                  <View style={styles.movementEmptyTile}>
-                    <Text style={styles.movementEmptyText}>
-                      {t("overlay.recording.noMovementsYet")}
-                    </Text>
-                  </View>
-                ) : (
-                  observedMovements.map((item, index) => (
-                    <View key={`${item.name}-${index}`} style={styles.movementTile}>
-                      <Text style={styles.movementName} numberOfLines={1}>
-                        {item.name}
-                      </Text>
-                      <View style={styles.movementRepBox}>
-                        <Text style={styles.movementRepCount}>{item.reps}</Text>
-                        <Text style={styles.movementRepUnit}>reps</Text>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </View>
-            </View>
-          )}
-
-          {/* --- 실험적인 데이터 (EXPERIMENTAL & DIAGNOSTICS - Moved to Bottom) --- */}
-          {!previewOnly && (
-            <View style={styles.experimentalSectionHeader}>
-              <View style={styles.experimentalDivider} />
-              <Text style={styles.experimentalSectionTitle}>
-                {t("overlay.recording.experimentalSection")}
+            <TouchableOpacity
+              onPress={() => setIsTelemetryExpanded((prev) => !prev)}
+              activeOpacity={0.8}
+              style={[styles.telemetryToggleBar, isLandscapeLayout && styles.telemetryToggleLandscape]}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isTelemetryExpanded
+                  ? t("overlay.recording.collapseTelemetry")
+                  : t("overlay.recording.expandTelemetry")
+              }
+            >
+              <IconSymbol
+                name={isTelemetryExpanded ? "chevron.up" : "chevron.down"}
+                size={13}
+                color="#00F0FF"
+              />
+              <Text style={styles.telemetryToggleText}>
+                {isLandscapeLayout
+                  ? t(isTelemetryExpanded ? "overlay.recording.hideTelemetry" : "overlay.recording.showTelemetry")
+                  : t(isTelemetryExpanded ? "overlay.recording.collapseTelemetry" : "overlay.recording.expandTelemetry")}
               </Text>
-              <View style={styles.experimentalDivider} />
-            </View>
+            </TouchableOpacity>
           )}
 
-          {/* Card 3: AI 비전 실험 (AI EXPERIMENT & STATE) */}
-          {!previewOnly && (
-            <View style={styles.aiVisionCard}>
-              <View style={styles.aiVisionHeader}>
-                <View style={styles.cardHeaderTitleRow}>
-                  <IconSymbol name="eye" size={14} color="#00F0FF" />
-                  <Text style={styles.aiVisionTitle} numberOfLines={1}>
-                    {t("overlay.recording.aiVisionTitle")}
-                  </Text>
+          {/* Telemetry Section (Scrollable Cards - Visible only when expanded) */}
+          {isTelemetryExpanded && (
+            <ScrollView
+              testID="recording-telemetry"
+              style={styles.telemetryScrollView}
+              contentContainerStyle={[styles.telemetryContent, isLandscapeLayout && styles.telemetryContentLandscape]}
+              nestedScrollEnabled={true}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Card 1: 실시간 피드백 (Live Coaching Feedback) */}
+              {(isRecording || chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
+                <View style={styles.feedbackCardWrapper}>
+                  {isFeedbackCollapsed ? (
+                    <TouchableOpacity
+                      style={styles.collapsedFeedbackPill}
+                      onPress={() => setIsFeedbackCollapsed(false)}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("overlay.feedback.expand")}
+                    >
+                      <View style={styles.collapsedFeedbackContent}>
+                        <IconSymbol name="sparkles" size={14} color="#30D158" />
+                        <Text style={styles.collapsedFeedbackText} numberOfLines={1}>
+                          {chunkFeedback ||
+                            liveFeedback.captureAdvice ||
+                            t("overlay.feedback.collapsedLabel")}
+                        </Text>
+                        <View style={styles.expandBadge}>
+                          <Text style={styles.expandBadgeText}>
+                            {t("overlay.feedback.expand")}
+                          </Text>
+                          <IconSymbol name="chevron.down" size={12} color="#00F0FF" />
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  ) : (
+                    <View style={styles.feedbackCard}>
+                      <View style={styles.feedbackHeader}>
+                        <View style={styles.feedbackHeaderLeft}>
+                          <IconSymbol name="sparkles" size={15} color="#30D158" />
+                          <Text style={styles.feedbackTitle} numberOfLines={1}>
+                            {t("overlay.feedback.title")}
+                          </Text>
+                        </View>
+                        <View style={styles.feedbackHeaderRight}>
+                          {!isLandscapeLayout && <View style={styles.badgeActivePill}>
+                            <View style={styles.activeDot} />
+                            <Text style={styles.badgeActiveText}>
+                              {t("overlay.recording.feedbackActive")}
+                            </Text>
+                          </View>}
+                          <TouchableOpacity
+                            style={styles.collapseBtn}
+                            onPress={() => setIsFeedbackCollapsed(true)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            accessibilityRole="button"
+                            accessibilityLabel={t("overlay.feedback.collapse")}
+                          >
+                            <Text style={styles.collapseBtnText}>
+                              {t("overlay.feedback.collapse")}
+                            </Text>
+                            <IconSymbol name="chevron.up" size={11} color="#94A3B8" />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+
+                      {liveFeedback.captureAdvice && (
+                        <View style={styles.adviceRow}>
+                          <IconSymbol name="camera.fill" size={14} color="#FFD28A" />
+                          <Text style={styles.adviceText}>
+                            {t("activity.camera")}: {liveFeedback.captureAdvice}
+                          </Text>
+                        </View>
+                      )}
+
+                      {chunkFeedback && (
+                        <Text style={styles.coachingText}>{chunkFeedback}</Text>
+                      )}
+
+                      <ActivitySummaryContent summary={liveFeedback.summary} compact />
+                    </View>
+                  )}
                 </View>
-                <View style={styles.aiVisionBadge}>
-                  <Text style={styles.aiVisionBadgeText}>
-                    CONF {(safeConfidence * 100).toFixed(0)}% · {(safeMotion * 10).toFixed(1)}ms
-                  </Text>
+              )}
+
+              {/* Card 2: 동작 감지 현황 (Observed Activity - Core Workout Data) */}
+              {!previewOnly && (
+                <View style={styles.activityCard}>
+                  <View style={[styles.activityHeader, isLandscapeLayout && styles.cardHeaderLandscape]}>
+                    <View style={[styles.cardHeaderTitleRow, isLandscapeLayout && styles.cardTitleLandscape]}>
+                      <IconSymbol name="dumbbell.fill" size={14} color="#00F0FF" />
+                      <Text style={styles.activityTitle} numberOfLines={1}>
+                        {t("overlay.recording.observedActivityTitle")}
+                      </Text>
+                    </View>
+                    {liveFeedback.summary?.available && (
+                      <View style={styles.syncBadge}>
+                        <Text style={styles.syncBadgeText}>
+                          {t(`activity.state.${liveFeedback.summary.review_state}`)}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.movementTilesRow}>
+                    {observedMovements.length === 0 ? (
+                      <View style={styles.movementEmptyTile}>
+                        <Text style={styles.movementEmptyText}>
+                          {t("activity.noEvidence")}
+                        </Text>
+                      </View>
+                    ) : (
+                      observedMovements.map((item) => (
+                        <View key={`${item.movement}/${item.unit}`} testID={`observed-movement-${item.movement}-${item.unit}`} style={styles.movementTile}>
+                          <Text style={styles.movementName} numberOfLines={1}>
+                            {item.movement}
+                          </Text>
+                          <View style={styles.movementRepBox}>
+                            <Text style={styles.movementRepCount}>
+                              {item.unit === "reps" ? item.count : Math.round(item.seconds * 10) / 10}
+                            </Text>
+                            <Text style={styles.movementRepUnit}>
+                              {t(`overlay.recording.${item.unit === "reps" ? "repsUnit" : "secondsUnit"}`)}
+                            </Text>
+                          </View>
+                        </View>
+                      ))
+                    )}
+                  </View>
                 </View>
-              </View>
-              <View style={styles.jsonTerminalBox}>
-                <Text style={styles.jsonTerminalText}>
-                  {`{\n  "pose_state": "${
-                    monitorData.isWorkingOut
-                      ? "eccentric_descent"
-                      : isRecording
-                      ? "active_motion"
-                      : "ready_idle"
-                  }",\n  "stability_index": ${safeConfidence.toFixed(
-                    2,
-                  )},\n  "motion_velocity": ${safeMotion.toFixed(
-                    3,
-                  )},\n  "ankle_symmetry": "${
-                    safeConfidence > 0.6 ? "stable" : "adjusting"
-                  }"\n}`}
-                </Text>
-              </View>
-            </View>
+              )}
+
+              {/* --- 실험적인 데이터 (EXPERIMENTAL & DIAGNOSTICS - Moved to Bottom) --- */}
+              {!previewOnly && (
+                <View style={styles.experimentalSectionHeader}>
+                  <View style={styles.experimentalDivider} />
+                  <Text style={styles.experimentalSectionTitle}>
+                    {t("overlay.recording.experimentalSection")}
+                  </Text>
+                  <View style={styles.experimentalDivider} />
+                </View>
+              )}
+
+              {/* Card 3: AI 비전 실험 (AI EXPERIMENT & STATE) */}
+              {!previewOnly && (
+                <View style={styles.aiVisionCard}>
+                  <View style={[styles.aiVisionHeader, isLandscapeLayout && styles.cardHeaderLandscape]}>
+                    <View style={[styles.cardHeaderTitleRow, isLandscapeLayout && styles.cardTitleLandscape]}>
+                      <IconSymbol name="eye" size={14} color="#00F0FF" />
+                      <Text style={styles.aiVisionTitle} numberOfLines={1}>
+                        {t("overlay.recording.aiVisionTitle")}
+                      </Text>
+                    </View>
+                    <View style={styles.aiVisionBadge}>
+                      <Text style={styles.aiVisionBadgeText}>
+                        {t(`overlay.recording.${isModelLoaded ? "modelReady" : "modelLoading"}`)}
+                      </Text>
+                    </View>
+                  </View>
+                  {isModelLoaded && (
+                    <View style={styles.jsonTerminalBox}>
+                      <Text style={styles.jsonTerminalText}>
+                        {t("overlay.recording.detectionConfidence", { value: (safeConfidence * 100).toFixed(0) })}
+                      </Text>
+                      <Text style={styles.jsonTerminalText}>
+                        {t("overlay.recording.motionMagnitude", { value: safeMotion.toFixed(3) })}
+                      </Text>
+                      <Text style={styles.jsonTerminalText}>
+                        {t(`overlay.recording.${monitorData.isWorkingOut ? "motionDetected" : "motionNotDetected"}`)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* On-device Environment Observation Card (Experimental) */}
+              {environmentEnabled && (
+                <View style={styles.experimentalCardWrapper}>
+                  <EnvironmentLiveCard
+                    status={environment.status}
+                    record={environment.record}
+                  />
+                </View>
+              )}
+
+              {/* Apple On-Device AI Feedback Card (Experimental) */}
+              {onDeviceAi && (
+                <View style={styles.experimentalCardWrapper}>
+                  <AppleAiFeedbackCard
+                    status={appleAi.status}
+                    error={appleAi.error}
+                    result={appleAi.result}
+                    archiveError={appleAi.archiveError}
+                  />
+                </View>
+              )}
+
+              {/* Energy Monitor (Compact bottom telemetry element) */}
+              {!previewOnly && (
+                <View style={styles.energyMonitorWrapper}>
+                  <EnergyMonitor
+                    label={
+                      isRecording ? "Default Model (7MB) · 2fps" : "Preview · 1fps"
+                    }
+                  />
+                </View>
+              )}
+            </ScrollView>
           )}
 
-          {/* On-device Environment Observation Card (Experimental) */}
-          {environmentEnabled && (
-            <View style={styles.experimentalCardWrapper}>
-              <EnvironmentLiveCard
-                status={environment.status}
-                record={environment.record}
-              />
-            </View>
-          )}
-
-          {/* Apple On-Device AI Feedback Card (Experimental) */}
-          {onDeviceAi && (
-            <View style={styles.experimentalCardWrapper}>
-              <AppleAiFeedbackCard
-                status={appleAi.status}
-                error={appleAi.error}
-                result={appleAi.result}
-                archiveError={appleAi.archiveError}
-              />
-            </View>
-          )}
-
-          {/* Energy Monitor (Compact bottom telemetry element) */}
-          {!previewOnly && (
-            <View style={styles.energyMonitorWrapper}>
-              <EnergyMonitor
-                label={
-                  isRecording ? "Default Model (7MB) · 2fps" : "Preview · 1fps"
-                }
-              />
-            </View>
-          )}
-        </ScrollView>
-      )}
+        </View>
+      </View>
 
       {/* Merging indicator overlay */}
       {isMerging && (
@@ -1791,7 +1780,7 @@ export default function VisionTestPage() {
           </View>
         </View>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -1799,7 +1788,32 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#05080C",
-    paddingTop: Platform.OS === "ios" ? 54 : 32,
+    paddingVertical: 8,
+  },
+  chromeLandscape: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  recordingBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  recordingBodyLandscape: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  recordingSidebarExpanded: {
+    flex: 1,
+    minHeight: 0,
+  },
+  recordingSidebarLandscape: {
+    minHeight: 0,
+    justifyContent: "center",
+    flexShrink: 0,
   },
   center: {
     flex: 1,
@@ -1858,8 +1872,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   topHeaderLandscape: {
-    paddingHorizontal: 24,
-    marginBottom: 4,
+    paddingHorizontal: 0,
+    marginBottom: 0,
+    gap: 12,
   },
   backButton: {
     width: 38,
@@ -1908,8 +1923,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   slimStatusBarLandscape: {
-    marginHorizontal: 32,
-    marginBottom: 6,
+    flex: 1,
+    marginHorizontal: 0,
+    marginBottom: 0,
   },
   statusRecSection: {
     flexDirection: "row",
@@ -1996,6 +2012,21 @@ const styles = StyleSheet.create({
   statusBatteryTextDisconnected: {
     color: "#64748B",
   },
+  viewfinderSpace: {
+    flex: 1,
+    minHeight: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    marginHorizontal: 16,
+    overflow: "hidden",
+  },
+  viewfinderSpaceLandscape: {
+    marginHorizontal: 0,
+    minWidth: 0,
+  },
+  viewfinderSpaceCompact: {
+    maxHeight: 210,
+  },
   viewfinderWrapper: {
     alignSelf: "center",
     borderRadius: 20,
@@ -2020,11 +2051,15 @@ const styles = StyleSheet.create({
     borderTopColor: "rgba(255, 255, 255, 0.05)",
   },
   viewfinderBottomLeft: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: 8,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
   },
   viewfinderBottomText: {
+    flexShrink: 1,
     color: "#94A3B8",
     fontSize: 10,
     fontWeight: "500",
@@ -2041,7 +2076,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   controlBarContainerLandscape: {
+    paddingHorizontal: 0,
     marginVertical: 6,
+  },
+  controlColumn: {
+    flexDirection: "column",
+  },
+  landscapeActionBtn: {
+    width: 48,
+    minWidth: 48,
+    paddingHorizontal: 0,
   },
   controlRow: {
     flexDirection: "row",
@@ -2136,6 +2180,10 @@ const styles = StyleSheet.create({
     borderColor: "rgba(0, 240, 255, 0.2)",
     marginBottom: 8,
   },
+  telemetryToggleLandscape: {
+    paddingHorizontal: 8,
+    minHeight: 40,
+  },
   telemetryToggleText: {
     color: "#00F0FF",
     fontSize: 11,
@@ -2150,6 +2198,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 40,
     gap: 10,
+  },
+  telemetryContentLandscape: {
+    paddingHorizontal: 0,
+    paddingBottom: 8,
   },
   feedbackCardWrapper: {
     marginBottom: 2,
@@ -2316,6 +2368,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
+  },
+  cardHeaderLandscape: {
+    flexDirection: "column",
+    alignItems: "flex-start",
+  },
+  cardTitleLandscape: {
+    flex: 0,
+    alignSelf: "stretch",
   },
   cardHeaderTitleRow: {
     flexDirection: "row",
