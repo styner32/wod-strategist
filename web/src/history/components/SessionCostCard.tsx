@@ -1,12 +1,12 @@
+import { memo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { historyApi } from "../../api/history";
 
 interface SessionCostCardProps {
   sessionId: string;
 }
 
-export function SessionCostCard({ sessionId }: SessionCostCardProps) {
+export const SessionCostCard = memo(function SessionCostCard({ sessionId }: SessionCostCardProps) {
   const [showDetails, setShowDetails] = useState(false);
 
   const { data: cost, isLoading, error } = useQuery({
@@ -155,4 +155,4 @@ export function SessionCostCard({ sessionId }: SessionCostCardProps) {
       )}
     </section>
   );
-}
+});

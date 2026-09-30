@@ -316,6 +316,7 @@ export function SessionDetailPage() {
       ) {
         return false;
       }
+      if (query.state.dataUpdateCount >= 40) return false;
       const pollCount = Math.min(query.state.dataUpdateCount, 4);
       return Math.min(1000 * 2 ** pollCount, 8000);
     },
@@ -494,6 +495,7 @@ export function SessionDetailPage() {
         if (query.state.error) return false;
         const status = query.state.data?.status ?? run.status;
         if (isTerminalChunkReanalysisStatus(status)) return false;
+        if (query.state.dataUpdateCount >= 40) return false;
         const pollCount = Math.min(query.state.dataUpdateCount, 4);
         return Math.min(1000 * 2 ** pollCount, 8000);
       },
@@ -710,27 +712,32 @@ export function SessionDetailPage() {
           sensorPollingBudget.current = { sessionKey, startedAtMs: Date.now() };
         }
         const data = await historyApi.getSensorTimeline(sessionId!, profileId!);
-        const elapsedMs = Date.now() - sensorPollingBudget.current.startedAtMs;
-        if (sensorPollingBudget.current.sessionKey === sessionKey &&
-            data.status !== "pending" &&
-            sensorTimelinePollInterval(data, !!videoUrl?.download_url, elapsedMs, false) !== false) {
-          // A completed sensor response may arrive before merge boundaries or the
-          // first video URL. These queries otherwise only refresh on focus/remount.
-          await Promise.allSettled([
-            queryClient.refetchQueries({ queryKey: ["chunks", sessionId], type: "active" }, { cancelRefetch: false }),
-            queryClient.refetchQueries({ queryKey: ["session-analysis", sessionId], type: "active" }, { cancelRefetch: false }),
-            queryClient.refetchQueries({ queryKey: ["video-url", sessionId, profileId], type: "active" }, { cancelRefetch: false }),
-          ]);
+        const startedAt = sensorPollingBudget.current.startedAtMs || Date.now();
+        const elapsedMs = Date.now() - startedAt;
+        if (
+          sensorPollingBudget.current.sessionKey === sessionKey &&
+          data.status !== "pending" &&
+          sensorTimelinePollInterval(data, !!videoUrl?.download_url, elapsedMs, false) !== false
+        ) {
+          if (!videoUrl?.download_url) {
+            await queryClient.refetchQueries(
+              { queryKey: ["video-url", sessionId, profileId], type: "active" },
+              { cancelRefetch: false },
+            );
+          }
         }
         return data;
       },
       enabled: !!sessionId && !!profileId,
-      refetchInterval: (query) => sensorTimelinePollInterval(
-        query.state.data,
-        !!videoUrl?.download_url,
-        Date.now() - sensorPollingBudget.current.startedAtMs,
-        query.state.status === "error",
-      ),
+      refetchInterval: (query) => {
+        const startedAt = sensorPollingBudget.current.startedAtMs || Date.now();
+        return sensorTimelinePollInterval(
+          query.state.data,
+          !!videoUrl?.download_url,
+          Date.now() - startedAt,
+          query.state.status === "error",
+        );
+      },
       retry: false,
     });
 
@@ -820,7 +827,7 @@ export function SessionDetailPage() {
                 ref={videoRef}
                 src={videoUrl.download_url}
                 controls
-                preload="auto"
+                preload="metadata"
                 onTimeUpdate={handleTimeUpdate}
                 className="w-full aspect-video bg-black"
               />
@@ -990,7 +997,7 @@ export function SessionDetailPage() {
           {sessionId && profileId && <ActivitySummaryPanel sessionId={sessionId} profileId={profileId} />}
           {analysis && (
             <SensorTimelinePanel
-              key={`${sessionId}:${profileId}:${effectiveVideoKind}:${sensorTimelineResponse?.timeline?.source.request_id ?? ""}:${sensorTimelineResponse?.timeline?.source.source_generation ?? ""}`}
+              key={`${sessionId}:${profileId}:${effectiveVideoKind}`}
               timelineResponse={sensorTimelineResponse}
               isLoading={sensorTimelineLoading}
               currentTime={currentTime}

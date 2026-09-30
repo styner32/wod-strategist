@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { memo, useEffect, useId, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useMutation,
@@ -100,7 +100,7 @@ function AdditionalObservation({
     </div>
   );
 }
-export function AnalysisOverview({
+export const AnalysisOverview = memo(function AnalysisOverview({
   analysis,
   seek,
   seekHighlight,
@@ -129,11 +129,15 @@ export function AnalysisOverview({
     enabled: analysis.status.toLowerCase() === "completed",
     placeholderData: keepPreviousData,
     retry: false,
-    refetchInterval: (q) =>
-      enrichmentPending(q.state.data?.analysis.status) ||
-      enrichmentPending(q.state.data?.summary.status)
-        ? 3000
-        : false,
+    refetchInterval: (q) => {
+      const isPending =
+        enrichmentPending(q.state.data?.analysis.status) ||
+        enrichmentPending(q.state.data?.summary.status);
+      if (!isPending) return false;
+      const pollCount = q.state.dataUpdateCount;
+      if (pollCount >= 40) return false;
+      return Math.min(2000 * 1.5 ** Math.min(pollCount, 4), 10000);
+    },
   });
   const mutation = useMutation({
     mutationFn: (agentic: boolean) =>
@@ -449,4 +453,4 @@ export function AnalysisOverview({
       <AnalysisOriginal text={analysis.output} />
     </div>
   );
-}
+});

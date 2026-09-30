@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { ChunkAnalysisResult } from '../../api/history';
 
 interface Props {
@@ -6,7 +7,7 @@ interface Props {
   onSeek?: (time: number) => void;
 }
 
-export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
+export const ChunkMetricsChart = memo(function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
   const chunkStart = (chunk: ChunkAnalysisResult) => chunk.media_start_secs ?? null;
   const chunkEnd = (chunk: ChunkAnalysisResult) => chunk.media_end_secs ?? null;
   const sorted = [...chunks].sort((a, b) => {
@@ -200,4 +201,4 @@ export function ChunkMetricsChart({ chunks, currentTime, onSeek }: Props) {
       )}
     </div>
   );
-}
+});

@@ -69,6 +69,7 @@ export function SessionReanalysisPanel({
     refetchInterval: (query) => {
       const runs = query.state.data?.runs ?? [];
       if (!runs.some((run) => !isTerminal(run.status))) return false;
+      if (query.state.dataUpdateCount >= 40) return false;
       const pollCount = Math.min(query.state.dataUpdateCount, 4);
       return Math.min(1000 * (2 ** pollCount), 8000);
     },
@@ -87,6 +88,7 @@ export function SessionReanalysisPanel({
       if (query.state.error) return false;
       const status = (query.state.data as SessionReanalysisRun | undefined)?.status;
       if (isTerminal(status)) return false;
+      if (query.state.dataUpdateCount >= 40) return false;
       const pollCount = Math.min(query.state.dataUpdateCount, 4);
       return Math.min(1000 * (2 ** pollCount), 8000);
     },

@@ -1,6 +1,6 @@
 import { HeartRateBadge } from "./components/HeartRateSummaryPanel";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { historyApi, type AnalysisResult } from "../api/history";
 import { useAuth } from "../auth/useAuth";
@@ -72,7 +72,7 @@ function parseAnalysisOutput(output: string): {
   }
 }
 
-function HistoryCard({ result }: { result: AnalysisResult }) {
+const HistoryCard = memo(function HistoryCard({ result }: { result: AnalysisResult }) {
   const parsed = parseAnalysisOutput(result.output || "{}");
   // `||`, not `??`: an empty overview must fall back to the legacy summary.
   parsed.summary = result.analysis_summary?.result?.overview || result.analysis_summary?.last_success?.overview || parsed.summary;
@@ -162,7 +162,7 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
       )}
     </Link>
   );
-}
+});
 
 export function HistoryListPage() {
   const { user } = useAuth();
@@ -215,9 +215,7 @@ export function HistoryListPage() {
     observer.observe(target);
 
     return () => {
-      if (target) {
-        observer.unobserve(target);
-      }
+      observer.disconnect();
     };
   }, [hasNextPage, isFetchingNextPage, isFetching, fetchNextPage, error]);
 

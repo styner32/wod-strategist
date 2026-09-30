@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type {
   AnalysisFeedback,
   ChunkAnalysisResult,
@@ -98,7 +98,7 @@ function bulkStatusClasses(status: string) {
   return 'border-error/20 bg-error/5 text-error';
 }
 
-export function GuidanceTimeline({
+export const GuidanceTimeline = memo(function GuidanceTimeline({
   chunks,
   currentTime,
   selectedChunkId,
@@ -316,4 +316,4 @@ export function GuidanceTimeline({
       )}
     </section>
   );
-}
+});

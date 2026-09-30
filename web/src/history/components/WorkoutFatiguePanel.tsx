@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { SessionFatigue } from "../../api/history";
 
 interface WorkoutFatiguePanelProps {
@@ -46,7 +47,7 @@ export function getFatigueColorClasses(score: number) {
   };
 }
 
-export function WorkoutFatiguePanel({ fatigue }: WorkoutFatiguePanelProps) {
+export const WorkoutFatiguePanel = memo(function WorkoutFatiguePanel({ fatigue }: WorkoutFatiguePanelProps) {
   if (!fatigue) {
     return null;
   }
@@ -179,5 +180,5 @@ export function WorkoutFatiguePanel({ fatigue }: WorkoutFatiguePanelProps) {
       )}
     </div>
   );
-}
+});
 

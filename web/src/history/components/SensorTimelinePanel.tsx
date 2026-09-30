@@ -1,4 +1,4 @@
-import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useId, useMemo, useRef, useState } from "react";
 import type { SensorTimelineResponse } from "../../api/history";
 import {
   buildSvgLinePath,
@@ -38,7 +38,7 @@ function getStatusLabel(status?: string): string {
   }
 }
 
-export function SensorTimelinePanel({
+export const SensorTimelinePanel = memo(function SensorTimelinePanel({
   timelineResponse,
   isLoading,
   currentTime,
@@ -736,4 +736,4 @@ export function SensorTimelinePanel({
       <p className="mt-3 text-xs text-text-muted">{labels.referenceOnlyNotice}</p>
     </section>
   );
-}
+});

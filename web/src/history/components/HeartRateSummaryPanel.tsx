@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { HeartRateSummary } from "../../../../shared/heartRateSummary";
 import { HEART_RATE_ZONE_COLORS, hrNumber, hrPercent } from "../../../../shared/heartRateSummary";
 import ko from "../../../../features/i18n/locales/ko.json";
@@ -6,15 +7,15 @@ const labels: Record<string, string> = ko.heartRate;
 const label = (key: string) => labels[key] ?? labels.unavailable;
 const seconds = (n?: number) => hrNumber(n, ` ${labels.seconds}`);
 
-export function HeartRateBadge({ summary }: { summary?: HeartRateSummary }) {
+export const HeartRateBadge = memo(function HeartRateBadge({ summary }: { summary?: HeartRateSummary }) {
   return (
     <span className="inline-flex rounded-md bg-bg-secondary px-2 py-1 text-xs text-text-secondary">
       ♥ {label(summary?.status ?? "unavailable")}{summary?.calculation_version === 1 ? ` · ${labels.legacy}` : ""}
     </span>
   );
-}
+});
 
-export function HeartRateSummaryPanel({ summary }: { summary?: HeartRateSummary }) {
+export const HeartRateSummaryPanel = memo(function HeartRateSummaryPanel({ summary }: { summary?: HeartRateSummary }) {
   const rows = summary ? [
     [labels.average, hrNumber(summary.avg_bpm, " bpm")],
     [labels.peak, hrNumber(summary.peak_bpm, " bpm")],
@@ -78,4 +79,4 @@ export function HeartRateSummaryPanel({ summary }: { summary?: HeartRateSummary 
       )}
     </section>
   );
-}
+});

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { activityReviewPending, activitySummaryPath, type ActivitySummary } from "../../../../shared/activity";
@@ -18,12 +19,27 @@ const gapReasons: Record<string, string> = {
   unassessable_target_or_activity: "The athlete or movement is unclear",
 };
 
-export function ActivitySummaryPanel({ sessionId, profileId }: { sessionId: string; profileId: number }) {
+export const ActivitySummaryPanel = memo(function ActivitySummaryPanel({
+  sessionId,
+  profileId,
+}: {
+  sessionId: string;
+  profileId: number;
+}) {
   const { data } = useQuery({
     queryKey: ["activity-summary", profileId, sessionId],
     queryFn: () => api.get<ActivitySummary>(activitySummaryPath(sessionId, profileId)),
     enabled: !!sessionId && profileId > 0,
-    refetchInterval: query => activityReviewPending(query.state.data) ? 5000 : false,
+    refetchInterval: (query) => {
+      const summary = query.state.data;
+      if (!activityReviewPending(summary)) return false;
+      const isActivelyProcessing =
+        summary?.review_state === "queued" || summary?.review_state === "running";
+      const pollCount = query.state.dataUpdateCount;
+      const maxPolls = isActivelyProcessing ? 40 : 4;
+      if (pollCount >= maxPolls) return false;
+      return Math.min(2000 * 1.5 ** Math.min(pollCount, 4), 10000);
+    },
   });
   if (!data?.available) return null;
   return <section className="rounded-xl border border-slate-700 bg-slate-900 p-4 text-slate-100">
@@ -34,8 +50,8 @@ export function ActivitySummaryPanel({ sessionId, profileId }: { sessionId: stri
     </li>)}</ul>
     {!data.movements.length && <p>No countable observations yet.</p>}
     {data.unassessed.length > 0 && <details className="mt-2 text-amber-300"><summary>{data.unassessed.length} unassessed intervals</summary>
-      <ul>{data.unassessed.map((gap, index) => <li key={index}>{clockLabels[gap.clock]}: {gap.start_secs == null || gap.end_secs == null ? "Time unknown" : `${gap.start_secs.toFixed(1)}–${gap.end_secs.toFixed(1)}s`} · {gapReasons[gap.reason] ?? "This interval could not be assessed"}</li>)}</ul>
+      <ul>{data.unassessed.map((gap, index) => <li key={index}>{clockLabels[gap.clock]}: {gap.start_secs == null || gap.end_secs == null ? "Time unknown" : `${gap.start_secs.toFixed(1)}–${gap.end_secs.toFixed(1)}s`} · {gapReasons[gap.reason] ?? "This interval could not be assessed"}{gap.movement ? ` (${gap.movement})` : ""}</li>)}</ul>
     </details>}
     <p className="mt-2 text-xs text-slate-400">Recorded observations only. Review does not guarantee an exact total or judge competition-valid repetitions.</p>
   </section>;
-}
+});

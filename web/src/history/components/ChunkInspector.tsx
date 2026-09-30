@@ -212,6 +212,7 @@ export function ChunkInspector({
     refetchInterval: (query) => {
       const status = (query.state.data as ChunkReanalysisRun | undefined)?.status;
       if (status !== 'QUEUED' && status !== 'RUNNING') return false;
+      if (query.state.dataUpdateCount >= 40) return false;
       const pollCount = Math.min(query.state.dataUpdateCount, 4);
       return Math.min(1000 * (2 ** pollCount), 8000);
     },
