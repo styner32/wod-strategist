@@ -8,6 +8,22 @@
 - Do not add `expo-sharing`. Gallery uses existing `expo-media-library/legacy`, write-only photo permission and `saveToLibraryAsync`.
 - Request photo-add permission before capture; denial must not prevent camera recording. Complete sessions save one full video automatically; History provides independent device-original recovery even when no server row exists. With no active profile after offline hydration, display only the authenticated owner's local sessions and their profile IDs.
 
+## Gallery filenames (2026-09-30)
+
+- New sessions reserve optional `galleryFileStem` at `prepareOriginalSession`: `{WARMUP|WOD|ACCESSORY|COOLDOWN}-{YYYYMMDD}-{N}`. The date uses device-local `createdAt`, not save time or the UTC date. Type comes from the session ID; session IDs/server paths are unchanged.
+- `N` starts at 1 per day and is shared across all workout types, profiles and accounts in this app installation. Serialize reservations across sessions. Store immutable, non-personal markers under `Documents/originals/filename-sequences/{YYYYMMDD}/{N}.json`; interrupted `.json.tmp` markers also consume a number. Do not prune markers during video cleanup or reuse failed-start numbers. Reinstallation/removing app data removes this local sequence history; no cross-device uniqueness is promised.
+- Persist the reserved stem in the initial manifest before camera start. Generate `output/{galleryFileStem}.mp4`; preserve the native merger's actual `.mp4`/`.mov` extension. Photos receives that named file directly, without an extra video encode or staging copy. Restart, date/time-zone change and gallery retry retain the assigned stem.
+- Manifests without `galleryFileStem` keep their previous `outputPath` or `output/original.mp4` fallback. Never retroactively rename prior pending/saved videos, and keep existing uncertain-save confirmation and source-retention rules.
+- Automated tests cover concurrent type/profile allocation, local midnight, restart, account changes, failed starts/partial reservations, save retry, MP4/MOV filenames and old manifests. Physical iPhone Photos filename display and Mac export of a new named video still require device acceptance; mocks verify only the URL supplied to the existing save API.
+
+Validation on 2026-09-30: 4 suites / 62 tests passed, along with type checking and diff whitespace checks:
+
+```sh
+TZ=Asia/Seoul npm test -- --runInBand features/video/originalVideoStore.test.ts features/video/OriginalVideosPending.test.tsx app/workout/__tests__/visionTestPage.original.test.tsx features/wod/__tests__/mergeChunksLocal.test.ts
+npm run typecheck
+git diff --check
+```
+
 ## Retention and recovery
 
 - Register an expected source before starting native capture. Register the closed, nonempty source only from its finalization callback. Keep valid very short tails.

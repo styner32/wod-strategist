@@ -64,12 +64,14 @@ jest.mock("expo-file-system/legacy", () => ({
 }));
 
 let store: typeof import("./originalVideoStore");
+let now: jest.SpyInstance;
 beforeEach(() => {
   jest.resetModules();
   jest.clearAllMocks();
   mockFiles.clear(); mockDirectories.clear();
   mockUserId = 7; mockLoggedIn = true; mockFailSavedCommit = false;
   mockDocuments = "file:///container-one/Documents/";
+  now = jest.spyOn(Date, "now").mockReturnValue(new Date(2026, 8, 30, 23, 59, 59).getTime());
   mockPermission.mockResolvedValue({ granted: true });
   mockSave.mockResolvedValue(undefined);
   mockMerge.mockImplementation(async (_sources: string[], output: string) => {
@@ -79,6 +81,7 @@ beforeEach(() => {
   });
   store = require("./originalVideoStore");
 });
+afterEach(() => now.mockRestore());
 
 async function prepared(mode: "chunks" | "continuous" = "chunks") {
   return store.prepareOriginalSession({ profileId: 3, sessionId: "WOD-20260929-ORIGINAL", mode });
@@ -116,8 +119,8 @@ it("validates a single camera MOV through passthrough and saves with add-only pe
   });
   const result = await store.finalizeAndSaveOriginal(ref);
   expect(mockPermission).toHaveBeenCalledWith(true);
-  expect(mockSave).toHaveBeenCalledWith(expect.stringContaining("output/original.mov"));
-  expect(mockMerge).toHaveBeenCalledWith([path], expect.stringContaining("output/original.mp4"));
+  expect(mockSave).toHaveBeenCalledWith(expect.stringContaining("output/WOD-20260930-1.mov"));
+  expect(mockMerge).toHaveBeenCalledWith([path], expect.stringContaining("output/WOD-20260930-1.mp4"));
   expect(result.status).toBe("saved");
   expect(mockFiles.has(path)).toBe(false);
   expect((await store.listOriginalSessions(3))[0]).toMatchObject({ status: "saved", cleanedAt: expect.any(Number) });
@@ -129,8 +132,8 @@ it("merges finalized runs in order and saves the actual MOV path returned by the
   const second = await part(ref, 2);
   await stopped(ref);
   const result = await store.finalizeAndSaveOriginal(ref);
-  expect(mockMerge).toHaveBeenCalledWith([first, second], expect.stringContaining("output/original.mp4"));
-  expect(mockSave).toHaveBeenCalledWith(expect.stringContaining("output/original.mov"));
+  expect(mockMerge).toHaveBeenCalledWith([first, second], expect.stringContaining("output/WOD-20260930-1.mp4"));
+  expect(mockSave).toHaveBeenCalledWith(expect.stringContaining("output/WOD-20260930-1.mov"));
   expect(result.status).toBe("saved");
 });
 
@@ -344,4 +347,100 @@ it("does not overwrite an existing session or trust an invalid newer manifest", 
   expect((await store.finalizeAndSaveOriginal(ref)).status).toBe("needs_attention");
   expect(mockFiles.has(path)).toBe(true);
   expect(mockSave).not.toHaveBeenCalled();
+});
+
+it("reserves one daily sequence across concurrent workout types and profiles", async () => {
+  const types = ["WARMUP", "WOD", "ACCESSORY", "COOLDOWN"];
+  const refs = await Promise.all(types.map((type, index) => store.prepareOriginalSession({
+    profileId: index + 1, sessionId: `${type}-20260930-CONCURRENT`,
+  })));
+  const sessions = await store.listOriginalSessions();
+  expect(sessions).toHaveLength(4);
+  for (const [index, ref] of refs.entries()) {
+    expect(sessions.find(session => session.sessionId === ref.sessionId)?.galleryFileStem)
+      .toBe(`${types[index]}-20260930-${index + 1}`);
+  }
+});
+
+it("retains the capture-date name across midnight, restart and a rejected gallery save", async () => {
+  const ref = await prepared();
+  await part(ref, 0);
+  await stopped(ref);
+  mockSave.mockRejectedValueOnce(new Error("Photos unavailable"));
+  expect((await store.finalizeAndSaveOriginal(ref)).status).toBe("failed");
+  now.mockReturnValue(new Date(2026, 9, 1, 0, 0, 1).getTime());
+  restart();
+  expect((await store.finalizeAndSaveOriginal(ref)).status).toBe("saved");
+  expect(mockSave.mock.calls.map(call => call[0])).toEqual([
+    expect.stringContaining("/WOD-20260930-1.mov"), expect.stringContaining("/WOD-20260930-1.mov"),
+  ]);
+  expect(mockMerge).toHaveBeenCalledTimes(1);
+  const next = await store.prepareOriginalSession({ profileId: 4, sessionId: "WARMUP-20261001-NEXT" });
+  expect((await store.listOriginalSessions(4)).find(session => session.sessionId === next.sessionId)?.galleryFileStem)
+    .toBe("WARMUP-20261001-1");
+});
+
+it("does not reuse a number after save cleanup, restart, account change or failed capture", async () => {
+  const ref = await prepared();
+  await part(ref, 0);
+  await stopped(ref);
+  expect((await store.finalizeAndSaveOriginal(ref)).status).toBe("saved");
+  restart();
+  mockUserId = 9;
+  const failed = await store.prepareOriginalSession({ profileId: 4, sessionId: "WARMUP-20260930-FAILED" });
+  await store.markOriginalRecordingStopped(failed, { complete: false, reason: "native_start_failed" });
+  const next = await store.prepareOriginalSession({ profileId: 4, sessionId: "WOD-20260930-NEXT" });
+  expect((await store.listOriginalSessions(4)).find(session => session.sessionId === next.sessionId)?.galleryFileStem)
+    .toBe("WOD-20260930-3");
+});
+
+it("keeps a reservation if session metadata fails to commit and skips an interrupted temp reservation", async () => {
+  const fs = require("expo-file-system/legacy");
+  fs.moveAsync.mockImplementationOnce(async ({ from, to }: { from: string; to: string }) => {
+    mockFiles.set(to, mockFiles.get(from)!);
+    mockFiles.delete(from);
+  }).mockRejectedValueOnce(new Error("owner metadata write failed"));
+  await expect(prepared()).rejects.toThrow("owner metadata write failed");
+  const ledger = `${mockDocuments}originals/filename-sequences/20260930/`;
+  expect(mockFiles.has(`${ledger}1.json`)).toBe(true);
+  mockFiles.set(`${ledger}2.json.tmp`, "partial");
+  restart();
+  const next = await store.prepareOriginalSession({ profileId: 4, sessionId: "WOD-20260930-NEXT" });
+  expect((await store.listOriginalSessions(4)).find(session => session.sessionId === next.sessionId)?.galleryFileStem)
+    .toBe("WOD-20260930-3");
+});
+
+it.each(["mp4", "mov"])("passes the reserved %s filename unchanged to Photos", async (extension) => {
+  const ref = await prepared();
+  await part(ref, 0);
+  await stopped(ref);
+  mockMerge.mockImplementationOnce(async (_sources: string[], requested: string) => {
+    const output = requested.replace(/\.mp4$/, `.${extension}`);
+    mockFiles.set(output, "encoded-camera-data");
+    return output;
+  });
+  const result = await store.finalizeAndSaveOriginal(ref);
+  expect(result).toMatchObject({ status: "saved", galleryFileStem: "WOD-20260930-1",
+    outputPath: `output/WOD-20260930-1.${extension}` });
+  expect(mockSave).toHaveBeenCalledWith(`${store.getOriginalDirectory(ref)}output/WOD-20260930-1.${extension}`);
+});
+
+it.each([false, true])("keeps older pending original filenames (existing output=%s)", async (existingOutput) => {
+  const ref = await prepared();
+  await part(ref, 0);
+  await stopped(ref);
+  // Fixture representing an existing pre-feature manifest, with no assigned name.
+  const directory = store.getOriginalDirectory(ref);
+  for (const [path, value] of mockFiles) {
+    if (!path.startsWith(directory) || !/manifest-\d+\.json$/.test(path)) continue;
+    const session = JSON.parse(value);
+    delete session.galleryFileStem;
+    if (existingOutput) session.outputPath = "output/original.mov";
+    mockFiles.set(path, JSON.stringify(session));
+  }
+  if (existingOutput) mockFiles.set(`${directory}output/original.mov`, "existing-original");
+  restart();
+  expect((await store.finalizeAndSaveOriginal(ref)).status).toBe("saved");
+  expect(mockSave).toHaveBeenCalledWith(`${directory}output/original.mov`);
+  expect(mockMerge).toHaveBeenCalledTimes(existingOutput ? 0 : 1);
 });

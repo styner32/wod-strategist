@@ -33,6 +33,8 @@ export interface OriginalVideoSession extends OriginalSessionRef {
   status: OriginalVideoStatus;
   chunks: OriginalChunk[];
   outputPath?: string;
+  /** Reserved at capture start; absent on sessions created before named exports. */
+  galleryFileStem?: string;
   savedAt?: number;
   cleanedAt?: number;
   captureIssue?: string;
@@ -48,6 +50,8 @@ const saving = new Map<string, Promise<OriginalVideoSession>>();
 const recording = new Set<string>();
 const holds = new Map<string, number>();
 const listeners = new Set<() => void>();
+let filenameQueue: Promise<unknown> = Promise.resolve();
+const galleryFileStemPattern = /^(WARMUP|WOD|ACCESSORY|COOLDOWN)-\d{8}-[1-9]\d*$/;
 
 function key(ref: OriginalSessionRef) {
   return `${ref.ownerUserId}:${ref.profileId}:${ref.sessionId}`;
@@ -125,6 +129,35 @@ async function atomicNewFile(path: string, value: unknown) {
   await FS.moveAsync({ from: temporary, to: path });
 }
 
+/** Device-wide reservations survive cleanup, account changes and interrupted starts. */
+function reserveGalleryFileStem(sessionId: string, createdAt: number): Promise<string> {
+  const workoutType = sessionId.match(/^(?:P\d+-)?(WARMUP|WOD|ACCESSORY|COOLDOWN)-/)?.[1];
+  if (!workoutType) return Promise.reject(new Error("original_workout_type_invalid"));
+  const started = new Date(createdAt);
+  const date = `${started.getFullYear()}${String(started.getMonth() + 1).padStart(2, "0")}${String(started.getDate()).padStart(2, "0")}`;
+  const task = filenameQueue.catch(() => {}).then(async () => {
+    const directory = `${root()}filename-sequences/${date}/`;
+    await FS.makeDirectoryAsync(directory, { intermediates: true });
+    const names = await FS.readDirectoryAsync(directory);
+    let last = 0;
+    for (const name of names) {
+      // A temp marker may have been written just before a crash. Never reuse it.
+      const match = /^([1-9]\d*)\.json(?:\.tmp)?$/.exec(name);
+      if (!match) continue;
+      const sequence = Number(match[1]);
+      if (!Number.isSafeInteger(sequence)) throw new Error("original_filename_sequence_invalid");
+      last = Math.max(last, sequence);
+    }
+    const next = last + 1;
+    if (!Number.isSafeInteger(next)) throw new Error("original_filename_sequence_exhausted");
+    // Immutable, non-personal markers are not deleted when a saved video is cleaned.
+    await atomicNewFile(`${directory}${next}.json`, { version: 1 });
+    return `${workoutType}-${date}-${next}`;
+  });
+  filenameQueue = task;
+  return task;
+}
+
 /** Commit to a new filename: no delete/replace window can erase the last valid manifest. */
 async function commit(session: OriginalVideoSession) {
   assertOwner(session);
@@ -150,6 +183,7 @@ function validManifest(value: any, ref: OriginalSessionRef): value is OriginalVi
       part.directory === `sources/${String(part.order).padStart(6, "0")}` && typeof part.finalized === "boolean" &&
       (part.path === undefined || (safeRelative(part.path) && part.path.startsWith(`${part.directory}/`)))) &&
     (value.outputPath === undefined || safeRelative(value.outputPath)) &&
+    (value.galleryFileStem === undefined || (typeof value.galleryFileStem === "string" && galleryFileStemPattern.test(value.galleryFileStem))) &&
     (value.status !== "saved" || (value.complete && typeof value.savedAt === "number" && value.savedAt > 0));
 }
 
@@ -181,13 +215,15 @@ export async function prepareOriginalSession(input: {
 }): Promise<OriginalSessionRef> {
   const ref: OriginalSessionRef = { profileId: input.profileId, sessionId: input.sessionId, ownerUserId: useAuthStore.getState().userId ?? 0 };
   assertOwner(ref);
+  const createdAt = Date.now();
   await exclusive(ref, async () => {
     const directory = getOriginalDirectory(ref);
     if ((await FS.getInfoAsync(directory)).exists) throw new Error("original_session_already_exists");
     await FS.makeDirectoryAsync(directory, { intermediates: true });
-    const createdAt = Date.now();
+    const galleryFileStem = await reserveGalleryFileStem(ref.sessionId, createdAt);
+    assertOwner(ref);
     await atomicNewFile(directory + "owner.json", { ...ref, createdAt });
-    await commit({ ...ref, version: 1, revision: 0, mode: input.mode ?? "chunks", createdAt,
+    await commit({ ...ref, version: 1, revision: 0, mode: input.mode ?? "chunks", createdAt, galleryFileStem,
       stoppedAt: null, complete: false, chunks: [], status: "recording" });
     recording.add(key(ref));
   });
@@ -365,7 +401,7 @@ export function finalizeAndSaveOriginal(ref: OriginalSessionRef, options: {
       if (!output) {
         // The native passthrough validator also verifies a single finalized recording.
         await FS.makeDirectoryAsync(resolvePath(ref, "output"), { intermediates: true });
-        output = await mergeChunksLocal(sources, resolvePath(ref, "output/original.mp4"));
+        output = await mergeChunksLocal(sources, resolvePath(ref, `output/${session.galleryFileStem ?? "original"}.mp4`));
       }
       const outputPath = relativePath(ref, output);
       if (!outputPath.startsWith("output/") || session.chunks.some(chunk => chunk.path === outputPath)) {
