@@ -39,6 +39,8 @@ var _ = Describe("Movement evidence and accumulation", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(doc.Events).To(BeEmpty())
 		Expect(doc.Unassessed).To(HaveLen(1))
+		Expect(doc.Unassessed[0].Movement).To(Equal("Air Squat"))
+		Expect(doc.Unassessed[0].Reason).To(Equal("incomplete_cycle"))
 		row := source(1, 0, 10)
 		row.MovementObservations = nil
 		row.ObservedSignals = `{"movement":"Air Squat","rep_count":99}`
@@ -64,9 +66,40 @@ var _ = Describe("Movement evidence and accumulation", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(doc.Events).To(BeEmpty())
 		Expect(doc.Unassessed).NotTo(BeEmpty())
-		doc, err = Decode([]byte(`{"version":1,"target_state":"ambiguous","activity_state":"exercise","events":[],"unassessed":[]}`), 0, 10)
+		Expect(doc.Unassessed[0].Movement).To(Equal("Invented Squat"))
+		Expect(doc.Unassessed[0].Reason).To(Equal("unsupported_movement_or_unit"))
+
+		doc, err = Decode([]byte(`{"version":1,"target_state":"ambiguous","activity_state":"exercise","events":[{"movement":"Clean & Jerk","unit":"reps","start_secs":1.0,"end_secs":3.0,"complete":true,"evidence":"c&j"}],"unassessed":[]}`), 0, 10)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(doc.Unassessed).NotTo(BeEmpty())
+		Expect(doc.Unassessed[0].Reason).To(Equal("unassessable_target_or_activity"))
+		Expect(doc.Unassessed[0].Movement).To(Equal("Clean & Jerk"))
+
+		rowUnclear := source(4, 0, 10)
+		rowUnclear.ExerciseType = "Push Jerk"
+		rowUnclear.MovementObservations = []byte(`{"version":1,"target_state":"ambiguous","activity_state":"exercise","events":[],"unassessed":[]}`)
+		summaryWithEx := Build([]db.ChunkAnalysisResult{rowUnclear}, nil)
+		Expect(summaryWithEx.Unassessed).NotTo(BeEmpty())
+		Expect(summaryWithEx.Unassessed[0].Movement).To(Equal("Push Jerk"))
+	})
+	It("accepts canonical aliases and plurals for recognized movements", func() {
+		rowing := Observation{Movement: "Rowing", Unit: "seconds", Start: 1, End: 9, Complete: true, Evidence: "rowing on machine"}
+		doc, err := Decode(observationJSON(rowing), 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(doc.Events).To(HaveLen(1))
+		Expect(doc.Events[0].Movement).To(Equal("Row"))
+
+		dus := Observation{Movement: "Double Unders", Unit: "reps", Start: 2, End: 4, Complete: true, Evidence: "jump rope double unders"}
+		doc, err = Decode(observationJSON(dus), 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(doc.Events).To(HaveLen(1))
+		Expect(doc.Events[0].Movement).To(Equal("Double-under"))
+
+		deadlifts := Observation{Movement: "Deadlifts", Unit: "reps", Start: 5, End: 8, Complete: true, Evidence: "deadlift rep"}
+		doc, err = Decode(observationJSON(deadlifts), 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(doc.Events).To(HaveLen(1))
+		Expect(doc.Events[0].Movement).To(Equal("Deadlift"))
 	})
 	It("deduplicates retries and includes observations older than the coaching window", func() {
 		first, last := source(1, 0, 10), source(2, 70, 80)

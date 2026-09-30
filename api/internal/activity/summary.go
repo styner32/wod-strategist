@@ -17,11 +17,12 @@ type Total struct {
 	Seconds  float64 `json:"seconds"`
 }
 type Gap struct {
-	ChunkID uint     `json:"chunk_id,omitempty"`
-	Clock   string   `json:"clock"`
-	Start   *float64 `json:"start_secs"`
-	End     *float64 `json:"end_secs"`
-	Reason  string   `json:"reason"`
+	ChunkID  uint     `json:"chunk_id,omitempty"`
+	Clock    string   `json:"clock"`
+	Start    *float64 `json:"start_secs"`
+	End      *float64 `json:"end_secs"`
+	Reason   string   `json:"reason"`
+	Movement string   `json:"movement,omitempty"`
 }
 type ReviewedChunk struct {
 	ChunkID      uint         `json:"chunk_id"`
@@ -137,7 +138,11 @@ func Build(rows []db.ChunkAnalysisResult, stored *Summary) Summary {
 			result.Available = true
 		}
 		gap := func(reason string) {
-			result.Unassessed = append(result.Unassessed, Gap{row.ID, "capture", row.StartSecs, row.EndSecs, reason})
+			m := ""
+			if row.ExerciseType != "" && row.ExerciseType != "None" && row.ExerciseType != "NO_EXERCISE" {
+				m = row.ExerciseType
+			}
+			result.Unassessed = append(result.Unassessed, Gap{ChunkID: row.ID, Clock: "capture", Start: row.StartSecs, End: row.EndSecs, Reason: reason, Movement: m})
 		}
 		if !Timed(row) {
 			gap("unknown_capture_interval")
@@ -198,7 +203,18 @@ func Build(rows []db.ChunkAnalysisResult, stored *Summary) Summary {
 		}
 		for _, g := range doc.Unassessed {
 			s, e := g.Start+offset, g.End+offset
-			result.Unassessed = append(result.Unassessed, Gap{row.ID, clock, &s, &e, g.Reason})
+			m := g.Movement
+			if m == "" && row.ExerciseType != "" && row.ExerciseType != "None" && row.ExerciseType != "NO_EXERCISE" {
+				m = row.ExerciseType
+			}
+			result.Unassessed = append(result.Unassessed, Gap{
+				ChunkID:  row.ID,
+				Clock:    clock,
+				Start:    &s,
+				End:      &e,
+				Reason:   g.Reason,
+				Movement: m,
+			})
 		}
 	}
 	for _, total := range totals {

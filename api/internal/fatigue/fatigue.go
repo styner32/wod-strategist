@@ -146,6 +146,9 @@ func init() {
 
 // GetMovementWeights returns load weights for a given movement name.
 func GetMovementWeights(name string) MovementMuscleWeights {
+	if canonical := movement.Canonical(name); canonical != "" {
+		name = canonical
+	}
 	key := movement.NormalizeKey(name)
 	if w, ok := movementLoadCatalog[key]; ok {
 		return w

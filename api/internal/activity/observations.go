@@ -27,9 +27,10 @@ type CaptureAssessment struct {
 }
 
 type Interval struct {
-	Start  float64 `json:"start_secs"`
-	End    float64 `json:"end_secs"`
-	Reason string  `json:"reason"`
+	Start    float64 `json:"start_secs"`
+	End      float64 `json:"end_secs"`
+	Reason   string  `json:"reason"`
+	Movement string  `json:"movement,omitempty"`
 }
 
 type Observation struct {
@@ -51,7 +52,38 @@ type Observations struct {
 }
 
 func Unknown(start, end float64, reason string) Observations {
-	return Observations{DurationSecs: end - start, Version: Version, TargetState: "unknown", ActivityState: "unknown", Events: []Observation{}, Unassessed: []Interval{{Start: start, End: end, Reason: reason}}}
+	return UnknownWithMovement(start, end, reason, "")
+}
+
+func UnknownWithMovement(start, end float64, reason, movement string) Observations {
+	return Observations{
+		DurationSecs:  end - start,
+		Version:       Version,
+		TargetState:   "unknown",
+		ActivityState: "unknown",
+		Events:        []Observation{},
+		Unassessed:    []Interval{{Start: start, End: end, Reason: reason, Movement: movement}},
+	}
+}
+
+func observedMovements(events []Observation, unassessed []Interval) string {
+	seen := map[string]bool{}
+	var list []string
+	for _, e := range events {
+		m := strings.TrimSpace(e.Movement)
+		if m != "" && !seen[m] {
+			seen[m] = true
+			list = append(list, m)
+		}
+	}
+	for _, u := range unassessed {
+		m := strings.TrimSpace(u.Movement)
+		if m != "" && !seen[m] {
+			seen[m] = true
+			list = append(list, m)
+		}
+	}
+	return strings.Join(list, ", ")
 }
 
 func ValidInterval(start, end float64) bool {
@@ -59,13 +91,7 @@ func ValidInterval(start, end float64) bool {
 }
 
 func CanonicalMovement(raw string) string {
-	key := movement.NormalizeKey(raw)
-	for _, name := range movement.All() {
-		if movement.NormalizeKey(name) == key {
-			return name
-		}
-	}
-	return ""
+	return movement.Canonical(raw)
 }
 
 // UnitForMovement is intentionally explicit for non-cycle activities. Unsupported
@@ -106,7 +132,8 @@ func Decode(raw []byte, start, end float64) (Observations, error) {
 		return Unknown(start, end, "invalid_activity"), errors.New("invalid activity state")
 	}
 	if doc.TargetState != "identified" || doc.ActivityState == "unknown" {
-		return Unknown(start, end, "unassessable_target_or_activity"), nil
+		m := observedMovements(doc.Events, doc.Unassessed)
+		return UnknownWithMovement(start, end, "unassessable_target_or_activity", m), nil
 	}
 	if doc.ActivityState == "rest" && len(doc.Events) > 0 {
 		return Unknown(start, end, "conflicting_activity"), errors.New("events during rest")
@@ -119,13 +146,18 @@ func Decode(raw []byte, start, end float64) (Observations, error) {
 			return Unknown(start, end, "invalid_event"), errors.New("invalid or overlapping event")
 		}
 		previousEnd = event.End
+		rawMovement := event.Movement
 		event.Movement = CanonicalMovement(event.Movement)
 		if event.Movement == "" || event.Unit != UnitForMovement(event.Movement) {
-			doc.Unassessed = append(doc.Unassessed, Interval{event.Start, event.End, "unsupported_movement_or_unit"})
+			m := rawMovement
+			if m == "" {
+				m = event.Movement
+			}
+			doc.Unassessed = append(doc.Unassessed, Interval{Start: event.Start, End: event.End, Reason: "unsupported_movement_or_unit", Movement: m})
 			continue
 		}
 		if !event.Complete {
-			doc.Unassessed = append(doc.Unassessed, Interval{event.Start, event.End, "incomplete_cycle"})
+			doc.Unassessed = append(doc.Unassessed, Interval{Start: event.Start, End: event.End, Reason: "incomplete_cycle", Movement: event.Movement})
 			continue
 		}
 		accepted = append(accepted, event)
@@ -154,7 +186,7 @@ func Decode(raw []byte, start, end float64) (Observations, error) {
 		doc.Events = []Observation{}
 	}
 	if doc.ActivityState == "exercise" && len(doc.Events) == 0 && len(doc.Unassessed) == 0 {
-		doc.Unassessed = append(doc.Unassessed, Interval{start, end, "no_countable_evidence"})
+		doc.Unassessed = append(doc.Unassessed, Interval{Start: start, End: end, Reason: "no_countable_evidence"})
 	}
 	return doc, nil
 }

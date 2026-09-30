@@ -19,7 +19,7 @@ export interface MovementObservations {
   target_state: "identified" | "ambiguous" | "not_visible" | "unknown";
   activity_state: "exercise" | "rest" | "unknown";
   events: MovementObservation[];
-  unassessed: { start_secs: number; end_secs: number; reason: string }[];
+  unassessed: { start_secs: number; end_secs: number; reason: string; movement?: string }[];
 }
 export interface ContextualCoaching {
   text: LocalizedActivityText;
@@ -36,7 +36,7 @@ export interface ActivitySummary {
   review_state: "unavailable" | "provisional" | "queued" | "running" | "completed" | "partial" | "failed" | "disabled";
   coverage_scope: "recorded_chunks";
   movements: { movement: string; unit: "reps" | "seconds"; count: number; seconds: number }[];
-  unassessed: { chunk_id?: number; clock: "capture" | "media" | "chunk"; start_secs: number | null; end_secs: number | null; reason: string }[];
+  unassessed: { chunk_id?: number; clock: "capture" | "media" | "chunk"; start_secs: number | null; end_secs: number | null; reason: string; movement?: string }[];
   reviews: { chunk_id: number; state: string; observations: MovementObservations }[];
 }
 export function activitySummaryPath(sessionId: string, profileId: number): string {

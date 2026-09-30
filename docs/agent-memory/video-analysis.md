@@ -292,3 +292,14 @@ The bare Gemini client constructor still defaults to `gemini-3.1-pro-preview` wh
 - Endpoints:
   - `GET /api/v1/sessions/:session_id/cost`: Cost breakdown for a single session.
   - `GET /api/v1/analytics/cost`: Cumulative token/cost totals for owned profiles (optionally one `profile_id`); task/model breakdown arrays are on the session-cost response only.
+
+## Movement Catalog Matching & Unassessed Movement Preservation
+- `movement.NormalizeKey(raw)` normalizes `&` to ` and ` (in addition to trimming, lowercasing, converting hyphens to spaces, and collapsing whitespace). This ensures `Clean and Jerk` matches `Clean & Jerk`.
+- `movement.Canonical(raw)` maps raw exercise names, common aliases (e.g. `Rowing` -> `Row`, `Double Unders` -> `Double-under`, `DU` -> `Double-under`, `C&J` -> `Clean & Jerk`), and regular English plurals (`-es`, `-s`) to the official catalog name. `activity.CanonicalMovement` delegates to `movement.Canonical`.
+- Jump rope cycle observation (`Double-under`, `Single-under`): The movement observation prompt instructs Gemini to count each observable takeoff-to-landing jump cycle as 1 rep cycle, rather than attempting to isolate high-speed rope rotations or dropping them into `unassessed`.
+- Unassessed intervals (`activity.Interval` and `activity.Gap`) include a `Movement string `json:"movement,omitempty"`` field.
+- When an interval is unassessed due to `unassessable_target_or_activity`, `unsupported_movement_or_unit`, `incomplete_cycle`, or `analysis_incomplete`:
+  - `Decode` extracts the detected movement from events or unassessed entries.
+  - `Build` falls back to `row.ExerciseType` if the observation's movement field is empty.
+  - The UI (`ActivitySummaryPanel` and `ActivitySummaryCard`) displays the recognized movement next to the gap reason (e.g. `The athlete or movement is unclear (Clean and Jerk)`).
+

@@ -20,7 +20,7 @@ export function ActivitySummaryContent({ summary, compact = false }: { summary: 
       <Text style={{ color: "#ffd28a", fontSize: compact ? 11 : 13 }}>{t("activity.gaps", { count: summary.unassessed.length })}</Text>
     </TouchableOpacity>}
     {!compact && showGaps && summary.unassessed.map((gap, index) => <Text key={index} style={{ color: "#ffd28a", fontSize: 12 }}>
-      {t(gap.clock === "media" ? "activity.mediaTime" : gap.clock === "chunk" ? "activity.chunkTime" : "activity.captureTime")}: {gap.start_secs == null || gap.end_secs == null ? t("activity.unknownTime") : `${gap.start_secs.toFixed(1)}–${gap.end_secs.toFixed(1)}s`}
+      {t(gap.clock === "media" ? "activity.mediaTime" : gap.clock === "chunk" ? "activity.chunkTime" : "activity.captureTime")}: {gap.start_secs == null || gap.end_secs == null ? t("activity.unknownTime") : `${gap.start_secs.toFixed(1)}–${gap.end_secs.toFixed(1)}s`}{gap.movement ? ` · ${gap.movement}` : ""}
     </Text>)}
     {!compact && <Text style={{ color: "#b6bfca", fontSize: 11 }}>{t("activity.observedOnly")}</Text>}
   </View>;
