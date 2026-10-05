@@ -16,6 +16,7 @@ import (
 	gcs "cloud.google.com/go/storage"
 
 	"github.com/hibiken/asynq"
+	"github.com/wod-strategist/api/internal/cost"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"go.uber.org/zap"
@@ -82,6 +83,8 @@ func NewSensorTelemetryTask(analysisResultID, profileID uint, requestID string, 
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.
 type VideoAnalysisPayload struct {
+	LiveAnalysisVersion int `json:"live_analysis_version,omitempty"`
+
 	SessionID         string
 	FilePath          string
 	WorkoutType       string
@@ -100,6 +103,8 @@ type VideoAnalysisPayload struct {
 
 // VideoAnalysisWithSessionPayload is used when session_id is available (when user has selected a session to upload)
 type VideoAnalysisWithSessionPayload struct {
+	LiveAnalysisVersion int `json:"live_analysis_version,omitempty"`
+
 	SessionID         string
 	FilePath          string
 	ProfileID         uint
@@ -155,13 +160,16 @@ type GeminiClient interface {
 	DeleteFile(ctx context.Context, name string) error
 	FileExists(ctx context.Context, name string) (bool, error)
 	FileVideoDuration(ctx context.Context, name string) (time.Duration, bool, error)
-	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) error
+	GenerateWorkoutMusic(ctx context.Context, model, prompt, outputPath string) (*gemini.TokenUsage, error)
 
 	// Two-pass analysis: upload → index (Flash) → per-segment analysis (Pro)
 	UploadVideo(ctx context.Context, filePath string) (*gemini.UploadResult, error)
+	UploadVideoWithObserver(ctx context.Context, filePath string, onUploaded func(*gemini.UploadResult) error) (*gemini.UploadResult, error)
 	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *gemini.TokenUsage, error)
+
+	AnalyzeHighlightAgentic(ctx context.Context, fileURI, mimeType, prompt string) gemini.StreamComparisonResult
 
 	// Lightweight Flash model query (e.g. verification)
 	QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
@@ -189,6 +197,11 @@ const (
 
 // Worker holds all dependencies shared across task handlers.
 type Worker struct {
+	AgenticHighlightsEnabled  bool
+	CaptureFeedbackEnabled    bool
+	ContextualCoachingEnabled bool
+	ActivityCountingEnabled   bool
+
 	DB             *gorm.DB
 	StorageClient  StorageClient
 	BucketName     string
@@ -217,23 +230,12 @@ func NewWorker(db *gorm.DB, storageClient StorageClient, bucketName string, gemi
 // saveTokenUsage persists a Gemini API token usage record to the DB.
 // Silently logs errors — token tracking should never block the main workflow.
 func (w *Worker) saveTokenUsage(sessionID string, profileID uint, taskType string, usage *gemini.TokenUsage) {
-	if usage == nil || w.DB == nil {
-		return
-	}
-	record := &db.TokenUsage{
-		SessionID:       sessionID,
-		TaskType:        taskType,
-		Model:           usage.Model,
-		PromptTokens:    usage.PromptTokens,
-		CandidateTokens: usage.CandidateTokens,
-		TotalTokens:     usage.TotalTokens,
-	}
-	record.ProfileID = profileID
-	if err := w.DB.Create(record).Error; err != nil {
-		w.logger.Error("Failed to save token usage",
-			zap.String("session_id", sessionID),
-			zap.String("task_type", taskType),
-			zap.Error(err))
+	w.saveTokenUsageForRequest(sessionID, profileID, taskType, "", usage)
+}
+
+func (w *Worker) saveTokenUsageForRequest(sessionID string, profileID uint, taskType, requestKey string, usage *gemini.TokenUsage) {
+	if err := cost.RecordUsage(w.DB, sessionID, profileID, 0, taskType, requestKey, usage); err != nil {
+		w.logger.Error("Failed to save token usage", zap.String("session_id", sessionID), zap.String("task_type", taskType), zap.Error(err))
 	}
 }
 

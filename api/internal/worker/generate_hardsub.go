@@ -280,6 +280,7 @@ func (w *Worker) generateChunkNarration(ctx context.Context, sessionID string, p
 
 		wavPath := filepath.Join(tmpDir, fmt.Sprintf("tts_%03d.wav", i))
 		usage, err := w.GeminiClient.GenerateSpeech(ctx, ttsText, defaultTTSVoice, wavPath)
+		w.saveTokenUsage(sessionID, profileID, "hardsub:tts", usage)
 		if err != nil {
 			w.logger.Warn("TTS generation failed for chunk, skipping",
 				zap.Int("chunk_index", i),
@@ -287,7 +288,6 @@ func (w *Worker) generateChunkNarration(ctx context.Context, sessionID string, p
 				zap.Error(err))
 			continue
 		}
-		w.saveTokenUsage(sessionID, profileID, "hardsub:tts", usage)
 
 		clips = append(clips, ttsClip{path: wavPath, startSec: *ch.StartSecs})
 	}

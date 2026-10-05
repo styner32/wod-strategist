@@ -95,6 +95,7 @@ func main() {
 		GitCommit:               GitCommit,
 		EnableChunkReanalysis:   cfg.ChunkReanalysisEnabled,
 		EnableSessionReanalysis: cfg.SessionReanalysisEnabled,
+		EnableAgenticHighlights: cfg.AgenticHighlightsEnabled,
 	})
 	if err != nil {
 		logger.Log.Fatal("Failed to create controller", zap.Error(err))

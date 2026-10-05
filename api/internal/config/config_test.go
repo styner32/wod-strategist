@@ -30,6 +30,16 @@ var _ = Describe("InitServer", func() {
 		setEnv("JWT_SIGNING_SECRET", "test-jwt-siging-secret")
 	})
 
+	It("keeps Agentic highlights disabled by default and enables only an explicit true value", func() {
+		setEnv("ENABLE_AGENTIC_HIGHLIGHTS", "")
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.AgenticHighlightsEnabled).To(BeFalse())
+		setEnv("ENABLE_AGENTIC_HIGHLIGHTS", "true")
+		cfg, err = config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.AgenticHighlightsEnabled).To(BeTrue())
+	})
 	It("returns config with the default port when PORT is unset", func() {
 		setEnv("PORT", "")
 
@@ -230,6 +240,25 @@ var _ = Describe("InitWorker", func() {
 			cfg, err := config.InitWorker()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.AppEnv).To(Equal("production"))
+		})
+	})
+
+	Context("live feedback feature switches", func() {
+		It("defaults all new features off and enables each independently", func() {
+			setEnv("ENABLE_CAPTURE_FEEDBACK", "")
+			setEnv("ENABLE_CONTEXTUAL_COACHING", "")
+			setEnv("ENABLE_ACTIVITY_COUNTING", "")
+			cfg, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.CaptureFeedbackEnabled).To(BeFalse())
+			Expect(cfg.ContextualCoachingEnabled).To(BeFalse())
+			Expect(cfg.ActivityCountingEnabled).To(BeFalse())
+			setEnv("ENABLE_ACTIVITY_COUNTING", "true")
+			cfg, err = config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ActivityCountingEnabled).To(BeTrue())
+			Expect(cfg.CaptureFeedbackEnabled).To(BeFalse())
+			Expect(cfg.ContextualCoachingEnabled).To(BeFalse())
 		})
 	})
 

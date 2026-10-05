@@ -212,7 +212,7 @@ const copyRecursive = async (
           if (targetFile.exists) {
             targetFile.delete();
           }
-          item.copy(targetFile);
+          await item.copy(targetFile);
           copied++;
           console.log(`📦 Copied natively (JSI): ${name}`);
         } catch (copyErr) {

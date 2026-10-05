@@ -20,6 +20,9 @@ jest.mock("expo-constants", () => ({
 
 jest.mock("react-native", () => ({
   Platform: { OS: "android" },
+  // Expo's lazy fetch polyfill can initialize during Jest teardown. Optional
+  // native modules are unavailable in this unit fixture, as on the Jest host.
+  TurboModuleRegistry: { get: jest.fn(() => null) },
 }));
 
 describe("PolarSensorRecorder", () => {
@@ -639,4 +642,54 @@ describe("PolarSensorRecorder", () => {
     expect(res1).toBe(res2);
     expect(PolarSensorRecorder.isActive()).toBe(false);
   });
+
+  it.each(["reply", "timeout"])(
+    "freezes the footer and ignores trailing HR while BLE stop waits for %s",
+    async (completion) => {
+      let releaseStop!: () => void;
+      const pendingStop = new Promise<void>((resolve) => { releaseStop = resolve; });
+      const device = {
+        name: "Polar H10",
+        writeCharacteristicWithResponseForService: jest.fn(() => pendingStop),
+      } as unknown as Device;
+      PolarSensorRecorder.onDeviceReady(device, false);
+      const baseEpochMs = Date.now();
+      PolarSensorRecorder.start({ sessionId: "WOD-STOP-CUTOFF", profileId: 9, baseEpochMs });
+      jest.advanceTimersByTime(1000);
+      PolarSensorRecorder.onHeartRate(120, [], Date.now());
+      jest.advanceTimersByTime(4000);
+
+      const stopPromise = PolarSensorRecorder.stop();
+      const activeAfterStop = PolarSensorRecorder.isActive();
+      const concurrentStop = PolarSensorRecorder.stop();
+      jest.advanceTimersByTime(250);
+      PolarSensorRecorder.onHeartRate(240, [], Date.now());
+
+      // A second recording must not replace shared state during the BLE await.
+      PolarSensorRecorder.start({ sessionId: "WOD-TOO-EARLY", profileId: 9, baseEpochMs: Date.now() });
+      const activeAfterEarlyStart = PolarSensorRecorder.isActive();
+      if (completion === "reply") releaseStop();
+      else jest.advanceTimersByTime(750);
+      const result = await stopPromise;
+      releaseStop();
+      PolarSensorRecorder.onDeviceLost("test cleanup");
+
+      expect(device.writeCharacteristicWithResponseForService).toHaveBeenCalledTimes(1);
+      expect(activeAfterStop).toBe(false);
+      expect(activeAfterEarlyStart).toBe(false);
+      expect(concurrentStop).toBe(stopPromise);
+      expect(result).toMatchObject({ sessionId: "WOD-STOP-CUTOFF", complete: true });
+      const lines = __getMockFileContent(result!.filePath)!.trim().split("\n").map((line) => JSON.parse(line));
+      expect(lines.filter((line) => line.k === "hr")).toEqual([{ k: "hr", t: 1000, bpm: 120 }]);
+      expect(lines[lines.length - 1]).toMatchObject({ k: "end", t: 5000, summary: { hr_samples: 1 } });
+
+      // Once stop completes, a new session can record and close normally.
+      PolarSensorRecorder.start({ sessionId: "WOD-AFTER-STOP", profileId: 9, baseEpochMs: Date.now() });
+      PolarSensorRecorder.onHeartRate(130, [], Date.now());
+      const next = await PolarSensorRecorder.stop();
+      expect(next?.sessionId).toBe("WOD-AFTER-STOP");
+      const nextLines = __getMockFileContent(next!.filePath)!.trim().split("\n").map((line) => JSON.parse(line));
+      expect(nextLines.filter((line) => line.k === "hr")).toHaveLength(1);
+    },
+  );
 });

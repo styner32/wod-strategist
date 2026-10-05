@@ -146,15 +146,22 @@ func init() {
 
 // GetMovementWeights returns load weights for a given movement name.
 func GetMovementWeights(name string) MovementMuscleWeights {
+	if canonical := movement.Canonical(name); canonical != "" {
+		name = canonical
+	}
 	key := movement.NormalizeKey(name)
 	if w, ok := movementLoadCatalog[key]; ok {
 		return w
 	}
 
 	// Deterministic partial match fallback: longest match first, then lexicographical
-	for _, catalogKey := range sortedCatalogKeys {
-		if strings.Contains(key, catalogKey) || strings.Contains(catalogKey, key) {
-			return movementLoadCatalog[catalogKey]
+	// Exact generic weights (e.g. "snatch") remain usable, but missing variants
+	// must not acquire the weights of an arbitrarily chosen catalog subtype.
+	if !movement.IsAmbiguous(name) {
+		for _, catalogKey := range sortedCatalogKeys {
+			if strings.Contains(key, catalogKey) || strings.Contains(catalogKey, key) {
+				return movementLoadCatalog[catalogKey]
+			}
 		}
 	}
 

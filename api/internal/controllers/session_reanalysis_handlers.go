@@ -389,6 +389,7 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 			return err
 		}
 
+		ctl.enrichmentWorker().PrepareEnrichmentOutbox(c.Request.Context(), tx, sessionID)
 		return nil
 	})
 
@@ -398,6 +399,7 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 		return
 	}
 
+	ctl.enrichmentWorker().PublishEnrichmentOutbox(c.Request.Context(), sessionID)
 	c.JSON(http.StatusOK, ApplySessionReanalysisResponse{
 		SessionID: sessionID,
 		RunID:     run.ID,

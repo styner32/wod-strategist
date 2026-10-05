@@ -7,18 +7,18 @@
     "icon": "./assets/images/icon.png",
     "scheme": "wodstrategist",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sunjinlee.wodstrategist",
       "entitlements": {
         "com.apple.developer.healthkit": true,
-        "com.apple.developer.healthkit.background-delivery": true
+        "com.apple.developer.healthkit.background-delivery": true,
+        "com.apple.developer.weatherkit": true
       },
       "infoPlist": {
         "NSCameraUsageDescription": "AI 코칭을 위해 사용자의 움직임을 분석합니다.",
         "NSMicrophoneUsageDescription": "운동 영상 녹화를 위해 마이크를 사용합니다.",
-        "NSLocationWhenInUseUsageDescription": "주변 블루투스 기기(심박계) 검색 및 연결을 위해 위치 권한이 필요합니다.",
+        "NSLocationWhenInUseUsageDescription": "운동 중 주변 지역의 실외 날씨를 기록하고 블루투스 심박계를 연결하기 위해 위치 권한을 사용합니다.",
         "NSHealthShareUsageDescription": "운동 중 심박수를 모니터링하기 위해 건강 데이터에 접근합니다.",
         "NSHealthUpdateUsageDescription": "운동 데이터를 건강 앱에 저장합니다.",
         "NSPhotoLibraryUsageDescription": "사용자가 사진을 선택할 수 있도록 갤러리 접근이 필요합니다.",
@@ -26,24 +26,19 @@
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": [
-          "fetch"
-        ]
+        "UIBackgroundModes": ["fetch"],
+        "NSMotionUsageDescription": "운동 촬영 중 휴대폰의 기울기와 움직임을 기록합니다."
       }
     },
     "android": {
       "package": "com.sunjinlee.wodstrategist",
-      "permissions": [
-        "CAMERA",
-        "RECORD_AUDIO"
-      ],
+      "permissions": ["CAMERA", "RECORD_AUDIO"],
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
     "web": {
@@ -101,9 +96,7 @@
         "react-native-ble-plx",
         {
           "isBackgroundEnabled": true,
-          "modes": [
-            "central"
-          ],
+          "modes": ["central"],
           "bluetoothAlwaysPermission": "심박계 연결을 위해 블루투스 권한이 필요합니다."
         }
       ],
@@ -111,7 +104,8 @@
         "expo-build-properties",
         {
           "ios": {
-            "buildReactNativeFromSource": true
+            "deploymentTarget": "16.4",
+            "enableSceneSupport": true
           }
         }
       ],

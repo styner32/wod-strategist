@@ -34,7 +34,7 @@ describe('chunk recording finalization', () => {
     expect(jest.getTimerCount()).toBe(0);
   });
 
-  it('unblocks stop for a discarded micro chunk or recording error', async () => {
+  it('unblocks stop for a recording error', async () => {
     const completion = createChunkRecordingCompletion(jest.fn().mockResolvedValue(undefined));
     const stopping = completion.stop();
     completion.finish(null);
@@ -52,6 +52,18 @@ describe('chunk recording finalization', () => {
     expect(finished).not.toHaveBeenCalled();
     jest.advanceTimersByTime(1);
     await expect(stopping).resolves.toBeNull();
+  });
+
+  it('waits beyond five seconds for continuous preparation and retains a short tail', async () => {
+    const completion = createChunkRecordingCompletion(jest.fn().mockResolvedValue(undefined), null);
+    const stopping = completion.stop();
+    const finished = jest.fn();
+    stopping.then(finished);
+    jest.advanceTimersByTime(60000);
+    await Promise.resolve();
+    expect(finished).not.toHaveBeenCalled();
+    completion.finish('/last-80ms.mp4');
+    await expect(stopping).resolves.toBe('/last-80ms.mp4');
   });
 
   it('propagates native stop errors without leaving a timeout running', async () => {

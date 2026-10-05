@@ -6,8 +6,14 @@ import {
   getUploadUrl,
   uploadToGcs,
   uploadSensorToGcs,
+  uploadSessionAssetToGcs,
   notifyUploadComplete,
   processWorkoutVideo,
+  processWorkoutChunk,
+  is4xxError,
+  getErrorStatusCode,
+  parseWorkoutImage,
+  parseAppearanceImage,
 } from "./api";
 import { FileSystemUploadType } from "expo-file-system/legacy";
 
@@ -66,7 +72,7 @@ describe("API Client Methods", () => {
     ])("rejects invalid source %j before starting a native upload", async (info) => {
       mockGetInfoAsync.mockResolvedValueOnce(info);
       await expect(uploadSensorToGcs("https://gcs.fake/upload", "file:///missing.ndjson"))
-        .rejects.toThrow("Sensor upload file is missing");
+        .rejects.toThrow("Session asset upload file is missing");
       expect(mockSensorUploadAsync).not.toHaveBeenCalled();
       expect(mockCreateUploadTask).not.toHaveBeenCalled();
     });
@@ -95,6 +101,14 @@ describe("API Client Methods", () => {
       mockSensorUploadAsync.mockResolvedValueOnce({ status: 412, body: "Precondition Failed" });
       await expect(uploadSensorToGcs("https://gcs.fake/upload", "file:///sensor.ndjson"))
         .rejects.toMatchObject({ status: 412, body: "Precondition Failed" });
+    });
+
+    it.each(['image/jpeg', 'application/json'])("uploads Apple AI assets with %s content type", async mime => {
+      await uploadSessionAssetToGcs('https://gcs.fake/upload', 'file:///evidence', mime);
+      expect(mockSensorUploadAsync).toHaveBeenCalledWith('https://gcs.fake/upload', 'file:///evidence', {
+        httpMethod: 'PUT', headers: { 'Content-Type': mime }, uploadType: FileSystemUploadType.BINARY_CONTENT,
+      });
+      expect(mockCreateUploadTask).not.toHaveBeenCalled();
     });
   });
   
@@ -246,6 +260,236 @@ describe("API Client Methods", () => {
 
       // Verify the Expo System upload task was dispatched
       expect(createUploadTask).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("is4xxError and getErrorStatusCode", () => {
+    it("identifies 4xx errors by status property", () => {
+      const err400: any = new Error("Bad Request");
+      err400.status = 400;
+      expect(is4xxError(err400)).toBe(true);
+      expect(getErrorStatusCode(err400)).toBe(400);
+
+      const err422: any = new Error("Unprocessable");
+      err422.status = 422;
+      expect(is4xxError(err422)).toBe(true);
+      expect(getErrorStatusCode(err422)).toBe(422);
+
+      const err500: any = new Error("Server Error");
+      err500.status = 500;
+      expect(is4xxError(err500)).toBe(false);
+      expect(getErrorStatusCode(err500)).toBe(500);
+    });
+
+    it("identifies 4xx errors by error message pattern", () => {
+      expect(is4xxError(new Error("API Error [400]: Bad Request"))).toBe(true);
+      expect(getErrorStatusCode(new Error("API Error [400]: Bad Request"))).toBe(400);
+
+      expect(is4xxError(new Error("Failed to upload to GCS: HTTP 403 Forbidden"))).toBe(true);
+      expect(getErrorStatusCode(new Error("Failed to upload to GCS: HTTP 403 Forbidden"))).toBe(403);
+
+      expect(is4xxError(new Error("API Error [502]: Bad Gateway"))).toBe(false);
+      expect(is4xxError(new Error("Network request failed"))).toBe(false);
+      expect(getErrorStatusCode(new Error("Network request failed"))).toBeNull();
+    });
+  });
+
+  describe("processWorkoutChunk retry behavior", () => {
+    const chunkOptions = {
+      profileId: 1,
+      maxRetries: 5,
+      retryDelayMs: 1, // minimal delay for test execution
+    };
+
+    beforeEach(() => {
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, () => {
+          return HttpResponse.json({
+            upload_url: "https://gcs.fake/upload",
+            gcs_uri: "gs://bucket/videos/1/test/chunk.mp4",
+          });
+        }),
+        http.post(`${API_BASE_URL}/chunk-complete`, () => {
+          return HttpResponse.json({
+            task_id: "chunk_task_123",
+            session_id: "session_chunk_001",
+          });
+        }),
+      );
+      mockUploadAsync.mockResolvedValue({ status: 200, body: "", headers: {} });
+    });
+
+    it("succeeds on first attempt without retrying", async () => {
+      const onRetry = jest.fn();
+      const res = await processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        onRetry,
+      });
+
+      expect(res.taskId).toBe("chunk_task_123");
+      expect(res.sessionId).toBe("session_chunk_001");
+      expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it("retries on transient failure (e.g. 500) and succeeds on next attempt", async () => {
+      let attempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, () => {
+          attempts++;
+          if (attempts === 1) {
+            return new HttpResponse(null, { status: 500, statusText: "Internal Error" });
+          }
+          return HttpResponse.json({
+            upload_url: "https://gcs.fake/upload",
+            gcs_uri: "gs://bucket/videos/1/test/chunk.mp4",
+          });
+        }),
+      );
+
+      const onRetry = jest.fn();
+      const res = await processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        onRetry,
+      });
+
+      expect(res.taskId).toBe("chunk_task_123");
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      expect(onRetry).toHaveBeenCalledWith(1, 5, expect.any(Error));
+      expect(attempts).toBe(2);
+    });
+
+    it("does NOT retry on 4xx error and throws immediately", async () => {
+      let attempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, () => {
+          attempts++;
+          return new HttpResponse(null, { status: 400, statusText: "Bad Request" });
+        }),
+      );
+
+      const onRetry = jest.fn();
+      await expect(
+        processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+          ...chunkOptions,
+          onRetry,
+        }),
+      ).rejects.toThrow(/API Error \[400\]/);
+
+      expect(attempts).toBe(1);
+      expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it("exhausts maxRetries on continuous transient failures", async () => {
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, () => {
+          return new HttpResponse(null, { status: 503, statusText: "Service Unavailable" });
+        }),
+      );
+
+      const onRetry = jest.fn();
+      await expect(
+        processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+          ...chunkOptions,
+          maxRetries: 3,
+          retryDelayMs: 1,
+          onRetry,
+        }),
+      ).rejects.toThrow(/API Error \[503\]/);
+
+      expect(onRetry).toHaveBeenCalledTimes(2); // Retries after attempt 1 and attempt 2, fails on 3
+    });
+  });
+
+  describe("parseWorkoutImage", () => {
+    it("should upload image via uploadAsync with MULTIPART and return parsed workout", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 200,
+        body: JSON.stringify({
+          wod_description: "Fran 21-15-9",
+          movements: ["Thruster", "Pull-up"],
+          raw_text: "FRAN 21-15-9",
+        }),
+      });
+
+      const res = await parseWorkoutImage("file:///path/to/whiteboard.jpg");
+      expect(res.wod_description).toBe("Fran 21-15-9");
+      expect(res.movements).toEqual(["Thruster", "Pull-up"]);
+      expect(res.raw_text).toBe("FRAN 21-15-9");
+      expect(mockSensorUploadAsync).toHaveBeenCalledWith(
+        expect.stringContaining("/parse-workout-image"),
+        "file:///path/to/whiteboard.jpg",
+        expect.objectContaining({
+          httpMethod: "POST",
+          uploadType: FileSystemUploadType.MULTIPART,
+          fieldName: "image",
+          mimeType: "image/jpeg",
+        }),
+      );
+    });
+
+    it("should handle png files with correct mimeType", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 200,
+        body: JSON.stringify({
+          wod_description: "Grace",
+          movements: ["Clean and Jerk"],
+          raw_text: "GRACE",
+        }),
+      });
+
+      await parseWorkoutImage("file:///path/to/board.png");
+      expect(mockSensorUploadAsync).toHaveBeenCalledWith(
+        expect.stringContaining("/parse-workout-image"),
+        "file:///path/to/board.png",
+        expect.objectContaining({
+          mimeType: "image/png",
+        }),
+      );
+    });
+
+    it("should throw error with backend error message on non-200 response", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 422,
+        body: JSON.stringify({ error: "could not extract workout from image" }),
+      });
+
+      await expect(parseWorkoutImage("file:///path/to/whiteboard.jpg")).rejects.toThrow(
+        "could not extract workout from image",
+      );
+    });
+
+    it("should throw Unauthorized on 401 response", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 401,
+        body: "Unauthorized",
+      });
+
+      await expect(parseWorkoutImage("file:///path/to/whiteboard.jpg")).rejects.toThrow(
+        "Unauthorized",
+      );
+    });
+  });
+
+  describe("parseAppearanceImage", () => {
+    it("should upload image and return appearance string", async () => {
+      mockSensorUploadAsync.mockResolvedValueOnce({
+        status: 200,
+        body: JSON.stringify({
+          appearance: "Black shirt, grey shorts",
+        }),
+      });
+
+      const res = await parseAppearanceImage("file:///path/to/person.jpg");
+      expect(res.appearance).toBe("Black shirt, grey shorts");
+      expect(mockSensorUploadAsync).toHaveBeenCalledWith(
+        expect.stringContaining("/appearance-from-image"),
+        "file:///path/to/person.jpg",
+        expect.objectContaining({
+          httpMethod: "POST",
+          uploadType: FileSystemUploadType.MULTIPART,
+          fieldName: "image",
+        }),
+      );
     });
   });
 });

@@ -37,9 +37,11 @@ const ChunkAnalysisPrompt = `
 ## 필수: 운동 종목 식별
 먼저, 영상에서 수행 중인 운동 종목을 식별하세요.
 - 운동이 보이면 → 첫 줄에 반드시 [EXERCISE: 영어 운동 이름] 태그를 출력하세요.
-  (예: [EXERCISE: Snatch], [EXERCISE: Back Squat], [EXERCISE: Pull-up], [EXERCISE: Burpee])
+  (예: [EXERCISE: Hang Power Clean], [EXERCISE: Push Jerk], [EXERCISE: Deadlift], [EXERCISE: Power Snatch], [EXERCISE: Back Squat], [EXERCISE: Pull-up], [EXERCISE: Burpee])
+  * 클린과 스내치는 포괄적인 [EXERCISE: Hang Clean] 또는 [EXERCISE: Snatch]를 쓰지 말고, [EXERCISE: Hang Power Clean], [EXERCISE: Hang Squat Clean], [EXERCISE: Power Clean], [EXERCISE: Squat Clean], [EXERCISE: Hang Power Snatch], [EXERCISE: Hang Squat Snatch] 등으로 구체적인 표준 종목명을 쓰세요.
+  * 바벨/덤벨을 손에 쥐고 행(Hang) 위치에 들고 세트를 이어가는 구간은 운동 진행 중([EXERCISE: ...])입니다. 기구를 완전히 바닥에 내려놓았을 때만 [NO_EXERCISE]를 출력하세요.
 - 대상 인물이 운동 중인 것은 분명하지만 정확한 종목 근거가 부족하면 → 첫 줄에 [EXERCISE: Unknown] 태그를 출력하세요.
-- 운동이 보이지 않으면 (휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그만 출력하세요.
+- 운동이 보이지 않으면 (기구를 내려놓은 휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그만 출력하세요.
 
 ## 코칭 피드백 규칙
 - 운동이 감지된 경우: [EXERCISE: ...] 태그 다음 줄에 **반드시 1~2문장**으로만 코칭 피드백을 답하세요.
@@ -280,6 +282,10 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
+	if handled, err := w.resumeLiveChunk(ctx, p.LiveAnalysisVersion, p); handled {
+		return err
+	}
+
 	retryCount := getRetryCount(ctx)
 
 	w.logger.Info("Processing chunk analysis",
@@ -304,8 +310,12 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 			chunkFailed.StartSecs = &p.StartSecs
 			chunkFailed.EndSecs = &p.EndSecs
 		}
+		w.failedLiveObservations(p.LiveAnalysisVersion, chunkFailed)
 		if err := w.persistChunkAnalysisResult(ctx, chunkFailed); err != nil {
 			return fmt.Errorf("failed to record failed chunk analysis result: %w", err)
+		}
+		if err := w.refreshLiveActivity(ctx, p, chunkFailed); err != nil {
+			return err
 		}
 		return asynq.SkipRetry
 	}
@@ -339,7 +349,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		probeChan <- probeResult{score: score, err: pErr}
 	}()
 
-	prompt := w.buildChunkAnalysisPrompt(p)
+	prompt := w.buildChunkAnalysisPrompt(p) + w.livePrompt(p.LiveAnalysisVersion)
 
 	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38)
 
@@ -375,6 +385,8 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return fmt.Errorf("chunk analysis is empty")
 	}
 
+	liveRaw := analysis
+	analysis = liveBlocks.ReplaceAllString(analysis, "")
 	// Extract exercise type detected by the model from the response
 	detectedExercise := parseChunkExercise(analysis)
 	// Extract observed signals JSON for benchmarking
@@ -404,9 +416,19 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		chunkResult.StartSecs = &p.StartSecs
 		chunkResult.EndSecs = &p.EndSecs
 	}
+	duration := 0.0
+	if p.LiveAnalysisVersion == 1 && w.ActivityCountingEnabled {
+		duration = probeVideoDuration(ctx, localFilePath)
+	}
+	w.parseLiveFeedback(liveRaw, p.LiveAnalysisVersion, duration, chunkResult)
 	if err := w.persistChunkAnalysisResult(ctx, chunkResult); err != nil {
 		return fmt.Errorf("failed to save chunk analysis result: %w", err)
 	}
+
+	if err := w.refreshLiveActivity(ctx, p, chunkResult); err != nil {
+		return err
+	}
+	w.addContextualCoaching(ctx, p.LiveAnalysisVersion, chunkResult)
 
 	w.logger.Info("Chunk analysis completed",
 		zap.String("session_id", p.SessionID),
@@ -419,6 +441,10 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	var p VideoAnalysisWithSessionPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
+	}
+
+	if handled, err := w.resumeLiveChunk(ctx, p.LiveAnalysisVersion, VideoAnalysisPayload{ProfileID: p.ProfileID, SessionID: p.SessionID, FilePath: p.FilePath}); handled {
+		return err
 	}
 
 	retryCount := getRetryCount(ctx)
@@ -445,8 +471,12 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 			chunkFailed.StartSecs = &p.StartSecs
 			chunkFailed.EndSecs = &p.EndSecs
 		}
+		w.failedLiveObservations(p.LiveAnalysisVersion, chunkFailed)
 		if err := w.persistChunkAnalysisResult(ctx, chunkFailed); err != nil {
 			return fmt.Errorf("failed to record failed chunk analysis result: %w", err)
+		}
+		if err := w.refreshLiveActivity(ctx, VideoAnalysisPayload{ProfileID: p.ProfileID, SessionID: p.SessionID}, chunkFailed); err != nil {
+			return err
 		}
 		return asynq.SkipRetry
 	}
@@ -495,7 +525,7 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		probeChan <- probeResult{score: score, err: pErr}
 	}()
 
-	prompt := w.buildChunkAnalysisWithSessionPrompt(p, &profile, &session)
+	prompt := w.buildChunkAnalysisWithSessionPrompt(p, &profile, &session) + w.livePrompt(p.LiveAnalysisVersion)
 
 	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38)
 
@@ -531,6 +561,8 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		return fmt.Errorf("chunk analysis is empty")
 	}
 
+	liveRaw := analysis
+	analysis = liveBlocks.ReplaceAllString(analysis, "")
 	// Extract exercise type detected by the model from the response
 	detectedExercise := parseChunkExercise(analysis)
 	// Extract observed signals JSON for benchmarking
@@ -560,9 +592,19 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		chunkResult.StartSecs = &p.StartSecs
 		chunkResult.EndSecs = &p.EndSecs
 	}
+	duration := 0.0
+	if p.LiveAnalysisVersion == 1 && w.ActivityCountingEnabled {
+		duration = probeVideoDuration(ctx, localFilePath)
+	}
+	w.parseLiveFeedback(liveRaw, p.LiveAnalysisVersion, duration, chunkResult)
 	if err := w.persistChunkAnalysisResult(ctx, chunkResult); err != nil {
 		return fmt.Errorf("failed to save chunk analysis result: %w", err)
 	}
+
+	if err := w.refreshLiveActivity(ctx, VideoAnalysisPayload{SessionID: p.SessionID, ProfileID: p.ProfileID, WorkoutType: session.WorkoutType, WODDescription: session.WODDescription, Movements: movementHintsFromDocument(session.MovementHints)}, chunkResult); err != nil {
+		return err
+	}
+	w.addContextualCoaching(ctx, p.LiveAnalysisVersion, chunkResult)
 
 	w.logger.Info("Chunk analysis completed",
 		zap.String("session_id", p.SessionID),

@@ -21,7 +21,16 @@ const MovementEvidenceRulesPrompt = `
 - 힌트와 영상이 다르면 영상에서 대상 인물에게 직접 보이는 근거를 우선하세요.
 - 힌트에 없는 종목이라도 시각적 근거가 충분하면 실제 관찰한 영어 종목명을 그대로 사용하세요.
 - 대상 인물이 운동 중인 것은 분명하지만 종목 근거가 부족하면 종목을 Unknown으로 처리하세요. 추측해서 힌트에 맞추지 마세요.
-- 걷기, 휴식, 회복, 준비 또는 장비 세팅은 운동 종목이 아닙니다.`
+- 바벨이나 덤벨을 손에 쥐고 행(Hang) 위치(무릎 위/허벅지/골반)에 들고 있거나 세트 중 서서 호흡을 고르는 상태는 운동 세트(exercise) 진행 중입니다. 바벨을 바닥에 내려놓거나 기구를 완전히 놓았을 때만 휴식/준비입니다.
+- 클린과 스내치는 포괄적 명칭(Clean, Hang Clean, Snatch, Hang Snatch)을 쓰지 말고, 출발 위치(Floor vs Hang)와 캐치 깊이(Power: 평행 위 vs Squat: 평행 이하 풀 스쿼트)에 따라 정확한 세부 종목명을 사용하세요:
+  · Hang Power Clean, Hang Squat Clean, Power Clean, Squat Clean
+  · Hang Power Snatch, Hang Squat Snatch, Power Snatch, Squat Snatch
+- 머리 위로 바벨을 올리는 동작은 하체 딥/캐치 방식에 따라 정확히 구분하세요:
+  · Push Jerk (딥-드라이브 후 무릎을 다시 굽혀 밑으로 들어가며 캐치)
+  · Split Jerk (딥-드라이브 후 앞뒤로 발을 벌리며 캐치)
+  · Push Press (무릎 1회 딥-드라이브 반동으로 밀어 올리고 무릎을 다시 굽히지 않음)
+  · Strict Press (하체 반동 없이 상체 힘으로만 밀어 올림)
+- 기구를 완전히 내려놓은 상태에서의 걷기, 휴식, 회복, 준비 또는 장비 세팅은 운동 종목이 아닙니다.`
 
 const FatigueEvidenceRulesPrompt = `
 

@@ -11,6 +11,15 @@ import (
 
 var _ = Describe("Fatigue Calculation & Readiness", func() {
 	Context("GetMovementWeights", func() {
+		It("preserves generic snatch weights without guessing other unspecified variants", func() {
+			Expect(fatigue.GetMovementWeights("Snatch").QuadsSquat).To(Equal(0.7))
+			Expect(fatigue.GetMovementWeights("Power Snatch").QuadsSquat).To(Equal(0.4))
+			Expect(fatigue.GetMovementWeights("Squat Snatch").QuadsSquat).To(Equal(0.8))
+			for _, raw := range []string{"Muscle-up", "Dips", "Squats", "Overhead Press", "Jump Rope", "GHD"} {
+				Expect(fatigue.GetMovementWeights(raw)).To(Equal(fatigue.GetMovementWeights("Some Unknown Exercise")), raw)
+			}
+			Expect(fatigue.GetMovementWeights("Clean and Jerk")).To(Equal(fatigue.GetMovementWeights("Clean & Jerk")))
+		})
 		It("maps known movements correctly", func() {
 			snatchW := fatigue.GetMovementWeights("Power Snatch")
 			Expect(snatchW.PosteriorChain).To(BeNumerically(">=", 0.8))

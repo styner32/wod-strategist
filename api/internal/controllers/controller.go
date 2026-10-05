@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"io"
 	"mime/multipart"
 	"time"
 
@@ -24,6 +25,8 @@ type QueueClient interface {
 }
 
 type ObjectStorage interface {
+	NewReaderWithGeneration(ctx context.Context, objectName string, generation int64) (io.ReadCloser, error)
+	DeleteObject(ctx context.Context, objectName string) error
 	GenerateSignedURL(objectName string, method string, expires time.Duration) (string, error)
 	GenerateCreateSignedURL(objectName string, contentType string, sha256Hex string, expires time.Duration) (string, map[string]string, error)
 	ObjectAttrs(ctx context.Context, objectName string) (*gcs.ObjectAttrs, error)
@@ -76,6 +79,7 @@ type VerifyHighlightsTaskFactory func(sessionID string) (*asynq.Task, error)
 type HardSubTaskFactory func(sessionID string, profileID uint, enableTTS bool) (*asynq.Task, error)
 
 type Config struct {
+	EnableAgenticHighlights bool
 	DB                      *gorm.DB
 	QueueClient             QueueClient
 	AnalysisResults         AnalysisResultRepository
@@ -97,6 +101,7 @@ type Config struct {
 }
 
 type Controller struct {
+	enableAgenticHighlights bool
 	db                      *gorm.DB
 	queueClient             QueueClient
 	analysisResults         AnalysisResultRepository
@@ -177,5 +182,6 @@ func New(config Config) (*Controller, error) {
 		newGenerateHardSub:      hardSubFactory,
 		enableChunkReanalysis:   config.EnableChunkReanalysis,
 		enableSessionReanalysis: config.EnableSessionReanalysis,
+		enableAgenticHighlights: config.EnableAgenticHighlights,
 	}, nil
 }

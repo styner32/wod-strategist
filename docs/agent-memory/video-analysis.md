@@ -1,5 +1,9 @@
 # Video Analysis Memory
 
+For the local SDK v1.71 Static/Agentic experiment, see
+[`video-mode-comparison.md`](video-mode-comparison.md). Production processing
+modes and the 5 FPS segment-analysis path are unchanged.
+
 ## Active remediation plan
 
 The source-level review and ordered implementation plan live in
@@ -278,6 +282,10 @@ The bare Gemini client constructor still defaults to `gemini-3.1-pro-preview` wh
 - **Worker Execution**: `session_debug_reanalysis.go` overrides the target WOD description with the run's `wod_description` for both indexing and segment prompts.
 - **Candidate Apply**: `POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply` atomically updates `analysis_results` (output, session_score, highlight_segments, wod_description, status) and `sessions` (`wod_description`, `workout_type`) using an atomic DB transaction.
 
+### Web status polling (2026-10-01)
+- `web/src/history/historyPolling.ts` bounds each pending work identity to 40 successful refreshes (4 for provisional activity). `dataUpdateCount` is cumulative cache state: subtract the baseline for the current run IDs/source, never use its absolute value as the limit. QUEUED -> RUNNING retains the budget; new IDs, terminal completion, or explicit status refresh reset it.
+- The UI displays paused polling and offers status-only resumption without creating another AI request. Reset the relevant budgets before invalidating after a newly submitted job. Preserve background polling suppression and capped backoff (8 seconds for reanalysis, 10 seconds for enrichment/activity).
+
 ## AI Cost & Token Tracking
 - Repository estimate constants in `internal/cost/cost.go` (not a verified current vendor quote):
   - `gemini-3.8-flash`: $1.50 / 1M prompt tokens, $9.00 / 1M candidate tokens.
@@ -288,3 +296,14 @@ The bare Gemini client constructor still defaults to `gemini-3.1-pro-preview` wh
 - Endpoints:
   - `GET /api/v1/sessions/:session_id/cost`: Cost breakdown for a single session.
   - `GET /api/v1/analytics/cost`: Cumulative token/cost totals for owned profiles (optionally one `profile_id`); task/model breakdown arrays are on the session-cost response only.
+
+## Movement Catalog Matching & Unassessed Movement Preservation
+- `movement.NormalizeKey(raw)` normalizes `&` to ` and ` (in addition to trimming, lowercasing, converting hyphens to spaces, and collapsing whitespace). This ensures `Clean and Jerk` matches `Clean & Jerk`.
+- `movement.Canonical(raw)` maps raw exercise names, common aliases (e.g. `Rowing` -> `Row`, `Double Unders` -> `Double-under`, `DU` -> `Double-under`, `C&J` -> `Clean & Jerk`), and regular English plurals (`-es`, `-s`) to the official catalog name. `activity.CanonicalMovement` delegates to `movement.Canonical`.
+- Unspecified variants/implements (`Snatch`, `Muscle-up`, `Dip`, `Squat`, generic press names, `Jump Rope`, `GHD`, including plurals) remain unconfirmed; never infer Power, Bar, Ring, Air, Strict, or Single-under from these names. Preserve the raw name in unassessed evidence. `fatigue.GetMovementWeights` may use an existing exact generic weight (`snatch`), but `movement.IsAmbiguous` blocks subtype substring fallback for the other unspecified names.
+- Jump rope cycle observation (`Double-under`, `Single-under`): The movement observation prompt instructs Gemini to count each observable takeoff-to-landing jump cycle as 1 rep cycle, rather than attempting to isolate high-speed rope rotations or dropping them into `unassessed`.
+- Unassessed intervals (`activity.Interval` and `activity.Gap`) include a `Movement string `json:"movement,omitempty"`` field.
+- When an interval is unassessed due to `unassessable_target_or_activity`, `unsupported_movement_or_unit`, `incomplete_cycle`, or `analysis_incomplete`:
+  - `Decode` extracts the detected movement from events or unassessed entries.
+  - `Build` falls back to `row.ExerciseType` if the observation's movement field is empty.
+  - The UI (`ActivitySummaryPanel` and `ActivitySummaryCard`) displays the recognized movement next to the gap reason (e.g. `The athlete or movement is unclear (Clean and Jerk)`).

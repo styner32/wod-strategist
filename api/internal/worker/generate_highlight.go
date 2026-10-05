@@ -491,7 +491,9 @@ func tryGenerateMusic(ctx context.Context, log *zap.Logger, w *Worker, p Highlig
 		zap.String("session_id", p.SessionID),
 		zap.String("prompt", prompt))
 
-	if err := w.GeminiClient.GenerateWorkoutMusic(ctx, "lyria-3-clip-preview", prompt, musicPath); err != nil {
+	usage, err := w.GeminiClient.GenerateWorkoutMusic(ctx, "lyria-3-clip-preview", prompt, musicPath)
+	w.saveTokenUsage(p.SessionID, p.ProfileID, "highlight:music", usage)
+	if err != nil {
 		log.Warn("Music generation failed, continuing without music",
 			zap.String("session_id", p.SessionID),
 			zap.Error(err))

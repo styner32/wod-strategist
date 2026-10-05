@@ -213,6 +213,9 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 
 	w.logger.Info("Merged video uploaded", zap.String("gcs_uri", mergedGCSURI))
 
+	// Counting is dispatched independently of the full analysis outcome.
+	activityReviewErr := w.enqueueActivityReview(ctx, p, mergedGCSURI)
+
 	// 4.5. Conditional analysis-grade re-encode
 	// If the merged video is too large for Gemini (>500MB), create a smaller
 	// analysis-grade copy with tighter compression (CRF 28).
@@ -285,7 +288,7 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	w.logger.Info("Analysis enqueued for merged video",
 		zap.String("session_id", p.SessionID),
 		zap.String("analysis_uri", analysisGCSURI))
-	return nil
+	return activityReviewErr
 }
 
 func probeConcatMediaIntervals(ctx context.Context, objects, localPaths []string) ([]concatMediaInterval, error) {

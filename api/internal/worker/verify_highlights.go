@@ -13,6 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // VerifyHighlightsPayload is the payload for the highlight:verify task.
@@ -197,14 +198,21 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		w.logger.Info("Highlight verification completed with no segments remaining after low-confidence filtering",
 			zap.String("session_id", p.SessionID))
 		profileID := analysisResult.ProfileID
-		if err := w.DB.Model(&db.AnalysisResult{}).
-			Where("id = ?", analysisResult.ID).
-			Updates(map[string]any{
-				"highlight_segments": MarshalHighlightSegments(nil),
-				"verified":           false,
-			}).Error; err != nil {
+		if err := w.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&db.AnalysisResult{}).
+				Where("id = ?", analysisResult.ID).
+				Updates(map[string]any{
+					"highlight_segments": MarshalHighlightSegments(nil),
+					"verified":           false,
+				}).Error; err != nil {
+				return err
+			}
+			w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
+			return nil
+		}); err != nil {
 			return fmt.Errorf("failed to update verified highlights: %w", err)
 		}
+		w.PublishEnrichmentOutbox(ctx, p.SessionID)
 
 		pMode := string(w.PipelineMode)
 		if pMode == "" && w.UseCache {
@@ -229,12 +237,11 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 
 	// 6. Query with Flash model (single call for all segments)
 	output, verifyUsage, err := w.GeminiClient.QueryVideoFlash(ctx, fileURI, mimeType, prompt)
+	profileID := analysisResult.ProfileID
+	w.saveTokenUsage(p.SessionID, profileID, "highlight:verify", verifyUsage)
 	if err != nil {
 		return fmt.Errorf("flash verification query failed: %w", err)
 	}
-
-	profileID := analysisResult.ProfileID
-	w.saveTokenUsage(p.SessionID, profileID, "highlight:verify", verifyUsage)
 
 	// 7. Parse verification results
 	results, parsed := parseVerificationResults(output, segments)
@@ -267,15 +274,22 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 
 	// 8. Persist only verified observations and rebuild their parent events. The
 	// legacy flag remains false if any original observation was rejected or omitted.
-	if err := w.DB.Model(&db.AnalysisResult{}).
-		Where("id = ?", analysisResult.ID).
-		Updates(map[string]any{
-			"highlight_segments": MarshalHighlightSegments(verifiedSegments),
-			"verified":           allVerified,
-		}).Error; err != nil {
+	if err := w.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&db.AnalysisResult{}).
+			Where("id = ?", analysisResult.ID).
+			Updates(map[string]any{
+				"highlight_segments": MarshalHighlightSegments(verifiedSegments),
+				"verified":           allVerified,
+			}).Error; err != nil {
+			return err
+		}
+		w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
+		return nil
+	}); err != nil {
 		return fmt.Errorf("failed to update verified highlights: %w", err)
 	}
 
+	w.PublishEnrichmentOutbox(ctx, p.SessionID)
 	w.logger.Info("Highlight verification completed",
 		zap.String("session_id", p.SessionID),
 		zap.Bool("all_verified", allVerified),

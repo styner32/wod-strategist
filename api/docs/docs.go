@@ -58,7 +58,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/controllers.CompleteUploadRequest"
+                            "$ref": "#/definitions/controllers.ChunkCompleteRequest"
                         }
                     }
                 ],
@@ -643,6 +643,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/sessions/{session_id}/activity-summary": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get observed workout activity",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Owned profile ID",
+                        "name": "profile_id",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/activity.Summary"
+                        }
+                    }
+                }
+            }
+        },
         "/subtitles/:session_id": {
             "get": {
                 "description": "Returns chunk analysis feedback as an SRT subtitle file for a given session",
@@ -874,6 +909,170 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "activity.Gap": {
+            "type": "object",
+            "properties": {
+                "chunk_id": {
+                    "type": "integer"
+                },
+                "clock": {
+                    "type": "string"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "activity.Interval": {
+            "type": "object",
+            "properties": {
+                "end_secs": {
+                    "type": "number"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "activity.Observation": {
+            "type": "object",
+            "properties": {
+                "complete": {
+                    "type": "boolean"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "evidence": {
+                    "type": "string"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                },
+                "unit": {
+                    "description": "reps or seconds",
+                    "type": "string"
+                }
+            }
+        },
+        "activity.Observations": {
+            "type": "object",
+            "properties": {
+                "activity_state": {
+                    "description": "exercise, rest, unknown",
+                    "type": "string"
+                },
+                "duration_secs": {
+                    "type": "number"
+                },
+                "events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/activity.Observation"
+                    }
+                },
+                "target_state": {
+                    "description": "identified, ambiguous, not_visible, unknown",
+                    "type": "string"
+                },
+                "unassessed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/activity.Interval"
+                    }
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "activity.ReviewedChunk": {
+            "type": "object",
+            "properties": {
+                "chunk_id": {
+                    "type": "integer"
+                },
+                "observations": {
+                    "$ref": "#/definitions/activity.Observations"
+                },
+                "state": {
+                    "type": "string"
+                }
+            }
+        },
+        "activity.Summary": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "coverage_scope": {
+                    "type": "string"
+                },
+                "media_generation": {
+                    "type": "string"
+                },
+                "movements": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/activity.Total"
+                    }
+                },
+                "review_state": {
+                    "type": "string"
+                },
+                "review_version": {
+                    "type": "integer"
+                },
+                "reviews": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/activity.ReviewedChunk"
+                    }
+                },
+                "source_version": {
+                    "type": "string"
+                },
+                "unassessed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/activity.Gap"
+                    }
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "activity.Total": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "seconds": {
+                    "type": "number"
+                },
+                "unit": {
+                    "type": "string"
+                }
+            }
+        },
         "controllers.ChunkAnalysisSummaryResponse": {
             "type": "object",
             "properties": {
@@ -888,6 +1087,57 @@ const docTemplate = `{
                 },
                 "total": {
                     "type": "integer"
+                }
+            }
+        },
+        "controllers.ChunkCompleteRequest": {
+            "type": "object",
+            "properties": {
+                "appearance_hints": {
+                    "type": "string"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "gcs_uri": {
+                    "type": "string"
+                },
+                "heart_rate_bpm": {
+                    "type": "integer"
+                },
+                "injuries": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "live_analysis_version": {
+                    "type": "integer"
+                },
+                "movements": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "profile_id": {
+                    "type": "integer"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                },
+                "wod_description": {
+                    "description": "e.g. \"Fran\" or \"For Time: 5 rounds of...\"",
+                    "type": "string"
+                },
+                "workout_confidence": {
+                    "type": "number"
+                },
+                "workout_type": {
+                    "type": "string"
                 }
             }
         },
@@ -1339,6 +1589,12 @@ const docTemplate = `{
         "db.ChunkAnalysisResult": {
             "type": "object",
             "properties": {
+                "capture_assessment": {
+                    "type": "object"
+                },
+                "contextual_coaching": {
+                    "type": "object"
+                },
                 "created_at": {
                     "type": "string"
                 },
@@ -1358,6 +1614,9 @@ const docTemplate = `{
                 },
                 "id": {
                     "type": "integer"
+                },
+                "movement_observations": {
+                    "type": "object"
                 },
                 "observed_signals": {
                     "description": "JSON: estimated workout metrics for benchmarking",

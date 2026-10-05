@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go.uber.org/zap"
 	"net/http"
 	"net/http/httptest"
 	"time"
@@ -112,6 +113,27 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 		Expect(resp.TargetRPE).NotTo(BeNil())
 		Expect(resp.TargetRPE.Score).To(BeNumerically(">=", 1))
 		Expect(resp.OverallSummary).NotTo(BeEmpty())
+	})
+
+	It("records strategy usage when Gemini fails to produce an answer", func() {
+		now := time.Now().UTC().Add(-time.Hour)
+		source := "session_ulid"
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: "WOD-20260928-STRATEGYCOST", ProfileID: profile.ID, Status: "COMPLETED", WorkoutAt: &now, WorkoutAtSource: &source, SessionScore: `{"intensity":85,"movements":{"Push Jerk":{"reps":30},"Thruster":{"reps":45}}}`})
+		transport := testhelpers.NewMockTransport()
+		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
+		Expect(err).NotTo(HaveOccurred())
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).Body([]byte(`{"usageMetadata":{"promptTokenCount":15,"thoughtsTokenCount":8,"totalTokenCount":23}}`))
+		router = newTestRouterWithAuthService(controllers.Config{TextParser: client})
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/strategies/pre-wod-advice", fmt.Sprintf(`{"profile_id":%d,"wod_description":"Fran"}`, profile.ID), &user)
+		resp := httptest.NewRecorder()
+		router.ServeHTTP(resp, req)
+		Expect(resp.Code).To(Equal(http.StatusOK))
+		var records []db.TokenUsage
+		Expect(dbConn.Find(&records).Error).To(Succeed())
+		Expect(records).To(HaveLen(1))
+		Expect(records[0].ProfileID).To(Equal(profile.ID))
+		Expect(records[0].TotalTokens).To(Equal(int64(23)))
+		Expect(transport.Verify()).To(Succeed())
 	})
 
 	It("uses Gemini generated output when textParser is configured and evidence is complete", func() {

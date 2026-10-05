@@ -57,6 +57,8 @@ var _ = Describe("listOriginalChunks", func() {
 		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/sess-filter-pure/", []string{
 			"videos/sess-filter-pure/sensor_telemetry.ndjson",
 			"videos/sess-filter-pure/metrics.json",
+			"videos/sess-filter-pure/apple_ai_01.json",
+			"videos/sess-filter-pure/apple_ai_01_frame_1.jpg",
 			"videos/sess-filter-pure/chunk_001.mp4",
 			"videos/sess-filter-pure/chunk_002.MOV",
 			"videos/sess-filter-pure/merged.mp4",

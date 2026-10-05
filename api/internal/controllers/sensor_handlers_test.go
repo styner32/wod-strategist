@@ -345,3 +345,83 @@ var _ = Describe("POST /api/v1/sessions/:session_id/sensor-upload calculation ve
 		}
 	})
 })
+
+var _ = Describe("POST /api/v1/sessions/:session_id/sensor-reprocess", func() {
+	var (
+		router  *gin.Engine
+		user    db.User
+		profile db.Profile
+	)
+
+	BeforeEach(func() {
+		testhelpers.CleanupDB(dbConn)
+		testhelpers.CleanupQueue(inspector)
+		storage, err := testhelpers.NewStorageClientWithSigning("test-bucket", testhelpers.NewMockTransport())
+		Expect(err).NotTo(HaveOccurred())
+		router = newTestRouterWithAuthService(controllers.Config{StorageClient: storage})
+		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
+		Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())
+	})
+
+	It("returns 400 if no sensor data was recorded for the session", func() {
+		sid := "WOD-20260908-01JQXYZ3K4M5N6P7Q8R9ABCDEF"
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID: sid,
+			ProfileID: profile.ID,
+			Status:    "COMPLETED",
+		})
+
+		body, _ := json.Marshal(map[string]any{"profile_id": profile.ID})
+		req := httptest.NewRequest("POST", "/api/v1/sessions/"+sid+"/sensor-reprocess", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		authorizeRequest(req, &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusBadRequest))
+		Expect(w.Body.String()).To(ContainSubstring("NO_SENSOR_DATA"))
+	})
+
+	It("resets FAILED sensor state to PENDING and enqueues task", func() {
+		sid := "WOD-20260908-01JQXYZ3K4M5N6P7Q8R9ABCDEF"
+		targetGen := "12345"
+		lastErr := "QUALITY_CHECK_FAILED"
+		proc := controllers.SensorProcessingData{
+			SchemaVersion:    1,
+			RequestID:        "a0000000-0000-0000-0000-000000000001",
+			ObjectName:       fmt.Sprintf("videos/%d/%s/sensor_telemetry_v1_a.ndjson", profile.ID, sid),
+			TargetGeneration: &targetGen,
+			Attempts:         1,
+			LastErrorCode:    &lastErr,
+		}
+		procJSON, _ := json.Marshal(proc)
+
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:        sid,
+			ProfileID:        profile.ID,
+			Status:           "COMPLETED",
+			SensorState:      db.SensorStateFailed,
+			SensorVersion:    1,
+			SensorProcessing: db.JSONDocument(procJSON),
+		})
+
+		body, _ := json.Marshal(map[string]any{"profile_id": profile.ID})
+		req := httptest.NewRequest("POST", "/api/v1/sessions/"+sid+"/sensor-reprocess", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		authorizeRequest(req, &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusAccepted))
+
+		var updated db.AnalysisResult
+		Expect(dbConn.Where("session_id = ?", sid).First(&updated).Error).To(Succeed())
+		Expect(updated.SensorState).To(Equal(db.SensorStatePending))
+
+		var procAfter controllers.SensorProcessingData
+		Expect(json.Unmarshal(updated.SensorProcessing, &procAfter)).To(Succeed())
+		Expect(procAfter.Attempts).To(Equal(0))
+		Expect(procAfter.LastErrorCode).To(BeNil())
+	})
+})
+

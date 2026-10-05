@@ -1,6 +1,6 @@
 import { HeartRateBadge } from "./components/HeartRateSummaryPanel";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { historyApi, type AnalysisResult } from "../api/history";
 import { useAuth } from "../auth/useAuth";
@@ -72,8 +72,10 @@ function parseAnalysisOutput(output: string): {
   }
 }
 
-function HistoryCard({ result }: { result: AnalysisResult }) {
+const HistoryCard = memo(function HistoryCard({ result }: { result: AnalysisResult }) {
   const parsed = parseAnalysisOutput(result.output || "{}");
+  // `||`, not `??`: an empty overview must fall back to the legacy summary.
+  parsed.summary = result.analysis_summary?.result?.overview || result.analysis_summary?.last_success?.overview || parsed.summary;
   const stretchCount = useMemo(() => {
     if (!result.stretch_recommendations) return 0;
     try {
@@ -122,6 +124,9 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 mb-2">
+        {result.analysis_summary?.status && (
+          <span className="text-xs text-text-secondary">요약 {result.analysis_summary.status === "completed" ? "완료" : result.analysis_summary.status === "pending" || result.analysis_summary.status === "running" ? "생성 중" : "확인 필요"}</span>
+        )}
         {parsed.workoutType && (
           <span className="inline-block text-xs bg-bg-secondary text-text-secondary px-2 py-0.5 rounded-md">
             {parsed.workoutType}
@@ -157,7 +162,7 @@ function HistoryCard({ result }: { result: AnalysisResult }) {
       )}
     </Link>
   );
-}
+});
 
 export function HistoryListPage() {
   const { user } = useAuth();
@@ -210,9 +215,7 @@ export function HistoryListPage() {
     observer.observe(target);
 
     return () => {
-      if (target) {
-        observer.unobserve(target);
-      }
+      observer.disconnect();
     };
   }, [hasNextPage, isFetchingNextPage, isFetching, fetchNextPage, error]);
 
@@ -250,7 +253,7 @@ export function HistoryListPage() {
         )}
       </div>
 
-      {totalCost && totalCost.total_tokens > 0 && (
+      {totalCost && (totalCost.total_tokens > 0 || !!totalCost.unmeasured_calls || !!totalCost.unpriced_calls) && (
         <div className="bg-bg-elevated border border-border rounded-xl p-4 mb-6 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-bg-secondary flex items-center justify-center text-lg">
@@ -261,6 +264,8 @@ export function HistoryListPage() {
               <div className="flex items-baseline gap-2">
                 <span className="text-lg font-bold text-text-primary">
                   ${totalCost.cost_usd.toFixed(3)}
+                  {!!totalCost.unmeasured_calls && <span className="ml-2 text-xs text-warning">사용량 미제공 {totalCost.unmeasured_calls}건</span>}
+                  {!!totalCost.unpriced_calls && <span className="ml-2 text-xs text-warning">금액 미산정 {totalCost.unpriced_calls}건</span>}
                 </span>
                 <span className="text-xs font-medium text-text-muted">
                   (₩{Math.round(totalCost.cost_krw).toLocaleString()})

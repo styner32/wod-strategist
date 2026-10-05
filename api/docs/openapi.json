@@ -39,7 +39,15 @@
                 ],
                 "summary": "Chunk Complete",
                 "requestBody": {
-                    "$ref": "#/components/requestBodies/controllers.CompleteUploadRequest"
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.ChunkCompleteRequest"
+                            }
+                        }
+                    },
+                    "description": "Upload metadata",
+                    "required": true
                 },
                 "responses": {
                     "202": {
@@ -741,6 +749,46 @@
                 }
             }
         },
+        "/sessions/{session_id}/activity-summary": {
+            "get": {
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get observed workout activity",
+                "parameters": [
+                    {
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Owned profile ID",
+                        "name": "profile_id",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/activity.Summary"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/subtitles/:session_id": {
             "get": {
                 "description": "Returns chunk analysis feedback as an SRT subtitle file for a given session",
@@ -791,7 +839,15 @@
                 ],
                 "summary": "Complete Upload",
                 "requestBody": {
-                    "$ref": "#/components/requestBodies/controllers.CompleteUploadRequest"
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.CompleteUploadRequest"
+                            }
+                        }
+                    },
+                    "description": "Upload metadata",
+                    "required": true
                 },
                 "responses": {
                     "202": {
@@ -1011,20 +1067,171 @@
         }
     ],
     "components": {
-        "requestBodies": {
-            "controllers.CompleteUploadRequest": {
-                "content": {
-                    "application/json": {
-                        "schema": {
-                            "$ref": "#/components/schemas/controllers.CompleteUploadRequest"
-                        }
-                    }
-                },
-                "description": "Upload metadata",
-                "required": true
-            }
-        },
         "schemas": {
+            "activity.Gap": {
+                "type": "object",
+                "properties": {
+                    "chunk_id": {
+                        "type": "integer"
+                    },
+                    "clock": {
+                        "type": "string"
+                    },
+                    "end_secs": {
+                        "type": "number"
+                    },
+                    "reason": {
+                        "type": "string"
+                    },
+                    "start_secs": {
+                        "type": "number"
+                    }
+                }
+            },
+            "activity.Interval": {
+                "type": "object",
+                "properties": {
+                    "end_secs": {
+                        "type": "number"
+                    },
+                    "reason": {
+                        "type": "string"
+                    },
+                    "start_secs": {
+                        "type": "number"
+                    }
+                }
+            },
+            "activity.Observation": {
+                "type": "object",
+                "properties": {
+                    "complete": {
+                        "type": "boolean"
+                    },
+                    "end_secs": {
+                        "type": "number"
+                    },
+                    "evidence": {
+                        "type": "string"
+                    },
+                    "movement": {
+                        "type": "string"
+                    },
+                    "start_secs": {
+                        "type": "number"
+                    },
+                    "unit": {
+                        "description": "reps or seconds",
+                        "type": "string"
+                    }
+                }
+            },
+            "activity.Observations": {
+                "type": "object",
+                "properties": {
+                    "activity_state": {
+                        "description": "exercise, rest, unknown",
+                        "type": "string"
+                    },
+                    "duration_secs": {
+                        "type": "number"
+                    },
+                    "events": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/activity.Observation"
+                        }
+                    },
+                    "target_state": {
+                        "description": "identified, ambiguous, not_visible, unknown",
+                        "type": "string"
+                    },
+                    "unassessed": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/activity.Interval"
+                        }
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "activity.ReviewedChunk": {
+                "type": "object",
+                "properties": {
+                    "chunk_id": {
+                        "type": "integer"
+                    },
+                    "observations": {
+                        "$ref": "#/components/schemas/activity.Observations"
+                    },
+                    "state": {
+                        "type": "string"
+                    }
+                }
+            },
+            "activity.Summary": {
+                "type": "object",
+                "properties": {
+                    "available": {
+                        "type": "boolean"
+                    },
+                    "coverage_scope": {
+                        "type": "string"
+                    },
+                    "media_generation": {
+                        "type": "string"
+                    },
+                    "movements": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/activity.Total"
+                        }
+                    },
+                    "review_state": {
+                        "type": "string"
+                    },
+                    "review_version": {
+                        "type": "integer"
+                    },
+                    "reviews": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/activity.ReviewedChunk"
+                        }
+                    },
+                    "source_version": {
+                        "type": "string"
+                    },
+                    "unassessed": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/activity.Gap"
+                        }
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "activity.Total": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer"
+                    },
+                    "movement": {
+                        "type": "string"
+                    },
+                    "seconds": {
+                        "type": "number"
+                    },
+                    "unit": {
+                        "type": "string"
+                    }
+                }
+            },
             "controllers.ChunkAnalysisSummaryResponse": {
                 "type": "object",
                 "properties": {
@@ -1039,6 +1246,57 @@
                     },
                     "total": {
                         "type": "integer"
+                    }
+                }
+            },
+            "controllers.ChunkCompleteRequest": {
+                "type": "object",
+                "properties": {
+                    "appearance_hints": {
+                        "type": "string"
+                    },
+                    "end_secs": {
+                        "type": "number"
+                    },
+                    "gcs_uri": {
+                        "type": "string"
+                    },
+                    "heart_rate_bpm": {
+                        "type": "integer"
+                    },
+                    "injuries": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "live_analysis_version": {
+                        "type": "integer"
+                    },
+                    "movements": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "profile_id": {
+                        "type": "integer"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "start_secs": {
+                        "type": "number"
+                    },
+                    "wod_description": {
+                        "description": "e.g. \"Fran\" or \"For Time: 5 rounds of...\"",
+                        "type": "string"
+                    },
+                    "workout_confidence": {
+                        "type": "number"
+                    },
+                    "workout_type": {
+                        "type": "string"
                     }
                 }
             },
@@ -1490,6 +1748,12 @@
             "db.ChunkAnalysisResult": {
                 "type": "object",
                 "properties": {
+                    "capture_assessment": {
+                        "type": "object"
+                    },
+                    "contextual_coaching": {
+                        "type": "object"
+                    },
                     "created_at": {
                         "type": "string"
                     },
@@ -1509,6 +1773,9 @@
                     },
                     "id": {
                         "type": "integer"
+                    },
+                    "movement_observations": {
+                        "type": "object"
                     },
                     "observed_signals": {
                         "description": "JSON: estimated workout metrics for benchmarking",

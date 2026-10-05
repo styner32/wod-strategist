@@ -58,6 +58,13 @@ func BuildNormalizedWorkoutPrompt(wodDescription string, hints []string, gender 
      - "G2OH" → "Ground to Overhead"
      - "PC" → "Power Clean"
      - "SC" → "Squat Clean"
+     - "HPC" → "Hang Power Clean"
+     - "HSC" → "Hang Squat Clean"
+     - "HC" → "Hang Power Clean"
+     - "PS" → "Power Snatch"
+     - "HPS" → "Hang Power Snatch"
+     - "HSS" → "Hang Squat Snatch"
+     - "HS" → "Hang Power Snatch"
      - "PP" → "Push Press"
      - "PJ" → "Push Jerk"
      - "SJ" → "Split Jerk"
@@ -157,15 +164,12 @@ func (w *Worker) normalizeWorkout(ctx context.Context, sessionID string, profile
 	gender := w.lookupGender(profileID)
 	prompt := BuildNormalizedWorkoutPrompt(trimmedDesc, hints, gender)
 	raw, usage, err := w.GeminiClient.ParseText(ctx, prompt)
+	w.saveTokenUsage(sessionID, profileID, "session:normalize-workout", usage)
 	if err != nil {
 		w.logger.Warn("Failed to parse text for workout normalization",
 			zap.String("session_id", sessionID),
 			zap.Error(err))
 		return ""
-	}
-
-	if usage != nil {
-		w.saveTokenUsage(sessionID, profileID, "session:normalize-workout", usage)
 	}
 
 	movements, err := ParseNormalizedWorkoutOutput(raw)

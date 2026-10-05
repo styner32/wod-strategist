@@ -1,12 +1,12 @@
+import { memo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { historyApi } from "../../api/history";
 
 interface SessionCostCardProps {
   sessionId: string;
 }
 
-export function SessionCostCard({ sessionId }: SessionCostCardProps) {
+export const SessionCostCard = memo(function SessionCostCard({ sessionId }: SessionCostCardProps) {
   const [showDetails, setShowDetails] = useState(false);
 
   const { data: cost, isLoading, error } = useQuery({
@@ -87,6 +87,13 @@ export function SessionCostCard({ sessionId }: SessionCostCardProps) {
         </div>
       </div>
 
+      <p className="mt-2 text-[11px] text-text-muted">
+        Thinking {formatTokens(cost.thinking_tokens ?? 0)} · 도구 입력 {formatTokens(cost.tool_use_tokens ?? 0)} · 캐시 {formatTokens(cost.cached_tokens ?? 0)}
+      </p>
+      {!!cost.unmeasured_calls && <p className="mt-2 text-xs text-warning">사용량 일부가 미제공된 요청 {cost.unmeasured_calls}건이 있어 합계가 불완전합니다.</p>}
+      {!!cost.unpriced_calls && <p className="mt-2 text-xs text-warning">별도 과금 모델 {cost.unpriced_calls}건은 금액에 포함되지 않았습니다.</p>}
+      <p className="mt-2 text-[11px] text-text-muted">앱에 설정된 단가 기준 추정 비용입니다. 실제 청구 금액과 다를 수 있습니다.</p>
+
       {showDetails && (
         <div className="mt-4 space-y-3 border-t border-border pt-3">
           {cost.by_task_type && cost.by_task_type.length > 0 && (
@@ -148,4 +155,4 @@ export function SessionCostCard({ sessionId }: SessionCostCardProps) {
       )}
     </section>
   );
-}
+});

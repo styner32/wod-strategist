@@ -6,6 +6,7 @@ import { useFrameProcessor } from 'react-native-vision-camera';
 import { runAtTargetFps } from 'react-native-vision-camera';
 import { useRunOnJS } from 'react-native-worklets-core';
 import { useResizePlugin } from 'vision-camera-resize-plugin';
+import { CaptureWindow } from '../../wod/captureWindow';
 
 // Default: 2fps — sufficient for activity detection (person exercising vs idle)
 // while minimizing battery drain. The pose model's primary production role is
@@ -79,6 +80,8 @@ export function usePoseDetection(
   // for readability (the callback references them but isn't invoked synchronously).
   const inferenceFrameCountRef = useRef(0);
   const workoutFrameCountRef = useRef(0);
+  const captureObservations = useRef(new CaptureWindow());
+  const nativeCaptureObservations = useRef(new CaptureWindow());
 
   // Polling: read from the ref (plain JS, no SharedValue .value reads)
   // and push to React state at a steady cadence.
@@ -110,6 +113,8 @@ export function usePoseDetection(
       rawScores: data.rawScores,
       rawFirstValues: data.rawFirstValues,
     };
+    captureObservations.current.add(data.captureTimeMs, data.isWorkingOut ? 1 : 0);
+    nativeCaptureObservations.current.add(data.nativeTimeMs, data.isWorkingOut ? 1 : 0);
     // Always count frames — refs are reset at each chunk boundary by
     // resetFrameCounts(), so only inter-chunk frames contribute to confidence.
     // (Gating on data._isRecording was tried and failed — the SV read from
@@ -143,6 +148,8 @@ export function usePoseDetection(
     // providing live CONF/MOTION/STATE feedback on the dashboard.
     runAtTargetFps(isRecordingSV.value ? inferenceFps : 1, () => {
       'worklet';
+      // Stamp at frame processing, before inference/JS delivery/export latency.
+      const captureTimeMs = Date.now();
 
       // 1. Preprocessing — let the resize plugin center-crop automatically.
       // We handle coordinate remapping manually after inference.
@@ -259,6 +266,8 @@ export function usePoseDetection(
 
         // Bridge all data to JS thread via useRunOnJS → ref
         updateMonitorSafe({
+          captureTimeMs,
+          nativeTimeMs: frame.timestamp,
           isWorkingOut: isWorkingOut,
           confidence: confidence,
           motion: smoothedMotion,
@@ -306,5 +315,18 @@ export function usePoseDetection(
     confidence: latestInferenceRef.current.confidence,
   }), []);
 
-  return { frameProcessor, poseResult, monitorData, isModelLoaded: plugin.state === 'loaded', resetFrameCounts, getWorkoutConfidence, getLatestMotion };
+  const getCaptureConfidence = useCallback((start: number, end: number, nativeClockOffsetMs?: number) => {
+    // iOS Frame.timestamp is native PTS in ms. Reuse the recorder's anchor, so
+    // stabilization and delayed JS/analysis delivery cannot move pose observations.
+    if (nativeClockOffsetMs !== undefined && Number.isFinite(nativeClockOffsetMs)) {
+      return nativeCaptureObservations.current.mean(start - nativeClockOffsetMs, end - nativeClockOffsetMs);
+    }
+    return captureObservations.current.mean(start, end);
+  }, []);
+  const resetCaptureObservations = useCallback(() => {
+    captureObservations.current.clear();
+    nativeCaptureObservations.current.clear();
+  }, []);
+
+  return { frameProcessor, poseResult, monitorData, isModelLoaded: plugin.state === 'loaded', resetFrameCounts, getWorkoutConfidence, getLatestMotion, getCaptureConfidence, resetCaptureObservations };
 }

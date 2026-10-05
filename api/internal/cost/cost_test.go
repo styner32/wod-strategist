@@ -145,3 +145,35 @@ var _ = Describe("Cost calculation", func() {
 		})
 	})
 })
+
+var _ = Describe("Detailed token accounting", func() {
+	It("includes tool input and thinking output once, without readding cached input", func() {
+		rows := []db.TokenUsage{{Model: "gemini-3.8-flash", PromptTokens: 100, CandidateTokens: 20, TotalTokens: 460,
+			UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":40,"toolUsePromptTokenCount":300,"cachedContentTokenCount":50,"totalTokenCount":460}`)}}
+		result := cost.CalculateSessionCost("session", rows)
+		expected, _ := cost.CalculateTokensCost("gemini-3.8-flash", 400, 60)
+		Expect(result.CostUSD).To(Equal(expected))
+		Expect(result.TotalTokens).To(Equal(int64(460)))
+		Expect(result.ThinkingTokens).To(Equal(int64(40)))
+		Expect(result.ToolUseTokens).To(Equal(int64(300)))
+		Expect(result.CachedTokens).To(Equal(int64(50)))
+		Expect(result.UnmeasuredCalls).To(BeZero())
+		total := cost.CalculateTotalCost(rows)
+		Expect(total.CostUSD).To(Equal(result.CostUSD))
+		aggregate := cost.CalculateTotalCostFromAggregates([]cost.ModelTokenAggregate{{Model: "gemini-3.8-flash", PromptTokens: 100, CandidateTokens: 20, TotalTokens: 460, ThinkingTokens: 40, ToolUseTokens: 300, CachedTokens: 50}})
+		Expect(aggregate).To(Equal(total))
+	})
+	It("distinguishes missing usage from a measured zero in API totals", func() {
+		rows := []db.TokenUsage{{Model: "gemini-3.8-flash", UsageMetadata: db.NullableJSONDocument(`{}`)}, {Model: "gemini-3.8-flash", UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0}`)}}
+		Expect(cost.CalculateSessionCost("session", rows).UnmeasuredCalls).To(Equal(int64(1)))
+	})
+})
+
+var _ = Describe("Non-token-priced generation", func() {
+	It("preserves music tokens but does not invent a Flash-priced bill", func() {
+		result := cost.CalculateSessionCost("s", []db.TokenUsage{{Model: "lyria-3-clip-preview", TotalTokens: 100, PromptTokens: 10, CandidateTokens: 90}})
+		Expect(result.TotalTokens).To(Equal(int64(100)))
+		Expect(result.CostUSD).To(BeZero())
+		Expect(result.UnpricedCalls).To(Equal(int64(1)))
+	})
+})

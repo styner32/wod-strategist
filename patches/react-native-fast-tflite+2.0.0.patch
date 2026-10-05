@@ -1,0 +1,73 @@
+diff --git a/node_modules/react-native-fast-tflite/ios/Tflite.mm b/node_modules/react-native-fast-tflite/ios/Tflite.mm
+index c76d3fa..c0a2b31 100644
+--- a/node_modules/react-native-fast-tflite/ios/Tflite.mm
++++ b/node_modules/react-native-fast-tflite/ios/Tflite.mm
+@@ -1,30 +1,55 @@
+ #import "Tflite.h"
+ #import "../cpp/TensorflowPlugin.h"
+ #import <React-callinvoker/ReactCommon/CallInvoker.h>
++#ifdef RCT_NEW_ARCH_ENABLED
++#import <ReactCommon/RCTTurboModuleWithJSIBindings.h>
++#else
+ #import <React/RCTBridge+Private.h>
++#endif
+ #import <jsi/jsi.h>
+ #import <string>
+ 
+-// This is defined in RCTTurboModule.h.
+-// for future versions of React we might need to figure out another approach to get the
+-// JSCallInvoker!
++#ifdef RCT_NEW_ARCH_ENABLED
++@interface Tflite () <RCTTurboModuleWithJSIBindings>
++@end
++#else
+ @interface RCTBridge (RCTTurboModule)
+ - (std::shared_ptr<facebook::react::CallInvoker>)jsCallInvoker;
+ @end
++#endif
+ 
+ using namespace facebook;
+ 
+-@implementation Tflite
++@implementation Tflite {
++  BOOL _bindingsInstalled;
++}
+ RCT_EXPORT_MODULE(Tflite)
+ 
++#ifdef RCT_NEW_ARCH_ENABLED
++// React Native supplies the actual runtime and invoker before exposing this TurboModule to JS.
++// RCTBridge.currentBridge no longer provides a runtime in bridgeless React Native 0.86.
++- (void)installJSIBindingsWithRuntime:(jsi::Runtime &)runtime
++                        callInvoker:(const std::shared_ptr<react::CallInvoker> &)callInvoker {
++  _bindingsInstalled = [[self installWithRuntime:runtime callInvoker:callInvoker] boolValue];
++}
++#endif
++
+ - (NSNumber *)install {
++#ifdef RCT_NEW_ARCH_ENABLED
++  return @(_bindingsInstalled);
++#else
+   RCTBridge* bridge = [RCTBridge currentBridge];
+   RCTCxxBridge* cxxBridge = (RCTCxxBridge*)bridge;
+   if (!cxxBridge.runtime) {
+     return @(false);
+   }
+   jsi::Runtime& runtime = *(jsi::Runtime*)cxxBridge.runtime;
++  return [self installWithRuntime:runtime callInvoker:[bridge jsCallInvoker]];
++#endif
++}
+ 
++- (NSNumber *)installWithRuntime:(jsi::Runtime &)runtime
++                    callInvoker:(const std::shared_ptr<react::CallInvoker> &)callInvoker {
+   auto fetchByteDataFromUrl = [](std::string url) {
+     NSString* string = [NSString stringWithUTF8String:url.c_str()];
+     NSLog(@"Fetching %@...", string);
+@@ -37,7 +62,7 @@ RCT_EXPORT_MODULE(Tflite)
+   };
+ 
+   try {
+-    TensorflowPlugin::installToRuntime(runtime, [bridge jsCallInvoker], fetchByteDataFromUrl);
++    TensorflowPlugin::installToRuntime(runtime, callInvoker, fetchByteDataFromUrl);
+   } catch (std::exception& exc) {
+     NSLog(@"Failed to install TensorFlow Lite plugin to Runtime! %s", exc.what());
+     return @(false);

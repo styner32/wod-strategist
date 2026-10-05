@@ -103,6 +103,10 @@ resource "google_cloud_run_v2_service" "api" {
         value = tostring(var.enable_chunk_reanalysis)
       }
       env {
+        name  = "ENABLE_AGENTIC_HIGHLIGHTS"
+        value = tostring(var.enable_agentic_highlights)
+      }
+      env {
         name  = "ENABLE_SESSION_REANALYSIS"
         value = tostring(var.enable_session_reanalysis)
       }
@@ -176,6 +180,22 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       env {
         name  = "GEMINI_THINKING_LEVEL"
         value = var.gemini_thinking_level
+      }
+      env {
+        name  = "ENABLE_CAPTURE_FEEDBACK"
+        value = tostring(var.enable_capture_feedback)
+      }
+      env {
+        name  = "ENABLE_CONTEXTUAL_COACHING"
+        value = tostring(var.enable_contextual_coaching)
+      }
+      env {
+        name  = "ENABLE_AGENTIC_HIGHLIGHTS"
+        value = tostring(var.enable_agentic_highlights)
+      }
+      env {
+        name  = "ENABLE_ACTIVITY_COUNTING"
+        value = tostring(var.enable_activity_counting)
       }
       env {
         name  = "PIPELINE_MODE"

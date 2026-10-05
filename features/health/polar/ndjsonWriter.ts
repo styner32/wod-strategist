@@ -42,8 +42,8 @@ export class NdjsonWriter {
   private droppedLines = 0;
   readonly filePath: string;
 
-  constructor(sessionId: string) {
-    const dir = new Directory(Paths.document, "sensor");
+  constructor(sessionId: string, directoryName: string = "sensor") {
+    const dir = new Directory(Paths.document, directoryName);
     if (!dir.exists) {
       dir.create({ intermediates: true });
     }

@@ -1,0 +1,86 @@
+.analysis-markdown {
+  max-width: 75ch;
+  min-width: 0;
+  width: 100%;
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+}
+@media (min-width: 768px) {
+  .analysis-markdown {
+    font-size: 16px;
+  }
+}
+.analysis-markdown > :first-child {
+  margin-top: 0;
+}
+.analysis-markdown p,
+.analysis-markdown ul,
+.analysis-markdown ol,
+.analysis-markdown blockquote,
+.analysis-markdown pre {
+  margin: 0.85em 0;
+}
+.analysis-markdown h3,
+.analysis-markdown h4,
+.analysis-markdown h5,
+.analysis-markdown h6 {
+  font-size: 1em;
+  font-weight: 650;
+  margin: 1.5em 0 0.5em;
+}
+.analysis-markdown strong {
+  font-weight: 700;
+}
+.analysis-markdown ul {
+  list-style: disc;
+  padding-left: 1.5em;
+}
+.analysis-markdown ol {
+  list-style: decimal;
+  padding-left: 1.5em;
+}
+.analysis-markdown li {
+  margin: 0.3em 0;
+}
+.analysis-markdown li > ul,
+.analysis-markdown li > ol {
+  margin: 0.25em 0;
+}
+.analysis-markdown blockquote {
+  border-left: 3px solid var(--color-border);
+  padding-left: 1em;
+  color: var(--color-text-secondary);
+}
+.analysis-markdown a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+.analysis-markdown pre,
+.analysis-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.analysis-markdown pre {
+  padding: 0.75em;
+  background: var(--color-bg-secondary);
+  font-size: 0.85em;
+}
+.analysis-markdown table {
+  border-collapse: collapse;
+  min-width: 100%;
+  font-size: 0.9em;
+}
+.analysis-markdown td,
+.analysis-markdown th {
+  border: 1px solid var(--color-border);
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+.analysis-markdown hr {
+  border-color: var(--color-border);
+  margin: 1.5em 0;
+}
+
+.analysis-markdown th { min-width: 6rem; white-space: nowrap; }
