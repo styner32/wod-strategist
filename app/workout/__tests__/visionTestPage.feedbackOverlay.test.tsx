@@ -137,7 +137,12 @@ jest.mock("@/features/ai-coach/useAppleAiFeedback", () => ({
 jest.mock("@/features/ai-coach/appleAiUpload", () => ({ saveAppleAiObservation: async () => {}, flushAppleAiUploads: async () => {} }));
 jest.mock("@/features/debug/telemetryRecorder", () => ({ TelemetryRecorder: { start: () => {}, registerProvider: () => {}, stop: async () => null } }));
 jest.mock("@/features/debug/telemetryUpload", () => ({ enqueueUpload: async () => {}, flushPendingUploads: async () => {} }));
-jest.mock("@/features/wod/api", () => ({ mergeChunks: async () => {}, processWorkoutChunk: jest.fn() }));
+jest.mock("@/features/wod/api", () => ({
+  mergeChunks: async () => {},
+  processWorkoutChunk: jest.fn(),
+  is4xxError: (err: any) => Boolean(err?.status >= 400 && err?.status < 500),
+  getErrorStatusCode: (err: any) => err?.status ?? null,
+}));
 jest.mock("expo-keep-awake", () => ({ activateKeepAwakeAsync: async () => {}, deactivateKeepAwake: () => {} }));
 jest.mock("expo-media-library/legacy", () => ({ requestPermissionsAsync: async () => ({ granted: true }) }));
 jest.mock("expo-screen-orientation", () => ({

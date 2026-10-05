@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from '../historyPolling';
 import { useMemo, useRef, useState } from 'react';
 import {
   historyApi,
@@ -187,6 +188,7 @@ export function ChunkInspector({
   onUndoCorrection,
   onUseCandidate,
 }: Props) {
+  const queryClient = useQueryClient();
   const videoRef = useRef<HTMLVideoElement>(null);
   const [explicitRunId, setExplicitRunId] = useState<number | undefined>();
   const sortedRuns = useMemo(
@@ -205,18 +207,19 @@ export function ChunkInspector({
     staleTime: 10 * 60 * 1000,
   });
 
-  const { data: runDetail } = useQuery({
-    queryKey: ['chunk-reanalysis', sessionId, chunk.id, selectedRunId],
+  const runKey = ['chunk-reanalysis', sessionId, chunk.id, selectedRunId];
+  const runQuery = useQuery({
+    queryKey: runKey,
     queryFn: () => historyApi.getChunkReanalysis(sessionId, chunk.id, selectedRunId!),
     enabled: selectedRunId != null,
     refetchInterval: (query) => {
       const status = (query.state.data as ChunkReanalysisRun | undefined)?.status;
-      if (status !== 'QUEUED' && status !== 'RUNNING') return false;
-      if (query.state.dataUpdateCount >= 40) return false;
-      const pollCount = Math.min(query.state.dataUpdateCount, 4);
-      return Math.min(1000 * (2 ** pollCount), 8000);
+      return historyPollInterval(query,
+        (status === 'QUEUED' || status === 'RUNNING') && selectedRunId != null ? String(selectedRunId) : undefined);
     },
   });
+  const runDetail = runQuery.data;
+  const pollingStopped = historyPollingStopped(queryClient, runKey, runQuery.dataUpdatedAt);
 
   const selectedRun = runDetail
     ?? sortedRuns.find((run) => runId(run) === selectedRunId);
@@ -297,9 +300,17 @@ export function ChunkInspector({
 
       {(creatingRun || hasActiveRun) && (
         <p aria-live="polite" className="mt-3 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 text-sm text-warning">
-          {creatingRun ? 'Requesting a new analysis…' : 'The selected chunk is being re-analyzed. Results will update automatically.'}
+          {creatingRun ? 'Requesting a new analysis…' : pollingStopped ? 'Automatic status updates are paused. The analysis continues on the server.' : 'The selected chunk is being re-analyzed. Results will update automatically.'}
         </p>
       )}
+      {pollingStopped && <button type="button" className="mt-2 text-sm text-accent underline" onClick={() => {
+        resetHistoryPolling(queryClient, runKey);
+        resetHistoryPolling(queryClient, ['chunk-reanalyses', sessionId, chunk.id]);
+        void Promise.all([
+          runQuery.refetch(),
+          queryClient.refetchQueries({ queryKey: ['chunk-reanalyses', sessionId, chunk.id], type: 'active' }),
+        ]);
+      }}>Resume status updates</button>}
       <p aria-live="polite" className="sr-only">
         {sortedRuns[0] ? `Latest re-analysis status: ${sortedRuns[0].status.replaceAll('_', ' ')}` : ''}
       </p>

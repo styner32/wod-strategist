@@ -54,6 +54,9 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - A rejected delta uses `lastSampleIntervalMs`, or the nominal interval before a valid measurement exists. Do not stretch samples across packet loss using a fixed upper limit such as 60ms.
 - Reset the measured interval with the clock anchor on a new stream; stop/disconnect also clears it. This heuristic cannot detect every small partial-packet loss without a sequence counter.
 
+### H10 internal HR recording (experimental)
+- Opt-in, iOS-only toggle that records HR inside the H10 beside the live pipeline and uploads `h10_memory_hr.json`. Rules, PS-FTP constants and deletion/deadline policy: [h10-memory-recording.md](h10-memory-recording.md). Never change the live HR/ACC path for it.
+
 ## iOS scene lifecycle
 
 - See [ios-scene-lifecycle.md](ios-scene-lifecycle.md) for Expo SDK 57 / Xcode 27 scene ownership, the iOS 16.4 minimum, native regeneration checks and dependency compatibility patches.
@@ -69,6 +72,12 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - A reinstall can change the absolute `file:///var/mobile/Containers/Data/Application/{UUID}/Documents/` prefix while retaining the files. `loadQueue()` rebases saved `Documents/sensor/*.ndjson` paths against the current `documentDirectory`, including backup recovery, without changing request IDs or upload stages.
 - Check `getInfoAsync(filePath)` before `PREPARE_PENDING` / `PUT_PENDING`. Missing files or directories become `NEEDS_ATTENTION`; retain the queue entry. `COMPLETE_PENDING` must still reconcile with the server even if the local file is absent.
 - Sensor PUTs use legacy `uploadAsync`, whose iOS implementation checks file existence before constructing a background upload. `createUploadTask().uploadAsync()` uses `uploadTaskStartAsync`, which lacks that guard in the installed Expo SDK and can raise an uncaught `NSInvalidArgumentException` for a stale path. JavaScript `.catch()` cannot catch that native exception.
+
+## Chunk upload retry policy
+- Chunk uploads (`processWorkoutChunk` in `features/wod/api.ts`) retry transient network and 5xx errors up to 5 times with a 5000ms fixed interval.
+- 4xx client errors (400, 401, 403, 404, 422) are non-retryable and abort immediately via `is4xxError`.
+- In `visionTestPage.tsx`, retry attempts and terminal failures display an on-screen status banner (`uploadBanner`) with translated strings (`overlay.recording.chunkRetrying`, `overlay.recording.chunk4xxError`, `overlay.recording.chunkUploadFailed`).
+- If all retries fail or a 4xx error occurs, the failed chunk is skipped and execution proceeds to the next chunk; upon workout completion, `mergeChunks` proceeds with all successfully uploaded chunks.
 
 ## Internationalization (i18n)
 Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/locales/{en,ko}.json`.

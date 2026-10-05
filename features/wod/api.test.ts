@@ -9,6 +9,9 @@ import {
   uploadSessionAssetToGcs,
   notifyUploadComplete,
   processWorkoutVideo,
+  processWorkoutChunk,
+  is4xxError,
+  getErrorStatusCode,
   parseWorkoutImage,
   parseAppearanceImage,
 } from "./api";
@@ -257,6 +260,143 @@ describe("API Client Methods", () => {
 
       // Verify the Expo System upload task was dispatched
       expect(createUploadTask).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("is4xxError and getErrorStatusCode", () => {
+    it("identifies 4xx errors by status property", () => {
+      const err400: any = new Error("Bad Request");
+      err400.status = 400;
+      expect(is4xxError(err400)).toBe(true);
+      expect(getErrorStatusCode(err400)).toBe(400);
+
+      const err422: any = new Error("Unprocessable");
+      err422.status = 422;
+      expect(is4xxError(err422)).toBe(true);
+      expect(getErrorStatusCode(err422)).toBe(422);
+
+      const err500: any = new Error("Server Error");
+      err500.status = 500;
+      expect(is4xxError(err500)).toBe(false);
+      expect(getErrorStatusCode(err500)).toBe(500);
+    });
+
+    it("identifies 4xx errors by error message pattern", () => {
+      expect(is4xxError(new Error("API Error [400]: Bad Request"))).toBe(true);
+      expect(getErrorStatusCode(new Error("API Error [400]: Bad Request"))).toBe(400);
+
+      expect(is4xxError(new Error("Failed to upload to GCS: HTTP 403 Forbidden"))).toBe(true);
+      expect(getErrorStatusCode(new Error("Failed to upload to GCS: HTTP 403 Forbidden"))).toBe(403);
+
+      expect(is4xxError(new Error("API Error [502]: Bad Gateway"))).toBe(false);
+      expect(is4xxError(new Error("Network request failed"))).toBe(false);
+      expect(getErrorStatusCode(new Error("Network request failed"))).toBeNull();
+    });
+  });
+
+  describe("processWorkoutChunk retry behavior", () => {
+    const chunkOptions = {
+      profileId: 1,
+      maxRetries: 5,
+      retryDelayMs: 1, // minimal delay for test execution
+    };
+
+    beforeEach(() => {
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, () => {
+          return HttpResponse.json({
+            upload_url: "https://gcs.fake/upload",
+            gcs_uri: "gs://bucket/videos/1/test/chunk.mp4",
+          });
+        }),
+        http.post(`${API_BASE_URL}/chunk-complete`, () => {
+          return HttpResponse.json({
+            task_id: "chunk_task_123",
+            session_id: "session_chunk_001",
+          });
+        }),
+      );
+      mockUploadAsync.mockResolvedValue({ status: 200, body: "", headers: {} });
+    });
+
+    it("succeeds on first attempt without retrying", async () => {
+      const onRetry = jest.fn();
+      const res = await processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        onRetry,
+      });
+
+      expect(res.taskId).toBe("chunk_task_123");
+      expect(res.sessionId).toBe("session_chunk_001");
+      expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it("retries on transient failure (e.g. 500) and succeeds on next attempt", async () => {
+      let attempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, () => {
+          attempts++;
+          if (attempts === 1) {
+            return new HttpResponse(null, { status: 500, statusText: "Internal Error" });
+          }
+          return HttpResponse.json({
+            upload_url: "https://gcs.fake/upload",
+            gcs_uri: "gs://bucket/videos/1/test/chunk.mp4",
+          });
+        }),
+      );
+
+      const onRetry = jest.fn();
+      const res = await processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        onRetry,
+      });
+
+      expect(res.taskId).toBe("chunk_task_123");
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      expect(onRetry).toHaveBeenCalledWith(1, 5, expect.any(Error));
+      expect(attempts).toBe(2);
+    });
+
+    it("does NOT retry on 4xx error and throws immediately", async () => {
+      let attempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, () => {
+          attempts++;
+          return new HttpResponse(null, { status: 400, statusText: "Bad Request" });
+        }),
+      );
+
+      const onRetry = jest.fn();
+      await expect(
+        processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+          ...chunkOptions,
+          onRetry,
+        }),
+      ).rejects.toThrow(/API Error \[400\]/);
+
+      expect(attempts).toBe(1);
+      expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it("exhausts maxRetries on continuous transient failures", async () => {
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, () => {
+          return new HttpResponse(null, { status: 503, statusText: "Service Unavailable" });
+        }),
+      );
+
+      const onRetry = jest.fn();
+      await expect(
+        processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+          ...chunkOptions,
+          maxRetries: 3,
+          retryDelayMs: 1,
+          onRetry,
+        }),
+      ).rejects.toThrow(/API Error \[503\]/);
+
+      expect(onRetry).toHaveBeenCalledTimes(2); // Retries after attempt 1 and attempt 2, fails on 3
     });
   });
 

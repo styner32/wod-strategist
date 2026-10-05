@@ -103,7 +103,12 @@ jest.mock("@/features/ai-coach/useAppleAiFeedback", () => ({ useAppleAiFeedback:
 jest.mock("@/features/ai-coach/appleAiUpload", () => ({ saveAppleAiObservation: async () => {}, flushAppleAiUploads: async () => {} }));
 jest.mock("@/features/debug/telemetryRecorder", () => ({ TelemetryRecorder: { start: () => {}, registerProvider: () => {}, stop: async () => null } }));
 jest.mock("@/features/debug/telemetryUpload", () => ({ enqueueUpload: async () => {}, flushPendingUploads: async () => {} }));
-jest.mock("@/features/wod/api", () => ({ mergeChunks: async () => {}, processWorkoutChunk: (...args: unknown[]) => mockProcessChunk(...args) }));
+jest.mock("@/features/wod/api", () => ({
+  mergeChunks: async () => {},
+  processWorkoutChunk: (...args: unknown[]) => mockProcessChunk(...args),
+  is4xxError: (err: any) => Boolean(err?.status >= 400 && err?.status < 500),
+  getErrorStatusCode: (err: any) => err?.status ?? null,
+}));
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -349,4 +354,65 @@ it.each(["callback", "throw"])("allows a new session after native startup %s fai
     await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
     next.unmount();
   } finally { alert.mockRestore(); }
+});
+
+it("displays 4xx upload error notice on the screen when chunk upload fails with 4xx", async () => {
+  const err400: any = new Error("API Error [400]: Bad Request");
+  err400.status = 400;
+  mockProcessChunk.mockRejectedValueOnce(err400);
+
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+  const callbacks = mockStartCamera.mock.calls[0][0];
+
+  await act(async () => {
+    callbacks.onRecordingSegment({
+      status: "ready",
+      path: "file:///documents/run-1/analysis/part.mp4",
+      captureStartTimeMs: Date.now() - 1000,
+      captureEndTimeMs: Date.now(),
+    });
+  });
+
+  await waitFor(() => {
+    expect(view.getByTestId("upload-status-banner")).toBeTruthy();
+    expect(view.getByText("overlay.recording.chunk4xxError")).toBeTruthy();
+  });
+  view.unmount();
+});
+
+it("displays retry notice when chunk upload triggers onRetry callback", async () => {
+  let finishUpload!: () => void;
+  mockProcessChunk.mockImplementationOnce((_uri, _sessionId, options) => {
+    options.onRetry?.(2, 5, new Error("Temporary network timeout"));
+    return new Promise<void>((resolve) => {
+      finishUpload = resolve;
+    });
+  });
+
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+  const callbacks = mockStartCamera.mock.calls[0][0];
+
+  await act(async () => {
+    callbacks.onRecordingSegment({
+      status: "ready",
+      path: "file:///documents/run-1/analysis/part.mp4",
+      captureStartTimeMs: Date.now() - 1000,
+      captureEndTimeMs: Date.now(),
+    });
+  });
+
+  await waitFor(() => {
+    expect(view.getByTestId("upload-status-banner")).toBeTruthy();
+    expect(view.getByText("overlay.recording.chunkRetrying")).toBeTruthy();
+  });
+
+  await act(async () => {
+    finishUpload();
+  });
+  await waitFor(() => {
+    expect(view.queryByTestId("upload-status-banner")).toBeNull();
+  });
+  view.unmount();
 });

@@ -10,6 +10,7 @@ let mockProfileId: number | null = 3;
 const mockList = jest.fn();
 const mockSave = jest.fn();
 const mockConfirm = jest.fn();
+const mockDiscard = jest.fn();
 jest.mock("../auth/useAuthStore", () => ({
   useAuthStore: (selector: (value: unknown) => unknown) => selector({ userId: mockUserId, isLoggedIn: true }),
 }));
@@ -21,6 +22,7 @@ jest.mock("./originalVideoStore", () => ({
   listOriginalSessions: (...args: unknown[]) => mockList(...args),
   finalizeAndSaveOriginal: (...args: unknown[]) => mockSave(...args),
   confirmOriginalAlreadySaved: (...args: unknown[]) => mockConfirm(...args),
+  discardOriginalSession: (...args: unknown[]) => mockDiscard(...args),
   subscribeOriginalVideos: () => () => {},
 }));
 
@@ -106,4 +108,19 @@ it("can reveal an existing failure without newer stage metadata", async () => {
   await waitFor(() => expect(view.getByText("originalVideos.showError")).toBeTruthy());
   fireEvent.press(view.getByText("originalVideos.showError"));
   expect(view.getByText("old native error")).toBeTruthy();
+});
+
+it("prompts for confirmation and discards an unconfirmed or failed original video", async () => {
+  const needsAttention = { ...pending, status: "needs_attention" as const, complete: false, captureIssue: "Fragment lacks native video timing" };
+  mockList.mockResolvedValue([needsAttention]);
+  mockDiscard.mockResolvedValue(undefined);
+  const alert = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+  const view = render(<OriginalVideosPending />);
+  await waitFor(() => expect(view.getByText("originalVideos.discard")).toBeTruthy());
+  fireEvent.press(view.getByText("originalVideos.discard"));
+  expect(mockDiscard).not.toHaveBeenCalled();
+  expect(alert).toHaveBeenCalledWith("originalVideos.discardTitle", "originalVideos.discardBody", expect.any(Array));
+  await act(async () => { alert.mock.calls[0][2]?.[1].onPress?.(); });
+  await waitFor(() => expect(mockDiscard).toHaveBeenCalledWith(needsAttention));
+  alert.mockRestore();
 });

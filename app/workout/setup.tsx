@@ -52,6 +52,7 @@ interface VideoPreferences {
   skipCompression: boolean;
   serialUpload: boolean;
   continuousRecording: boolean;
+  h10MemoryRecording: boolean;
   resolution: "480p" | "720p" | "1080p" | "2160p";
   landscapeMode: boolean;
   autoRecord: boolean;
@@ -71,6 +72,7 @@ function getDefaultVideoPrefs(): VideoPreferences {
     skipCompression: isAndroid,
     serialUpload: isAndroid,
     continuousRecording: false,
+    h10MemoryRecording: false,
     resolution: "720p",
     landscapeMode: false,
     autoRecord: true,
@@ -412,6 +414,7 @@ export default function WorkoutSetup() {
       params: {
         resolution: videoPrefs.resolution,
         continuousRecording: videoPrefs.continuousRecording ? "true" : "false",
+        h10MemoryRecording: Platform.OS === "ios" && videoPrefs.h10MemoryRecording ? "true" : "false",
         workoutType,
         movements: selectedMovements.join(", "),
         injuries: injuries.join(", "),
@@ -1055,6 +1058,17 @@ export default function WorkoutSetup() {
                     </View>
                     <Switch value={videoPrefs.continuousRecording}
                       onValueChange={(value) => updatePref("continuousRecording", value)} />
+                  </View>
+                )}
+                {Platform.OS === "ios" && (
+                  <View style={styles.optionRow}>
+                    <View style={{ flex: 1, marginRight: 12 }}>
+                      <Text style={styles.optionLabel}>{t("setup.h10MemoryRecording")}</Text>
+                      <Text style={{ color: "#aaa", fontSize: 12, marginTop: 4 }}>{t("setup.h10MemoryRecordingHelp")}</Text>
+                    </View>
+                    <Switch value={videoPrefs.h10MemoryRecording}
+                      accessibilityLabel={t("setup.h10MemoryRecording")}
+                      onValueChange={(value) => updatePref("h10MemoryRecording", value)} />
                   </View>
                 )}
                 <View style={styles.optionRow}>

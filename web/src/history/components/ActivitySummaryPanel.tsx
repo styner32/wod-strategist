@@ -1,5 +1,6 @@
 import { memo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from "../historyPolling";
 import { api } from "../../api/client";
 import { activityReviewPending, activitySummaryPath, type ActivitySummary } from "../../../../shared/activity";
 
@@ -26,25 +27,35 @@ export const ActivitySummaryPanel = memo(function ActivitySummaryPanel({
   sessionId: string;
   profileId: number;
 }) {
-  const { data } = useQuery({
-    queryKey: ["activity-summary", profileId, sessionId],
+  const client = useQueryClient();
+  const key = ["activity-summary", profileId, sessionId];
+  const query = useQuery({
+    queryKey: key,
     queryFn: () => api.get<ActivitySummary>(activitySummaryPath(sessionId, profileId)),
     enabled: !!sessionId && profileId > 0,
     refetchInterval: (query) => {
       const summary = query.state.data;
-      if (!activityReviewPending(summary)) return false;
       const isActivelyProcessing =
         summary?.review_state === "queued" || summary?.review_state === "running";
-      const pollCount = query.state.dataUpdateCount;
-      const maxPolls = isActivelyProcessing ? 40 : 4;
-      if (pollCount >= maxPolls) return false;
-      return Math.min(2000 * 1.5 ** Math.min(pollCount, 4), 10000);
+      const work = activityReviewPending(summary)
+        ? JSON.stringify([summary?.source_version, summary?.media_generation, isActivelyProcessing])
+        : undefined;
+      return historyPollInterval(query, work, true, isActivelyProcessing ? 40 : 4);
     },
   });
+  const data = query.data;
+  const pollingStopped = historyPollingStopped(client, key, query.dataUpdatedAt);
   if (!data?.available) return null;
   return <section className="rounded-xl border border-slate-700 bg-slate-900 p-4 text-slate-100">
     <h2 className="font-semibold">Observed workout activity</h2>
     <p className="text-sm text-sky-300">{labels[data.review_state]}</p>
+    {pollingStopped && <p role="status" className="text-sm text-amber-300">
+      Automatic status updates are paused.{' '}
+      <button type="button" className="underline" onClick={() => {
+        resetHistoryPolling(client, key);
+        void query.refetch();
+      }}>Resume status updates</button>
+    </p>}
     <ul className="mt-2 space-y-1">{data.movements.map(item => <li key={`${item.movement}/${item.unit}`}>
       {item.movement}: {item.unit === "reps" ? `${item.count} observed repetitions` : `${Math.round(item.seconds * 10) / 10} observed seconds`}
     </li>)}</ul>

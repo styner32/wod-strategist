@@ -1,6 +1,7 @@
 import { AnalysisOriginal } from "./AnalysisMarkdown";
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
+import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from '../historyPolling';
 import {
   historyApi,
   type AnalysisResult,
@@ -62,16 +63,15 @@ export function SessionReanalysisPanel({
     data: listResponse,
     error: listError,
     isLoading: listLoading,
+    dataUpdatedAt: listUpdatedAt,
   } = useQuery({
     queryKey: ['session-reanalyses', sessionId],
     queryFn: () => historyApi.listSessionReanalyses(sessionId),
     retry: false,
     refetchInterval: (query) => {
       const runs = query.state.data?.runs ?? [];
-      if (!runs.some((run) => !isTerminal(run.status))) return false;
-      if (query.state.dataUpdateCount >= 40) return false;
-      const pollCount = Math.min(query.state.dataUpdateCount, 4);
-      return Math.min(1000 * (2 ** pollCount), 8000);
+      const pending = runs.filter((run) => !isTerminal(run.status)).map((run) => run.id).sort((a, b) => a - b);
+      return historyPollInterval(query, pending.length ? JSON.stringify(pending) : undefined);
     },
   });
 
@@ -79,22 +79,25 @@ export function SessionReanalysisPanel({
   const selectedRunId = explicitRunId ?? runs[0]?.id;
   const selectedListRun = runs.find((run) => run.id === selectedRunId);
 
-  const { data: runDetail, error: runError } = useQuery({
+  const { data: runDetail, error: runError, dataUpdatedAt: runUpdatedAt } = useQuery({
     queryKey: ['session-reanalysis', sessionId, selectedRunId],
     queryFn: () => historyApi.getSessionReanalysis(sessionId, selectedRunId!),
     enabled: selectedRunId != null,
     retry: false,
     refetchInterval: (query) => {
-      if (query.state.error) return false;
       const status = (query.state.data as SessionReanalysisRun | undefined)?.status;
-      if (isTerminal(status)) return false;
-      if (query.state.dataUpdateCount >= 40) return false;
-      const pollCount = Math.min(query.state.dataUpdateCount, 4);
-      return Math.min(1000 * (2 ** pollCount), 8000);
+      return historyPollInterval(query, !isTerminal(status) && selectedRunId != null ? String(selectedRunId) : undefined);
     },
   });
 
   const selectedRun = runDetail ?? selectedListRun;
+  const pollingStopped = historyPollingStopped(queryClient, ['session-reanalyses', sessionId], listUpdatedAt)
+    || historyPollingStopped(queryClient, ['session-reanalysis', sessionId, selectedRunId], runUpdatedAt);
+  const resumePolling = () => {
+    const keys = [['session-reanalyses', sessionId], ['session-reanalysis', sessionId]];
+    for (const key of keys) resetHistoryPolling(queryClient, key);
+    void Promise.all(keys.map((key) => queryClient.refetchQueries({ queryKey: key, type: 'active' })));
+  };
 
   const createMutation = useMutation({
     mutationFn: () => {
@@ -108,6 +111,7 @@ export function SessionReanalysisPanel({
     },
     onSuccess: async (response) => {
       setExplicitRunId(response.run_id);
+      resetHistoryPolling(queryClient, ['session-reanalyses', sessionId]);
       await queryClient.invalidateQueries({ queryKey: ['session-reanalyses', sessionId] });
     },
   });
@@ -205,6 +209,10 @@ export function SessionReanalysisPanel({
       </div>
 
       <div className="mt-3 text-sm" aria-live="polite">
+        {pollingStopped && <p role="status" className="text-warning">
+          Automatic status updates are paused. The analysis continues on the server.{' '}
+          <button type="button" className="underline" onClick={resumePolling}>Resume status updates</button>
+        </p>}
         {blockedReason && !canCreate && <p className="text-warning">{blockedReason}</p>}
         {selectedRun && (
           <p className={isTerminal(selectedRun.status) ? 'text-text-secondary' : 'text-warning'}>

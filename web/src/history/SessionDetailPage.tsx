@@ -1,5 +1,6 @@
 import { AnalysisOverview } from "./components/AnalysisOverview";
 import { OnDeviceAiPanel } from "./components/OnDeviceAiPanel";
+import { H10MemoryPanel } from "./components/H10MemoryPanel";
 import { ActivitySummaryPanel } from "./components/ActivitySummaryPanel";
 import { HeartRateSummaryPanel } from "./components/HeartRateSummaryPanel";
 import { SensorTimelinePanel } from "./components/SensorTimelinePanel";
@@ -10,6 +11,8 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from "./historyPolling";
+import { refreshSensorVideoMetadata, type SensorMetadataRefresh } from "./sensorTimelineRecovery";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import {
@@ -167,6 +170,7 @@ export function SessionDetailPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const inspectorRef = useRef<HTMLDivElement>(null);
   const sensorPollingBudget = useRef({ sessionKey: "", startedAtMs: 0 });
+  const sensorMetadataRefresh = useRef<SensorMetadataRefresh>({});
   const [currentTime, setCurrentTime] = useState(0);
   const [selectedKind, setSelectedKind] = useState<VideoKind>();
 
@@ -301,7 +305,7 @@ export function SessionDetailPage() {
   const selectedChunk =
     chunks.find((chunk) => chunk.id === selectedChunkId) ?? chunks[0];
 
-  const { data: runResponse, isLoading: runsLoading } = useQuery({
+  const { data: runResponse, isLoading: runsLoading, dataUpdatedAt: runsUpdatedAt } = useQuery({
     queryKey: ["chunk-reanalyses", sessionId, selectedChunk?.id],
     queryFn: () =>
       historyApi.listChunkReanalyses(sessionId!, selectedChunk!.id),
@@ -311,14 +315,9 @@ export function SessionDetailPage() {
       const runs = normalizeRuns(
         query.state.data as ReanalysisListResponse | undefined,
       );
-      if (
-        !runs.some((run) => run.status === "QUEUED" || run.status === "RUNNING")
-      ) {
-        return false;
-      }
-      if (query.state.dataUpdateCount >= 40) return false;
-      const pollCount = Math.min(query.state.dataUpdateCount, 4);
-      return Math.min(1000 * 2 ** pollCount, 8000);
+      const pending = runs.filter((run) => run.status === "QUEUED" || run.status === "RUNNING")
+        .map((run) => run.id ?? run.run_id).sort((a, b) => (a ?? 0) - (b ?? 0));
+      return historyPollInterval(query, pending.length ? JSON.stringify(pending) : undefined);
     },
   });
   const runs = normalizeRuns(runResponse);
@@ -393,6 +392,7 @@ export function SessionDetailPage() {
         crypto.randomUUID(),
       ),
     onSuccess: async (_result, chunk) => {
+      resetHistoryPolling(queryClient, ["chunk-reanalyses", sessionId, chunk.id]);
       await queryClient.invalidateQueries({
         queryKey: ["chunk-reanalyses", sessionId, chunk.id],
       });
@@ -448,6 +448,7 @@ export function SessionDetailPage() {
       return { requestedChunkIds, queuedRuns, failures };
     },
     onSuccess: async (result) => {
+      resetHistoryPolling(queryClient, ["chunk-reanalyses", sessionId]);
       await Promise.all(
         result.requestedChunkIds.map((chunkId) =>
           queryClient.invalidateQueries({
@@ -492,15 +493,22 @@ export function SessionDetailPage() {
           dataUpdateCount: number;
         };
       }) => {
-        if (query.state.error) return false;
         const status = query.state.data?.status ?? run.status;
-        if (isTerminalChunkReanalysisStatus(status)) return false;
-        if (query.state.dataUpdateCount >= 40) return false;
-        const pollCount = Math.min(query.state.dataUpdateCount, 4);
-        return Math.min(1000 * 2 ** pollCount, 8000);
+        return historyPollInterval(query, !isTerminalChunkReanalysisStatus(status) ? String(run.runId) : undefined);
       },
     })),
   });
+
+  const chunkPollingStopped = historyPollingStopped(
+    queryClient, ["chunk-reanalyses", sessionId, selectedChunk?.id], runsUpdatedAt,
+  ) || (bulkReanalysisResult?.queuedRuns ?? []).some((run, index) => historyPollingStopped(
+    queryClient, ["chunk-reanalysis", sessionId, run.chunkId, run.runId], bulkRunQueries[index]?.dataUpdatedAt ?? 0,
+  ));
+  const resumeChunkPolling = () => {
+    const keys = [["chunk-reanalyses", sessionId], ["chunk-reanalysis", sessionId]];
+    for (const key of keys) resetHistoryPolling(queryClient, key);
+    void Promise.all(keys.map((key) => queryClient.refetchQueries({ queryKey: key, type: "active" })));
+  };
 
   const trackedBulkRuns = (bulkReanalysisResult?.queuedRuns ?? []).map(
     (run, index) => ({
@@ -712,6 +720,10 @@ export function SessionDetailPage() {
           sensorPollingBudget.current = { sessionKey, startedAtMs: Date.now() };
         }
         const data = await historyApi.getSensorTimeline(sessionId!, profileId!);
+        if (sensorPollingBudget.current.sessionKey === sessionKey) {
+          await refreshSensorVideoMetadata(queryClient, data, sessionId!, profileId!, sensorMetadataRefresh.current)
+            .catch(() => {}); // Metadata queries retain their own errors and retry state.
+        }
         const startedAt = sensorPollingBudget.current.startedAtMs || Date.now();
         const elapsedMs = Date.now() - startedAt;
         if (
@@ -731,9 +743,11 @@ export function SessionDetailPage() {
       enabled: !!sessionId && !!profileId,
       refetchInterval: (query) => {
         const startedAt = sensorPollingBudget.current.startedAtMs || Date.now();
+        const metadataFailed = sensorMetadataRefresh.current.sessionKey === `${sessionId}:${profileId}`
+          && sensorMetadataRefresh.current.failed;
         return sensorTimelinePollInterval(
           query.state.data,
-          !!videoUrl?.download_url,
+          !!videoUrl?.download_url && !metadataFailed,
           Date.now() - startedAt,
           query.state.status === "error",
         );
@@ -1212,6 +1226,10 @@ export function SessionDetailPage() {
                 )}
             </section>
 
+            {chunkPollingStopped && <p role="status" className="text-sm text-warning">
+              Automatic status updates are paused. The analysis continues on the server.{" "}
+              <button type="button" className="underline" onClick={resumeChunkPolling}>Resume status updates</button>
+            </p>}
             <GuidanceTimeline
               chunks={chunks}
               currentTime={currentTime}
@@ -1406,6 +1424,7 @@ export function SessionDetailPage() {
       )}
 
       {sessionId && profileId && <OnDeviceAiPanel key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} />}
+      {sessionId && profileId && <H10MemoryPanel key={`h10:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} />}
 
       {/* Chunk metrics chart — full width below */}
       {chunks.length > 0 && (

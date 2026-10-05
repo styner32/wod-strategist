@@ -34,6 +34,7 @@ git diff --check
 - `onRecordingSourceFinalized` closes the source barrier. `onRecordingFinished` closes the analysis-preparation barrier. Gallery saving can begin at the first barrier; cleanup waits for the second and all readers.
 - Unexpected screen unmount marks an active original incomplete and drains readers before releasing its hold. Native view detach stops both the legacy and segmented writer if the JS view reference has already disappeared; it does not cancel/delete the recording. Manifest-write failure must not leave the same-process recording marker permanently active.
 - The server merge is withheld if any analysis input failed or uploads still remain after the existing wait limit. This does not prevent local original saving.
+- Users can discard unconfirmed or failed original sessions from History (`OriginalVideosPending.tsx`) via `discardOriginalSession(ref)` with explicit confirmation. Discarding recursively removes the session's originals directory, cleans memory state, and notifies listeners without touching global sequence counters. Active recording, active Photos save, or held sessions cannot be discarded.
 
 ## Local merge
 

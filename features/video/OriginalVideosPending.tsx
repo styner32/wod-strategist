@@ -8,6 +8,7 @@ import { useColorScheme } from "../../hooks/use-color-scheme";
 import { formatSessionLabel } from "../wod/sessionLabel";
 import {
   confirmOriginalAlreadySaved,
+  discardOriginalSession,
   finalizeAndSaveOriginal,
   listOriginalSessions,
   subscribeOriginalVideos,
@@ -44,11 +45,12 @@ export function OriginalVideosPending() {
     return () => { requests.current++; unsubscribe(); subscription.remove(); };
   }, [refresh]);
 
-  const perform = async (session: OriginalVideoSession, action: "retry" | "retry_uncertain" | "confirmed") => {
+  const perform = async (session: OriginalVideoSession, action: "retry" | "retry_uncertain" | "confirmed" | "discard") => {
     if (busy) return;
     setBusy(session.sessionId);
     try {
       if (action === "confirmed") await confirmOriginalAlreadySaved(session);
+      else if (action === "discard") await discardOriginalSession(session);
       else await finalizeAndSaveOriginal(session, { retryUncertain: action === "retry_uncertain" });
     } catch {
       Alert.alert(t("common.error"), t("originalVideos.operationFailed"));
@@ -70,6 +72,7 @@ export function OriginalVideosPending() {
       {visible.map(session => {
         const working = busy === session.sessionId || ["recording", "preparing", "saving"].includes(session.status);
         const canRetry = session.complete && !session.captureIssue && !working;
+        const canDiscard = !working;
         return (
           <View key={session.sessionId} style={[styles.card, { backgroundColor: dark ? "#2C2C2E" : "#F5F5F5" }]}>
             <View style={styles.row}>
@@ -114,6 +117,16 @@ export function OriginalVideosPending() {
               {session.status === "permission_denied" && <TouchableOpacity accessibilityRole="button" style={styles.button} onPress={() => { void Linking.openSettings(); }}>
                 <Text style={styles.buttonText}>{t("originalVideos.openSettings")}</Text>
               </TouchableOpacity>}
+              {canDiscard && (
+                <TouchableOpacity disabled={!!busy} accessibilityRole="button" style={styles.discardButton} onPress={() => {
+                  Alert.alert(t("originalVideos.discardTitle"), t("originalVideos.discardBody"), [
+                    { text: t("common.cancel"), style: "cancel" },
+                    { text: t("originalVideos.discard"), style: "destructive", onPress: () => { void perform(session, "discard"); } },
+                  ]);
+                }}>
+                  <Text style={styles.discardButtonText}>{t("originalVideos.discard")}</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         );
@@ -132,4 +145,6 @@ const styles = StyleSheet.create({
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   button: { paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8, backgroundColor: "rgba(100,210,255,0.15)" },
   buttonText: { color: "#287EA3", fontSize: 13, fontWeight: "600" },
+  discardButton: { paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8, backgroundColor: "rgba(255,69,58,0.12)" },
+  discardButtonText: { color: "#FF453A", fontSize: 13, fontWeight: "600" },
 });

@@ -40,6 +40,10 @@ import {
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { PolarSensorRecorder } from "@/features/health/polar/polarSensorRecorder";
 import {
+  H10MemoryRecorderInstance,
+  type H10MemoryStatus,
+} from "@/features/health/polar/h10MemoryRecorder";
+import {
   enqueueSensorUpload,
   flushSensorUploads,
 } from "@/features/health/polar/sensorTelemetryUpload";
@@ -64,6 +68,8 @@ import {
 import {
   mergeChunks,
   processWorkoutChunk,
+  is4xxError,
+  getErrorStatusCode,
 } from "../../features/wod/api";
 import {
   prepareOriginalSession, beginOriginalChunk, addOriginalChunk,
@@ -130,6 +136,7 @@ export default function VisionTestPage() {
     skipCompression: skipCompressionParam,
     serialUpload: serialUploadParam,
     continuousRecording: continuousRecordingParam,
+    h10MemoryRecording: h10MemoryRecordingParam,
     landscapeMode: landscapeModeParam,
     previewOnly: previewOnlyParam,
     zoomMode: zoomModeParam,
@@ -151,6 +158,7 @@ export default function VisionTestPage() {
     skipCompression?: string;
     serialUpload?: string;
     continuousRecording?: string;
+    h10MemoryRecording?: string;
     landscapeMode?: string;
     previewOnly?: string;
     zoomMode?: string;
@@ -187,6 +195,8 @@ export default function VisionTestPage() {
 
   // Experimental native capability. Remains opt-in until release/device acceptance.
   const continuousRecording = Platform.OS === "ios" && continuousRecordingParam === "true";
+  // Experimental H10 internal HR recording beside the live pipeline (iOS first, opt-in).
+  const h10MemoryEnabled = Platform.OS === "ios" && h10MemoryRecordingParam === "true" && !previewOnly;
 
   const workoutType = parseWorkoutType(workoutTypeParam);
   const workoutTypeLabel = formatWorkoutTypeLabel(workoutType).toUpperCase();
@@ -276,7 +286,11 @@ export default function VisionTestPage() {
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; unmountRecorder.current(); };
+    return () => {
+      if (bannerTimer.current) clearTimeout(bannerTimer.current);
+      mounted.current = false;
+      unmountRecorder.current();
+    };
   }, []);
   const heartRateWindow = useRef(new CaptureWindow());
   // A timer-stopped chunk remains pending until the native finish callback.
@@ -298,6 +312,35 @@ export default function VisionTestPage() {
   // --- Upload monitoring ---
   const [pendingUploads, setPendingUploads] = useState(0);
   const [inflightUploads, setInflightUploads] = useState(0);
+
+  // --- Upload banner & error notification ---
+  type UploadBannerState = {
+    type: "retry" | "error";
+    message: string;
+  } | null;
+
+  const [uploadBanner, setUploadBanner] = useState<UploadBannerState>(null);
+  const bannerTimer = useRef<NodeJS.Timeout | null>(null);
+
+  const showUploadBanner = useCallback(
+    (banner: UploadBannerState, autoDismissMs?: number) => {
+      if (bannerTimer.current) {
+        clearTimeout(bannerTimer.current);
+        bannerTimer.current = null;
+      }
+      setUploadBanner(banner);
+      if (banner && autoDismissMs && autoDismissMs > 0) {
+        bannerTimer.current = setTimeout(() => {
+          setUploadBanner((current) => (current === banner ? null : current));
+        }, autoDismissMs);
+      }
+    },
+    [],
+  );
+
+  const clearRetryBanner = useCallback(() => {
+    setUploadBanner((prev) => (prev?.type === "retry" ? null : prev));
+  }, []);
 
   // --- Serial Upload Queue ---
   // Prevents concurrent uploads from piling up in memory on slow connections.
@@ -581,6 +624,79 @@ export default function VisionTestPage() {
     return () => clearInterval(interval);
   }, [isRecording]);
 
+  // --- Experimental H10 internal recording: status + live-pipeline watchdog ---
+  const [h10MemoryStatus, setH10MemoryStatus] = useState<H10MemoryStatus | null>(null);
+  const [h10MemoryStall, setH10MemoryStall] = useState<"hr" | "acc" | null>(null);
+  const hrStatusRef = useRef(hrStatus);
+  useEffect(() => {
+    hrStatusRef.current = hrStatus;
+  }, [hrStatus]);
+  useEffect(() => {
+    if (!h10MemoryEnabled) return;
+    // A previous run may still be finishing in the background; show only this session's status.
+    return H10MemoryRecorderInstance.subscribe((status) => {
+      if (status.sessionId === sessionIdRef.current) setH10MemoryStatus(status);
+    });
+  }, [h10MemoryEnabled]);
+  useEffect(() => {
+    if (!h10MemoryEnabled || !isRecording || isPaused) return;
+    let lastHr = -1;
+    let lastAcc = -1;
+    let accFlowing = false;
+    let hrChangedAt = Date.now();
+    let accChangedAt = Date.now();
+    let shownAt = 0;
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const stats = PolarSensorRecorder.getLiveStatus();
+      if (stats.hrSamples !== lastHr) {
+        lastHr = stats.hrSamples;
+        hrChangedAt = now;
+      }
+      if (stats.accSamples !== lastAcc) {
+        if (lastAcc >= 0 && stats.accSamples > lastAcc) accFlowing = true;
+        lastAcc = stats.accSamples;
+        accChangedAt = now;
+      }
+      // Leaving BLE range changes hrStatus away from "Live"; that is expected, not a malfunction.
+      let stall: "hr" | "acc" | null = null;
+      if (hrStatusRef.current === "Live" && now - hrChangedAt > 15_000) stall = "hr";
+      else if (accFlowing && now - accChangedAt > 5_000 && now - hrChangedAt < 3_000) stall = "acc";
+      if (stall) {
+        shownAt = now;
+        setH10MemoryStall(stall);
+      } else if (now - shownAt >= 10_000) {
+        setH10MemoryStall(null);
+      }
+    }, 1000);
+    return () => {
+      clearInterval(interval);
+      setH10MemoryStall(null);
+    };
+  }, [h10MemoryEnabled, isRecording, isPaused]);
+  useEffect(() => () => {
+    // No-op unless a run for this session is still active (e.g. the screen closed mid-workout).
+    void H10MemoryRecorderInstance.finish(sessionIdRef.current);
+  }, []);
+  const h10MemoryStatusForSession = h10MemoryStatus;
+  const h10MemoryBanner: { type: "error" | "warning"; message: string } | null = !h10MemoryEnabled
+    ? null
+    : h10MemoryStatusForSession?.phase === "start_failed" && h10MemoryStatusForSession.error
+      ? { type: "error", message: t("overlay.recording.h10MemoryStartFailed", { code: h10MemoryStatusForSession.error.code }) }
+      : h10MemoryStatusForSession?.phase === "failed" && h10MemoryStatusForSession.error
+        ? {
+            type: "error",
+            message: t("overlay.recording.h10MemoryFailed", {
+              stage: h10MemoryStatusForSession.error.stage,
+              code: h10MemoryStatusForSession.error.code,
+            }),
+          }
+        : h10MemoryStall === "hr"
+          ? { type: "warning", message: t("overlay.recording.h10MemoryHrStalled") }
+          : h10MemoryStall === "acc"
+            ? { type: "warning", message: t("overlay.recording.h10MemoryAccStalled") }
+            : null;
+
   // Refs that mirror render-state for sampling outside the render cycle.
   // TelemetryRecorder polls these at 1Hz via registered providers.
   const chunkCountRef = useRef(0);
@@ -660,10 +776,45 @@ export default function VisionTestPage() {
             injuries: injuries ? injuries.split(", ") : [],
             workoutType, profileId: capture.ref.profileId, startSecs, endSecs,
             heartRateBpm, workoutConfidence, appearanceHints,
+            maxRetries: 5,
+            retryDelayMs: 5000,
+            onRetry: (attempt, maxRetries) => {
+              showUploadBanner({
+                type: "retry",
+                message: t("overlay.recording.chunkRetrying", {
+                  attempt,
+                  maxRetries,
+                }),
+              });
+            },
           });
+          clearRetryBanner();
         } catch (error) {
           capture.failedUploads += 1;
+          const is4xx = is4xxError(error);
+          const statusCode = getErrorStatusCode(error);
           console.warn("Analysis upload failed; gallery archive is independent", error);
+          if (is4xx) {
+            showUploadBanner(
+              {
+                type: "error",
+                message: t("overlay.recording.chunk4xxError", {
+                  code: statusCode ? `HTTP ${statusCode}` : "4xx",
+                }),
+              },
+              8000,
+            );
+          } else {
+            showUploadBanner(
+              {
+                type: "error",
+                message: t("overlay.recording.chunkUploadFailed", {
+                  maxRetries: 5,
+                }),
+              },
+              8000,
+            );
+          }
         } finally {
           // Compressor may return its input. Never delete the original/analysis input here.
           try {
@@ -928,6 +1079,19 @@ export default function VisionTestPage() {
         );
       }
 
+      // Experimental: H10 internal HR recording (fire-and-forget, never blocks the camera).
+      if (h10MemoryEnabled) {
+        try {
+          H10MemoryRecorderInstance.begin({
+            sessionId: sessionIdRef.current,
+            profileId: profileId!,
+            baseEpochMs: recordingStartTime.current,
+          });
+        } catch (h10Error) {
+          console.warn("⚠️ H10 internal recording unavailable:", h10Error);
+        }
+      }
+
       // Record sequential chunks: each is uploaded for real-time analysis,
       // and raw chunk files are kept locally for gallery-save merge.
       startChunkRecording();
@@ -949,6 +1113,7 @@ export default function VisionTestPage() {
       void environment.stop("start_error").catch(() => {});
       void TelemetryRecorder.stop().catch(() => {});
       void PolarSensorRecorder.stop().catch(() => {});
+      void H10MemoryRecorderInstance.finish(sessionIdRef.current);
       const capture = originalCapture.current;
       if (capture) {
         await markOriginalRecordingStopped(capture.ref, { complete: false, reason: recordingErrorMessage(error) }).catch(console.warn);
@@ -1010,6 +1175,8 @@ export default function VisionTestPage() {
       const telemetryStopped = TelemetryRecorder.stop().catch((error) => {
         console.warn("telemetry stop failed", error); return null;
       });
+      // Experimental: no-op unless H10 internal recording runs for this session.
+      void H10MemoryRecorderInstance.finish(sessionIdRef.current);
 
       if (!isPaused && segmentStartTime.current > 0) {
         accumulatedMs.current += Date.now() - segmentStartTime.current;
@@ -1090,9 +1257,14 @@ export default function VisionTestPage() {
           await Promise.all(capture.drains);
           await waitForOutstandingUploads(MERGE_UPLOAD_WAIT_MS);
           try {
-            if (uploadedChunkCount.current === 0 || outstandingUploads.current > 0 || capture.failedUploads > 0) {
-              console.warn("Server merge skipped because analysis inputs are incomplete");
+            if (uploadedChunkCount.current === 0) {
+              console.warn("Server merge skipped because no chunks were uploaded");
               return;
+            }
+            if (outstandingUploads.current > 0 || capture.failedUploads > 0) {
+              console.warn(
+                `⚠️ Proceeding with server merge with ${uploadedChunkCount.current} chunk(s) uploaded (${capture.failedUploads} failed, ${outstandingUploads.current} still in flight)`,
+              );
             }
             await mergeChunks(sessionId, {
               workoutType,
@@ -1309,6 +1481,68 @@ export default function VisionTestPage() {
             </Text>
           </View>
         </View>
+
+        {/* Upload Status / Error Banner */}
+        {uploadBanner && (
+          <View
+            testID="upload-status-banner"
+            style={[
+              styles.uploadBanner,
+              uploadBanner.type === "error"
+                ? styles.uploadBannerError
+                : styles.uploadBannerRetry,
+              isLandscapeLayout && styles.uploadBannerLandscape,
+            ]}
+          >
+            <IconSymbol
+              name={
+                uploadBanner.type === "error"
+                  ? "xmark.circle.fill"
+                  : "arrow.clockwise"
+              }
+              size={13}
+              color={uploadBanner.type === "error" ? "#FF453A" : "#FFD60A"}
+            />
+            <Text
+              style={[
+                styles.uploadBannerText,
+                uploadBanner.type === "error"
+                  ? styles.uploadBannerTextError
+                  : styles.uploadBannerTextRetry,
+              ]}
+              numberOfLines={2}
+            >
+              {uploadBanner.message}
+            </Text>
+          </View>
+        )}
+
+        {/* Experimental H10 internal recording warning */}
+        {h10MemoryBanner && (
+          <View
+            testID="h10-memory-banner"
+            style={[
+              styles.uploadBanner,
+              h10MemoryBanner.type === "error" ? styles.uploadBannerError : styles.uploadBannerRetry,
+              isLandscapeLayout && styles.uploadBannerLandscape,
+            ]}
+          >
+            <IconSymbol
+              name={h10MemoryBanner.type === "error" ? "xmark.circle.fill" : "flag.fill"}
+              size={13}
+              color={h10MemoryBanner.type === "error" ? "#FF453A" : "#FFD60A"}
+            />
+            <Text
+              style={[
+                styles.uploadBannerText,
+                h10MemoryBanner.type === "error" ? styles.uploadBannerTextError : styles.uploadBannerTextRetry,
+              ]}
+              numberOfLines={2}
+            >
+              {h10MemoryBanner.message}
+            </Text>
+          </View>
+        )}
 
       </View>
 
@@ -1723,6 +1957,20 @@ export default function VisionTestPage() {
                 </View>
               )}
 
+              {/* Experimental H10 internal HR recording status */}
+              {h10MemoryEnabled && h10MemoryStatusForSession && (
+                <View testID="h10-memory-status" style={[styles.experimentalCardWrapper, styles.jsonTerminalBox]}>
+                  <Text style={styles.jsonTerminalText}>
+                    {t("overlay.recording.h10MemoryStatus", {
+                      phase:
+                        h10MemoryStatusForSession.sampleCount !== null
+                          ? `${h10MemoryStatusForSession.phase} (${h10MemoryStatusForSession.sampleCount})`
+                          : h10MemoryStatusForSession.phase,
+                    })}
+                  </Text>
+                </View>
+              )}
+
               {/* Apple On-Device AI Feedback Card (Experimental) */}
               {onDeviceAi && (
                 <View style={styles.experimentalCardWrapper}>
@@ -1926,6 +2174,40 @@ const styles = StyleSheet.create({
     flex: 1,
     marginHorizontal: 0,
     marginBottom: 0,
+  },
+  uploadBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    gap: 8,
+    borderWidth: 1,
+  },
+  uploadBannerLandscape: {
+    marginHorizontal: 0,
+    marginBottom: 6,
+  },
+  uploadBannerError: {
+    backgroundColor: "rgba(255, 69, 58, 0.12)",
+    borderColor: "rgba(255, 69, 58, 0.35)",
+  },
+  uploadBannerRetry: {
+    backgroundColor: "rgba(255, 214, 10, 0.12)",
+    borderColor: "rgba(255, 214, 10, 0.35)",
+  },
+  uploadBannerText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  uploadBannerTextError: {
+    color: "#FF453A",
+  },
+  uploadBannerTextRetry: {
+    color: "#FFD60A",
   },
   statusRecSection: {
     flexDirection: "row",

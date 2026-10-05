@@ -10,6 +10,23 @@ export interface OriginalSessionRef {
   sessionId: string;
 }
 
+export async function discardOriginalSession(ref: OriginalSessionRef): Promise<void> {
+  assertOwner(ref);
+  const id = key(ref);
+  if (recording.has(id)) throw new Error("cannot_discard_recording_original");
+  if (saving.has(id)) throw new Error("cannot_discard_saving_original");
+  if ((holds.get(id) ?? 0) > 0) throw new Error("cannot_discard_held_original");
+  await exclusive(ref, async () => {
+    const directory = getOriginalDirectory(ref);
+    await FS.deleteAsync(directory, { idempotent: true });
+    queues.delete(id);
+    saving.delete(id);
+    recording.delete(id);
+    holds.delete(id);
+  });
+  notify();
+}
+
 export type OriginalVideoStatus =
   | "recording" | "pending" | "preparing" | "saving" | "saved"
   | "permission_denied" | "failed" | "uncertain" | "needs_attention";

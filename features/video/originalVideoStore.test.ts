@@ -444,3 +444,30 @@ it.each([false, true])("keeps older pending original filenames (existing output=
   expect(mockSave).toHaveBeenCalledWith(`${directory}output/original.mov`);
   expect(mockMerge).toHaveBeenCalledTimes(existingOutput ? 0 : 1);
 });
+
+it("discards an incomplete or failed original session and removes its files", async () => {
+  const ref = await prepared("continuous");
+  await part(ref, 0);
+  await store.markOriginalRecordingStopped(ref, { complete: false, reason: "Fragment lacks native video timing" });
+  const directory = store.getOriginalDirectory(ref);
+  expect((await store.listOriginalSessions(3)).length).toBe(1);
+  expect([...mockFiles.keys()].some(k => k.startsWith(directory))).toBe(true);
+
+  await store.discardOriginalSession(ref);
+
+  expect((await store.listOriginalSessions(3)).length).toBe(0);
+  expect([...mockFiles.keys()].some(k => k.startsWith(directory))).toBe(false);
+});
+
+it("prevents discarding an active recording or held session", async () => {
+  const ref = await prepared();
+  await expect(store.discardOriginalSession(ref)).rejects.toThrow("cannot_discard_recording_original");
+
+  await stopped(ref);
+  const release = store.holdOriginalFiles(ref);
+  await expect(store.discardOriginalSession(ref)).rejects.toThrow("cannot_discard_held_original");
+  release();
+
+  await store.discardOriginalSession(ref);
+  expect((await store.listOriginalSessions(3)).length).toBe(0);
+});

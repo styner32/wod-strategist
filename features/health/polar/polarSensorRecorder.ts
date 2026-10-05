@@ -120,11 +120,17 @@ export const PolarSensorRecorder: BleSensorSink & {
   stop(): Promise<StopResult | null>;
   getLiveStatus(): { accSamples: number; hrSamples: number; dropped: number | null };
   isActive(): boolean;
+  /** Read-only: last ready device handle (null after a disconnect). */
+  getDevice(): Device | null;
   setBattery(percent: number): void;
   onBattery(percent: number): void;
 } = {
   isActive(): boolean {
     return state.isActive;
+  },
+
+  getDevice(): Device | null {
+    return state.device;
   },
 
   setBattery(percent: number): void {

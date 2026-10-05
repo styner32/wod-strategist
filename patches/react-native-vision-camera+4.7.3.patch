@@ -671,7 +671,9 @@ index 0000000..a86f31d
 +        guard segmentType == .separable else { throw Self.failure("Unknown fragment type") }
 +        let index = self.entries.count + 1
 +        guard let start, let duration, start.isNumeric, duration.isNumeric, duration > .zero else {
-+          throw Self.failure("Fragment lacks native video timing")
++          // A fragment with only audio or non-positive video duration is already preserved in sourceFile above,
++          // but does not form an independent video analysis segment.
++          return
 +        }
 +        let entry: [String: Any] = ["index": index, "offset": offset, "length": data.count,
 +                                  "startSeconds": start.seconds, "durationSeconds": duration.seconds]

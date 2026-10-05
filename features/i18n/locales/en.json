@@ -282,7 +282,9 @@
     "rawTextLabel": "Original Text",
     "wodTextPlaceholder": "Describe today's workout...\ne.g. For Time: 21-15-9 Thrusters (43kg) + Pull-ups",
     "continuousRecording": "Continuous recording validation (experimental)",
-    "continuousRecordingHelp": "Keeps recording across 10-second boundaries. Off by default pending device validation. Test 720p/1080p first."
+    "continuousRecordingHelp": "Keeps recording across 10-second boundaries. Off by default pending device validation. Test 720p/1080p first.",
+    "h10MemoryRecording": "H10 internal HR recording (experimental)",
+    "h10MemoryRecordingHelp": "Also records heart rate inside the Polar H10 and retrieves it after the workout, to fill signal gaps later. Live heart rate and motion stay unchanged. iOS may ask to pair the H10."
   },
   "upload": {
     "title": "Upload Video",
@@ -445,7 +447,15 @@
       "expandTelemetry": "Compact video · Show telemetry",
       "collapseTelemetry": "Expand video · Hide telemetry",
       "tapToExpand": "Tap video to expand telemetry",
-      "tapToCollapse": "Tap video to expand full camera"
+      "tapToCollapse": "Tap video to expand full camera",
+      "chunkRetrying": "Chunk upload retrying (%{attempt}/%{maxRetries})...",
+      "chunk4xxError": "Chunk upload skipped (%{code}). Continuing...",
+      "chunkUploadFailed": "Chunk upload failed after %{maxRetries} attempts. Continuing...",
+      "h10MemoryStatus": "H10 memory: %{phase}",
+      "h10MemoryStartFailed": "H10 internal recording failed to start (%{code}). Live data continues.",
+      "h10MemoryFailed": "H10 internal recording error (%{stage}: %{code}).",
+      "h10MemoryHrStalled": "H10 memory ON: live heart rate stopped arriving while connected.",
+      "h10MemoryAccStalled": "H10 memory ON: live motion (ACC) stopped while heart rate continues."
     },
     "sensor": {
       "heartRate": "HEART RATE",
@@ -778,6 +788,9 @@
     "retained": "Original files stay on this device until saving is confirmed.",
     "retry": "Retry gallery save",
     "alreadySaved": "Already saved",
+    "discard": "Delete from device",
+    "discardTitle": "Delete original from device?",
+    "discardBody": "Permanently delete these unconfirmed original files from this device? This cannot be undone.",
     "openSettings": "Photo permission settings",
     "operationFailed": "Could not complete the operation. Original files are retained.",
     "showError": "Show error details",

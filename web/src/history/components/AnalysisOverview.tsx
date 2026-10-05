@@ -22,6 +22,7 @@ import {
   parseHighlightTimestamp,
 } from "../highlights";
 import { AnalysisMarkdown, AnalysisOriginal } from "./AnalysisMarkdown";
+import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from "../historyPolling";
 
 const statuses: Record<string, string> = {
   pending: "대기 중",
@@ -133,17 +134,21 @@ export const AnalysisOverview = memo(function AnalysisOverview({
       const isPending =
         enrichmentPending(q.state.data?.analysis.status) ||
         enrichmentPending(q.state.data?.summary.status);
-      if (!isPending) return false;
-      const pollCount = q.state.dataUpdateCount;
-      if (pollCount >= 40) return false;
-      return Math.min(2000 * 1.5 ** Math.min(pollCount, 4), 10000);
+      const work = isPending
+        ? JSON.stringify([q.state.data?.analysis.run_id, q.state.data?.summary.run_id])
+        : undefined;
+      return historyPollInterval(q, work, true);
     },
   });
   const mutation = useMutation({
     mutationFn: (agentic: boolean) =>
       startEnrichment(analysis.session_id, agentic),
-    onSuccess: () => client.invalidateQueries({ queryKey: key }),
+    onSuccess: () => {
+      resetHistoryPolling(client, key);
+      return client.invalidateQueries({ queryKey: key });
+    },
   });
+  const pollingStopped = historyPollingStopped(client, key, query.dataUpdatedAt);
   const summary = query.data?.summary ?? analysis.analysis_summary;
   const content = summary?.result ?? summary?.last_success;
   const legacy = legacyOverallSummary(analysis.output);
@@ -442,10 +447,13 @@ export const AnalysisOverview = memo(function AnalysisOverview({
           {mutation.error.message}
         </p>
       )}
-      {query.isError && (
+      {(query.isError || pollingStopped) && (
         <p role="status" className="text-sm text-warning">
-          추가 분석 상태를 불러오지 못했습니다.{" "}
-          <button className={button} onClick={() => void query.refetch()}>
+          {query.isError ? "추가 분석 상태를 불러오지 못했습니다." : "자동 상태 조회를 잠시 중단했습니다. 분석 작업은 서버에서 계속됩니다."}{" "}
+          <button className={button} onClick={() => {
+            resetHistoryPolling(client, key);
+            void query.refetch();
+          }}>
             다시 조회
           </button>
         </p>

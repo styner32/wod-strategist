@@ -67,7 +67,9 @@ export async function apiClient<T = any>(
 
   if (res.status === 401) {
     await notifyUnauthorized();
-    throw new Error("Unauthorized");
+    const err: any = new Error("Unauthorized");
+    err.status = 401;
+    throw err;
   }
 
   if (!res.ok) {
@@ -75,9 +77,12 @@ export async function apiClient<T = any>(
     try {
       errorText = await res.text();
     } catch {}
-    throw new Error(
+    const err: any = new Error(
       `API Error [${res.status}]: ${errorText || res.statusText}`,
     );
+    err.status = res.status;
+    err.body = errorText;
+    throw err;
   }
 
   // Not all responses have JSON bodies (e.g. 204 No Content)
@@ -101,6 +106,7 @@ export interface UploadResult {
 export interface ProcessWorkoutVideoOptions {
   onProgress?: (progress: number) => void;
   onCancelReady?: (cancel: () => Promise<void>) => void;
+  onRetry?: (attempt: number, maxRetries: number, error: unknown) => void;
   movements?: string[];
   injuries?: string[];
   mimeType?: string;
@@ -111,6 +117,49 @@ export interface ProcessWorkoutVideoOptions {
   heartRateBpm?: number;
   workoutConfidence?: number;
   appearanceHints?: string;
+  maxRetries?: number;
+  retryDelayMs?: number;
+}
+
+/**
+ * Determines whether an error represents a 4xx client error (e.g., 400 Bad Request, 401, 403, 404, 422).
+ * 4xx errors are not retryable as identical requests will fail identically.
+ */
+export function is4xxError(error: unknown): boolean {
+  if (!error) return false;
+  const status = (error as any)?.status;
+  if (typeof status === "number") {
+    return status >= 400 && status < 500;
+  }
+  const message = (error as any)?.message;
+  if (typeof message === "string") {
+    const match = message.match(/(?:API Error \[|HTTP\s+)(\d{3})/i);
+    if (match) {
+      const code = parseInt(match[1], 10);
+      return code >= 400 && code < 500;
+    }
+    if (message.includes("Unauthorized") || message.includes("Forbidden")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Extracts HTTP status code from an error if available.
+ */
+export function getErrorStatusCode(error: unknown): number | null {
+  if (!error) return null;
+  const status = (error as any)?.status;
+  if (typeof status === "number") return status;
+  const message = (error as any)?.message;
+  if (typeof message === "string") {
+    const match = message.match(/(?:API Error \[|HTTP\s+)(\d{3})/i);
+    if (match) return parseInt(match[1], 10);
+    if (message.includes("Unauthorized")) return 401;
+    if (message.includes("Forbidden")) return 403;
+  }
+  return null;
 }
 
 export type UploadUrlResponse = Required<
@@ -432,9 +481,12 @@ export async function uploadToGcs(
   }
 
   if (response.status < 200 || response.status >= 300) {
-    throw new Error(
+    const err: any = new Error(
       `Failed to upload to GCS: HTTP ${response.status} ${response.body || ""}`,
     );
+    err.status = response.status;
+    err.body = response.body;
+    throw err;
   }
 }
 
@@ -571,6 +623,9 @@ export async function processWorkoutChunk(
     heartRateBpm,
     workoutConfidence,
     appearanceHints,
+    maxRetries = 5,
+    retryDelayMs = 5000,
+    onRetry,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
 
@@ -584,31 +639,55 @@ export async function processWorkoutChunk(
     await new Promise((resolve) => setTimeout(resolve, DEBUG_SLOW_UPLOAD_MS));
   }
 
-  const { upload_url, gcs_uri } = await getUploadUrl(
-    sessionId,
-    filename,
-    profileId,
-  );
-  await uploadToGcs(upload_url, fileUri, mimeType);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const { upload_url, gcs_uri } = await getUploadUrl(
+        sessionId,
+        filename,
+        profileId,
+      );
+      await uploadToGcs(upload_url, fileUri, mimeType);
 
-  const result = await notifyChunkUploadComplete(
-    sessionId,
-    gcs_uri,
-    movements,
-    injuries,
-    workoutType,
-    profileId,
-    startSecs,
-    endSecs,
-    heartRateBpm,
-    workoutConfidence,
-    appearanceHints,
-  );
+      const result = await notifyChunkUploadComplete(
+        sessionId,
+        gcs_uri,
+        movements,
+        injuries,
+        workoutType,
+        profileId,
+        startSecs,
+        endSecs,
+        heartRateBpm,
+        workoutConfidence,
+        appearanceHints,
+      );
 
-  return {
-    taskId: result.task_id,
-    sessionId: result.session_id,
-  };
+      return {
+        taskId: result.task_id,
+        sessionId: result.session_id,
+      };
+    } catch (error) {
+      lastError = error;
+      if (is4xxError(error)) {
+        console.warn(
+          `[processWorkoutChunk] 4xx client error on attempt ${attempt}; skipping retries:`,
+          error,
+        );
+        throw error;
+      }
+      if (attempt < maxRetries) {
+        onRetry?.(attempt, maxRetries, error);
+        console.warn(
+          `[processWorkoutChunk] Chunk upload failed (attempt ${attempt}/${maxRetries}). Retrying in ${retryDelayMs}ms...`,
+          error,
+        );
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 export interface MergeChunksResult {
