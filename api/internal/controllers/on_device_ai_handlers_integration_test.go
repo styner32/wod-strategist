@@ -109,7 +109,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/on-device-ai/asset", func() {
 		response = httptest.NewRecorder()
 		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, path+"environment_one.json", "", &other))
 		Expect(response.Code).To(Equal(http.StatusForbidden))
-		for _, name := range []string{"../environment_one.json", "environment_nested/one.json", "video.mp4", "sensor.json", "environment_one.html"} {
+		for _, name := range []string{"../environment_one.json", "environment_nested/one.json", "video.mp4", "sensor.json", "environment_one.html", "h10_memory_hr.m4a"} {
 			response = httptest.NewRecorder()
 			router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, path+url.QueryEscape(name), "", &user))
 			Expect(response.Code).To(Equal(http.StatusBadRequest))
@@ -120,6 +120,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/on-device-ai/asset", func() {
 		}{
 			{"apple_ai_one.json", `{"schemaVersion":1,"answer":{"feedback":"original answer"}}`, http.StatusOK},
 			{"environment_one.json", `{"version":1,"outcome":"error","raw":"unparseable answer"}`, http.StatusOK},
+			{"h10_memory_hr.json", `{"schema_version":1,"kind":"polar_h10_memory_hr","hr_samples":[90,91]}`, http.StatusOK},
 			{"environment_broken.json", `{broken`, http.StatusUnprocessableEntity},
 			{"environment_large.json", strings.Repeat("x", 2*1024*1024+1), http.StatusRequestEntityTooLarge},
 		} {

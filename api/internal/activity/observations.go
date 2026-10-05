@@ -162,7 +162,28 @@ func Decode(raw []byte, start, end float64) (Observations, error) {
 		}
 		accepted = append(accepted, event)
 	}
-	doc.Events = accepted
+	remainingGaps := make([]Interval, 0, len(doc.Unassessed))
+	for _, gap := range doc.Unassessed {
+		if gap.Reason == "unsupported_movement_or_unit" && gap.Movement != "" {
+			canonical := CanonicalMovement(gap.Movement)
+			if canonical != "" {
+				unit := UnitForMovement(canonical)
+				accepted = append(accepted, Observation{
+					Start:    gap.Start,
+					End:      gap.End,
+					Movement: canonical,
+					Unit:     unit,
+					Complete: true,
+					Evidence: "canonical movement: " + canonical,
+				})
+				continue
+			}
+		}
+		remainingGaps = append(remainingGaps, gap)
+	}
+	doc.Unassessed = remainingGaps
+	sort.Slice(accepted, func(i, j int) bool { return accepted[i].Start < accepted[j].Start })
+
 	for _, gap := range doc.Unassessed {
 		if !ValidInterval(gap.Start, gap.End) || gap.Start < start || gap.End > end || gap.Reason == "" {
 			return Unknown(start, end, "invalid_gap"), errors.New("invalid unassessed interval")
@@ -170,7 +191,11 @@ func Decode(raw []byte, start, end float64) (Observations, error) {
 	}
 	// A claimed event intersecting an unassessable interval is not countable.
 	doc.Events = nil
+	prevEnd := start
 	for _, event := range accepted {
+		if event.Start < prevEnd {
+			continue
+		}
 		clear := true
 		for _, gap := range doc.Unassessed {
 			if event.Start < gap.End && event.End > gap.Start {
@@ -180,6 +205,7 @@ func Decode(raw []byte, start, end float64) (Observations, error) {
 		}
 		if clear {
 			doc.Events = append(doc.Events, event)
+			prevEnd = event.End
 		}
 	}
 	if doc.Events == nil {

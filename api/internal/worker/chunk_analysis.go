@@ -37,9 +37,11 @@ const ChunkAnalysisPrompt = `
 ## 필수: 운동 종목 식별
 먼저, 영상에서 수행 중인 운동 종목을 식별하세요.
 - 운동이 보이면 → 첫 줄에 반드시 [EXERCISE: 영어 운동 이름] 태그를 출력하세요.
-  (예: [EXERCISE: Snatch], [EXERCISE: Back Squat], [EXERCISE: Pull-up], [EXERCISE: Burpee])
+  (예: [EXERCISE: Hang Power Clean], [EXERCISE: Push Jerk], [EXERCISE: Deadlift], [EXERCISE: Power Snatch], [EXERCISE: Back Squat], [EXERCISE: Pull-up], [EXERCISE: Burpee])
+  * 클린과 스내치는 포괄적인 [EXERCISE: Hang Clean] 또는 [EXERCISE: Snatch]를 쓰지 말고, [EXERCISE: Hang Power Clean], [EXERCISE: Hang Squat Clean], [EXERCISE: Power Clean], [EXERCISE: Squat Clean], [EXERCISE: Hang Power Snatch], [EXERCISE: Hang Squat Snatch] 등으로 구체적인 표준 종목명을 쓰세요.
+  * 바벨/덤벨을 손에 쥐고 행(Hang) 위치에 들고 세트를 이어가는 구간은 운동 진행 중([EXERCISE: ...])입니다. 기구를 완전히 바닥에 내려놓았을 때만 [NO_EXERCISE]를 출력하세요.
 - 대상 인물이 운동 중인 것은 분명하지만 정확한 종목 근거가 부족하면 → 첫 줄에 [EXERCISE: Unknown] 태그를 출력하세요.
-- 운동이 보이지 않으면 (휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그만 출력하세요.
+- 운동이 보이지 않으면 (기구를 내려놓은 휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그만 출력하세요.
 
 ## 코칭 피드백 규칙
 - 운동이 감지된 경우: [EXERCISE: ...] 태그 다음 줄에 **반드시 1~2문장**으로만 코칭 피드백을 답하세요.

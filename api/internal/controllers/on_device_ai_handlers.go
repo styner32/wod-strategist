@@ -16,7 +16,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var onDeviceAssetName = regexp.MustCompile(`^(apple_ai_|environment_)[A-Za-z0-9_-]+\.(json|jpg|m4a|ndjson)$`)
+// h10_memory_*.json is the experimental Polar H10 internal HR record: readable here, never listed.
+var onDeviceAssetName = regexp.MustCompile(`^((apple_ai_|environment_)[A-Za-z0-9_-]+\.(json|jpg|m4a|ndjson)|h10_memory_[A-Za-z0-9_-]+\.json)$`)
 
 // Authorize the exact profile prefix, including sessions without a cloud analysis row.
 func (ctl *Controller) onDevicePrefix(c *gin.Context) (string, bool) {

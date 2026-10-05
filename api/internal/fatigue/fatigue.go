@@ -155,9 +155,13 @@ func GetMovementWeights(name string) MovementMuscleWeights {
 	}
 
 	// Deterministic partial match fallback: longest match first, then lexicographical
-	for _, catalogKey := range sortedCatalogKeys {
-		if strings.Contains(key, catalogKey) || strings.Contains(catalogKey, key) {
-			return movementLoadCatalog[catalogKey]
+	// Exact generic weights (e.g. "snatch") remain usable, but missing variants
+	// must not acquire the weights of an arbitrarily chosen catalog subtype.
+	if !movement.IsAmbiguous(name) {
+		for _, catalogKey := range sortedCatalogKeys {
+			if strings.Contains(key, catalogKey) || strings.Contains(catalogKey, key) {
+				return movementLoadCatalog[catalogKey]
+			}
 		}
 	}
 

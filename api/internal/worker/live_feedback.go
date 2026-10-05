@@ -68,7 +68,15 @@ unit: reps 또는 seconds. complete: 시작과 완료를 모두 직접 관찰했
 거리/칼로리처럼 화면에 보이지 않는 수치를 임의로 추정하지 마세요. 대상자 가림이나 화면 이탈로 동작 시작과 완료를 전혀 분간할 수 없을 때만 unassessed에 남기세요.
 판독 불가, 가림, 불명확한 대상, 중단된 사이클은 unassessed의 구간과 reason으로 남기세요.
 휴식이 명확하면 events와 unassessed는 빈 배열입니다. 운동이 불명확한 경우를 휴식으로 대체하지 마세요.
-movement는 기존 종목의 영어 표준 이름을 쓰며 변형(예: Power Clean, Squat Clean)을 합치지 마세요.
+바벨이나 덤벨을 손에 쥐고 행(Hang) 위치(무릎 위/허벅지/골반)에 들고 있거나 세트 중 잠시 호흡을 고르는 구간은 휴식이 아닌 운동 세트(exercise) 진행 중입니다. 바벨을 바닥에 완전히 내려놓거나 기구를 놓았을 때만 휴식(rest)으로 판정하세요.
+클린과 스내치는 'Clean', 'Hang Clean', 'Snatch', 'Hang Snatch' 같은 포괄적 명칭을 쓰지 마세요. 바닥/행 시작 위치와 캐치 깊이에 따라 다음 표준 영어 명칭 중 하나로 정확히 지정하세요:
+- 'Hang Power Clean' (무릎 위에서 시작, 평행 위 캐치) / 'Hang Squat Clean' (무릎 위에서 시작, 평행 이하 풀 스쿼트 캐치)
+- 'Power Clean' (바닥에서 시작, 평행 위 캐치) / 'Squat Clean' (바닥에서 시작, 평행 이하 풀 스쿼트 캐치)
+- 'Hang Power Snatch' (무릎 위에서 시작, 평행 위 캐치) / 'Hang Squat Snatch' (무릎 위에서 시작, 평행 이하 풀 스쿼트 캐치)
+- 'Power Snatch' (바닥에서 시작, 평행 위 캐치) / 'Squat Snatch' (바닥에서 시작, 평행 이하 풀 스쿼트 캐치)
+- 'Push Jerk' (딥-드라이브 후 2차 딥 무릎 굽힘으로 캐치) / 'Split Jerk' (앞뒤 발 벌림 캐치) / 'Push Press' (1회 딥-드라이브 반동으로 밀어 올림) / 'Strict Press' (하체 반동 없음)
+- 'Deadlift' (바닥에서 골반까지 끌어올려 무릎/골반 펴기. 터치앤고 반복 포함)
+movement는 위 기존 종목의 영어 표준 이름을 쓰며 임의의 변형을 만들지 마세요.
 모든 시각은 별도 지시가 없으면 이 클립 시작 기준 초입니다. events와 unassessed 배열은 반드시 포함하세요.
 ` + "```movement_observations\n" + `{"version":1,"target_state":"identified","activity_state":"exercise","events":[{"movement":"Air Squat","unit":"reps","start_secs":1.0,"end_secs":3.0,"complete":true,"evidence":"descends and returns to standing"}],"unassessed":[]}` + "\n```\n"
 

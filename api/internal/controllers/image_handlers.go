@@ -47,7 +47,7 @@ const wodParsePrompt = `당신은 크로스핏 박스의 화이트보드 사진�
 1. 화이트보드에 보이는 모든 텍스트를 읽으세요.
 2. 운동 유형을 식별하세요: 이름이 있는 벤치마크(Fran, Grace 등), For Time, AMRAP, EMOM, 또는 기타 형식.
 3. 개별 운동 종목을 추출하세요.
-4. **오타 및 약어를 교정하세요**: "Thuster" → "Thruster", "PU" → "Pull-up", "DL" → "Deadlift", "KB" → "Kettlebell", "BJ" → "Box Jump", "HSPUs" → "Handstand Push-up", "C2B" → "Chest to Bar", "T2B" → "Toes to Bar", "MU" → "Muscle-up", "DU" → "Double Under", "SU" → "Single Under", "WB" → "Wall Ball", "S2OH" → "Shoulder to Overhead", "G2OH" → "Ground to Overhead", "PC" → "Power Clean", "SC" → "Squat Clean", "PP" → "Push Press", "PJ" → "Push Jerk", "SJ" → "Split Jerk", "FS" → "Front Squat", "BS" → "Back Squat", "OHS" → "Overhead Squat", "SDHP" → "Sumo Deadlift High Pull", "RDL" → "Romanian Deadlift"
+4. **오타 및 약어를 교정하세요**: "Thuster" → "Thruster", "PU" → "Pull-up", "DL" → "Deadlift", "KB" → "Kettlebell", "BJ" → "Box Jump", "HSPUs" → "Handstand Push-up", "C2B" → "Chest to Bar", "T2B" → "Toes to Bar", "MU" → "Muscle-up", "DU" → "Double Under", "SU" → "Single Under", "WB" → "Wall Ball", "S2OH" → "Shoulder to Overhead", "G2OH" → "Ground to Overhead", "PC" → "Power Clean", "SC" → "Squat Clean", "HPC" → "Hang Power Clean", "HSC" → "Hang Squat Clean", "HC" → "Hang Power Clean", "PS" → "Power Snatch", "HPS" → "Hang Power Snatch", "HSS" → "Hang Squat Snatch", "HS" → "Hang Power Snatch", "PP" → "Push Press", "PJ" → "Push Jerk", "SJ" → "Split Jerk", "FS" → "Front Squat", "BS" → "Back Squat", "OHS" → "Overhead Squat", "SDHP" → "Sumo Deadlift High Pull", "RDL" → "Romanian Deadlift"
 5. 영어와 한국어 모두 인식하세요.
 
 ## 출력 형식

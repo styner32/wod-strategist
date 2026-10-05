@@ -438,14 +438,15 @@ They are suggestions, not confirmation and not a closed list. Omit any hint not 
 5. Static stretch holds and slow mobility movements ARE active exercise segments — label with the pose or stretch name (e.g., "Pigeon Pose", "Cossack Squat Hold", "Mobility"). Do NOT discard slow stretching or static holds as rest.`
 	} else {
 		prompt += `
-5. If target exercise is visible but the exact movement is unclear, use type "Unknown"; do not force a hint. Omit walking, rest, recovery, setup, and no-exercise intervals.`
+5. Active exercise sets include barbell/dumbbell cycling where the target person holds the bar at the hang position between reps. Only omit walking, rest, setup, and intervals where equipment is released on the floor.
+6. Use specific standard CrossFit exercise names: 'Hang Power Clean', 'Hang Squat Clean', 'Power Clean', 'Squat Clean', 'Hang Power Snatch', 'Hang Squat Snatch', 'Power Snatch', 'Squat Snatch', 'Push Jerk', 'Split Jerk', 'Push Press', 'Strict Press', 'Deadlift'. Avoid ambiguous names like 'Clean', 'Hang Clean', 'Snatch', or 'Hang Snatch'. If exercise is visible but exact movement is unclear, use type "Unknown"; do not force a hint.`
 	}
 
 	prompt += `
-6. Only report exercises you can visually confirm — do NOT guess or infer exercises from context.
-7. Output a strictly formatted JSON array of the segments.
-8. Use "MM:SS" format for timestamps.
-9. Each segment should be at least 10 seconds long.
+7. Only report exercises you can visually confirm — do NOT guess or infer exercises from context.
+8. Output a strictly formatted JSON array of the segments.
+9. Use "MM:SS" format for timestamps.
+10. Each segment should be at least 10 seconds long.
 
 ## Output JSON Schema
 ` + "```json\n[\n  {\n    \"start\": \"MM:SS\",\n    \"end\": \"MM:SS\",\n    \"type\": \"Exercise Name\",\n    \"description\": \"What you visually observe the target person doing — describe the equipment, stance, and movement.\"\n  }\n]\n```"

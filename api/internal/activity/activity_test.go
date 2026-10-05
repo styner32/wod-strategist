@@ -101,6 +101,19 @@ var _ = Describe("Movement evidence and accumulation", func() {
 		Expect(doc.Events).To(HaveLen(1))
 		Expect(doc.Events[0].Movement).To(Equal("Deadlift"))
 	})
+	It("preserves unspecified variants as gaps instead of counting a specific subtype", func() {
+		for _, raw := range []string{"Snatch", "Muscle-up", "Dips", "Squats", "Press", "Jump Rope"} {
+			event := cycle(1, 3)
+			event.Movement = raw
+			row := source(1, 0, 10)
+			row.MovementObservations = observationJSON(event)
+			summary := Build([]db.ChunkAnalysisResult{row}, nil)
+			Expect(summary.Movements).To(BeEmpty(), raw)
+			Expect(summary.Unassessed).To(HaveLen(1), raw)
+			Expect(summary.Unassessed[0].Movement).To(Equal(raw))
+			Expect(summary.Unassessed[0].Reason).To(Equal("unsupported_movement_or_unit"))
+		}
+	})
 	It("deduplicates retries and includes observations older than the coaching window", func() {
 		first, last := source(1, 0, 10), source(2, 70, 80)
 		duplicate := first
@@ -142,5 +155,23 @@ var _ = Describe("Movement evidence and accumulation", func() {
 		media := 10.0
 		second.MediaStartSecs = &media
 		Expect(Adjacent(first, second)).To(BeFalse())
+	})
+	It("recovers unassessed intervals whose movement is now recognized in the canonical catalog", func() {
+		rawJSON := []byte(`{
+			"version": 1,
+			"target_state": "identified",
+			"activity_state": "exercise",
+			"events": [],
+			"unassessed": [
+				{"start_secs": 1.5, "end_secs": 4.8, "reason": "unsupported_movement_or_unit", "movement": "Hang Power Clean"},
+				{"start_secs": 5.5, "end_secs": 8.0, "reason": "unsupported_movement_or_unit", "movement": "Hang Power Clean"}
+			]
+		}`)
+		doc, err := Decode(rawJSON, 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(doc.Events).To(HaveLen(2))
+		Expect(doc.Events[0].Movement).To(Equal("Hang Power Clean"))
+		Expect(doc.Events[1].Movement).To(Equal("Hang Power Clean"))
+		Expect(doc.Unassessed).To(BeEmpty())
 	})
 })
