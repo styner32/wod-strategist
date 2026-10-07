@@ -17,7 +17,7 @@ const (
 
 // segmentHeaderRegex matches the segment header format from two-pass analysis:
 // "## 세그먼트 N: ExerciseName (start ~ end)"
-var segmentHeaderRegex = regexp.MustCompile(`(?m)^##\s*세그먼트\s+\d+:\s*(.+?)\s*\((\d+:\d{2})\s*~\s*(\d+:\d{2})\)`)
+var segmentHeaderRegex = regexp.MustCompile(`(?m)^##\s*세그먼트\s+\d+:\s*(.+?)\s*\((\d+:\d{2}(?:\.\d+)?)\s*~\s*(\d+:\d{2}(?:\.\d+)?)\)`)
 
 // bulletRegex matches Korean/English bullet points (-, *, •, numbered) with content.
 var bulletRegex = regexp.MustCompile(`(?m)^\s*(?:[-*•]|\d+[.)]\s*)\s*(.+)$`)
@@ -434,14 +434,15 @@ func decoratePoint(point, section string) string {
 	return point
 }
 
-// parseMmSsToSeconds converts "MM:SS" to seconds as float64.
+// parseMmSsToSeconds converts "MM:SS" (or "MM:SS.ss") to seconds as float64.
 func parseMmSsToSeconds(mmss string) float64 {
-	var m, s int
-	_, err := fmt.Sscanf(mmss, "%d:%d", &m, &s)
+	var m int
+	var s float64
+	_, err := fmt.Sscanf(mmss, "%d:%f", &m, &s)
 	if err != nil {
 		return 0
 	}
-	return float64(m*60 + s)
+	return float64(m*60) + s
 }
 
 // truncateSubtitle wraps subtitle text into multiple lines for readability.

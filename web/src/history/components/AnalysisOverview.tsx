@@ -391,7 +391,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
                             처리 정보
                           </summary>
                           <p>
-                            처리 시간 {item.metrics.elapsed_seconds?.toFixed(1)}
+                            처리 시간 {item.metrics.elapsed_seconds?.toFixed(2)}
                             초 · 종료 {item.metrics.finish_reason || "미확인"}
                           </p>
                           <p>

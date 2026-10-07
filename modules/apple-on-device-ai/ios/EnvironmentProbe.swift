@@ -53,6 +53,7 @@ final class EnvironmentProbe {
 
   static func frames(_ path: String) async throws -> [String: Any] {
     let asset = AVURLAsset(url: localURL(path))
+    guard !(try await asset.loadTracks(withMediaType: .video)).isEmpty else { return ["error": "no_video_track", "frames": []] }
     let duration = try await asset.load(.duration).seconds
     guard duration.isFinite, duration >= 0.2 else { throw ProbeError.invalidVideo }
     let generator = AVAssetImageGenerator(asset: asset)

@@ -1,6 +1,11 @@
 import { memo, useCallback, useId, useMemo, useRef, useState } from "react";
 import type { SensorTimelineResponse } from "../../api/history";
 import {
+  compareH10MemoryWithTimeline,
+  h10MemoryToRenderableSamples,
+  h10MemoryValueAtTime,
+} from "../h10MemoryRecord";
+import {
   buildSvgLinePath,
   captureToMedia,
   decimatePoints,
@@ -20,6 +25,9 @@ export interface SensorTimelinePanelProps {
   isMergedVideo?: boolean;
   onReprocess?: () => Promise<void> | void;
   isReprocessing?: boolean;
+  sessionId?: string;
+  profileId?: number;
+  h10MemoryData?: unknown;
 }
 
 function getStatusLabel(status?: string): string {
@@ -46,12 +54,18 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
   isMergedVideo = true,
   onReprocess,
   isReprocessing,
+  sessionId: _sessionId,
+  profileId: _profileId,
+  h10MemoryData,
 }: SensorTimelinePanelProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null);
   const [hoverMs, setHoverMs] = useState<number | null>(null);
   const [dragState, setDragState] = useState<{ startMs: number; currentMs: number } | null>(null);
+  const [showH10Memory, setShowH10Memory] = useState(true);
   const filterId = useId();
+
+  const rawH10 = h10MemoryData;
 
   const timeline = timelineResponse?.timeline;
   const segments = timelineResponse?.video_mapping?.segments ?? [];
@@ -75,6 +89,21 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
 
   const botChartY = 150;
   const botChartH = 100;
+
+  // Comparison summary
+  const comparison = useMemo(
+    () => compareH10MemoryWithTimeline(rawH10, timeline),
+    [rawH10, timeline],
+  );
+
+  // Downsampled points and paths
+  const h10Samples = useMemo(
+    () =>
+      rawH10
+        ? h10MemoryToRenderableSamples(rawH10, activeStartMs, activeEndMs, chartWidth)
+        : [],
+    [rawH10, activeStartMs, activeEndMs, chartWidth],
+  );
 
   // X scale helpers
   const xScale = useCallback(
@@ -106,11 +135,19 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
         rawMax = Math.max(rawMax, value);
       }
     }
+    if (showH10Memory && h10Samples.length > 0) {
+      for (const s of h10Samples) {
+        if (s.value != null && Number.isFinite(s.value)) {
+          rawMin = Math.min(rawMin, s.value);
+          rawMax = Math.max(rawMax, s.value);
+        }
+      }
+    }
     if (rawMin === Infinity) return { minHR: 50, maxHR: 180 };
     const min = Math.max(30, Math.floor((rawMin - 10) / 10) * 10);
     const max = Math.min(230, Math.ceil((rawMax + 10) / 10) * 10);
     return { minHR: min, maxHR: Math.max(min + 20, max) };
-  }, [points, activeStartMs, activeEndMs]);
+  }, [points, activeStartMs, activeEndMs, showH10Memory, h10Samples]);
 
   const yScaleHR = useCallback(
     (val: number) => {
@@ -159,6 +196,11 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
     [hrSamples, xScale, yScaleHR],
   );
 
+  const h10LinePath = useMemo(
+    () => (h10Samples.length > 0 ? buildSvgLinePath(h10Samples, xScale, yScaleHR) : ""),
+    [h10Samples, xScale, yScaleHR],
+  );
+
   const accLinePath = useMemo(
     () => buildSvgLinePath(accSamples, xScale, yScaleAcc),
     [accSamples, xScale, yScaleAcc],
@@ -191,6 +233,10 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
       movement: timelineValueAtTime(timeline, "acc_magnitude_std_g", hoverMs),
     };
   }, [hoverMs, timeline]);
+  const h10HoverValue = useMemo(
+    () => (rawH10 && hoverMs != null ? h10MemoryValueAtTime(rawH10, hoverMs) : null),
+    [rawH10, hoverMs],
+  );
   const hoverMediaSec = hoverMs == null ? null : captureToMedia(hoverMs, segments);
   const hoverX = useMemo(() => {
     if (hoverMs == null || hoverMs < activeStartMs || hoverMs > activeEndMs) return null;
@@ -227,7 +273,7 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
   const accTicks = useMemo(() => {
     const mid = Number(((minAcc + maxAcc) / 2).toFixed(2));
     return [
-      { val: minAcc.toFixed(1), y: yScaleAcc(minAcc) },
+      { val: minAcc.toFixed(2), y: yScaleAcc(minAcc) },
       { val: mid.toFixed(2), y: yScaleAcc(mid) },
       { val: maxAcc.toFixed(2), y: yScaleAcc(maxAcc) },
     ];
@@ -446,6 +492,44 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
         </div>
       )}
 
+      {/* H10 Memory Comparison Bar */}
+      {comparison && comparison.hasData && (
+        <div className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-3 text-text-secondary">
+            <span className="inline-flex items-center gap-1.5 font-medium text-emerald-400">
+              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+              H10 내부 저장 비교
+            </span>
+            <span>샘플 {comparison.totalMemorySamples.toLocaleString()}개</span>
+            {comparison.meanAbsDiff !== null && (
+              <span>
+                실시간 대비 오차: 평균{" "}
+                <strong className="font-mono text-emerald-300">
+                  ±{comparison.meanAbsDiff.toFixed(2)} bpm
+                </strong>
+                {comparison.maxAbsDiff !== null && (
+                  <span className="text-text-muted">
+                    {" "}(최대 {comparison.maxAbsDiff.toFixed(2)} bpm)
+                  </span>
+                )}
+              </span>
+            )}
+            {comparison.gapFilledSeconds > 0 && (
+              <span className="text-amber-400 font-medium">
+                ⚡ 실시간 누락 보완 {comparison.gapFilledSeconds}초
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowH10Memory((prev) => !prev)}
+            className="rounded border border-emerald-500/40 px-2 py-0.5 text-xs text-emerald-300 hover:bg-emerald-500/20 cursor-pointer"
+          >
+            {showH10Memory ? "H10 선 숨기기" : "H10 선 표시"}
+          </button>
+        </div>
+      )}
+
       {/* Hover Information Bar */}
       <div className="flex flex-wrap items-center gap-4 text-xs font-mono mb-2 px-1 min-h-[20px]">
         {hoverValues && hoverMs != null ? (
@@ -455,10 +539,31 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
             </span>
             <span className="text-rose-400">
               ♥ {labels.heartRate}:{" "}
-              {hoverValues.heartRate.status === "valid"
-                ? `${hoverValues.heartRate.value} ${labels.heartRateUnit}`
+              {hoverValues.heartRate.status === "valid" && hoverValues.heartRate.value !== null
+                ? `${Number.isInteger(hoverValues.heartRate.value) ? hoverValues.heartRate.value : hoverValues.heartRate.value.toFixed(2)} ${labels.heartRateUnit}`
                 : getStatusLabel(hoverValues.heartRate.status)}
             </span>
+            {showH10Memory && h10HoverValue && (
+              <span className="text-emerald-400">
+                💾 H10 저장:{" "}
+                {h10HoverValue.status === "valid" && h10HoverValue.value !== null
+                  ? `${Number.isInteger(h10HoverValue.value) ? h10HoverValue.value : h10HoverValue.value.toFixed(2)} bpm`
+                  : getStatusLabel(h10HoverValue.status)}
+                {hoverValues.heartRate.status === "valid" &&
+                  h10HoverValue.status === "valid" &&
+                  hoverValues.heartRate.value !== null &&
+                  h10HoverValue.value !== null && (
+                    <span className="text-text-muted ml-1 font-sans text-[11px]">
+                      ({(() => {
+                        const delta = h10HoverValue.value - hoverValues.heartRate.value;
+                        const absDelta = Math.abs(delta);
+                        const formattedDelta = absDelta < 0.005 ? "0.00" : `${delta > 0 ? "+" : "-"}${absDelta.toFixed(2)}`;
+                        return `${formattedDelta} bpm`;
+                      })()})
+                    </span>
+                  )}
+              </span>
+            )}
             <span className="text-sky-400">
               ⚡ {labels.movementVariance}:{" "}
               {hoverValues.movement.status === "valid" && hoverValues.movement.value != null
@@ -556,6 +661,11 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
             className="fill-rose-400 text-[11px] font-semibold"
           >
             ♥ {labels.heartRate} ({labels.heartRateUnit})
+            {showH10Memory && h10LinePath && (
+              <tspan dx="12" className="fill-emerald-400 font-normal">
+                💾 H10 저장 (점선)
+              </tspan>
+            )}
           </text>
           <text
             x={margin.left + 8}
@@ -644,6 +754,19 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
                 fill="none"
                 stroke="#f43f5e"
                 strokeWidth={1.75}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            )}
+
+            {/* Top Chart Line (H10 Memory Heart Rate) */}
+            {showH10Memory && h10LinePath && (
+              <path
+                d={h10LinePath}
+                fill="none"
+                stroke="#34d399"
+                strokeWidth={1.75}
+                strokeDasharray="4 2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />

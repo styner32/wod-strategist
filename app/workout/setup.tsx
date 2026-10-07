@@ -46,7 +46,7 @@ interface VideoPreferences {
   onDeviceAi: boolean;
   environmentObservation: boolean;
   environmentAnalysis: boolean;
-  observationIntervalSeconds: 30 | 60 | 120;
+  observationIntervalSeconds: 120 | 300 | 600;
   showSkeleton: boolean;
   lowFps: boolean;
   skipCompression: boolean;
@@ -65,8 +65,8 @@ function getDefaultVideoPrefs(): VideoPreferences {
   return {
     onDeviceAi: false,
     environmentObservation: false,
-    environmentAnalysis: true,
-    observationIntervalSeconds: 60,
+    environmentAnalysis: false,
+    observationIntervalSeconds: 300,
     showSkeleton: !isAndroid,
     lowFps: isAndroid,
     skipCompression: isAndroid,
@@ -144,7 +144,18 @@ export default function WorkoutSetup() {
         if (raw) {
           try {
             const saved = JSON.parse(raw) as Partial<VideoPreferences>;
-            setVideoPrefs((prev) => ({ ...prev, ...saved }));
+            // Posture feedback is hidden from settings; ignore any previously saved opt-in.
+            // Also normalize observationIntervalSeconds to 120 | 300 | 600, defaulting to 300.
+            const interval = [120, 300, 600].includes(saved.observationIntervalSeconds as any)
+              ? (saved.observationIntervalSeconds as 120 | 300 | 600)
+              : 300;
+            setVideoPrefs((prev) => ({
+              ...prev,
+              ...saved,
+              environmentAnalysis: saved.environmentAnalysis ?? false,
+              observationIntervalSeconds: interval,
+              onDeviceAi: false,
+            }));
           } catch {
             // ignore parse errors, use defaults
           }
@@ -1026,30 +1037,12 @@ export default function WorkoutSetup() {
                 </View>}
                 {videoPrefs.environmentObservation && <View style={styles.optionRow}>
                   <Text style={styles.optionLabel}>{t("environment.interval")}</Text>
-                  <View style={styles.toggleGroup}>{([30,60,120] as const).map(seconds =>
+                  <View style={styles.toggleGroup}>{([120,300,600] as const).map(seconds =>
                     <TouchableOpacity key={seconds} style={[styles.toggleBtn, videoPrefs.observationIntervalSeconds === seconds && styles.toggleActive]}
                       onPress={() => updatePref("observationIntervalSeconds", seconds)}>
                       <Text style={styles.optionLabel}>{t("environment.seconds", { count: seconds })}</Text>
                     </TouchableOpacity>)}</View>
                 </View>}
-                <View style={styles.optionRow}>
-                  <View style={{ flex: 1, paddingRight: 12 }}>
-                    <Text style={styles.optionLabel}>{t("appleAi.option")}</Text>
-                    <Text style={{ color: "#999", fontSize: 12, marginTop: 4 }}>
-                      {t("appleAi.description")}
-                    </Text>
-                    {(videoPrefs.onDeviceAi || (videoPrefs.environmentObservation && videoPrefs.environmentAnalysis)) && <Text style={{ color: "#a4d7ff", fontSize: 12, marginTop: 4 }}>
-                      {t(`appleAi.status.${appleAiAvailability}`)}
-                    </Text>}
-                  </View>
-                  <Switch
-                    accessibilityLabel={t("appleAi.option")}
-                    value={videoPrefs.onDeviceAi}
-                    onValueChange={(v) => updatePref("onDeviceAi", v)}
-                    trackColor={{ false: "#767577", true: "#81b0ff" }}
-                    thumbColor={videoPrefs.onDeviceAi ? "#f5dd4b" : "#f4f3f4"}
-                  />
-                </View>
                 {Platform.OS === "ios" && (
                   <View style={styles.optionRow}>
                     <View style={{ flex: 1, marginRight: 12 }}>

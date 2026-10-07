@@ -2,8 +2,9 @@
 
 ## Scope and switches
 - `environmentObservation` defaults OFF; independent of `onDeviceAi` (posture) and MoveNet.
-- `environmentAnalysis` defaults true inside the enabled journal. False retains motion/power/weather/events without image or sound inference.
-- `observationIntervalSeconds`: 30, 60 (default for missing/new settings), or 120; existing saved choices remain unchanged. Setup persists and passes all three parameters to `visionTestPage`.
+- `environmentAnalysis` (and `visualQuestions`) defaults false inside the enabled journal. Visual LLM questions (camera, behavior, space) are OFF by default, avoiding NPU load and segment read races. False retains motion/power/events and sound analysis without visual LLM questions.
+- `observationIntervalSeconds`: 120, 300 (default for new/reset settings), or 600. Backward compatible with 30 and 60. Setup persists and passes all parameters to `visionTestPage`.
+- Periodic WeatherKit probe in recorder is disabled until Apple Developer capability and entitlement are provisioned.
 - Native protocol `environmentVersion = 1`; posture remains `promptVersion = 3`. Older binaries report `module_missing` rather than accepting ignored parameters.
 - Only within-recording exercise/rest/space interactions. No equipment cleanup, character, intent, inferred bystander emotions, repetition totals or unobserved actions.
 

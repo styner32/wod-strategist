@@ -1,6 +1,7 @@
 import {
   analysisProse,
   analysisSegments,
+  formatLongTimestamps,
   legacyOverallSummary,
 } from "../src/history/analysisPresentation";
 
@@ -48,5 +49,17 @@ describe("analysis presentation", () => {
     expect(legacyOverallSummary('{"overall_summary":"전체 요약"}')).toBe(
       "전체 요약",
     );
+  });
+  it("shortens long decimal timestamps in headers and prose down to at most 2 decimal places", () => {
+    const raw = "## 세그먼트 1: Power Clean (6:20.0666665 ~ 6:50.0666665)\n본문 내용";
+    expect(formatLongTimestamps(raw)).toBe(
+      "## 세그먼트 1: Power Clean (6:20.07 ~ 6:50.07)\n본문 내용",
+    );
+    expect(analysisProse(raw)).toContain(
+      "## 세그먼트 1: Power Clean (6:20.07 ~ 6:50.07)",
+    );
+    expect(analysisSegments(raw)).toEqual([
+      { title: "Power Clean", start: 380.07, end: 410.07, body: "본문 내용\n" },
+    ]);
   });
 });

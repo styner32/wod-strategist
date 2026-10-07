@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"sort"
@@ -1113,16 +1114,21 @@ func isWalkingActivity(val string) bool {
 }
 
 func formatSegmentTimestamp(seconds float64) string {
-	duration := secondsDuration(seconds)
-	minutes := duration / time.Minute
-	remainder := duration % time.Minute
-	wholeSeconds := remainder / time.Second
-	nanoseconds := remainder % time.Second
-	if nanoseconds == 0 {
+	if seconds < 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) {
+		return "0:00"
+	}
+	totalCentis := int64(math.Round(seconds * 100))
+	totalSeconds := totalCentis / 100
+	centis := totalCentis % 100
+	minutes := totalSeconds / 60
+	wholeSeconds := totalSeconds % 60
+	if centis == 0 {
 		return fmt.Sprintf("%d:%02d", minutes, wholeSeconds)
 	}
-	fraction := strings.TrimRight(fmt.Sprintf("%09d", nanoseconds), "0")
-	return fmt.Sprintf("%d:%02d.%s", minutes, wholeSeconds, fraction)
+	if centis%10 == 0 {
+		return fmt.Sprintf("%d:%02d.%d", minutes, wholeSeconds, centis/10)
+	}
+	return fmt.Sprintf("%d:%02d.%02d", minutes, wholeSeconds, centis)
 }
 
 // mergeSegmentsByMovement combines adjacent segments that have the same exercise

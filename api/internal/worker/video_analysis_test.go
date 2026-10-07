@@ -1119,6 +1119,29 @@ var _ = Describe("convertToSeconds", func() {
 	})
 })
 
+var _ = Describe("formatSegmentTimestamp", func() {
+	It("formats whole seconds without decimals", func() {
+		Expect(formatSegmentTimestamp(0)).To(Equal("0:00"))
+		Expect(formatSegmentTimestamp(30)).To(Equal("0:30"))
+		Expect(formatSegmentTimestamp(90)).To(Equal("1:30"))
+		Expect(formatSegmentTimestamp(600)).To(Equal("10:00"))
+	})
+
+	It("formats fractional seconds up to 2 decimal places", func() {
+		Expect(formatSegmentTimestamp(12.25)).To(Equal("0:12.25"))
+		Expect(formatSegmentTimestamp(12.5)).To(Equal("0:12.5"))
+	})
+
+	It("rounds long floats (like frame-rate fractions) to 2 decimal places", func() {
+		Expect(formatSegmentTimestamp(380.0666665)).To(Equal("6:20.07"))
+		Expect(formatSegmentTimestamp(410.0666665)).To(Equal("6:50.07"))
+	})
+
+	It("handles negative or invalid values safely", func() {
+		Expect(formatSegmentTimestamp(-5)).To(Equal("0:00"))
+	})
+})
+
 // ---------------------------------------------------------------------------
 // parseChunkExercise & stripExerciseTag
 // ---------------------------------------------------------------------------

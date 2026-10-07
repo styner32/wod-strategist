@@ -6,7 +6,7 @@ import { H10_MEMORY_FILENAME, summarizeH10Memory } from '../h10MemoryRecord';
 
 const buttonClass = 'rounded-lg border border-border px-3 py-2 text-sm text-accent hover:bg-bg-tertiary disabled:opacity-50';
 const statusLabel: Record<string, string> = { complete: '회수 완료', error: '오류', recording: '미완료(기록 중 종료)' };
-const seconds = (ms: number | null) => (ms === null ? '확인 불가' : `${(ms / 1000).toFixed(1)}초`);
+const seconds = (ms: number | null) => (ms === null ? '확인 불가' : `${(ms / 1000).toFixed(2)}초`);
 const orNone = (value: number | string | null) => (value === null || value === '' ? '기록 없음' : String(value));
 
 function Row({ label, value }: { label: string; value: string }) {

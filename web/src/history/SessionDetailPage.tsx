@@ -4,6 +4,8 @@ import { H10MemoryPanel } from "./components/H10MemoryPanel";
 import { ActivitySummaryPanel } from "./components/ActivitySummaryPanel";
 import { HeartRateSummaryPanel } from "./components/HeartRateSummaryPanel";
 import { SensorTimelinePanel } from "./components/SensorTimelinePanel";
+import { onDeviceAiApi } from "../api/onDeviceAi";
+import { H10_MEMORY_FILENAME } from "./h10MemoryRecord";
 import {
   useMutation,
   useQueries,
@@ -755,6 +757,14 @@ export function SessionDetailPage() {
       retry: false,
     });
 
+  const { data: h10MemoryData } = useQuery({
+    queryKey: ["h10-memory", profileId, sessionId],
+    queryFn: () => onDeviceAiApi.read(sessionId!, profileId!, H10_MEMORY_FILENAME),
+    enabled: Boolean(sessionId && profileId),
+    retry: false,
+    staleTime: 60_000,
+  });
+
   // Track video playback position
   const handleTimeUpdate = useCallback(() => {
     if (videoRef.current) {
@@ -1023,6 +1033,9 @@ export function SessionDetailPage() {
                   : undefined
               }
               isReprocessing={reprocessSensorMutation.isPending}
+              sessionId={sessionId}
+              profileId={profileId}
+              h10MemoryData={h10MemoryData}
             />
           )}
           {analysis?.session_fatigue && (

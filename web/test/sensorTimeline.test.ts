@@ -117,6 +117,31 @@ describe('sensor timeline rendering and selection', () => {
     expect(markup).not.toContain('센서 시계열 데이터가 없습니다.');
   });
 
+  it('renders H10 memory comparison banner, dashed path, and toggle when h10MemoryData is provided', () => {
+    const response: SensorTimelineResponse = {
+      status: 'completed',
+      timeline: timeline([point(0, 100), point(1000, 105), point(2000, 110)]),
+      video_mapping: { kind: 'merged', method: 'chunk_linear', segments: [] },
+    };
+    const h10Data = {
+      schema_version: 1,
+      status: 'complete',
+      base_epoch_ms: 10000,
+      start: { sent_epoch_ms: 10000, ack_epoch_ms: 10000 },
+      recording_interval_ms: 1000,
+      hr_samples: [100, 107, 110],
+    };
+    const markup = renderToStaticMarkup(createElement(SensorTimelinePanel, {
+      timelineResponse: response,
+      h10MemoryData: h10Data,
+    }));
+    expect(markup).toContain('H10 내부 저장 비교');
+    expect(markup).toContain('H10 선 숨기기');
+    expect(markup).toContain('H10 저장 (점선)');
+    expect(markup).toContain('stroke="#34d399"');
+    expect(markup).toContain('stroke-dasharray="4 2"');
+  });
+
   it('renders reprocess button on failure when onReprocess callback is supplied', () => {
     const response: SensorTimelineResponse = {
       status: 'failed',

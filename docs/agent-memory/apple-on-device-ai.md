@@ -84,3 +84,10 @@ Changed areas: setup preferences, recording hook/card, both locales, the Apple E
 - Changed areas: setup labels/preview, recording-hook argument, hook lifecycle/request, archive context/version, TypeScript native contract/version check, Swift request/prompt/module constant, both locales, and focused hook/upload/native-compatibility tests.
 - Validation: `npm test -- --runInBand features/ai-coach/__tests__ features/wod/api.test.ts features/health/polar/__tests__/sensorTelemetryUpload.test.ts` passed 6 suites / 85 tests; `npm run typecheck` and `git diff --check` passed. Added per-request context and archive checks, same-session appearance cancellation, old/new session context isolation, empty appearance, old native binary rejection, and schema 1/2 queue compatibility.
 - `xcodebuild -workspace ios/wodstrategist.xcworkspace -scheme wodstrategist -configuration Debug -destination 'generic/platform=iOS' -derivedDataPath /private/tmp/wod-apple-ai-build CODE_SIGNING_ALLOWED=NO build` passed. Unsigned build only: no signed install, new device inference, commit or deployment. Model target matching and feedback quality remain device acceptance items.
+
+## Posture feedback hidden from settings — 2026-10-06
+
+- The `onDeviceAi` toggle was removed from `app/workout/setup.tsx` advanced options. Persisted `wod_video_preferences.onDeviceAi` is forced to `false` on load, so earlier opt-ins cannot stay active without a way to switch them off. The recording route therefore always receives `onDeviceAi=false`.
+- Only the setup entry point changed. The native module, `useAppleAiFeedback`, archive/upload code, web viewer and already uploaded `apple_ai_*` evidence are untouched; do not delete them without a separate decision.
+- Reason (sessions 2026-10-05/06, 139 and 179 attempts): every successful attempt fell back to `multiple_people` with a full frame, and replies often selected different people. `appearanceHints` was empty in both sessions.
+- Validation: `npm run typecheck` passed. No device test was run.

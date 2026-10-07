@@ -83,14 +83,14 @@ it('keeps measurements without image or sound inference when in measurements-onl
   expect(jest.mocked(saveRecord).mock.calls.some(([r]) => r.reason==='measurements_only')).toBe(true);
 });
 
-it('defaults to 60 seconds and cycles one question per visual turn without extra calls', async () => {
+it('defaults to 300 seconds and cycles one question per visual turn without extra calls', async () => {
   await recorder.stop();
   recorder = new EnvironmentRecorder({ sessionId:'default',profileId:1,startedAt:Date.now() },context,{},jest.fn());
-  await flush(); offer(); await advance(30_000);
+  await flush(); offer(); await advance(150_000);
   expect(appleEnvironment.observeEnvironment).not.toHaveBeenCalled();
-  offer(); await advance(30_000);
+  offer(); await advance(150_000);
   expect(appleEnvironment.observeEnvironment).toHaveBeenCalledTimes(1);
-  for (let i=0;i<4;i++) { offer(); await advance(60_000); }
+  for (let i=0;i<4;i++) { offer(); await advance(300_000); }
   const questions = jest.mocked(saveRecord).mock.calls.map(([r]) => r.questionId).filter(Boolean);
   expect(questions).toEqual(['camera.occlusion','behavior.posture','space.relative_position','camera.framing']);
   expect(appleEnvironment.observeEnvironment).toHaveBeenCalledTimes(4);
@@ -108,4 +108,18 @@ it('never extracts visual evidence under serious thermal pressure', async () => 
   offer(); await advance(30_000);
   expect(appleEnvironment.environmentFrames).not.toHaveBeenCalled();
   expect(jest.mocked(saveRecord).mock.calls.some(([r]) => r.reason === 'thermal')).toBe(true);
+});
+it('records sound without visual questions when visualQuestions is false', async () => {
+  await recorder.stop();
+  recorder = new EnvironmentRecorder({ sessionId:'sound_only',profileId:1,startedAt:Date.now() },context,{visualQuestions:false,observationIntervalSeconds:120},jest.fn());
+  await flush(); offer(); await advance(120_000);
+  expect(appleEnvironment.environmentFrames).not.toHaveBeenCalled();
+  expect(appleEnvironment.observeEnvironment).not.toHaveBeenCalled();
+  expect(jest.mocked(saveRecord).mock.calls.some(([r]) => r.kind==='sound')).toBe(true);
+});
+it('does not trigger weather fetches while WeatherKit probe is disabled', async () => {
+  await recorder.stop();
+  recorder = new EnvironmentRecorder({ sessionId:'no_weather',profileId:1,startedAt:Date.now() },context,{observationIntervalSeconds:30},jest.fn());
+  await flush(); offer(); await advance(350_000);
+  expect(appleEnvironment.environmentWeather).not.toHaveBeenCalled();
 });

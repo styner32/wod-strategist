@@ -35,7 +35,7 @@ function Evidence({ item, sessionId, profileId }: { item: Record<string, unknown
     {failed ? <p className="text-sm text-amber-400">근거 파일을 불러오지 못했습니다.</p> : filename.endsWith('.jpg') ?
       <a href={url} target="_blank" rel="noreferrer"><img loading="lazy" className="max-h-80 w-full rounded object-contain" src={url} alt="AI에 전달한 입력 사진" onError={() => setFailed(true)} /></a> :
       filename.endsWith('.m4a') ? <audio controls preload="none" className="w-full" src={url} onError={() => setFailed(true)} /> : null}
-    <figcaption className="mt-2 break-all text-xs text-text-muted">{offset !== null && `${item.mediaOffsetMs !== undefined ? '원본 조각 내' : '촬영 경과'} ${(offset / 1000).toFixed(1)}초 · `}{filename}</figcaption>
+    <figcaption className="mt-2 break-all text-xs text-text-muted">{offset !== null && `${item.mediaOffsetMs !== undefined ? '원본 조각 내' : '촬영 경과'} ${(offset / 1000).toFixed(2)}초 · `}{filename}</figcaption>
     <a href={url} target="_blank" rel="noreferrer" className="text-xs text-accent">원본 열기</a>
   </figure>;
 }
@@ -48,7 +48,7 @@ function MeasurementDetails({ kind, value }: { kind: unknown; value: unknown }) 
     const humidity = numberValue(data.humidityFraction);
     return <div className="rounded-lg bg-bg-tertiary p-3">
       <h4 className="font-medium">지역 실외 날씨 · 실내 측정값 아님</h4>
-      <p>{temperature === null ? '온도 미기록' : `${temperature.toFixed(1)}°C`} · {humidity === null ? '습도 미기록' : `습도 ${(humidity * 100).toFixed(0)}%`} · {textValue(data.condition)}</p>
+      <p>{temperature === null ? '온도 미기록' : `${temperature.toFixed(2)}°C`} · {humidity === null ? '습도 미기록' : `습도 ${(humidity * 100).toFixed(0)}%`} · {textValue(data.condition)}</p>
       <p className="text-xs text-text-muted">자료 시각: {date(data.observedAt)}</p>
       {httpsURL(attribution.markURL) && <img className="mt-2 h-6 max-w-40 object-contain" src={httpsURL(attribution.markURL)} alt={textValue(attribution.name) || 'WeatherKit'} />}
       {httpsURL(attribution.legalURL) && <a className="text-xs text-accent" href={httpsURL(attribution.legalURL)} target="_blank" rel="noreferrer">{textValue(attribution.name) || 'WeatherKit'} · 출처</a>}
@@ -56,7 +56,7 @@ function MeasurementDetails({ kind, value }: { kind: unknown; value: unknown }) 
   }
   if (kind === 'sound') return <div className="rounded-lg bg-bg-tertiary p-3">
     <h4 className="font-medium">소리 분류 · Apple Sound Analysis</h4>
-    <p className="text-xs text-text-muted">녹음 신호 RMS {numberValue(data.rmsDbfs)?.toFixed(1) ?? '미기록'} dBFS · 실제 공간의 소음계 측정값이 아닙니다.</p>
+    <p className="text-xs text-text-muted">녹음 신호 RMS {numberValue(data.rmsDbfs)?.toFixed(2) ?? '미기록'} dBFS · 실제 공간의 소음계 측정값이 아닙니다.</p>
     <ul className="mt-2 space-y-1">{arrayValue(data.classifications).map((window, i) => <li key={i}>{arrayValue(object(window).labels).map(value => {
       const item = object(value); const confidence = numberValue(item.confidence);
       return `${textValue(item.label)} (${confidence === null ? '신뢰도 미기록' : `신뢰도 ${(confidence * 100).toFixed(0)}%`})`;

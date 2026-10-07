@@ -46,7 +46,11 @@ export class EnvironmentRecorder {
   private intervalMs: number;
   constructor(identity: { sessionId: string; profileId: number; startedAt: number }, context: Context,
     settings: Record<string, unknown>, private publish: (state: { status: string; record?: EnvironmentRecord }) => void) {
-    this.intervalMs = settings.observationIntervalSeconds === 30 ? 30_000 : settings.observationIntervalSeconds === 120 ? 120_000 : 60_000;
+    this.intervalMs = settings.observationIntervalSeconds === 120 ? 120_000
+      : settings.observationIntervalSeconds === 600 ? 600_000
+      : settings.observationIntervalSeconds === 30 ? 30_000
+      : settings.observationIntervalSeconds === 60 ? 60_000
+      : 300_000;
     this.session = { version: 1, id: ulid(), profileId: identity.profileId, sessionId: identity.sessionId,
       ownerUserId: useAuthStore.getState().userId, startedAt: identity.startedAt, endedAt: null, complete: false, context, settings: { ...settings, observationIntervalSeconds: this.intervalMs / 1000 },
       appVersion: Constants.expoConfig?.version ?? 'unknown', os: `${Platform.OS} ${Platform.Version}`, device: 'unavailable' };
@@ -106,21 +110,27 @@ export class EnvironmentRecorder {
       }
       const now = Date.now();
       if (!this.active || this.paused || this.memoryHalted) return;
-      if (now >= this.nextWeatherAt && !this.weatherPending && !this.protection.reason && environmentNativeAvailable) {
+      const weatherEnabled = false; // Disabled until WeatherKit developer entitlement is provisioned
+      if (weatherEnabled && now >= this.nextWeatherAt && !this.weatherPending && !this.protection.reason && environmentNativeAvailable) {
         this.nextWeatherAt = now + 300_000;
         this.weatherPending = this.weather().finally(() => { this.weatherPending = null; });
       }
       if (now < this.nextAt) return;
       const scheduled = this.nextAt;
       this.nextAt = now + this.intervalMs;
-      const kind = observationKinds[this.step++ % observationKinds.length];
+      const visualEnabled = this.session.settings.visualQuestions !== false;
+      const kinds = visualEnabled ? observationKinds : (['sound'] as const);
+      const kind = kinds[this.step++ % kinds.length];
       const record = newEnvironmentRecord(this.session, kind, kind === 'sound' ? 'SoundAnalysis' : 'FoundationModels');
       record.scheduledAt = scheduled; record.powerBefore = power;
-      prepareObservation(record, Math.floor((this.step - 1) / observationKinds.length));
+      prepareObservation(record, Math.floor((this.step - 1) / kinds.length));
       if (this.pending) { this.event('skipped', { kind, reason: 'busy', scheduledAt: scheduled }); return; }
       const chunk = this.chunk;
       const analysisEnabled = this.session.settings.environmentAnalysis !== false;
-      const release = analysisEnabled && !this.protection.reason && environmentNativeAvailable && chunk && now-chunk.captureEnd <= this.intervalMs ? acquireAppleAiSlot() : null;
+      const needsSlot = kind !== 'sound';
+      const release = analysisEnabled && !this.protection.reason && environmentNativeAvailable && chunk && now-chunk.captureEnd <= this.intervalMs
+        ? (needsSlot ? acquireAppleAiSlot() : () => {})
+        : null;
       record.reason = !analysisEnabled ? 'measurements_only' : this.protection.reason ?? (!environmentNativeAvailable ? 'module_missing' : !chunk || now-chunk.captureEnd > this.intervalMs ? 'no_recent_chunk' : !release ? 'busy' : null);
       this.pending = (async () => {
         try {
@@ -160,6 +170,7 @@ export class EnvironmentRecorder {
         if (availability !== 'available') throw new Error(availability);
         if (cancelled()) throw new Error('cancelled');
         const prepared = await appleEnvironment.environmentFrames(chunk.path);
+        if (prepared.error || !prepared.frames.length) throw new Error(prepared.error ?? 'no_frames');
         temps.push(...prepared.frames.map(f => f.path));
         record.evidence = await archiveEvidence(this.session.id, record.id, prepared.frames, 'image/jpeg');
         record.preparationMs = Date.now()-record.startedAt;
