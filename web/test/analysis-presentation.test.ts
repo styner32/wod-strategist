@@ -62,4 +62,13 @@ describe("analysis presentation", () => {
       { title: "Power Clean", start: 380.07, end: 410.07, body: "본문 내용\n" },
     ]);
   });
+  it("carries rounded-up timestamps into the next minute and hour", () => {
+    expect(formatLongTimestamps("6:59.998 1:05:59.999 0:59:59.9951 06:30.5049")).toBe(
+      "7:00 1:06:00 1:00:00 06:30.5",
+    );
+    const raw = "## 세그먼트 1: A (6:30.5 ~ 6:59.9983333)\n본문";
+    expect(analysisSegments(raw)).toEqual([
+      { title: "A", start: 390.5, end: 420, body: "본문\n" },
+    ]);
+  });
 });

@@ -48,6 +48,12 @@ it('does not catch up after pause; sound without a track is not classified as qu
   expect(jest.mocked(saveRecord).mock.calls.find(([r]) => r.kind==='sound')?.[0]).toMatchObject({ reason:'no_audio_track',outcome:'error' });
   expect(appleEnvironment.environmentSound).not.toHaveBeenCalled();
 });
+it('records an error without inference when the chunk has no video track yet', async () => {
+  jest.mocked(appleEnvironment.environmentFrames).mockResolvedValueOnce({ error:'no_video_track', frames:[] });
+  offer(); await advance(30_000);
+  expect(appleEnvironment.observeEnvironment).not.toHaveBeenCalled();
+  expect(jest.mocked(saveRecord).mock.calls.find(([r]) => r.kind==='camera')?.[0]).toMatchObject({ reason:'no_video_track',outcome:'error' });
+});
 it('drains pending input extraction before stop resolves, then avoids inference', async () => {
   let finish!: (value: any) => void;
   jest.mocked(appleEnvironment.environmentFrames).mockImplementationOnce(() => new Promise(resolve => { finish=resolve; }));
