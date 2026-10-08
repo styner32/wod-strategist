@@ -664,9 +664,9 @@ type ReprocessSensorResponse struct {
 
 // ReprocessSensor handles POST /api/v1/sessions/:session_id/sensor-reprocess
 func (ctl *Controller) ReprocessSensor(c *gin.Context) {
-	sessionID := c.Param("session_id")
-	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required or invalid"})
 		return
 	}
 

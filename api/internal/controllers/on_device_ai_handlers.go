@@ -26,7 +26,7 @@ func (ctl *Controller) onDevicePrefix(c *gin.Context) (string, bool) {
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return "", false
 	}
-	sid := c.Param("session_id")
+	sid := sanitizeIdentifier(c.Param("session_id"))
 	pid, err := strconv.ParseUint(c.Query("profile_id"), 10, 32)
 	if err != nil || pid == 0 || !isValidSessionID(sid) || strings.ContainsAny(sid, "/\\") {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session or profile"})

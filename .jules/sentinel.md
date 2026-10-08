@@ -72,3 +72,7 @@
 **Vulnerability:** Several API controllers (`sensor_handlers.go`, `cost_handlers.go`, `sensor_timeline_handlers.go`, and `feedback_handlers.go`) extracted the `session_id` parameter directly via `c.Param("session_id")` and failed to apply proper path traversal validation via `sanitizeIdentifier()` and `isValidSessionID()`.
 **Learning:** Even if helper validation functions exist, they must be consistently applied to all path and query parameters representing identifiers across every endpoint to prevent malicious input from traversing directories or injecting malicious paths when interacting with file systems or GCS URIs.
 **Prevention:** Always wrap path parameters functioning as identifiers with `sanitizeIdentifier()` and follow up with a strict format check like `isValidSessionID()` immediately after extraction in API handlers.
+## 2024-10-08 - Fix Missing Path Traversal Validation on session_id
+**Vulnerability:** Several API controllers directly used `c.Param("session_id")` without sanitization or format validation, leading to potential path traversal vulnerabilities.
+**Learning:** Even when utility functions like `sanitizeIdentifier()` and `isValidSessionID()` exist, they can be easily missed when directly extracting path parameters.
+**Prevention:** Always ensure path parameters acting as identifiers are strictly validated and sanitized immediately after extraction using the application's defined utility functions.

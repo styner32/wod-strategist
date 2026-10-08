@@ -16,7 +16,7 @@ func (ctl *Controller) DeleteEnvironment(c *gin.Context) {
 		c.AbortWithStatus(http.StatusUnauthorized)
 		return
 	}
-	sessionID := c.Param("session_id")
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
 	profile, err := strconv.ParseUint(c.Query("profile_id"), 10, 32)
 	if err != nil || profile == 0 || !isValidSessionID(sessionID) || strings.ContainsAny(sessionID, "/\\") {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session or profile"})

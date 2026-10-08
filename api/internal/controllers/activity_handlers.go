@@ -21,7 +21,7 @@ import (
 // @Success 200 {object} activity.Summary
 // @Router /sessions/{session_id}/activity-summary [get]
 func (ctl *Controller) GetActivitySummary(c *gin.Context) {
-	sid := c.Param("session_id")
+	sid := sanitizeIdentifier(c.Param("session_id"))
 	pid, err := strconv.ParseUint(c.Query("profile_id"), 10, 32)
 	if !isValidSessionID(sid) || err != nil || pid == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "valid session_id and profile_id are required"})
