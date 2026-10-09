@@ -72,7 +72,13 @@
 **Vulnerability:** Several API controllers (`sensor_handlers.go`, `cost_handlers.go`, `sensor_timeline_handlers.go`, and `feedback_handlers.go`) extracted the `session_id` parameter directly via `c.Param("session_id")` and failed to apply proper path traversal validation via `sanitizeIdentifier()` and `isValidSessionID()`.
 **Learning:** Even if helper validation functions exist, they must be consistently applied to all path and query parameters representing identifiers across every endpoint to prevent malicious input from traversing directories or injecting malicious paths when interacting with file systems or GCS URIs.
 **Prevention:** Always wrap path parameters functioning as identifiers with `sanitizeIdentifier()` and follow up with a strict format check like `isValidSessionID()` immediately after extraction in API handlers.
+
 ## 2024-10-08 - Fix Missing Path Traversal Validation on session_id
 **Vulnerability:** Several API controllers directly used `c.Param("session_id")` without sanitization or format validation, leading to potential path traversal vulnerabilities.
 **Learning:** Even when utility functions like `sanitizeIdentifier()` and `isValidSessionID()` exist, they can be easily missed when directly extracting path parameters.
 **Prevention:** Always ensure path parameters acting as identifiers are strictly validated and sanitized immediately after extraction using the application's defined utility functions.
+
+## 2024-10-09 - [MEDIUM] Fix directory traversal check in DeleteEnvironment
+**Vulnerability:** A missing backslash check in `strings.Contains(..., "/")` within `DeleteEnvironment` could have allowed malicious actors to construct path traversals on backend filesystems, depending on how Google Cloud Storage objects are resolved internally or dumped locally by other systems, exploiting the gap in the security boundary which assumed only `/` acted as a directory separator.
+**Learning:** Always use `strings.ContainsAny(..., "/\\")` when validating potential user-controlled object paths in Go rather than solely targeting the Unix path separator, because cross-platform traversal risks (like `..\` in Windows) can be inherently inherited when payloads jump from a POSIX cloud abstraction (GCS) to a localized context.
+**Prevention:** Integrate comprehensive `strings.ContainsAny(input, "/\\")` verifications or standard path sanitization components that strip both Unix and Windows separators proactively, rather than manually implementing partial checks.
