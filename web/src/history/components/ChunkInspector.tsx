@@ -9,6 +9,13 @@ import {
   type ChunkReanalysisRun,
   type FeedbackCorrection,
 } from '../../api/history';
+import {
+  chunkInitialSeek,
+  chunkPlaySeek,
+  chunkTimeUpdateAction,
+  reachableChunkStart,
+  type ChunkMediaState,
+} from '../chunkPlayback';
 
 interface Props {
   sessionId: string;
@@ -41,6 +48,15 @@ function formatTime(secs: number | null | undefined) {
   const minutes = Math.floor(secs / 60);
   const seconds = Math.floor(secs % 60);
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+}
+
+function mediaState(video: HTMLVideoElement): ChunkMediaState {
+  return {
+    currentTime: video.currentTime,
+    duration: video.duration,
+    paused: video.paused,
+    seeking: video.seeking,
+  };
 }
 
 function formatDate(value?: string) {
@@ -247,22 +263,35 @@ export function ChunkInspector({
   );
 
   const playInterval = () => {
-    if (!videoRef.current || start == null || !Number.isFinite(start)) return;
-    videoRef.current.currentTime = start;
-    void videoRef.current.play();
+    const video = videoRef.current;
+    if (!video) return;
+    const target = reachableChunkStart(start, video.duration);
+    if (target == null) return;
+    video.currentTime = target;
+    void video.play();
   };
 
+  // Seek corrections must never re-trigger themselves; see chunkPlayback.ts.
   const handleTimeUpdate = () => {
     const video = videoRef.current;
     if (!video) return;
-    if (start != null && Number.isFinite(start) && video.currentTime < start) {
-      video.currentTime = start;
-      return;
-    }
-    if (end != null && Number.isFinite(end) && video.currentTime >= end) {
-      video.currentTime = end;
-      video.pause();
-    }
+    const action = chunkTimeUpdateAction(mediaState(video), start, end);
+    if (action.kind === 'pause') video.pause();
+    else if (action.kind === 'seek') video.currentTime = action.to;
+  };
+
+  const handlePlay = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const target = chunkPlaySeek(mediaState(video), start, end);
+    if (target != null) video.currentTime = target;
+  };
+
+  const handleLoadedMetadata = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const target = chunkInitialSeek(mediaState(video), start);
+    if (target != null) video.currentTime = target;
   };
 
   return (
@@ -329,11 +358,8 @@ export function ChunkInspector({
                 ref={videoRef}
                 src={playUrl}
                 controls
-                onLoadedMetadata={() => {
-                  if (videoRef.current && start != null && Number.isFinite(start)) {
-                    videoRef.current.currentTime = start;
-                  }
-                }}
+                onLoadedMetadata={handleLoadedMetadata}
+                onPlay={handlePlay}
                 onTimeUpdate={handleTimeUpdate}
                 className="aspect-video w-full"
               />
