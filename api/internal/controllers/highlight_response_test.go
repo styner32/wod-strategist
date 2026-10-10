@@ -177,3 +177,50 @@ func TestPopulateSessionFatigue_SensorFreshnessRejection(t *testing.T) {
 		t.Errorf("expected SensorStatus to be none, got %s", fatigueRes.SensorStatus)
 	}
 }
+
+func TestPopulateSessionFatigue_CardiovascularFloor(t *testing.T) {
+	results := []db.AnalysisResult{
+		{
+			SessionID:        "WOD-20261007-01M4A0BYQYDW8KGMMCSK4ZFJZB",
+			Status:           "COMPLETED",
+			SessionScore:     `{"intensity":70,"movements":{"Power Clean":{"reps":52}}}`,
+			SensorVersion:    1,
+			SensorState:      db.SensorStateCompleted,
+			SensorProcessing: db.JSONDocument(`{"request_id":"req-hr","target_generation":"1"}`),
+			SensorSummary: db.JSONDocument(`{
+				"version": 1,
+				"request_id": "req-hr",
+				"source_generation": "1",
+				"calculation_version": 1,
+				"quality": {"valid_hr": true, "is_complete": true},
+				"metrics": {
+					"hr": {
+						"valid_hr": true,
+						"weighted_mean_bpm": 158.0,
+						"peak_bpm": 170,
+						"zones": {
+							"z4_ratio": 0.35,
+							"z5_ratio": 0.24
+						}
+					}
+				}
+			}`),
+		},
+	}
+
+	normalized := normalizeHighlightResultsForResponseWithSchema(results, 1)
+	fatigueRes := normalized[0].SessionFatigue
+	if fatigueRes == nil {
+		t.Fatal("expected SessionFatigue to be populated, got nil")
+	}
+	if !fatigueRes.HeartRateAdjusted {
+		t.Errorf("expected HeartRateAdjusted to be true due to high HR zones, got false")
+	}
+	if fatigueRes.OverallScore < 40 {
+		t.Errorf("expected OverallScore >= 40, got %d", fatigueRes.OverallScore)
+	}
+	if fatigueRes.State == "fresh" {
+		t.Errorf("expected state not to be fresh under high HR, got %s", fatigueRes.State)
+	}
+}
+

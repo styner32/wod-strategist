@@ -44,7 +44,7 @@ export function SignupPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold bg-gradient-to-r from-accent to-purple-400 bg-clip-text text-transparent">
-            WOD Strategist
+            FormBuddy
           </h1>
           <p className="text-text-secondary mt-2">Create your account</p>
         </div>

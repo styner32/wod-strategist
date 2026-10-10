@@ -44,6 +44,40 @@ type StretchRecommendation struct {
 
 var stretchesBlockRegex = regexp.MustCompile("(?is)(?:```stretches\\s*(\\[.*?\\])\\s*```|```json\\s*(\\[.*?\\])\\s*```|<stretches>\\s*(\\[.*?\\])\\s*</stretches>)")
 
+// kineticChainAliases maps evidenced joints to associated muscular/kinetic chain target areas.
+var kineticChainAliases = map[string][]string{
+	"ankle":      {"ankle", "calf", "achilles", "lower leg", "foot"},
+	"calf":       {"ankle", "calf", "achilles", "lower leg"},
+	"hip":        {"hip", "glutes", "glute", "groin", "adductors", "adductor", "psoas", "hip flexors", "hip flexor"},
+	"hamstring":  {"hamstring", "hamstrings", "posterior chain"},
+	"upper back": {"upper back", "thoracic", "t-spine", "tspine", "lats", "lat", "scapula", "rhomboids"},
+	"lower back": {"lower back", "lumbar", "lumbar spine"},
+	"knee":       {"knee", "quads", "quad", "quadriceps", "patella"},
+	"shoulder":   {"shoulder", "deltoid", "rotator cuff", "pecs", "pec"},
+	"wrist":      {"wrist", "forearm", "wrist flexor", "wrist extensor"},
+	"neck":       {"neck", "trapezius", "trap", "cervical"},
+}
+
+func isTargetAreaEvidenced(targetArea string, evidencedJoints map[string]struct{}) bool {
+	target := strings.ToLower(strings.TrimSpace(targetArea))
+	if target == "" {
+		return false
+	}
+	if _, ok := evidencedJoints[target]; ok {
+		return true
+	}
+	for joint := range evidencedJoints {
+		if aliases, ok := kineticChainAliases[joint]; ok {
+			for _, a := range aliases {
+				if a == target || strings.Contains(target, a) || strings.Contains(a, target) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (w *Worker) loadStretchCatalog(ctx context.Context) (names []string, resolver map[string]string) {
 	resolver = make(map[string]string)
 	nameSet := make(map[string]struct{})
@@ -159,7 +193,7 @@ func BuildStretchRecommendationPrompt(current []MobilityObservation, history []d
    - 새로운 스트레칭 명칭은 반드시 **영문 Title Case** 및 **간결한 표준 Naming Convention**을 따르세요:
      (예: [Target/Joint] [Type] Stretch 또는 [Movement] Hold/Rock/Pose — `+"`Hip 90/90 Stretch`"+`, `+"`Adductor Groin Stretch`"+`, `+"`Lat Doorframe Stretch`"+`). 길거나 서술적인 명칭, 한국어 포함 명칭은 금지됩니다.
 3. **이유(reason) 및 임시(provisional) 기입 규칙**:
-   - 누적 관찰 이력(SessionCount >= 2)에 기반한 경우: "최근 N개 세션의 [운동명]에서 [관절/제한]이 반복 관찰됨"과 같이 관찰 세션 수를 명시하고, provisional: false 로 기입하세요.
+   - 누적 관찰 이력(SessionCount >= 2)에 기반한 경우: "최근 N개 세션의 [운동명]에서 [관절/제한]이 반복 관찰됨"과 같이 관찰 세션 수를 명시하고, provisional: false 로 기입하세요. (주의: 한국어 '관찰됨(observed)'을 '관절됨(jointed)'으로 오기하지 마세요)
    - 오늘 처음 관찰되었거나 단일 세션(SessionCount == 1)인 경우: "오늘 세션에서 처음 관찰됨 — 추이를 지켜보세요" 등의 문구를 포함하고, provisional: true 로 기입하세요.
 4. **부상 주의사항(caution)**: 추천 부위가 알려진 부상 부위와 겹칠 경우 caution 필드에 "통증 시 즉시 중단" 등 경고 문구를 포함하세요.
 5. **의학적 진단 금지**: 통증이나 병명을 진단하지 마세요.
@@ -390,8 +424,7 @@ func (w *Worker) sanitizeAndPersistStretchRecommendations(ctx context.Context, i
 
 	var sanitized []StretchRecommendation
 	for _, item := range items {
-		targetKey := strings.ToLower(strings.TrimSpace(item.TargetArea))
-		if _, ok := evidencedJoints[targetKey]; !ok {
+		if !isTargetAreaEvidenced(item.TargetArea, evidencedJoints) {
 			continue
 		}
 
@@ -399,6 +432,8 @@ func (w *Worker) sanitizeAndPersistStretchRecommendations(ctx context.Context, i
 		if reason == "" {
 			continue
 		}
+		item.Reason = reason
+		item.Caution = strings.TrimSpace(item.Caution)
 
 		canonicalStretch, matched := resolveStretchName(item.Stretch, resolver)
 		if !matched {

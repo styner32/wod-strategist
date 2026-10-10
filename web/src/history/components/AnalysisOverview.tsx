@@ -328,8 +328,10 @@ export const AnalysisOverview = memo(function AnalysisOverview({
                       </span>
                       <span className="mt-1 block text-xs text-text-secondary">
                         {h.startLabel}–{h.endLabel} ·{" "}
-                        {classification[h.type] ?? h.type} · Agentic{" "}
-                        {statuses[item?.status ?? ""] ?? "미실행"}
+                        {classification[h.type] ?? h.type}
+                        {item?.status && item.status !== "none" && (
+                          <> · 추가 분석 {statuses[item.status] ?? item.status}</>
+                        )}
                       </span>
                     </span>
                     <span aria-hidden>{expanded ? "−" : "+"}</span>
@@ -381,8 +383,9 @@ export const AnalysisOverview = memo(function AnalysisOverview({
                         </>
                       ) : (
                         <p className="text-sm text-text-secondary">
-                          {statuses[item?.status ?? ""] ??
-                            "아직 추가 분석하지 않았습니다."}
+                          {item?.status
+                            ? (statuses[item.status] ?? "추가 분석 진행 중")
+                            : "상세 분석이 생략되었습니다."}
                         </p>
                       )}
                       {item?.metrics && (
@@ -395,7 +398,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
                             초 · 종료 {item.metrics.finish_reason || "미확인"}
                           </p>
                           <p>
-                            MEDIA_PROCESSING 탐색{" "}
+                            세부 영상 탐색{" "}
                             {item.metrics.agentic_observed
                               ? "확인"
                               : "확인되지 않음"}

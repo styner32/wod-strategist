@@ -70,12 +70,13 @@ const (
    - 사용자 입력에만 있고 영상에서 보이지 않는 계획 종목은 포함하지 마세요. 힌트에 없는 실제 관찰 종목은 포함하세요.
    - 걷기, 휴식, 회복, 준비, 장비 세팅, Unknown은 하이라이트나 fatigue_point가 아닙니다.
    - 구간당 최대 3개만 출력하고, 근거가 없으면 빈 배열을 출력하세요. 카테고리별 개수 할당량은 없습니다.
+   - 세션 전반에 걸친 시간적 균형: 후반부 피로 구간에만 편중되지 않도록, 전반부 세트(00:00 이후 초기 운동 구간)의 모범 동작이나 기준 테크닉(positive_form, technique_event)과 후반부 피로/자세 변화(form_issue, fatigue_onset)를 고르게 추출하세요.
    - type: positive_form(직접 보이는 좋은 기술), form_issue(직접 보이는 교정점), fatigue_onset(지속적인 속도·가동범위·자세 저하), technique_event(평가와 별개인 구체적인 기술·전환 장면)
 	   - 동일한 연속 동작과 같은 type을 여러 조각으로 나누지 마세요. 각 start/end는 현상이 실제로 보이는 정확한 시각이어야 합니다.
 	   - confidence는 해당 시각 근거가 영상에서 직접 확인된 확신도이며 0.0~1.0 숫자로 출력하세요.
    - 중요한 장면이면 tags에 key_moment를 추가하세요. positive_form/form_issue/fatigue_onset와 겹치는 key_moment를 별도 항목으로 중복 출력하지 마세요.
    - fatigue_onset는 심박수만으로 만들지 말고 반복 속도 저하, 케이던스 손실, 가동범위 감소 또는 자세 붕괴가 지속적으로 보여야 합니다.
-   - movement 필드에는 실제로 관찰된 운동 종목명을 기입하세요.
+   - movement 필드에는 실제로 관찰된 운동 종목의 공식 표준 영어 명칭(예: "Power Clean", "Dumbbell Squat Snatch", "V-up")만 기입하세요. 한글이나 음차를 사용하지 마세요.
    - 반드시 아래 형식의 **highlights** JSON 코드 블록으로 출력하세요 (json이 아닌 highlights 태그 사용):
 ` + "```highlights\n" + `[{"start":"0:15","end":"0:18.5","type":"positive_form","movement":"Snatch","reason":"수직에 가까운 풀 익스텐션","confidence":0.94,"tags":["key_moment"]},{"start":"0:22","end":"0:24","type":"form_issue","movement":"Snatch","reason":"캐치 순간 무릎 내전","confidence":0.86}]` + "\n```"
 

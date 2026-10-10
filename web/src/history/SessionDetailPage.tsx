@@ -1003,11 +1003,29 @@ export function SessionDetailPage() {
                     </p>
                   )}
                 </div>
+                {sessionAnalysis?.movement_hints &&
+                  sessionAnalysis.movement_hints.length > 0 && (
+                    <div className="col-span-2 border-t border-border pt-3 mt-1">
+                      <p className="text-text-muted">
+                        Planned movements (계획된 종목)
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {sessionAnalysis.movement_hints.map((movement) => (
+                          <span
+                            key={movement}
+                            className="rounded-md bg-accent/10 px-2 py-1 text-xs text-accent font-medium"
+                          >
+                            {movement}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 {sessionAnalysis?.additional_observed_movements &&
                   sessionAnalysis.additional_observed_movements.length > 0 && (
                     <div className="col-span-2 border-t border-border pt-3 mt-1">
                       <p className="text-text-muted">
-                        Additional observed movements
+                        Additional observed movements (영상 추가 관찰 동작)
                       </p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {sessionAnalysis.additional_observed_movements.map(
