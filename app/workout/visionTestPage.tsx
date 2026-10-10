@@ -1,4 +1,5 @@
 import { appleEnvironment, environmentNativeAvailable } from "../../modules/apple-on-device-ai";
+import { weatherEnabled } from "../../features/environment/recorder";
 import { flushEnvironmentUploads } from "../../features/environment/store";
 import { useEnvironmentRecorder } from "../../features/environment/useEnvironmentRecorder";
 import { EnvironmentLiveCard } from "../../features/environment/EnvironmentCard";
@@ -1003,7 +1004,7 @@ export default function VisionTestPage() {
       }
 
       // Resolve the OS location prompt before recording: permission UI may background the camera.
-      if (environmentEnabled && environmentNativeAvailable) {
+      if (environmentEnabled && environmentNativeAvailable && weatherEnabled) {
         await appleEnvironment.requestEnvironmentLocationPermission().catch(() => {});
       }
       await MediaLibrary.requestPermissionsAsync(true).catch(() => {});
@@ -1042,7 +1043,7 @@ export default function VisionTestPage() {
         { wodDescription, movements, appearanceHints: appearanceHints ?? "", language: locale },
         { resolution, lowFps, showSkeleton, onDeviceAi, zoomMode, aspectRatio, landscapeMode,
           observationIntervalSeconds: Number(observationIntervalSeconds) || 300,
-          environmentAnalysis: environmentAnalysisParam === "true",
+          environmentAnalysis: true,
           visualQuestions: environmentAnalysisParam === "true",
           fps: targetFps, videoHdr: false, bufferCompression: false, audio: hasMicPermission, zoom: zoomMode ? 0.1 : 0,
           deviceId: device?.id ?? null, physicalDevices: device?.physicalDevices ?? [],
@@ -1148,7 +1149,7 @@ export default function VisionTestPage() {
   async function handleResumeRecording() {
     if (!isRecording || !isPaused || stoppingWorkout.current) return;
     await pauseTransition.current;
-    if (stoppingWorkout.current || !originalCapture.current?.complete || pendingChunk.current) return;
+    if (stoppingWorkout.current || !originalCapture.current || pendingChunk.current) return;
     console.log("▶️ Resuming recording...");
 
     segmentStartTime.current = Date.now();
@@ -1244,7 +1245,7 @@ export default function VisionTestPage() {
       // before the user can background the app.
       // Use the ref, not `chunkCount` state: the final chunk increments it
       // inside an async callback that this closure may not have observed yet.
-      if (capture?.complete && capture.order > 0) {
+      if (capture && capture.order > 0 && (capture.complete || uploadedChunkCount.current > 0)) {
         const movementsArray = movements ? movements.split(", ") : [];
         const injuriesArray = injuries ? injuries.split(", ") : [];
 

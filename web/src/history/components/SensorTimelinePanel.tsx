@@ -4,6 +4,7 @@ import {
   compareH10MemoryWithTimeline,
   h10MemoryToRenderableSamples,
   h10MemoryValueAtTime,
+  parseH10MemoryData,
 } from "../h10MemoryRecord";
 import {
   buildSvgLinePath,
@@ -54,8 +55,6 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
   isMergedVideo = true,
   onReprocess,
   isReprocessing,
-  sessionId: _sessionId,
-  profileId: _profileId,
   h10MemoryData,
 }: SensorTimelinePanelProps) {
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -65,7 +64,10 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
   const [showH10Memory, setShowH10Memory] = useState(true);
   const filterId = useId();
 
-  const rawH10 = h10MemoryData;
+  const parsedH10 = useMemo(
+    () => (h10MemoryData ? parseH10MemoryData(h10MemoryData) : null),
+    [h10MemoryData],
+  );
 
   const timeline = timelineResponse?.timeline;
   const segments = timelineResponse?.video_mapping?.segments ?? [];
@@ -92,17 +94,17 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
 
   // Comparison summary
   const comparison = useMemo(
-    () => compareH10MemoryWithTimeline(rawH10, timeline),
-    [rawH10, timeline],
+    () => (parsedH10 ? compareH10MemoryWithTimeline(parsedH10, timeline) : null),
+    [parsedH10, timeline],
   );
 
   // Downsampled points and paths
   const h10Samples = useMemo(
     () =>
-      rawH10
-        ? h10MemoryToRenderableSamples(rawH10, activeStartMs, activeEndMs, chartWidth)
+      parsedH10
+        ? h10MemoryToRenderableSamples(parsedH10, activeStartMs, activeEndMs, chartWidth)
         : [],
-    [rawH10, activeStartMs, activeEndMs, chartWidth],
+    [parsedH10, activeStartMs, activeEndMs, chartWidth],
   );
 
   // X scale helpers
@@ -234,8 +236,8 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
     };
   }, [hoverMs, timeline]);
   const h10HoverValue = useMemo(
-    () => (rawH10 && hoverMs != null ? h10MemoryValueAtTime(rawH10, hoverMs) : null),
-    [rawH10, hoverMs],
+    () => (parsedH10 && hoverMs != null ? h10MemoryValueAtTime(parsedH10, hoverMs) : null),
+    [parsedH10, hoverMs],
   );
   const hoverMediaSec = hoverMs == null ? null : captureToMedia(hoverMs, segments);
   const hoverX = useMemo(() => {
@@ -493,7 +495,7 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
       )}
 
       {/* H10 Memory Comparison Bar */}
-      {comparison && comparison.hasData && (
+      {comparison && (
         <div className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-3 text-text-secondary">
             <span className="inline-flex items-center gap-1.5 font-medium text-emerald-400">

@@ -105,5 +105,82 @@ describe('h10Memory timeline integration', () => {
       gapFilledSeconds: 1, // sample at index 3 (5500ms) filled the gap
     });
   });
+
+  it('excludes pauses and stop tail past duration_ms from gap-filled counts', () => {
+    // 10 samples: start at 0ms, interval 1000ms.
+    // 0-3000: live data valid
+    // 3000-6000: paused! (should NOT count as gap-filled)
+    // 6000-7000: live data missing (dropout! SHOULD count as gap-filled)
+    // 7000-8000: live data valid
+    // duration_ms is 8000.
+    // 8000-10000: stop tail! (should NOT count as gap-filled)
+    const record = {
+      base_epoch_ms: 1000,
+      start: { ack_epoch_ms: 1000 },
+      recording_interval_ms: 1000,
+      hr_samples: [100, 100, 100, 105, 105, 105, 110, 110, 95, 90],
+    };
+
+    const mockTimeline: SensorTimelineData = {
+      schema_version: 1,
+      clock: 'capture_clock',
+      bucket_ms: 1000,
+      duration_ms: 8000,
+      source: { sensor_version: '1', request_id: 'r', source_generation: '1', hr_calculation_version: 2 },
+      points: [
+        { start_ms: 0, end_ms: 1000, heart_rate_bpm: { value: 100, status: 'valid' }, acc_magnitude_std_g: { value: 0.1, status: 'valid' } },
+        { start_ms: 1000, end_ms: 2000, heart_rate_bpm: { value: 100, status: 'valid' }, acc_magnitude_std_g: { value: 0.1, status: 'valid' } },
+        { start_ms: 2000, end_ms: 3000, heart_rate_bpm: { value: 100, status: 'valid' }, acc_magnitude_std_g: { value: 0.1, status: 'valid' } },
+        { start_ms: 6000, end_ms: 7000, heart_rate_bpm: { value: null, status: 'missing' }, acc_magnitude_std_g: { value: 0.1, status: 'valid' } },
+        { start_ms: 7000, end_ms: 8000, heart_rate_bpm: { value: 110, status: 'valid' }, acc_magnitude_std_g: { value: 0.1, status: 'valid' } },
+      ],
+      gaps: [{ start_ms: 6000, end_ms: 7000, channel: 'heart_rate', reason: 'dropout' }],
+      pauses: [{ start_ms: 3000, end_ms: 6000 }],
+    };
+
+    const stats = compareH10MemoryWithTimeline(record, mockTimeline);
+    expect(stats).not.toBeNull();
+    // Only the sample at index 6 (center 6500ms) is a true dropout within duration_ms
+    expect(stats?.gapFilledSeconds).toBe(1);
+    expect(stats?.matchedCount).toBe(4); // 0-1s, 1-2s, 2-3s, 7-8s
+  });
+
+  it('validates alignment inputs: interval <= 0 or invalid offset', () => {
+    // interval = 0
+    const zeroInterval = {
+      base_epoch_ms: 1000,
+      start: { ack_epoch_ms: 2000 },
+      recording_interval_ms: 0,
+      hr_samples: [100, 110],
+    };
+    expect(h10MemoryToRenderableSamples(zeroInterval, 0, 10000)).toEqual([]);
+    expect(h10MemoryValueAtTime(zeroInterval, 2500)).toEqual({ value: null, status: 'missing' });
+    expect(compareH10MemoryWithTimeline(zeroInterval, {
+      schema_version: 1, clock: 'capture_clock', bucket_ms: 1000, duration_ms: 5000,
+      source: { sensor_version: '1', request_id: 'r', source_generation: '1', hr_calculation_version: 2 },
+      points: [], gaps: [], pauses: [],
+    })).toBeNull();
+
+    // null ack
+    const nullAck = {
+      base_epoch_ms: 1000,
+      start: {},
+      recording_interval_ms: 1000,
+      hr_samples: [100, 110],
+    };
+    expect(h10MemoryToRenderableSamples(nullAck, 0, 10000)).toEqual([]);
+    expect(h10MemoryValueAtTime(nullAck, 2500)).toEqual({ value: null, status: 'missing' });
+
+    // ack < base
+    const invalidOffset = {
+      base_epoch_ms: 5000,
+      start: { ack_epoch_ms: 4000 },
+      recording_interval_ms: 1000,
+      hr_samples: [100, 110],
+    };
+    expect(h10MemoryToRenderableSamples(invalidOffset, 0, 10000)).toEqual([]);
+    expect(h10MemoryValueAtTime(invalidOffset, 2500)).toEqual({ value: null, status: 'missing' });
+  });
 });
+
 

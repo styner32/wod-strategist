@@ -130,3 +130,9 @@ The rebuilt app exposed `capture/create-recorder-error: Audio is enabled but its
 - Reproducible implementation remains in the VisionCamera patch (existing Swift files; no new Pod source entry). Added `scripts/native-video-tests/SegmentedAudioStartupSmoke.swift`; the existing continuous encoding fixture now uses the production AAC fallback. These tests cover startup and generated media only; physical microphone startup/Photos/long-run continuity still require device acceptance.
 
 Validation: `scripts/native-video-tests/run-segmented-smoke.sh` passed (startup, lifecycle, JS callbacks, continuous A/V samples and legacy stop cases). Patch-package clean application matched all 18 changed files. The Release simulator `xcodebuild` command above and `git diff --check` passed. No device install or microphone capture was performed.
+
+## Interruption recovery and resume follow-up (2026-10-08)
+
+- System alerts (Amber alert, phone call) transition the app to `inactive`, triggering auto-pause. Frame drops (`droppedVideoFrames > 0`) or drain timeout (`tailDrainTimedOut = true`) mark `capture.complete = false`.
+- Resuming was previously blocked by `!originalCapture.current?.complete` in `handleResumeRecording`, causing silent failure when the user pressed Resume after an alert. Resuming now requires only an active capture instance (`!originalCapture.current`), allowing the camera to record subsequent runs (e.g. order 2).
+- Server merge was previously withheld whenever `capture.complete` was false. It now proceeds when `uploadedChunkCount.current > 0` even if an earlier local run dropped buffers, allowing uploaded workout segments to be analyzed instead of stalling indefinitely in `PENDING`. Local high-res original preservation remains strict: incomplete sessions keep their files on disk under `needs_attention` without automatic Photos export.

@@ -123,9 +123,35 @@ it('records sound without visual questions when visualQuestions is false', async
   expect(appleEnvironment.observeEnvironment).not.toHaveBeenCalled();
   expect(jest.mocked(saveRecord).mock.calls.some(([r]) => r.kind==='sound')).toBe(true);
 });
+it('records sound in app path where environmentAnalysis is true and visualQuestions is false', async () => {
+  await recorder.stop();
+  recorder = new EnvironmentRecorder({ sessionId:'app_sound_only',profileId:1,startedAt:Date.now() },context,{environmentAnalysis:true,visualQuestions:false,observationIntervalSeconds:120},jest.fn());
+  await flush(); offer(); await advance(120_000);
+  expect(appleEnvironment.environmentFrames).not.toHaveBeenCalled();
+  expect(appleEnvironment.observeEnvironment).not.toHaveBeenCalled();
+  const soundCall = jest.mocked(saveRecord).mock.calls.find(([r]) => r.kind==='sound');
+  expect(soundCall).toBeDefined();
+  expect(soundCall![0].reason).not.toBe('measurements_only');
+});
+it('allows sound analysis to proceed even when posture holds the apple ai slot', async () => {
+  await recorder.stop();
+  recorder = new EnvironmentRecorder({ sessionId:'slot_bypass_sound',profileId:1,startedAt:Date.now() },context,{visualQuestions:false,observationIntervalSeconds:120},jest.fn());
+  await flush();
+  const releasePostureSlot = acquireAppleAiSlot()!;
+  try {
+    offer(); await advance(120_000);
+    const soundCall = jest.mocked(saveRecord).mock.calls.find(([r]) => r.kind==='sound');
+    expect(soundCall).toBeDefined();
+    expect(soundCall![0].reason).not.toBe('busy');
+    expect(appleEnvironment.environmentAudio).toHaveBeenCalled();
+  } finally {
+    releasePostureSlot();
+  }
+});
 it('does not trigger weather fetches while WeatherKit probe is disabled', async () => {
   await recorder.stop();
   recorder = new EnvironmentRecorder({ sessionId:'no_weather',profileId:1,startedAt:Date.now() },context,{observationIntervalSeconds:30},jest.fn());
   await flush(); offer(); await advance(350_000);
   expect(appleEnvironment.environmentWeather).not.toHaveBeenCalled();
 });
+

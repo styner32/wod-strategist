@@ -27,7 +27,7 @@ import {
 import { MarkdownText } from "@/components/ui/MarkdownText";
 import { normalizeStretchKey } from "@/features/stretch/normalize";
 import { useColorScheme } from "@/hooks/use-color-scheme";
-import { useHasPendingMerge } from "@/store/useMergeStatus";
+import { useHasPendingMerge, useMergeStatus } from "@/store/useMergeStatus";
 import { useProfileId } from "@/store/useProfileStore";
 import { useVideoQueue } from "@/store/useVideoQueue";
 import { useShallow } from "zustand/shallow";
@@ -39,8 +39,10 @@ import {
   fetchVideoDownloadURL,
   generateHardSub,
   generateHighlight,
+  mergeChunks,
   retryAnalysis,
 } from "../api";
+import { parseWorkoutType } from "../workoutType";
 import {
   AnalysisResult,
   HighlightResult,
@@ -1146,14 +1148,79 @@ export function useHistoryData(options?: { limit?: number }) {
 // Processing Section
 // ---------------------
 
-function ProcessingSection({ items }: { items: AnalysisResult[] }) {
+export function isStaleProcessing(
+  createdAt: string,
+  now: number = Date.now(),
+): boolean {
+  if (!createdAt) return false;
+  const createdTime = new Date(createdAt).getTime();
+  if (!Number.isFinite(createdTime)) return false;
+  return now - createdTime >= 60 * 60 * 1000;
+}
+
+export function ProcessingSection({
+  items,
+  onRefresh,
+}: {
+  items: AnalysisResult[];
+  onRefresh?: () => void;
+}) {
   const scheme = useColorScheme() ?? "light";
   const isDark = scheme === "dark";
+  const activeProfileId = useProfileId();
+  const [remergingId, setRemergingId] = useState<string | null>(null);
 
   // Pull ALL non-completed items from the local video queue
   // useShallow prevents infinite re-renders from .filter() creating new array refs
   const queueItems = useVideoQueue(
     useShallow((s) => s.items.filter((i) => i.status !== "UPLOADED")),
+  );
+
+  const handleRemerge = useCallback(
+    (item: AnalysisResult) => {
+      const profileIdToUse = item.profile_id ?? activeProfileId;
+      if (!profileIdToUse) {
+        Alert.alert(t("common.error"), t("historyList.remergeFailed"));
+        return;
+      }
+
+      Alert.alert(
+        t("historyList.remergeConfirmTitle"),
+        t("historyList.remergeConfirmBody"),
+        [
+          { text: t("common.cancel"), style: "cancel" },
+          {
+            text: t("historyList.remergeAction"),
+            onPress: async () => {
+              try {
+                setRemergingId(item.session_id);
+                const parts = item.session_id.split("-");
+                const rawType =
+                  parts[0]?.startsWith("P") && parts.length > 1
+                    ? parts[1]
+                    : parts[0];
+                const workoutType = parseWorkoutType(rawType);
+
+                await mergeChunks(item.session_id, {
+                  profileId: profileIdToUse,
+                  workoutType,
+                });
+
+                useMergeStatus.getState().addPending(item.session_id);
+                Alert.alert(t("upload.success"), t("historyList.remergeStarted"));
+                onRefresh?.();
+              } catch (err) {
+                console.error("Failed to re-merge chunks:", err);
+                Alert.alert(t("common.error"), t("historyList.remergeFailed"));
+              } finally {
+                setRemergingId(null);
+              }
+            },
+          },
+        ],
+      );
+    },
+    [activeProfileId, onRefresh],
   );
 
   if (items.length === 0 && queueItems.length === 0) return null;
@@ -1177,43 +1244,73 @@ function ProcessingSection({ items }: { items: AnalysisResult[] }) {
       </View>
 
       {/* Server-side PENDING analysis results */}
-      {items.map((item) => (
-        <View
-          key={item.id}
-          style={[
-            processingStyles.card,
-            { backgroundColor: processingBg, borderColor: processingBorder },
-          ]}
-        >
-          <View style={processingStyles.cardRow}>
-            <Text style={processingStyles.icon}>🔬</Text>
-            <View style={processingStyles.cardContent}>
-              <Text
+      {items.map((item) => {
+        const stale = isStaleProcessing(item.created_at);
+        const isRemerging = remergingId === item.session_id;
+
+        return (
+          <View
+            key={item.id}
+            style={[
+              processingStyles.card,
+              { backgroundColor: processingBg, borderColor: processingBorder },
+            ]}
+          >
+            <View style={processingStyles.cardRow}>
+              <Text style={processingStyles.icon}>🔬</Text>
+              <View style={processingStyles.cardContent}>
+                <Text
+                  style={[
+                    processingStyles.cardTitle,
+                    { color: isDark ? "#FFF" : "#1C1C1E" },
+                  ]}
+                >
+                  {formatSessionLabel(item.session_id)}
+                </Text>
+                <Text
+                  style={[processingStyles.cardSubtitle, { color: subtextColor }]}
+                >
+                  {t("historyList.aiAnalyzing")}
+                </Text>
+              </View>
+              <View
                 style={[
-                  processingStyles.cardTitle,
-                  { color: isDark ? "#FFF" : "#1C1C1E" },
+                  processingStyles.statusDot,
+                  { backgroundColor: "#FFD60A" },
                 ]}
-              >
-                {formatSessionLabel(item.session_id)}
-              </Text>
-              <Text
-                style={[processingStyles.cardSubtitle, { color: subtextColor }]}
-              >
-                {t("historyList.aiAnalyzing")}
-              </Text>
+              />
             </View>
-            <View
-              style={[
-                processingStyles.statusDot,
-                { backgroundColor: "#FFD60A" },
-              ]}
-            />
+            <View style={processingStyles.cardFooter}>
+              <Text style={[processingStyles.cardDate, { color: subtextColor }]}>
+                {formatDate(item.created_at)}
+              </Text>
+              {stale && (
+                <TouchableOpacity
+                  style={[
+                    processingStyles.remergeBtn,
+                    isRemerging && { opacity: 0.6 },
+                  ]}
+                  disabled={isRemerging}
+                  onPress={() => handleRemerge(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("historyList.remerge")}
+                >
+                  {isRemerging ? (
+                    <ActivityIndicator size="small" color="#FFD60A" />
+                  ) : (
+                    <>
+                      <Text style={processingStyles.remergeIcon}>🔄</Text>
+                      <Text style={processingStyles.remergeBtnText}>
+                        {t("historyList.remerge")}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
-          <Text style={[processingStyles.cardDate, { color: subtextColor }]}>
-            {formatDate(item.created_at)}
-          </Text>
-        </View>
-      ))}
+        );
+      })}
 
       {/* Local video queue items (all stages) */}
       {queueItems.map((item) => {
@@ -1345,9 +1442,34 @@ const processingStyles = StyleSheet.create({
   cardSubtitle: {
     fontSize: 12,
   },
+  cardFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginLeft: 30,
+    marginTop: 2,
+  },
   cardDate: {
     fontSize: 11,
-    marginLeft: 30,
+  },
+  remergeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: "rgba(255,214,10,0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(255,214,10,0.3)",
+  },
+  remergeIcon: {
+    fontSize: 11,
+  },
+  remergeBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#FFD60A",
   },
   statusDot: {
     width: 8,
@@ -1412,6 +1534,7 @@ const mergeBannerStyles = StyleSheet.create({
 interface HistoryListProps {
   data: AnalysisResult[];
   loading: boolean;
+  onRefresh?: () => void;
   onArchive?: (id: number) => void;
   focusSessionId?: string;
   scrollViewRef?: React.RefObject<any>;
@@ -1475,6 +1598,7 @@ function groupByDate(items: AnalysisResult[]): DateSection[] {
 export function HistoryList({
   data,
   loading,
+  onRefresh,
   onArchive,
   focusSessionId,
   scrollViewRef,
@@ -1560,7 +1684,7 @@ export function HistoryList({
     <>
       <OriginalVideosPending />
       <MergeBanner />
-      <ProcessingSection items={pendingItems} />
+      <ProcessingSection items={pendingItems} onRefresh={onRefresh} />
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id.toString()}

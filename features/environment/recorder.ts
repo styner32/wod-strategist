@@ -21,6 +21,9 @@ export function newEnvironmentRecord(session: EnvironmentSession, kind: Environm
     outcome: 'skipped', reason: null, preparationMs: 0, inferenceMs: 0, raw: null, parsed: null,
     validation: 'not_applicable', evidence: [], powerBefore: null, powerAfter: null };
 }
+
+export const weatherEnabled = false; // Disabled until WeatherKit developer entitlement is provisioned
+
 export class EnvironmentRecorder {
   private session: EnvironmentSession;
   private writer: NdjsonWriter | null = null;
@@ -110,7 +113,6 @@ export class EnvironmentRecorder {
       }
       const now = Date.now();
       if (!this.active || this.paused || this.memoryHalted) return;
-      const weatherEnabled = false; // Disabled until WeatherKit developer entitlement is provisioned
       if (weatherEnabled && now >= this.nextWeatherAt && !this.weatherPending && !this.protection.reason && environmentNativeAvailable) {
         this.nextWeatherAt = now + 300_000;
         this.weatherPending = this.weather().finally(() => { this.weatherPending = null; });

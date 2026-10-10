@@ -759,10 +759,25 @@ export function SessionDetailPage() {
 
   const { data: h10MemoryData } = useQuery({
     queryKey: ["h10-memory", profileId, sessionId],
-    queryFn: () => onDeviceAiApi.read(sessionId!, profileId!, H10_MEMORY_FILENAME),
-    enabled: Boolean(sessionId && profileId),
+    queryFn: async () => {
+      try {
+        return await onDeviceAiApi.read(sessionId!, profileId!, H10_MEMORY_FILENAME);
+      } catch (err: any) {
+        if (err?.status === 404 || err?.response?.status === 404) {
+          return null;
+        }
+        throw err;
+      }
+    },
+    enabled: Boolean(sessionId && profileId && analysis),
     retry: false,
-    staleTime: 60_000,
+    staleTime: 10_000,
+    refetchInterval: (query) => {
+      if (!query.state.data && sensorTimelineResponse?.status === "pending") {
+        return 5000;
+      }
+      return false;
+    },
   });
 
   // Track video playback position

@@ -306,6 +306,68 @@ it("keeps the resumed writer active when a source-accepted older run reports a l
   view.unmount();
 });
 
+it("resumes recording when a previous run had dropped frames or tail drain timeout during pause, and triggers server merge for uploaded chunks", async () => {
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+  const first = mockStartCamera.mock.calls[0][0];
+
+  // Upload an analysis segment during run 1
+  await act(async () => {
+    first.onRecordingSegment({
+      status: "ready",
+      path: "file:///documents/run-1/analysis/part.mp4",
+      captureStartTimeMs: Date.now() - 1000,
+      captureEndTimeMs: Date.now(),
+    });
+  });
+
+  // Pause recording (e.g. backgrounded by system alert)
+  fireEvent.press(view.getByText("pause.fill"));
+  await waitFor(() => expect(mockStopCamera).toHaveBeenCalledTimes(1));
+
+  // The interrupted run reports dropped buffers and tail timeout
+  await act(async () => {
+    first.onRecordingSourceFinalized({
+      ...source(1),
+      droppedVideoFrames: 24,
+      droppedAudioBuffers: 0,
+      tailDrainTimedOut: true,
+    });
+    await first.onRecordingFinished({
+      ...source(1),
+      droppedVideoFrames: 24,
+      droppedAudioBuffers: 0,
+      tailDrainTimedOut: true,
+    });
+  });
+
+  // Resume recording after dismissing the alert
+  fireEvent.press(view.getByText("play.fill"));
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(2));
+
+  // Stop the second run and complete the workout
+  const second = mockStartCamera.mock.calls[1][0];
+  fireEvent.press(view.getByText("square.fill"));
+  await waitFor(() => expect(mockStopCamera).toHaveBeenCalledTimes(2));
+  await act(async () => {
+    second.onRecordingSourceFinalized(source(2));
+    await second.onRecordingFinished(source(2));
+  });
+
+  // Capture was marked incomplete due to the first run's dropped buffers
+  expect(mockStopped).toHaveBeenCalledWith(mockRef, {
+    complete: false,
+    reason: "capture dropped buffers: video=24, audio=0, tailTimeout=true",
+  });
+  // Both runs were added to the manifest
+  expect(mockAdd.mock.calls.map(call => call[1].order)).toEqual([1, 2]);
+  // Original is retained without automatic gallery save because complete is false
+  expect(mockSave).not.toHaveBeenCalled();
+  // Server merge was triggered for the uploaded chunks
+  expect(mockAddPending).toHaveBeenCalledWith(mockRef.sessionId);
+  view.unmount();
+});
+
 it.each(["network", "confidence"])("keeps complete originals saveable and releases readers after an analysis %s failure", async (failure) => {
   if (failure === "network") mockProcessChunk.mockRejectedValueOnce(new Error("offline"));
   else mockConfidence.mockImplementationOnce(() => { throw new Error("confidence unavailable"); });

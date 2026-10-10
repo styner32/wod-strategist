@@ -54,12 +54,12 @@ function H10MemoryDetail({ sessionId, profileId }: { sessionId: string; profileI
   </div>;
 }
 
-/** Phase 1: shows what the experimental H10 internal recording uploaded; no timeline merge. */
+/** Phase 1: shows what the experimental H10 internal recording uploaded and overlays on the sensor timeline. */
 export function H10MemoryPanel({ sessionId, profileId }: { sessionId: string; profileId: number }) {
   const [open, setOpen] = useState(false);
   return <section className="mt-6 min-w-0 rounded-xl border border-border bg-bg-elevated p-4" aria-label="H10 내부 저장 심박 기록">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold text-text-primary">H10 내부 저장 심박 (실험)</h2>
-      <p className="mt-1 text-sm text-text-muted">Polar H10 메모리에서 회수한 심박 원본 · 그래프에는 아직 반영하지 않음</p></div>
+      <p className="mt-1 text-sm text-text-muted">Polar H10 메모리에서 회수한 심박 원본 · 센서 시계열 오버레이 지원</p></div>
       <button className={buttonClass} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? '기록 접기' : '기록 확인'}</button></div>
     {open && <H10MemoryDetail sessionId={sessionId} profileId={profileId} />}
   </section>;
