@@ -17,10 +17,32 @@ For detailed patterns see:
 * **Use factories in `testhelpers/factory.go`** (`CreateUser`, `CreateProfile`, ...) for test setup. No inline `dbConn.Create(&db.Foo{...})`.
 
 ## Testing Philosophy
-* **Framework:** Use `Ginkgo` and `Gomega` for tests (except `Benchmark...` functions).
+* **Framework:** Every test is a Ginkgo spec (`Describe` / `It`, or `DescribeTable` + `Entry` for table-driven cases) with Gomega assertions (`Expect(...)`), including pure-function unit tests. The only `func TestXxx(t *testing.T)` allowed is the `RunSpecs` suite runner in `*_suite_test.go`; `Benchmark...` functions are the only other exception.
+* **Existing `testing.T` tests are violations, not precedent.** Some test files still use `func TestXxx(t *testing.T)`. When adding or changing a test in such a file, convert that file to Ginkgo in the same change. This is in scope, not an unrelated refactor (same rule as pulling handlers out of `handlers.go`). Never append another `TestXxx` or mix both styles in one file.
+* **Running specs:** From `api/`: `go test ./internal/<pkg> -count=1 -ginkgo.focus='<Describe text>'` (add `-p 1` for multiple packages). A package's `BeforeSuite` may need PostgreSQL/Redis even when the focused spec is pure. If the suite cannot run locally, report that the tests were not run. Never rewrite a test as `testing.T` to get a run that skips the suite.
 * **Package Init:** Add a `*_suite_test.go` file with `RunSpecs(...)` when adding tests to a new package.
 * **Mocking:** Do **NOT** create `fake*` structs for interfaces (e.g., `fakeStorage`). Use real clients backed by `api/internal/testhelpers.MockTransport`.
 * **Outbound HTTP unit tests:** Prefer `testhelpers.MockTransport` at the transport layer before falling back to ad-hoc servers.
+
+```go
+// ❌ Don't
+func TestEscapeLikePattern(t *testing.T) {
+	if got := escapeLikePattern("dead_lift"); got != `dead\_lift` {
+		t.Errorf("got %q", got)
+	}
+}
+
+// ✅ Do
+var _ = Describe("escapeLikePattern", func() {
+	DescribeTable("escapes LIKE wildcards",
+		func(input, want string) {
+			Expect(escapeLikePattern(input)).To(Equal(want))
+		},
+		Entry("percent", "50% snatch", `50\% snatch`),
+		Entry("underscore", "dead_lift", `dead\_lift`),
+	)
+})
+```
 
 ## Worker Task Integration Testing (`internal/worker/*_test.go`)
 Follow the **4-layer real-client strategy** (see [backend-testing.md](../docs/agent-memory/backend-testing.md)):
@@ -48,3 +70,4 @@ Follow the **4-layer real-client strategy** (see [backend-testing.md](../docs/ag
 * **NEVER use `db.AutoMigrate()`**. All schema changes must go through versioned `golang-migrate` SQL files (`up.sql`/`down.sql`).
 * **NEVER** drop columns without `IF EXISTS` in `down.sql`. Use `ALTER TABLE ... ADD COLUMN ... DEFAULT` to protect existing rows.
 * **NEVER** use the Gemini `CachedContent` API with `VideoMetadata` (they are incompatible). Use the Files API upload as the cache layer.
+* **NEVER** write `func TestXxx(t *testing.T)` test functions. Write Ginkgo specs with Gomega `Expect`. The only exceptions are the `RunSpecs` suite runner in `*_suite_test.go` and `Benchmark...` functions.

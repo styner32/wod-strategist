@@ -4,6 +4,7 @@
 - Plan explicitly before modifying code.
 - Prefer small, reviewable diffs.
 - Follow existing project patterns before introducing new abstractions.
+- Documented rules (this file and scoped `AGENTS.md` files) override patterns in nearby code. Code that contradicts a rule is not precedent; follow the rule.
 - Avoid unrelated refactors.
 - Do not rename unrelated symbols or reformat unrelated files.
 - Reuse existing helpers, clients, and package boundaries.
@@ -38,6 +39,7 @@ Never do these unless explicitly requested:
 ## 🚫 CRITICAL CONSTRAINTS
 - **NEVER** embed the `profile_id` directly inside the Session ID string — use it only as a GCS path prefix.
 - **NEVER** place new session file types in a separate top-level prefix — always under `videos/{pid}/{sid}/`.
+- **NEVER** write Go tests in `api/` as `func TestXxx(t *testing.T)`. Use Ginkgo/Gomega specs; only the `RunSpecs` runner in `*_suite_test.go` is allowed. See [api/AGENTS.md](api/AGENTS.md#testing-philosophy).
 
 ## Scoped rules
 - [api/AGENTS.md](api/AGENTS.md) — Backend Go rules (testing, migrations, error handling, video analysis)
@@ -53,7 +55,7 @@ Never do these unless explicitly requested:
 When introducing a new integration, architectural pattern, non-obvious gotcha, or platform-specific workaround, create or update a memory doc in [docs/agent-memory/](docs/agent-memory/). Each doc should be concise and rule-oriented — include exact param names, default values, schema columns, and constraints that a future agent would need to make correct edits.
 
 Consult these when working on the relevant domain:
-- [docs/agent-memory/backend-testing.md](docs/agent-memory/backend-testing.md) — Worker integration test patterns and helpers
+- [docs/agent-memory/backend-testing.md](docs/agent-memory/backend-testing.md) — Test tiers (pure vs I/O), controller and worker integration patterns, helpers
 - [docs/agent-memory/migrations.md](docs/agent-memory/migrations.md) — `golang-migrate` workflow, authoring rules
 - [docs/agent-memory/video-analysis.md](docs/agent-memory/video-analysis.md) — Two-pass architecture, anti-hallucination rules
 - [docs/agent-memory/storage-and-session-format.md](docs/agent-memory/storage-and-session-format.md) — GCS layout details, backward compatibility
