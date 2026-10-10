@@ -25,6 +25,7 @@ var _ = Describe("GET /api/v1/video-download/:session_id", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 

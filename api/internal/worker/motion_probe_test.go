@@ -4,58 +4,50 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestProbeMotionScoreDirect(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Fatalf("ffmpeg is required for motion probe tests but was not found in PATH: %v", err)
-	}
+var _ = Describe("probeMotionScore", func() {
+	It("differentiates static and dynamic videos", func() {
+		if _, err := exec.LookPath("ffmpeg"); err != nil {
+			Skip("ffmpeg is required for motion probe tests but was not found in PATH")
+		}
 
-	// 1. Create a static video (pure black)
-	staticPath := filepath.Join(t.TempDir(), "static.mp4")
-	cmdStatic := exec.Command("ffmpeg",
-		"-f", "lavfi", "-i", "color=c=black:size=64x64:rate=10",
-		"-t", "3",
-		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "51",
-		"-y", staticPath,
-	)
-	if output, err := cmdStatic.CombinedOutput(); err != nil {
-		t.Fatalf("Failed to create static video with ffmpeg: %s: %v", string(output), err)
-	}
+		// 1. Create a static video (pure black)
+		staticPath := filepath.Join(GinkgoT().TempDir(), "static.mp4")
+		cmdStatic := exec.Command("ffmpeg",
+			"-f", "lavfi", "-i", "color=c=black:size=64x64:rate=10",
+			"-t", "3",
+			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "51",
+			"-y", staticPath,
+		)
+		output, err := cmdStatic.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), "Failed to create static video with ffmpeg: %s", string(output))
 
-	// 2. Create a dynamic video (testsrc with moving patterns)
-	dynamicPath := filepath.Join(t.TempDir(), "dynamic.mp4")
-	cmdDynamic := exec.Command("ffmpeg",
-		"-f", "lavfi", "-i", "testsrc=size=64x64:rate=10",
-		"-t", "3",
-		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "51",
-		"-y", dynamicPath,
-	)
-	if output, err := cmdDynamic.CombinedOutput(); err != nil {
-		t.Fatalf("Failed to create dynamic video with ffmpeg: %s: %v", string(output), err)
-	}
+		// 2. Create a dynamic video (testsrc with moving patterns)
+		dynamicPath := filepath.Join(GinkgoT().TempDir(), "dynamic.mp4")
+		cmdDynamic := exec.Command("ffmpeg",
+			"-f", "lavfi", "-i", "testsrc=size=64x64:rate=10",
+			"-t", "3",
+			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "51",
+			"-y", dynamicPath,
+		)
+		output, err = cmdDynamic.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), "Failed to create dynamic video with ffmpeg: %s", string(output))
 
-	// 3. Probe motion scores
-	staticScore, err := probeMotionScore(context.Background(), staticPath)
-	if err != nil {
-		t.Fatalf("probeMotionScore for static failed: %v", err)
-	}
+		// 3. Probe motion scores
+		staticScore, err := probeMotionScore(context.Background(), staticPath)
+		Expect(err).NotTo(HaveOccurred())
 
-	dynamicScore, err := probeMotionScore(context.Background(), dynamicPath)
-	if err != nil {
-		t.Fatalf("probeMotionScore for dynamic failed: %v", err)
-	}
+		dynamicScore, err := probeMotionScore(context.Background(), dynamicPath)
+		Expect(err).NotTo(HaveOccurred())
 
-	t.Logf("Static score: %f, Dynamic score: %f", staticScore, dynamicScore)
+		// Static video should have very low scene changes (often exactly 0.0 or near 0)
+		Expect(staticScore).To(BeNumerically("<=", 0.05))
 
-	// Static video should have very low scene changes (often exactly 0.0 or near 0)
-	if staticScore > 0.05 {
-		t.Errorf("Expected static video score to be very low, got %f", staticScore)
-	}
-
-	// Dynamic video should have higher scene changes
-	if dynamicScore <= staticScore {
-		t.Errorf("Expected dynamic video score (%f) to be higher than static video score (%f)", dynamicScore, staticScore)
-	}
-}
+		// Dynamic video should have higher scene changes
+		Expect(dynamicScore).To(BeNumerically(">", staticScore))
+	})
+})

@@ -48,6 +48,7 @@ func feedbackRequest(method, path, body string, user *db.User) *http.Request {
 
 var _ = Describe("POST /api/v1/sessions/:session_id/feedback", func() {
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 	})
 
@@ -149,6 +150,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/feedback", func() {
 
 var _ = Describe("GET /api/v1/sessions/:session_id/feedback", func() {
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 	})
 
@@ -194,6 +196,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/feedback", func() {
 
 var _ = Describe("PATCH /api/v1/sessions/:session_id/feedback/:feedback_id", func() {
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 	})
 
@@ -231,6 +234,7 @@ var _ = Describe("PATCH /api/v1/sessions/:session_id/feedback/:feedback_id", fun
 
 var _ = Describe("DELETE /api/v1/sessions/:session_id/feedback/:feedback_id", func() {
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 	})
 

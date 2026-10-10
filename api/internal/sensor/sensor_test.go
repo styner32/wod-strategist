@@ -5,10 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"os"
 	"strings"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	"github.com/wod-strategist/api/internal/sensor"
 )
@@ -18,158 +19,118 @@ func computeHash(content string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func TestSensorParser_FloatingPointTimestamps(t *testing.T) {
-	opts := sensor.ParseOptions{
-		ExpectedProfileID: 1,
-		ExpectedSessionID: "WARMUP-20260908-01M1Z6RVEJZJ9HSWFAR9NWX926",
-	}
+var _ = Describe("Sensor Parser", func() {
+	It("handles floating point timestamps", func() {
+		opts := sensor.ParseOptions{
+			ExpectedProfileID: 1,
+			ExpectedSessionID: "WARMUP-20260908-01M1Z6RVEJZJ9HSWFAR9NWX926",
+		}
 
-	content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WARMUP-20260908-01M1Z6RVEJZJ9HSWFAR9NWX926","profile_id":1,"clock_source":"capture_clock","base_epoch_ms":1757302488832}
+		content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WARMUP-20260908-01M1Z6RVEJZJ9HSWFAR9NWX926","profile_id":1,"clock_source":"capture_clock","base_epoch_ms":1757302488832}
 {"k":"stream_start","t":4400.45,"stream_id":1,"sampling":{"acc_hz":52,"acc_range_g":8,"ecg_hz":130,"delta_compressed":false},"clock_anchor":{"device_timestamp_ns":1625902167906250,"capture_offset_ms":4400.45,"method":"bluetooth_notification"}}
 {"k":"acc","t":4400.45,"stream_id":1,"dt":19.53,"v":[[0.05,0.98,0.02],[0.06,0.97,0.03]]}
 {"k":"hr","t":4500.25,"bpm":150}
 {"k":"hr","t":5500.75,"bpm":155}
 {"k":"end","t":6000.5,"pause_intervals":[{"start_offset_ms":5000.1,"end_offset_ms":5100.2}],"device":{"battery_percent_end":85}}
 `
-	opts.ExpectedSHA256 = computeHash(content)
-	opts.ExpectedSizeBytes = int64(len(content))
+		opts.ExpectedSHA256 = computeHash(content)
+		opts.ExpectedSizeBytes = int64(len(content))
 
-	res, err := sensor.ParseAndProcess(strings.NewReader(content), opts)
-	if err != nil {
-		t.Fatalf("ParseAndProcess failed: %v", err)
-	}
-	if !res.Quality.IsComplete {
-		t.Fatalf("expected complete, got errors: %v", res.Quality.Errors)
-	}
-	if res.Quality.Status != "ok" {
-		t.Errorf("expected status 'ok', got %s", res.Quality.Status)
-	}
-}
+		res, err := sensor.ParseAndProcess(strings.NewReader(content), opts)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(res.Quality.IsComplete).To(BeTrue(), "expected complete, got errors: %v", res.Quality.Errors)
+		Expect(res.Quality.Status).To(Equal("ok"))
+	})
 
+	Context("P1 Quality and Limits", func() {
+		opts := sensor.ParseOptions{
+			ExpectedProfileID: 42,
+			ExpectedSessionID: "WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF",
+		}
 
-func TestSensorParser_P1_QualityAndLimits(t *testing.T) {
-	opts := sensor.ParseOptions{
-		ExpectedProfileID: 42,
-		ExpectedSessionID: "WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF",
-	}
-
-	t.Run("End missing results in incomplete status and no valid HR", func(t *testing.T) {
-		content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
+		It("marks incomplete and no valid HR when end is missing", func() {
+			content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
 {"k":"hr","t":1000,"bpm":150}
 {"k":"hr","t":2000,"bpm":155}
 `
-		opts.ExpectedSHA256 = computeHash(content)
-		res, err := sensor.ParseAndProcess(strings.NewReader(content), opts)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Quality.IsComplete {
-			t.Errorf("expected IsComplete=false")
-		}
-		if res.Quality.Status != "incomplete" {
-			t.Errorf("expected status=incomplete, got %s", res.Quality.Status)
-		}
-		if res.Quality.ValidHR {
-			t.Errorf("expected ValidHR=false")
-		}
-		if res.HRBonus != 0.0 {
-			t.Errorf("expected HRBonus=0, got %f", res.HRBonus)
-		}
-	})
+			currentOpts := opts
+			currentOpts.ExpectedSHA256 = computeHash(content)
+			res, err := sensor.ParseAndProcess(strings.NewReader(content), currentOpts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.Quality.IsComplete).To(BeFalse())
+			Expect(res.Quality.Status).To(Equal("incomplete"))
+			Expect(res.Quality.ValidHR).To(BeFalse())
+			Expect(res.HRBonus).To(Equal(0.0))
+		})
 
-	t.Run("Identity mismatch (profile_id)", func(t *testing.T) {
-		content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":99,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
+		It("rejects identity mismatch on profile_id", func() {
+			content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":99,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
 {"k":"end","t":5000,"pause_intervals":[],"device":{"battery_percent_end":80},"summary":{"hr_samples":0,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}
 `
-		opts.ExpectedSHA256 = computeHash(content)
-		res, err := sensor.ParseAndProcess(strings.NewReader(content), opts)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Quality.IsComplete {
-			t.Errorf("expected IsComplete=false")
-		}
-		if res.Quality.Status != "corrupt" {
-			t.Errorf("expected status=corrupt, got %s", res.Quality.Status)
-		}
-		if len(res.Quality.Errors) == 0 || !strings.Contains(res.Quality.Errors[0], "profile_id") {
-			t.Errorf("expected profile_id error, got %v", res.Quality.Errors)
-		}
-	})
+			currentOpts := opts
+			currentOpts.ExpectedSHA256 = computeHash(content)
+			res, err := sensor.ParseAndProcess(strings.NewReader(content), currentOpts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.Quality.IsComplete).To(BeFalse())
+			Expect(res.Quality.Status).To(Equal("corrupt"))
+			Expect(res.Quality.Errors).NotTo(BeEmpty())
+			Expect(res.Quality.Errors[0]).To(ContainSubstring("profile_id"))
+		})
 
-	t.Run("SHA-256 hash mismatch", func(t *testing.T) {
-		content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
+		It("rejects SHA-256 hash mismatch", func() {
+			content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
 {"k":"end","t":5000,"pause_intervals":[],"device":{"battery_percent_end":80},"summary":{"hr_samples":0,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}
 `
-		mismatchOpts := opts
-		mismatchOpts.ExpectedSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
-		res, err := sensor.ParseAndProcess(strings.NewReader(content), mismatchOpts)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Quality.IsComplete {
-			t.Errorf("expected IsComplete=false")
-		}
-		if res.Quality.Status != "corrupt" {
-			t.Errorf("expected status=corrupt, got %s", res.Quality.Status)
-		}
-		if len(res.Quality.Errors) == 0 || !strings.Contains(res.Quality.Errors[0], "SHA-256 mismatch") {
-			t.Errorf("expected SHA-256 mismatch error, got %v", res.Quality.Errors)
-		}
-	})
+			mismatchOpts := opts
+			mismatchOpts.ExpectedSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
+			res, err := sensor.ParseAndProcess(strings.NewReader(content), mismatchOpts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.Quality.IsComplete).To(BeFalse())
+			Expect(res.Quality.Status).To(Equal("corrupt"))
+			Expect(res.Quality.Errors).NotTo(BeEmpty())
+			Expect(res.Quality.Errors[0]).To(ContainSubstring("SHA-256 mismatch"))
+		})
 
-	t.Run("Line exceeding 1 MiB rejected", func(t *testing.T) {
-		hugeLine := strings.Repeat("A", 1024*1024+10)
-		content := fmt.Sprintf(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
+		It("rejects line exceeding 1 MiB", func() {
+			hugeLine := strings.Repeat("A", 1024*1024+10)
+			content := fmt.Sprintf(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
 {"k":"comment","data":"%s"}
 {"k":"end","t":5000,"pause_intervals":[],"device":{"battery_percent_end":80},"summary":{"hr_samples":0,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}
 `, hugeLine)
-		opts.ExpectedSHA256 = computeHash(content)
-		res, err := sensor.ParseAndProcess(strings.NewReader(content), opts)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Quality.IsComplete {
-			t.Errorf("expected IsComplete=false")
-		}
-		if res.Quality.Status != "corrupt" {
-			t.Errorf("expected status=corrupt, got %s", res.Quality.Status)
-		}
-		if len(res.Quality.Errors) == 0 || !strings.Contains(res.Quality.Errors[0], "1 MiB limit") {
-			t.Errorf("expected 1 MiB limit error, got %v", res.Quality.Errors)
-		}
-	})
+			currentOpts := opts
+			currentOpts.ExpectedSHA256 = computeHash(content)
+			res, err := sensor.ParseAndProcess(strings.NewReader(content), currentOpts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.Quality.IsComplete).To(BeFalse())
+			Expect(res.Quality.Status).To(Equal("corrupt"))
+			Expect(res.Quality.Errors).NotTo(BeEmpty())
+			Expect(res.Quality.Errors[0]).To(ContainSubstring("1 MiB limit"))
+		})
 
-	t.Run("Non-empty line after end event rejected", func(t *testing.T) {
-		content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
+		It("rejects non-empty line after end event", func() {
+			content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
 {"k":"end","t":5000,"pause_intervals":[],"device":{"battery_percent_end":80},"summary":{"hr_samples":0,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}
 {"k":"hr","t":6000,"bpm":150}
 `
-		opts.ExpectedSHA256 = computeHash(content)
-		res, err := sensor.ParseAndProcess(strings.NewReader(content), opts)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Quality.IsComplete {
-			t.Errorf("expected IsComplete=false")
-		}
-		if res.Quality.Status != "corrupt" {
-			t.Errorf("expected status=corrupt, got %s", res.Quality.Status)
-		}
-		if len(res.Quality.Errors) == 0 || !strings.Contains(res.Quality.Errors[0], "after end event") {
-			t.Errorf("expected after end event error, got %v", res.Quality.Errors)
-		}
+			currentOpts := opts
+			currentOpts.ExpectedSHA256 = computeHash(content)
+			res, err := sensor.ParseAndProcess(strings.NewReader(content), currentOpts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.Quality.IsComplete).To(BeFalse())
+			Expect(res.Quality.Status).To(Equal("corrupt"))
+			Expect(res.Quality.Errors).NotTo(BeEmpty())
+			Expect(res.Quality.Errors[0]).To(ContainSubstring("after end event"))
+		})
 	})
-}
 
-func TestSensorParser_P2_StreamAndPauses(t *testing.T) {
-	opts := sensor.ParseOptions{
-		ExpectedProfileID: 42,
-		ExpectedSessionID: "WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF",
-	}
+	Context("P2 Stream and Pauses", func() {
+		opts := sensor.ParseOptions{
+			ExpectedProfileID: 42,
+			ExpectedSessionID: "WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF",
+		}
 
-	t.Run("Numeric stream_id and pause interval subtraction", func(t *testing.T) {
-		content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
+		It("handles numeric stream_id and pause interval subtraction", func() {
+			content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
 {"k":"stream_start","t":0,"stream_id":1,"sampling":{"acc_hz":50,"acc_range_g":8,"acc_resolution_bits":16,"frame_type":1,"delta_compressed":false},"clock_anchor":{"device_timestamp_ns":100000,"capture_offset_ms":0,"method":"first_packet"}}
 {"k":"hr","t":1000,"bpm":150}
 {"k":"hr","t":3000,"bpm":150}
@@ -180,222 +141,179 @@ func TestSensorParser_P2_StreamAndPauses(t *testing.T) {
 {"k":"hr","t":10000,"bpm":150}
 {"k":"end","t":10000,"pause_intervals":[{"start_offset_ms":5000,"end_offset_ms":8000}],"device":{"battery_percent_end":85},"summary":{"hr_samples":5,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}
 `
-		opts.ExpectedSHA256 = computeHash(content)
-		res, err := sensor.ParseAndProcess(strings.NewReader(content), opts)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !res.Quality.IsComplete {
-			t.Errorf("expected IsComplete=true")
-		}
-		if res.Quality.Status != "ok" {
-			t.Errorf("expected status=ok, got %s", res.Quality.Status)
-		}
-		if res.Metrics.DurationSeconds != 7.0 {
-			t.Errorf("expected duration=7.0, got %f", res.Metrics.DurationSeconds)
-		}
-		if res.Metrics.PauseSeconds != 3.0 {
-			t.Errorf("expected pause=3.0, got %f", res.Metrics.PauseSeconds)
-		}
-	})
-}
-
-func TestSensorParser_P3_HRMetricsAndBonus(t *testing.T) {
-	age := 30
-	maxHR := 220 - age // 190
-	opts := sensor.ParseOptions{
-		ExpectedProfileID: 42,
-		ExpectedSessionID: "WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF",
-		Age:               &age,
-		EstimatedMaxHR:    &maxHR,
-	}
-
-	t.Run("Coverage 50% threshold: 49% invalid, 50% valid", func(t *testing.T) {
-		var buf bytes.Buffer
-		buf.WriteString(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}` + "\n")
-		for tMs := 0; tMs <= 49000; tMs += 1000 {
-			buf.WriteString(fmt.Sprintf(`{"k":"hr","t":%d,"bpm":160}`+"\n", tMs))
-		}
-		buf.WriteString(`{"k":"end","t":100000,"pause_intervals":[],"device":{"battery_percent_end":90},"summary":{"hr_samples":50,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}` + "\n")
-
-		content := buf.String()
-		opts49 := opts
-		opts49.ExpectedSHA256 = computeHash(content)
-		res49, err := sensor.ParseAndProcess(strings.NewReader(content), opts49)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if math.Abs(res49.Metrics.HR.Coverage-0.49) > 0.01 {
-			t.Errorf("expected coverage ~0.49, got %f", res49.Metrics.HR.Coverage)
-		}
-		if res49.Quality.ValidHR {
-			t.Errorf("expected ValidHR=false for 49%% coverage")
-		}
-		if res49.HRBonus != 0.0 {
-			t.Errorf("expected HRBonus=0, got %f", res49.HRBonus)
-		}
-
-		// 50s valid HR: coverage = 50% -> valid_hr = true, bonus = (160 - 140) * 0.5 = 10.0
-		buf.Reset()
-		buf.WriteString(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}` + "\n")
-		for tMs := 0; tMs <= 50000; tMs += 1000 {
-			buf.WriteString(fmt.Sprintf(`{"k":"hr","t":%d,"bpm":160}`+"\n", tMs))
-		}
-		buf.WriteString(`{"k":"end","t":100000,"pause_intervals":[],"device":{"battery_percent_end":90},"summary":{"hr_samples":51,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}` + "\n")
-
-		content50 := buf.String()
-		opts50 := opts
-		opts50.ExpectedSHA256 = computeHash(content50)
-		res50, err := sensor.ParseAndProcess(strings.NewReader(content50), opts50)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if math.Abs(res50.Metrics.HR.Coverage-0.50) > 0.01 {
-			t.Errorf("expected coverage ~0.50, got %f", res50.Metrics.HR.Coverage)
-		}
-		if !res50.Quality.ValidHR {
-			t.Errorf("expected ValidHR=true for 50%% coverage")
-		}
-		if math.Abs(res50.HRBonus-10.0) > 0.01 {
-			t.Errorf("expected HRBonus=10.0, got %f", res50.HRBonus)
-		}
-		if res50.Metrics.HR.WeightedMeanBPM == nil || math.Abs(*res50.Metrics.HR.WeightedMeanBPM-160.0) > 0.01 {
-			t.Errorf("expected weighted mean BPM ~160, got %v", res50.Metrics.HR.WeightedMeanBPM)
-		}
+			currentOpts := opts
+			currentOpts.ExpectedSHA256 = computeHash(content)
+			res, err := sensor.ParseAndProcess(strings.NewReader(content), currentOpts)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.Quality.IsComplete).To(BeTrue())
+			Expect(res.Quality.Status).To(Equal("ok"))
+			Expect(res.Metrics.DurationSeconds).To(Equal(7.0))
+			Expect(res.Metrics.PauseSeconds).To(Equal(3.0))
+		})
 	})
 
-	t.Run("BPM bounds check (29 ignored, 30 accepted, 240 accepted, 241 ignored)", func(t *testing.T) {
-		content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
+	Context("P3 HR Metrics and Bonus", func() {
+		age := 30
+		maxHR := 220 - age // 190
+		opts := sensor.ParseOptions{
+			ExpectedProfileID: 42,
+			ExpectedSessionID: "WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF",
+			Age:               &age,
+			EstimatedMaxHR:    &maxHR,
+		}
+
+		It("evaluates coverage 50% threshold: 49% invalid, 50% valid", func() {
+			var buf bytes.Buffer
+			buf.WriteString(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}` + "\n")
+			for tMs := 0; tMs <= 49000; tMs += 1000 {
+				buf.WriteString(fmt.Sprintf(`{"k":"hr","t":%d,"bpm":160}`+"\n", tMs))
+			}
+			buf.WriteString(`{"k":"end","t":100000,"pause_intervals":[],"device":{"battery_percent_end":90},"summary":{"hr_samples":50,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}` + "\n")
+
+			content := buf.String()
+			opts49 := opts
+			opts49.ExpectedSHA256 = computeHash(content)
+			res49, err := sensor.ParseAndProcess(strings.NewReader(content), opts49)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res49.Metrics.HR.Coverage).To(BeNumerically("~", 0.49, 0.01))
+			Expect(res49.Quality.ValidHR).To(BeFalse())
+			Expect(res49.HRBonus).To(Equal(0.0))
+
+			// 50s valid HR: coverage = 50% -> valid_hr = true, bonus = (160 - 140) * 0.5 = 10.0
+			buf.Reset()
+			buf.WriteString(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}` + "\n")
+			for tMs := 0; tMs <= 50000; tMs += 1000 {
+				buf.WriteString(fmt.Sprintf(`{"k":"hr","t":%d,"bpm":160}`+"\n", tMs))
+			}
+			buf.WriteString(`{"k":"end","t":100000,"pause_intervals":[],"device":{"battery_percent_end":90},"summary":{"hr_samples":51,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}` + "\n")
+
+			content50 := buf.String()
+			opts50 := opts
+			opts50.ExpectedSHA256 = computeHash(content50)
+			res50, err := sensor.ParseAndProcess(strings.NewReader(content50), opts50)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res50.Metrics.HR.Coverage).To(BeNumerically("~", 0.50, 0.01))
+			Expect(res50.Quality.ValidHR).To(BeTrue())
+			Expect(res50.HRBonus).To(BeNumerically("~", 10.0, 0.01))
+			Expect(res50.Metrics.HR.WeightedMeanBPM).NotTo(BeNil())
+			Expect(*res50.Metrics.HR.WeightedMeanBPM).To(BeNumerically("~", 160.0, 0.01))
+		})
+
+		It("checks BPM bounds (29 ignored, 30 accepted, 240 accepted, 241 ignored)", func() {
+			content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}
 {"k":"hr","t":1000,"bpm":29}
 {"k":"hr","t":2000,"bpm":30}
 {"k":"hr","t":3000,"bpm":240}
 {"k":"hr","t":4000,"bpm":241}
 {"k":"end","t":5000,"pause_intervals":[],"device":{"battery_percent_end":90},"summary":{"hr_samples":4,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}
 `
-		optsBounds := opts
-		optsBounds.ExpectedSHA256 = computeHash(content)
-		res, err := sensor.ParseAndProcess(strings.NewReader(content), optsBounds)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if res.Metrics.HR.MinBPM == nil || *res.Metrics.HR.MinBPM != 30 {
-			t.Errorf("expected min BPM=30, got %v", res.Metrics.HR.MinBPM)
-		}
-		if res.Metrics.HR.PeakBPM == nil || *res.Metrics.HR.PeakBPM != 240 {
-			t.Errorf("expected peak BPM=240, got %v", res.Metrics.HR.PeakBPM)
-		}
+			optsBounds := opts
+			optsBounds.ExpectedSHA256 = computeHash(content)
+			res, err := sensor.ParseAndProcess(strings.NewReader(content), optsBounds)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.Metrics.HR.MinBPM).NotTo(BeNil())
+			Expect(*res.Metrics.HR.MinBPM).To(Equal(30))
+			Expect(res.Metrics.HR.PeakBPM).NotTo(BeNil())
+			Expect(*res.Metrics.HR.PeakBPM).To(Equal(240))
+		})
+
+		It("clamps HR bonus to [0, 20]", func() {
+			var buf bytes.Buffer
+			buf.WriteString(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}` + "\n")
+			for tMs := 0; tMs <= 10000; tMs += 1000 {
+				buf.WriteString(fmt.Sprintf(`{"k":"hr","t":%d,"bpm":130}`+"\n", tMs))
+			}
+			buf.WriteString(`{"k":"end","t":10000,"pause_intervals":[],"device":{"battery_percent_end":90},"summary":{"hr_samples":11,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}` + "\n")
+
+			c1 := buf.String()
+			optsLow := opts
+			optsLow.ExpectedSHA256 = computeHash(c1)
+			resLow, err := sensor.ParseAndProcess(strings.NewReader(c1), optsLow)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resLow.HRBonus).To(Equal(0.0))
+
+			buf.Reset()
+			buf.WriteString(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}` + "\n")
+			for tMs := 0; tMs <= 10000; tMs += 1000 {
+				buf.WriteString(fmt.Sprintf(`{"k":"hr","t":%d,"bpm":190}`+"\n", tMs))
+			}
+			buf.WriteString(`{"k":"end","t":10000,"pause_intervals":[],"device":{"battery_percent_end":90},"summary":{"hr_samples":11,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}` + "\n")
+
+			c2 := buf.String()
+			optsHigh := opts
+			optsHigh.ExpectedSHA256 = computeHash(c2)
+			resHigh, err := sensor.ParseAndProcess(strings.NewReader(c2), optsHigh)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resHigh.HRBonus).To(Equal(20.0))
+		})
 	})
 
-	t.Run("HR bonus clamps to [0, 20]", func(t *testing.T) {
-		var buf bytes.Buffer
-		buf.WriteString(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}` + "\n")
-		for tMs := 0; tMs <= 10000; tMs += 1000 {
-			buf.WriteString(fmt.Sprintf(`{"k":"hr","t":%d,"bpm":130}`+"\n", tMs))
-		}
-		buf.WriteString(`{"k":"end","t":10000,"pause_intervals":[],"device":{"battery_percent_end":90},"summary":{"hr_samples":11,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}` + "\n")
-
-		c1 := buf.String()
-		optsLow := opts
-		optsLow.ExpectedSHA256 = computeHash(c1)
-		resLow, err := sensor.ParseAndProcess(strings.NewReader(c1), optsLow)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if resLow.HRBonus != 0.0 {
-			t.Errorf("expected HRBonus=0, got %f", resLow.HRBonus)
+	Describe("CaptureToMedia", func() {
+		chunks := []sensor.ChunkTimeline{
+			{CaptureStartMs: 0, CaptureEndMs: 10000, MediaStartMs: 0.0, MediaEndMs: 10.0, IsFinal: false},
+			{CaptureStartMs: 12000, CaptureEndMs: 22000, MediaStartMs: 10.0, MediaEndMs: 20.0, IsFinal: true},
 		}
 
-		buf.Reset()
-		buf.WriteString(`{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF","profile_id":42,"clock_source":"capture_clock","base_epoch_ms":1700000000000}` + "\n")
-		for tMs := 0; tMs <= 10000; tMs += 1000 {
-			buf.WriteString(fmt.Sprintf(`{"k":"hr","t":%d,"bpm":190}`+"\n", tMs))
-		}
-		buf.WriteString(`{"k":"end","t":10000,"pause_intervals":[],"device":{"battery_percent_end":90},"summary":{"hr_samples":11,"acc_samples":0,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}` + "\n")
+		It("maps timestamps correctly", func() {
+			media, ok := sensor.CaptureToMedia(5000, chunks)
+			Expect(ok).To(BeTrue())
+			Expect(media).To(BeNumerically("~", 5.0, 0.001))
 
-		c2 := buf.String()
-		optsHigh := opts
-		optsHigh.ExpectedSHA256 = computeHash(c2)
-		resHigh, err := sensor.ParseAndProcess(strings.NewReader(c2), optsHigh)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if resHigh.HRBonus != 20.0 {
-			t.Errorf("expected HRBonus=20.0, got %f", resHigh.HRBonus)
-		}
+			_, ok = sensor.CaptureToMedia(11000, chunks)
+			Expect(ok).To(BeFalse(), "expected false for gap")
+
+			media, ok = sensor.CaptureToMedia(15000, chunks)
+			Expect(ok).To(BeTrue())
+			Expect(media).To(BeNumerically("~", 13.0, 0.001))
+
+			media, ok = sensor.CaptureToMedia(22000, chunks)
+			Expect(ok).To(BeTrue())
+			Expect(media).To(BeNumerically("~", 20.0, 0.001))
+		})
+
+		It("returns false for overlapping chunks", func() {
+			badChunks := []sensor.ChunkTimeline{
+				{CaptureStartMs: 0, CaptureEndMs: 10000, MediaStartMs: 0.0, MediaEndMs: 10.0, IsFinal: false},
+				{CaptureStartMs: 8000, CaptureEndMs: 15000, MediaStartMs: 10.0, MediaEndMs: 17.0, IsFinal: true},
+			}
+			_, ok := sensor.CaptureToMedia(5000, badChunks)
+			Expect(ok).To(BeFalse(), "expected false for overlapping chunks")
+		})
 	})
-}
 
-func TestCaptureToMediaMapping(t *testing.T) {
-	chunks := []sensor.ChunkTimeline{
-		{CaptureStartMs: 0, CaptureEndMs: 10000, MediaStartMs: 0.0, MediaEndMs: 10.0, IsFinal: false},
-		{CaptureStartMs: 12000, CaptureEndMs: 22000, MediaStartMs: 10.0, MediaEndMs: 20.0, IsFinal: true},
-	}
+	Describe("MediaToCapture", func() {
+		chunks := []sensor.ChunkTimeline{
+			{CaptureStartMs: 0, CaptureEndMs: 10000, MediaStartMs: 0.0, MediaEndMs: 10.0, IsFinal: false},
+			{CaptureStartMs: 12000, CaptureEndMs: 22000, MediaStartMs: 10.0, MediaEndMs: 20.0, IsFinal: true},
+		}
 
-	media, ok := sensor.CaptureToMedia(5000, chunks)
-	if !ok || math.Abs(media-5.0) > 0.001 {
-		t.Errorf("expected 5.0, got %f, ok=%v", media, ok)
-	}
+		It("maps timestamps correctly", func() {
+			capMs, ok := sensor.MediaToCapture(5.0, chunks)
+			Expect(ok).To(BeTrue())
+			Expect(capMs).To(Equal(int64(5000)))
 
-	_, ok = sensor.CaptureToMedia(11000, chunks)
-	if ok {
-		t.Errorf("expected false for gap")
-	}
+			capMs, ok = sensor.MediaToCapture(13.0, chunks)
+			Expect(ok).To(BeTrue())
+			Expect(capMs).To(Equal(int64(15000)))
 
-	media, ok = sensor.CaptureToMedia(15000, chunks)
-	if !ok || math.Abs(media-13.0) > 0.001 {
-		t.Errorf("expected 13.0, got %f, ok=%v", media, ok)
-	}
+			capMs, ok = sensor.MediaToCapture(20.0, chunks)
+			Expect(ok).To(BeTrue())
+			Expect(capMs).To(Equal(int64(22000)))
 
-	media, ok = sensor.CaptureToMedia(22000, chunks)
-	if !ok || math.Abs(media-20.0) > 0.001 {
-		t.Errorf("expected 20.0, got %f, ok=%v", media, ok)
-	}
+			_, ok = sensor.MediaToCapture(25.0, chunks)
+			Expect(ok).To(BeFalse(), "expected false for out-of-range media time")
+		})
+	})
 
-	badChunks := []sensor.ChunkTimeline{
-		{CaptureStartMs: 0, CaptureEndMs: 10000, MediaStartMs: 0.0, MediaEndMs: 10.0, IsFinal: false},
-		{CaptureStartMs: 8000, CaptureEndMs: 15000, MediaStartMs: 10.0, MediaEndMs: 17.0, IsFinal: true},
-	}
-	_, ok = sensor.CaptureToMedia(5000, badChunks)
-	if ok {
-		t.Errorf("expected false for overlapping chunks")
-	}
-}
+	Describe("Duplicate HR Timestamps", func() {
+		It("processes duplicate timestamps without error", func() {
+			optsV2 := sensor.ParseOptions{
+				CalculationVersion: 2,
+				ExpectedProfileID:  1,
+				ExpectedSessionID:  "WOD-20260917-01M2PERXWM5NAA8ABX5Z44GH4B",
+			}
 
-func TestMediaToCaptureMapping(t *testing.T) {
-	chunks := []sensor.ChunkTimeline{
-		{CaptureStartMs: 0, CaptureEndMs: 10000, MediaStartMs: 0.0, MediaEndMs: 10.0, IsFinal: false},
-		{CaptureStartMs: 12000, CaptureEndMs: 22000, MediaStartMs: 10.0, MediaEndMs: 20.0, IsFinal: true},
-	}
-
-	capMs, ok := sensor.MediaToCapture(5.0, chunks)
-	if !ok || capMs != 5000 {
-		t.Errorf("expected 5000, got %d, ok=%v", capMs, ok)
-	}
-
-	capMs, ok = sensor.MediaToCapture(13.0, chunks)
-	if !ok || capMs != 15000 {
-		t.Errorf("expected 15000, got %d, ok=%v", capMs, ok)
-	}
-
-	capMs, ok = sensor.MediaToCapture(20.0, chunks)
-	if !ok || capMs != 22000 {
-		t.Errorf("expected 22000, got %d, ok=%v", capMs, ok)
-	}
-
-	_, ok = sensor.MediaToCapture(25.0, chunks)
-	if ok {
-		t.Errorf("expected false for out-of-range media time")
-	}
-}
-
-func TestSensorParser_DuplicateHRTimestamps(t *testing.T) {
-	optsV2 := sensor.ParseOptions{
-		CalculationVersion: 2,
-		ExpectedProfileID:  1,
-		ExpectedSessionID:  "WOD-20260917-01M2PERXWM5NAA8ABX5Z44GH4B",
-	}
-
-	content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260917-01M2PERXWM5NAA8ABX5Z44GH4B","profile_id":1,"clock_source":"capture_clock","base_epoch_ms":1789607573396}
+			content := `{"k":"meta","schema_version":"2.0.0","workout_session_id":"WOD-20260917-01M2PERXWM5NAA8ABX5Z44GH4B","profile_id":1,"clock_source":"capture_clock","base_epoch_ms":1789607573396}
 {"k":"stream_start","t":1000,"stream_id":1,"sampling":{"acc_hz":50,"acc_range_g":8}}
 {"k":"hr","t":1000,"bpm":100,"rr":[600]}
 {"k":"hr","t":2000,"bpm":110,"rr":[550]}
@@ -403,77 +321,53 @@ func TestSensorParser_DuplicateHRTimestamps(t *testing.T) {
 {"k":"hr","t":3000,"bpm":120,"rr":[500]}
 {"k":"end","t":4000,"pause_intervals":[]}
 `
-	optsV2.ExpectedSHA256 = computeHash(content)
-	optsV2.ExpectedSizeBytes = int64(len(content))
+			optsV2.ExpectedSHA256 = computeHash(content)
+			optsV2.ExpectedSizeBytes = int64(len(content))
 
-	timelineSource := sensor.TimelineSource{
-		SensorVersion:        "1",
-		RequestID:            "test-req",
-		SourceGeneration:     "100",
-		HRCalculationVersion: 2,
-	}
+			timelineSource := sensor.TimelineSource{
+				SensorVersion:        "1",
+				RequestID:            "test-req",
+				SourceGeneration:     "100",
+				HRCalculationVersion: 2,
+			}
 
-	res, err := sensor.ParseAndProcessWithTimeline(strings.NewReader(content), optsV2, timelineSource)
-	if err != nil {
-		t.Fatalf("ParseAndProcessWithTimeline failed: %v", err)
-	}
-	if !res.Summary.Quality.IsComplete {
-		t.Fatalf("expected IsComplete=true, got errors: %v", res.Summary.Quality.Errors)
-	}
-	if res.Summary.Quality.Status != "ok" {
-		t.Errorf("expected status 'ok', got %s", res.Summary.Quality.Status)
-	}
-	if !res.Summary.Quality.ValidHR {
-		t.Errorf("expected ValidHR=true")
-	}
-	if res.Timeline == nil {
-		t.Errorf("expected timeline to be generated")
-	}
+			res, err := sensor.ParseAndProcessWithTimeline(strings.NewReader(content), optsV2, timelineSource)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.Summary.Quality.IsComplete).To(BeTrue(), "expected IsComplete=true, got errors: %v", res.Summary.Quality.Errors)
+			Expect(res.Summary.Quality.Status).To(Equal("ok"))
+			Expect(res.Summary.Quality.ValidHR).To(BeTrue())
+			Expect(res.Timeline).NotTo(BeNil())
 
-	// Also test CalculationVersion 1
-	optsV1 := optsV2
-	optsV1.CalculationVersion = 1
-	resV1, err := sensor.ParseAndProcess(strings.NewReader(content), optsV1)
-	if err != nil {
-		t.Fatalf("ParseAndProcess V1 failed: %v", err)
-	}
-	if !resV1.Quality.IsComplete {
-		t.Fatalf("expected V1 IsComplete=true, got errors: %v", resV1.Quality.Errors)
-	}
+			// Also test CalculationVersion 1
+			optsV1 := optsV2
+			optsV1.CalculationVersion = 1
+			resV1, err := sensor.ParseAndProcess(strings.NewReader(content), optsV1)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resV1.Quality.IsComplete).To(BeTrue(), "expected V1 IsComplete=true, got errors: %v", resV1.Quality.Errors)
 
-	// Verify real session file if available on local disk
-	if data, err := os.ReadFile("/tmp/sensor_failed_20260917.ndjson"); err == nil {
-		h := sha256.Sum256(data)
-		realOpts := sensor.ParseOptions{
-			CalculationVersion: 2,
-			ExpectedProfileID:  1,
-			ExpectedSessionID:  "WOD-20260917-01M2PERXWM5NAA8ABX5Z44GH4B",
-			ExpectedSHA256:     hex.EncodeToString(h[:]),
-			ExpectedSizeBytes:  int64(len(data)),
-		}
-		realSource := sensor.TimelineSource{
-			SensorVersion:        "1",
-			RequestID:            "664fda62-bf90-4b69-a3f3-26b5d202f89a",
-			SourceGeneration:     "1",
-			HRCalculationVersion: 2,
-		}
-		realRes, err := sensor.ParseAndProcessWithTimeline(bytes.NewReader(data), realOpts, realSource)
-		if err != nil {
-			t.Fatalf("ParseAndProcessWithTimeline for real file failed: %v", err)
-		}
-		if !realRes.Summary.Quality.IsComplete {
-			t.Fatalf("expected real file IsComplete=true, got: %v", realRes.Summary.Quality.Errors)
-		}
-		if realRes.Summary.Quality.Status != "ok" {
-			t.Errorf("expected real file status ok, got %s", realRes.Summary.Quality.Status)
-		}
-		if !realRes.Summary.Quality.ValidHR {
-			t.Errorf("expected real file ValidHR=true")
-		}
-		if realRes.Timeline == nil {
-			t.Errorf("expected real file timeline to be present")
-		}
-	}
-}
-
-
+			// Verify real session file if available on local disk
+			if data, err := os.ReadFile("/tmp/sensor_failed_20260917.ndjson"); err == nil {
+				h := sha256.Sum256(data)
+				realOpts := sensor.ParseOptions{
+					CalculationVersion: 2,
+					ExpectedProfileID:  1,
+					ExpectedSessionID:  "WOD-20260917-01M2PERXWM5NAA8ABX5Z44GH4B",
+					ExpectedSHA256:     hex.EncodeToString(h[:]),
+					ExpectedSizeBytes:  int64(len(data)),
+				}
+				realSource := sensor.TimelineSource{
+					SensorVersion:        "1",
+					RequestID:            "664fda62-bf90-4b69-a3f3-26b5d202f89a",
+					SourceGeneration:     "1",
+					HRCalculationVersion: 2,
+				}
+				realRes, err := sensor.ParseAndProcessWithTimeline(bytes.NewReader(data), realOpts, realSource)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(realRes.Summary.Quality.IsComplete).To(BeTrue(), "expected real file IsComplete=true, got: %v", realRes.Summary.Quality.Errors)
+				Expect(realRes.Summary.Quality.Status).To(Equal("ok"))
+				Expect(realRes.Summary.Quality.ValidHR).To(BeTrue())
+				Expect(realRes.Timeline).NotTo(BeNil())
+			}
+		})
+	})
+})

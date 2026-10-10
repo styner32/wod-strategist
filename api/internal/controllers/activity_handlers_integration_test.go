@@ -21,6 +21,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/activity-summary", func() {
 	var user db.User
 	var session db.Session
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		router = newTestRouterWithAuthService(controllers.Config{})
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})

@@ -27,6 +27,7 @@ var _ = Describe("Sensor Handlers", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 		transport = testhelpers.NewMockTransport()
@@ -305,7 +306,7 @@ var _ = Describe("Sensor Handlers", func() {
 })
 
 var _ = Describe("POST /api/v1/sessions/:session_id/sensor-upload calculation version", func() {
-	BeforeEach(func() { testhelpers.CleanupDB(dbConn); testhelpers.CleanupQueue(inspector) })
+	BeforeEach(func() { ensureTestDB(); testhelpers.CleanupDB(dbConn); testhelpers.CleanupQueue(inspector) })
 	It("pins version two per request and defaults legacy requests to version one", func() {
 		storage, err := testhelpers.NewStorageClientWithSigning("test-bucket", testhelpers.NewMockTransport())
 		Expect(err).NotTo(HaveOccurred())
@@ -354,6 +355,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/sensor-reprocess", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 		storage, err := testhelpers.NewStorageClientWithSigning("test-bucket", testhelpers.NewMockTransport())

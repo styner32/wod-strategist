@@ -1,151 +1,96 @@
 package controllers
 
 import (
-	"testing"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestParseWorkoutBlock_Valid(t *testing.T) {
-	input := "Here is the workout:\n```workout\n" +
-		`{"wod_description":"Fran","movements":["Thruster","Pull-up"],"raw_text":"FRAN\n21-15-9\nThrusters 43kg\nPull-ups"}` +
-		"\n```\n"
+var _ = Describe("parseWorkoutBlock", func() {
+	It("parses valid workout block", func() {
+		input := "Here is the workout:\n```workout\n" +
+			`{"wod_description":"Fran","movements":["Thruster","Pull-up"],"raw_text":"FRAN\n21-15-9\nThrusters 43kg\nPull-ups"}` +
+			"\n```\n"
 
-	resp, err := parseWorkoutBlock(input)
-	if err != nil {
-		t.Fatalf("parseWorkoutBlock failed: %v", err)
-	}
+		resp, err := parseWorkoutBlock(input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.WODDescription).To(Equal("Fran"))
+		Expect(resp.Movements).To(Equal([]string{"Thruster", "Pull-up"}))
+		Expect(resp.RawText).NotTo(BeEmpty())
+	})
 
-	if resp.WODDescription != "Fran" {
-		t.Errorf("expected WODDescription 'Fran', got %q", resp.WODDescription)
-	}
-	if len(resp.Movements) != 2 {
-		t.Fatalf("expected 2 movements, got %d", len(resp.Movements))
-	}
-	if resp.Movements[0] != "Thruster" {
-		t.Errorf("expected first movement 'Thruster', got %q", resp.Movements[0])
-	}
-	if resp.Movements[1] != "Pull-up" {
-		t.Errorf("expected second movement 'Pull-up', got %q", resp.Movements[1])
-	}
-	if resp.RawText == "" {
-		t.Error("expected non-empty RawText")
-	}
-}
+	It("returns error when no workout block is present", func() {
+		input := "I cannot read the whiteboard clearly."
 
-func TestParseWorkoutBlock_NoBlock(t *testing.T) {
-	input := "I cannot read the whiteboard clearly."
+		_, err := parseWorkoutBlock(input)
+		Expect(err).To(HaveOccurred())
+	})
 
-	_, err := parseWorkoutBlock(input)
-	if err == nil {
-		t.Error("expected error when no workout block present")
-	}
-}
+	It("returns error for invalid JSON in workout block", func() {
+		input := "```workout\nnot valid json\n```\n"
 
-func TestParseWorkoutBlock_InvalidJSON(t *testing.T) {
-	input := "```workout\nnot valid json\n```\n"
+		_, err := parseWorkoutBlock(input)
+		Expect(err).To(HaveOccurred())
+	})
 
-	_, err := parseWorkoutBlock(input)
-	if err == nil {
-		t.Error("expected error for invalid JSON in workout block")
-	}
-}
+	It("parses empty workout block", func() {
+		input := "```workout\n" +
+			`{"wod_description":"","movements":[],"raw_text":""}` +
+			"\n```\n"
 
-func TestParseWorkoutBlock_EmptyWorkout(t *testing.T) {
-	input := "```workout\n" +
-		`{"wod_description":"","movements":[],"raw_text":""}` +
-		"\n```\n"
+		resp, err := parseWorkoutBlock(input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.WODDescription).To(BeEmpty())
+		Expect(resp.Movements).To(BeEmpty())
+	})
 
-	resp, err := parseWorkoutBlock(input)
-	if err != nil {
-		t.Fatalf("parseWorkoutBlock failed: %v", err)
-	}
+	It("parses For Time workout block", func() {
+		input := "```workout\n" +
+			`{"wod_description":"For Time: 5 rounds of 10 Deadlifts (60kg) + 15 Box Jumps (24in)","movements":["Deadlift","Box Jump"],"raw_text":"FOR TIME\n5RDS\n10 DL 60kg\n15 BJ 24\""}` +
+			"\n```\n"
 
-	if resp.WODDescription != "" {
-		t.Errorf("expected empty WODDescription, got %q", resp.WODDescription)
-	}
-	if len(resp.Movements) != 0 {
-		t.Errorf("expected 0 movements, got %d", len(resp.Movements))
-	}
-}
+		resp, err := parseWorkoutBlock(input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.WODDescription).To(Equal("For Time: 5 rounds of 10 Deadlifts (60kg) + 15 Box Jumps (24in)"))
+		Expect(resp.Movements).To(Equal([]string{"Deadlift", "Box Jump"}))
+	})
 
-func TestParseWorkoutBlock_ForTimeWorkout(t *testing.T) {
-	input := "```workout\n" +
-		`{"wod_description":"For Time: 5 rounds of 10 Deadlifts (60kg) + 15 Box Jumps (24in)","movements":["Deadlift","Box Jump"],"raw_text":"FOR TIME\n5RDS\n10 DL 60kg\n15 BJ 24\""}` +
-		"\n```\n"
+	It("parses AMRAP workout block", func() {
+		input := "```workout\n" +
+			`{"wod_description":"AMRAP 20: 5 Pull-ups, 10 Push-ups, 15 Air Squats","movements":["Pull-up","Push-up","Air Squat"],"raw_text":"AMRAP 20분\n5 풀업\n10 푸쉬업\n15 에어스쿼트"}` +
+			"\n```\n"
 
-	resp, err := parseWorkoutBlock(input)
-	if err != nil {
-		t.Fatalf("parseWorkoutBlock failed: %v", err)
-	}
+		resp, err := parseWorkoutBlock(input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.Movements).To(HaveLen(3))
+	})
 
-	if resp.WODDescription != "For Time: 5 rounds of 10 Deadlifts (60kg) + 15 Box Jumps (24in)" {
-		t.Errorf("unexpected WODDescription: %q", resp.WODDescription)
-	}
-	if len(resp.Movements) != 2 {
-		t.Fatalf("expected 2 movements, got %d", len(resp.Movements))
-	}
-}
+	It("parses json fence", func() {
+		input := "```json\n" +
+			`{"wod_description":"Grace","movements":["Clean and Jerk"],"raw_text":"GRACE\n30 C&J"}` +
+			"\n```\n"
 
-func TestParseWorkoutBlock_AMRAPWorkout(t *testing.T) {
-	input := "```workout\n" +
-		`{"wod_description":"AMRAP 20: 5 Pull-ups, 10 Push-ups, 15 Air Squats","movements":["Pull-up","Push-up","Air Squat"],"raw_text":"AMRAP 20분\n5 풀업\n10 푸쉬업\n15 에어스쿼트"}` +
-		"\n```\n"
+		resp, err := parseWorkoutBlock(input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.WODDescription).To(Equal("Grace"))
+		Expect(resp.Movements).To(Equal([]string{"Clean and Jerk"}))
+	})
 
-	resp, err := parseWorkoutBlock(input)
-	if err != nil {
-		t.Fatalf("parseWorkoutBlock failed: %v", err)
-	}
+	It("handles case-insensitive fence", func() {
+		input := "```Workout\n" +
+			`{"wod_description":"Cindy","movements":["Pull-up","Push-up","Air Squat"],"raw_text":"CINDY"}` +
+			"\n```\n"
 
-	if len(resp.Movements) != 3 {
-		t.Errorf("expected 3 movements, got %d", len(resp.Movements))
-	}
-}
+		resp, err := parseWorkoutBlock(input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.WODDescription).To(Equal("Cindy"))
+	})
 
-func TestParseWorkoutBlock_JSONFence(t *testing.T) {
-	input := "```json\n" +
-		`{"wod_description":"Grace","movements":["Clean and Jerk"],"raw_text":"GRACE\n30 C&J"}` +
-		"\n```\n"
+	It("parses raw JSON without code fences", func() {
+		input := `Here is the extracted workout: {"wod_description":"Murph","movements":["Run","Pull-up","Push-up","Air Squat"],"raw_text":"MURPH"} Hope this helps!`
 
-	resp, err := parseWorkoutBlock(input)
-	if err != nil {
-		t.Fatalf("parseWorkoutBlock failed: %v", err)
-	}
-
-	if resp.WODDescription != "Grace" {
-		t.Errorf("expected WODDescription 'Grace', got %q", resp.WODDescription)
-	}
-	if len(resp.Movements) != 1 || resp.Movements[0] != "Clean and Jerk" {
-		t.Errorf("unexpected movements: %v", resp.Movements)
-	}
-}
-
-func TestParseWorkoutBlock_CaseInsensitiveFence(t *testing.T) {
-	input := "```Workout\n" +
-		`{"wod_description":"Cindy","movements":["Pull-up","Push-up","Air Squat"],"raw_text":"CINDY"}` +
-		"\n```\n"
-
-	resp, err := parseWorkoutBlock(input)
-	if err != nil {
-		t.Fatalf("parseWorkoutBlock failed: %v", err)
-	}
-
-	if resp.WODDescription != "Cindy" {
-		t.Errorf("expected WODDescription 'Cindy', got %q", resp.WODDescription)
-	}
-}
-
-func TestParseWorkoutBlock_RawJSONWithoutFences(t *testing.T) {
-	input := `Here is the extracted workout: {"wod_description":"Murph","movements":["Run","Pull-up","Push-up","Air Squat"],"raw_text":"MURPH"} Hope this helps!`
-
-	resp, err := parseWorkoutBlock(input)
-	if err != nil {
-		t.Fatalf("parseWorkoutBlock failed: %v", err)
-	}
-
-	if resp.WODDescription != "Murph" {
-		t.Errorf("expected WODDescription 'Murph', got %q", resp.WODDescription)
-	}
-	if len(resp.Movements) != 4 {
-		t.Errorf("expected 4 movements, got %d", len(resp.Movements))
-	}
-}
-
+		resp, err := parseWorkoutBlock(input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resp.WODDescription).To(Equal("Murph"))
+		Expect(resp.Movements).To(Equal([]string{"Run", "Pull-up", "Push-up", "Air Squat"}))
+	})
+})

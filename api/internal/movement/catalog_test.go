@@ -1,100 +1,81 @@
 package movement_test
 
 import (
-	"testing"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	"github.com/wod-strategist/api/internal/movement"
 )
 
-func TestNormalizeKey(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"Power Clean", "power clean"},
-		{" Power-Clean ", "power clean"},
-		{"power   clean", "power clean"},
-		{"Pull-up", "pull up"},
-		{"  Double-under  ", "double under"},
-		{"", ""},
-		{"   ", ""},
-		{"Clean & Jerk", "clean and jerk"},
-		{"Clean and Jerk", "clean and jerk"},
-		{"Clean&Jerk", "clean and jerk"},
-	}
+var _ = Describe("movement catalog", func() {
+	DescribeTable("NormalizeKey",
+		func(input, expected string) {
+			Expect(movement.NormalizeKey(input)).To(Equal(expected))
+		},
+		Entry("Power Clean", "Power Clean", "power clean"),
+		Entry("Power-Clean with spaces", " Power-Clean ", "power clean"),
+		Entry("power clean extra spaces", "power   clean", "power clean"),
+		Entry("Pull-up", "Pull-up", "pull up"),
+		Entry("Double-under", "  Double-under  ", "double under"),
+		Entry("empty", "", ""),
+		Entry("spaces only", "   ", ""),
+		Entry("Clean & Jerk", "Clean & Jerk", "clean and jerk"),
+		Entry("Clean and Jerk", "Clean and Jerk", "clean and jerk"),
+		Entry("Clean&Jerk", "Clean&Jerk", "clean and jerk"),
+	)
 
-	for _, tt := range tests {
-		got := movement.NormalizeKey(tt.input)
-		if got != tt.expected {
-			t.Errorf("NormalizeKey(%q) = %q; want %q", tt.input, got, tt.expected)
-		}
-	}
-}
+	It("All returns non-empty movement list starting with Power Snatch", func() {
+		all := movement.All()
+		Expect(all).NotTo(BeEmpty())
+		Expect(all[0]).To(Equal("Power Snatch"))
+	})
 
-func TestAll(t *testing.T) {
-	all := movement.All()
-	if len(all) == 0 {
-		t.Fatal("expected non-empty movement list")
-	}
-	if all[0] != "Power Snatch" {
-		t.Errorf("expected first movement to be Power Snatch, got %q", all[0])
-	}
-}
-
-func TestCanonical(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
+	DescribeTable("Canonical",
+		func(input, expected string) {
+			Expect(movement.Canonical(input)).To(Equal(expected))
+		},
 		// Exact canonical
-		{"Deadlift", "Deadlift"},
-		{"deadlift", "Deadlift"},
-		{"Double-under", "Double-under"},
-		{"Row", "Row"},
+		Entry("Deadlift", "Deadlift", "Deadlift"),
+		Entry("deadlift", "deadlift", "Deadlift"),
+		Entry("Double-under", "Double-under", "Double-under"),
+		Entry("Row", "Row", "Row"),
 
 		// Aliases
-		{"Rowing", "Row"},
-		{"rowing", "Row"},
-		{"rower", "Row"},
-		{"running", "Run"},
-		{"Double Unders", "Double-under"},
-		{"Double-Unders", "Double-under"},
-		{"double under", "Double-under"},
-		{"du", "Double-under"},
-		{"dus", "Double-under"},
-		{"Single Unders", "Single-under"},
-		{"su", "Single-under"},
-		{"c&j", "Clean & Jerk"},
-		{"Clean and Jerk", "Clean & Jerk"},
-		{"hspu", "Handstand Push-up"},
-		{"pullup", "Pull-up"},
-		{"pullups", "Pull-up"},
-		{"pushup", "Push-up"},
-		{"situp", "Sit-up"},
-		{"wall ball", "Wallball Shot"},
-		{"kettlebell swing", "KB Swing"},
-		{"farmers carry", "Farmer's Carry"},
+		Entry("Rowing", "Rowing", "Row"),
+		Entry("rowing", "rowing", "Row"),
+		Entry("rower", "rower", "Row"),
+		Entry("running", "running", "Run"),
+		Entry("Double Unders", "Double Unders", "Double-under"),
+		Entry("Double-Unders", "Double-Unders", "Double-under"),
+		Entry("double under", "double under", "Double-under"),
+		Entry("du", "du", "Double-under"),
+		Entry("dus", "dus", "Double-under"),
+		Entry("Single Unders", "Single Unders", "Single-under"),
+		Entry("su", "su", "Single-under"),
+		Entry("c&j", "c&j", "Clean & Jerk"),
+		Entry("Clean and Jerk", "Clean and Jerk", "Clean & Jerk"),
+		Entry("hspu", "hspu", "Handstand Push-up"),
+		Entry("pullup", "pullup", "Pull-up"),
+		Entry("pullups", "pullups", "Pull-up"),
+		Entry("pushup", "pushup", "Push-up"),
+		Entry("situp", "situp", "Sit-up"),
+		Entry("wall ball", "wall ball", "Wallball Shot"),
+		Entry("kettlebell swing", "kettlebell swing", "KB Swing"),
+		Entry("farmers carry", "farmers carry", "Farmer's Carry"),
 
 		// Plural fallbacks
-		{"Deadlifts", "Deadlift"},
-		{"deadlifts", "Deadlift"},
-		{"Push Presses", "Push Press"},
-		{"Burpees", "Burpee"},
-		{"Air Squats", "Air Squat"},
-		{"Box Jump Overs", "Box Jump Over"},
-		{"Burpee Box Jump Overs", "Burpee Box Jump Over"},
+		Entry("Deadlifts", "Deadlifts", "Deadlift"),
+		Entry("deadlifts", "deadlifts", "Deadlift"),
+		Entry("Push Presses", "Push Presses", "Push Press"),
+		Entry("Burpees", "Burpees", "Burpee"),
+		Entry("Air Squats", "Air Squats", "Air Squat"),
+		Entry("Box Jump Overs", "Box Jump Overs", "Box Jump Over"),
+		Entry("Burpee Box Jump Overs", "Burpee Box Jump Overs", "Burpee Box Jump Over"),
 
 		// Unknown / empty
-		{"", ""},
-		{"   ", ""},
-		{"Invented Squat", ""},
-		{"Some Random Unknown Movement", ""},
-	}
-
-	for _, tt := range tests {
-		got := movement.Canonical(tt.input)
-		if got != tt.expected {
-			t.Errorf("Canonical(%q) = %q; want %q", tt.input, got, tt.expected)
-		}
-	}
-}
+		Entry("empty", "", ""),
+		Entry("spaces", "   ", ""),
+		Entry("invented", "Invented Squat", ""),
+		Entry("unknown", "Some Random Unknown Movement", ""),
+	)
+})

@@ -40,6 +40,7 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 

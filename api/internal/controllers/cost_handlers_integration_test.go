@@ -24,6 +24,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/cost", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
@@ -113,6 +114,7 @@ var _ = Describe("GET /api/v1/analytics/cost", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 
 		user = testhelpers.CreateUser(dbConn, &db.User{Username: "testuser"})

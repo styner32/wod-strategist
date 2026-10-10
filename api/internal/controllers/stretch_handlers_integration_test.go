@@ -30,6 +30,7 @@ var _ = Describe("Stretch Handlers Integration", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		transport := testhelpers.NewMockTransport()
 		storageClient, err := testhelpers.NewStorageClientWithSigning("test-bucket", transport)

@@ -25,6 +25,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/sensor-timeline", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 		router = newTestRouterWithAuthService(controllers.Config{})

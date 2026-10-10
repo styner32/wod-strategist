@@ -14,8 +14,12 @@ import (
 )
 
 var _ = Describe("DELETE /api/v1/sessions/:session_id/environment", func() {
-	It("requires ownership and deletes only observation assets, idempotently", func() {
+	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
+	})
+
+	It("requires ownership and deletes only observation assets, idempotently", func() {
 		profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		var user db.User
 		Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())

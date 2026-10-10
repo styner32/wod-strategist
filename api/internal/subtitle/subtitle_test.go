@@ -1,18 +1,11 @@
 package subtitle
 
 import (
-	"testing"
-
 	"github.com/wod-strategist/api/internal/db"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestSubtitle(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Subtitle Suite")
-}
 
 func pf(v float64) *float64 { return &v }
 

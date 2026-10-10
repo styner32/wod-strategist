@@ -27,6 +27,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/chunks/:chunk_id/reanalyses"
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 
