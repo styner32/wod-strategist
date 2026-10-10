@@ -1167,7 +1167,11 @@ func segmentBoundariesTouch(end, start string) bool {
 		return false
 	}
 	difference := endDuration - startDuration
-	return difference >= -time.Millisecond && difference <= time.Millisecond
+	// Tolerance aligns with formatSegmentTimestamp's 10ms (centisecond) resolution,
+	// so adjacent boundaries straddling a rounding step (e.g. 12.0049s "0:12" and 12.0051s "0:12.01")
+	// merge correctly.
+	const boundaryTolerance = 10 * time.Millisecond
+	return difference >= -boundaryTolerance && difference <= boundaryTolerance
 }
 
 // maxSegmentsForDuration calculates the maximum number of segments to analyze

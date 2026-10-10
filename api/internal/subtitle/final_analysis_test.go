@@ -114,6 +114,40 @@ func TestFormatFinalAnalysisSRT_NoSegments(t *testing.T) {
 	}
 }
 
+func TestFormatFinalAnalysisSRT_FractionalSegmentHeaders(t *testing.T) {
+	input := `
+## 세그먼트 1: Snatch (6:20.07 ~ 6:50.5)
+
+### 2. 강점 및 약점
+**강점:**
+- Core 안정성이 잘 유지됩니다
+
+**약점:**
+- 첫 번째 풀에서 팔꿈치가 일찍 굽혀집니다
+`
+	srt := subtitle.FormatFinalAnalysisSRT(input)
+	if srt == "" {
+		t.Fatal("Expected non-empty SRT for fractional segment headers")
+	}
+
+	// 6:20.07 is 380.07 seconds -> 00:06:20,070
+	if !strings.Contains(srt, "00:06:20,070") {
+		t.Errorf("Expected SRT to contain start timestamp 00:06:20,070, got:\n%s", srt)
+	}
+
+	// 6:50.5 is 410.5 seconds -> 00:06:50,500
+	if !strings.Contains(srt, "00:06:50,500") {
+		t.Errorf("Expected SRT to contain end timestamp 00:06:50,500, got:\n%s", srt)
+	}
+
+	if !strings.Contains(srt, "[강점] Core 안정성이 잘 유지됩니다") {
+		t.Errorf("Expected subtitle to include strength point, got:\n%s", srt)
+	}
+	if !strings.Contains(srt, "[개선] 첫 번째 풀에서 팔꿈치가 일찍 굽혀집니다") {
+		t.Errorf("Expected subtitle to include weakness point, got:\n%s", srt)
+	}
+}
+
 func TestParseAnalysisSegments(t *testing.T) {
 	// Verify that code blocks in analysis output don't leak into feedback points
 	srt := subtitle.FormatFinalAnalysisSRT(sampleFinalAnalysis)

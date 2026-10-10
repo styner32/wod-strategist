@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -1137,8 +1138,17 @@ var _ = Describe("formatSegmentTimestamp", func() {
 		Expect(formatSegmentTimestamp(410.0666665)).To(Equal("6:50.07"))
 	})
 
-	It("handles negative or invalid values safely", func() {
+	It("handles centisecond carry to next whole second/minute", func() {
+		Expect(formatSegmentTimestamp(59.996)).To(Equal("1:00"))
+		Expect(formatSegmentTimestamp(119.995)).To(Equal("2:00"))
+		Expect(formatSegmentTimestamp(9.996)).To(Equal("0:10"))
+	})
+
+	It("handles negative, NaN, and Inf values safely", func() {
 		Expect(formatSegmentTimestamp(-5)).To(Equal("0:00"))
+		Expect(formatSegmentTimestamp(math.NaN())).To(Equal("0:00"))
+		Expect(formatSegmentTimestamp(math.Inf(1))).To(Equal("0:00"))
+		Expect(formatSegmentTimestamp(math.Inf(-1))).To(Equal("0:00"))
 	})
 })
 
@@ -1241,6 +1251,28 @@ var _ = Describe("mergeSegmentsByMovement", func() {
 
 	It("returns empty for empty input", func() {
 		Expect(mergeSegmentsByMovement(nil)).To(BeNil())
+	})
+
+	It("merges adjacent segments that straddle centisecond rounding (10ms tolerance)", func() {
+		// e.g. 12.0049s formats as "0:12" and 12.0051s formats as "0:12.01"
+		segments := []Segment{
+			{Start: "0:00", End: "0:12", Type: "Snatch", Description: "part 1"},
+			{Start: "0:12.01", End: "0:25", Type: "Snatch", Description: "part 2"},
+		}
+		merged := mergeSegmentsByMovement(segments)
+		Expect(merged).To(HaveLen(1))
+		Expect(merged[0].Start).To(Equal("0:00"))
+		Expect(merged[0].End).To(Equal("0:25"))
+		Expect(merged[0].Description).To(Equal("part 1 | part 2"))
+	})
+
+	It("does not merge segments with a gap larger than 10ms tolerance", func() {
+		segments := []Segment{
+			{Start: "0:00", End: "0:12", Type: "Snatch"},
+			{Start: "0:12.05", End: "0:25", Type: "Snatch"},
+		}
+		merged := mergeSegmentsByMovement(segments)
+		Expect(merged).To(HaveLen(2))
 	})
 
 	It("returns single segment unchanged", func() {
