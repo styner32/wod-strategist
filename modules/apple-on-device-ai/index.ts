@@ -68,7 +68,7 @@ interface EnvironmentModule {
   startEnvironmentMotion(): Promise<void>;
   stopEnvironmentMotion(): Promise<void>;
   environmentSample(): Promise<Record<string, unknown>>;
-  environmentFrames(path: string): Promise<{ frames: { path: string; mediaOffsetMs: number; width: number; height: number }[]; durationMs: number }>;
+  environmentFrames(path: string): Promise<{ frames: { path: string; mediaOffsetMs: number; width: number; height: number }[]; durationMs?: number; error?: string }>;
   environmentAudio(path: string): Promise<{ path?: string; durationMs?: number; mediaOffsetMs?: number; error?: string }>;
   environmentSound(path: string): Promise<Record<string, unknown>>;
   requestEnvironmentLocationPermission(): Promise<string>;

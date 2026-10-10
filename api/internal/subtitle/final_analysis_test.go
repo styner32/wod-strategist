@@ -2,7 +2,9 @@ package subtitle_test
 
 import (
 	"strings"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/subtitle"
@@ -59,332 +61,223 @@ const sampleFinalAnalysis = `
 - 그립 위치를 어깨 너비보다 약간 넓게 조정해보세요
 `
 
-func TestFormatFinalAnalysisSRT(t *testing.T) {
-	srt := subtitle.FormatFinalAnalysisSRT(sampleFinalAnalysis)
-
-	if srt == "" {
-		t.Fatal("Expected non-empty SRT output")
-	}
-
-	// Should have multiple subtitle entries
-	entries := strings.Split(strings.TrimSpace(srt), "\n\n")
-	if len(entries) < 4 {
-		t.Errorf("Expected at least 4 subtitle entries, got %d", len(entries))
-	}
-
-	// Check that entries contain pro/con markers
-	hasCheckmark := strings.Contains(srt, "[강점]")
-	hasWarning := strings.Contains(srt, "[개선]")
-	if !hasCheckmark {
-		t.Error("Expected [강점] markers for strengths")
-	}
-	if !hasWarning {
-		t.Error("Expected [개선] markers for weaknesses/tips")
-	}
-
-	// Verify SRT time format is present
-	if !strings.Contains(srt, "-->") {
-		t.Error("Expected SRT time arrows (-->)")
-	}
-
-	// First entry should start at 00:00:00
-	if !strings.Contains(srt, "00:00:00") {
-		t.Error("Expected first subtitle to start at 00:00:00")
-	}
-
-	// Entries for segment 2 should be within 0:30 ~ 1:00 range
-	if !strings.Contains(srt, "00:00:30") {
-		t.Error("Expected subtitle entries starting around 00:00:30 for segment 2")
-	}
-
-	t.Logf("Generated SRT:\n%s", srt)
-}
-
-func TestFormatFinalAnalysisSRT_Empty(t *testing.T) {
-	srt := subtitle.FormatFinalAnalysisSRT("")
-	if srt != "" {
-		t.Errorf("Expected empty SRT for empty input, got: %s", srt)
-	}
-}
-
-func TestFormatFinalAnalysisSRT_NoSegments(t *testing.T) {
-	srt := subtitle.FormatFinalAnalysisSRT("Just some random text without segment headers")
-	if srt != "" {
-		t.Errorf("Expected empty SRT for input without segments, got: %s", srt)
-	}
-}
-
-func TestParseAnalysisSegments(t *testing.T) {
-	// Verify that code blocks in analysis output don't leak into feedback points
-	srt := subtitle.FormatFinalAnalysisSRT(sampleFinalAnalysis)
-
-	// Should not contain raw JSON or code block markers
-	if strings.Contains(srt, "```") {
-		t.Error("SRT should not contain code block markers")
-	}
-	if strings.Contains(srt, `"start"`) {
-		t.Error("SRT should not contain raw JSON fields")
-	}
-}
-
-func TestTruncateSubtitle(t *testing.T) {
-	srt := subtitle.FormatFinalAnalysisSRT(sampleFinalAnalysis)
-
-	// Check no single content line exceeds reasonable length
-	for _, line := range strings.Split(srt, "\n") {
-		// Skip SRT timecodes, entry numbers, and empty lines
-		if strings.Contains(line, "-->") || line == "" {
-			continue
-		}
-		// Skip numeric entry IDs
-		isNum := true
-		for _, r := range line {
-			if r < '0' || r > '9' {
-				isNum = false
-				break
-			}
-		}
-		if isNum {
-			continue
-		}
-		runes := []rune(line)
-		if len(runes) > 100 {
-			t.Errorf("Subtitle line too long (%d chars): %s", len(runes), line)
-		}
-	}
-}
-
 func pf(v float64) *float64 { return &v }
 
-func TestFormatMixedSRT_GapFilling(t *testing.T) {
-	// Final analysis covers 0:00~0:30 and 0:30~1:00.
-	// Chunk at 1:00~1:10 is in a gap → should be included.
-	// Chunk at 0:05~0:15 overlaps segment 1 → should be excluded.
-	chunks := []db.ChunkAnalysisResult{
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    "Chunk cue in gap",
-			StartSecs: pf(60.0),
-			EndSecs:   pf(70.0),
-		},
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    "Chunk cue overlapping segment 1",
-			StartSecs: pf(5.0),
-			EndSecs:   pf(15.0),
-		},
-	}
+var _ = Describe("Final Analysis Subtitle Generation", func() {
+	Context("FormatFinalAnalysisSRT", func() {
+		It("formats SRT with multiple entries, strength/improvement markers and timecodes", func() {
+			srt := subtitle.FormatFinalAnalysisSRT(sampleFinalAnalysis)
+			Expect(srt).NotTo(BeEmpty())
 
-	srt := subtitle.FormatMixedSRT(sampleFinalAnalysis, chunks)
+			entries := strings.Split(strings.TrimSpace(srt), "\n\n")
+			Expect(len(entries)).To(BeNumerically(">=", 4))
 
-	if srt == "" {
-		t.Fatal("Expected non-empty mixed SRT")
-	}
+			Expect(srt).To(ContainSubstring("[강점]"))
+			Expect(srt).To(ContainSubstring("[개선]"))
+			Expect(srt).To(ContainSubstring("-->"))
+			Expect(srt).To(ContainSubstring("00:00:00"))
+			Expect(srt).To(ContainSubstring("00:00:30"))
+		})
 
-	// The gap-filling chunk should be present
-	if !strings.Contains(srt, "Chunk cue in gap") {
-		t.Error("Expected gap-filling chunk to be included")
-	}
+		It("returns empty SRT for empty input", func() {
+			srt := subtitle.FormatFinalAnalysisSRT("")
+			Expect(srt).To(BeEmpty())
+		})
 
-	// The overlapping chunk should NOT be present
-	if strings.Contains(srt, "Chunk cue overlapping segment 1") {
-		t.Error("Expected overlapping chunk to be excluded")
-	}
+		It("returns empty SRT when input contains no segments", func() {
+			srt := subtitle.FormatFinalAnalysisSRT("Just some random text without segment headers")
+			Expect(srt).To(BeEmpty())
+		})
 
-	// Should still contain final analysis markers
-	if !strings.Contains(srt, "[강점]") {
-		t.Error("Expected [강점] markers from final analysis")
-	}
-	if !strings.Contains(srt, "[개선]") {
-		t.Error("Expected [개선] markers from final analysis")
-	}
+		It("handles fractional segment headers accurately", func() {
+			input := `
+## 세그먼트 1: Snatch (6:20.07 ~ 6:50.5)
 
-	t.Logf("Mixed SRT:\n%s", srt)
-}
+### 2. 강점 및 약점
+**강점:**
+- Core 안정성이 잘 유지됩니다
 
-func TestFormatMixedSRT_ChunkOnlyFallback(t *testing.T) {
-	// No final analysis → should fall back to chunk-only
-	chunks := []db.ChunkAnalysisResult{
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    "Good form on pull-up",
-			StartSecs: pf(0.0),
-			EndSecs:   pf(10.0),
-		},
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    "Keep elbows tight",
-			StartSecs: pf(10.0),
-			EndSecs:   pf(20.0),
-		},
-	}
+**약점:**
+- 첫 번째 풀에서 팔꿈치가 일찍 굽혀집니다
+`
+			srt := subtitle.FormatFinalAnalysisSRT(input)
+			Expect(srt).NotTo(BeEmpty())
+			Expect(srt).To(ContainSubstring("00:06:20,070"))
+			Expect(srt).To(ContainSubstring("00:06:50,500"))
+			Expect(srt).To(ContainSubstring("[강점] Core 안정성이 잘 유지됩니다"))
+			Expect(srt).To(ContainSubstring("[개선] 첫 번째 풀에서 팔꿈치가 일찍 굽혀집니다"))
+		})
 
-	srt := subtitle.FormatMixedSRT("", chunks)
+		It("prevents code blocks from leaking into output", func() {
+			srt := subtitle.FormatFinalAnalysisSRT(sampleFinalAnalysis)
+			Expect(srt).NotTo(ContainSubstring("```"))
+			Expect(srt).NotTo(ContainSubstring(`"start"`))
+		})
 
-	if srt == "" {
-		t.Fatal("Expected non-empty SRT from chunk fallback")
-	}
-	if !strings.Contains(srt, "Good form on pull-up") {
-		t.Error("Expected chunk cues in output")
-	}
-	if !strings.Contains(srt, "Keep elbows tight") {
-		t.Error("Expected chunk cues in output")
-	}
-}
+		It("keeps subtitle line length within reasonable limits", func() {
+			srt := subtitle.FormatFinalAnalysisSRT(sampleFinalAnalysis)
+			for _, line := range strings.Split(srt, "\n") {
+				if strings.Contains(line, "-->") || line == "" {
+					continue
+				}
+				isNum := true
+				for _, r := range line {
+					if r < '0' || r > '9' {
+						isNum = false
+						break
+					}
+				}
+				if isNum {
+					continue
+				}
+				runes := []rune(line)
+				Expect(len(runes)).To(BeNumerically("<=", 100), "Subtitle line too long: %s", line)
+			}
+		})
+	})
 
-func TestFormatMixedSRT_FinalOnly(t *testing.T) {
-	// Final analysis exists but no chunks → should work fine
-	srt := subtitle.FormatMixedSRT(sampleFinalAnalysis, nil)
+	Context("FormatMixedSRT", func() {
+		It("fills gaps between final analysis segments with chunks and excludes overlaps", func() {
+			chunks := []db.ChunkAnalysisResult{
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    "Chunk cue in gap",
+					StartSecs: pf(60.0),
+					EndSecs:   pf(70.0),
+				},
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    "Chunk cue overlapping segment 1",
+					StartSecs: pf(5.0),
+					EndSecs:   pf(15.0),
+				},
+			}
 
-	if srt == "" {
-		t.Fatal("Expected non-empty SRT from final-only")
-	}
-	if !strings.Contains(srt, "[강점]") {
-		t.Error("Expected [강점] markers")
-	}
-}
+			srt := subtitle.FormatMixedSRT(sampleFinalAnalysis, chunks)
+			Expect(srt).NotTo(BeEmpty())
+			Expect(srt).To(ContainSubstring("Chunk cue in gap"))
+			Expect(srt).NotTo(ContainSubstring("Chunk cue overlapping segment 1"))
+			Expect(srt).To(ContainSubstring("[강점]"))
+			Expect(srt).To(ContainSubstring("[개선]"))
+		})
 
-func TestFormatMixedSRT_BothEmpty(t *testing.T) {
-	srt := subtitle.FormatMixedSRT("", nil)
-	if srt != "" {
-		t.Errorf("Expected empty SRT when both sources are empty, got: %s", srt)
-	}
-}
+		It("falls back to chunk-only when final analysis is empty", func() {
+			chunks := []db.ChunkAnalysisResult{
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    "Good form on pull-up",
+					StartSecs: pf(0.0),
+					EndSecs:   pf(10.0),
+				},
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    "Keep elbows tight",
+					StartSecs: pf(10.0),
+					EndSecs:   pf(20.0),
+				},
+			}
 
-func TestFormatMixedSRT_LongChunkSplits(t *testing.T) {
-	// Simulate a long chunk output that should split into multiple subtitle entries
-	longOutput := "수직 상승 마인드 머슬 커넥션: 하단에서 올라올 때 엉덩이가 먼저 뒤로 빠지지 않고(Good morning squat 형태의 오류가 없음), 가슴과 엉덩이가 동시에 수직으로 상승하는 리프팅 궤적이 매우 좋습니다. 코어 안정성도 잘 유지되고 있습니다."
+			srt := subtitle.FormatMixedSRT("", chunks)
+			Expect(srt).NotTo(BeEmpty())
+			Expect(srt).To(ContainSubstring("Good form on pull-up"))
+			Expect(srt).To(ContainSubstring("Keep elbows tight"))
+		})
 
-	chunks := []db.ChunkAnalysisResult{
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    longOutput,
-			StartSecs: pf(0.0),
-			EndSecs:   pf(10.0),
-		},
-	}
+		It("formats final-only when chunks are empty", func() {
+			srt := subtitle.FormatMixedSRT(sampleFinalAnalysis, nil)
+			Expect(srt).NotTo(BeEmpty())
+			Expect(srt).To(ContainSubstring("[강점]"))
+		})
 
-	srt := subtitle.FormatMixedSRT("", chunks)
+		It("returns empty SRT when both sources are empty", func() {
+			srt := subtitle.FormatMixedSRT("", nil)
+			Expect(srt).To(BeEmpty())
+		})
 
-	if srt == "" {
-		t.Fatal("Expected non-empty SRT")
-	}
+		It("splits long chunk output into multiple subtitle entries", func() {
+			longOutput := "수직 상승 마인드 머슬 커넥션: 하단에서 올라올 때 엉덩이가 먼저 뒤로 빠지지 않고(Good morning squat 형태의 오류가 없음), 가슴과 엉덩이가 동시에 수직으로 상승하는 리프팅 궤적이 매우 좋습니다. 코어 안정성도 잘 유지되고 있습니다."
 
-	// Should have multiple entries (long text was split)
-	entries := strings.Split(strings.TrimSpace(srt), "\n\n")
-	if len(entries) < 2 {
-		t.Errorf("Expected long chunk to split into multiple entries, got %d", len(entries))
-	}
+			chunks := []db.ChunkAnalysisResult{
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    longOutput,
+					StartSecs: pf(0.0),
+					EndSecs:   pf(10.0),
+				},
+			}
 
-	// Should NOT contain "..." truncation (text was split, not truncated)
-	if strings.Contains(srt, "...") {
-		t.Logf("WARNING: SRT still contains truncation:\n%s", srt)
-	}
+			srt := subtitle.FormatMixedSRT("", chunks)
+			Expect(srt).NotTo(BeEmpty())
+			entries := strings.Split(strings.TrimSpace(srt), "\n\n")
+			Expect(len(entries)).To(BeNumerically(">=", 2))
+		})
 
-	t.Logf("Split long chunk into %d entries:\n%s", len(entries), srt)
-}
+		It("extends short subtitle to at least 2 seconds if there is a gap", func() {
+			chunks := []db.ChunkAnalysisResult{
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    "Quick fix cue",
+					StartSecs: pf(0.0),
+					EndSecs:   pf(0.5),
+				},
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    "Next cue after gap",
+					StartSecs: pf(5.0),
+					EndSecs:   pf(15.0),
+				},
+			}
 
-func TestFormatMixedSRT_ShortSubtitleExtended(t *testing.T) {
-	// Chunk with a very short time window (0.5s) followed by a gap.
-	// The subtitle should extend to at least 2 seconds.
-	chunks := []db.ChunkAnalysisResult{
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    "Quick fix cue",
-			StartSecs: pf(0.0),
-			EndSecs:   pf(0.5),
-		},
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    "Next cue after gap",
-			StartSecs: pf(5.0),
-			EndSecs:   pf(15.0),
-		},
-	}
+			srt := subtitle.FormatMixedSRT("", chunks)
+			Expect(srt).NotTo(BeEmpty())
+			Expect(srt).To(ContainSubstring("00:00:02,000"))
+		})
 
-	srt := subtitle.FormatMixedSRT("", chunks)
+		It("caps short subtitle extension to avoid overlapping next entry", func() {
+			chunks := []db.ChunkAnalysisResult{
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    "Short cue",
+					StartSecs: pf(0.0),
+					EndSecs:   pf(0.5),
+				},
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    "Following cue",
+					StartSecs: pf(1.0),
+					EndSecs:   pf(10.0),
+				},
+			}
 
-	if srt == "" {
-		t.Fatal("Expected non-empty SRT")
-	}
+			srt := subtitle.FormatMixedSRT("", chunks)
+			Expect(srt).NotTo(BeEmpty())
+			Expect(srt).To(ContainSubstring("00:00:01,000"))
+			Expect(srt).NotTo(ContainSubstring("00:00:02,000"))
+		})
 
-	// The first subtitle should be extended past 0.5s — verify via SRT timecode
-	// 0.5s = 00:00:00,500; 2.0s = 00:00:02,000
-	if !strings.Contains(srt, "00:00:02,000") {
-		t.Errorf("Expected first subtitle to be extended to 2.0s, got:\n%s", srt)
-	}
+		It("extends short subtitle freely when it is the last entry", func() {
+			chunks := []db.ChunkAnalysisResult{
+				{
+					SessionID: "test",
+					Status:    "COMPLETED",
+					Output:    "Only cue",
+					StartSecs: pf(10.0),
+					EndSecs:   pf(10.3),
+				},
+			}
 
-	t.Logf("Extended short subtitle SRT:\n%s", srt)
-}
-
-func TestFormatMixedSRT_ShortSubtitleNoOverlap(t *testing.T) {
-	// Chunk with short time window (0.5s) followed immediately by another chunk at 1.0s.
-	// Extension should be capped at 1.0s to avoid overlapping.
-	chunks := []db.ChunkAnalysisResult{
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    "Short cue",
-			StartSecs: pf(0.0),
-			EndSecs:   pf(0.5),
-		},
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    "Following cue",
-			StartSecs: pf(1.0),
-			EndSecs:   pf(10.0),
-		},
-	}
-
-	srt := subtitle.FormatMixedSRT("", chunks)
-
-	if srt == "" {
-		t.Fatal("Expected non-empty SRT")
-	}
-
-	// The first subtitle should be capped at 1.0s (next entry start)
-	if !strings.Contains(srt, "00:00:01,000") {
-		t.Errorf("Expected first subtitle to be capped at 1.0s, got:\n%s", srt)
-	}
-
-	// Should NOT extend to 2.0s because that would overlap
-	if strings.Contains(srt, "00:00:02,000") {
-		t.Errorf("First subtitle should not extend past next entry start:\n%s", srt)
-	}
-
-	t.Logf("No-overlap SRT:\n%s", srt)
-}
-
-func TestFormatMixedSRT_ShortSubtitleLastEntry(t *testing.T) {
-	// Single chunk with short time window — no next entry, should extend freely.
-	chunks := []db.ChunkAnalysisResult{
-		{
-			SessionID: "test",
-			Status:    "COMPLETED",
-			Output:    "Only cue",
-			StartSecs: pf(10.0),
-			EndSecs:   pf(10.3),
-		},
-	}
-
-	srt := subtitle.FormatMixedSRT("", chunks)
-
-	if srt == "" {
-		t.Fatal("Expected non-empty SRT")
-	}
-
-	// Should be extended to 12.0s (10.0 + 2.0)
-	if !strings.Contains(srt, "00:00:12,000") {
-		t.Errorf("Expected last subtitle to extend to 12.0s, got:\n%s", srt)
-	}
-
-	t.Logf("Last entry extension SRT:\n%s", srt)
-}
+			srt := subtitle.FormatMixedSRT("", chunks)
+			Expect(srt).NotTo(BeEmpty())
+			Expect(srt).To(ContainSubstring("00:00:12,000"))
+		})
+	})
+})

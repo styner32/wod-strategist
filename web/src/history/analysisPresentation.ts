@@ -91,11 +91,36 @@ export function analysisProse(raw: string): string {
     }
     i = closed ? j : j - 1;
   }
-  return out
-    .join("\n")
-    .replace(/(?:\n\s*---\s*){2,}/g, "\n\n---\n")
-    .replace(/\n{4,}/g, "\n\n\n")
-    .trim();
+  return formatLongTimestamps(
+    out
+      .join("\n")
+      .replace(/(?:\n\s*---\s*){2,}/g, "\n\n---\n")
+      .replace(/\n{4,}/g, "\n\n\n")
+      .trim(),
+  );
+}
+
+/** Formats timestamps with >2 decimal digits down to at most 2 decimal places. */
+export function formatLongTimestamps(text: string): string {
+  return text.replace(/\b((?:\d+:)?\d+:\d{2})\.(\d{3,})\b/g, (_match, clock: string, frac: string) => {
+    // Round in whole centiseconds so x:59.995+ carries into the next minute/hour.
+    const units = clock.split(":");
+    const totalCentis =
+      units.reduce((total, unit) => total * 60 + Number(unit), 0) * 100 +
+      Math.round(Number(`0.${frac}`) * 100);
+    const seconds = Math.floor(totalCentis / 100);
+    const centis = totalCentis % 100;
+    const parts =
+      units.length === 3
+        ? [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+        : [Math.floor(seconds / 60), seconds % 60];
+    const formatted = parts
+      .map((value, i) => String(value).padStart(i === 0 ? units[0].length : 2, "0"))
+      .join(":");
+    if (centis === 0) return formatted;
+    const fracStr = centis % 10 === 0 ? String(centis / 10) : String(centis).padStart(2, "0");
+    return `${formatted}.${fracStr}`;
+  });
 }
 
 export interface AnalysisSegment {

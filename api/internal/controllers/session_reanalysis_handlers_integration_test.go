@@ -28,6 +28,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 
@@ -385,6 +386,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/reanalyses", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 
@@ -478,6 +480,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/reanalyses/:run_id", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 
@@ -575,6 +578,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply", f
 	}
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})

@@ -1,12 +1,14 @@
 package gemini
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
-	"bytes"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 func makeTestImage(w, h int) image.Image {
@@ -19,172 +21,123 @@ func makeTestImage(w, h int) image.Image {
 	return img
 }
 
-func encodeJPEG(t *testing.T, img image.Image) []byte {
-	t.Helper()
+func encodeJPEG(img image.Image) []byte {
+	GinkgoHelper()
 	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
-		t.Fatalf("failed to encode JPEG: %v", err)
-	}
+	err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90})
+	Expect(err).NotTo(HaveOccurred())
 	return buf.Bytes()
 }
 
-func encodePNG(t *testing.T, img image.Image) []byte {
-	t.Helper()
+func encodePNG(img image.Image) []byte {
+	GinkgoHelper()
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		t.Fatalf("failed to encode PNG: %v", err)
-	}
+	err := png.Encode(&buf, img)
+	Expect(err).NotTo(HaveOccurred())
 	return buf.Bytes()
 }
 
-func TestNormalizeImage_SmallJPEGUnchangedDimensions(t *testing.T) {
-	// A 640x480 image is below maxImageDimension, so no resize should occur.
-	img := makeTestImage(640, 480)
-	raw := encodeJPEG(t, img)
+var _ = Describe("NormalizeImage", func() {
+	It("keeps small JPEG dimensions unchanged", func() {
+		// A 640x480 image is below maxImageDimension, so no resize should occur.
+		img := makeTestImage(640, 480)
+		raw := encodeJPEG(img)
 
-	result, mime, err := NormalizeImage(raw, "image/jpeg")
-	if err != nil {
-		t.Fatalf("NormalizeImage failed: %v", err)
-	}
+		result, mime, err := NormalizeImage(raw, "image/jpeg")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mime).To(Equal("image/jpeg"))
 
-	if mime != "image/jpeg" {
-		t.Errorf("expected mime image/jpeg, got %s", mime)
-	}
+		// Decode result and check dimensions are unchanged
+		decoded, err := jpeg.Decode(bytes.NewReader(result))
+		Expect(err).NotTo(HaveOccurred())
 
-	// Decode result and check dimensions are unchanged
-	decoded, err := jpeg.Decode(bytes.NewReader(result))
-	if err != nil {
-		t.Fatalf("failed to decode result: %v", err)
-	}
+		bounds := decoded.Bounds()
+		Expect(bounds.Dx()).To(Equal(640))
+		Expect(bounds.Dy()).To(Equal(480))
+	})
 
-	bounds := decoded.Bounds()
-	if bounds.Dx() != 640 || bounds.Dy() != 480 {
-		t.Errorf("expected 640x480, got %dx%d", bounds.Dx(), bounds.Dy())
-	}
-}
+	It("resizes large image to fit within max dimensions", func() {
+		// A 4000x3000 image should be resized to 1024x768.
+		img := makeTestImage(4000, 3000)
+		raw := encodeJPEG(img)
 
-func TestNormalizeImage_LargeImageResized(t *testing.T) {
-	// A 4000x3000 image should be resized to 1024x768.
-	img := makeTestImage(4000, 3000)
-	raw := encodeJPEG(t, img)
+		result, mime, err := NormalizeImage(raw, "image/jpeg")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mime).To(Equal("image/jpeg"))
 
-	result, mime, err := NormalizeImage(raw, "image/jpeg")
-	if err != nil {
-		t.Fatalf("NormalizeImage failed: %v", err)
-	}
+		decoded, err := jpeg.Decode(bytes.NewReader(result))
+		Expect(err).NotTo(HaveOccurred())
 
-	if mime != "image/jpeg" {
-		t.Errorf("expected mime image/jpeg, got %s", mime)
-	}
+		bounds := decoded.Bounds()
+		Expect(bounds.Dx()).To(Equal(1024))
+		Expect(bounds.Dy()).To(Equal(768))
+	})
 
-	decoded, err := jpeg.Decode(bytes.NewReader(result))
-	if err != nil {
-		t.Fatalf("failed to decode result: %v", err)
-	}
+	It("resizes tall image based on height as longest side", func() {
+		// A 1500x3000 image — longest side is height, should resize to 512x1024.
+		img := makeTestImage(1500, 3000)
+		raw := encodeJPEG(img)
 
-	bounds := decoded.Bounds()
-	if bounds.Dx() != 1024 {
-		t.Errorf("expected width 1024, got %d", bounds.Dx())
-	}
-	if bounds.Dy() != 768 {
-		t.Errorf("expected height 768, got %d", bounds.Dy())
-	}
-}
+		result, _, err := NormalizeImage(raw, "image/jpeg")
+		Expect(err).NotTo(HaveOccurred())
 
-func TestNormalizeImage_TallImageResized(t *testing.T) {
-	// A 1500x3000 image — longest side is height, should resize to 512x1024.
-	img := makeTestImage(1500, 3000)
-	raw := encodeJPEG(t, img)
+		decoded, err := jpeg.Decode(bytes.NewReader(result))
+		Expect(err).NotTo(HaveOccurred())
 
-	result, _, err := NormalizeImage(raw, "image/jpeg")
-	if err != nil {
-		t.Fatalf("NormalizeImage failed: %v", err)
-	}
+		bounds := decoded.Bounds()
+		Expect(bounds.Dy()).To(Equal(1024))
+		Expect(bounds.Dx()).To(Equal(512))
+	})
 
-	decoded, err := jpeg.Decode(bytes.NewReader(result))
-	if err != nil {
-		t.Fatalf("failed to decode result: %v", err)
-	}
+	It("converts PNG input to JPEG", func() {
+		img := makeTestImage(2048, 1536)
+		raw := encodePNG(img)
 
-	bounds := decoded.Bounds()
-	if bounds.Dy() != 1024 {
-		t.Errorf("expected height 1024, got %d", bounds.Dy())
-	}
-	if bounds.Dx() != 512 {
-		t.Errorf("expected width 512, got %d", bounds.Dx())
-	}
-}
+		result, mime, err := NormalizeImage(raw, "image/png")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mime).To(Equal("image/jpeg"))
 
-func TestNormalizeImage_PNGInput(t *testing.T) {
-	img := makeTestImage(2048, 1536)
-	raw := encodePNG(t, img)
+		decoded, err := jpeg.Decode(bytes.NewReader(result))
+		Expect(err).NotTo(HaveOccurred())
 
-	result, mime, err := NormalizeImage(raw, "image/png")
-	if err != nil {
-		t.Fatalf("NormalizeImage failed: %v", err)
-	}
+		bounds := decoded.Bounds()
+		Expect(bounds.Dx()).To(Equal(1024))
+	})
 
-	if mime != "image/jpeg" {
-		t.Errorf("expected output mime image/jpeg, got %s", mime)
-	}
+	It("reduces file size for large images", func() {
+		// A large image should produce a smaller output.
+		img := makeTestImage(4000, 3000)
+		raw := encodeJPEG(img)
 
-	decoded, err := jpeg.Decode(bytes.NewReader(result))
-	if err != nil {
-		t.Fatalf("failed to decode result: %v", err)
-	}
+		result, _, err := NormalizeImage(raw, "image/jpeg")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(len(result)).To(BeNumerically("<", len(raw)))
+	})
 
-	bounds := decoded.Bounds()
-	if bounds.Dx() != 1024 {
-		t.Errorf("expected width 1024, got %d", bounds.Dx())
-	}
-}
+	It("returns error for invalid input", func() {
+		_, _, err := NormalizeImage([]byte("not an image"), "image/jpeg")
+		Expect(err).To(HaveOccurred())
+	})
+})
 
-func TestNormalizeImage_ReducesFileSize(t *testing.T) {
-	// A large image should produce a smaller output.
-	img := makeTestImage(4000, 3000)
-	raw := encodeJPEG(t, img)
+var _ = Describe("DetectImageMIME", func() {
+	It("detects JPEG mime", func() {
+		img := makeTestImage(10, 10)
+		raw := encodeJPEG(img)
+		Expect(DetectImageMIME(raw)).To(Equal("image/jpeg"))
+	})
 
-	result, _, err := NormalizeImage(raw, "image/jpeg")
-	if err != nil {
-		t.Fatalf("NormalizeImage failed: %v", err)
-	}
+	It("detects PNG mime", func() {
+		img := makeTestImage(10, 10)
+		raw := encodePNG(img)
+		Expect(DetectImageMIME(raw)).To(Equal("image/png"))
+	})
 
-	if len(result) >= len(raw) {
-		t.Errorf("expected output (%d bytes) to be smaller than input (%d bytes)", len(result), len(raw))
-	}
-}
+	It("returns empty string for unknown input", func() {
+		Expect(DetectImageMIME([]byte("hello"))).To(BeEmpty())
+	})
 
-func TestNormalizeImage_InvalidInput(t *testing.T) {
-	_, _, err := NormalizeImage([]byte("not an image"), "image/jpeg")
-	if err == nil {
-		t.Error("expected error for invalid image data")
-	}
-}
-
-func TestDetectImageMIME_JPEG(t *testing.T) {
-	img := makeTestImage(10, 10)
-	raw := encodeJPEG(t, img)
-	if got := DetectImageMIME(raw); got != "image/jpeg" {
-		t.Errorf("expected image/jpeg, got %s", got)
-	}
-}
-
-func TestDetectImageMIME_PNG(t *testing.T) {
-	img := makeTestImage(10, 10)
-	raw := encodePNG(t, img)
-	if got := DetectImageMIME(raw); got != "image/png" {
-		t.Errorf("expected image/png, got %s", got)
-	}
-}
-
-func TestDetectImageMIME_Unknown(t *testing.T) {
-	if got := DetectImageMIME([]byte("hello")); got != "" {
-		t.Errorf("expected empty string, got %s", got)
-	}
-}
-
-func TestDetectImageMIME_TooShort(t *testing.T) {
-	if got := DetectImageMIME([]byte{0x89}); got != "" {
-		t.Errorf("expected empty string for short input, got %s", got)
-	}
-}
+	It("returns empty string for input that is too short", func() {
+		Expect(DetectImageMIME([]byte{0x89})).To(BeEmpty())
+	})
+})

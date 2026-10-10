@@ -6,7 +6,7 @@ import { H10_MEMORY_FILENAME, summarizeH10Memory } from '../h10MemoryRecord';
 
 const buttonClass = 'rounded-lg border border-border px-3 py-2 text-sm text-accent hover:bg-bg-tertiary disabled:opacity-50';
 const statusLabel: Record<string, string> = { complete: '회수 완료', error: '오류', recording: '미완료(기록 중 종료)' };
-const seconds = (ms: number | null) => (ms === null ? '확인 불가' : `${(ms / 1000).toFixed(1)}초`);
+const seconds = (ms: number | null) => (ms === null ? '확인 불가' : `${(ms / 1000).toFixed(2)}초`);
 const orNone = (value: number | string | null) => (value === null || value === '' ? '기록 없음' : String(value));
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -54,12 +54,12 @@ function H10MemoryDetail({ sessionId, profileId }: { sessionId: string; profileI
   </div>;
 }
 
-/** Phase 1: shows what the experimental H10 internal recording uploaded; no timeline merge. */
+/** Phase 1: shows what the experimental H10 internal recording uploaded and overlays on the sensor timeline. */
 export function H10MemoryPanel({ sessionId, profileId }: { sessionId: string; profileId: number }) {
   const [open, setOpen] = useState(false);
   return <section className="mt-6 min-w-0 rounded-xl border border-border bg-bg-elevated p-4" aria-label="H10 내부 저장 심박 기록">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold text-text-primary">H10 내부 저장 심박 (실험)</h2>
-      <p className="mt-1 text-sm text-text-muted">Polar H10 메모리에서 회수한 심박 원본 · 그래프에는 아직 반영하지 않음</p></div>
+      <p className="mt-1 text-sm text-text-muted">Polar H10 메모리에서 회수한 심박 원본 · 센서 시계열 오버레이 지원</p></div>
       <button className={buttonClass} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? '기록 접기' : '기록 확인'}</button></div>
     {open && <H10MemoryDetail sessionId={sessionId} profileId={profileId} />}
   </section>;

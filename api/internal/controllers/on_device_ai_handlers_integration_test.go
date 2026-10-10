@@ -16,8 +16,12 @@ import (
 )
 
 var _ = Describe("GET /api/v1/sessions/:session_id/on-device-ai", func() {
-	It("requires profile ownership and pages only journal records across both formats", func() {
+	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
+	})
+
+	It("requires profile ownership and pages only journal records across both formats", func() {
 		profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		var user db.User
 		Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())
@@ -68,7 +72,6 @@ var _ = Describe("GET /api/v1/sessions/:session_id/on-device-ai", func() {
 		Expect(transport.Verify()).To(Succeed())
 	})
 	It("returns an empty list when no observation has been uploaded", func() {
-		testhelpers.CleanupDB(dbConn)
 		profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		var user db.User
 		Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())
@@ -90,8 +93,12 @@ var _ = Describe("GET /api/v1/sessions/:session_id/on-device-ai", func() {
 })
 
 var _ = Describe("GET /api/v1/sessions/:session_id/on-device-ai/asset", func() {
-	It("authorizes reads, preserves raw archives, bounds JSON and restricts signed media to the session", func() {
+	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
+	})
+
+	It("authorizes reads, preserves raw archives, bounds JSON and restricts signed media to the session", func() {
 		profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		var user db.User
 		Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())

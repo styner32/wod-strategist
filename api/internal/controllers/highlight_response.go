@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/fatigue"
+	"github.com/wod-strategist/api/internal/sensor"
 	"github.com/wod-strategist/api/internal/worker"
 )
 
@@ -180,12 +181,47 @@ func populateSessionFatigueWithSchema(res *db.AnalysisResult, schemaVersion int)
 
 	var total float64
 	muscles := make(map[string]int, len(fatigue.AllMuscleGroups))
+	scoresList := make([]float64, 0, len(fatigue.AllMuscleGroups))
 	for _, g := range fatigue.AllMuscleGroups {
 		score := int(math.Round(loads[g]))
 		muscles[g] = score
 		total += float64(score)
+		scoresList = append(scoresList, float64(score))
 	}
-	overallScore := int(math.Round(total / float64(len(fatigue.AllMuscleGroups))))
+
+	// Calculate weighted fatigue score:
+	// Peak localized fatigue in top-2 loaded muscles accounts for 60%
+	// Whole-body general distribution accounts for 40%
+	sort.Float64s(scoresList)
+	top2Avg := (scoresList[len(scoresList)-1] + scoresList[len(scoresList)-2]) / 2.0
+	wholeBodyAvg := total / float64(len(fatigue.AllMuscleGroups))
+	blendedScore := int(math.Round(0.60*top2Avg + 0.40*wholeBodyAvg))
+
+	// Heart rate sensor verification & cardiovascular fatigue floor:
+	// If sensor shows high cardiovascular load (Zone 4+5 ratio >= 40%, or avg HR >= 155 bpm, or peak HR >= 170 bpm with zone 4+5 >= 25%),
+	// ensure overall score reflects at least moderate fatigue (floor of 40: "moderate" / "보통").
+	if freshness.Valid && freshness.ValidHR {
+		var summary sensor.SensorSummaryResult
+		if json.Unmarshal([]byte(res.SensorSummary), &summary) == nil {
+			hr := summary.Metrics.HR
+			highIntensity := false
+			if hr.Zones != nil && (hr.Zones.Zone4Ratio+hr.Zones.Zone5Ratio >= 0.40) {
+				highIntensity = true
+			} else if hr.WeightedMeanBPM != nil && *hr.WeightedMeanBPM >= 155 {
+				highIntensity = true
+			} else if hr.PeakBPM != nil && *hr.PeakBPM >= 170 && hr.Zones != nil && (hr.Zones.Zone4Ratio+hr.Zones.Zone5Ratio >= 0.25) {
+				highIntensity = true
+			}
+			if highIntensity {
+				hrAdjusted = true
+				if blendedScore < 40 {
+					blendedScore = 40
+				}
+			}
+		}
+	}
+
+	overallScore := blendedScore
 	state, stateKO := fatigue.StateFromFatigueScore(overallScore)
 
 	adviceCode := "low_load"

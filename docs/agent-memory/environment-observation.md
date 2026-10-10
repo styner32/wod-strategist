@@ -2,20 +2,22 @@
 
 ## Scope and switches
 - `environmentObservation` defaults OFF; independent of `onDeviceAi` (posture) and MoveNet.
-- `environmentAnalysis` defaults true inside the enabled journal. False retains motion/power/weather/events without image or sound inference.
-- `observationIntervalSeconds`: 30, 60 (default for missing/new settings), or 120; existing saved choices remain unchanged. Setup persists and passes all three parameters to `visionTestPage`.
+- `environmentObservation` defaults OFF; independent of `onDeviceAi` (posture) and MoveNet.
+- Inside the enabled journal, `visualQuestions` defaults to false (mapped from setup's AI observation toggle). Visual LLM questions (camera, behavior, space) are OFF by default, avoiding NPU load and segment read races. When false, motion/power/events and sound analysis are retained without visual LLM questions. Explicit `environmentAnalysis: false` sets `measurements_only` without audio classification.
+- `observationIntervalSeconds`: 120, 300 (default for new/reset settings), or 600. Backward compatible with 30 and 60. Setup persists and passes all parameters to `visionTestPage`.
+- Periodic WeatherKit probe in recorder and pre-recording location permission prompt are disabled (`weatherEnabled = false`) until Apple Developer capability and entitlement are provisioned.
 - Native protocol `environmentVersion = 1`; posture remains `promptVersion = 3`. Older binaries report `module_missing` rather than accepting ignored parameters.
 - Only within-recording exercise/rest/space interactions. No equipment cleanup, character, intent, inferred bystander emotions, repetition totals or unobserved actions.
 
 ## Scheduling and evidence
 - `EnvironmentRecorder`: camera -> behavior -> sound -> space, one attempt per interval. First attempt after the interval; uses only the latest completed chunk if its completion is no older than one interval. No backlog/catch-up.
-- `acquireAppleAiSlot` is shared with posture capture/preparation/inference and explicit history reanalysis. An environment attempt skips a busy slot. Native AppleAiEngine is a second guard; cancellation holds the slot until native work settles.
-- Extract beginning/middle/end (maximum three full-frame JPEGs, maximum 640px) of ONE already completed chunk via AVAssetImageGenerator. No added camera frame processor, continuous image detector or candidate-frame scan.
+- Visual questions (camera, behavior, space) acquire `acquireAppleAiSlot` (shared with posture capture/preparation/inference and explicit history reanalysis) and skip if busy. Sound turns use the SoundAnalysis framework (separate from Foundation Models) and do not acquire the AppleAi slot. Native AppleAiEngine is a second guard; cancellation holds the slot until native work settles.
+- Extract beginning/middle/end (maximum three full-frame JPEGs, maximum 640px) of ONE already completed chunk via AVAssetImageGenerator. No added camera frame processor, continuous image detector or candidate-frame scan. `environmentFrames` returns `{error:"no_video_track", frames:[]}` for a chunk without a video track; the recorder must record that as `outcome:"error"` and never call `observeEnvironment` with zero frames (native AppleAiEngine also rejects 0 frames as `invalid_frames`).
 - Preserve actual media offsets returned by the generator. `captureStart/captureEnd` include callback/wall timing and are NOT merged-video positions. Source filename is the local original chunk identity, not a claim about a compressed remote filename.
 - Sound: at most first five seconds from the completed chunk, AVAssetExportSession -> m4a -> SoundAnalysis `version1`. Top three labels per sound window and RMS/peak dBFS; not calibrated SPL, no transcript. `no_audio_track` is not silence.
 - Auxiliary native extraction/classification uses a non-queuing runner, 15-second cancellation deadline. Model deadline is 30 seconds. Stop drains these operations before local chunk cleanup.
 - Motion: CoreMotion device attitude/rotation/acceleration at 1Hz; records device motion, NOT athlete motion. Includes process physical footprint bytes, not AI-specific memory consumption. Device identifier is `hw.machine`.
-- Power queries use a shared five-second cache with posture (`observedAt` retained); no second power polling timer. Weather at start/5min uses approximate location, current outdoor conditions and Apple attribution. Location permission is requested before recording begins; the recording-time fetch never opens a permission prompt. Location request deadline 15s; weather cancellation deadline 25s. No route tracking. Indoor ambient temperature/humidity is not measured.
+- Power queries use a shared five-second cache with posture (`observedAt` retained); no second power polling timer. Weather at start/5min (disabled until WeatherKit entitlement is provisioned) uses approximate location, current outdoor conditions and Apple attribution. Location permission is requested before recording begins only when weather is enabled (`weatherEnabled = true`); the recording-time fetch never opens a permission prompt. Location request deadline 15s; weather cancellation deadline 25s. No route tracking. Indoor ambient temperature/humidity is not measured.
 - Unsupported exposure/focus metadata is explicitly listed; do not infer ISO, light in lux, or lens focus distance from configured preferences.
 - Existing sensor/MoveNet provider snapshots and source links are recorded without enabling disabled pipelines.
 

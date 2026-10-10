@@ -57,11 +57,11 @@ export const ActivitySummaryPanel = memo(function ActivitySummaryPanel({
       }}>Resume status updates</button>
     </p>}
     <ul className="mt-2 space-y-1">{data.movements.map(item => <li key={`${item.movement}/${item.unit}`}>
-      {item.movement}: {item.unit === "reps" ? `${item.count} observed repetitions` : `${Math.round(item.seconds * 10) / 10} observed seconds`}
+      {item.movement}: {item.unit === "reps" ? `${item.count} observed repetitions` : `${item.seconds.toFixed(2)} observed seconds`}
     </li>)}</ul>
     {!data.movements.length && <p>No countable observations yet.</p>}
     {data.unassessed.length > 0 && <details className="mt-2 text-amber-300"><summary>{data.unassessed.length} unassessed intervals</summary>
-      <ul>{data.unassessed.map((gap, index) => <li key={index}>{clockLabels[gap.clock]}: {gap.start_secs == null || gap.end_secs == null ? "Time unknown" : `${gap.start_secs.toFixed(1)}–${gap.end_secs.toFixed(1)}s`} · {gapReasons[gap.reason] ?? "This interval could not be assessed"}{gap.movement ? ` (${gap.movement})` : ""}</li>)}</ul>
+      <ul>{data.unassessed.map((gap, index) => <li key={index}>{clockLabels[gap.clock]}: {gap.start_secs == null || gap.end_secs == null ? "Time unknown" : `${gap.start_secs.toFixed(2)}–${gap.end_secs.toFixed(2)}s`} · {gapReasons[gap.reason] ?? "This interval could not be assessed"}{gap.movement ? ` (${gap.movement})` : ""}</li>)}</ul>
     </details>}
     <p className="mt-2 text-xs text-slate-400">Recorded observations only. Review does not guarantee an exact total or judge competition-valid repetitions.</p>
   </section>;

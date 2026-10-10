@@ -1,34 +1,25 @@
 package controllers
 
 import (
-	"testing"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestSanitizeAppearanceValue(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{input: "  Red Nike Metcon  ", expected: "Red Nike Metcon"},
-		{input: "Line1\nLine2`backtick`", expected: "Line1 Line2backtick"},
-	}
+var _ = Describe("session appearance sanitization", func() {
+	DescribeTable("sanitizeAppearanceValue",
+		func(input, expected string) {
+			Expect(sanitizeAppearanceValue(input)).To(Equal(expected))
+		},
+		Entry("trims whitespace", "  Red Nike Metcon  ", "Red Nike Metcon"),
+		Entry("replaces newlines and strips backticks", "Line1\nLine2`backtick`", "Line1 Line2backtick"),
+	)
 
-	for _, tt := range tests {
-		got := sanitizeAppearanceValue(tt.input)
-		if got != tt.expected {
-			t.Errorf("sanitizeAppearanceValue(%q) = %q, expected %q", tt.input, got, tt.expected)
+	It("normalizes appearance struct", func() {
+		in := &AppearanceInput{
+			Appearance: "  Black t-shirt, grey shorts\nred shoes  ",
 		}
-	}
-}
 
-func TestNormalizeAppearance(t *testing.T) {
-	in := &AppearanceInput{
-		Appearance: "  Black t-shirt, grey shorts\nred shoes  ",
-	}
-
-	out := normalizeAppearance(in)
-
-	if out.Appearance != "Black t-shirt, grey shorts red shoes" {
-		t.Errorf("Expected sanitized appearance string, got %s", out.Appearance)
-	}
-}
+		out := normalizeAppearance(in)
+		Expect(out.Appearance).To(Equal("Black t-shirt, grey shorts red shoes"))
+	})
+})

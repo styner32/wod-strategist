@@ -29,6 +29,7 @@ var _ = Describe("GET /api/v1/related-wods", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 		router = newTestRouterWithAuthService(controllers.Config{})

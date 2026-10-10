@@ -270,4 +270,22 @@ var _ = Describe("Mobility & Stretch Recommendations Unit Tests", func() {
 		Expect(sanitized).To(BeEmpty())
 		Expect(resolver).To(BeEmpty())
 	})
+
+	It("supports kinetic chain aliases so Ankle evidenced joint qualifies Calf target area", func() {
+		current := []MobilityObservation{
+			{Joint: "Ankle", Side: "right", Observation: "limited_ankle_dorsiflexion", Movement: "Squat", Evidence: "배측굴곡 제한", Confidence: 0.9, Assessable: true},
+		}
+		w := &Worker{logger: zap.NewNop()}
+		resolver := map[string]string{
+			"calf stretch": "Calf Stretch",
+		}
+		recs := []StretchRecommendation{
+			{Stretch: "Calf Stretch", TargetArea: "Calf", Reason: "발목 배측굴곡 제한 완화"},
+		}
+		sanitized := w.sanitizeAndPersistStretchRecommendations(context.Background(), recs, current, nil, resolver)
+		Expect(sanitized).To(HaveLen(1))
+		Expect(sanitized[0].Stretch).To(Equal("Calf Stretch"))
+		Expect(sanitized[0].Reason).To(Equal("발목 배측굴곡 제한 완화"))
+	})
 })
+

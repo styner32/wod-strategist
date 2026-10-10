@@ -77,7 +77,7 @@ var _ = Describe("buildChunkAnalysisPrompt", func() {
 		prompt := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{})
 
 		Expect(prompt).To(ContainSubstring("## 개인 프로필"))
-		Expect(prompt).NotTo(ContainSubstring("운동 후보 힌트"))
+		Expect(prompt).NotTo(ContainSubstring("## 운동 후보 힌트"))
 		Expect(prompt).NotTo(ContainSubstring("## 알려진 부상 사항"))
 	})
 })

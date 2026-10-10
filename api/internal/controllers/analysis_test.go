@@ -26,6 +26,7 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 

@@ -20,6 +20,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
 		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())

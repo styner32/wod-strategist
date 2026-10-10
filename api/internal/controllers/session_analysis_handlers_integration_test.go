@@ -24,6 +24,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 		router = newTestRouterWithAuthService(controllers.Config{})
@@ -224,6 +225,7 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 	)
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})

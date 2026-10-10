@@ -82,7 +82,7 @@ actor AppleAiEngine {
     guard available == "available" else { return failure(available) }
     guard ProcessInfo.processInfo.thermalState.rawValue < 2 else { return failure("thermal") }
     guard #available(iOS 27.0, *) else { return failure("unsupported_os") }
-    guard (request.observationPrompt != nil ? request.frames.count <= 3 : request.frames.count == 3),
+    guard (request.observationPrompt != nil ? (1...3).contains(request.frames.count) : request.frames.count == 3),
           request.frames.allSatisfy({ $0.capturedAt.isFinite }),
           zip(request.frames, request.frames.dropFirst()).allSatisfy({ $0.capturedAt < $1.capturedAt })
     else { return failure("invalid_frames") }

@@ -4,6 +4,8 @@ import { H10MemoryPanel } from "./components/H10MemoryPanel";
 import { ActivitySummaryPanel } from "./components/ActivitySummaryPanel";
 import { HeartRateSummaryPanel } from "./components/HeartRateSummaryPanel";
 import { SensorTimelinePanel } from "./components/SensorTimelinePanel";
+import { onDeviceAiApi } from "../api/onDeviceAi";
+import { H10_MEMORY_FILENAME } from "./h10MemoryRecord";
 import {
   useMutation,
   useQueries,
@@ -755,6 +757,29 @@ export function SessionDetailPage() {
       retry: false,
     });
 
+  const { data: h10MemoryData } = useQuery({
+    queryKey: ["h10-memory", profileId, sessionId],
+    queryFn: async () => {
+      try {
+        return await onDeviceAiApi.read(sessionId!, profileId!, H10_MEMORY_FILENAME);
+      } catch (err: any) {
+        if (err?.status === 404 || err?.response?.status === 404) {
+          return null;
+        }
+        throw err;
+      }
+    },
+    enabled: Boolean(sessionId && profileId && analysis),
+    retry: false,
+    staleTime: 10_000,
+    refetchInterval: (query) => {
+      if (!query.state.data && sensorTimelineResponse?.status === "pending") {
+        return 5000;
+      }
+      return false;
+    },
+  });
+
   // Track video playback position
   const handleTimeUpdate = useCallback(() => {
     if (videoRef.current) {
@@ -978,11 +1003,29 @@ export function SessionDetailPage() {
                     </p>
                   )}
                 </div>
+                {sessionAnalysis?.movement_hints &&
+                  sessionAnalysis.movement_hints.length > 0 && (
+                    <div className="col-span-2 border-t border-border pt-3 mt-1">
+                      <p className="text-text-muted">
+                        Planned movements (계획된 종목)
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {sessionAnalysis.movement_hints.map((movement) => (
+                          <span
+                            key={movement}
+                            className="rounded-md bg-accent/10 px-2 py-1 text-xs text-accent font-medium"
+                          >
+                            {movement}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 {sessionAnalysis?.additional_observed_movements &&
                   sessionAnalysis.additional_observed_movements.length > 0 && (
                     <div className="col-span-2 border-t border-border pt-3 mt-1">
                       <p className="text-text-muted">
-                        Additional observed movements
+                        Additional observed movements (영상 추가 관찰 동작)
                       </p>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {sessionAnalysis.additional_observed_movements.map(
@@ -1023,6 +1066,9 @@ export function SessionDetailPage() {
                   : undefined
               }
               isReprocessing={reprocessSensorMutation.isPending}
+              sessionId={sessionId}
+              profileId={profileId}
+              h10MemoryData={h10MemoryData}
             />
           )}
           {analysis?.session_fatigue && (

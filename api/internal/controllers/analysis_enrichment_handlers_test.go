@@ -20,6 +20,7 @@ func enrichmentRouteSpecs(method, suffix string) {
 	var owner, other db.User
 	var session db.Session
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 		p := testhelpers.CreateProfile(dbConn, &db.Profile{})

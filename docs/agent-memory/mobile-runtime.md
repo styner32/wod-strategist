@@ -103,6 +103,6 @@ Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/
 - **Inference Throttle Safety**: Production MoveNet frame processing uses `runAtTargetFps()` at 2 fps during recording and 1 fps in preview, regardless of resolution. The pose test page can explicitly request a higher rate. The Apple AI experiment has a separate image-sampling schedule and does not change MoveNet's throttle.
 
 ### Environment observation journal
-- Optional `environmentObservation` / `environmentAnalysis` / `observationIntervalSeconds` (30/60/120) are passed from setup. Defaults: off / true / 60. Existing saved 30/60/120 choices are preserved.
+- Optional `environmentObservation` / `environmentAnalysis` / `observationIntervalSeconds` (120/300/600) are passed from setup. Defaults: off / false / 300. Existing saved interval choices are normalized.
 - `OPT FLAGS` includes `environment:<status>:<questionId|->:<review_needed|->`. Uses completed video chunks; never add another live frame processor for this journal.
 - See [environment-observation.md](environment-observation.md) for source separation, shared AI slot, evidence uploads, review, and device validation boundaries.

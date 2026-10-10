@@ -43,6 +43,7 @@ export default function HistoryScreen() {
         <HistoryList
           data={data}
           loading={loading}
+          onRefresh={onRefresh}
           onArchive={onArchive}
           focusSessionId={focusSessionId}
           scrollViewRef={scrollViewRef}

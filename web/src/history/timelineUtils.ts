@@ -231,6 +231,19 @@ export function decimatePoints(
     previousEnd = point.end_ms;
   }
 
+  return decimateRenderableSamples(samples, visibleStartMs, visibleEndMs, targetWidthPx);
+}
+
+/**
+ * Decimates arbitrary RenderableSample arrays over pixel width, preserving peaks,
+ * valleys, and null boundaries before grouping into bins.
+ */
+export function decimateRenderableSamples(
+  samples: RenderableSample[],
+  visibleStartMs: number,
+  visibleEndMs: number,
+  targetWidthPx = 600,
+): RenderableSample[] {
   const width = Math.max(1, Math.floor(targetWidthPx));
   if (samples.length <= width * 2) return samples;
 

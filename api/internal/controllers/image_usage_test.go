@@ -22,6 +22,7 @@ import (
 
 func imageUsageSpec(route, task string) {
 	It("records measured usage for an empty response against the authenticated account", func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		user := testhelpers.CreateUser(dbConn, &db.User{})
 		transport := testhelpers.NewMockTransport()

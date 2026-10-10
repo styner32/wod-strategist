@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,17 +34,22 @@ var (
 	inspector       *asynq.Inspector
 	authService     *auth.Service
 	defaultTestUser db.User
+	dbOnce          sync.Once
 )
 
+func ensureTestDB() {
+	dbOnce.Do(func() {
+		var err error
+		dbConn, err = testhelpers.InitDB()
+		Expect(err).NotTo(HaveOccurred())
+		inspector = testhelpers.NewQueueInspector()
+
+		testJWTSecret := []byte(os.Getenv("JWT_SIGNING_SECRET"))
+		authService = auth.NewService(dbConn, []byte(testJWTSecret))
+	})
+}
+
 var _ = BeforeSuite(func() {
-	var err error
-	dbConn, err = testhelpers.InitDB()
-	Expect(err).NotTo(HaveOccurred())
-	inspector = testhelpers.NewQueueInspector()
-
-	testJWTSecret := []byte(os.Getenv("JWT_SIGNING_SECRET"))
-	authService = auth.NewService(dbConn, []byte(testJWTSecret))
-
 	testhelpers.InitLogger()
 })
 
@@ -136,6 +142,7 @@ var _ = Describe("Controller handlers", func() {
 	var profileID uint
 
 	BeforeEach(func() {
+		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.CleanupQueue(inspector)
 
@@ -261,7 +268,7 @@ var _ = Describe("Controller handlers", func() {
 			Entry("missing profile id", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[]}`, http.StatusBadRequest, "profile_id is required"),
 			Entry("invalid gcs scheme", `{"session_id":"session-1","gcs_uri":"https://test-bucket-name/videos/1/session-1/video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
 			Entry("missing gcs bucket", `{"session_id":"session-1","gcs_uri":"gs:///videos/1/session-1/video.mp4","movements":[],"profile_id":1}`, http.StatusBadRequest, "invalid GCS URI"),
-			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":`+repeatedJSONString("Burpee", 101)+`,"profile_id":1}`, http.StatusBadRequest, "too many movements"),
+			Entry("too many movements", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":`+repeatedJSONString("Burpee", 201)+`,"profile_id":1}`, http.StatusBadRequest, "too many movements"),
 			Entry("empty movement name", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[""],"profile_id":1}`, http.StatusBadRequest, "movement name cannot be empty"),
 			Entry("invalid injury", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[],"injuries":["Head"],"profile_id":1}`, http.StatusBadRequest, "invalid injuries"),
 			Entry("too many injuries", `{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/1/session-1/video.mp4","movements":[],"injuries":`+repeatedJSONString("Left Knee", 100)+`,"profile_id":1}`, http.StatusBadRequest, "too many injuries"),

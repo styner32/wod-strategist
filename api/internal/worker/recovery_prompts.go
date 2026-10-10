@@ -87,7 +87,7 @@ const (
    - type: positive_form(좋은 가동범위/정렬/홀드), form_issue(가동범위 제한 또는 보상작용), technique_event(구체적인 스트레칭/가동성 전환 장면). fatigue_onset은 웜업/쿨다운에서 사용하지 마세요.
    - confidence는 해당 시각 근거가 영상에서 직접 확인된 확신도이며 0.0~1.0 숫자로 출력하세요.
    - 중요한 장면이면 tags에 key_moment를 추가하세요.
-   - movement 필드에는 실제로 관찰된 스트레칭 또는 모빌리티 동작명을 기입하세요.
+   - movement 필드에는 실제로 관찰된 스트레칭 또는 모빌리티 동작의 공식 표준 영어 명칭(예: "Pigeon Pose", "Ankle Dorsiflexion Rock")을 기입하세요.
    - 반드시 아래 형식의 **highlights** JSON 코드 블록으로 출력하세요 (json이 아닌 highlights 태그 사용):
 ` + "```highlights\n" + `[{"start":"0:15","end":"0:25","type":"positive_form","movement":"Pigeon Pose","reason":"골반 수평 유지 및 충분한 고관절 굴곡 가동범위","confidence":0.92,"tags":["key_moment"]},{"start":"0:30","end":"0:40","type":"form_issue","movement":"Ankle Dorsiflexion Rock","reason":"발뒤꿈치 들림으로 인한 족배굴곡 제한","confidence":0.88}]` + "\n```"
 
