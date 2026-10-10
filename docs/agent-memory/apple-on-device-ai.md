@@ -60,8 +60,7 @@ Changed areas: setup preferences, recording hook/card, both locales, the Apple E
 
 - The upload endpoint itself needs no backend change. A follow-up found developer `collectSessionCatalog`/`buildVideoAssets` classified arbitrary files as chunks. Both now filter `.mp4`/`.mov` before counting/exposing videos, consistent with the merge worker. This follow-up **requires an API deployment** to affect hosted developer lists; it has not been deployed.
 - Coverage includes mixed JPEG/JSON/NDJSON alongside video in nested and legacy layouts, preserving catalog counts/order, ignoring evidence-only sessions, and excluding Apple AI files from merge inputs.
-- Validation: `go test -p 1 ./internal/controllers ./internal/worker -ginkgo.focus='asset helpers|GET /api/v1/dev/sessions|listOriginalChunks' -count=1` passed the worker package, but the controller suite could not connect to local `wod_test` on port 5432 (connection refused), so its catalog integration assertions did not run. The asset-helper tests can run separately with production controller sources plus `handlers_test.go` and `controllers_suite_test.go`, without the integration suite's DB setup. `git diff --check` passed.
-- Separate asset-helper run passed using zsh: `sources=(internal/controllers/*.go)` then `go test ${sources:#*_test.go} internal/controllers/handlers_test.go internal/controllers/controllers_suite_test.go -ginkgo.focus='asset helpers' -count=1` (from `api/`).
+- Validation: `go test -p 1 ./internal/controllers ./internal/worker -ginkgo.focus='asset helpers|GET /api/v1/dev/sessions|listOriginalChunks' -count=1` passed the worker package. With deferred DB initialization in place in the controllers suite, pure unit specs like `asset helpers` run directly without requiring a live PostgreSQL instance. `git diff --check` passed.
 
 ## Crop/selection validation — 2026-09-21
 

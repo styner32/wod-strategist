@@ -48,7 +48,7 @@ Never do these unless explicitly requested:
 ## Documentation scope
 - [docs/documentation-review.md](docs/documentation-review.md) records the documentation reconciliation and remaining decisions.
 - `docs/agent-memory/` describes current implementation and constraints; `docs/video-analysis-improvement/` describes target work, with a dated baseline in `01-current-pipeline.md`.
-- `.agent/skills/` contains generic examples, not repository architecture or an instruction to add dependencies, repository interfaces, or CI. Apply the scoped repository rules when using those examples.
+- `.agents/skills/` contains installed agent skills (such as `find-skills` and `security-audit`). Skill files are reference guidance and workflows, not repository architecture or an instruction to add dependencies, repository interfaces, or CI. Apply the scoped repository rules when using those examples.
 - `.jules/sentinel.md` is a historical incident journal; its old API-key and path-sanitization notes do not override current auth or validation code.
 
 ## Project memory docs

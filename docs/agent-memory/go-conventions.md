@@ -28,6 +28,8 @@
 
 ## Testing
 
+- **Ginkgo/Gomega only:** All tests in `api/` must be written as Ginkgo v2 specs (`Describe`, `Context`, `It`, `DescribeTable` + `Entry`) using Gomega matchers (`Expect(...).To(...)`).
+- **No `func TestXxx(t *testing.T)`:** Standalone `testing.T` functions are strictly forbidden in `api/`. The only allowed `testing.T` function is the package suite runner (`RunSpecs`) in `*_suite_test.go`.
 - Prefer integration-style tests that exercise multiple layers (middleware →
   handler → DB) over isolated unit tests with mocks.
 - Use real dependencies with minimal config for route-level tests. Test helpers

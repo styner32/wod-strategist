@@ -14,9 +14,14 @@
 
 ## Test tiers (what goes where)
 - **Pure functions** (validators, sanitizers, parsers): table-driven
-  Ginkgo/Gomega unit tests, no DB/Redis/transport. See `handlers_test.go`. Mock-free unit
+  Ginkgo/Gomega unit tests using `DescribeTable` + `Entry`, no DB/Redis/transport. See `handlers_test.go`. Mock-free unit
   tests of pure logic are encouraged — the "no mocks" rule bans *layer
   isolation via fakes*, not fast tests of pure code.
+- **Running specs without a database**: Pure unit specs can be run directly without PostgreSQL or Redis by focusing on the spec:
+  ```bash
+  TEST_DATABASE_URL='postgres://x:x@127.0.0.1:1/nope_test?sslmode=disable&connect_timeout=2' go test ./internal/controllers -count=1 -ginkgo.focus='validation helpers'
+  ```
+  The controllers suite uses lazy database initialization (`ensureTestDB()` wrapped in `sync.Once`), so integration specs only connect to the database when executed. Specs that do not hit the database will succeed even when PostgreSQL is unreachable.
 - **Everything with I/O**: sociable tests through the real entry point
   (router `ServeHTTP` / worker handler) per the 4-layer strategy below.
 
@@ -36,9 +41,9 @@ See also: [migrations.md](migrations.md).
   `wod_test` DB and Redis DB 15, and `CleanupDB` truncates every table.
 - Never run two test invocations concurrently (IDE runners, second
   worktree) — they will corrupt each other's state.
-- DB connections are **suite-scoped**: open in `BeforeSuite`, clean with
+- DB connections are **suite-scoped**: opened lazily on demand or in `BeforeSuite`, cleaned with
   `CleanupDB` in `BeforeEach`. Do not call `InitDB()` per spec — each call
-  opens a GORM pool that is never closed. (Some worker suites still do
+  opens a GORM pool that is never closed. In the `controllers` package, DB initialization is deferred via `ensureTestDB()` so pure unit specs do not require a live database. (Some worker suites still do
   this; migrate them opportunistically when touching those files.)
 
 ## Controller (route) tests
