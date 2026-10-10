@@ -1,3 +1,5 @@
+name: wod-dev
+
 services:
   db:
     image: postgres:18-alpine
@@ -64,4 +66,6 @@ networks:
 
 volumes:
   db-volume:
+    name: api_db-volume # Old volume name
   redis-data:
+    name: api_redis-data # Old volume name

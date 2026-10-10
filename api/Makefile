@@ -10,6 +10,7 @@ MIGRATIONS_DIR ?= internal/db/migrations
 IMAGE_REPO ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)
 CMD_DIR ?= cmd
 TEST_DIR ?= ./cmd/... ./internal/...
+GINKGO_FLAGS ?= -ginkgo.succinct -ginkgo.silence-skips
 
 GIT_SHA := $(shell git rev-parse --short HEAD)
 
@@ -87,9 +88,9 @@ test-chunk-upload: ## Replay chunk upload from a saved video. Usage: make test-c
 test: ## Run the tests
 	@mkdir -p tmp/go-build tmp/go-tmp
 	@if command -v gotestsum >/dev/null 2>&1; then \
-		GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp gotestsum --format pkgname-and-test-fails -- -p 1 $(TEST_DIR); \
+		GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp GINKGO_NO_COLOR=TRUE gotestsum --format pkgname-and-test-fails -- -p 1 $(TEST_DIR) $(GINKGO_FLAGS); \
 	else \
-		GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp go test $(TEST_DIR) -p 1 -v; \
+		GOCACHE=$$(pwd)/tmp/go-build GOTMPDIR=$$(pwd)/tmp/go-tmp GINKGO_NO_COLOR=TRUE go test $(TEST_DIR) -p 1 -v $(GINKGO_FLAGS); \
 	fi
 
 migrate-test-up:

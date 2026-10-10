@@ -14,8 +14,8 @@ type MovementGroup = movement.MovementGroup
 var movementGroups = movement.MovementGroups
 var movements = movement.All()
 
-const MaxMovementCount = 100
-const MaxMovementNameLength = 100
+const MaxMovementCount = 200
+const MaxMovementNameLength = 200
 
 var injuries = []string{
 	"Neck",
