@@ -1,78 +1,41 @@
-## 2024-03-14 - Fix SSRF and Arbitrary File Read/Delete in GCS Worker
+## 2026-03-14 - Fix Arbitrary File Read and Deletion in Background Workers
 
-**Vulnerability:** The `/upload-complete` API endpoint accepted a `gcs_uri` string which was subsequently passed to the worker `api/internal/worker/handler.go`. The worker checked if the path began with `gs://` to treat it as a GCS URI, but otherwise treated it as a local file path. It then read this file for processing and eventually executed `os.Remove(localFilePath)`.
-**Learning:** Because external input at the API boundary wasn't validated as strictly adhering to the expected format (`gs://`), users could provide local file paths (like `/app/gcp-key.json` or `/etc/passwd`) to arbitrary file read and delete them. The background worker implicitly trusted the path provided by the API.
-**Prevention:** Always strictly validate and normalize external resource URIs (e.g., ensuring a `gs://` prefix) at the first API boundary (e.g., `router.go`) before enqueuing them to a background worker. Don't rely on workers to sanitize input when they fall back to a less secure default (like local file access).
+**Vulnerability:** API endpoints (such as `/upload-complete`) accepted `gcs_uri` strings that were passed to background workers (`api/internal/worker/handler.go`). Paths without a `gs://` prefix were treated as local files, uploaded to Gemini, and deleted via `os.Remove()`. Furthermore, workers implicitly trusted payload paths from task queues.
+**Learning:** External inputs and queue payloads must never be implicitly trusted across system boundaries. Workers must enforce their own strict validation and not fall back to local filesystem operations for remote storage URIs.
+**Prevention:** Always validate and normalize URIs (enforcing `gs://` prefix) at both the API boundary and inside background workers (Defense in Depth). Never execute `os.Remove()` on arbitrary user- or payload-controlled paths.
 
-## 2024-06-11 - Prevent Arbitrary File Read and Deletion in Worker
+## 2026-03-23 - Prevent Information Exposure in Analysis Errors
 
-**Vulnerability:** Arbitrary file read and deletion via the `/upload-complete` endpoint and Asynq worker. `GcsURI` in the request was not validated to ensure it starts with `gs://`. The worker treated any path without the `gs://` prefix as a local file, directly uploading it to Gemini and then deleting it via `os.Remove`.
-**Learning:** When passing file paths or URIs across system boundaries (from API to background worker), validation must be enforced at both the API boundary and before the worker accesses the filesystem. Also, `defer os.Remove(localFilePath)` is dangerous if `localFilePath` can be controlled by user input.
-**Prevention:** Always validate and sanitize user-provided URIs (e.g., enforce `gs://` prefix). Use `filepath.Base` for any dynamic components used in local temporary file generation. Ensure proper separation between external URIs and internal filesystem paths.
+**Vulnerability:** In `api/internal/worker/handler.go`, when video or chunk analysis failed, raw error messages (`err.Error()`) containing internal filesystem paths (`/tmp/...`) and third-party error details were stored directly in the database `Output` field and exposed via user-facing endpoints (`/analysis`, `/history`).
+**Learning:** Storing and returning raw backend error strings directly to client-facing payloads leaks internal architecture and infrastructure details (CWE-209).
+**Prevention:** Always catch and log raw internal errors securely on the server side using the application logger, and return generic, safe error messages to clients (e.g., "An internal error occurred during analysis.").
 
-## 2024-11-06 - Prevent Arbitrary File Read and Deletion in Worker (Queue Trust)
+## 2026-06-08 - Insecure Direct Object Reference (IDOR) on User-Specific Endpoints
 
-**Vulnerability:** The `api/internal/worker/handler.go` worker blindly trusted the `p.FilePath` payload from the Redis Asynq queue to be a valid file. If the path did not start with `gs://`, it would default to treating it as a local file, reading it, uploading it to Gemini, and then deleting it with `os.Remove`. Furthermore, `p.SessionID` was used directly in a `filepath.Join` without sanitization when constructing a local temporary file path for downloading GCS objects. This allowed an attacker manipulating the background queue to perform arbitrary file reads and deletions, and path traversal during GCS downloads.
-**Learning:** Do not implicitly trust payloads from a task queue, even if they originated from your own API. The API boundary validation (like checking `gs://` on `/upload-complete`) can be bypassed if an attacker can enqueue tasks directly, or if there is another unvalidated path. Workers must enforce their own strict validation and sanitization (Defense in Depth).
-**Prevention:** Always strictly validate and normalize URIs (enforce `gs://`) within background workers before accessing them. Always sanitize identifiers like `SessionID` using `filepath.Base` before using them in `filepath.Join` to construct local filesystem paths.
+**Vulnerability:** Endpoints handling telemetry uploads (`UploadDebugTelemetry`), highlights (`GetHighlight`, `GetHighlightDownloadURL`, `VerifyHighlights`), and video uploads lacked consistent profile and session ownership validation, allowing authenticated users to access or mutate resources belonging to other profiles.
+**Learning:** Ownership checks must not rely on implicit assumptions or be skipped on telemetry/debug endpoints. Parameter injection in payloads allows cross-account manipulation if ownership is not explicitly verified early in the request lifecycle.
+**Prevention:** In Go API controllers (`api/internal/controllers`), all endpoints handling user-scoped resources must explicitly call `ctl.assertOwnsProfile()` or `ctl.assertOwnsSession()` immediately after parsing the request.
 
-## 2025-03-20 - Prevent Path Traversal in Worker Temp File Creation
+## 2026-07-19 - Fix API Key Bypass on Mobile Auth Endpoints
 
-**Vulnerability:** A path traversal vulnerability existed in `api/internal/worker/handler.go` where `p.SessionID` was directly used in `filepath.Join("/tmp", fmt.Sprintf("%s_%s", p.SessionID, filepath.Base(p.FilePath)))` to construct a temporary file path when downloading a file from GCS. An attacker could potentially supply a malicious `SessionID` (e.g., `../../etc/cron.d/`) to write downloaded files to unintended locations on the worker's filesystem.
-**Learning:** Even if `SessionID` is sanitized at the API boundary, it should be re-sanitized when constructing local file paths inside background workers. The payload is re-created from JSON by the worker and may come from a manipulated queue or bypass API validation.
-**Prevention:** Always apply `filepath.Base()` to any dynamically generated string (like IDs or filenames) that is used as a path segment in `filepath.Join()`, especially before creating or opening local files.
-
-## 2024-05-20 - Prevent Information Exposure in Analysis Errors
-
-**Vulnerability:** In `api/internal/worker/handler.go`, when a video or chunk analysis failed (e.g., due to downstream Gemini API errors, GCS download errors, or local filesystem permission issues), the raw `err.Error()` was saved to the database in the `Output` field of the results table. These results are exposed to the user via the `/analysis` and `/history` endpoints.
-**Learning:** Returning or saving unhandled raw error strings from backend components (like file system errors containing `/tmp/` paths, or third-party service errors) directly to user-facing payloads leaks internal system details. This information exposure (CWE-209) violates the principle of failing securely.
-**Prevention:** Always catch raw internal errors, securely log them on the server side using the application's logging framework, and replace the user-facing output with safe, generic error messages (e.g., "An internal error occurred during analysis.").
-
-## 2025-04-09 - Path Traversal Validation Bypass via filepath.Base()
-**Vulnerability:** Path Traversal vulnerability check bypass in background workers.
-**Learning:** `filepath.Base()` strips path separators from strings. Calling `filepath.Base()` on user input and then checking the *result* for path separators using `strings.ContainsRune(val, filepath.Separator)` will always silently pass, bypassing the validation logic meant to reject malicious input. The validation must occur *before* sanitizing the input or checking the original input string.
-**Prevention:** Always validate and check for path separators on the *raw* user input before applying any path transformation or sanitization functions.
-
-## 2025-05-13 - [Path Traversal in Session ID Handlers]
-**Vulnerability:** Path parameters such as `session_id` in API handlers (e.g. `GetAnalysis`, `GetHighlight`) were being read directly via `c.Param("session_id")` and used in database lookups or file path constructions without sanitization.
-**Learning:** Even though ORMs like GORM provide some injection protection, unvalidated strings read directly from HTTP paths can lead to path traversal if they are subsequently used to fetch or construct storage URIs (e.g., interacting with local disk or GCS).
-**Prevention:** Always wrap path or query parameters that function as identifiers with a dedicated sanitization function (like `sanitizeIdentifier`) before using them in further logic.
-
-## 2024-05-27 - Path Traversal in File Paths
-**Vulnerability:** The `validateSessionID` function merely checks for `filepath.Separator` (e.g. `/` or `\` depending on OS) to prevent path traversal issues. However, if paths are built using simple concatenation or other means, `filepath.Base` is recommended per memory guidelines: "Do not trust payloads from the Asynq task queue implicitly; always re-sanitize and validate inputs (e.g., applying `filepath.Base` to identifiers) within background workers, as the queue could potentially be manipulated or bypass API validation."
-**Learning:** Checking for separators is insufficient, especially when components like `..` can be manipulated and bypass simple checks. Using `filepath.Base` ensures that only the final element of the path is used, inherently preventing directory traversal attacks.
-**Prevention:** Always use `filepath.Base` on user-supplied identifiers intended to be part of file paths or object names before using them.
-
-## 2025-05-24 - Path Traversal Check OS-Dependency Bypass
-**Vulnerability:** The `validateSessionID` function in `api/internal/worker/worker.go` used `strings.ContainsRune(sessionID, filepath.Separator)` to check for path separators. Because `filepath.Separator` is determined by the operating system the code is compiled for/running on (`/` on Linux, `\` on Windows), this check would fail to detect a backslash (`\`) when running on a Linux system, allowing potential path traversal bypasses if the payload later reached a Windows-based system or a loosely-parsed filesystem implementation.
-**Learning:** Security validation logic should not rely on OS-specific path separators. Attackers can supply cross-platform payloads (like Windows-style paths `..\`) to applications running on Unix, bypassing validation checks that only look for Unix separators.
-**Prevention:** When explicitly denying path characters to prevent traversal or arbitrary file operations, always check for both Unix (`/`) and Windows (`\`) separators manually (e.g., using `strings.ContainsAny(sessionID, "/\\")`), rather than relying on the single OS-dependent `filepath.Separator`.
-
-## 2024-05-24 - Missing Authorization (IDOR) on Upload Endpoint
-**Vulnerability:** The `UploadDebugTelemetry` endpoint accepted a JSON payload containing `profileId` without validating that the authenticated user actually owned that profile. This is an Insecure Direct Object Reference (IDOR) that allowed any user to upload debug telemetry data on behalf of other users' profiles.
-**Learning:** Endpoints that handle debug, telemetry, or seemingly low-value data are often overlooked for authorization checks, but parameter injection in the payload allows a malicious actor to inject or corrupt data for other users.
-**Prevention:** All endpoints that perform state changes or storage operations tied to a specific resource (e.g., `profileId`) must validate ownership by explicitly calling the `assertOwnsProfile(c, req.ProfileID)` utility before processing the payload.
-
-## 2026-06-08 - [High] Insecure Direct Object Reference (IDOR) / Missing Authorization in handlers
-**Vulnerability:** Found multiple IDOR and missing authorization vulnerabilities in endpoints serving highlight data (`GetHighlight`, `GetHighlightDownloadURL`, `VerifyHighlights`) and initiating uploads (`Upload`) in the Go backend. Attackers could guess highlight IDs or use known session IDs to access or modify data belonging to other users.
-**Learning:** `ctl.assertOwnsProfile` and `ctl.assertOwnsSession` were implemented as utility functions but were not consistently called early in the request lifecycle (fail-fast principle) across all endpoints handling user-specific data. Some endpoints relied on implicit checking or no checking at all. In the Go backend, the database teardown utility (`CleanupDB` in `api/internal/testhelpers/factory.go`) strictly requires the test database name to end with `_test` (e.g., `wod_test`); otherwise, it will panic to prevent the accidental deletion of non-test data.
-**Prevention:** In the Go backend API controllers (`api/internal/controllers`), endpoints handling requests tied to user-specific resources must explicitly validate ownership using `ctl.assertOwnsProfile()` or `ctl.assertOwnsSession()` immediately after parsing and sanitizing the request input.
-
-## 2026-07-19 - [CRITICAL] Fix API Key Bypass on Mobile Auth Endpoints
-**Vulnerability:** The `APIKeyMiddleware` skipped the API key check if a `jwt` cookie was present, assuming that downstream `AuthMiddleware` would validate the cookie. However, mobile auth endpoints (`/auth/login`, `/auth/signup`) were not protected by `AuthMiddleware`, allowing an attacker to completely bypass API key authorization by supplying a dummy `jwt` cookie.
-**Learning:** Middleware skip logic based on the presence of unverified credentials (like a cookie) creates vulnerabilities if downstream middleware validation is not uniformly applied to all subsequent routes.
-**Prevention:** Unverified credentials should never be used as a skip condition unless they are strictly verified within the same middleware, or if the skip logic explicitly excludes routes that lack downstream validation.
+**Vulnerability:** `APIKeyMiddleware` skipped the API key check whenever a `jwt` cookie was present, assuming `AuthMiddleware` would validate it downstream. However, mobile auth endpoints (`/auth/login`, `/auth/signup`) were unauthenticated and not protected by `AuthMiddleware`, allowing attackers to bypass API key enforcement with a dummy cookie.
+**Learning:** Middleware skip logic based on unverified credentials introduces critical authorization bypasses if subsequent routes lack matching downstream validation.
+**Prevention:** Never treat unverified credentials as a skip condition unless they are verified within the same middleware, or ensure the skip logic explicitly excludes public/unprotected routes.
 
 ## 2026-09-01 - Prevent Timing Attacks in Authentication Flows
-**Vulnerability:** The authentication flows (`Login` and `DeleteAccount` in `api/internal/auth/service.go`) used bcrypt to hash and verify passwords. However, if the user lookup failed (e.g., the user did not exist or was deleted), the function would immediately return an error without performing the bcrypt comparison. This created a timing attack vulnerability, allowing an attacker to enumerate valid usernames by measuring the server's response time (responses for invalid usernames would be significantly faster because the expensive bcrypt operation was skipped).
-**Learning:** Returning early on invalid user lookups in authentication flows without simulating the computational cost of a successful lookup leaks information about the existence of the user. This violates the principle of failing securely and allows for username enumeration.
-**Prevention:** Always ensure that early returns on invalid users in authentication flows still perform a dummy computation (e.g., a dummy bcrypt comparison using a precomputed hash) to normalize server response times for both valid and invalid usernames.
 
-## 2027-09-27 - [High] Path Traversal Validation Missing on session_id Path Parameters
-**Vulnerability:** Several API controllers (`sensor_handlers.go`, `cost_handlers.go`, `sensor_timeline_handlers.go`, and `feedback_handlers.go`) extracted the `session_id` parameter directly via `c.Param("session_id")` and failed to apply proper path traversal validation via `sanitizeIdentifier()` and `isValidSessionID()`.
-**Learning:** Even if helper validation functions exist, they must be consistently applied to all path and query parameters representing identifiers across every endpoint to prevent malicious input from traversing directories or injecting malicious paths when interacting with file systems or GCS URIs.
-**Prevention:** Always wrap path parameters functioning as identifiers with `sanitizeIdentifier()` and follow up with a strict format check like `isValidSessionID()` immediately after extraction in API handlers.
-## 2024-10-08 - Fix Missing Path Traversal Validation on session_id
-**Vulnerability:** Several API controllers directly used `c.Param("session_id")` without sanitization or format validation, leading to potential path traversal vulnerabilities.
-**Learning:** Even when utility functions like `sanitizeIdentifier()` and `isValidSessionID()` exist, they can be easily missed when directly extracting path parameters.
-**Prevention:** Always ensure path parameters acting as identifiers are strictly validated and sanitized immediately after extraction using the application's defined utility functions.
+**Vulnerability:** `Login` and `DeleteAccount` in `api/internal/auth/service.go` returned immediately when a user lookup failed, skipping the bcrypt password verification. This allowed attackers to enumerate valid usernames by measuring the significant response time difference between existing and non-existing accounts.
+**Learning:** Early returns on authentication failures without matching computational cost leak account existence through side-channel timing analysis.
+**Prevention:** Perform a dummy bcrypt comparison using a precomputed hash when a user lookup fails, ensuring constant-time response behavior for both valid and invalid usernames.
+
+## 2026-10-09 - Comprehensive Path Traversal and Identifier Sanitization
+
+**Vulnerability:** Across multiple controllers and worker routines, identifiers (`session_id`, environment names, storage paths) extracted from path parameters (`c.Param`), JSON payloads, or task queues were directly used in GCS URIs, local temporary files (`filepath.Join`), or deletion checks without cross-platform path traversal validation.
+**Learning:**
+1. Simple checks like `strings.Contains(path, "/")` or OS-specific `filepath.Separator` fail against Windows-style `\` separators or cross-platform traversal payloads (`..\`).
+2. Calling `filepath.Base()` before validating raw input strips separators and silently bypasses validation.
+3. Task queue payloads and URL parameters must be sanitized at both the API boundary and worker execution points.
+**Prevention:**
+1. Always validate raw input for path traversal before transformation using cross-platform checks (`strings.ContainsAny(input, "/\\")`).
+2. Wrap path parameters functioning as identifiers with `sanitizeIdentifier()` and enforce strict format validation (e.g., `isValidSessionID()`) immediately upon extraction.
+3. In workers, apply `filepath.Base()` to any dynamic components before constructing local filesystem paths in `filepath.Join()`.

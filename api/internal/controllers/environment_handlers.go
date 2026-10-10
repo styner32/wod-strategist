@@ -32,7 +32,8 @@ func (ctl *Controller) DeleteEnvironment(c *gin.Context) {
 		return
 	}
 	for _, object := range objects {
-		if !strings.HasPrefix(object, prefix) || strings.Contains(strings.TrimPrefix(object, prefix), "/") {
+		// Prevent path traversal by explicitly blocking both Unix and Windows path separators
+		if !strings.HasPrefix(object, prefix) || strings.ContainsAny(strings.TrimPrefix(object, prefix), "/\\") {
 			continue
 		}
 		if err := ctl.storageClient.DeleteObject(c.Request.Context(), object); err != nil {
