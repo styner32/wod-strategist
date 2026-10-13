@@ -1465,7 +1465,7 @@ var _ = Describe("mergeSegmentsByMovement", func() {
 var _ = Describe("Workout progress observation windows", func() {
 	It("observes only media gaps between sets without presuming rest", func() {
 		sets := []Segment{{Start: "0:40", End: "1:00", Type: "Power Clean"}, {Start: "0:10", End: "0:20", Type: "Power Clean"}}
-		windows := addBetweenObservationWindows(sets)
+		windows := addBetweenObservationWindows(sets, nil)
 		Expect(windows).To(HaveLen(3))
 		Expect(windows[0].Start).To(Equal("0:10"))
 		Expect(windows[1].Start).To(Equal("0:20"))
@@ -1478,7 +1478,18 @@ var _ = Describe("Workout progress observation windows", func() {
 
 	It("keeps touching or overlapping indexed windows without inventing a rest", func() {
 		sets := []Segment{{Start: "0:00", End: "0:20", Type: "Power Clean"}, {Start: "0:10", End: "0:15", Type: "Unknown"}, {Start: "0:20", End: "0:30", Type: "Power Clean"}}
-		Expect(addBetweenObservationWindows(sets)).To(HaveLen(3))
+		Expect(addBetweenObservationWindows(sets, nil)).To(HaveLen(3))
+	})
+
+	It("does not bridge a segment omitted by the triage budget", func() {
+		indexed := []Segment{{Start: "0:00", End: "0:10", Type: "Squat"}, {Start: "0:20", End: "0:30", Type: "Lunge"}, {Start: "0:40", End: "0:50", Type: "Squat"}, {Start: "1:00", End: "1:10", Type: "Squat"}}
+		selected := []Segment{indexed[0], indexed[2], indexed[3]}
+		omitted := omittedIndexedSegments(indexed, selected)
+		Expect(omitted).To(Equal([]Segment{indexed[1]}))
+		windows := addBetweenObservationWindows(selected, omitted)
+		Expect(windows).To(HaveLen(4)) // 0:00-0:40 spans the omitted lunge; 0:50-1:00 is observed
+		Expect(windows[2].Start).To(Equal("0:50"))
+		Expect(windows[2].Type).To(Equal("Unknown"))
 	})
 
 	It("requires direct full-window rest evidence before omitting exercise scoring", func() {

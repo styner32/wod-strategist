@@ -64,7 +64,12 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 	}
 	if len(req.WODStartSecs) > 0 {
 		var session db.Session
-		if ctl.db.WithContext(c.Request.Context()).Where("session_id = ? AND profile_id = ? AND workout_type = ? AND wod_evaluation_version = 1", sessionID, profileID, "wod").First(&session).Error != nil {
+		if err := ctl.db.WithContext(c.Request.Context()).Where("session_id = ? AND profile_id = ? AND workout_type = ? AND wod_evaluation_version = 1", sessionID, profileID, "wod").First(&session).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.Log.Error("failed to check WOD start correction eligibility", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session re-analysis"})
+				return
+			}
 			c.JSON(http.StatusConflict, gin.H{"error": "start correction is available only for new WOD sessions"})
 			return
 		}
@@ -126,7 +131,11 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		// lookup and object listing.
 		if lookupErr := ctl.db.WithContext(c.Request.Context()).
 			Where("profile_id = ? AND client_request_id = ?", profileID, req.ClientRequestID).
-			First(&existing).Error; lookupErr == nil && existing.SessionID == sessionID {
+			First(&existing).Error; lookupErr == nil {
+			if existing.SessionID != sessionID || !wodStartRequestsEqual(existing.WODStartRequest, wodStartRequestDocument(req.WODStartSecs)) {
+				c.JSON(http.StatusConflict, gin.H{"error": "client_request_id was already used for another session"})
+				return
+			}
 			if err := ctl.ensureSessionReanalysisTask(c.Request.Context(), &existing); err != nil {
 				logger.Log.Error("failed to recover idempotent session re-analysis task", zap.Uint("run_id", existing.ID), zap.Error(err))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue session re-analysis"})
@@ -710,14 +719,6 @@ func decodeCreateSessionReanalysisRequest(reader io.Reader) (CreateSessionReanal
 }
 
 var errWODCandidateStale = errors.New("WOD re-analysis source changed")
-
-func (ctl *Controller) newWODReanalysisAllowed(c *gin.Context) bool {
-	if UserIDFromContext(c) == 0 {
-		return false
-	}
-	var count int64
-	return ctl.db.WithContext(c.Request.Context()).Model(&db.Session{}).Joins("JOIN profiles p ON p.id = sessions.profile_id").Where("sessions.session_id = ? AND sessions.workout_type = ? AND sessions.wod_evaluation_version = 1 AND p.user_id = ?", c.Param("session_id"), "wod", UserIDFromContext(c)).Count(&count).Error == nil && count == 1
-}
 
 // Wrap explicit JSON null so the nullable column can distinguish reset from omission.
 func wodStartRequestDocument(raw json.RawMessage) db.NullableJSONDocument {

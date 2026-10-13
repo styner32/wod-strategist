@@ -3,11 +3,8 @@ package wodeval
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"testing"
 	"time"
 )
-
-func TestWODEvaluation(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "WOD Evaluation Suite") }
 
 var _ = Describe("WOD training load", func() {
 	var location *time.Location

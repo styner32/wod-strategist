@@ -128,9 +128,10 @@ func summaryFingerprint(a db.AnalysisResult, workoutType ...string) string {
 	return enrichmentHash([]string{a.Output, typeName, string(a.WorkoutProgress)})
 }
 
+// Legacy sessions may have analysis without a sessions row; their type is unknown.
 func summarySource(conn *gorm.DB, a db.AnalysisResult) (string, string, error) {
 	var session db.Session
-	if err := conn.Select("workout_type").Where("session_id = ? AND profile_id = ?", a.SessionID, a.ProfileID).First(&session).Error; err != nil {
+	if err := conn.Select("workout_type").Where("session_id = ? AND profile_id = ?", a.SessionID, a.ProfileID).First(&session).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", "", err
 	}
 	return session.WorkoutType, summaryFingerprint(a, session.WorkoutType), nil

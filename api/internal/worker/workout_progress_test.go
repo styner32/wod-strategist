@@ -57,6 +57,41 @@ var _ = Describe("Independent workout progress helpers", func() {
 		Expect(items[0].RepEvents).To(BeEmpty())
 		Expect(gaps).To(ContainElement(HaveField("Reason", "incomplete_cycle")))
 	})
+	It("localizes a malformed entry so sibling repetitions survive", func() {
+		raw := `{"intervals":[{"start_secs":10,"end_secs":20,"activity":"exercise","movement":"Power Clean","target_confirmed":true,"rep_events":[{"movement":"Power Clean","unit":"reps","start_secs":11,"end_secs":13,"complete":true,"evidence":"full visible lift/catch"}]},{"start_secs":20,"end_secs":30.2,"activity":"exercise","movement":"Power Clean","target_confirmed":true,"rep_events":[]}],"unassessed":[{"start_secs":25,"end_secs":26,"reason":"not_visible"}]}`
+		items, gaps := parseWorkoutObservations(wrap(raw), seg, 0)
+		Expect(items).To(HaveLen(1))
+		Expect(items[0].RepEvents).To(HaveLen(1))
+		Expect(gaps).To(ConsistOf(
+			workoutprogress.Gap{Start: 20, End: 30, Clock: "media", Reason: "invalid_observation_bounds"},
+			workoutprogress.Gap{Start: 25, End: 26, Clock: "media", Reason: "invalid_unassessed_bounds"},
+		))
+		raw = `{"intervals":[{"start_secs":10,"end_secs":30,"activity":"exercise","movement":"Power Clean","target_confirmed":true,"rep_events":[]}],"unassessed":[{"clock":"media","start_secs":"bad","reason":"x"}]}`
+		_, gaps = parseWorkoutObservations(wrap(raw), seg, 0)
+		Expect(gaps).To(ContainElement(workoutprogress.Gap{Start: 10, End: 30, Clock: "media", Reason: "invalid_observation_response"}))
+	})
+	It("assesses coverage only inside the attempted span", func() {
+		in := interval()
+		edges := workoutprogress.Build([]workoutprogress.Interval{in}, []workoutprogress.Gap{{Start: 0, End: 10, Clock: "media", Reason: "not_analyzed"}, {Start: 30, End: 40, Clock: "media", Reason: "not_analyzed"}, {Start: 50, End: 60, Clock: "capture", Reason: "recording_gap"}, {Start: 12, End: 14, Clock: "media", Reason: "incomplete_cycle"}}, "source")
+		from, to := progressAssessedSpan(edges)
+		Expect([]float64{from, to}).To(Equal([]float64{10, 30}))
+		Expect(progressCoverageComplete(edges, from, to)).To(BeTrue())
+		score := validateWorkoutProgressScore(`{"form":80,"intensity":0,"consistency":90,"movements":{},"summary":"ok"}`, VideoAnalysisPayload{WorkoutType: WorkoutTypeWarmup}, edges)
+		Expect(score).To(MatchJSON(`{"overall":83,"form":80,"intensity":0,"consistency":90,"movements":{},"summary":"ok"}`))
+
+		later := in
+		later.ID, later.Start, later.End = "set-b", 40, 60
+		later.RepEvents = []activity.Observation{}
+		later.FormObservations = []workoutprogress.Observation{observation(41, 43, "stable catch")}
+		interior := workoutprogress.Build([]workoutprogress.Interval{in, later}, []workoutprogress.Gap{{Start: 30, End: 40, Clock: "media", Reason: "not_analyzed"}}, "source")
+		from, to = progressAssessedSpan(interior)
+		Expect(progressCoverageComplete(interior, from, to)).To(BeFalse())
+		omitted := workoutprogress.Build([]workoutprogress.Interval{in}, []workoutprogress.Gap{{Start: 30, End: 40, Clock: "media", Reason: "not_analyzed"}, {Start: 40, End: 50, Clock: "media", Reason: "segment_budget_omitted"}}, "source")
+		from, to = progressAssessedSpan(omitted)
+		Expect(progressCoverageComplete(omitted, from, to)).To(BeFalse(), "a budget-omitted edge segment is still part of the workout")
+		paused := workoutprogress.Build([]workoutprogress.Interval{in}, []workoutprogress.Gap{{Start: 50, End: 60, Clock: "capture", Reason: "unverified_capture_mapping"}}, "source")
+		Expect(progressCoverageComplete(paused, 10, 30)).To(BeFalse())
+	})
 	It("attaches only unambiguous planned loads as confirmation candidates", func() {
 		items := []workoutprogress.Interval{interval()}
 		attachProgressLoadCandidates(items, `[{"movement":"Power Clean","weight_raw":"135lb"}]`)

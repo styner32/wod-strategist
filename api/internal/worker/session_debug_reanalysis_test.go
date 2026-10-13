@@ -186,7 +186,8 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(completed.Status).To(Equal(db.SessionReanalysisStatusCompleted))
 		Expect(completed.Output).To(ContainSubstring("교정 라벨"))
 		Expect(completed.HighlightSegments).NotTo(BeEmpty())
-		Expect(completed.SessionScore).To(MatchJSON(`{"overall":null,"form":80,"intensity":null,"consistency":null,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}`))
+		// Footage after the last observed window is outside the assessed span.
+		Expect(completed.SessionScore).To(MatchJSON(`{"overall":null,"form":80,"intensity":80,"consistency":null,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}`))
 		Expect(completed.WorkoutProgress).NotTo(BeEmpty())
 		Expect(completed.PromptTokens).To(Equal(int32(17)))
 

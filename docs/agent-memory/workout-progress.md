@@ -61,6 +61,8 @@ They do not estimate physiological recovery and never update `workout_progress`.
 
 ## Assessment, reanalysis and release
 
+Coverage completeness (`progressCoverageComplete`) is judged only inside the assessed span: every attempted window, including failed and `segment_budget_omitted` ones, but not the unindexed edges filled as `not_analyzed`. Version-1 WODs end the span at the last validated `wod_evidence` end. Count-only reasons (`no_countable_evidence`, `incomplete_cycle`) and capture-clock `recording_gap` keep coverage complete; `unverified_capture_mapping` does not. The triage budget (`maxSegmentsForDuration`) applies to indexed segments only. Between-set observation windows are added afterwards and never bridge an omitted segment. A malformed model entry voids only its clamped claimed bounds; an unlocatable entry still voids the whole window.
+
 Segment responses also contain time-bounded direct form/ROM/pace observations. Final WOD scoring uses all evidence; warmup scoring treats controlled progressive ROM expansion positively. Spinal/pelvic observations must be visible and movement-specific; abdominal pressure or muscle activation cannot be established from video alone.
 
 Only existing version-1 WOD eligibility invokes onset trimming and version-1 score policy. Timeline availability does not upgrade historical scoring or Effort eligibility. Explicit selected-video reanalysis can create progress without historical backfill. Reanalysis candidates enter comparisons only after apply. Apply atomically replaces progress; changed-source confirmations require review again. Summary fingerprints include workout type and progress as well as analysis text.

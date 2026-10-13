@@ -195,7 +195,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		segments = trimWODSegments(segments, wodStart)
 		wodComplete = w.wodCoverageComplete(ctx, p, wodStart)
 	}
-	segments = addBetweenObservationWindows(segments)
+	indexedSegments := segments
 	maxSegments := maxSegmentsForDuration(file.Duration)
 	if len(segments) > maxSegments && !newWOD {
 		allSegments := append([]Segment(nil), segments...)
@@ -216,6 +216,8 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			segments = preserveWarmupTrajectories(allSegments, segments, maxSegments)
 		}
 	}
+	omittedSegments := omittedIndexedSegments(indexedSegments, segments)
+	segments = addBetweenObservationWindows(segments, omittedSegments)
 
 	contextSnapshot, _ := json.Marshal(map[string]any{
 		"session_id": run.SessionID, "profile_id": run.ProfileID,
@@ -242,6 +244,9 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	var wodEvidence []wodSegmentEvidence
 	var progressIntervals []workoutprogress.Interval
 	var progressGaps []workoutprogress.Gap
+	for _, seg := range omittedSegments {
+		progressGaps = append(progressGaps, workoutprogress.Gap{Start: convertToSeconds(seg.Start).Seconds(), End: convertToSeconds(seg.End).Seconds(), Clock: "media", Reason: "segment_budget_omitted"})
+	}
 	var output strings.Builder
 	var highlightCandidates []highlightCandidate
 	for i, segment := range segments {

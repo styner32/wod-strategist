@@ -744,7 +744,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		segments = trimWODSegments(segments, wodStart)
 		wodComplete = w.wodCoverageComplete(ctx, p, wodStart)
 	}
-	segments = addBetweenObservationWindows(segments)
+	indexedSegments := segments
 	maxSegs := maxSegmentsForDuration(upload.VideoDuration)
 	if len(segments) > maxSegs && !newWOD {
 		allSegments := append([]Segment(nil), segments...)
@@ -771,6 +771,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("count", len(segments)),
 			zap.Any("segments", segments))
 	}
+	// The budget applies to indexed segments only. Between-set windows never
+	// bridge an omitted segment, which stays explicitly unassessed.
+	omittedSegments := omittedIndexedSegments(indexedSegments, segments)
+	segments = addBetweenObservationWindows(segments, omittedSegments)
 
 	// ── Pass 2: Observe each segment independently ──
 	wodContext := buildWODContext(p.WODDescription)
@@ -778,6 +782,9 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	var wodEvidence []wodSegmentEvidence
 	var progressIntervals []workoutprogress.Interval
 	var progressGaps []workoutprogress.Gap
+	for _, seg := range omittedSegments {
+		progressGaps = append(progressGaps, workoutprogress.Gap{Start: convertToSeconds(seg.Start).Seconds(), End: convertToSeconds(seg.End).Seconds(), Clock: "media", Reason: "segment_budget_omitted"})
+	}
 	var allAnalysis strings.Builder
 	var highlightCandidates []highlightCandidate
 	for i, seg := range segments {
@@ -951,9 +958,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 // Reserve early/late pairs for selected warmup movements before filling the
 // remaining budget. Omitted intervals remain unassessed in workout_progress.
 // Observe recorded time between indexed sets without assigning it to rest.
-// Calling this before triage leaves budget omissions explicitly unassessed.
-// Capture pauses have no media duration and cannot create an observation window.
-func addBetweenObservationWindows(segments []Segment) []Segment {
+// A window spanning an omitted segment is not added, so budget omissions stay
+// explicitly unassessed. Capture pauses have no media duration and cannot
+// create an observation window.
+func addBetweenObservationWindows(segments, omitted []Segment) []Segment {
 	ordered := append([]Segment(nil), segments...)
 	sort.SliceStable(ordered, func(i, j int) bool { return convertToSeconds(ordered[i].Start) < convertToSeconds(ordered[j].Start) })
 	out := []Segment{}
@@ -963,7 +971,7 @@ func addBetweenObservationWindows(segments []Segment) []Segment {
 		if end <= start {
 			continue
 		}
-		if len(out) > 0 && start-previousEnd > 10*time.Millisecond {
+		if len(out) > 0 && start-previousEnd > 10*time.Millisecond && !segmentsOverlap(omitted, previousEnd, start) {
 			out = append(out, Segment{
 				Start: formatSegmentTimestamp(previousEnd.Seconds()), End: seg.Start, Type: "Unknown",
 				Description: "Observe the current target person's activity directly. This recorded window has no confirmed activity or movement label; do not assume rest or exercise.",
@@ -975,6 +983,29 @@ func addBetweenObservationWindows(segments []Segment) []Segment {
 		}
 	}
 	return out
+}
+
+func omittedIndexedSegments(indexed, selected []Segment) []Segment {
+	kept := map[Segment]bool{}
+	for _, seg := range selected {
+		kept[seg] = true
+	}
+	omitted := []Segment{}
+	for _, seg := range indexed {
+		if !kept[seg] {
+			omitted = append(omitted, seg)
+		}
+	}
+	return omitted
+}
+
+func segmentsOverlap(segments []Segment, start, end time.Duration) bool {
+	for _, seg := range segments {
+		if convertToSeconds(seg.Start) < end && convertToSeconds(seg.End) > start {
+			return true
+		}
+	}
+	return false
 }
 
 // Rest is complete coverage only when the current-window observer directly

@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
+	"github.com/wod-strategist/api/internal/movement"
 	"github.com/wod-strategist/api/internal/sensor"
 	"github.com/wod-strategist/api/internal/timeline"
 	"github.com/wod-strategist/api/internal/wodeval"
@@ -218,10 +220,13 @@ func (w *Worker) synthesizeWOD(ctx context.Context, p VideoAnalysisPayload, star
 
 func (w *Worker) synthesizeWODWithProgress(ctx context.Context, p VideoAnalysisPayload, start wodeval.Start, evidence []wodSegmentEvidence, complete bool, progress workoutprogress.Progress, assessmentContext string, observe ...func(string, *gemini.TokenUsage)) string {
 	if progress.Version == 1 {
-		for _, gap := range progress.Unassessed {
-			if gap.Reason != "no_countable_evidence" && gap.Reason != "incomplete_cycle" {
-				complete = false
-			}
+		// The WOD ends at the last validated exercise observation; later footage is not part of it.
+		from, to := progressAssessedSpan(progress)
+		if len(evidence) > 0 {
+			to = evidence[len(evidence)-1].EndSecs
+		}
+		if !progressCoverageComplete(progress, from, to) {
+			complete = false
 		}
 	}
 	score := wodeval.Score{WODStart: start, Movements: map[string]map[string]int{}, EvidenceStatus: "partial", Summary: "분석 근거가 부족하여 일부 점수를 판단할 수 없습니다."}
@@ -329,13 +334,20 @@ func (w *Worker) synthesizeWODWithProgress(ctx context.Context, p VideoAnalysisP
 	if !comparable {
 		score.Consistency = nil
 	}
+	// The model also sees canonical progress names, so match by canonical name.
+	movementKey := func(name string) string {
+		if canonical := activity.CanonicalMovement(name); canonical != "" {
+			return canonical
+		}
+		return movement.NormalizeKey(name)
+	}
 	allowed := map[string]bool{}
 	for _, e := range evidence {
-		allowed[e.Movement] = true
+		allowed[movementKey(e.Movement)] = true
 	}
-	for movement, values := range score.Movements {
-		if !allowed[movement] {
-			delete(score.Movements, movement)
+	for name, values := range score.Movements {
+		if !allowed[movementKey(name)] {
+			delete(score.Movements, name)
 			continue
 		}
 		for key, value := range values {

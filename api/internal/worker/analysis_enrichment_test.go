@@ -358,6 +358,17 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 		Expect(s.Status).To(Equal("completed"))
 		Expect(s.Result.Overview).To(Equal("fenced"))
 	})
+	It("summarizes legacy analysis that has no sessions row", func() {
+		Expect(conn.Where("session_id = ?", sid).Delete(&db.Session{}).Error).To(Succeed())
+		_, err := w.ScheduleAnalysisEnrichment(context.Background(), sid, false, false)
+		Expect(err).NotTo(HaveOccurred())
+		s, _ := load()
+		summary(`{"overview":"legacy summary","strengths":[],"improvements":[],"limitations":[]}`)
+		task(s.RunID, "summary", 0)
+		s, _ = load()
+		Expect(s.Status).To(Equal("completed"))
+		Expect(s.Result.Overview).To(Equal("legacy summary"))
+	})
 	It("uses authoritative workout type and progress and invalidates an unchanged analysis summary", func() {
 		_, err := w.ScheduleAnalysisEnrichment(context.Background(), sid, false, false)
 		Expect(err).NotTo(HaveOccurred())

@@ -62,7 +62,7 @@ func parseWorkoutObservations(text string, seg Segment, index int) ([]workoutpro
 	var gaps []workoutprogress.Gap
 	for i, item := range raw.Intervals {
 		if !activity.ValidInterval(item.Start, item.End) || item.Start < start || item.End > end {
-			gaps = append(gaps, workoutprogress.Gap{Start: start, End: end, Clock: "media", Reason: "invalid_observation_bounds"})
+			gaps = append(gaps, localizedProgressGap(item.Start, item.End, start, end, "invalid_observation_bounds"))
 			continue
 		}
 		in := item.Interval
@@ -94,7 +94,7 @@ func parseWorkoutObservations(text string, seg Segment, index int) ([]workoutpro
 			events := make([]activity.Observation, 0, len(in.RepEvents))
 			for j, event := range in.RepEvents {
 				if !activity.ValidInterval(event.Start, event.End) || event.Start < start || event.End > end || strings.TrimSpace(event.Evidence) == "" {
-					gaps = append(gaps, workoutprogress.Gap{Start: in.Start, End: in.End, Clock: "media", Reason: "invalid_event_bounds_or_evidence"})
+					gaps = append(gaps, localizedProgressGap(event.Start, event.End, in.Start, in.End, "invalid_event_bounds_or_evidence"))
 					continue
 				}
 				if in.Movement != "" && activity.CanonicalMovement(event.Movement) != activity.CanonicalMovement(in.Movement) {
@@ -112,12 +112,22 @@ func parseWorkoutObservations(text string, seg Segment, index int) ([]workoutpro
 		if gap.Clock == "media" && activity.ValidInterval(gap.Start, gap.End) && gap.Start >= start && gap.End <= end && strings.TrimSpace(gap.Reason) != "" {
 			gaps = append(gaps, gap)
 		} else {
-			gaps = append(gaps, workoutprogress.Gap{Start: start, End: end, Clock: "media", Reason: "invalid_unassessed_bounds"})
+			gaps = append(gaps, localizedProgressGap(gap.Start, gap.End, start, end, "invalid_unassessed_bounds"))
 		}
 	}
 	// Domain validation reuses activity.Decode/Own, including incomplete cycles.
 	validated := workoutprogress.Build(intervals, gaps, "segment-observations")
 	return validated.Intervals, validated.Unassessed
+}
+
+// A rejected entry voids only the part of the window it claimed, so one malformed
+// sibling cannot erase valid repetitions. Unlocatable entries void the window.
+func localizedProgressGap(claimedStart, claimedEnd, start, end float64, reason string) workoutprogress.Gap {
+	gapStart, gapEnd := math.Max(claimedStart, start), math.Min(claimedEnd, end)
+	if !activity.ValidInterval(gapStart, gapEnd) {
+		gapStart, gapEnd = start, end
+	}
+	return workoutprogress.Gap{Start: gapStart, End: gapEnd, Clock: "media", Reason: reason}
 }
 
 func boundedProgressObservations(items []workoutprogress.Observation, start, end float64) []workoutprogress.Observation {
@@ -377,6 +387,37 @@ func (w *Worker) assessWorkoutProgress(ctx context.Context, p VideoAnalysisPaylo
 	return validateWorkoutProgressScore(stripJSONFence(text), p, progress)
 }
 
+// The assessed span covers every attempted window, including failed or
+// budget-omitted ones, but not unindexed edges that were filled as not_analyzed.
+func progressAssessedSpan(progress workoutprogress.Progress) (float64, float64) {
+	from, to := math.Inf(1), math.Inf(-1)
+	for _, in := range progress.Intervals {
+		from, to = math.Min(from, in.Start), math.Max(to, in.End)
+	}
+	for _, gap := range progress.Unassessed {
+		if gap.Clock == "media" && gap.Reason != "not_analyzed" {
+			from, to = math.Min(from, gap.Start), math.Max(to, gap.End)
+		}
+	}
+	return from, to
+}
+
+// Media outside [from, to] (pre-onset waiting, post-workout footage) is not part
+// of the assessed workout. Count-only uncertainty does not erase visible
+// posture/ROM, and a verified recording pause stays in capture-clock elapsed time.
+func progressCoverageComplete(progress workoutprogress.Progress, from, to float64) bool {
+	for _, gap := range progress.Unassessed {
+		switch {
+		case gap.Reason == "no_countable_evidence" || gap.Reason == "incomplete_cycle":
+		case gap.Clock == "capture" && gap.Reason == "recording_gap":
+		case gap.Clock == "media" && (gap.End <= from || gap.Start >= to):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Different labels on an overlapping frame/cycle are one observation, not a
 // temporal comparison. A long segment can still contain an early/late pair.
 func hasComparableProgressObservations(progress workoutprogress.Progress) bool {
@@ -462,15 +503,8 @@ func validateWorkoutProgressScore(raw string, p VideoAnalysisPayload, progress w
 	if formCount == 0 {
 		score.Form = nil
 	}
-	coverageComplete := true
-	for _, gap := range progress.Unassessed {
-		if gap.Reason == "no_countable_evidence" || gap.Reason == "incomplete_cycle" {
-			continue // count uncertainty does not erase visible posture/ROM
-		}
-		if gap.Clock == "media" || gap.Clock == "capture" {
-			coverageComplete = false
-		}
-	}
+	from, to := progressAssessedSpan(progress)
+	coverageComplete := progressCoverageComplete(progress, from, to)
 	if !coverageComplete || !hasComparableProgressObservations(progress) {
 		score.Consistency = nil
 	}

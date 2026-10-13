@@ -336,10 +336,12 @@ func ComputeLegacySessionMuscleLoadsWithSignals(
 // Returns (loads, true) if valid movements exist, or (nil, false) if no valid movements exist.
 func ComputeSessionMuscleLoads(sessionScoreJSON string) (map[string]float64, bool) {
 	var evidence struct {
-		Version   int  `json:"evaluation_version"`
-		Intensity *int `json:"intensity"`
+		Version   int             `json:"evaluation_version"`
+		Intensity json.RawMessage `json:"intensity"`
 	}
-	if json.Unmarshal([]byte(sessionScoreJSON), &evidence) == nil && evidence.Version == 1 && evidence.Intensity == nil {
+	// Missing v1 intensity, or intensity explicitly withheld as null by progress
+	// assessment, must not become the default load factor.
+	if json.Unmarshal([]byte(sessionScoreJSON), &evidence) == nil && ((evidence.Version == 1 && len(evidence.Intensity) == 0) || string(evidence.Intensity) == "null") {
 		return nil, false
 	}
 	if strings.TrimSpace(sessionScoreJSON) == "" || sessionScoreJSON == "{}" {
@@ -389,7 +391,7 @@ func ComputeSessionMuscleLoads(sessionScoreJSON string) (map[string]float64, boo
 	}
 
 	intensityFactor := 1.0
-	if score.Intensity > 0 || (evidence.Version == 1 && evidence.Intensity != nil) {
+	if score.Intensity > 0 || (evidence.Version == 1 && len(evidence.Intensity) > 0) {
 		intensityFactor = math.Max(0.5, math.Min(1.5, float64(score.Intensity)/70.0))
 	}
 

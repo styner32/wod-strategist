@@ -80,6 +80,14 @@ var _ = Describe("Fatigue Calculation & Readiness", func() {
 			loadsWithSensor, _ := fatigue.ComputeSessionMuscleLoadsWithSensor(scoreJSON, `{"quality":{"valid_hr":true,"is_complete":true},"hr_bonus":15.0}`)
 			Expect(loads[fatigue.GroupCardioMetabolic]).To(Equal(loadsWithSensor[fatigue.GroupCardioMetabolic]))
 		})
+
+		It("does not default the load factor when assessment withheld intensity", func() {
+			loads, ok := fatigue.ComputeSessionMuscleLoads(`{"intensity":null,"movements":{"Power Clean":{"form":80}}}`)
+			Expect(ok).To(BeFalse())
+			Expect(loads).To(BeNil())
+			_, ok = fatigue.ComputeSessionMuscleLoads(`{"movements":{"Power Clean":{"form":80}}}`)
+			Expect(ok).To(BeTrue(), "legacy scores without an intensity key stay readable")
+		})
 	})
 
 	Context("ComputeCurrentReadiness with decay and evidence status", func() {

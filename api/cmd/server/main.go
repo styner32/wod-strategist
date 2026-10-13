@@ -15,6 +15,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// The alpine runtime image has no zoneinfo; wod-training-load accepts any IANA zone.
+	_ "time/tzdata"
 
 	"github.com/hibiken/asynq"
 	_ "github.com/wod-strategist/api/docs"

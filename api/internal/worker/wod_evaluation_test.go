@@ -123,6 +123,28 @@ var _ = Describe("WOD full-session evaluation", func() {
 		Expect(strings.Contains(text, "fileUri")).To(BeFalse())
 		Expect(text).NotTo(ContainSubstring(`\"start_secs\":120`))
 	})
+	It("stays complete across post-WOD footage and verified recording pauses, matching movement names by catalog key", func() {
+		transport := testhelpers.NewMockTransport()
+		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
+		Expect(err).NotTo(HaveOccurred())
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":60,"consistency":90,"movements":{"power clean":{"form":80,"intensity":60}},"summary":"좋습니다."}`}}}}}})
+		set := func(id string, from, to float64) workoutprogress.Interval {
+			return workoutprogress.Interval{ID: id, Start: from, End: to, Activity: "exercise", Movement: "Power Clean", FormObservations: []workoutprogress.Observation{{Start: from, End: from + 2, Evidence: "stable catch"}}}
+		}
+		progress := workoutprogress.Build([]workoutprogress.Interval{set("early", 120, 150), set("late", 150, 180)}, []workoutprogress.Gap{{Start: 180, End: 180.03, Clock: "media", Reason: "not_analyzed"}, {Start: 200, End: 230, Clock: "capture", Reason: "recording_gap"}}, "source")
+		evidence := []wodSegmentEvidence{{TargetConfirmed: true, Movement: "Power Clean", StartSecs: 120, EndSecs: 150, Pace: []string{"early pace"}}, {TargetConfirmed: true, Movement: "Power Clean", StartSecs: 150, EndSecs: 180, Pace: []string{"late pace"}}}
+		start := 120.0
+		w := &Worker{GeminiClient: client, logger: zap.NewNop()}
+		score, ok := wodeval.Decode(w.synthesizeWODWithProgress(context.Background(), VideoAnalysisPayload{WorkoutType: "wod"}, wodeval.Start{Seconds: &start, Status: "confirmed"}, evidence, true, progress, "", func(string, *gemini.TokenUsage) {}))
+		Expect(ok).To(BeTrue())
+		Expect(score.EvidenceStatus).To(Equal("complete"))
+		Expect(score.WODStart.EndSeconds).NotTo(BeNil())
+		Expect(*score.WODStart.EndSeconds).To(Equal(180.0))
+		Expect(score.Intensity).NotTo(BeNil())
+		Expect(score.Overall).NotTo(BeNil())
+		Expect(score.Movements).To(HaveKey("power clean"))
+		Expect(transport.Verify()).To(Succeed())
+	})
 	It("preserves nullable scores through the public parser and suppresses partial intensity", func() {
 		w := &Worker{logger: zap.NewNop()}
 		start := 10.0

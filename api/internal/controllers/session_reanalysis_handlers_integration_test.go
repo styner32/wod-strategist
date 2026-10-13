@@ -16,6 +16,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/testhelpers"
 	"github.com/wod-strategist/api/internal/worker"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 )
 
 var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
@@ -684,5 +685,60 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply", f
 		))
 
 		Expect(response.Code).To(Equal(http.StatusForbidden))
+	})
+
+	Context("WOD start candidate", func() {
+		It("rejects stale start candidates without replacing score or effort", func() {
+			ensureTestDB()
+			testhelpers.CleanupDB(dbConn)
+			profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
+			var user db.User
+			Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())
+			effort := 7
+			session := testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WOD-20261013-STALESTART", ProfileID: profile.ID, WorkoutType: "wod", WODEvaluationVersion: 1, Effort: &effort})
+			current := `{"evaluation_version":1,"intensity":80}`
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", Output: "newer analysis", SessionScore: current})
+			run := testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", OriginalAnalysisSnapshot: db.JSONDocument(`{"output":"old analysis","session_score":"{}"}`), Output: "stale candidate", SessionScore: `{"evaluation_version":1,"intensity":70}`})
+			router := newTestRouterWithAuthService(controllers.Config{})
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPost, fmt.Sprintf("/api/v1/sessions/%s/reanalyses/%d/apply", session.SessionID, run.ID), `{}`, &user))
+			Expect(response.Code).To(Equal(409))
+			var stored db.AnalysisResult
+			Expect(dbConn.Where("session_id = ?", session.SessionID).First(&stored).Error).To(Succeed())
+			Expect(stored.SessionScore).To(Equal(current))
+			Expect(dbConn.First(&session, session.ID).Error).To(Succeed())
+			Expect(session.Effort).NotTo(BeNil())
+			Expect(*session.Effort).To(Equal(7))
+		})
+	})
+
+	Context("workout progress candidate", func() {
+		It("atomically replaces progress and invalidates confirmations on changed source for legacy warmup", func() {
+			profile, user := progressOwner()
+			old, oldRaw := progressFixture("old-video")
+			next, nextRaw := progressFixture("new-video")
+			s := testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WARMUP-20261013-APPLY", ProfileID: profile.ID, WorkoutType: "warmup"})
+			a := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: s.SessionID, ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: oldRaw})
+			record := testhelpers.CreatePerformanceRecord(dbConn, &db.PerformanceRecord{ProfileID: profile.ID, AnalysisID: a.ID, SessionID: s.SessionID, IntervalID: old.Intervals[0].ID, SourceVersion: old.SourceVersion, Movement: "Power Clean", StartSecs: 0, EndSecs: 60, Reps: 3, RepsPerMinute: 3})
+			snapshot, err := json.Marshal(map[string]any{"workout_progress": old})
+			Expect(err).NotTo(HaveOccurred())
+			run := testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{SessionID: s.SessionID, ProfileID: profile.ID, Status: "COMPLETED", OriginalAnalysisSnapshot: db.JSONDocument(snapshot), WorkoutProgress: nextRaw, SessionScore: `{}`, WorkoutType: "warmup"})
+			router := newTestRouterWithAuthService(controllers.Config{})
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPost, fmt.Sprintf("/api/v1/sessions/%s/reanalyses/%d/apply", s.SessionID, run.ID), `{}`, &user))
+			Expect(response.Code).To(Equal(200), response.Body.String())
+			Expect(dbConn.First(&record, record.ID).Error).To(Succeed())
+			Expect(record.Status).To(Equal("needs_confirmation"))
+			Expect(dbConn.First(&a, a.ID).Error).To(Succeed())
+			stored, err := workoutprogress.Decode(a.WorkoutProgress)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stored.SourceVersion).To(Equal(next.SourceVersion))
+			Expect(dbConn.First(&s, s.ID).Error).To(Succeed())
+			Expect(s.WODEvaluationVersion).To(BeZero())
+			// The same old snapshot cannot apply again even with legacy score version 0.
+			response = httptest.NewRecorder()
+			router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPost, fmt.Sprintf("/api/v1/sessions/%s/reanalyses/%d/apply", s.SessionID, run.ID), `{}`, &user))
+			Expect(response.Code).To(Equal(409))
+		})
 	})
 })

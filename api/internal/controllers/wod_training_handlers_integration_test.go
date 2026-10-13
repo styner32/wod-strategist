@@ -109,28 +109,3 @@ var _ = Describe("GET /api/v1/wod-training-load", func() {
 		Expect(response.Code).To(Equal(403))
 	})
 })
-
-var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply WOD start", func() {
-	It("rejects stale start candidates without replacing score or effort", func() {
-		ensureTestDB()
-		testhelpers.CleanupDB(dbConn)
-		profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
-		var user db.User
-		Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())
-		effort := 7
-		session := testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WOD-20261013-STALESTART", ProfileID: profile.ID, WorkoutType: "wod", WODEvaluationVersion: 1, Effort: &effort})
-		current := `{"evaluation_version":1,"intensity":80}`
-		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", Output: "newer analysis", SessionScore: current})
-		run := testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", OriginalAnalysisSnapshot: db.JSONDocument(`{"output":"old analysis","session_score":"{}"}`), Output: "stale candidate", SessionScore: `{"evaluation_version":1,"intensity":70}`})
-		router := newTestRouterWithAuthService(controllers.Config{})
-		response := httptest.NewRecorder()
-		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPost, fmt.Sprintf("/api/v1/sessions/%s/reanalyses/%d/apply", session.SessionID, run.ID), `{}`, &user))
-		Expect(response.Code).To(Equal(409))
-		var stored db.AnalysisResult
-		Expect(dbConn.Where("session_id = ?", session.SessionID).First(&stored).Error).To(Succeed())
-		Expect(stored.SessionScore).To(Equal(current))
-		Expect(dbConn.First(&session, session.ID).Error).To(Succeed())
-		Expect(session.Effort).NotTo(BeNil())
-		Expect(*session.Effort).To(Equal(7))
-	})
-})
