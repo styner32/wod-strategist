@@ -14,6 +14,9 @@ import {
   getErrorStatusCode,
   parseWorkoutImage,
   parseAppearanceImage,
+  getWorkoutProgress,
+  confirmPerformanceRecords,
+  getPerformanceBenchmarks,
 } from "./api";
 import { FileSystemUploadType } from "expo-file-system/legacy";
 
@@ -491,5 +494,25 @@ describe("API Client Methods", () => {
         }),
       );
     });
+  });
+});
+
+describe("performance evidence endpoints", () => {
+  it("loads nullable progress without inventing evidence", async () => {
+    server.use(http.get(`${API_BASE_URL}/sessions/new/workout-progress`, () => HttpResponse.json({ progress: null, records: [] })));
+    await expect(getWorkoutProgress("new")).resolves.toEqual({ progress: null, records: [] });
+  });
+  it("sends current-source reviewed values and explicitly confirmed no external load", async () => {
+    const body = { source_version: "evidence-a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: null, measurement: "window" as const, technique: "unspecified" as const }] };
+    server.use(http.put(`${API_BASE_URL}/sessions/new/performance-records`, async ({ request }) => { expect(await request.json()).toEqual(body); return HttpResponse.json({ progress: null, records: [] }); }));
+    await expect(confirmPerformanceRecords("new", body)).resolves.toEqual({ progress: null, records: [] });
+  });
+  it("preserves the 409 source conflict so the UI requires review", async () => {
+    server.use(http.put(`${API_BASE_URL}/sessions/new/performance-records`, () => HttpResponse.json({ error: "source changed" }, { status: 409 })));
+    await expect(confirmPerformanceRecords("new", { source_version: "old", records: [] })).rejects.toMatchObject({ status: 409 });
+  });
+  it("encodes the movement query and supplies the owned profile", async () => {
+    server.use(http.get(`${API_BASE_URL}/performance-benchmarks`, ({ request }) => { const url = new URL(request.url); expect(url.searchParams.get("profile_id")).toBe("7"); expect(url.searchParams.get("movement")).toBe("Clean & Jerk"); return HttpResponse.json({ records: [], comparisons: [], best: [] }); }));
+    await expect(getPerformanceBenchmarks(7, "Clean & Jerk")).resolves.toEqual({ records: [], comparisons: [], best: [] });
   });
 });

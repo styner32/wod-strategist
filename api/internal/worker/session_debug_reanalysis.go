@@ -16,6 +16,7 @@ import (
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/storage"
 	"github.com/wod-strategist/api/internal/wodeval"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -23,8 +24,8 @@ import (
 const (
 	TypeSessionDebugReanalysis = "session:debug-reanalysis"
 
-	sessionDebugPromptVersion = "session-debug-reanalysis-v1"
-	sessionDebugSchemaVersion = "session-reanalysis-candidate-v1"
+	sessionDebugPromptVersion = "session-independent-observations-v2"
+	sessionDebugSchemaVersion = "session-reanalysis-progress-v2"
 	sessionDebugMaxRetries    = 2
 )
 
@@ -194,8 +195,10 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		segments = trimWODSegments(segments, wodStart)
 		wodComplete = w.wodCoverageComplete(ctx, p, wodStart)
 	}
+	segments = addBetweenObservationWindows(segments)
 	maxSegments := maxSegmentsForDuration(file.Duration)
 	if len(segments) > maxSegments && !newWOD {
+		allSegments := append([]Segment(nil), segments...)
 		triagePrompt := buildTriagePrompt(segments, maxSegments, file.Duration, target.WorkoutType)
 		promptRecord.WriteString(triagePrompt)
 		triaged, usage, triageErr := w.triageSegments(ctx, &gemini.UploadResult{
@@ -208,6 +211,9 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			segments = triaged
 		} else {
 			segments = segments[:maxSegments]
+		}
+		if target.WorkoutType == WorkoutTypeWarmup {
+			segments = preserveWarmupTrajectories(allSegments, segments, maxSegments)
 		}
 	}
 
@@ -232,8 +238,10 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	}
 
 	wodContext := buildWODContext(target.WODDescription)
-	finalContext := w.buildHistoryContext(run.ProfileID, 5) + w.buildSessionDebugFatigueContext(ctx, run.SessionID, run.ProfileID, target.Corrections)
+	assessmentContext := buildSessionDebugAssessmentContext(target.Corrections)
 	var wodEvidence []wodSegmentEvidence
+	var progressIntervals []workoutprogress.Interval
+	var progressGaps []workoutprogress.Gap
 	var output strings.Builder
 	var highlightCandidates []highlightCandidate
 	for i, segment := range segments {
@@ -241,7 +249,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		if end <= start {
 			continue
 		}
-		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, finalContext, i == len(segments)-1 && !newWOD)
+		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, "", false)
 		if newWOD {
 			prompt += wodSegmentEvidencePrompt
 		}
@@ -267,7 +275,10 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		if usage != nil && usage.Model != "" {
 			model = usage.Model
 		}
-		if newWOD {
+		observedIntervals, observedGaps := parseWorkoutObservations(analysis, segment, i)
+		progressIntervals = append(progressIntervals, observedIntervals...)
+		progressGaps = append(progressGaps, observedGaps...)
+		if newWOD && !isFullyObservedRestWindow(segment, observedIntervals, observedGaps) {
 			if evidence, ok := decodeWODEvidence(analysis, segment); ok {
 				wodEvidence = append(wodEvidence, evidence)
 			} else {
@@ -288,11 +299,22 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 	}
 	analysis := output.String()
-	sessionScore := parseSessionScore(analysis)
-	if newWOD {
-		sessionScore = w.synthesizeWOD(ctx, p, wodStart, wodEvidence, wodComplete, observeWODUsage)
-		analysis += "\n\n```score\n" + sessionScore + "\n```"
+	normalizedWorkout := ""
+	if NormalizeWorkoutType(p.WorkoutType) == WorkoutTypeWOD && strings.TrimSpace(p.WODDescription) != "" {
+		normalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements)
 	}
+	progress := w.buildWorkoutProgress(ctx, p, file.URI, progressIntervals, progressGaps, file.Duration.Seconds(), normalizedWorkout)
+	progressJSON, encodeErr := json.Marshal(progress)
+	if encodeErr != nil {
+		return w.failSessionDebugRun(ctx, run.ID, retryCount, started, "The performed observations could not be saved.", encodeErr)
+	}
+	var sessionScore string
+	if newWOD {
+		sessionScore = w.synthesizeWODWithProgress(ctx, p, wodStart, wodEvidence, wodComplete, progress, assessmentContext, observeWODUsage)
+	} else {
+		sessionScore = w.assessWorkoutProgress(ctx, p, progress, assessmentContext, observeWODUsage)
+	}
+	analysis += "\n\n```score\n" + sessionScore + "\n```"
 	normalizedHighlights := consolidateHighlightCandidates(highlightCandidates, HighlightNormalizeOptions{
 		VideoEndSeconds: file.Duration.Seconds(),
 	})
@@ -305,17 +327,28 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	return w.completeSessionDebugRun(ctx, run.ID, db.SessionReanalysisStatusCompleted, started, map[string]any{
 		"output": analysis, "highlight_segments": highlightSegments,
 		"session_score": sessionScore, "workout_type": target.WorkoutType,
-		"model": model, "prompt_hash": hex.EncodeToString(hash[:]),
+		"workout_progress": db.NullableJSONDocument(progressJSON),
+		"model":            model, "prompt_hash": hex.EncodeToString(hash[:]),
 		"prompt_tokens": aggregate.PromptTokens, "candidate_tokens": aggregate.CandidateTokens,
 		"total_tokens": aggregate.TotalTokens, "safe_error": "",
 	})
 }
 
 func buildSessionDebugCorrectionContext(corrections []sessionDebugCorrection) string {
-	if len(corrections) == 0 {
+	// Only factual movement/activity labels are available to the observer.
+	observational := make([]sessionDebugCorrection, 0, len(corrections))
+	for _, correction := range corrections {
+		if correction.MovementName == "" && correction.ActivityState == "" {
+			continue
+		}
+		correction.FatigueState = ""
+		correction.Category = "movement_activity"
+		observational = append(observational, correction)
+	}
+	if len(observational) == 0 {
 		return ""
 	}
-	raw, err := json.Marshal(corrections)
+	raw, err := json.Marshal(observational)
 	if err != nil {
 		return ""
 	}
@@ -326,7 +359,21 @@ func buildSessionDebugCorrectionContext(corrections []sessionDebugCorrection) st
 - 이 목록에는 저장된 활성 교정만 포함되며 자유 텍스트 메모와 미확정 재분석 후보는 포함되지 않습니다.
 - 교정은 구간을 찾는 비배타적 참고 라벨입니다. 현재 영상에서 대상 인물의 기구 접촉, 몸 위치와 동작 패턴을 다시 확인하세요.
 - 영상 근거가 교정과 모순되면 영상 근거를 우선하고 Unknown 또는 실제 관찰 종목으로 판단하세요.
-- fatigue_state가 fatigued여도 시각적 피로 근거가 먼저 확인되지 않으면 피로 이벤트나 시점을 만들지 마세요.`, string(raw))
+- 이전 평가나 피로 판단은 이 관찰 입력에 포함되지 않습니다.`, string(raw))
+}
+
+func buildSessionDebugAssessmentContext(corrections []sessionDebugCorrection) string {
+	assessments := make([]sessionDebugCorrection, 0)
+	for _, correction := range corrections {
+		if correction.FatigueState != "" {
+			assessments = append(assessments, correction)
+		}
+	}
+	if len(assessments) == 0 {
+		return ""
+	}
+	raw, _ := json.Marshal(assessments)
+	return string(raw)
 }
 
 func mappedSessionDebugCorrections(corrections []sessionDebugCorrection) []sessionDebugCorrection {

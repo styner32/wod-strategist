@@ -31,6 +31,7 @@ func (w *Worker) resumeLiveChunk(ctx context.Context, version int, p VideoAnalys
 	if err = w.refreshLiveActivity(ctx, p, &existing); err != nil {
 		return true, err
 	}
+	// Resume only optional coaching; the saved video observation stays unchanged.
 	w.addContextualCoaching(ctx, version, &existing)
 	return true, nil
 }

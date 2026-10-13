@@ -15,6 +15,7 @@ const (
 // deliberately separate from analysis_results so a rerun cannot replace the
 // immutable production analysis or trigger production-derived output.
 type SessionReanalysisRun struct {
+	WorkoutProgress          NullableJSONDocument `json:"-" swaggertype:"object"`
 	WODStartRequest          NullableJSONDocument `json:"-"`
 	ID                       uint                 `gorm:"primaryKey" json:"id"`
 	SessionID                string               `json:"session_id"`

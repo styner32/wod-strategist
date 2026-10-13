@@ -4,7 +4,6 @@ import { flushEnvironmentUploads } from "../../features/environment/store";
 import { useEnvironmentRecorder } from "../../features/environment/useEnvironmentRecorder";
 import { EnvironmentLiveCard } from "../../features/environment/EnvironmentCard";
 import { useLiveWorkoutFeedback } from "../../features/wod/useLiveWorkoutFeedback";
-import { ActivitySummaryContent } from "../../features/wod/ui/ActivitySummaryCard";
 import { useIsFocused } from "expo-router/react-navigation";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as MediaLibrary from "expo-media-library/legacy";
@@ -1854,7 +1853,6 @@ export default function VisionTestPage() {
                         <Text style={styles.coachingText}>{chunkFeedback}</Text>
                       )}
 
-                      <ActivitySummaryContent summary={liveFeedback.summary} compact />
                     </View>
                   )}
                 </View>

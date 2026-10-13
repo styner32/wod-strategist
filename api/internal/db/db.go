@@ -92,6 +92,8 @@ const (
 )
 
 type AnalysisResult struct {
+	WorkoutProgress NullableJSONDocument `json:"workout_progress" swaggertype:"object"`
+
 	AnalysisSummary          JSONDocument `json:"analysis_summary"`
 	AgenticHighlightAnalysis JSONDocument `json:"-"`
 	ID                       uint         `gorm:"primaryKey" json:"id"`

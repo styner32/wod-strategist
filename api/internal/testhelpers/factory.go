@@ -160,6 +160,7 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 		ArchivedAt:             resultAttr.ArchivedAt,
 	}
 	result.AnalysisSummary = resultAttr.AnalysisSummary
+	result.WorkoutProgress = resultAttr.WorkoutProgress
 	result.AgenticHighlightAnalysis = resultAttr.AgenticHighlightAnalysis
 	if result.AnalysisType == "" {
 		result.AnalysisType = db.AnalysisTypeWOD
@@ -306,6 +307,7 @@ func CreateChunkReanalysisRun(dbConn *gorm.DB, runAttr *db.ChunkReanalysisRun) d
 
 func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRun) db.SessionReanalysisRun {
 	run := db.SessionReanalysisRun{
+		WorkoutProgress:          runAttr.WorkoutProgress,
 		SessionID:                runAttr.SessionID,
 		WODStartRequest:          runAttr.WODStartRequest,
 		ProfileID:                runAttr.ProfileID,
@@ -362,6 +364,33 @@ func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRu
 }
 
 var stretchCounter uint64
+
+func CreatePerformanceRecord(dbConn *gorm.DB, attr *db.PerformanceRecord) db.PerformanceRecord {
+	record := *attr
+	if record.ElapsedSeconds == 0 {
+		record.ElapsedSeconds = record.EndSecs - record.StartSecs
+	}
+	if record.Status == "" {
+		record.Status = "confirmed"
+	}
+	if record.Measurement == "" {
+		record.Measurement = "window"
+	}
+	if record.Technique == "" {
+		record.Technique = "unspecified"
+	}
+	if record.RateBasis == "" {
+		record.RateBasis = "normalized_per_minute"
+	}
+	if len(record.OriginalCandidate) == 0 {
+		record.OriginalCandidate = db.JSONDocument(`{}`)
+	}
+	if record.ConfirmedAt.IsZero() {
+		record.ConfirmedAt = time.Now().UTC()
+	}
+	g.Expect(dbConn.Create(&record).Error).NotTo(g.HaveOccurred())
+	return record
+}
 
 func CreateStretch(dbConn *gorm.DB, stretchAttr *db.Stretch) db.Stretch {
 	val := atomic.AddUint64(&stretchCounter, 1)

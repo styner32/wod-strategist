@@ -354,23 +354,29 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 		Expect(pending).To(HaveLen(1))
 	})
 
-	It("is disabled unless the server feature flag is enabled", func() {
-		disabledRouter := newTestRouterWithAuthService(controllers.Config{
-			QueueClient: testhelpers.NewQueueClient(),
+	It("allows explicit owned legacy video reanalysis without upgrading score eligibility", func() {
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+		Expect(err).NotTo(HaveOccurred())
+		selectedRouter := newTestRouterWithAuthService(controllers.Config{
+			QueueClient:   testhelpers.NewQueueClient(),
+			StorageClient: storageClient,
+			BucketName:    "test-bucket",
 		})
 		response := httptest.NewRecorder()
-		disabledRouter.ServeHTTP(response, newAuthorizedJSONRequest(
+		selectedRouter.ServeHTTP(response, newAuthorizedJSONRequest(
 			http.MethodPost,
 			requestPath(),
 			`{"client_request_id":"disabled"}`,
 			&user,
 		))
 
-		Expect(response.Code).To(Equal(http.StatusServiceUnavailable))
-		Expect(response.Body.String()).To(ContainSubstring("session re-analysis is disabled"))
+		Expect(response.Code).To(Equal(http.StatusAccepted), response.Body.String())
 		var count int64
 		Expect(dbConn.Model(&db.SessionReanalysisRun{}).Count(&count).Error).To(Succeed())
-		Expect(count).To(BeZero())
+		Expect(count).To(Equal(int64(1)))
+		Expect(dbConn.First(&session, session.ID).Error).To(Succeed())
+		Expect(session.WODEvaluationVersion).To(BeZero())
+		Expect(transport.Verify()).To(Succeed())
 	})
 })
 

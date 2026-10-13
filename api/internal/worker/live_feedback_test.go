@@ -171,6 +171,91 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(transport.Verify()).To(Succeed())
 		Expect(storageTransport.Verify()).To(Succeed())
 	}, Entry("generic", false), Entry("session-aware", true))
+	DescribeTable("adds bounded coaching after independent exercise observation without altering its evidence", func(sessionAware, enabled bool) {
+		w.ContextualCoachingEnabled = enabled
+		if !hasFfmpeg() {
+			Skip("ffmpeg required")
+		}
+		prior := createRow(0, 10)
+		Expect(conn.Model(&prior).UpdateColumn("output", "PRIOR_ASSESSMENT_MUST_STAY_OUT").Error).To(Succeed())
+		filename := createTinyMP4(GinkgoT())
+		body, err := os.ReadFile(filename)
+		Expect(err).NotTo(HaveOccurred())
+		uri := fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_10.mp4", profile.ID, session.SessionID)
+		current := testhelpers.CreateChunkAnalysisResult(conn, &db.ChunkAnalysisResult{SessionID: session.SessionID, ProfileID: profile.ID, FilePath: uri, Status: "FAILED"})
+		progress := db.NullableJSONDocument(`{"version":1,"clock":"media","source_version":"PROGRESS_MUST_STAY_OUT","intervals":[],"unassessed":[]}`)
+		analysis := testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{SessionID: session.SessionID, ProfileID: profile.ID, WorkoutProgress: progress})
+		testhelpers.MockGCSDownloadWithBody(storageTransport, uri, body)
+		mockFile("1s")
+		observations, err := json.Marshal(activity.Observations{DurationSecs: 1, Version: 1, TargetState: "identified", ActivityState: "exercise", Events: []activity.Observation{{Movement: "Air Squat", Unit: "reps", Start: 0.1, End: 0.7, Complete: true, Evidence: "descends and stands"}}, Unassessed: []activity.Interval{}})
+		Expect(err).NotTo(HaveOccurred())
+		mockGeneration("[EXERCISE: Air Squat]\n현재 구간의 자세 안내입니다.\n```target_person\n{\"matched_cues\":[\"target\"],\"ambiguous\":false,\"confidence\":0.9}\n```\n```movement_observations\n" + string(observations) + "\n```")
+		if enabled {
+			transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("current_observations").MatchBodyContains("PRIOR_ASSESSMENT_MUST_STAY_OUT").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": fmt.Sprintf(`{"text":{"ko":"최근 같은 동작과 연결한 안내입니다.","en":"A cue connected to the recent same movement."},"current_chunk_id":%d,"source_chunk_ids":[%d]}`, current.ID, prior.ID)}}}}}})
+		}
+		payload, err := json.Marshal(VideoAnalysisPayload{SessionID: session.SessionID, ProfileID: profile.ID, FilePath: uri, StartSecs: 10, EndSecs: 11, LiveAnalysisVersion: 1})
+		Expect(err).NotTo(HaveOccurred())
+		if sessionAware {
+			Expect(w.HandleChunkAnalysisWithSessionTask(context.Background(), asynq.NewTask(TypeChunkAnalysisWithSession, payload))).To(Succeed())
+		} else {
+			Expect(w.HandleChunkAnalysisTask(context.Background(), asynq.NewTask(TypeChunkAnalysis, payload))).To(Succeed())
+		}
+		var saved db.ChunkAnalysisResult
+		Expect(conn.Where("file_path = ?", uri).First(&saved).Error).To(Succeed())
+		Expect(saved.Output).To(ContainSubstring("현재 구간의 자세 안내"))
+		if enabled {
+			Expect(string(saved.ContextualCoaching)).To(ContainSubstring("최근 같은 동작과 연결한 안내"))
+		} else {
+			Expect(saved.ContextualCoaching).To(BeEmpty())
+		}
+		Expect(saved.MovementObservations).NotTo(BeEmpty())
+		Expect(string(saved.MovementObservations)).To(MatchJSON(string(observations)))
+		Expect(saved.TargetConfidence).To(BeNumerically(">", 0.5))
+		Expect(coachingEligible(saved)).To(BeTrue())
+		var preserved db.AnalysisResult
+		Expect(conn.First(&preserved, analysis.ID).Error).To(Succeed())
+		Expect([]byte(preserved.WorkoutProgress)).To(MatchJSON(string(progress)))
+		videoCalls, coachingCalls := 0, 0
+		for _, request := range transport.Requests() {
+			if strings.Contains(request.URL, ":generateContent") {
+				if strings.Contains(string(request.Body), "fileData") {
+					videoCalls++
+					Expect(string(request.Body)).NotTo(ContainSubstring("PRIOR_ASSESSMENT_MUST_STAY_OUT"))
+				} else {
+					coachingCalls++
+					Expect(string(request.Body)).To(ContainSubstring("PRIOR_ASSESSMENT_MUST_STAY_OUT"))
+				}
+				Expect(string(request.Body)).NotTo(ContainSubstring("PROGRESS_MUST_STAY_OUT"))
+			}
+		}
+		Expect(videoCalls).To(Equal(1))
+		if enabled {
+			Expect(coachingCalls).To(Equal(1))
+		} else {
+			Expect(coachingCalls).To(BeZero())
+		}
+		Expect(transport.Verify()).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+	}, Entry("generic enabled", false, true), Entry("session-aware enabled", true, true), Entry("generic disabled", false, false), Entry("session-aware disabled", true, false))
+	It("resumes saved observations for optional coaching and skips coaching already saved", func() {
+		prior, current := createRow(0, 10), createRow(10, 20)
+		before := activity.SourceVersion([]db.ChunkAnalysisResult{prior, current})
+		mockGeneration(fmt.Sprintf(`{"text":{"ko":"연결된 안내","en":"Connected cue"},"current_chunk_id":%d,"source_chunk_ids":[%d]}`, current.ID, prior.ID))
+		payload := VideoAnalysisPayload{SessionID: session.SessionID, ProfileID: profile.ID, FilePath: current.FilePath, WorkoutType: "wod"}
+		for i := 0; i < 2; i++ {
+			resumed, err := w.resumeLiveChunk(context.Background(), 1, payload)
+			Expect(err).To(Succeed())
+			Expect(resumed).To(BeTrue())
+		}
+		var saved db.ChunkAnalysisResult
+		Expect(conn.First(&saved, current.ID).Error).To(Succeed())
+		Expect(string(saved.ContextualCoaching)).To(ContainSubstring("Connected cue"))
+		Expect(saved.Output).To(Equal(current.Output))
+		Expect(string(saved.MovementObservations)).To(MatchJSON(string(current.MovementObservations)))
+		Expect(activity.SourceVersion([]db.ChunkAnalysisResult{prior, saved})).To(Equal(before))
+		Expect(transport.Requests()).To(HaveLen(1), "resume does not re-observe video or repeat saved coaching")
+		Expect(transport.Verify()).To(Succeed())
+	})
 	It("saves connected coaching without changing the independent observations", func() {
 		prior := createRow(0, 10)
 		current := createRow(10, 20)

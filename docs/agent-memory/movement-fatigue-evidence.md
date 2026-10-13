@@ -33,7 +33,15 @@ time is unknown: do not add `heart_rate_sampled_at`, create a fatigue event from
 BPM, or use BPM to time an event. BPM may only corroborate fatigue already
 established visually during exercise.
 
-Final two-pass analysis calls `buildSessionFatigueEvidenceContext`, which scans
-every completed structured chunk and sends one aggregate to the final deep
-segment. The aggregate omits BPM and prohibits fatigue output when no valid
-visual evidence exists.
+New final analysis builds `workout_progress` from independent, time-bounded
+observation events and sends it to a separate final assessment. No session fatigue
+aggregate or historical score is sent to a deep segment, including the last.
+The existing observed-signals estimates and fatigue flags are legacy/local
+interpretations, not canonical performed repetitions or training intensity.
+Never use them to fill missing events in the new timeline.
+
+Final assessment distinguishes visible pace/form/ROM change from inferred
+fatigue, observed post-rest performance from biological recovery, and controlled
+warmup ROM expansion from inconsistency. Video cannot establish muscle activation
+or abdominal pressure. Assessment results never update source observations.
+See [`workout-progress.md`](workout-progress.md).

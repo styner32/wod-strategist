@@ -72,3 +72,9 @@ describe("analysis presentation", () => {
     ]);
   });
 });
+
+it("hides final-only workout evidence blocks while preserving the original response", () => {
+  const raw = 'Summary\n```workout_observations\n{"intervals":[]}\n```\n```wod_evidence\n{"whole_session":true}\n```\n```json\n{"workout_progress":{"version":1}}\n```\nConclusion';
+  expect(analysisProse(raw)).toBe("Summary\nConclusion");
+  expect(raw).toContain('"whole_session":true');
+});

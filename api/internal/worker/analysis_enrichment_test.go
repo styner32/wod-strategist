@@ -16,6 +16,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/testhelpers"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -356,6 +357,42 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 		s, _ = load()
 		Expect(s.Status).To(Equal("completed"))
 		Expect(s.Result.Overview).To(Equal("fenced"))
+	})
+	It("uses authoritative workout type and progress and invalidates an unchanged analysis summary", func() {
+		_, err := w.ScheduleAnalysisEnrichment(context.Background(), sid, false, false)
+		Expect(err).NotTo(HaveOccurred())
+		s, _ := load()
+		summary(`{"overview":"original summary","strengths":[],"improvements":[],"limitations":[]}`)
+		task(s.RunID, "summary", 0)
+		s, _ = load()
+		oldRun := s.RunID
+		Expect(conn.Model(&db.Session{}).Where("session_id = ? AND profile_id = ?", sid, a.ProfileID).UpdateColumn("workout_type", "warmup").Error).To(Succeed())
+		progress := db.NullableJSONDocument(`{"version":1,"clock":"media","source_version":"current-observations","intervals":[{"id":"set1","start_secs":10,"end_secs":20,"activity":"exercise","movement":"Power Clean","load":null,"observation_refs":["current-segment"],"rep_events":[],"form_observations":[{"start_secs":10,"end_secs":12,"evidence":"early catch"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}`)
+		Expect(conn.Model(&a).UpdateColumn("workout_progress", progress).Error).To(Succeed())
+		_, err = w.ScheduleAnalysisEnrichment(context.Background(), sid, false, false)
+		Expect(err).NotTo(HaveOccurred())
+		s, _ = load()
+		Expect(s.RunID).NotTo(Equal(oldRun))
+		transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("warmup").MatchBodyContains("early catch").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overview":"current progress","strengths":[],"improvements":[],"limitations":[]}`}}}}}})
+		task(s.RunID, "summary", 0)
+		s, _ = load()
+		Expect(s.Status).To(Equal("completed"))
+		var current db.AnalysisResult
+		Expect(conn.First(&current, a.ID).Error).To(Succeed())
+		Expect(current.Output).To(Equal(a.Output))
+		Expect([]byte(current.WorkoutProgress)).To(MatchJSON(string(progress)))
+	})
+	It("retains media identity for assessment-only reanalysis of the exact owned Files source", func() {
+		intervals := []workoutprogress.Interval{{ID: "rest", Start: 0, End: 10, Activity: "rest", ObservationRefs: []string{"segment-0"}}}
+		prior := workoutprogress.Build(intervals, nil, "media-sha256:original-bytes")
+		data, err := json.Marshal(prior)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(conn.Model(&a).UpdateColumn("workout_progress", db.NullableJSONDocument(data)).Error).To(Succeed())
+		p := VideoAnalysisPayload{SessionID: sid, ProfileID: a.ProfileID, WorkoutType: WorkoutTypeWOD}
+		unchanged := w.buildWorkoutProgress(context.Background(), p, a.GeminiFileURI, intervals, nil, 10, "")
+		Expect(unchanged.SourceVersion).To(Equal(prior.SourceVersion))
+		changed := w.buildWorkoutProgress(context.Background(), p, "https://example.test/changed-source", intervals, nil, 10, "")
+		Expect(changed.SourceVersion).NotTo(Equal(prior.SourceVersion))
 	})
 	It("treats a missing file as cleaned up and rejects forced reruns until then", func() {
 		_, err := w.ScheduleAnalysisEnrichment(context.Background(), sid, true, false)

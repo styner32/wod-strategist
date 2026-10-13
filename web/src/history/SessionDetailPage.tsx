@@ -1,4 +1,5 @@
 import { WODTrainingPanel } from "./components/WODTrainingPanel";
+import { WorkoutProgressPanel } from "./components/WorkoutProgressPanel";
 import { AnalysisOverview } from "./components/AnalysisOverview";
 import { OnDeviceAiPanel } from "./components/OnDeviceAiPanel";
 import { H10MemoryPanel } from "./components/H10MemoryPanel";
@@ -1052,6 +1053,7 @@ export function SessionDetailPage() {
 
           {/* Muscle Fatigue & Strain */}
           {analysis && profileId && sessionId && <WODTrainingPanel key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} scoreJSON={analysis.session_score} currentTime={currentTime} isOriginal={effectiveVideoKind === "merged"} seek={handleTimelineSeek} />}
+          {analysis?.status === "COMPLETED" && profileId && sessionId && <WorkoutProgressPanel key={`progress:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} sourceUpdatedAt={analysis.updated_at} isOriginal={effectiveVideoKind === "merged"} seek={handleAnalysisSeek} />}
           {analysis && <HeartRateSummaryPanel summary={analysis.heart_rate} />}
           {sessionId && profileId && <ActivitySummaryPanel sessionId={sessionId} profileId={profileId} />}
           {analysis && (

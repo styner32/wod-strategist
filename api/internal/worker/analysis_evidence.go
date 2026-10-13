@@ -35,6 +35,13 @@ const MovementEvidenceRulesPrompt = `
   · Strict Press (하체 반동 없이 상체 힘으로만 밀어 올림)
 - 기구를 완전히 내려놓은 상태에서의 걷기, 휴식, 회복, 준비 또는 장비 세팅은 운동 종목이 아닙니다.`
 
+const SpinalObservationRulesPrompt = `
+
+## 현재 구간 척추·골반 관찰 경계
+- 현재 대상 인물에게 실제로 보이는 척추·골반 정렬과 변화를 동작·촬영 시점에 맞추어 관찰하세요. 모든 동작에 목부터 골반까지 일직선 기준을 적용하지 마세요.
+- 가림·촬영 각도로 확인되지 않는 정렬은 확인 불가입니다. 영상만으로 복압, 근육 활성, 진단 또는 과거 상태를 확정하지 마세요.
+- 이전 관찰·점수·누적 피로·회복 해석은 현재 관찰의 입력이나 근거가 아닙니다. 관찰에 최종 평가가 섞이지 않도록 현재 구간의 직접 시각 근거만 남기세요.`
+
 const FatigueEvidenceRulesPrompt = `
 
 ## 피로 판정 근거 규칙
@@ -52,7 +59,7 @@ var allowedVisualFatigueEvidenceTypes = map[string]struct{}{
 }
 
 func baseChunkAnalysisPrompt() string {
-	return ChunkAnalysisPrompt + MovementEvidenceRulesPrompt + FatigueEvidenceRulesPrompt
+	return ChunkAnalysisPrompt + MovementEvidenceRulesPrompt + FatigueEvidenceRulesPrompt + SpinalObservationRulesPrompt
 }
 
 func buildMovementHintsContext(movements []string) string {

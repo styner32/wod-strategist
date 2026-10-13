@@ -8,6 +8,9 @@ const internalNames = new Set([
   "movements",
   "observed_signals",
   "target_person",
+  "workout_observations",
+  "wod_evidence",
+  "workout_progress",
 ]);
 function internalJSON(text: string): boolean {
   try {

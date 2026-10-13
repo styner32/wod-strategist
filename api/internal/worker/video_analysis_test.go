@@ -4,17 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/testhelpers"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -42,6 +46,17 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		Expect(prompt).To(ContainSubstring("Burpee"))
 		Expect(prompt).To(ContainSubstring("영상에 등장한다는 보장이 없습니다"))
 		Expect(prompt).To(ContainSubstring("## 알려진 부상 사항: Shoulder"))
+	})
+	It("keeps legacy full-video observation independent and moves all session scoring to final assessment", func() {
+		for _, workoutType := range []string{WorkoutTypeAccessory, WorkoutTypeCooldown, WorkoutTypeWOD} {
+			prompt := w.buildAnalysisPrompt(VideoAnalysisPayload{WorkoutType: workoutType, WODDescription: "User workout plan"}, 30.125)
+			Expect(prompt).To(ContainSubstring("workout_observations"))
+			Expect(prompt).To(ContainSubstring("full-video media seconds 0.000 through 30.125000000"))
+			Expect(prompt).To(ContainSubstring("현재 구간 척추·골반 관찰 경계"))
+			Expect(prompt).NotTo(ContainSubstring("```score"))
+			Expect(prompt).NotTo(ContainSubstring("세션 전체 구조화 피로 근거"))
+			Expect(prompt).NotTo(ContainSubstring("개인 종목 혼동 참고"))
+		}
 	})
 
 	It("includes injury timestamp section when injuries are present", func() {
@@ -168,14 +183,19 @@ var _ = Describe("open-set movement prompts", func() {
 		Expect(prompt).To(ContainSubstring("힌트에 없는 종목이라도 시각적 근거가 충분"))
 	})
 
-	It("adds the all-chunk fatigue aggregate only to the final segment conclusion", func() {
+	It("keeps every segment independent of historical or cumulative assessment", func() {
 		context := "\n\n## 세션 전체 구조화 피로 근거 (모든 수신 청크 집계)\n- 구조화 청크: 4"
 		first := w.buildSegmentAnalysisPrompt(VideoAnalysisPayload{}, Segment{Start: "0:00", End: "0:10", Type: "Snatch"}, "", context, false)
 		last := w.buildSegmentAnalysisPrompt(VideoAnalysisPayload{}, Segment{Start: "0:10", End: "0:20", Type: "Snatch"}, "", context, true)
 
 		Expect(first).NotTo(ContainSubstring("모든 수신 청크 집계"))
-		Expect(last).To(ContainSubstring("모든 수신 청크 집계"))
-		Expect(last).To(ContainSubstring("구조화 청크: 4"))
+		Expect(last).NotTo(ContainSubstring("모든 수신 청크 집계"))
+		Expect(last).NotTo(ContainSubstring("구조화 청크: 4"))
+		Expect(last).NotTo(ContainSubstring("```score"))
+		Expect(last).To(ContainSubstring("workout_observations"))
+		Expect(last).To(ContainSubstring("현재 구간 척추·골반 관찰 경계"))
+		unchanged := w.buildSegmentAnalysisPrompt(VideoAnalysisPayload{}, Segment{Start: "0:10", End: "0:20", Type: "Snatch"}, "", "a different history and prior score", false)
+		Expect(last).To(Equal(unchanged))
 	})
 })
 
@@ -570,8 +590,9 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	It("recovers profile_id=0 for a queued task from its persisted session", func() {
 		const sessionID = "WOD-20260715-01J00000000000000000000002"
 		testhelpers.CreateSession(dbConn, &db.Session{
-			SessionID: sessionID,
-			ProfileID: profileID,
+			SessionID:   sessionID,
+			ProfileID:   profileID,
+			WorkoutType: WorkoutTypeAccessory,
 		})
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/0/"+sessionID+"/video.mp4")
 		setupGeminiTransport(analysisWithHighlights)
@@ -589,6 +610,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	})
 
 	It("persists a COMPLETED AnalysisResult with parsed highlight segments", func() {
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: "sess-happy-001", ProfileID: profileID, WorkoutType: WorkoutTypeAccessory})
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-happy-001/chunk_001.mp4")
 		transport := setupGeminiTransport(analysisWithHighlights)
 
@@ -596,7 +618,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 			SessionID:   "sess-happy-001",
 			ProfileID:   profileID,
 			FilePath:    "gs://test-bucket/videos/sess-happy-001/chunk_001.mp4",
-			WorkoutType: WorkoutTypeWOD,
+			WorkoutType: WorkoutTypeAccessory,
 			Movements:   []string{"Burpee", "Pull-up"},
 		})
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
@@ -631,26 +653,26 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	})
 
 	It("sets ProfileID on the result when ProfileID > 0", func() {
-		user := db.User{
+		user := testhelpers.CreateUser(dbConn, &db.User{
 			Username:     "test-username",
 			PasswordHash: "test-password",
-		}
-		Expect(dbConn.Create(&user).Error).NotTo(HaveOccurred())
+		})
 
-		profile := db.Profile{
+		profile := testhelpers.CreateProfile(dbConn, &db.Profile{
 			UserID:    user.ID,
 			BirthYear: ptr(1990), BirthMonth: ptr(6), BirthDay: ptr(15),
 			Gender: ptr("male"), HeightCm: ptr(175), WeightKg: ptr(75.0),
-		}
-		Expect(dbConn.Create(&profile).Error).NotTo(HaveOccurred())
+		})
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: "sess-profile-001", ProfileID: profile.ID, WorkoutType: WorkoutTypeAccessory})
 
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-profile-001/chunk_001.mp4")
 		transport := setupGeminiTransport(analysisWithHighlights)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
-			SessionID: "sess-profile-001",
-			FilePath:  "gs://test-bucket/videos/sess-profile-001/chunk_001.mp4",
-			ProfileID: profile.ID,
+			SessionID:   "sess-profile-001",
+			FilePath:    "gs://test-bucket/videos/sess-profile-001/chunk_001.mp4",
+			ProfileID:   profile.ID,
+			WorkoutType: WorkoutTypeAccessory,
 		})
 
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
@@ -663,6 +685,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	})
 
 	It("enqueues an injury:analysis follow-up task with parsed focus timestamps", func() {
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: "sess-injury-001", ProfileID: profileID, WorkoutType: WorkoutTypeAccessory})
 		analysisWithInjury := analysisWithHighlights + "\n```injury_timestamps\n" +
 			`[{"start":"0:32","end":"0:45","reason":"무릎 내전 관찰"}]` + "\n```"
 
@@ -670,10 +693,11 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		transport := setupGeminiTransport(analysisWithInjury)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
-			SessionID: "sess-injury-001",
-			FilePath:  "gs://test-bucket/videos/sess-injury-001/chunk_001.mp4",
-			ProfileID: profileID,
-			Injuries:  []string{"Knee"},
+			SessionID:   "sess-injury-001",
+			FilePath:    "gs://test-bucket/videos/sess-injury-001/chunk_001.mp4",
+			ProfileID:   profileID,
+			Injuries:    []string{"Knee"},
+			WorkoutType: WorkoutTypeAccessory,
 		})
 
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
@@ -702,13 +726,15 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	})
 
 	It("does NOT enqueue an injury task when there are no injuries", func() {
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: "sess-no-injury-001", ProfileID: profileID, WorkoutType: WorkoutTypeAccessory})
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-no-injury-001/chunk_001.mp4")
 		transport := setupGeminiTransport(analysisWithHighlights)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
-			SessionID: "sess-no-injury-001",
-			FilePath:  "gs://test-bucket/videos/sess-no-injury-001/chunk_001.mp4",
-			ProfileID: profileID,
+			SessionID:   "sess-no-injury-001",
+			FilePath:    "gs://test-bucket/videos/sess-no-injury-001/chunk_001.mp4",
+			ProfileID:   profileID,
+			WorkoutType: WorkoutTypeAccessory,
 		})
 
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
@@ -722,6 +748,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	})
 
 	It("returns an error and saves no record when Gemini returns empty analysis", func() {
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: "sess-empty-001", ProfileID: profileID, WorkoutType: WorkoutTypeAccessory})
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-empty-001/chunk.mp4")
 
 		transport := testhelpers.NewMockTransport()
@@ -771,9 +798,10 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 			JSON(map[string]any{})
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
-			SessionID: "sess-empty-001",
-			FilePath:  "gs://test-bucket/videos/sess-empty-001/chunk.mp4",
-			ProfileID: profileID,
+			SessionID:   "sess-empty-001",
+			FilePath:    "gs://test-bucket/videos/sess-empty-001/chunk.mp4",
+			ProfileID:   profileID,
+			WorkoutType: WorkoutTypeAccessory,
 		})
 
 		err = w.HandleVideoAnalysisTask(context.Background(), task)
@@ -783,6 +811,46 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		var count int64
 		dbConn.Model(&db.AnalysisResult{}).Where("session_id = ?", "sess-empty-001").Count(&count)
 		Expect(count).To(BeZero())
+	})
+	It("preserves independent legacy observations when the separate final assessment fails validation", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not found in PATH")
+		}
+		const sessionID = "COOLDOWN-20261013-01JLEGACYPROGRESSTEST00000"
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sessionID, ProfileID: profileID, WorkoutType: WorkoutTypeCooldown})
+		videoBytes, err := os.ReadFile(createTinyMP4(GinkgoT()))
+		Expect(err).NotTo(HaveOccurred())
+		source := "gs://test-bucket/videos/" + sessionID + "/video.mp4"
+		testhelpers.MockGCSDownloadWithBody(storageTransport, source, videoBytes)
+		observations := "현재 영상의 동작 관찰\n```workout_observations\n" + `{"intervals":[{"start_secs":0,"end_secs":1,"activity":"exercise","movement":"Air Squat","target_confirmed":true,"rep_events":[{"movement":"Air Squat","unit":"reps","start_secs":0.1,"end_secs":0.3,"complete":true,"evidence":"visible complete squat"}],"form_observations":[{"start_secs":0.1,"end_secs":0.3,"evidence":"controlled initial squat"},{"start_secs":0.7,"end_secs":0.9,"evidence":"controlled later squat"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
+		transport := setupGeminiTransport(observations)
+		for _, expectation := range transport.Expectations {
+			if expectation.Optional {
+				expectation.MatchBodyContains("분석 대상 WOD")
+			}
+		}
+		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"form":"invalid score"}`}}}}}})
+		task := makeVideoAnalysisTask(VideoAnalysisPayload{SessionID: sessionID, ProfileID: profileID, FilePath: source, WorkoutType: WorkoutTypeCooldown})
+		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
+		Expect(transport.Verify()).To(Succeed())
+		var result db.AnalysisResult
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&result).Error).To(Succeed())
+		Expect(result.Status).To(Equal("COMPLETED"))
+		Expect(result.SessionScore).To(Equal("{}"))
+		progress, err := workoutprogress.Decode(result.WorkoutProgress)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(progress.Intervals).To(HaveLen(1))
+		Expect(progress.Intervals[0].RepEvents).To(HaveLen(1))
+		Expect(progress.Intervals[0].FormObservations).To(HaveLen(2))
+		Expect(progress.MediaSourceID).To(HavePrefix("media-sha256:"))
+		for _, request := range transport.Requests() {
+			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+				Expect(string(request.Body)).To(ContainSubstring("workout_observations"))
+				Expect(string(request.Body)).NotTo(ContainSubstring("개인 종목 혼동 참고"))
+				Expect(string(request.Body)).NotTo(ContainSubstring("세션 전체 구조화 피로 근거"))
+				Expect(string(request.Body)).NotTo(ContainSubstring("```score"))
+			}
+		}
 	})
 
 	It("skips retry and returns SkipRetry when file path is not a GCS URI", func() {
@@ -808,11 +876,9 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		profileID        uint
 	)
 
-	// setupTwoPassTransport: upload → poll → analyzeSegment x2 (Pro) → deleteFile
-	// No IndexVideo mock — chunks in DB provide the segment index.
-	// Since seeded chunks have different exercise types (Snatch + Pull-up),
-	// mergeSegmentsByMovement produces 2 segments → 2 generateContent calls.
-	setupTwoPassTransport := func(segmentAnalysis string, hasInjuries bool) *testhelpers.MockTransport {
+	// Real upload/poll, bounded exercise observers, recorded between-set rest,
+	// then a separate text-only final assessment. Successful files are retained.
+	setupTwoPassTransport := func(segmentAnalysis string, hasInjuries bool, newWOD ...bool) *testhelpers.MockTransport {
 		transport := testhelpers.NewMockTransport()
 		realClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
 			APIKey:       geminiAPIKey,
@@ -848,19 +914,42 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
-				"name":  "files/mock-two-pass",
-				"state": "ACTIVE",
+				"name":          "files/mock-two-pass",
+				"state":         "ACTIVE",
+				"videoMetadata": map[string]string{"videoDuration": "90s"},
 			})
+		observationBlock := func(name string, start, end float64, rest bool) string {
+			in := workoutObservationInterval{Interval: workoutprogress.Interval{Start: start, End: end, Activity: "exercise", Movement: name, RepEvents: []activity.Observation{{Movement: name, Unit: "reps", Start: start + 1, End: start + 2, Complete: true, Evidence: "visible complete repetition"}}, FormObservations: []workoutprogress.Observation{{Start: start + 1, End: start + 2, Evidence: "controlled early position"}, {Start: end - 3, End: end - 1, Evidence: "controlled late position"}}, ROMObservations: []workoutprogress.Observation{}, PaceObservations: []workoutprogress.Observation{}}, TargetConfirmed: true}
+			if rest {
+				in.Activity, in.Movement, in.RepEvents = "rest", "", []activity.Observation{}
+				in.FormObservations = []workoutprogress.Observation{{Start: start, End: end, Evidence: "target standing with equipment released throughout this recorded window"}}
+			}
+			raw, err := json.Marshal(map[string]any{"intervals": []workoutObservationInterval{in}, "unassessed": []workoutprogress.Gap{}})
+			Expect(err).NotTo(HaveOccurred())
+			return "\n```workout_observations\n" + string(raw) + "\n```"
+		}
+		wodEvidenceBlock := func(name string, start, end float64) string {
+			if len(newWOD) == 0 || !newWOD[0] {
+				return ""
+			}
+			raw, err := json.Marshal(wodSegmentEvidence{TargetConfirmed: true, Movement: name, StartSecs: start, EndSecs: end, Form: []string{"controlled positions throughout visible exercise"}, Pace: []string{"early visible cycle", "late visible cycle"}})
+			Expect(err).NotTo(HaveOccurred())
+			return "\n```wod_evidence\n" + string(raw) + "\n```"
+		}
+		if len(newWOD) > 0 && newWOD[0] {
+			transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("Locate the earliest actual WOD exercise onset").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"seconds":0,"target_confirmed":true,"preceding_activity":"rest_setup","evidence":"target begins the first visible exercise at video time zero"}`}}}}}})
+		}
 
 		// Segment 1 (Snatch) analysis
 		transport.New(geminiBaseURL).
 			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			MatchBodyContains(`"startOffset":"0s"`).MatchBodyContains(`"endOffset":"45s"`).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
 				"candidates": []map[string]any{{
 					"content": map[string]any{
-						"parts": []map[string]any{{"text": segmentAnalysis}},
+						"parts": []map[string]any{{"text": segmentAnalysis + observationBlock("Power Snatch", 0, 45, false) + wodEvidenceBlock("Power Snatch", 0, 45)}},
 					},
 				}},
 			})
@@ -869,14 +958,17 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		transport.New(geminiBaseURL).
 			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			MatchBodyContains(`"startOffset":"50s"`).MatchBodyContains(`"endOffset":"90s"`).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
 				"candidates": []map[string]any{{
 					"content": map[string]any{
-						"parts": []map[string]any{{"text": segmentAnalysis}},
+						"parts": []map[string]any{{"text": "현재 Pull-up 구간을 독립적으로 관찰했습니다." + observationBlock("Pull-up", 50, 90, false) + wodEvidenceBlock("Pull-up", 50, 90)}},
 					},
 				}},
 			})
+		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").MatchBodyContains(`"startOffset":"45s"`).MatchBodyContains(`"endOffset":"50s"`).Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": observationBlock("", 45, 50, true)}}}}}})
+		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("controlled early position").MatchBodyContains("controlled late position").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overall":100,"form":80,"intensity":80,"consistency":80,"movements":{"Power Snatch":{"form":80,"intensity":80},"Pull-up":{"form":80,"intensity":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`}}}}}})
 
 		return transport
 	}
@@ -890,7 +982,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		mediaEnd0 := 45.0
 		mediaStart1 := 50.0
 		mediaEnd1 := 90.0
-		Expect(dbConn.Create(&db.ChunkAnalysisResult{
+		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
 			SessionID:       sessionID,
 			ProfileID:       profileID,
 			FilePath:        "gs://test-bucket/videos/" + sessionID + "/chunk_0.mp4",
@@ -902,8 +994,8 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			EndSecs:         &end0,
 			MediaStartSecs:  &mediaStart0,
 			MediaEndSecs:    &mediaEnd0,
-		}).Error).NotTo(HaveOccurred())
-		Expect(dbConn.Create(&db.ChunkAnalysisResult{
+		})
+		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
 			SessionID:       sessionID,
 			ProfileID:       profileID,
 			FilePath:        "gs://test-bucket/videos/" + sessionID + "/chunk_1.mp4",
@@ -915,7 +1007,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			EndSecs:         &end1,
 			MediaStartSecs:  &mediaStart1,
 			MediaEndSecs:    &mediaEnd1,
-		}).Error).NotTo(HaveOccurred())
+		})
 	}
 
 	BeforeEach(func() {
@@ -999,8 +1091,12 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 	})
 
 	It("persists COMPLETED result using chunk-based segments (no injuries)", func() {
+		w.UseCache = false // WOD still requires the independent two-pass observer.
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: "sess-twopass-001", ProfileID: profileID, WorkoutType: WorkoutTypeWOD, WODEvaluationVersion: 0})
 		seedChunks("sess-twopass-001", profileID)
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-twopass-001/merged.mp4")
+		merged := fmt.Sprintf("videos/%d/sess-twopass-001/merged.mp4", profileID)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", merged, []string{merged})
 		transport := setupTwoPassTransport(analysisWithHighlights, false)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
@@ -1013,24 +1109,29 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
 
 		Expect(transport.Verify()).To(Succeed())
-		// 5 requests: upload + finalize + poll + analyzeSegment x2 (no deleteFile)
-		Expect(transport.Requests()).To(HaveLen(5))
 
 		var result db.AnalysisResult
 		Expect(dbConn.Where("session_id = ?", "sess-twopass-001").First(&result).Error).
 			NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal("COMPLETED"))
 		Expect(result.Output).To(ContainSubstring("훌륭한 운동이었습니다"))
-
-		fatigueContextBodies := 0
+		Expect(result.SessionScore).To(MatchJSON(`{"overall":80,"form":80,"intensity":80,"consistency":80,"movements":{"Power Snatch":{"form":80,"intensity":80},"Pull-up":{"form":80,"intensity":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`))
+		progress, err := workoutprogress.Decode(result.WorkoutProgress)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(progress.Intervals).To(HaveLen(3))
+		Expect(progress.Intervals[1].Activity).To(Equal("rest"))
+		Expect(progress.Unassessed).To(BeEmpty())
 		for _, request := range transport.Requests() {
-			if strings.Contains(string(request.Body), "모든 수신 청크 집계") {
-				fatigueContextBodies++
-				Expect(string(request.Body)).To(ContainSubstring("구조화 청크: 2"))
-				Expect(string(request.Body)).To(ContainSubstring("시각적으로 피로가 확립된 운동 청크: 1"))
+			Expect(request.Method).NotTo(Equal(http.MethodDelete))
+			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+				Expect(string(request.Body)).NotTo(ContainSubstring("모든 수신 청크 집계"))
+				Expect(string(request.Body)).NotTo(ContainSubstring("```score"))
+				Expect(string(request.Body)).To(ContainSubstring("workout_observations"))
+			} else if strings.Contains(request.URL, gemini.ModelFlash38+":generateContent") {
+				Expect(string(request.Body)).To(ContainSubstring("workout_progress"))
+				Expect(string(request.Body)).NotTo(ContainSubstring("fileUri"))
 			}
 		}
-		Expect(fatigueContextBodies).To(Equal(1))
 
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
@@ -1040,11 +1141,14 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 	})
 
 	It("enqueues injury task with file URI and does NOT delete file", func() {
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: "sess-twopass-inj-001", ProfileID: profileID, WorkoutType: WorkoutTypeWOD, WODEvaluationVersion: 0})
 		seedChunks("sess-twopass-inj-001", profileID)
 		analysisWithInjury := analysisWithHighlights + "\n```injury_timestamps\n" +
 			`[{"start":"0:32","end":"0:45","reason":"무릎 내전 관찰"}]` + "\n```"
 
 		testhelpers.MockGCSDownload(storageTransport, "gs://test-bucket/videos/sess-twopass-inj-001/merged.mp4")
+		merged := fmt.Sprintf("videos/%d/sess-twopass-inj-001/merged.mp4", profileID)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", merged, []string{merged})
 		transport := setupTwoPassTransport(analysisWithInjury, true)
 
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{
@@ -1056,8 +1160,9 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
 		Expect(transport.Verify()).To(Succeed())
-		// 5 requests: upload + finalize + poll + analyzeSegment x2 (no deleteFile)
-		Expect(transport.Requests()).To(HaveLen(5))
+		for _, request := range transport.Requests() {
+			Expect(request.Method).NotTo(Equal(http.MethodDelete))
+		}
 
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
@@ -1078,6 +1183,77 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(injPayload.GeminiFileURI).To(ContainSubstring("/files/mock-two-pass"))
 		Expect(injPayload.GeminiFileName).To(Equal("files/mock-two-pass"))
 		Expect(injPayload.FocusTimestamps).To(ContainSubstring("0:32"))
+	})
+	It("routes warmup through independent observations without cache and scores only in text final assessment", func() {
+		const sessionID = "WARMUP-20261013-01JFORCEDOBSERVATIONTEST00"
+		w.UseCache = false
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sessionID, ProfileID: profileID, WorkoutType: WorkoutTypeWarmup})
+		seedChunks(sessionID, profileID)
+		source := "gs://test-bucket/videos/" + sessionID + "/merged.mp4"
+		testhelpers.MockGCSDownload(storageTransport, source)
+		merged := fmt.Sprintf("videos/%d/%s/merged.mp4", profileID, sessionID)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", merged, []string{merged})
+		transport := setupTwoPassTransport(analysisWithHighlights, false)
+		Expect(w.HandleVideoAnalysisTask(context.Background(), makeVideoAnalysisTask(VideoAnalysisPayload{SessionID: sessionID, ProfileID: profileID, FilePath: source, WorkoutType: WorkoutTypeWarmup}))).To(Succeed())
+		Expect(transport.Verify()).To(Succeed())
+		var result db.AnalysisResult
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&result).Error).To(Succeed())
+		Expect(result.SessionScore).To(MatchJSON(`{"overall":80,"form":80,"intensity":0,"consistency":80,"movements":{"Power Snatch":{"form":80},"Pull-up":{"form":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`))
+		progress, err := workoutprogress.Decode(result.WorkoutProgress)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(progress.Intervals).To(HaveLen(3))
+		for _, request := range transport.Requests() {
+			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+				Expect(string(request.Body)).NotTo(ContainSubstring("```score"))
+				Expect(string(request.Body)).NotTo(ContainSubstring("모든 수신 청크 집계"))
+			}
+		}
+	})
+	It("keeps version-one WOD onset and complete observed rest in the production final assessment", func() {
+		const sessionID = "WOD-20261013-01JV1PROGRESSONSETTEST00000"
+		w.UseCache = false
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sessionID, ProfileID: profileID, WorkoutType: WorkoutTypeWOD, WODEvaluationVersion: 1})
+		seedChunks(sessionID, profileID)
+		source := "gs://test-bucket/videos/" + sessionID + "/merged.mp4"
+		testhelpers.MockGCSDownload(storageTransport, source)
+		merged := fmt.Sprintf("videos/%d/%s/merged.mp4", profileID, sessionID)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", merged, []string{merged})
+		transport := setupTwoPassTransport(analysisWithHighlights, false, true)
+		Expect(w.HandleVideoAnalysisTask(context.Background(), makeVideoAnalysisTask(VideoAnalysisPayload{SessionID: sessionID, ProfileID: profileID, FilePath: source, WorkoutType: WorkoutTypeWOD}))).To(Succeed())
+		Expect(transport.Verify()).To(Succeed())
+		var result db.AnalysisResult
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&result).Error).To(Succeed())
+		var score struct {
+			Version        int    `json:"evaluation_version"`
+			Form           *int   `json:"form"`
+			Intensity      *int   `json:"intensity"`
+			Consistency    *int   `json:"consistency"`
+			EvidenceStatus string `json:"evidence_status"`
+			WODStart       struct {
+				Status  string   `json:"status"`
+				Seconds *float64 `json:"seconds"`
+				End     *float64 `json:"end_seconds"`
+			} `json:"wod_start"`
+		}
+		Expect(json.Unmarshal([]byte(result.SessionScore), &score)).To(Succeed())
+		Expect(score.Version).To(Equal(1))
+		Expect(score.EvidenceStatus).To(Equal("complete"))
+		Expect(score.WODStart.Status).To(Equal("confirmed"))
+		Expect(score.WODStart.Seconds).NotTo(BeNil())
+		Expect(score.WODStart.End).NotTo(BeNil())
+		Expect(*score.WODStart.Seconds).To(Equal(0.0))
+		Expect(*score.WODStart.End).To(Equal(90.0))
+		Expect(score.Form).NotTo(BeNil())
+		Expect(score.Intensity).NotTo(BeNil())
+		Expect(*score.Form).To(Equal(80))
+		Expect(*score.Intensity).To(Equal(80))
+		Expect(score.Consistency).NotTo(BeNil())
+		Expect(*score.Consistency).To(Equal(80))
+		progress, err := workoutprogress.Decode(result.WorkoutProgress)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(progress.Intervals).To(HaveLen(3))
+		Expect(progress.Intervals[1].Activity).To(Equal("rest"))
+		Expect(progress.Unassessed).To(BeEmpty())
 	})
 })
 
@@ -1285,6 +1461,44 @@ var _ = Describe("mergeSegmentsByMovement", func() {
 // ---------------------------------------------------------------------------
 // maxSegmentsForDuration
 // ---------------------------------------------------------------------------
+
+var _ = Describe("Workout progress observation windows", func() {
+	It("observes only media gaps between sets without presuming rest", func() {
+		sets := []Segment{{Start: "0:40", End: "1:00", Type: "Power Clean"}, {Start: "0:10", End: "0:20", Type: "Power Clean"}}
+		windows := addBetweenObservationWindows(sets)
+		Expect(windows).To(HaveLen(3))
+		Expect(windows[0].Start).To(Equal("0:10"))
+		Expect(windows[1].Start).To(Equal("0:20"))
+		Expect(windows[1].End).To(Equal("0:40"))
+		Expect(windows[1].Type).To(Equal("Unknown"))
+		Expect(windows[1].Description).To(ContainSubstring("do not assume rest or exercise"))
+		Expect(windows[2].End).To(Equal("1:00"))
+		Expect(sets[0].Start).To(Equal("0:40"), "selection cannot mutate original indexing")
+	})
+
+	It("keeps touching or overlapping indexed windows without inventing a rest", func() {
+		sets := []Segment{{Start: "0:00", End: "0:20", Type: "Power Clean"}, {Start: "0:10", End: "0:15", Type: "Unknown"}, {Start: "0:20", End: "0:30", Type: "Power Clean"}}
+		Expect(addBetweenObservationWindows(sets)).To(HaveLen(3))
+	})
+
+	It("requires direct full-window rest evidence before omitting exercise scoring", func() {
+		seg := Segment{Start: "0:20", End: "0:40"}
+		rest := []workoutprogress.Interval{{Start: 20, End: 40, Activity: "rest"}}
+		Expect(isFullyObservedRestWindow(seg, rest, nil)).To(BeTrue())
+		Expect(isFullyObservedRestWindow(seg, nil, nil)).To(BeFalse())
+		Expect(isFullyObservedRestWindow(seg, rest, []workoutprogress.Gap{{Start: 25, End: 30, Clock: "media", Reason: "target_not_visible"}})).To(BeFalse())
+		Expect(isFullyObservedRestWindow(seg, []workoutprogress.Interval{{Start: 20, End: 35, Activity: "rest"}}, nil)).To(BeFalse())
+		Expect(isFullyObservedRestWindow(seg, []workoutprogress.Interval{{Start: 20, End: 40, Activity: "unknown"}}, nil)).To(BeFalse())
+	})
+
+	It("reserves early and late warmup observations for progress comparisons within budget", func() {
+		all := []Segment{{Start: "0:00", End: "0:10", Type: "Squat"}, {Start: "0:20", End: "0:30", Type: "Squat"}, {Start: "0:40", End: "0:50", Type: "Squat"}, {Start: "1:00", End: "1:10", Type: "Pigeon Pose"}}
+		selected := []Segment{all[1], all[3]}
+		got := preserveWarmupTrajectories(all, selected, 3)
+		Expect(got).To(Equal([]Segment{all[0], all[2], all[3]}))
+		Expect(preserveWarmupTrajectories(all, selected, 0)).To(BeEmpty())
+	})
+})
 
 var _ = Describe("maxSegmentsForDuration", func() {
 	It("returns 1 segment per 2 minutes", func() {

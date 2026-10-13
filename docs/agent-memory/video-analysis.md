@@ -77,6 +77,13 @@ For standard WODs, current code removes walking/rest/setup rows, retains `Unknow
 visual revalidation, and merges only touching segments with the same free-text
 movement. Recovery workouts retain low-motion/rest/setup chunks and exclude explicit walking; see [recovery-and-mobility.md](recovery-and-mobility.md). A filtered rest gap is never merged into the surrounding movement.
 
+Detailed analysis adds independent observation windows between indexed sets.
+Their activity is initially unknown; only direct target-person evidence can
+establish rest. Prefix waiting and post-workout tail are not automatically
+classified. Budget omissions and failed windows remain explicitly unassessed.
+Warmup selection reserves early/late observations of repeated movements when
+the segment budget permits a pair.
+
 Fallback:
 - if no usable verified chunk segments remain after split/recovery attempts, use model-based indexing
 - inject real video duration into the prompt
@@ -86,6 +93,16 @@ Fallback:
 ## Pass 2: segment analysis
 Analyze each segment independently with `VideoMetadata` offsets.
 Constrain analysis to the exact time range.
+
+Current-window observation includes time-bounded complete-cycle/form/ROM/pace
+evidence in `workout_observations`. Do not send history, previous assessments,
+session fatigue aggregates, or score requests to any segment, including the last.
+`workout_progress` assembles these observations before a separate text-only final
+assessment. WOD version-1 eligibility alone controls onset trimming and version-1
+scores; a new timeline must not upgrade historical sessions. Warmup progression
+is evaluated at final assessment, preserving controlled early/late ROM changes.
+See [`workout-progress.md`](workout-progress.md) for storage, confirmation and
+the one-way observation/timeline/assessment boundary.
 
 ## File lifecycle
 Upload once and reuse the same Gemini file URI across passes.
@@ -170,8 +187,10 @@ Do not disable the filter based on session drift or missing capture offsets.
 
 ## Whole-session debug re-analysis
 
-- Feature flag: `ENABLE_SESSION_REANALYSIS=true` on the API server. It is
-  independent from `ENABLE_CHUNK_REANALYSIS` and disabled by default.
+- Explicit selected-video reanalysis is available to authenticated owners,
+  including legacy and warmup sessions. The legacy `ENABLE_SESSION_REANALYSIS`
+  setting no longer blocks these owned requests; source readiness, quota and
+  active-run checks still apply. Chunk debugging has its separate switch.
 - Queue task: `session:debug-reanalysis`; its payload contains only `run_id`.
 - Persistence: `session_reanalysis_runs`. Candidate generation never replaces the unique
   production `analysis_results` row and never enqueues highlights, hardsubs,
@@ -189,9 +208,10 @@ Do not disable the filter based on session drift or missing capture offsets.
   included. Free-text notes and unconfirmed re-analysis candidates are never
   prompt context. Corrections carry `media_start_secs`/`media_end_secs`, remain
   non-authoritative labels, and must be revalidated from visible evidence.
-- A saved `fatigued` value cannot create visual fatigue evidence. Saved
-  `not_fatigued`, `walking_rest`, or non-exercise activity suppresses conflicting
-  original fatigue aggregation for that debug run.
+- Movement/activity/time corrections are non-authoritative hints for independent
+  video observers. Fatigue/evaluation corrections go only to the separate final
+  evaluator and cannot create or suppress original visual observations. Final
+  corrections never alter the new `workout_progress` source or repetitions.
 - Status values are `QUEUED`, `RUNNING`, `COMPLETED`, `FAILED`,
   `VIDEO_UNAVAILABLE`, and `CONTEXT_UNAVAILABLE`.
 

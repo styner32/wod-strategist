@@ -428,6 +428,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	if err := w.refreshLiveActivity(ctx, p, chunkResult); err != nil {
 		return err
 	}
+	// Bounded recent-window coaching is a separate post-observation result.
 	w.addContextualCoaching(ctx, p.LiveAnalysisVersion, chunkResult)
 
 	w.logger.Info("Chunk analysis completed",
@@ -604,6 +605,7 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	if err := w.refreshLiveActivity(ctx, VideoAnalysisPayload{SessionID: p.SessionID, ProfileID: p.ProfileID, WorkoutType: session.WorkoutType, WODDescription: session.WODDescription, Movements: movementHintsFromDocument(session.MovementHints)}, chunkResult); err != nil {
 		return err
 	}
+	// Bounded recent-window coaching is a separate post-observation result.
 	w.addContextualCoaching(ctx, p.LiveAnalysisVersion, chunkResult)
 
 	w.logger.Info("Chunk analysis completed",
@@ -629,7 +631,6 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 	}
 
 	prompt += buildMovementHintsContext(p.Movements)
-	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", strings.Join(p.Injuries, ", "))
@@ -644,6 +645,7 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 	// Add observed signals & target person requirement
 	prompt += ObservedSignalsPrompt
 	prompt += TargetPersonPrompt
+	prompt += independentSegmentPolicy
 
 	return prompt
 }
@@ -663,7 +665,6 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 	}
 
 	prompt += buildMovementHintsContext(movementHintsFromDocument(session.MovementHints))
-	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
 
 	if profile.Injuries != nil && *profile.Injuries != "" {
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", *profile.Injuries)
@@ -678,6 +679,7 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 	// Add observed signals & target person requirement
 	prompt += ObservedSignalsPrompt
 	prompt += TargetPersonPrompt
+	prompt += independentSegmentPolicy
 
 	return prompt
 }

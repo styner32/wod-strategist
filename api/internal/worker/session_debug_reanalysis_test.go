@@ -38,10 +38,10 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		videoBytes       []byte
 	)
 
-	expectAnalysis := func(fileURI string) {
+	expectAnalysis := func(fileURI string, finalCalls ...bool) {
 		analysisText := `교정 라벨을 영상에서 다시 확인했습니다.
 ` + "```highlights\n" + `[{"start":"0:00","end":"0:00.5","type":"key_moment","movement":"Pull-up","reason":"visible movement"}]` + "\n```\n" +
-			"```score\n" + `{"overall":80,"form":80,"intensity":80,"consistency":80,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}` + "\n```"
+			"```workout_observations\n" + `{"intervals":[{"start_secs":0,"end_secs":0.75,"activity":"exercise","movement":"Pull-up","target_confirmed":true,"rep_events":[{"movement":"Pull-up","unit":"reps","start_secs":0.1,"end_secs":0.5,"complete":true,"evidence":"complete pull and return"}],"form_observations":[{"start_secs":0.1,"end_secs":0.5,"evidence":"visible aligned pull"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
 		geminiTransport.New(baseURL).
 			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
@@ -53,6 +53,13 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 				}},
 				"usageMetadata": map[string]any{"promptTokenCount": 17, "candidatesTokenCount": 9, "totalTokenCount": 26},
 			})
+		if len(finalCalls) > 0 && !finalCalls[0] {
+			return
+		}
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			MatchBodyContains("weight_raw").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "```movements\n{\"movements\":[]}\n```"}}}}}})
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			MatchBodyContains("Evaluate the complete supplied workout timeline").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":80,"consistency":80,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}`}}}}}})
 	}
 
 	seedChunkAndRun := func() (db.ChunkAnalysisResult, db.SessionReanalysisRun) {
@@ -160,7 +167,14 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			}
 		}
 		Expect(prompt).To(ContainSubstring("Pull-up"))
-		Expect(prompt).To(ContainSubstring("not_fatigued"))
+		Expect(prompt).NotTo(ContainSubstring("not_fatigued"))
+		assessmentPrompt := ""
+		for _, request := range geminiTransport.Requests() {
+			if strings.Contains(string(request.Body), "Evaluate the complete supplied workout timeline") {
+				assessmentPrompt = string(request.Body)
+			}
+		}
+		Expect(assessmentPrompt).To(ContainSubstring("not_fatigued"))
 		Expect(prompt).To(ContainSubstring("media_start_secs"))
 		Expect(prompt).NotTo(ContainSubstring("PRIVATE FREE TEXT NOTE"))
 		Expect(prompt).NotTo(ContainSubstring("original-fatigue-marker"))
@@ -172,7 +186,8 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(completed.Status).To(Equal(db.SessionReanalysisStatusCompleted))
 		Expect(completed.Output).To(ContainSubstring("교정 라벨"))
 		Expect(completed.HighlightSegments).NotTo(BeEmpty())
-		Expect(completed.SessionScore).To(MatchJSON(`{"overall":80,"form":80,"intensity":80,"consistency":80,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}`))
+		Expect(completed.SessionScore).To(MatchJSON(`{"overall":null,"form":80,"intensity":null,"consistency":null,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}`))
+		Expect(completed.WorkoutProgress).NotTo(BeEmpty())
 		Expect(completed.PromptTokens).To(Equal(int32(17)))
 
 		var persistedChunk db.ChunkAnalysisResult
@@ -230,7 +245,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		testhelpers.MockGCSDownloadWithBody(storageTransport, sourceURI, videoBytes)
 		geminiTransport.New(baseURL).Get("/v1beta/files/partial-cache").MatchHeader("X-Goog-Api-Key", apiKey).
 			Reply(http.StatusOK).JSON(map[string]any{"name": "files/partial-cache", "state": "ACTIVE"})
-		expectAnalysis(baseURL + "/files/partial-cache")
+		expectAnalysis(baseURL+"/files/partial-cache", false)
 		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).MatchBodyContains("Burpee").
 			Reply(http.StatusInternalServerError).JSON(map[string]any{"error": map[string]any{"message": "temporary"}})

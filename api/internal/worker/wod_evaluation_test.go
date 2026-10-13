@@ -8,10 +8,12 @@ import (
 	"github.com/oklog/ulid/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/testhelpers"
 	"github.com/wod-strategist/api/internal/wodeval"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
 	"net/http"
 	"strings"
@@ -19,6 +21,34 @@ import (
 )
 
 var _ = Describe("WOD full-session evaluation", func() {
+	It("rebases final evidence without changing independent observations or carrying pre-WOD capture coordinates", func() {
+		transport := testhelpers.NewMockTransport()
+		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
+		Expect(err).To(Succeed())
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":70,"consistency":75,"movements":{},"summary":"관찰된 수행을 비교했습니다."}`}}}}}})
+		start, captureEnd := 120.0, 180.0
+		progress := workoutprogress.Build([]workoutprogress.Interval{{ID: "set", Start: 120, End: 180, Activity: "exercise", Movement: "Power Clean", CaptureStart: &start, CaptureEnd: &captureEnd, RepEvents: []activity.Observation{{Movement: "Power Clean", Unit: "reps", Start: 130, End: 132, Complete: true, Evidence: "complete catch and return"}}, FormObservations: []workoutprogress.Observation{{Start: 130, End: 132, Evidence: "visible neutral trunk"}}}}, nil, "source")
+		before, err := json.Marshal(progress)
+		Expect(err).To(Succeed())
+		w := &Worker{GeminiClient: client, logger: zap.NewNop()}
+		w.synthesizeWODWithProgress(context.Background(), VideoAnalysisPayload{WorkoutType: "wod"}, wodeval.Start{Seconds: &start, Status: "confirmed"}, []wodSegmentEvidence{{TargetConfirmed: true, Movement: "Power Clean", StartSecs: 120, EndSecs: 180, Form: []string{"visible neutral trunk"}, Pace: []string{"observed cycle"}}}, true, progress, "")
+		after, err := json.Marshal(progress)
+		Expect(err).To(Succeed())
+		Expect(after).To(Equal(before))
+		Expect(transport.Verify()).To(Succeed())
+		var request struct {
+			Contents []struct {
+				Parts []struct {
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"contents"`
+		}
+		Expect(json.Unmarshal(transport.Requests()[0].Body, &request)).To(Succeed())
+		prompt := request.Contents[0].Parts[0].Text
+		Expect(prompt).To(ContainSubstring(`"start_secs":10`))
+		Expect(prompt).NotTo(ContainSubstring(`"start_secs":130`))
+		Expect(prompt).NotTo(ContainSubstring(`"capture_start_secs"`))
+	})
 	It("keeps historical sessions opted out and enables only newly registered WODs", func() {
 		conn, err := testhelpers.InitDB()
 		Expect(err).To(Succeed())

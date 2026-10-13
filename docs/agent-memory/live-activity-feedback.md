@@ -46,6 +46,16 @@
 
 ## Coaching and delivery
 
+Following the user's 2026-10-14 clarification, bounded recent-window coaching
+is restored in both live handlers and saved-chunk resumption after independent
+observations are persisted. `ENABLE_CONTEXTUAL_COACHING` still controls generation
+with its existing default. Mobile displays valid current-chunk localized coaching
+with basic output as fallback; camera feedback remains independent. Accumulated
+counts stay in post-recording review. This separate 60-second coaching layer cannot
+rewrite observations, basic output or `workout_progress`, or supply its text to
+video observers. Full performed-history real-time analysis remains a follow-up
+after the user's acceptance of final assessment; see [workout-progress.md](workout-progress.md).
+
 - Query the same profile/session only. Use up to six completed, non-overlapping
   chunks wholly inside the 60 seconds before the current capture start.
 - Matching movement, target confidence above 0.5, and unambiguous

@@ -18,6 +18,7 @@ import (
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/timeline"
 	"github.com/wod-strategist/api/internal/wodeval"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -186,7 +187,9 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		pMode = string(PipelineModeOptimized)
 	}
 
-	if w.wodEvaluationVersion(ctx, p) == 1 {
+	// New analyses need independent observations before final assessment. This
+	// does not opt historical WODs into version-1 onset/score eligibility.
+	if p.WorkoutType == WorkoutTypeWOD || p.WorkoutType == WorkoutTypeWarmup {
 		pMode = string(PipelineModeOptimized)
 	}
 	if pMode == string(PipelineModeOptimized) || pMode == string(PipelineModeCompare) {
@@ -311,6 +314,7 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 			"highlight_segments":      result.HighlightSegments,
 			"wod_description":         result.WODDescription,
 			"session_score":           result.SessionScore,
+			"workout_progress":        result.WorkoutProgress,
 			"normalized_workout":      result.NormalizedWorkout,
 			"mobility_observations":   result.MobilityObservations,
 			"stretch_recommendations": result.StretchRecommendations,
@@ -331,6 +335,10 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 		}
 
 		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		progress, _ := workoutprogress.Decode(result.WorkoutProgress)
+		if err := db.InvalidatePerformanceRecords(tx, p.ProfileID, p.SessionID, progress.SourceVersion); err != nil {
 			return err
 		}
 		w.PrepareEnrichmentOutbox(ctx, tx, p.SessionID)
@@ -432,7 +440,6 @@ The user supplied these possible movements: %s
 They are suggestions, not confirmation and not a closed list. Omit any hint not visibly performed by the target person, and preserve any different movement that is visibly supported.
 `, strings.Join(p.Movements, ", "))
 	}
-	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
 	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 
 	prompt += `
@@ -737,8 +744,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		segments = trimWODSegments(segments, wodStart)
 		wodComplete = w.wodCoverageComplete(ctx, p, wodStart)
 	}
+	segments = addBetweenObservationWindows(segments)
 	maxSegs := maxSegmentsForDuration(upload.VideoDuration)
 	if len(segments) > maxSegs && !newWOD {
+		allSegments := append([]Segment(nil), segments...)
 		w.logger.Info("Pass 1.5: Triaging segments",
 			zap.Int("total_segments", len(segments)),
 			zap.Int("max_segments", maxSegs))
@@ -754,37 +763,28 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		} else {
 			segments = triagedSegments
 		}
+		if p.WorkoutType == WorkoutTypeWarmup {
+			segments = preserveWarmupTrajectories(allSegments, segments, maxSegs)
+		}
 
 		w.logger.Info("Segments after triage",
 			zap.Int("count", len(segments)),
 			zap.Any("segments", segments))
 	}
 
-	// ── Pass 2: Analyze each segment with Pro ──
-	// Build shared context once. The final segment receives history plus an
-	// aggregate derived from every completed structured chunk.
+	// ── Pass 2: Observe each segment independently ──
 	wodContext := buildWODContext(p.WODDescription)
-	historyContext := w.buildHistoryContext(p.ProfileID, 5)
-	fatigueContext := w.buildSessionFatigueEvidenceContext(p.SessionID)
-	finalContext := historyContext + fatigueContext
-
-	w.logger.Info("Pass 2 context prepared",
-		zap.String("session_id", p.SessionID),
-		zap.Bool("has_wod_context", wodContext != ""),
-		zap.Bool("has_history", historyContext != ""),
-		zap.Bool("has_fatigue_context", fatigueContext != ""))
 
 	var wodEvidence []wodSegmentEvidence
+	var progressIntervals []workoutprogress.Interval
+	var progressGaps []workoutprogress.Gap
 	var allAnalysis strings.Builder
 	var highlightCandidates []highlightCandidate
 	for i, seg := range segments {
 		start := convertToSeconds(seg.Start)
 		end := convertToSeconds(seg.End)
 
-		// Inject score prompt and history only into the last segment to avoid
-		// asking every segment for a session-wide score.
-		isLast := i == len(segments)-1
-		segPrompt := w.buildSegmentAnalysisPrompt(p, seg, wodContext, finalContext, isLast && !newWOD)
+		segPrompt := w.buildSegmentAnalysisPrompt(p, seg, wodContext, "", false)
 		if newWOD {
 			segPrompt += wodSegmentEvidencePrompt
 		}
@@ -795,7 +795,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.String("type", seg.Type),
 			zap.Duration("start", start),
 			zap.Duration("end", end),
-			zap.Bool("score_prompt", isLast))
+			zap.Bool("score_prompt", false))
 
 		apiCalls++
 		segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
@@ -804,6 +804,8 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", segUsage)
 		if err != nil {
 			wodComplete = false
+			_, failedGaps := parseWorkoutObservations("", seg, i)
+			progressGaps = append(progressGaps, failedGaps...)
 			w.logger.Error("Segment analysis failed, skipping",
 				zap.Int("segment", i+1),
 				zap.String("type", seg.Type),
@@ -811,13 +813,16 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			continue
 		}
 
-		if newWOD {
+		observedIntervals, observedGaps := parseWorkoutObservations(segAnalysis, seg, i)
+		if newWOD && !isFullyObservedRestWindow(seg, observedIntervals, observedGaps) {
 			if evidence, ok := decodeWODEvidence(segAnalysis, seg); ok {
 				wodEvidence = append(wodEvidence, evidence)
 			} else {
 				wodComplete = false
 			}
 		}
+		progressIntervals = append(progressIntervals, observedIntervals...)
+		progressGaps = append(progressGaps, observedGaps...)
 		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(segAnalysis, highlightSource{
 			Index:           i,
 			Start:           start.Seconds(),
@@ -847,20 +852,22 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.String("session_id", p.SessionID),
 		zap.Int("candidate_count", len(highlightCandidates)),
 		zap.Int("event_count", len(normalizedHighlights)))
-	sessionScore := parseSessionScore(analysis)
-	if newWOD {
-		sessionScore = w.synthesizeWOD(ctx, p, wodStart, wodEvidence, wodComplete, observeWODUsage)
-		analysis += "\n\n```score\n" + sessionScore + "\n```"
-	}
-
-	w.logger.Info("Session score parsed",
-		zap.String("session_id", p.SessionID),
-		zap.String("session_score", sessionScore))
-
 	normalizedWorkout := ""
 	if (p.WorkoutType == "" || p.WorkoutType == WorkoutTypeWOD) && strings.TrimSpace(p.WODDescription) != "" {
 		normalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements)
 	}
+	progress := w.buildWorkoutProgress(ctx, p, localFilePath, progressIntervals, progressGaps, upload.VideoDuration.Seconds(), normalizedWorkout)
+	progressJSON, err := json.Marshal(progress)
+	if err != nil {
+		return fmt.Errorf("encode workout progress: %w", err)
+	}
+	var sessionScore string
+	if newWOD {
+		sessionScore = w.synthesizeWODWithProgress(ctx, p, wodStart, wodEvidence, wodComplete, progress, "", observeWODUsage)
+	} else {
+		sessionScore = w.assessWorkoutProgress(ctx, p, progress, "", observeWODUsage)
+	}
+	analysis += "\n\n```score\n" + sessionScore + "\n```"
 
 	mobilityObs := sanitizeMobilityObservations(parseMobilityObservations(analysis))
 	mobilityJSON := marshalMobilityObservations(mobilityObs)
@@ -875,6 +882,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		HighlightSegments:      highlightSegments,
 		WODDescription:         p.WODDescription,
 		SessionScore:           sessionScore,
+		WorkoutProgress:        db.NullableJSONDocument(progressJSON),
 		NormalizedWorkout:      normalizedWorkout,
 		MobilityObservations:   mobilityJSON,
 		StretchRecommendations: stretchRecsJSON,
@@ -940,11 +948,115 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	return nil
 }
 
-// buildSegmentAnalysisPrompt builds the analysis prompt for a specific segment.
-// wodContext and historyContext are pre-built shared strings (may be empty).
-// If isLastSegment is true, the score output prompt and history context are appended
-// so Gemini produces a session-wide score at the end of the final segment.
-func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment, wodContext, historyContext string, isLastSegment bool) string {
+// Reserve early/late pairs for selected warmup movements before filling the
+// remaining budget. Omitted intervals remain unassessed in workout_progress.
+// Observe recorded time between indexed sets without assigning it to rest.
+// Calling this before triage leaves budget omissions explicitly unassessed.
+// Capture pauses have no media duration and cannot create an observation window.
+func addBetweenObservationWindows(segments []Segment) []Segment {
+	ordered := append([]Segment(nil), segments...)
+	sort.SliceStable(ordered, func(i, j int) bool { return convertToSeconds(ordered[i].Start) < convertToSeconds(ordered[j].Start) })
+	out := []Segment{}
+	var previousEnd time.Duration
+	for _, seg := range ordered {
+		start, end := convertToSeconds(seg.Start), convertToSeconds(seg.End)
+		if end <= start {
+			continue
+		}
+		if len(out) > 0 && start-previousEnd > 10*time.Millisecond {
+			out = append(out, Segment{
+				Start: formatSegmentTimestamp(previousEnd.Seconds()), End: seg.Start, Type: "Unknown",
+				Description: "Observe the current target person's activity directly. This recorded window has no confirmed activity or movement label; do not assume rest or exercise.",
+			})
+		}
+		out = append(out, seg)
+		if end > previousEnd {
+			previousEnd = end
+		}
+	}
+	return out
+}
+
+// Rest is complete coverage only when the current-window observer directly
+// identifies the target through the entire window. Missing evidence is unknown.
+func isFullyObservedRestWindow(seg Segment, intervals []workoutprogress.Interval, gaps []workoutprogress.Gap) bool {
+	if len(intervals) == 0 || len(gaps) > 0 {
+		return false
+	}
+	start, end := convertToSeconds(seg.Start).Seconds(), convertToSeconds(seg.End).Seconds()
+	cursor := start
+	for _, in := range intervals {
+		if in.Activity != "rest" || math.Abs(in.Start-cursor) > 0.01 {
+			return false
+		}
+		cursor = in.End
+	}
+	return math.Abs(cursor-end) <= 0.01
+}
+
+func preserveWarmupTrajectories(all, selected []Segment, budget int) []Segment {
+	if budget <= 0 {
+		return nil
+	}
+	var types []string
+	seenTypes := map[string]bool{}
+	for _, seg := range append(append([]Segment(nil), selected...), all...) {
+		key := strings.ToLower(strings.TrimSpace(seg.Type))
+		if !seenTypes[key] && !isNonExerciseMovement(seg.Type) {
+			types = append(types, key)
+			seenTypes[key] = true
+		}
+	}
+	result := []Segment{}
+	seen := map[string]bool{}
+	keyFor := func(seg Segment) string { return seg.Start + "|" + seg.End + "|" + strings.ToLower(seg.Type) }
+	add := func(seg Segment) {
+		key := keyFor(seg)
+		if len(result) < budget && !seen[key] {
+			result = append(result, seg)
+			seen[key] = true
+		}
+	}
+	for _, kind := range types {
+		matching := []Segment{}
+		for _, seg := range all {
+			if strings.ToLower(strings.TrimSpace(seg.Type)) == kind {
+				matching = append(matching, seg)
+			}
+		}
+		if len(matching) == 0 {
+			continue
+		}
+		sort.SliceStable(matching, func(i, j int) bool { return convertToSeconds(matching[i].Start) < convertToSeconds(matching[j].Start) })
+		needed := 1
+		if len(matching) > 1 {
+			needed = 2
+		}
+		if len(result)+needed <= budget {
+			add(matching[0])
+			add(matching[len(matching)-1])
+		}
+	}
+	for _, seg := range selected {
+		add(seg)
+	}
+	sort.SliceStable(result, func(i, j int) bool { return convertToSeconds(result[i].Start) < convertToSeconds(result[j].Start) })
+	return result
+}
+
+const independentSegmentPolicy = `
+## 독립 구간 관찰
+현재 영상 구간에서 직접 보이는 대상 인물의 동작, 완료된 반복, 반복 시점, 자세, 정렬, 가동범위와 템포만 기록하세요.
+이전 구간의 상태, 이전 점수나 이전 평가를 추측하거나 참조하지 마세요. 전체 세션 점수와 누적 강도, 피로 원인, 회복률은 최종 평가에서만 판단합니다.
+현재 구간 안에서도 서로 다른 반복/세트의 관찰 시점을 보존하세요. 긴 구간을 한 문장의 평균 평가로 압축하지 마세요.
+운동 계획과 프로필은 참고 정보이며 실제 수행 사실은 현재 영상으로 확인하세요. 복압이나 근육 활성은 영상만으로 확정하지 마세요.
+현재 보이는 자세에 대한 짧은 안내는 가능하지만 과거 대비 개선/악화나 누적 피로를 코칭하지 마세요.
+세션 점수(score) 블록을 생성하지 마세요.
+`
+
+// Legacy history/final parameters are deliberately ignored. A video observer
+// has the same inputs at the beginning and end of a session.
+func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment, wodContext, _ string, _ bool) string {
 	personalProfile := w.lookupProfileString(p.ProfileID)
 
 	prompt := fmt.Sprintf(`# 운동 영상 분석 요청
@@ -963,9 +1075,13 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 		prompt += wodContext
 	}
 
-	prompt += analysisPromptFor(p.WorkoutType)
+	prompt += independentSegmentPolicy
+	if IsRecoveryWorkoutType(p.WorkoutType) {
+		prompt += RecoveryChunkPolicyPrompt
+	}
 	prompt += MovementEvidenceRulesPrompt
 	prompt += FatigueEvidenceRulesPrompt
+	prompt += SpinalObservationRulesPrompt
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n   - 부상 부위: %s", InjuryTimestampPrompt, strings.Join(p.Injuries, ", "))
@@ -975,7 +1091,6 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 	prompt += MobilityOutputPrompt
 
 	prompt += buildMovementHintsContext(p.Movements)
-	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
@@ -988,17 +1103,7 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 - 모든 타임스탬프는 이 범위 안에서만 지정하세요.
 - 클립 내의 초 단위로 부상 위험이 있는 정확한 시점을 설명하세요.`, seg.Start, seg.End)
 
-	// On the last segment: inject history table and request a session-wide score.
-	if isLastSegment {
-		if historyContext != "" {
-			prompt += historyContext
-		}
-		if IsRecoveryWorkoutType(p.WorkoutType) {
-			prompt += w.buildMobilityHistoryContext(context.Background(), p.ProfileID, p.SessionID)
-		}
-		prompt += scoreOutputPromptFor(p.WorkoutType)
-	}
-
+	prompt += workoutObservationPrompt
 	return prompt
 }
 
@@ -1479,11 +1584,29 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	if (p.WorkoutType == "" || p.WorkoutType == WorkoutTypeWOD) && strings.TrimSpace(p.WODDescription) != "" {
 		legacyNormalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements)
 	}
+	// The full video is one independent observation window. A missing verified
+	// duration cannot establish event bounds, so it produces unavailable evidence.
+	var legacyIntervals []workoutprogress.Interval
+	var legacyGaps []workoutprogress.Gap
+	if videoDuration > 0 {
+		wholeVideo := Segment{Start: "0:00", End: fmt.Sprintf("%.9f", videoDuration), Type: "Full Video"}
+		legacyIntervals, legacyGaps = parseWorkoutObservations(analysis, wholeVideo, 0)
+	}
+	legacyProgress := w.buildWorkoutProgress(ctx, p, localFilePath, legacyIntervals, legacyGaps, videoDuration, legacyNormalizedWorkout)
+	legacyProgressJSON, encodeErr := json.Marshal(legacyProgress)
+	if encodeErr != nil {
+		return fmt.Errorf("encode legacy workout progress: %w", encodeErr)
+	}
+	legacyCalls := 1
+	legacySessionScore := w.assessWorkoutProgress(ctx, p, legacyProgress, "", func(task string, finalUsage *gemini.TokenUsage) {
+		legacyCalls++
+		w.saveTokenUsage(p.SessionID, p.ProfileID, task, finalUsage)
+	})
+	analysis += "\n\n```score\n" + legacySessionScore + "\n```"
 
 	legacyMobilityObs := sanitizeMobilityObservations(parseMobilityObservations(analysis))
 	legacyMobilityJSON := marshalMobilityObservations(legacyMobilityObs)
 	legacyStretchRecsJSON := w.recommendStretches(ctx, p.ProfileID, p.SessionID, legacyMobilityObs, p.Injuries)
-	legacySessionScore := parseSessionScore(analysis)
 
 	result := &db.AnalysisResult{
 		SessionID:              p.SessionID,
@@ -1493,6 +1616,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 		HighlightSegments:      highlightSegments,
 		WODDescription:         p.WODDescription,
 		SessionScore:           legacySessionScore,
+		WorkoutProgress:        db.NullableJSONDocument(legacyProgressJSON),
 		NormalizedWorkout:      legacyNormalizedWorkout,
 		MobilityObservations:   legacyMobilityJSON,
 		StretchRecommendations: legacyStretchRecsJSON,
@@ -1542,12 +1666,12 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	if pMode == "" {
 		pMode = string(w.PipelineMode)
 	}
-	w.recordStageMetrics(p.SessionID, p.ProfileID, "video_analysis", pMode, 1, 0, fileSizeBytes, time.Since(started))
+	w.recordStageMetrics(p.SessionID, p.ProfileID, "video_analysis", pMode, legacyCalls, 0, fileSizeBytes, time.Since(started))
 	return nil
 }
 
 func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs float64) string {
-	prompt := analysisPromptFor(p.WorkoutType) + MovementEvidenceRulesPrompt + FatigueEvidenceRulesPrompt
+	prompt := analysisPromptFor(p.WorkoutType) + MovementEvidenceRulesPrompt + FatigueEvidenceRulesPrompt + SpinalObservationRulesPrompt
 
 	if wod := buildWODContext(p.WODDescription); wod != "" {
 		prompt += wod
@@ -1563,7 +1687,6 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	prompt += MobilityOutputPrompt
 
 	prompt += buildMovementHintsContext(p.Movements)
-	prompt += w.buildPersonalMovementHintsContext(p.ProfileID, p.SessionID)
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
@@ -1575,7 +1698,6 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 
 	prompt += fmt.Sprintf("%s\n## 개인 프로필: %s", PersonalProfilePrompt, personalProfile)
 	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
-	prompt += w.buildSessionFatigueEvidenceContext(p.SessionID)
 
 	// Ground timestamps with actual video duration to prevent hallucinated timestamps.
 	if videoDurationSecs > 0 {
@@ -1589,9 +1711,14 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 - 영상에 존재하지 않는 장면의 타임스탬프를 절대 생성하지 마세요.
 - 모든 타임스탬프는 0:00 ~ %d:%02d 범위 안에 있어야 합니다.
 - 타임스탬프를 추측하지 말고, 영상을 직접 확인하여 정확한 시점을 기록하세요.`, minutes, seconds, minutes, seconds)
+		prompt += fmt.Sprintf("\n- Independent observation window: full-video media seconds 0.000 through %.9f; never exceed the exact end.\n", videoDurationSecs)
 	}
 
-	prompt += scoreOutputPromptFor(p.WorkoutType)
+	prompt += independentSegmentPolicy
+	if IsRecoveryWorkoutType(p.WorkoutType) {
+		prompt += RecoveryChunkPolicyPrompt
+	}
+	prompt += workoutObservationPrompt
 
 	return prompt
 }

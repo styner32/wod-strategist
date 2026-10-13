@@ -10,6 +10,7 @@ import {
 import { getToken } from "@/features/auth/storage";
 import type { components } from "./schema";
 import type { WorkoutType } from "./workoutType";
+import type { ConfirmPerformanceRecordsRequest, PerformanceBenchmarksResponse, WorkoutProgressResponse } from "../../shared/workoutProgress";
 
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
@@ -193,6 +194,17 @@ export async function fetchChunkAnalysis(
 
 export async function fetchMovements(): Promise<string[]> {
   return apiClient<string[]>("/movements");
+}
+
+export function getWorkoutProgress(sessionId: string, signal?: AbortSignal): Promise<WorkoutProgressResponse> {
+  return apiClient(`/sessions/${encodeURIComponent(sessionId)}/workout-progress`, { signal });
+}
+export function confirmPerformanceRecords(sessionId: string, body: ConfirmPerformanceRecordsRequest): Promise<WorkoutProgressResponse> {
+  return apiClient(`/sessions/${encodeURIComponent(sessionId)}/performance-records`, { method: "PUT", bodyPayload: body });
+}
+export function getPerformanceBenchmarks(profileId: number, movement: string, signal?: AbortSignal): Promise<PerformanceBenchmarksResponse> {
+  const params = new URLSearchParams({ profile_id: String(profileId), movement });
+  return apiClient(`/performance-benchmarks?${params}`, { signal });
 }
 
 export interface MovementGroup {

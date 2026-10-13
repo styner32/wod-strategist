@@ -1,4 +1,6 @@
 import { WODTrainingCard } from "./WODTrainingCard";
+import { WorkoutProgressCard } from "./WorkoutProgressCard";
+import { withoutWorkoutEvidence } from "../../../shared/analysisEvidence";
 import { EnvironmentHistoryCard } from "../../environment/EnvironmentCard";
 import { ActivitySummaryCard } from "./ActivitySummaryCard";
 import { HeartRateSummaryCard } from "./HeartRateSummaryCard";
@@ -165,6 +167,7 @@ function HistoryCard({
     focusSessionId && item.session_id === focusSessionId,
   );
   const [expanded, setExpanded] = useState(isFocused);
+  const [showOriginal, setShowOriginal] = useState(false);
   const [highlighted, setHighlighted] = useState(false);
   const cardRef = useRef<View>(null);
 
@@ -659,6 +662,7 @@ function HistoryCard({
         </View>
 
         <WODTrainingCard key={item.session_id} sessionId={item.session_id} profileId={item.profile_id} scoreJSON={item.session_score} />
+        {isCompleted && <WorkoutProgressCard key={`progress:${item.profile_id}:${item.session_id}`} sessionId={item.session_id} profileId={item.profile_id} onReviewVideo={availableVideos.includes("merged") ? (start, end) => router.push({ pathname: "/workout/player", params: { sessionId: item.session_id, profileId: String(item.profile_id), videoKind: "merged", startSecs: String(start), endSecs: String(end) } }) : undefined} />}
         <HeartRateSummaryCard summary={item.heart_rate} />
         <EnvironmentHistoryCard sessionId={item.session_id} profileId={item.profile_id} />
         <ActivitySummaryCard sessionId={item.session_id} profileId={item.profile_id} />
@@ -671,7 +675,9 @@ function HistoryCard({
           >
             {expanded ? (
               <View style={styles.contentBody}>
-                <MarkdownText>{item.output}</MarkdownText>
+                <MarkdownText>{withoutWorkoutEvidence(item.output)}</MarkdownText>
+                <TouchableOpacity accessibilityRole="button" onPress={() => setShowOriginal(v => !v)}><Text style={{ color: "#64D2FF", paddingVertical: 8 }}>{t("workoutProgress.originalAnalysis")}</Text></TouchableOpacity>
+                {showOriginal && <Text selectable style={{ color: isDark ? "#ccc" : "#444", fontSize: 12 }}>{item.output}</Text>}
 
                 {/* Workout Fatigue Breakdown */}
                 {item.session_fatigue && (
@@ -716,7 +722,7 @@ function HistoryCard({
                 style={[styles.previewText, { color: previewColor }]}
                 numberOfLines={4}
               >
-                {stripMarkdown(item.output)}
+                {stripMarkdown(withoutWorkoutEvidence(item.output))}
               </Text>
             )}
 

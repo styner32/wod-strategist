@@ -1,6 +1,7 @@
 import type { WODTraining, WODTrainingLoad } from "../../../shared/wodTraining";
 import type { HeartRateSummary } from "../../../shared/heartRateSummary";
 import { api } from "./client";
+import type { ConfirmPerformanceRecordsRequest, PerformanceBenchmarksResponse, WorkoutProgressResponse } from "../../../shared/workoutProgress";
 
 export interface StretchRecommendation {
   stretch: string;
@@ -317,6 +318,9 @@ export interface VideoDownloadResponse {
 export type VideoKind = "merged" | "hardsubbed" | "encoded";
 
 export const historyApi = {
+  getWorkoutProgress: (sessionId: string) => api.get<WorkoutProgressResponse>(`/sessions/${encodeURIComponent(sessionId)}/workout-progress`),
+  confirmPerformanceRecords: (sessionId: string, body: ConfirmPerformanceRecordsRequest) => api.put<WorkoutProgressResponse>(`/sessions/${encodeURIComponent(sessionId)}/performance-records`, body),
+  getPerformanceBenchmarks: (profileId: number, movement: string) => api.get<PerformanceBenchmarksResponse>(`/performance-benchmarks?${new URLSearchParams({ profile_id: String(profileId), movement })}`),
   list: (profileId: number, beforeId?: number, limit?: number) => {
     const params = new URLSearchParams();
     params.append("profile_id", String(profileId));

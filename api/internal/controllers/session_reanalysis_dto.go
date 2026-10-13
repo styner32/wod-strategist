@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"encoding/json"
+	"github.com/wod-strategist/api/internal/db"
 	"time"
 )
 
@@ -20,10 +21,11 @@ type CreateSessionReanalysisResponse struct {
 }
 
 type SessionReanalysisCandidateResponse struct {
-	Output            string `json:"output"`
-	HighlightSegments any    `json:"highlight_segments"`
-	SessionScore      string `json:"session_score"`
-	WorkoutType       string `json:"workout_type"`
+	WorkoutProgress   db.NullableJSONDocument `json:"workout_progress" swaggertype:"object"`
+	Output            string                  `json:"output"`
+	HighlightSegments any                     `json:"highlight_segments"`
+	SessionScore      string                  `json:"session_score"`
+	WorkoutType       string                  `json:"workout_type"`
 }
 
 type SessionReanalysisRunResponse struct {
