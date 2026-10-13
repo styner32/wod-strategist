@@ -335,6 +335,13 @@ func ComputeLegacySessionMuscleLoadsWithSignals(
 // movements from sessionScore. Deterministic calculation without sensor bonus (v2).
 // Returns (loads, true) if valid movements exist, or (nil, false) if no valid movements exist.
 func ComputeSessionMuscleLoads(sessionScoreJSON string) (map[string]float64, bool) {
+	var evidence struct {
+		Version   int  `json:"evaluation_version"`
+		Intensity *int `json:"intensity"`
+	}
+	if json.Unmarshal([]byte(sessionScoreJSON), &evidence) == nil && evidence.Version == 1 && evidence.Intensity == nil {
+		return nil, false
+	}
 	if strings.TrimSpace(sessionScoreJSON) == "" || sessionScoreJSON == "{}" {
 		return nil, false
 	}
@@ -382,7 +389,7 @@ func ComputeSessionMuscleLoads(sessionScoreJSON string) (map[string]float64, boo
 	}
 
 	intensityFactor := 1.0
-	if score.Intensity > 0 {
+	if score.Intensity > 0 || (evidence.Version == 1 && evidence.Intensity != nil) {
 		intensityFactor = math.Max(0.5, math.Min(1.5, float64(score.Intensity)/70.0))
 	}
 

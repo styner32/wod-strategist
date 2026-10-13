@@ -58,21 +58,22 @@ type User struct {
 }
 
 type Profile struct {
-	ID           uint         `gorm:"primaryKey" json:"id"`
-	UserID       uint         `gorm:"index;not null" json:"user_id"`
-	Name         string       `gorm:"not null" json:"name"`
-	BirthYear    *int         `json:"birth_year,omitempty"`
-	BirthMonth   *int         `json:"birth_month,omitempty"`
-	BirthDay     *int         `json:"birth_day,omitempty"`
-	Gender       *string      `json:"gender,omitempty"` // male, female, other
-	HeightCm     *int         `json:"height_cm,omitempty"`
-	WeightKg     *float64     `json:"weight_kg,omitempty"`
-	FitnessLevel string       `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
-	Injuries     *string      `gorm:"type:text;not null;default:'[]'" json:"injuries"`                // JSON array of injury strings
-	Appearance   JSONDocument `json:"appearance"`
-	ArchivedAt   *time.Time   `json:"archived_at,omitempty"`
-	CreatedAt    time.Time    `json:"created_at"`
-	UpdatedAt    time.Time    `json:"updated_at"`
+	WODTrackingStartedAt time.Time    `gorm:"->" json:"wod_tracking_started_at"`
+	ID                   uint         `gorm:"primaryKey" json:"id"`
+	UserID               uint         `gorm:"index;not null" json:"user_id"`
+	Name                 string       `gorm:"not null" json:"name"`
+	BirthYear            *int         `json:"birth_year,omitempty"`
+	BirthMonth           *int         `json:"birth_month,omitempty"`
+	BirthDay             *int         `json:"birth_day,omitempty"`
+	Gender               *string      `json:"gender,omitempty"` // male, female, other
+	HeightCm             *int         `json:"height_cm,omitempty"`
+	WeightKg             *float64     `json:"weight_kg,omitempty"`
+	FitnessLevel         string       `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
+	Injuries             *string      `gorm:"type:text;not null;default:'[]'" json:"injuries"`                // JSON array of injury strings
+	Appearance           JSONDocument `json:"appearance"`
+	ArchivedAt           *time.Time   `json:"archived_at,omitempty"`
+	CreatedAt            time.Time    `json:"created_at"`
+	UpdatedAt            time.Time    `json:"updated_at"`
 }
 
 const (
@@ -233,7 +234,9 @@ func (s SessionStatus) String() string {
 }
 
 type Session struct {
-	ActivitySummary NullableJSONDocument `json:"activity_summary,omitempty" swaggertype:"object"`
+	WODEvaluationVersion int                  `json:"wod_evaluation_version"`
+	Effort               *int                 `json:"effort"`
+	ActivitySummary      NullableJSONDocument `json:"activity_summary,omitempty" swaggertype:"object"`
 
 	ID             uint          `gorm:"primaryKey" json:"id"`
 	SessionID      string        `gorm:"uniqueIndex;not null" json:"session_id"`

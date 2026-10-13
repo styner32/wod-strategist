@@ -15,6 +15,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/storage"
+	"github.com/wod-strategist/api/internal/wodeval"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -166,8 +167,35 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 				"No exact workout segments are available within the session video.")
 		}
 	}
+	var storedStart struct {
+		Seconds json.RawMessage `json:"seconds"`
+	}
+	_ = json.Unmarshal(run.WODStartRequest, &storedStart)
+	wodStartRequest := storedStart.Seconds
+	observeWODUsage := func(task string, usage *gemini.TokenUsage) {
+		apiCalls++
+		w.saveTokenUsageForRequest(p.SessionID, p.ProfileID, task, fmt.Sprintf("session-reanalysis:%d", run.ID), usage)
+		addSessionDebugUsage(&aggregate, usage)
+	}
+	newWOD := w.wodEvaluationVersion(ctx, p) == 1
+	wodStart := wodeval.Start{}
+	wodComplete := true
+	if newWOD {
+		if len(wodStartRequest) > 0 && string(wodStartRequest) != "null" {
+			var seconds float64
+			if json.Unmarshal(wodStartRequest, &seconds) != nil || seconds >= file.Duration.Seconds() {
+				return w.finishSessionDebugUnavailable(ctx, run.ID, db.SessionReanalysisStatusContextUnavailable, started, "The start must be inside the original video.")
+			}
+		}
+		wodStart = w.detectWODStart(ctx, p, &gemini.UploadResult{FileURI: file.URI, MIMEType: chunkDebugMIMEType(file.MIMEType), VideoDuration: file.Duration}, segments, wodStartRequest, observeWODUsage)
+		if len(wodStartRequest) > 0 && string(wodStartRequest) != "null" && wodStart.Status != "confirmed" {
+			return w.finishSessionDebugUnavailable(ctx, run.ID, db.SessionReanalysisStatusContextUnavailable, started, "The start must precede the last confirmed exercise.")
+		}
+		segments = trimWODSegments(segments, wodStart)
+		wodComplete = w.wodCoverageComplete(ctx, p, wodStart)
+	}
 	maxSegments := maxSegmentsForDuration(file.Duration)
-	if len(segments) > maxSegments {
+	if len(segments) > maxSegments && !newWOD {
 		triagePrompt := buildTriagePrompt(segments, maxSegments, file.Duration, target.WorkoutType)
 		promptRecord.WriteString(triagePrompt)
 		triaged, usage, triageErr := w.triageSegments(ctx, &gemini.UploadResult{
@@ -192,7 +220,8 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		"injuries":       target.Injuries, "confirmed_corrections": target.Corrections,
 		"prompt_corrections":        promptCorrections,
 		"unmapped_correction_count": len(target.Corrections) - len(promptCorrections),
-		"segments":                  segments, "source_gcs_uri": run.SourceGCSURI,
+		"wod_start":                 wodStart, "wod_evaluation_version": w.wodEvaluationVersion(ctx, p),
+		"segments": segments, "source_gcs_uri": run.SourceGCSURI,
 		"prompt_version": sessionDebugPromptVersion, "schema_version": sessionDebugSchemaVersion,
 	})
 	if err := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
@@ -204,6 +233,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 
 	wodContext := buildWODContext(target.WODDescription)
 	finalContext := w.buildHistoryContext(run.ProfileID, 5) + w.buildSessionDebugFatigueContext(ctx, run.SessionID, run.ProfileID, target.Corrections)
+	var wodEvidence []wodSegmentEvidence
 	var output strings.Builder
 	var highlightCandidates []highlightCandidate
 	for i, segment := range segments {
@@ -211,7 +241,10 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		if end <= start {
 			continue
 		}
-		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, finalContext, i == len(segments)-1)
+		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, finalContext, i == len(segments)-1 && !newWOD)
+		if newWOD {
+			prompt += wodSegmentEvidencePrompt
+		}
 		prompt += correctionContext
 		defaultClientModel := ""
 		if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
@@ -234,6 +267,13 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		if usage != nil && usage.Model != "" {
 			model = usage.Model
 		}
+		if newWOD {
+			if evidence, ok := decodeWODEvidence(analysis, segment); ok {
+				wodEvidence = append(wodEvidence, evidence)
+			} else {
+				wodComplete = false
+			}
+		}
 		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(analysis, highlightSource{
 			Index: i, Start: start.Seconds(), End: end.Seconds(), Movement: segment.Type, HasBounds: true, HardGapBoundary: true,
 		})...)
@@ -248,6 +288,11 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 	}
 	analysis := output.String()
+	sessionScore := parseSessionScore(analysis)
+	if newWOD {
+		sessionScore = w.synthesizeWOD(ctx, p, wodStart, wodEvidence, wodComplete, observeWODUsage)
+		analysis += "\n\n```score\n" + sessionScore + "\n```"
+	}
 	normalizedHighlights := consolidateHighlightCandidates(highlightCandidates, HighlightNormalizeOptions{
 		VideoEndSeconds: file.Duration.Seconds(),
 	})
@@ -259,7 +304,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	w.recordStageMetrics(run.SessionID, run.ProfileID, "session_reanalysis", "current", apiCalls, 0, uploadBytes, time.Since(started))
 	return w.completeSessionDebugRun(ctx, run.ID, db.SessionReanalysisStatusCompleted, started, map[string]any{
 		"output": analysis, "highlight_segments": highlightSegments,
-		"session_score": parseSessionScore(analysis), "workout_type": target.WorkoutType,
+		"session_score": sessionScore, "workout_type": target.WorkoutType,
 		"model": model, "prompt_hash": hex.EncodeToString(hash[:]),
 		"prompt_tokens": aggregate.PromptTokens, "candidate_tokens": aggregate.CandidateTokens,
 		"total_tokens": aggregate.TotalTokens, "safe_error": "",

@@ -832,5 +832,24 @@
     "preparing": "Preparing %{count} originals for your gallery",
     "continuousMode": "Continuous recording (experimental)",
     "chunkMode": "10-second recordings"
+  },
+  "wodTraining": {
+    "title": "WOD training load",
+    "start": "WOD start: %{time}",
+    "intensity": "Intensity: %{score}",
+    "unknown": "Not assessable",
+    "effortHelp": "How hard did the workout feel? Effort 1 (very easy) to 10 (maximum effort)",
+    "effortChoice": "Effort %{score}",
+    "save": "Save effort",
+    "saving": "Saving",
+    "failed": "Could not save or load training data. Please try again.",
+    "sessionLoad": "Session load: %{value} AU",
+    "averages": "7-day daily average %{seven} AU · 28-day daily average %{twentyEight} AU",
+    "change": "%{value}% versus the 28-day baseline",
+    "collecting_baseline": "Collecting the 28-day baseline",
+    "no_baseline": "No load baseline available.",
+    "incomplete_records": "Comparison withheld because some workouts need effort or analysis.",
+    "missing": "28-day missing: effort %{effort} · duration %{duration} · workout time %{time}",
+    "scope": "Only confirmed new WOD records are included. Pre-WOD waiting is excluded; rests within the WOD are included. Edit the start in web history details."
   }
 }

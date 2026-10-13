@@ -1,12 +1,16 @@
 package controllers
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type CreateSessionReanalysisRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	AppearanceHints string `json:"appearance_hints,omitempty"`
-	Model           string `json:"model,omitempty"`
-	WODDescription  string `json:"wod_description,omitempty"`
+	WODStartSecs    json.RawMessage `json:"wod_start_secs,omitempty"`
+	ClientRequestID string          `json:"client_request_id"`
+	AppearanceHints string          `json:"appearance_hints,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	WODDescription  string          `json:"wod_description,omitempty"`
 }
 
 type CreateSessionReanalysisResponse struct {

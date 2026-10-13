@@ -17,6 +17,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/timeline"
+	"github.com/wod-strategist/api/internal/wodeval"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -173,6 +174,9 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 	p.ProfileID = profileID
 	p.WorkoutType = w.resolveSessionWorkoutType(ctx, p.SessionID, p.WorkoutType)
+	if err := w.ensureWODEvaluationSession(ctx, p); err != nil {
+		return err
+	}
 
 	pMode := p.PipelineMode
 	if pMode == "" {
@@ -182,6 +186,9 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 		pMode = string(PipelineModeOptimized)
 	}
 
+	if w.wodEvaluationVersion(ctx, p) == 1 {
+		pMode = string(PipelineModeOptimized)
+	}
 	if pMode == string(PipelineModeOptimized) || pMode == string(PipelineModeCompare) {
 		w.logger.Info("Using two-pass analysis for video (optimized)", zap.String("session_id", p.SessionID), zap.String("mode", pMode))
 		return w.handleVideoAnalysisTwoPass(ctx, p)
@@ -718,8 +725,20 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	// ── Pass 1.5: Triage segments ──
 	// If there are more segments than the budget allows, use Flash model to
 	// rank them by coaching value and pick the top N.
+	observeWODUsage := func(task string, usage *gemini.TokenUsage) {
+		apiCalls++
+		w.saveTokenUsage(p.SessionID, p.ProfileID, task, usage)
+	}
+	newWOD := w.wodEvaluationVersion(ctx, p) == 1
+	wodStart := wodeval.Start{}
+	wodComplete := true
+	if newWOD {
+		wodStart = w.detectWODStart(ctx, p, upload, segments, nil, observeWODUsage)
+		segments = trimWODSegments(segments, wodStart)
+		wodComplete = w.wodCoverageComplete(ctx, p, wodStart)
+	}
 	maxSegs := maxSegmentsForDuration(upload.VideoDuration)
-	if len(segments) > maxSegs {
+	if len(segments) > maxSegs && !newWOD {
 		w.logger.Info("Pass 1.5: Triaging segments",
 			zap.Int("total_segments", len(segments)),
 			zap.Int("max_segments", maxSegs))
@@ -755,6 +774,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.Bool("has_history", historyContext != ""),
 		zap.Bool("has_fatigue_context", fatigueContext != ""))
 
+	var wodEvidence []wodSegmentEvidence
 	var allAnalysis strings.Builder
 	var highlightCandidates []highlightCandidate
 	for i, seg := range segments {
@@ -764,7 +784,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		// Inject score prompt and history only into the last segment to avoid
 		// asking every segment for a session-wide score.
 		isLast := i == len(segments)-1
-		segPrompt := w.buildSegmentAnalysisPrompt(p, seg, wodContext, finalContext, isLast)
+		segPrompt := w.buildSegmentAnalysisPrompt(p, seg, wodContext, finalContext, isLast && !newWOD)
+		if newWOD {
+			segPrompt += wodSegmentEvidencePrompt
+		}
 
 		w.logger.Info("Pass 2: Analyzing segment",
 			zap.Int("segment", i+1),
@@ -780,6 +803,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		)
 		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", segUsage)
 		if err != nil {
+			wodComplete = false
 			w.logger.Error("Segment analysis failed, skipping",
 				zap.Int("segment", i+1),
 				zap.String("type", seg.Type),
@@ -787,6 +811,13 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			continue
 		}
 
+		if newWOD {
+			if evidence, ok := decodeWODEvidence(segAnalysis, seg); ok {
+				wodEvidence = append(wodEvidence, evidence)
+			} else {
+				wodComplete = false
+			}
+		}
 		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(segAnalysis, highlightSource{
 			Index:           i,
 			Start:           start.Seconds(),
@@ -817,6 +848,10 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		zap.Int("candidate_count", len(highlightCandidates)),
 		zap.Int("event_count", len(normalizedHighlights)))
 	sessionScore := parseSessionScore(analysis)
+	if newWOD {
+		sessionScore = w.synthesizeWOD(ctx, p, wodStart, wodEvidence, wodComplete, observeWODUsage)
+		analysis += "\n\n```score\n" + sessionScore + "\n```"
+	}
 
 	w.logger.Info("Session score parsed",
 		zap.String("session_id", p.SessionID),

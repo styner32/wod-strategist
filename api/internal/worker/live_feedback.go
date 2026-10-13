@@ -294,6 +294,9 @@ func (w *Worker) refreshLiveActivity(ctx context.Context, p VideoAnalysisPayload
 	if len(result.MovementObservations) == 0 {
 		return nil
 	}
+	if err := w.ensureWODEvaluationSession(ctx, p); err != nil {
+		return err
+	}
 	hints, _ := json.Marshal(p.Movements)
 	if string(hints) == "null" {
 		hints = []byte("[]")

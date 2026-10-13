@@ -1,3 +1,4 @@
+import { WODTrainingCard } from "./WODTrainingCard";
 import { EnvironmentHistoryCard } from "../../environment/EnvironmentCard";
 import { ActivitySummaryCard } from "./ActivitySummaryCard";
 import { HeartRateSummaryCard } from "./HeartRateSummaryCard";
@@ -657,6 +658,7 @@ function HistoryCard({
           )}
         </View>
 
+        <WODTrainingCard key={item.session_id} sessionId={item.session_id} profileId={item.profile_id} scoreJSON={item.session_score} />
         <HeartRateSummaryCard summary={item.heart_rate} />
         <EnvironmentHistoryCard sessionId={item.session_id} profileId={item.profile_id} />
         <ActivitySummaryCard sessionId={item.session_id} profileId={item.profile_id} />

@@ -109,14 +109,16 @@ func CreateProfile(dbConn *gorm.DB, profileAttr *db.Profile) db.Profile {
 
 func CreateSession(dbConn *gorm.DB, sessionAttr *db.Session) db.Session {
 	s := db.Session{
-		ActivitySummary: sessionAttr.ActivitySummary,
-		SessionID:       sessionAttr.SessionID,
-		ProfileID:       sessionAttr.ProfileID,
-		Status:          sessionAttr.Status,
-		IdempotencyKey:  sessionAttr.IdempotencyKey,
-		WODDescription:  sessionAttr.WODDescription,
-		MovementHints:   sessionAttr.MovementHints,
-		WorkoutType:     sessionAttr.WorkoutType,
+		ActivitySummary:      sessionAttr.ActivitySummary,
+		WODEvaluationVersion: sessionAttr.WODEvaluationVersion,
+		Effort:               sessionAttr.Effort,
+		SessionID:            sessionAttr.SessionID,
+		ProfileID:            sessionAttr.ProfileID,
+		Status:               sessionAttr.Status,
+		IdempotencyKey:       sessionAttr.IdempotencyKey,
+		WODDescription:       sessionAttr.WODDescription,
+		MovementHints:        sessionAttr.MovementHints,
+		WorkoutType:          sessionAttr.WorkoutType,
 	}
 
 	if s.IdempotencyKey == "" {
@@ -305,6 +307,7 @@ func CreateChunkReanalysisRun(dbConn *gorm.DB, runAttr *db.ChunkReanalysisRun) d
 func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRun) db.SessionReanalysisRun {
 	run := db.SessionReanalysisRun{
 		SessionID:                runAttr.SessionID,
+		WODStartRequest:          runAttr.WODStartRequest,
 		ProfileID:                runAttr.ProfileID,
 		ClientRequestID:          runAttr.ClientRequestID,
 		TaskID:                   runAttr.TaskID,

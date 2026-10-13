@@ -1,3 +1,4 @@
+import type { WODTraining, WODTrainingLoad } from "../../../shared/wodTraining";
 import type { HeartRateSummary } from "../../../shared/heartRateSummary";
 import { api } from "./client";
 
@@ -406,6 +407,7 @@ export const historyApi = {
     appearanceHints?: string,
     model?: string,
     wodDescription?: string,
+    wodStartSecs?: number | null,
   ) =>
     api.post<CreateSessionReanalysisResponse>(
       `/sessions/${sessionId}/reanalyses`,
@@ -414,6 +416,7 @@ export const historyApi = {
         ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
         ...(model ? { model } : {}),
         ...(wodDescription !== undefined ? { wod_description: wodDescription } : {}),
+        ...(wodStartSecs !== undefined ? { wod_start_secs: wodStartSecs } : {}),
       },
     ),
 
@@ -422,6 +425,10 @@ export const historyApi = {
       `/sessions/${sessionId}/reanalyses/${runId}/apply`,
       {},
     ),
+
+  getWODTraining: (sessionId: string) => api.get<WODTraining>(`/sessions/${sessionId}/wod-training`),
+  updateWODEffort: (sessionId: string, effort: number) => api.put<WODTraining>(`/sessions/${sessionId}/effort`, { effort }),
+  getWODTrainingLoad: (profileId: number) => api.get<WODTrainingLoad>(`/wod-training-load?profile_id=${profileId}&timezone=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`),
 
   getSessionCost: (sessionId: string) =>
     api.get<SessionCostResponse>(`/sessions/${sessionId}/cost`),

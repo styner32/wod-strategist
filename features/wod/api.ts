@@ -1131,3 +1131,7 @@ export async function fetchPreWodAdvice(
 export function fetchActivitySummary(sessionId: string, profileId: number, signal?: AbortSignal): Promise<ActivitySummary> {
  return apiClient<ActivitySummary>(activitySummaryPath(sessionId, profileId), { signal });
 }
+
+export const getWODTraining = (sessionId: string) => apiClient<import("../../shared/wodTraining").WODTraining>(`/sessions/${sessionId}/wod-training`);
+export const updateWODEffort = (sessionId: string, effort: number) => apiClient<import("../../shared/wodTraining").WODTraining>(`/sessions/${sessionId}/effort`, { method: "PUT", bodyPayload: { effort } });
+export const getWODTrainingLoad = (profileId: number) => apiClient<import("../../shared/wodTraining").WODTrainingLoad>(`/wod-training-load?profile_id=${profileId}&timezone=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`);

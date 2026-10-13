@@ -832,5 +832,24 @@
     "preparing": "원본 %{count}개를 갤러리 영상으로 준비하고 있습니다",
     "continuousMode": "연속 녹화 (실험)",
     "chunkMode": "10초 구간 녹화"
+  },
+  "wodTraining": {
+    "title": "WOD 훈련 부하",
+    "start": "본 WOD 시작: %{time}",
+    "intensity": "Intensity: %{score}",
+    "unknown": "판단 불가",
+    "effortHelp": "운동이 본인에게 얼마나 힘들었나요? Effort 1(매우 쉬움)~10(최대 노력)",
+    "effortChoice": "Effort %{score}점",
+    "save": "Effort 저장",
+    "saving": "저장 중",
+    "failed": "훈련 부하를 저장하거나 불러오지 못했습니다. 다시 시도해주세요.",
+    "sessionLoad": "운동별 부하: %{value} AU",
+    "averages": "7일 일평균 %{seven} AU · 28일 일평균 %{twentyEight} AU",
+    "change": "28일 기준 대비 %{value}%",
+    "collecting_baseline": "28일 기준 수집 중",
+    "no_baseline": "비교할 부하 기준이 없습니다.",
+    "incomplete_records": "입력·분석이 부족한 기록이 있어 비교를 보류합니다.",
+    "missing": "28일 누락: Effort %{effort}건 · 시간 %{duration}건 · 운동 일시 %{time}건",
+    "scope": "새 WOD의 확인된 기록만 반영합니다. 시작 전 대기는 제외하고 WOD 도중 휴식은 포함합니다. 시작 시점 수정은 웹 기록 상세에서 가능합니다."
   }
 }
