@@ -13,6 +13,12 @@
 - New mobile `/chunk-complete` calls send `live_analysis_version: 1`. Only these
   calls get new observations. Old recordings and uploaded-video split analysis
   are not backfilled. Both original chunk handlers implement the same contract.
+- A completed chunk can still contain `[NO_EXERCISE]` and empty coaching. Inspect
+  provider text and activity state before diagnosing delivery failure. Recovery
+  observers must treat visible equipment-free warmup, joint rotations, dynamic
+  ROM and holds as possible exercise; missing apparatus is not proof of rest.
+  Use Unknown when exercise is visible but its exact name is unclear, and keep
+  the shared observation-only boundary. Do not fabricate feedback for empty video.
 - `GET /api/v1/sessions/:session_id/activity-summary?profile_id=<owned id>`
   requires profile and session ownership. Existing chunk array responses remain
   compatible. Mobile and web use `shared/activity.ts` for the new contracts.

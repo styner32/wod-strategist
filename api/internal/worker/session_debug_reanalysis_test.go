@@ -426,6 +426,101 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(summary.CandidateTokens).To(Equal(int64(50)))
 		Expect(summary.TotalTokens).To(Equal(int64(150)))
 	})
+
+	It("reuses unchanged segment outputs from a previous COMPLETED SessionReanalysisRun without re-calling Gemini for those segments", func() {
+		firstChunk, firstRun := seedChunkAndRun()
+		secondStart, secondEnd := 0.76, 0.95
+		secondChunk := testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED",
+			ExerciseType: "Burpee", ObservedSignals: `{"movement":"Burpee","activity_state":"exercise"}`,
+			MediaStartSecs: &secondStart, MediaEndSecs: &secondEnd,
+		})
+		expires := time.Now().UTC().Add(time.Hour)
+		testhelpers.CreateSessionReanalysisRun(database, &db.SessionReanalysisRun{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: db.SessionReanalysisStatusCompleted,
+			SourceGCSURI: sourceURI, GeminiFileURI: baseURL + "/files/segment-reuse-cache",
+			GeminiFileName: "files/segment-reuse-cache", GeminiMIMEType: "video/mp4", GeminiFileExpiresAt: &expires,
+		})
+		testhelpers.MockGCSDownloadWithBody(storageTransport, sourceURI, videoBytes)
+		geminiTransport.New(baseURL).Get("/v1beta/files/segment-reuse-cache").MatchHeader("X-Goog-Api-Key", apiKey).
+			Reply(http.StatusOK).JSON(map[string]any{"name": "files/segment-reuse-cache", "state": "ACTIVE"})
+
+		expectAnalysis(baseURL+"/files/segment-reuse-cache", false)
+		burpeeOutput := "버피 동작이 확인됩니다.\n" +
+			"```highlights\n" + `[{"start":"0:00.8","end":"0:00.9","type":"key_moment","movement":"Burpee","reason":"burpee rep"}]` + "\n```\n" +
+			"```workout_observations\n" + `{"intervals":[{"start_secs":0.76,"end_secs":0.95,"activity":"exercise","movement":"Burpee","target_confirmed":true,"rep_events":[{"movement":"Burpee","unit":"reps","start_secs":0.8,"end_secs":0.9,"complete":true,"evidence":"burpee"}],"form_observations":[{"start_secs":0.8,"end_secs":0.9,"evidence":"steady burpee"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+			MatchHeader("X-Goog-Api-Key", apiKey).
+			MatchBodyContains("Burpee").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": burpeeOutput}}},
+			}},
+			"usageMetadata": map[string]any{"promptTokenCount": 14, "candidatesTokenCount": 6, "totalTokenCount": 20},
+		})
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			MatchBodyContains("weight_raw").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": "```movements\n{\"movements\":[]}\n```"}}},
+			}},
+		})
+
+		firstTask, err := NewSessionDebugReanalysisTask(firstRun.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(w.HandleSessionDebugReanalysisTask(context.Background(), firstTask)).To(Succeed())
+		Expect(geminiTransport.Verify()).To(Succeed())
+
+		// Second run: same firstChunk (0.0-0.75), plus a new correction on secondChunk (0.76-0.95 -> Box Jump).
+		// Only the second segment (0.76-0.95) should invoke Gemini ModelArgon4; the first segment (0.0-0.75) should be reused!
+		_ = firstChunk
+		testhelpers.CreateAnalysisFeedback(database, &db.AnalysisFeedback{
+			ProfileID:             profile.ID,
+			SessionID:             session.SessionID,
+			TargetType:            db.FeedbackTargetChunk,
+			ChunkAnalysisResultID: &secondChunk.ID,
+			Category:              db.FeedbackCategoryMovement,
+			Correction:            db.JSONDocument(`{"movement_name":"Box Jump"}`),
+		})
+		secondRun := testhelpers.CreateSessionReanalysisRun(database, &db.SessionReanalysisRun{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: db.SessionReanalysisStatusQueued,
+			SourceGCSURI: sourceURI,
+		})
+		testhelpers.MockGCSDownloadWithBody(storageTransport, sourceURI, videoBytes)
+		geminiTransport.New(baseURL).Get("/v1beta/files/segment-reuse-cache").MatchHeader("X-Goog-Api-Key", apiKey).
+			Reply(http.StatusOK).JSON(map[string]any{"name": "files/segment-reuse-cache", "state": "ACTIVE"})
+
+		boxJumpOutput := "박스 점프가 확인됩니다.\n" +
+			"```highlights\n" + `[{"start":"0:00.8","end":"0:00.9","type":"key_moment","movement":"Box Jump","reason":"box jump rep"}]` + "\n```\n" +
+			"```workout_observations\n" + `{"intervals":[{"start_secs":0.76,"end_secs":0.95,"activity":"exercise","movement":"Box Jump","target_confirmed":true,"rep_events":[{"movement":"Box Jump","unit":"reps","start_secs":0.8,"end_secs":0.9,"complete":true,"evidence":"box jump"}],"form_observations":[{"start_secs":0.8,"end_secs":0.9,"evidence":"soft landing"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+			MatchHeader("X-Goog-Api-Key", apiKey).
+			MatchBodyContains("Box Jump").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": boxJumpOutput}}},
+			}},
+			"usageMetadata": map[string]any{"promptTokenCount": 14, "candidatesTokenCount": 6, "totalTokenCount": 20},
+		})
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			MatchBodyContains("weight_raw").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": "```movements\n{\"movements\":[]}\n```"}}},
+			}},
+		})
+
+		secondTask, err := NewSessionDebugReanalysisTask(secondRun.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(w.HandleSessionDebugReanalysisTask(context.Background(), secondTask)).To(Succeed())
+		Expect(geminiTransport.Verify()).To(Succeed())
+
+		var completed db.SessionReanalysisRun
+		Expect(database.First(&completed, secondRun.ID).Error).To(Succeed())
+		Expect(completed.Status).To(Equal(db.SessionReanalysisStatusCompleted))
+		Expect(completed.Output).To(ContainSubstring("교정 라벨을 영상에서 다시 확인했습니다."))
+		Expect(completed.Output).To(ContainSubstring("박스 점프가 확인됩니다."))
+	})
 })
 
 var _ = Describe("session debug re-analysis helpers", func() {

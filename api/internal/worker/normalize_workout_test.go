@@ -6,6 +6,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/testhelpers"
 	"go.uber.org/zap"
@@ -74,4 +75,43 @@ var _ = Describe("normalize workout", func() {
 		Expect(observedUsage.CandidateTokens).To(Equal(int32(14)))
 		Expect(observedUsage.TotalTokens).To(Equal(int32(45)))
 	})
+
+	It("reuses existing NormalizedWorkout from analysis_results without calling Gemini when WODDescription is unchanged", func() {
+		conn, err := testhelpers.InitDB()
+		Expect(err).NotTo(HaveOccurred())
+		testhelpers.CleanupDB(conn)
+		profile := testhelpers.CreateProfile(conn, &db.Profile{})
+		session := testhelpers.CreateSession(conn, &db.Session{
+			SessionID:      "WOD-20261014-01JREUSENORM00000",
+			ProfileID:      profile.ID,
+			WODDescription: "10 Pull-ups",
+			WorkoutType:    "wod",
+		})
+		cachedNorm := `[{"movement":"Pull-up","reps":"10","is_main":true}]`
+		testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
+			SessionID:         session.SessionID,
+			ProfileID:         profile.ID,
+			Status:            "COMPLETED",
+			WODDescription:    "10 Pull-ups",
+			NormalizedWorkout: cachedNorm,
+		})
+
+		transport := testhelpers.NewMockTransport()
+		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:     "test-api-key",
+			BaseURL:    "https://normalize-workout.test",
+			HTTPClient: &http.Client{Transport: transport},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		w := &Worker{DB: conn, GeminiClient: client, logger: zap.NewNop()}
+		calledObserve := false
+		out := w.normalizeWorkout(context.Background(), session.SessionID, profile.ID, " 10 Pull-ups ", nil, func(string, *gemini.TokenUsage) {
+			calledObserve = true
+		})
+		Expect(out).To(Equal(cachedNorm))
+		Expect(calledObserve).To(BeFalse())
+		Expect(transport.Requests()).To(BeEmpty())
+	})
 })
+

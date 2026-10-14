@@ -224,6 +224,19 @@ export interface CreateChunkReanalysisResponse {
   status: ReanalysisStatus;
 }
 
+export interface CreateBatchChunkReanalysisResponse {
+  queued_runs: Array<{
+    chunk_id: number;
+    run_id: number;
+    task_id: string;
+    status: ReanalysisStatus;
+  }>;
+  failures: Array<{
+    chunk_id: number;
+    error: string;
+  }>;
+}
+
 export type SessionReanalysisStatus =
   | "QUEUED"
   | "RUNNING"
@@ -385,6 +398,7 @@ export const historyApi = {
     clientRequestId: string,
     appearanceHints?: string,
     model?: string,
+    reusePrevious?: boolean,
   ) =>
     api.post<CreateChunkReanalysisResponse>(
       `/sessions/${sessionId}/chunks/${chunkId}/reanalyses`,
@@ -392,6 +406,24 @@ export const historyApi = {
         client_request_id: clientRequestId,
         ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
         ...(model ? { model } : {}),
+        ...(reusePrevious !== undefined ? { reuse_previous: reusePrevious } : {}),
+      },
+    ),
+
+  createBatchChunkReanalysis: (
+    sessionId: string,
+    chunkIds: number[],
+    clientRequestId: string,
+    appearanceHints?: string,
+    reusePrevious: boolean = true,
+  ) =>
+    api.post<CreateBatchChunkReanalysisResponse>(
+      `/sessions/${sessionId}/chunks/batch-reanalyses`,
+      {
+        client_request_id: clientRequestId,
+        chunk_ids: chunkIds,
+        reuse_previous: reusePrevious,
+        ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
       },
     ),
 
@@ -488,6 +520,12 @@ export interface CostBreakdownItem {
   cost_krw: number;
 }
 
+export interface CostStageDurationItem {
+  stage: string;
+  duration_ms: number;
+  api_calls: number;
+}
+
 export interface SessionCostResponse {
   thinking_tokens?: number;
   tool_use_tokens?: number;
@@ -500,8 +538,10 @@ export interface SessionCostResponse {
   total_tokens: number;
   cost_usd: number;
   cost_krw: number;
+  total_duration_ms?: number;
   by_task_type: CostBreakdownItem[];
   by_model: CostBreakdownItem[];
+  by_stage?: CostStageDurationItem[];
 }
 
 export interface TotalCostResponse {

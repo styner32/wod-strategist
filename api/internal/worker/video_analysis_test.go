@@ -398,7 +398,12 @@ var _ = Describe("ParseHighlightSegments", func() {
 })
 
 var _ = Describe("NewVideoAnalysisTask", func() {
-	It("normalizes workout type to wod and keeps injuries in the payload", func() {
+	It("normalizes workout type to wod, keeps injuries in the payload, and configures a 1-hour timeout", func() {
+		Expect(videoAnalysisTaskTimeout).To(Equal(time.Hour))
+		Expect(isUnknownSegment(Segment{Type: "Unknown"})).To(BeTrue())
+		Expect(isUnknownSegment(Segment{Type: " unknown "})).To(BeTrue())
+		Expect(isUnknownSegment(Segment{Type: "Snatch"})).To(BeFalse())
+
 		task, err := NewVideoAnalysisTask(
 			"session-1",
 			"gs://bucket/video.mp4",
@@ -966,7 +971,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 					},
 				}},
 			})
-		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelArgon4 + ":generateContent").MatchBodyContains(`"startOffset":"45s"`).MatchBodyContains(`"endOffset":"50s"`).Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": observationBlock("", 45, 50, true)}}}}}})
+		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains(`"startOffset":"45s"`).MatchBodyContains(`"endOffset":"50s"`).MatchBodyContains(`"thinkingLevel":"HIGH"`).Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": observationBlock("", 45, 50, true)}}}}}})
 		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("controlled early position").MatchBodyContains("controlled late position").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overall":100,"form":80,"intensity":80,"consistency":80,"movements":{"Power Snatch":{"form":80,"intensity":80},"Pull-up":{"form":80,"intensity":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`}}}}}})
 
 		return transport
@@ -1114,6 +1119,12 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			NotTo(HaveOccurred())
 		Expect(result.Status).To(Equal("COMPLETED"))
 		Expect(result.Output).To(ContainSubstring("훌륭한 운동이었습니다"))
+		seg1Idx := strings.Index(result.Output, "## 세그먼트 1: Snatch (0:00 ~ 0:45)")
+		seg2Idx := strings.Index(result.Output, "## 세그먼트 2: Unknown (0:45 ~ 0:50)")
+		seg3Idx := strings.Index(result.Output, "## 세그먼트 3: Pull-up (0:50 ~ 1:30)")
+		Expect(seg1Idx).To(BeNumerically(">=", 0))
+		Expect(seg2Idx).To(BeNumerically(">", seg1Idx))
+		Expect(seg3Idx).To(BeNumerically(">", seg2Idx))
 		Expect(result.SessionScore).To(MatchJSON(`{"overall":80,"form":80,"intensity":80,"consistency":80,"movements":{"Power Snatch":{"form":80,"intensity":80},"Pull-up":{"form":80,"intensity":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`))
 		progress, err := workoutprogress.Decode(result.WorkoutProgress)
 		Expect(err).NotTo(HaveOccurred())
@@ -1127,8 +1138,14 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 				Expect(string(request.Body)).NotTo(ContainSubstring("```score"))
 				Expect(string(request.Body)).To(ContainSubstring("workout_observations"))
 			} else if strings.Contains(request.URL, gemini.ModelFlash38+":generateContent") {
-				Expect(string(request.Body)).To(ContainSubstring("workout_progress"))
-				Expect(string(request.Body)).NotTo(ContainSubstring("fileUri"))
+				body := string(request.Body)
+				if strings.Contains(body, `"startOffset":"45s"`) {
+					Expect(body).To(ContainSubstring(`"thinkingLevel":"HIGH"`))
+					Expect(body).To(ContainSubstring("workout_observations"))
+				} else {
+					Expect(body).To(ContainSubstring("workout_progress"))
+					Expect(body).NotTo(ContainSubstring("fileUri"))
+				}
 			}
 		}
 

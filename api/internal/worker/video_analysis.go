@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -29,6 +30,14 @@ const (
 	// Files larger than this are rejected immediately with a FAILED analysis result.
 	// The Gemini Files API struggles with very large uploads (timeouts, OOM).
 	maxAnalysisFileSizeBytes = 1 << 30 // 1 GB
+
+	// videoAnalysisTaskTimeout is the explicit Asynq execution timeout for full
+	// two-pass video analysis tasks (overrides Asynq's 30-minute default).
+	videoAnalysisTaskTimeout = time.Hour
+
+	// maxConcurrentSegmentAnalyses bounds parallel Pass 2 segment calls against
+	// the already-uploaded full video file URI.
+	maxConcurrentSegmentAnalyses = 5
 
 	PersonalProfilePrompt = `
 ## 개인 프로필
@@ -111,7 +120,7 @@ func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []s
 	if err != nil {
 		return nil, err
 	}
-	return asynq.NewTask(TypeVideoAnalysis, data), nil
+	return asynq.NewTask(TypeVideoAnalysis, data, asynq.Timeout(videoAnalysisTaskTimeout)), nil
 }
 
 func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
@@ -679,6 +688,9 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Bool("had_partial_chunks", len(segments) > 0))
 
 		if splitErr := w.splitAndAnalyzeChunks(ctx, geminiInputPath, p); splitErr != nil {
+			// The existing index was already found incomplete; do not reuse it
+			// when rebuilding fails. Index the full source instead.
+			segments = nil
 			w.logger.Warn("Chunk splitting failed, will fall back to model indexing",
 				zap.String("session_id", p.SessionID),
 				zap.Error(splitErr))
@@ -786,6 +798,15 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	}
 	var allAnalysis strings.Builder
 	var highlightCandidates []highlightCandidate
+	type segmentAnalysisResult struct {
+		analysis string
+		usage    *gemini.TokenUsage
+		err      error
+	}
+
+	segResults := make([]segmentAnalysisResult, len(segments))
+	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
+	var segWG sync.WaitGroup
 	for i, seg := range segments {
 		start := convertToSeconds(seg.Start)
 		end := convertToSeconds(seg.End)
@@ -795,30 +816,64 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			segPrompt += wodSegmentEvidencePrompt
 			segPrompt += ObservationOnlyOutputCheckPrompt
 		}
+		useFlash := isUnknownSegment(seg)
 
-		w.logger.Info("Pass 2: Analyzing segment",
-			zap.Int("segment", i+1),
-			zap.Int("total", len(segments)),
-			zap.String("type", seg.Type),
-			zap.Duration("start", start),
-			zap.Duration("end", end),
-			zap.Bool("score_prompt", false))
+		segWG.Add(1)
+		go func(idx int, s Segment, segStart, segEnd time.Duration, prompt string, flash bool) {
+			defer segWG.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			w.logger.Info("Pass 2: Analyzing segment",
+				zap.Int("segment", idx+1),
+				zap.Int("total", len(segments)),
+				zap.String("type", s.Type),
+				zap.Duration("start", segStart),
+				zap.Duration("end", segEnd),
+				zap.Bool("score_prompt", false),
+				zap.Bool("flash_model", flash))
+
+			var (
+				segAnalysis string
+				segUsage    *gemini.TokenUsage
+				err         error
+			)
+			if flash {
+				segAnalysis, segUsage, err = w.GeminiClient.AnalyzeSegmentWithModel(
+					ctx, upload.FileURI, upload.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38,
+				)
+			} else {
+				segAnalysis, segUsage, err = w.GeminiClient.AnalyzeSegment(
+					ctx, upload.FileURI, upload.MIMEType, segStart, segEnd, prompt,
+				)
+			}
+			segResults[idx] = segmentAnalysisResult{
+				analysis: segAnalysis,
+				usage:    segUsage,
+				err:      err,
+			}
+		}(i, seg, start, end, segPrompt, useFlash)
+	}
+	segWG.Wait()
+
+	for i, seg := range segments {
+		start := convertToSeconds(seg.Start)
+		end := convertToSeconds(seg.End)
+		res := segResults[i]
 
 		apiCalls++
-		segAnalysis, segUsage, err := w.GeminiClient.AnalyzeSegment(
-			ctx, upload.FileURI, upload.MIMEType, start, end, segPrompt,
-		)
-		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", segUsage)
-		if err != nil {
+		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", res.usage)
+		if res.err != nil {
 			wodComplete = false
 			_, failedGaps := parseWorkoutObservations("", seg, i)
 			progressGaps = append(progressGaps, failedGaps...)
 			w.logger.Error("Segment analysis failed, skipping",
 				zap.Int("segment", i+1),
 				zap.String("type", seg.Type),
-				zap.Error(err))
+				zap.Error(res.err))
 			continue
 		}
+		segAnalysis := res.analysis
 
 		observedIntervals, observedGaps := parseWorkoutObservations(segAnalysis, seg, i)
 		if newWOD && !isFullyObservedRestWindow(seg, observedIntervals, observedGaps) {
@@ -1834,4 +1889,8 @@ func firstNonEmpty(ss []string) string {
 		}
 	}
 	return ""
+}
+
+func isUnknownSegment(seg Segment) bool {
+	return strings.EqualFold(strings.TrimSpace(seg.Type), "unknown")
 }

@@ -109,6 +109,36 @@ var _ = Describe("GET /api/v1/sessions/:session_id/cost", func() {
 		Expect(body.ByModel[0].CostUSD).To(Equal(36.0))
 	})
 
+	It("includes total and per-stage durations from pipeline_stage_metrics", func() {
+		testhelpers.CreatePipelineStageMetric(dbConn, &db.PipelineStageMetric{
+			SessionID:  session.SessionID,
+			ProfileID:  profile.ID,
+			Stage:      "video_analysis",
+			Variant:    "B",
+			APICalls:   8,
+			DurationMs: 185000,
+		})
+		testhelpers.CreatePipelineStageMetric(dbConn, &db.PipelineStageMetric{
+			SessionID:  session.SessionID,
+			ProfileID:  profile.ID,
+			Stage:      "verify_highlights",
+			Variant:    "B",
+			APICalls:   1,
+			DurationMs: 12000,
+		})
+
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, fmt.Sprintf("/api/v1/sessions/%s/cost", session.SessionID), "", &user))
+		Expect(response.Code).To(Equal(http.StatusOK))
+		var body cost.SessionCostResponse
+		Expect(json.Unmarshal(response.Body.Bytes(), &body)).To(Succeed())
+		Expect(body.TotalDurationMs).To(Equal(int64(197000)))
+		Expect(body.ByStage).To(Equal([]cost.StageDurationItem{
+			{Stage: "video_analysis", DurationMs: 185000, APICalls: 8},
+			{Stage: "verify_highlights", DurationMs: 12000, APICalls: 1},
+		}))
+	})
+
 	It("rejects access for a session belonging to another user", func() {
 		otherProfile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		otherUser := db.User{}

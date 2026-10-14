@@ -157,6 +157,18 @@ func (w *Worker) normalizeWorkout(ctx context.Context, sessionID string, profile
 		return ""
 	}
 
+	if w.DB != nil && sessionID != "" {
+		var existing db.AnalysisResult
+		if err := w.DB.WithContext(ctx).
+			Where("session_id = ? AND profile_id = ? AND normalized_workout <> '' AND normalized_workout <> '[]'", sessionID, profileID).
+			Order("created_at DESC, id DESC").
+			First(&existing).Error; err == nil {
+			if strings.TrimSpace(existing.WODDescription) == trimmedDesc {
+				return existing.NormalizedWorkout
+			}
+		}
+	}
+
 	if w.GeminiClient == nil {
 		w.logger.Warn("Gemini client not configured for workout normalization", zap.String("session_id", sessionID))
 		return ""

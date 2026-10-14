@@ -392,9 +392,15 @@ it.each(["network", "confidence"])("keeps complete originals saveable and releas
   view.unmount();
 });
 
-it("falls back to native analysis chunks after compression fails and publishes only after both uploads finish", async () => {
+it.each(["exception", "missing_output", "empty_output"])("falls back to native analysis chunks after compression %s and publishes only after both uploads finish", async (failure) => {
   mockSkipCompression = false;
-  mockCompress.mockRejectedValueOnce(new Error("encoder failed"));
+  if (failure === "exception") mockCompress.mockRejectedValueOnce(new Error("encoder failed"));
+  else {
+    mockCompress.mockResolvedValueOnce("file:///missing-compressed.mp4");
+    require("expo-file-system/legacy").getInfoAsync.mockResolvedValueOnce(
+      failure === "missing_output" ? { exists: false } : { exists: true, size: 0 },
+    );
+  }
   const view = render(<VisionTestPage />);
   await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
   const callbacks = mockStartCamera.mock.calls[0][0];

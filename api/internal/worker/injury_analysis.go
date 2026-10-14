@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -287,6 +288,16 @@ func (w *Worker) runInjuryVariant(ctx context.Context, p InjuryAnalysisPayload,
 		return analysis
 	}
 
+	type injurySegmentResult struct {
+		startStr string
+		endStr   string
+		analysis string
+		err      error
+	}
+	results := make([]injurySegmentResult, len(intervals))
+	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
+	var wg sync.WaitGroup
+
 	for i, iv := range intervals {
 		startStr := formatDuration(time.Duration(iv.StartSecs) * time.Second)
 		endStr := formatDuration(time.Duration(iv.EndSecs) * time.Second)
@@ -300,17 +311,34 @@ func (w *Worker) runInjuryVariant(ctx context.Context, p InjuryAnalysisPayload,
 			zap.String("start", startStr),
 			zap.String("end", endStr))
 
-		segAnalysis, usage, err := w.GeminiClient.AnalyzeSegment(
-			ctx, p.GeminiFileURI, p.GeminiMIMEType,
-			time.Duration(iv.StartSecs)*time.Second, time.Duration(iv.EndSecs)*time.Second, segPrompt)
-		w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment:"+variant, usage)
-		if err != nil {
+		wg.Add(1)
+		go func(idx int, interval mergedInterval, sStr, eStr, prompt string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			segAnalysis, usage, err := w.GeminiClient.AnalyzeSegment(
+				ctx, p.GeminiFileURI, p.GeminiMIMEType,
+				time.Duration(interval.StartSecs)*time.Second, time.Duration(interval.EndSecs)*time.Second, prompt)
+			w.saveTokenUsage(p.SessionID, p.ProfileID, "injury:segment:"+variant, usage)
+			results[idx] = injurySegmentResult{
+				startStr: sStr,
+				endStr:   eStr,
+				analysis: segAnalysis,
+				err:      err,
+			}
+		}(i, iv, startStr, endStr, segPrompt)
+	}
+	wg.Wait()
+
+	for i, res := range results {
+		if res.err != nil {
 			w.logger.Error("Injury segment analysis failed",
-				zap.String("variant", variant), zap.Error(err))
+				zap.String("variant", variant), zap.Error(res.err))
 			continue
 		}
 		sb.WriteString(fmt.Sprintf("\n\n---\n## 부상 분석 구간 %d: %s ~ %s\n\n%s",
-			i+1, startStr, endStr, segAnalysis))
+			i+1, res.startStr, res.endStr, res.analysis))
 	}
 
 	w.recordStageMetrics(p.SessionID, p.ProfileID, "injury_analysis", variant,

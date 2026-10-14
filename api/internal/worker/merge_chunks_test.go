@@ -363,6 +363,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(pending).To(HaveLen(1))
 			Expect(pending[0].Type).To(Equal(TypeVideoAnalysis))
+			Expect(pending[0].Timeout).To(Equal(time.Hour))
 
 			var enqueued VideoAnalysisPayload
 			Expect(json.Unmarshal(pending[0].Payload, &enqueued)).To(Succeed())

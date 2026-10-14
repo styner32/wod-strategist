@@ -94,6 +94,11 @@ Fallback:
 Analyze each segment independently with `VideoMetadata` offsets.
 Constrain analysis to the exact time range.
 
+- `NewVideoAnalysisTask` sets an explicit 1-hour Asynq timeout (`videoAnalysisTaskTimeout = time.Hour`).
+- Pass 2 analyzes segments concurrently against the uploaded full-video URI (`maxConcurrentSegmentAnalyses = 5`), then aggregates token usage, `wodEvidence`, `workout_progress` intervals/gaps, highlights, and markdown output in chronological segment index order (`0..len(segments)-1`).
+- Segments with `Type == "Unknown"` (case-insensitive, including between-set observation windows and `Unknown` chunk windows) route to `gemini-3.8-flash` with `HIGH` thinking (`AnalyzeSegmentWithModel(..., gemini.ModelFlash38)`); non-`Unknown` exercise segments use the client's Pro model (`gemini-4-argon`, `HIGH` thinking).
+- `GET /api/v1/sessions/:session_id/cost` returns `total_duration_ms` and `by_stage` (`[]StageDurationItem`) aggregated from `pipeline_stage_metrics` so the web UI (`SessionCostCard` and `SessionDetailPage`) can display total and per-stage analysis duration.
+
 Current-window observation includes time-bounded complete-cycle/form/ROM/pace
 evidence in `workout_observations`. Do not send history, previous assessments,
 session fatigue aggregates, or score requests to any segment, including the last.
@@ -350,3 +355,18 @@ Deployment acceptance still requires matched, annotated-video comparison of Argo
   - `Decode` extracts the detected movement from events or unassessed entries.
   - `Build` falls back to `row.ExerciseType` if the observation's movement field is empty.
   - The UI (`ActivitySummaryPanel` and `ActivitySummaryCard`) displays the recognized movement next to the gap reason (e.g. `The athlete or movement is unclear (Clean and Jerk)`).
+
+## Analysis Value Reuse, Bounded Parallelism, and Batch API (2026-10-14)
+- **Previous-value & checkpoint reuse**:
+  - `detectWODStart` (`wod_evaluation.go`): When `len(request) == 0`, reuses `s.WODStart` from `analysis_results.session_score` if `s.WODStart.Status == "confirmed"` and either `s.WODStart.Source == "manual"` or `startCoveredBySegment(*s.WODStart.Seconds, segments)` is true.
+  - `normalizeWorkout` (`normalize_workout.go`): Reuses `existing.NormalizedWorkout` from `analysis_results` without calling Gemini when `strings.TrimSpace(existing.WODDescription) == strings.TrimSpace(wodDescription)` and `NormalizedWorkout` is non-empty (`<> ''` and `<> '[]'`).
+  - `chunk_debug_reanalysis.go`: Supports `reuse_previous: true` in `SourceContextSnapshot` (reusing a matching `COMPLETED` `ChunkReanalysisRun` with identical `(chunk_analysis_result_id, model, prompt_hash, source_gcs_uri, media_start_secs, media_end_secs, schema_version)`) and checks both `ChunkReanalysisRun` and `SessionReanalysisRun` when reusing active Gemini Files uploads.
+  - `session_debug_reanalysis.go`: Filters prompt corrections per segment (`correctionsForSegment`) and caches/reuses completed segments by `sha256(model|start|end|prompt)` across both intra-run retries (`run.SourceContextSnapshot["completed_segments"]`) and prior `COMPLETED` `SessionReanalysisRun` rows for the same `(session_id, profile_id, source_gcs_uri)`.
+- **Bounded parallelism (`maxConcurrentSegmentAnalyses = 5`)**:
+  - Applied across `video_analysis.go` (Pass 2), `session_debug_reanalysis.go` (Pass 2 + `Unknown` routing to `gemini-3.8-flash`), `activity_review.go` (rows loop with mutex-protected DB checkpointing), `injury_analysis.go` (intervals loop), and `generate_hardsub.go` (TTS chunks loop).
+- **Batch chunk re-analysis API**:
+  - `POST /api/v1/sessions/:session_id/chunks/batch-reanalyses` (`CreateBatchChunkReanalysis`) accepts `chunk_ids` (1..50), `client_request_id`, and optional `reuse_previous` (default `true`), enforcing profile quota and enqueueing `chunk:debug-reanalysis` tasks in one request.
+- **Gemini Batch API & 50% cost discount**:
+  - `Client.AnalyzeSegmentsBatch` (`internal/gemini/client.go`) submits `InlinedRequests` via `c.client.Batches.Create` with exact fractional `videoMetadata` offsets (`replaceBatchVideoMetadataOffsets` in `exactSegmentOffsetsTransport`) and polls `c.client.Batches.Get`.
+  - `cost.IsBatchTaskType` (`internal/cost/cost.go`) applies a 50% discount (`BatchDiscountMultiplier = 0.5`) to any `token_usages.task_type` ending in `:batch` (e.g., `video:analysis:batch`, `session:reanalysis:batch`).
+

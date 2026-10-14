@@ -230,11 +230,17 @@ func (t *MockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		Body:    body,
 	})
 
+	var bestExp *Expectation
 	for _, exp := range t.Expectations {
 		if !exp.isMatched && t.matches(exp, req, body) {
-			exp.isMatched = true
-			return t.buildResponse(exp, req), nil
+			if bestExp == nil || len(exp.BodySubstrings) > len(bestExp.BodySubstrings) {
+				bestExp = exp
+			}
 		}
+	}
+	if bestExp != nil {
+		bestExp.isMatched = true
+		return t.buildResponse(bestExp, req), nil
 	}
 
 	var reasons []string

@@ -219,3 +219,51 @@ var _ = Describe("Non-token-priced generation", func() {
 		Expect(result.UnpricedCalls).To(Equal(int64(1)))
 	})
 })
+
+var _ = Describe("ApplyStageMetrics", func() {
+	It("aggregates total and per-stage durations in stage order", func() {
+		resp := cost.CalculateSessionCost("s", nil)
+		cost.ApplyStageMetrics(&resp, []db.PipelineStageMetric{
+			{Stage: "video_analysis", DurationMs: 120000, APICalls: 6},
+			{Stage: "injury_analysis", DurationMs: 15000, APICalls: 1},
+			{Stage: "video_analysis", DurationMs: 30000, APICalls: 2},
+		})
+		Expect(resp.TotalDurationMs).To(Equal(int64(165000)))
+		Expect(resp.ByStage).To(Equal([]cost.StageDurationItem{
+			{Stage: "video_analysis", DurationMs: 150000, APICalls: 8},
+			{Stage: "injury_analysis", DurationMs: 15000, APICalls: 1},
+		}))
+	})
+})
+
+var _ = Describe("Batch API 50% discount", func() {
+	It("identifies :batch task types and applies a 50% discount to session and total costs", func() {
+		Expect(cost.IsBatchTaskType("video:analysis:batch")).To(BeTrue())
+		Expect(cost.IsBatchTaskType("session:reanalysis:batch")).To(BeTrue())
+		Expect(cost.IsBatchTaskType("video:analysis")).To(BeFalse())
+
+		standardRow := db.TokenUsage{
+			TaskType:        "video:analysis",
+			Model:           "gemini-4-argon",
+			PromptTokens:    1000000,
+			CandidateTokens: 1000000,
+			TotalTokens:     2000000,
+		}
+		batchRow := db.TokenUsage{
+			TaskType:        "video:analysis:batch",
+			Model:           "gemini-4-argon",
+			PromptTokens:    1000000,
+			CandidateTokens: 1000000,
+			TotalTokens:     2000000,
+		}
+
+		standardCost := cost.CalculateSessionCost("s1", []db.TokenUsage{standardRow})
+		batchCost := cost.CalculateSessionCost("s2", []db.TokenUsage{batchRow})
+		Expect(batchCost.CostUSD).To(BeNumerically("~", standardCost.CostUSD*0.5, 1e-6))
+		Expect(batchCost.CostKRW).To(BeNumerically("~", standardCost.CostKRW*0.5, 1e-3))
+
+		totalBatch := cost.CalculateTotalCost([]db.TokenUsage{batchRow})
+		Expect(totalBatch.CostUSD).To(BeNumerically("~", standardCost.CostUSD*0.5, 1e-6))
+	})
+})
+

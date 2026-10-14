@@ -117,4 +117,17 @@ var _ = Describe("Observation-only prompt boundaries", func() {
 		Expect(prompt).NotTo(ContainSubstring("부상 부위를 보호하기 위한 보상 작용"))
 		Expect(prompt).NotTo(ContainSubstring("팁 3가지"))
 	})
+
+	It("keeps observable equipment-free warmup exercise distinct from no exercise on both live routes", func() {
+		prompts := []string{
+			w.buildChunkAnalysisPrompt(VideoAnalysisPayload{WorkoutType: WorkoutTypeWarmup}),
+			w.buildChunkAnalysisWithSessionPrompt(VideoAnalysisWithSessionPayload{}, &db.Profile{}, &db.Session{WorkoutType: WorkoutTypeWarmup}),
+		}
+		for _, prompt := range prompts {
+			checkBoundary(prompt)
+			Expect(prompt).To(ContainSubstring("기구 없이 수행하는 맨몸 동작"))
+			Expect(prompt).To(ContainSubstring("기구를 들고 있지 않다는 이유로 [NO_EXERCISE]를 출력하지"))
+			Expect(prompt).To(ContainSubstring("운동은 보이지만 정확한 종목이 불명확하면 [EXERCISE: Unknown]"))
+		}
+	})
 })

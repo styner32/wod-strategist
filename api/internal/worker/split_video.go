@@ -2,11 +2,14 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,6 +76,10 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 	w.logger.Info("FFmpeg split completed",
 		zap.String("session_id", p.SessionID),
 		zap.Int("chunk_count", len(chunkFiles)))
+	intervals, err := verifiedSplitMediaIntervals(ctx, videoPath, tmpDir, chunkFiles, totalDuration)
+	if err != nil {
+		return fmt.Errorf("verify split source timestamps: %w", err)
+	}
 
 	// 5. Process each chunk in parallel: upload to GCS → analyze → save DB record
 	// Uses a semaphore to bound concurrency and avoid overwhelming Gemini API.
@@ -85,16 +92,12 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 	var errCount atomic.Int32
 	var skipCount atomic.Int32
 
-	mediaCursor := 0.0
 	for i, chunkFile := range chunkFiles {
 		chunkPath := filepath.Join(tmpDir, chunkFile)
 
-		// Build a continuous source-media timeline from the actual output chunk
-		// durations. Using i*segmentDuration would create overlaps or gaps when
-		// FFmpeg cuts on a nearby keyframe.
-		chunkDuration := probeVideoDuration(ctx, chunkPath)
-		startSecs, endSecs := splitChunkMediaInterval(mediaCursor, chunkDuration, totalDuration)
-		mediaCursor = endSecs
+		// Standalone MP4 durations can omit source time due to timestamp reset
+		// and container edits. Use the matching original packet timestamps.
+		startSecs, endSecs := intervals[i].Start, intervals[i].End
 
 		// Skip chunks that were already analyzed in a previous (partial) run
 		if w.chunkAlreadyAnalyzed(p.SessionID, startSecs) {
@@ -184,6 +187,72 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 	}
 
 	return nil
+}
+
+type splitMediaInterval struct{ Start, End float64 }
+type splitVideoPacket struct {
+	PTS  string `json:"pts_time"`
+	Hash string `json:"data_hash"`
+}
+
+// Packet identity is checked in decode order, so repeated/static frames cannot
+// accidentally match a different GOP. A missing/reordered/changed packet fails
+// verification and the caller falls back to indexing the full source video.
+func verifiedSplitMediaIntervals(ctx context.Context, sourcePath, directory string, files []string, totalDuration float64) ([]splitMediaInterval, error) {
+	source, err := readSplitVideoPackets(ctx, sourcePath)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 || totalDuration <= 0 || math.IsNaN(totalDuration) || math.IsInf(totalDuration, 0) {
+		return nil, fmt.Errorf("invalid split duration or empty split")
+	}
+	intervals := make([]splitMediaInterval, len(files))
+	cursor := 0
+	for i, name := range files {
+		packets, err := readSplitVideoPackets(ctx, filepath.Join(directory, name))
+		if err != nil {
+			return nil, err
+		}
+		if cursor+len(packets) > len(source) {
+			return nil, fmt.Errorf("split %d has extra video packets", i)
+		}
+		for j, packet := range packets {
+			if packet.Hash == "" || packet.Hash != source[cursor+j].Hash {
+				return nil, fmt.Errorf("split %d changed or reordered source video packets", i)
+			}
+		}
+		start, err := strconv.ParseFloat(source[cursor].PTS, 64)
+		if err != nil || start < 0 || start >= totalDuration || math.IsNaN(start) || math.IsInf(start, 0) || i > 0 && start <= intervals[i-1].Start {
+			return nil, fmt.Errorf("split %d has invalid source timestamp", i)
+		}
+		intervals[i].Start = start
+		if i > 0 {
+			intervals[i-1].End = start
+		}
+		cursor += len(packets)
+	}
+	if cursor != len(source) {
+		return nil, fmt.Errorf("split omitted source video packets")
+	}
+	intervals[len(intervals)-1].End = totalDuration
+	return intervals, nil
+}
+
+func readSplitVideoPackets(ctx context.Context, path string) ([]splitVideoPacket, error) {
+	output, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_data_hash", "sha256", "-show_entries", "packet=pts_time,data_hash", "-of", "json", path).Output()
+	if err != nil {
+		return nil, fmt.Errorf("probe split video packets: %w", err)
+	}
+	var document struct {
+		Packets []splitVideoPacket `json:"packets"`
+	}
+	if err := json.Unmarshal(output, &document); err != nil {
+		return nil, fmt.Errorf("decode split video packets: %w", err)
+	}
+	if len(document.Packets) == 0 {
+		return nil, fmt.Errorf("split video contains no video packets")
+	}
+	return document.Packets, nil
 }
 
 func splitChunkMediaInterval(cursor, probedDuration, totalDuration float64) (float64, float64) {

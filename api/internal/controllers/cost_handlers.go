@@ -38,7 +38,16 @@ func (ctl *Controller) GetSessionCost(c *gin.Context) {
 		return
 	}
 
+	var stageMetrics []db.PipelineStageMetric
+	if err := ctl.db.WithContext(c.Request.Context()).
+		Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+		Order("id ASC").
+		Find(&stageMetrics).Error; err != nil {
+		logger.Log.Warn("failed to query pipeline stage metrics for session", zap.String("session_id", sessionID), zap.Error(err))
+	}
+
 	resp := cost.CalculateSessionCost(sessionID, usages)
+	cost.ApplyStageMetrics(&resp, stageMetrics)
 	c.JSON(http.StatusOK, resp)
 }
 

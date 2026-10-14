@@ -97,6 +97,12 @@ func CalculateTokensCostAt(model string, promptTokens, candidateTokens int64, cr
 	return totalUSD, totalKRW
 }
 
+// IsBatchTaskType reports whether a token usage ledger entry was executed via the
+// Gemini Batch API (50% token rate discount), identified by a ":batch" suffix.
+func IsBatchTaskType(taskType string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(taskType)), ":batch")
+}
+
 type BreakdownItem struct {
 	UnpricedCalls   int64   `json:"unpriced_calls"`
 	ThinkingTokens  int64   `json:"thinking_tokens"`
@@ -111,20 +117,28 @@ type BreakdownItem struct {
 	CostKRW         float64 `json:"cost_krw"`
 }
 
+type StageDurationItem struct {
+	Stage      string `json:"stage"`
+	DurationMs int64  `json:"duration_ms"`
+	APICalls   int    `json:"api_calls"`
+}
+
 type SessionCostResponse struct {
-	UnpricedCalls   int64           `json:"unpriced_calls"`
-	ThinkingTokens  int64           `json:"thinking_tokens"`
-	ToolUseTokens   int64           `json:"tool_use_tokens"`
-	CachedTokens    int64           `json:"cached_tokens"`
-	UnmeasuredCalls int64           `json:"unmeasured_calls"`
-	SessionID       string          `json:"session_id"`
-	PromptTokens    int64           `json:"prompt_tokens"`
-	CandidateTokens int64           `json:"candidate_tokens"`
-	TotalTokens     int64           `json:"total_tokens"`
-	CostUSD         float64         `json:"cost_usd"`
-	CostKRW         float64         `json:"cost_krw"`
-	ByTaskType      []BreakdownItem `json:"by_task_type"`
-	ByModel         []BreakdownItem `json:"by_model"`
+	UnpricedCalls   int64               `json:"unpriced_calls"`
+	ThinkingTokens  int64               `json:"thinking_tokens"`
+	ToolUseTokens   int64               `json:"tool_use_tokens"`
+	CachedTokens    int64               `json:"cached_tokens"`
+	UnmeasuredCalls int64               `json:"unmeasured_calls"`
+	SessionID       string              `json:"session_id"`
+	PromptTokens    int64               `json:"prompt_tokens"`
+	CandidateTokens int64               `json:"candidate_tokens"`
+	TotalTokens     int64               `json:"total_tokens"`
+	CostUSD         float64             `json:"cost_usd"`
+	CostKRW         float64             `json:"cost_krw"`
+	TotalDurationMs int64               `json:"total_duration_ms"`
+	ByTaskType      []BreakdownItem     `json:"by_task_type"`
+	ByModel         []BreakdownItem     `json:"by_model"`
+	ByStage         []StageDurationItem `json:"by_stage,omitempty"`
 }
 
 type TotalCostResponse struct {
@@ -190,6 +204,9 @@ func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostR
 		cached += cache
 		unmeasured += missing
 		usd, _ := CalculateTokensCostAt(u.Model, p+v, c+t, u.CreatedAt)
+		if IsBatchTaskType(u.TaskType) {
+			usd = RoundUSD(usd * 0.5)
+		}
 
 		totalPrompt += p
 		totalCandidate += c
@@ -300,6 +317,9 @@ func CalculateTotalCost(usages []db.TokenUsage) TotalCostResponse {
 		cached += cache
 		unmeasured += missing
 		usd, _ := CalculateTokensCostAt(u.Model, p+v, c+t, u.CreatedAt)
+		if IsBatchTaskType(u.TaskType) {
+			usd = RoundUSD(usd * 0.5)
+		}
 
 		totalPrompt += p
 		totalCandidate += c
@@ -376,3 +396,34 @@ func UsageExtras(u db.TokenUsage) (thinking, tool, cached, unmeasured int64) {
 	}
 	return
 }
+
+func ApplyStageMetrics(resp *SessionCostResponse, metrics []db.PipelineStageMetric) {
+	if resp == nil || len(metrics) == 0 {
+		return
+	}
+	byStage := make(map[string]*StageDurationItem)
+	var stageKeys []string
+	var totalDurationMs int64
+	for _, m := range metrics {
+		stage := strings.TrimSpace(m.Stage)
+		if stage == "" || m.DurationMs < 0 {
+			continue
+		}
+		totalDurationMs += m.DurationMs
+		item, exists := byStage[stage]
+		if !exists {
+			item = &StageDurationItem{Stage: stage}
+			byStage[stage] = item
+			stageKeys = append(stageKeys, stage)
+		}
+		item.DurationMs += m.DurationMs
+		item.APICalls += m.APICalls
+	}
+	items := make([]StageDurationItem, 0, len(stageKeys))
+	for _, k := range stageKeys {
+		items = append(items, *byStage[k])
+	}
+	resp.TotalDurationMs = totalDurationMs
+	resp.ByStage = items
+}
+

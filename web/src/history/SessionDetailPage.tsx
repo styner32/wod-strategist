@@ -14,7 +14,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from "./historyPolling";
 import { refreshSensorVideoMetadata, type SensorMetadataRefresh } from "./sensorTimelineRecovery";
 import { Link, useParams, useSearchParams } from "react-router-dom";
@@ -45,7 +45,7 @@ import {
 } from "./components/FeedbackDialog";
 import { GuidanceTimeline } from "./components/GuidanceTimeline";
 
-import { SessionCostCard } from "./components/SessionCostCard";
+import { formatDurationMs, SessionCostCard } from "./components/SessionCostCard";
 import { SessionReanalysisPanel } from "./components/SessionReanalysisPanel";
 import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
 import { getHighlightSeekTime } from "./highlights";
@@ -215,6 +215,33 @@ export function SessionDetailPage() {
   );
 
   const analysis = sessionAnalysis?.analysis ?? analyses?.[0];
+  const analysisStatusUpper = analysis?.status?.toUpperCase() ?? "";
+  const isAnalysisInProgress =
+    analysisStatusUpper === "PROCESSING" ||
+    analysisStatusUpper === "PENDING" ||
+    analysisStatusUpper === "MERGING" ||
+    analysisStatusUpper === "UPLOADED";
+
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isAnalysisInProgress) return;
+    setNowMs(Date.now());
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [isAnalysisInProgress]);
+
+  const analysisWallClockMs = useMemo(() => {
+    if (!analysis?.created_at) return null;
+    const startMs = Date.parse(analysis.created_at);
+    if (!Number.isFinite(startMs)) return null;
+    const endMs = isAnalysisInProgress
+      ? nowMs
+      : analysis.updated_at
+        ? Date.parse(analysis.updated_at)
+        : NaN;
+    if (!Number.isFinite(endMs) || endMs <= startMs) return null;
+    return endMs - startMs;
+  }, [analysis?.created_at, analysis?.updated_at, isAnalysisInProgress, nowMs]);
 
   const stretchRecommendations = useMemo<StretchRecommendation[]>(() => {
     if (!analysis?.stretch_recommendations) return [];
@@ -411,8 +438,33 @@ export function SessionDetailPage() {
       const queuedRuns: BulkQueuedRun[] = [];
       const failures: BulkReanalysisFailure[] = [];
 
-      // Queue sequentially so the server's active-run and rolling-quota checks
-      // see each preceding request before the next one is submitted.
+      try {
+        const batchResponse = await historyApi.createBatchChunkReanalysis(
+          sessionId!,
+          requestedChunkIds,
+          crypto.randomUUID(),
+          undefined,
+          true,
+        );
+        for (const item of batchResponse.queued_runs ?? []) {
+          queuedRuns.push({
+            chunkId: item.chunk_id,
+            runId: item.run_id,
+            taskId: item.task_id,
+            status: item.status,
+          });
+        }
+        for (const item of batchResponse.failures ?? []) {
+          failures.push({
+            chunkId: item.chunk_id,
+            message: item.error,
+          });
+        }
+        return { requestedChunkIds, queuedRuns, failures };
+      } catch {
+        // Fallback to sequential per-chunk requests if batch endpoint is unavailable.
+      }
+
       for (const [index, chunk] of selectedChunks.entries()) {
         try {
           const response = await historyApi.createChunkReanalysis(
@@ -963,6 +1015,16 @@ export function SessionDetailPage() {
                     {analysis.workout_type || "—"}
                   </p>
                 </div>
+                {analysisWallClockMs != null && analysisWallClockMs > 0 && (
+                  <div data-testid="metadata-analysis-duration">
+                    <p className="text-text-muted">
+                      {isAnalysisInProgress ? "분석 경과 시간" : "총 분석 소요 시간"}
+                    </p>
+                    <p className="text-text-primary mt-0.5 font-medium">
+                      {formatDurationMs(analysisWallClockMs)}
+                    </p>
+                  </div>
+                )}
                 {analysis.sensor_state && analysis.sensor_state !== "NONE" && (
                   <div>
                     <p className="text-text-muted">Polar Sensor</p>
@@ -1146,7 +1208,12 @@ export function SessionDetailPage() {
               analysis?.status?.toLowerCase() === "pending" ? (
               <div className="flex items-center gap-3 text-text-secondary">
                 <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm">Analysis in progress...</span>
+                <span className="text-sm">
+                  Analysis in progress...
+                  {analysisWallClockMs != null && analysisWallClockMs > 0
+                    ? ` (경과 시간: ${formatDurationMs(analysisWallClockMs)})`
+                    : ""}
+                </span>
               </div>
             ) : analysis?.output ? (
               <div className="bg-bg-secondary p-4 rounded-xl border border-border">
@@ -1168,7 +1235,11 @@ export function SessionDetailPage() {
         {/* Right: Guidance Timeline (2/5 width) */}
         <div className="lg:col-span-2">
           <div className="space-y-3 lg:sticky lg:top-4">
-            <SessionCostCard sessionId={sessionId!} />
+            <SessionCostCard
+              sessionId={sessionId!}
+              fallbackDurationMs={analysisWallClockMs}
+              isProcessing={isAnalysisInProgress}
+            />
 
             <section
               className="rounded-xl border border-border bg-bg-elevated p-4"

@@ -128,11 +128,18 @@ func (w *Worker) detectWODStart(ctx context.Context, p VideoAnalysisPayload, upl
 		}
 		return out
 	}
-	// Omission retains a previously applied manual correction. Explicit null resets it.
+	// Omission retains a previously applied manual correction or confirmed start covered by an exercise segment. Explicit null resets it.
 	if len(request) == 0 && w.DB != nil {
 		var a db.AnalysisResult
 		if w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", p.SessionID, p.ProfileID).First(&a).Error == nil {
-			if s, ok := wodeval.Decode(a.SessionScore); ok && s.WODStart.Source == "manual" && wodeval.ValidWindow(s.WODStart) && *s.WODStart.Seconds < end {
+			if s, ok := wodeval.Decode(a.SessionScore); ok &&
+				s.WODStart.Status == "confirmed" &&
+				s.WODStart.Seconds != nil &&
+				!math.IsNaN(*s.WODStart.Seconds) &&
+				!math.IsInf(*s.WODStart.Seconds, 0) &&
+				*s.WODStart.Seconds >= 0 &&
+				*s.WODStart.Seconds < end &&
+				(s.WODStart.Source == "manual" || startCoveredBySegment(*s.WODStart.Seconds, segments)) {
 				out = s.WODStart
 				out.EndSeconds = &end
 				return out
@@ -166,15 +173,21 @@ func (w *Worker) detectWODStart(ctx context.Context, p VideoAnalysisPayload, upl
 		return out
 	}
 	// The onset must also be covered by an indexed exercise segment. Unknown gaps cannot become waiting.
-	for _, seg := range segments {
-		if seconds >= convertToSeconds(seg.Start).Seconds() && seconds < convertToSeconds(seg.End).Seconds() {
-			out.Seconds = result.Seconds
-			out.Status = "confirmed"
-			out.Evidence = result.Evidence
-			break
-		}
+	if startCoveredBySegment(seconds, segments) {
+		out.Seconds = result.Seconds
+		out.Status = "confirmed"
+		out.Evidence = result.Evidence
 	}
 	return out
+}
+
+func startCoveredBySegment(seconds float64, segments []Segment) bool {
+	for _, seg := range segments {
+		if seconds >= convertToSeconds(seg.Start).Seconds() && seconds < convertToSeconds(seg.End).Seconds() {
+			return true
+		}
+	}
+	return false
 }
 
 func trimWODSegments(segments []Segment, start wodeval.Start) []Segment {

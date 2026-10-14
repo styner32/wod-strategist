@@ -456,3 +456,23 @@ func CreateTokenUsage(dbConn *gorm.DB, usageAttr *db.TokenUsage) db.TokenUsage {
 	g.Expect(dbConn.Create(&u).Error).NotTo(g.HaveOccurred())
 	return u
 }
+
+func CreatePipelineStageMetric(dbConn *gorm.DB, metricAttr *db.PipelineStageMetric) db.PipelineStageMetric {
+	m := db.PipelineStageMetric{
+		SessionID:    metricAttr.SessionID,
+		ProfileID:    metricAttr.ProfileID,
+		Stage:        metricAttr.Stage,
+		Variant:      metricAttr.Variant,
+		APICalls:     metricAttr.APICalls,
+		SkippedCalls: metricAttr.SkippedCalls,
+		UploadBytes:  metricAttr.UploadBytes,
+		DurationMs:   metricAttr.DurationMs,
+		CreatedAt:    metricAttr.CreatedAt,
+	}
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now().UTC()
+	}
+	g.Expect(dbConn.Create(&m).Error).NotTo(g.HaveOccurred())
+	return m
+}
+

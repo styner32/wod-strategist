@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -255,43 +256,71 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 	}
 	failed := false
 	target := w.buildTargetPersonContext(p.ProfileID, p.SessionID)
+	for _, row := range rows {
+		if saved, ok := previous[row.ID]; ok {
+			replaceReview(saved)
+		} else {
+			replaceReview(activity.ReviewedChunk{ChunkID: row.ID, State: "pending"})
+		}
+	}
+
+	var mu sync.Mutex
+	var saveErr error
+	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
+	var wg sync.WaitGroup
+
 	for i, row := range rows {
 		if saved, ok := previous[row.ID]; ok && saved.State == "completed" {
-			replaceReview(saved)
 			continue
 		}
-		start, end, valid := reviewBounds(rows, i)
-		r := activity.ReviewedChunk{ChunkID: row.ID, State: "failed"}
-		if valid && end <= duration+0.001 {
-			prompt := movementObservationPrompt + target + fmt.Sprintf("\n검토 영상의 절대 media 초를 사용하세요. 문맥 구간 %.6f~%.6f초. 현재 집계 소유 구간은 (%.6f, %.6f]초입니다. 문맥에서 사이클 시작과 끝을 확인하고 기록하되, 이전 합계나 목표 횟수로 추측하지 마세요. 대상이 불명확하면 unknown입니다.", start, end, *row.MediaStartSecs, *row.MediaEndSecs)
-			started := time.Now()
-			callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-			raw, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(callCtx, uploaded.FileURI, uploaded.MIMEType, time.Duration(start*float64(time.Second)), time.Duration(end*float64(time.Second)), prompt, gemini.ModelFlash38)
-			cancel()
-			w.saveTokenUsage(p.SessionID, p.ProfileID, "activity:review", usage)
-			w.logger.Info("activity review window", zap.Uint("chunk_id", row.ID), zap.Duration("duration", time.Since(started)), zap.Bool("failed", callErr != nil))
-			if callErr == nil {
-				document := strings.TrimSpace(raw)
-				for _, m := range liveBlocks.FindAllStringSubmatch(raw, -1) {
-					if strings.EqualFold(m[1], "movement_observations") {
-						document = m[2]
-						break
+		wg.Add(1)
+		go func(idx int, chunkRow db.ChunkAnalysisResult) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			start, end, valid := reviewBounds(rows, idx)
+			r := activity.ReviewedChunk{ChunkID: chunkRow.ID, State: "failed"}
+			if valid && end <= duration+0.001 {
+				prompt := movementObservationPrompt + target + fmt.Sprintf("\n검토 영상의 절대 media 초를 사용하세요. 문맥 구간 %.6f~%.6f초. 현재 집계 소유 구간은 (%.6f, %.6f]초입니다. 문맥에서 사이클 시작과 끝을 확인하고 기록하되, 이전 합계나 목표 횟수로 추측하지 마세요. 대상이 불명확하면 unknown입니다.", start, end, *chunkRow.MediaStartSecs, *chunkRow.MediaEndSecs)
+				started := time.Now()
+				callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+				raw, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(callCtx, uploaded.FileURI, uploaded.MIMEType, time.Duration(start*float64(time.Second)), time.Duration(end*float64(time.Second)), prompt, gemini.ModelFlash38)
+				cancel()
+				w.saveTokenUsage(p.SessionID, p.ProfileID, "activity:review", usage)
+				w.logger.Info("activity review window", zap.Uint("chunk_id", chunkRow.ID), zap.Duration("duration", time.Since(started)), zap.Bool("failed", callErr != nil))
+				if callErr == nil {
+					document := strings.TrimSpace(raw)
+					for _, m := range liveBlocks.FindAllStringSubmatch(raw, -1) {
+						if strings.EqualFold(m[1], "movement_observations") {
+							document = m[2]
+							break
+						}
+					}
+					doc, parseErr := activity.Decode([]byte(stripJSONFence(document)), start, end)
+					if parseErr == nil {
+						r.State = "completed"
+						r.Observations = activity.Own(doc, *chunkRow.MediaStartSecs, *chunkRow.MediaEndSecs)
 					}
 				}
-				doc, parseErr := activity.Decode([]byte(stripJSONFence(document)), start, end)
-				if parseErr == nil {
-					r.State = "completed"
-					r.Observations = activity.Own(doc, *row.MediaStartSecs, *row.MediaEndSecs)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if r.State != "completed" {
+				failed = true
+			}
+			replaceReview(r)
+			if saveErr == nil {
+				if err := w.saveActivityReview(ctx, p, &summary); err != nil {
+					saveErr = err
 				}
 			}
-		}
-		if r.State != "completed" {
-			failed = true
-		}
-		replaceReview(r)
-		if err = w.saveActivityReview(ctx, p, &summary); err != nil {
-			return err
-		}
+		}(i, row)
+	}
+	wg.Wait()
+	if saveErr != nil {
+		return saveErr
 	}
 	summary.ReviewState = "completed"
 	built := activity.Build(rows, &summary)

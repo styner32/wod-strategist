@@ -135,6 +135,18 @@ var _ = Describe("Argon generation", func() {
 		Expect(string(transport.Requests()[0].Body)).NotTo(ContainSubstring("maxOutputTokens"))
 	})
 
+	It("uses HIGH thinking when analyzing segments with Flash 3.8", func() {
+		transport.New(baseURL).Post("/v1beta/models/" + ModelFlash38 + ":generateContent").Reply(200).
+			BodyString(`{"candidates":[{"content":{"parts":[{"text":"unknown segment answer"}]}}]}`)
+		text, usage, err := client.AnalyzeSegmentWithModel(context.Background(), baseURL+"/files/video", "video/mp4", 45*time.Second, 50*time.Second, "analyze unknown", ModelFlash38)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(text).To(Equal("unknown segment answer"))
+		Expect(usage.Model).To(Equal(ModelFlash38))
+		body := string(transport.Requests()[0].Body)
+		Expect(body).To(ContainSubstring(`"thinkingLevel":"HIGH"`))
+		Expect(body).To(ContainSubstring(`"mediaResolution":"MEDIA_RESOLUTION_MEDIUM"`))
+	})
+
 	It("honors an explicit thinking level while stripping the unsupported budget", func() {
 		config := &genai.GenerateContentConfig{ThinkingConfig: &genai.ThinkingConfig{
 			ThinkingLevel: genai.ThinkingLevelMedium, ThinkingBudget: genai.Ptr(int32(4096)),

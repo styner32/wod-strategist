@@ -605,6 +605,64 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 		Expect(completed.MediaEndSecs).To(BeNil())
 		Expect(completed.SafeError).To(Equal("An exact media interval is unavailable for this chunk."))
 	})
+
+	It("reuses a previous COMPLETED ChunkReanalysisRun candidate without calling Gemini when reuse_previous is true", func() {
+		start, end := 12.25, 19.75
+		chunk, firstRun := seedRun("reuse-candidate-1", "gs://test-bucket/videos/1/chunk_001.mp4", &start, &end)
+		expires := time.Now().UTC().Add(time.Hour)
+		sourceURI := "gs://test-bucket/videos/1/" + session.SessionID + "/merged.mp4"
+		testhelpers.CreateChunkReanalysisRun(dbConn, &db.ChunkReanalysisRun{
+			SessionID:             session.SessionID,
+			ProfileID:             profile.ID,
+			ChunkAnalysisResultID: chunk.ID,
+			ClientRequestID:       "prior-file-cache",
+			Status:                db.ChunkReanalysisStatusCompleted,
+			SourceKind:            db.ChunkReanalysisSourceSessionVideo,
+			SourceGCSURI:          sourceURI,
+			GeminiFileURI:         geminiBaseURL + "/files/cached-session",
+			GeminiFileName:        "files/cached-session",
+			GeminiMIMEType:        "video/mp4",
+			GeminiFileExpiresAt:   &expires,
+		})
+
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/1/"+session.SessionID+"/", []string{
+			"videos/1/" + session.SessionID + "/merged.mp4",
+		})
+		geminiTransport.New(geminiBaseURL).
+			Get("/v1beta/files/cached-session").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			JSON(map[string]any{"name": "files/cached-session", "state": "ACTIVE"})
+		expectSegmentAnalysis(geminiBaseURL + "/files/cached-session")
+
+		firstTask, err := NewChunkDebugReanalysisTask(firstRun.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(w.HandleChunkDebugReanalysisTask(context.Background(), firstTask)).To(Succeed())
+		Expect(geminiTransport.Verify()).To(Succeed())
+
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/1/"+session.SessionID+"/", []string{
+			"videos/1/" + session.SessionID + "/merged.mp4",
+		})
+		secondRun := testhelpers.CreateChunkReanalysisRun(dbConn, &db.ChunkReanalysisRun{
+			SessionID:             session.SessionID,
+			ProfileID:             profile.ID,
+			ChunkAnalysisResultID: chunk.ID,
+			ClientRequestID:       "reuse-candidate-2",
+			Status:                db.ChunkReanalysisStatusQueued,
+			SourceContextSnapshot: db.JSONDocument(`{"reuse_previous":true}`),
+		})
+		secondTask, err := NewChunkDebugReanalysisTask(secondRun.ID)
+		Expect(err).NotTo(HaveOccurred())
+		requestsBefore := len(geminiTransport.Requests())
+		Expect(w.HandleChunkDebugReanalysisTask(context.Background(), secondTask)).To(Succeed())
+		Expect(len(geminiTransport.Requests())).To(Equal(requestsBefore), "must not call Gemini when reusing previous completed candidate")
+
+		var completed db.ChunkReanalysisRun
+		Expect(dbConn.First(&completed, secondRun.ID).Error).To(Succeed())
+		Expect(completed.Status).To(Equal(db.ChunkReanalysisStatusCompleted))
+		Expect(string(completed.StructuredCandidate)).To(MatchJSON(`{"exercise_type":"Pull-up","output":"대상 인물이 바를 직접 잡고 당기고 있습니다.","observed_signals":{"fatigue_detected":false,"movement":"Pull-up","rep_count":3}}`))
+		Expect(completed.TotalTokens).To(BeZero())
+	})
 })
 
 func segmentOffsetsFromRequest(body map[string]any) (string, string) {

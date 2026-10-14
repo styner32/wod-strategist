@@ -117,6 +117,7 @@ func SetupRouter(appEnv string, allowedOrigins []string,
 	protected.GET("/sessions/:session_id/sensor-timeline", ctl.GetSensorTimeline)
 	protected.POST("/sessions/:session_id/sensor-reprocess", ctl.ReprocessSensor)
 	protected.GET("/sessions/:session_id/chunks/:chunk_id/play-url", ctl.GetChunkPlayURL)
+	protected.POST("/sessions/:session_id/chunks/batch-reanalyses", ctl.CreateBatchChunkReanalysis)
 	protected.POST("/sessions/:session_id/chunks/:chunk_id/reanalyses", ctl.CreateChunkReanalysis)
 	protected.GET("/sessions/:session_id/chunks/:chunk_id/reanalyses", ctl.ListChunkReanalyses)
 	protected.GET("/sessions/:session_id/chunks/:chunk_id/reanalyses/:run_id", ctl.GetChunkReanalysis)

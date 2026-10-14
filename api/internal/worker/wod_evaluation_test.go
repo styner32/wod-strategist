@@ -157,4 +157,43 @@ var _ = Describe("WOD full-session evaluation", func() {
 		Expect(score.Overall).To(BeNil())
 		Expect(score.WODStart.EndSeconds).To(BeNil())
 	})
+
+	It("reuses a previously confirmed auto-detected WODStart without calling Gemini when covered by an exercise segment", func() {
+		conn, err := testhelpers.InitDB()
+		Expect(err).To(Succeed())
+		testhelpers.CleanupDB(conn)
+		profile := testhelpers.CreateProfile(conn, &db.Profile{})
+		session := testhelpers.CreateSession(conn, &db.Session{
+			SessionID:   "WOD-20261014-01JREUSEWODSTART00",
+			ProfileID:   profile.ID,
+			WorkoutType: "wod",
+		})
+		testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
+			SessionID:    session.SessionID,
+			ProfileID:    profile.ID,
+			Status:       "COMPLETED",
+			SessionScore: `{"evaluation_version":1,"wod_start":{"seconds":12.5,"end_seconds":30,"status":"confirmed","source":"auto"," evidence":"first rep"}}`,
+		})
+
+		transport := testhelpers.NewMockTransport()
+		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:     "test",
+			HTTPClient: &http.Client{Transport: transport},
+		})
+		Expect(err).To(Succeed())
+		w := &Worker{DB: conn, GeminiClient: client, logger: zap.NewNop()}
+
+		got := w.detectWODStart(
+			context.Background(),
+			VideoAnalysisPayload{SessionID: session.SessionID, ProfileID: profile.ID, WorkoutType: "wod"},
+			&gemini.UploadResult{FileURI: "https://example.com/video", MIMEType: "video/mp4", VideoDuration: time.Minute},
+			[]Segment{{Start: "00:10", End: "00:30", Type: "Burpee"}},
+			nil,
+		)
+		Expect(got.Status).To(Equal("confirmed"))
+		Expect(got.Seconds).NotTo(BeNil())
+		Expect(*got.Seconds).To(Equal(12.5))
+		Expect(transport.Requests()).To(BeEmpty())
+	})
 })
+
