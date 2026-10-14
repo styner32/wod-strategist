@@ -457,6 +457,8 @@
       "chunkRetrying": "청크 업로드 재시도 중 (%{attempt}/%{maxRetries})...",
       "chunk4xxError": "청크 업로드 실패 (%{code}). 건너뛰고 계속 진행합니다.",
       "chunkUploadFailed": "청크 업로드 %{maxRetries}회 재시도 실패. 건너뛰고 계속 진행합니다.",
+      "analysisIncompleteTitle": "영상 전송 미완료",
+      "analysisIncompleteBody": "일부 영상이 전송되지 않아 부분 운동 영상을 생성하지 않았습니다. 다시 업로드하기 전에 기기에 저장된 원본을 확인해주세요.",
       "h10MemoryStatus": "H10 내부 저장: %{phase}",
       "h10MemoryStartFailed": "H10 내부 저장 시작 실패 (%{code}). 실시간 기록은 계속됩니다.",
       "h10MemoryFailed": "H10 내부 저장 오류 (%{stage}: %{code}).",

@@ -175,7 +175,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	wodStartRequest := storedStart.Seconds
 	observeWODUsage := func(task string, usage *gemini.TokenUsage) {
 		apiCalls++
-		w.saveTokenUsageForRequest(p.SessionID, p.ProfileID, task, fmt.Sprintf("session-reanalysis:%d", run.ID), usage)
+		w.saveTokenUsageForRequest(p.SessionID, p.ProfileID, task, sessionReanalysisTaskRequestKey(run.ID, task), usage)
 		addSessionDebugUsage(&aggregate, usage)
 	}
 	newWOD := w.wodEvaluationVersion(ctx, p) == 1
@@ -307,7 +307,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	analysis := output.String()
 	normalizedWorkout := ""
 	if NormalizeWorkoutType(p.WorkoutType) == WorkoutTypeWOD && strings.TrimSpace(p.WODDescription) != "" {
-		normalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements)
+		normalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements, observeWODUsage)
 	}
 	progress := w.buildWorkoutProgress(ctx, p, file.URI, progressIntervals, progressGaps, file.Duration.Seconds(), normalizedWorkout)
 	progressJSON, encodeErr := json.Marshal(progress)
@@ -676,6 +676,10 @@ func addSessionDebugUsage(total *gemini.TokenUsage, usage *gemini.TokenUsage) {
 	if usage.Model != "" {
 		total.Model = usage.Model
 	}
+}
+
+func sessionReanalysisTaskRequestKey(runID uint, task string) string {
+	return fmt.Sprintf("session-reanalysis:%d:%s", runID, strings.TrimSpace(task))
 }
 
 func (w *Worker) failSessionDebugRun(ctx context.Context, runID uint, retryCount int, started time.Time, safeError string, cause error) error {

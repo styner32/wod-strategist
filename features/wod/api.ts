@@ -468,6 +468,10 @@ export async function uploadToGcs(
   onProgress?: (progress: number) => void,
   onCancelReady?: (cancel: () => Promise<void>) => void,
 ): Promise<void> {
+  const info = await getInfoAsync(fileUri);
+  if (!info.exists || info.isDirectory || info.size === 0) {
+    throw new Error("Video upload file is missing, empty or is not a regular file");
+  }
   const uploadTask = createUploadTask(
     uploadUrl,
     fileUri,

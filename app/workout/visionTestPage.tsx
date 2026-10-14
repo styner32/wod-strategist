@@ -26,6 +26,7 @@ import {
   View,
 } from "react-native";
 import { Video } from "react-native-compressor";
+import { getInfoAsync } from "expo-file-system/legacy";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   Camera,
@@ -86,7 +87,7 @@ import { useMergeStatus } from "@/store/useMergeStatus";
 import { useProfileStore } from "@/store/useProfileStore";
 
 const CHUNK_DURATION_MS = 10000; // 10 seconds
-/** Upper bound on waiting for chunk uploads before the server merge fires. */
+/** Upper bound on waiting before deciding whether a complete server merge is possible. */
 const MERGE_UPLOAD_WAIT_MS = 90000;
 type OriginalCapture = {
   ref: OriginalSessionRef;
@@ -95,6 +96,9 @@ type OriginalCapture = {
   complete: boolean;
   failure?: string;
   failedUploads: number;
+  pendingUploads: number;
+  completedUploads: number;
+  bypassCompression?: boolean;
   drains: Promise<void>[];
   consumersFinished?: Promise<void>;
   release: () => void;
@@ -375,14 +379,14 @@ export default function VisionTestPage() {
    * Waits until every chunk's compress+upload work has settled, capped so a
    * stuck upload cannot postpone the merge forever.
    */
-  const waitForOutstandingUploads = async (timeoutMs: number) => {
+  const waitForOutstandingUploads = async (capture: OriginalCapture, timeoutMs: number) => {
     const deadline = Date.now() + timeoutMs;
-    while (outstandingUploads.current > 0 && Date.now() < deadline) {
+    while (capture.pendingUploads > 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    if (outstandingUploads.current > 0) {
+    if (capture.pendingUploads > 0) {
       console.warn(
-        `⚠️ Waiting ended with ${outstandingUploads.current} chunk upload(s) still in flight after ${timeoutMs}ms`,
+        `⚠️ Waiting ended with ${capture.pendingUploads} chunk upload(s) still in flight after ${timeoutMs}ms`,
       );
     }
   };
@@ -749,6 +753,7 @@ export default function VisionTestPage() {
     const release = holdOriginalFiles(capture.ref);
     uploadedChunkCount.current += 1;
     outstandingUploads.current += 1;
+    capture.pendingUploads += 1;
     setChunkCount((count) => count + 1);
     try {
       environment.event("existing_sensors", { hr: getReading().bpm ?? null, hrSource: "BLE",
@@ -761,13 +766,19 @@ export default function VisionTestPage() {
     preparationQueue.current = preparationQueue.current.then(async () => {
       let uri = path;
       try {
-        if (!skipCompression) uri = await Video.compress(path, { compressionMethod: "auto", maxSize: 720 });
+        if (!skipCompression && !capture.bypassCompression) {
+          uri = await Video.compress(path, { compressionMethod: "auto", maxSize: 720 });
+          const info = await getInfoAsync(uri);
+          if (!info.exists || info.isDirectory || info.size === 0) throw new Error("Compressed analysis video is unavailable");
+        }
       } catch (error) {
-        capture.failedUploads += 1;
-        outstandingUploads.current -= 1;
-        release();
-        console.warn("Analysis compression failed; original retained", error);
-        return;
+        // Compression is optional. Preserve this and subsequent native analysis
+        // inputs instead of losing the rest of a successfully captured session.
+        capture.bypassCompression = true;
+        uri = path;
+        console.warn("Analysis compression failed; uploading native analysis chunks", error);
+        try { environment.event("analysis_compression_fallback", { sessionId: capture.ref.sessionId, startSecs, endSecs }); }
+        catch (_) { /* Diagnostic collection is optional. */ }
       }
       const upload = async () => {
         try {
@@ -788,6 +799,7 @@ export default function VisionTestPage() {
               });
             },
           });
+          capture.completedUploads += 1;
           clearRetryBanner();
         } catch (error) {
           capture.failedUploads += 1;
@@ -824,7 +836,8 @@ export default function VisionTestPage() {
               if (file.exists) file.delete();
             }
           } catch (_) { /* A leftover disposable copy is safe. */ }
-          outstandingUploads.current = Math.max(0, outstandingUploads.current - 1);
+          capture.pendingUploads = Math.max(0, capture.pendingUploads - 1);
+          if (originalCapture.current === capture) outstandingUploads.current = Math.max(0, outstandingUploads.current - 1);
           release();
         }
       };
@@ -832,7 +845,8 @@ export default function VisionTestPage() {
       else trackUpload(upload);
     }).catch((error) => {
       capture.failedUploads += 1;
-      outstandingUploads.current = Math.max(0, outstandingUploads.current - 1);
+      capture.pendingUploads = Math.max(0, capture.pendingUploads - 1);
+      if (originalCapture.current === capture) outstandingUploads.current = Math.max(0, outstandingUploads.current - 1);
       release();
       console.warn("Analysis preparation failed; original retained", error);
     });
@@ -1015,7 +1029,7 @@ export default function VisionTestPage() {
         return;
       }
       const startedAt = Date.now();
-      originalCapture.current = { ref, startedAt, order: 0, complete: true, failedUploads: 0, drains: [], release: holdOriginalFiles(ref) };
+      originalCapture.current = { ref, startedAt, order: 0, complete: true, failedUploads: 0, pendingUploads: 0, completedUploads: 0, drains: [], release: holdOriginalFiles(ref) };
       heartRateWindow.current.clear();
       resetCaptureObservations();
       stoppingWorkout.current = false;
@@ -1244,7 +1258,7 @@ export default function VisionTestPage() {
       // before the user can background the app.
       // Use the ref, not `chunkCount` state: the final chunk increments it
       // inside an async callback that this closure may not have observed yet.
-      if (capture && capture.order > 0 && (capture.complete || uploadedChunkCount.current > 0)) {
+      if (capture?.complete && capture.order > 0) {
         const movementsArray = movements ? movements.split(", ") : [];
         const injuriesArray = injuries ? injuries.split(", ") : [];
 
@@ -1256,16 +1270,18 @@ export default function VisionTestPage() {
           // delay merged incomplete sessions whenever compression or the
           // network ran long.
           await Promise.all(capture.drains);
-          await waitForOutstandingUploads(MERGE_UPLOAD_WAIT_MS);
+          await waitForOutstandingUploads(capture, MERGE_UPLOAD_WAIT_MS);
           try {
-            if (uploadedChunkCount.current === 0) {
+            if (capture.completedUploads === 0 && capture.pendingUploads === 0 && capture.failedUploads === 0) {
               console.warn("Server merge skipped because no chunks were uploaded");
               return;
             }
-            if (outstandingUploads.current > 0 || capture.failedUploads > 0) {
+            if (capture.pendingUploads > 0 || capture.failedUploads > 0) {
               console.warn(
-                `⚠️ Proceeding with server merge with ${uploadedChunkCount.current} chunk(s) uploaded (${capture.failedUploads} failed, ${outstandingUploads.current} still in flight)`,
+                `⚠️ Server merge withheld: ${capture.completedUploads} uploaded, ${capture.failedUploads} failed, ${capture.pendingUploads} pending`,
               );
+              Alert.alert(t("overlay.recording.analysisIncompleteTitle"), t("overlay.recording.analysisIncompleteBody"));
+              return;
             }
             await mergeChunks(sessionId, {
               workoutType,

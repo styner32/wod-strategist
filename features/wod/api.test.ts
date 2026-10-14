@@ -8,6 +8,7 @@ import {
   uploadSensorToGcs,
   uploadSessionAssetToGcs,
   notifyUploadComplete,
+  notifyChunkUploadComplete,
   processWorkoutVideo,
   processWorkoutChunk,
   is4xxError,
@@ -63,6 +64,32 @@ afterEach(() => {
 afterAll(() => server.close());
 
 describe("API Client Methods", () => {
+  describe("notifyChunkUploadComplete live observation contract", () => {
+    it.each([
+      { start: 0, end: 10, version: 1 },
+      { start: 10.25, end: 20.75, version: 1 },
+    ])("preserves live version and the capture interval %j", async ({ start, end, version }) => {
+      let body: any;
+      server.use(http.post(`${API_BASE_URL}/chunk-complete`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ task_id: "chunk-task", session_id: "warmup" });
+      }));
+      await notifyChunkUploadComplete("warmup", "gs://bucket/chunk.mp4", [], [], "warmup", 1, start, end);
+      expect(body.live_analysis_version).toBe(version);
+      expect(body.workout_type).toBe("warmup");
+      expect(body.start_secs).toBe(start);
+      expect(body.end_secs).toBe(end);
+    });
+  });
+
+  it.each([{ exists: false }, { exists: true, isDirectory: true }, { exists: true, size: 0 }])(
+    "rejects an invalid video %j before constructing a native upload task", async (info) => {
+      mockGetInfoAsync.mockResolvedValueOnce(info);
+      await expect(uploadToGcs("https://gcs.fake/upload", "file:///missing.mp4", "video/mp4"))
+        .rejects.toThrow("Video upload file is missing");
+      expect(mockCreateUploadTask).not.toHaveBeenCalled();
+    },
+  );
   describe("uploadSensorToGcs", () => {
     beforeEach(() => {
       mockGetInfoAsync.mockResolvedValue({ exists: true, isDirectory: false });

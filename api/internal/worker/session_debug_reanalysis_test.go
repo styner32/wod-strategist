@@ -13,6 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/cost"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/testhelpers"
@@ -337,6 +338,94 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(segments).To(HaveLen(1))
 		Expect(segments[0].Type).To(Equal("Unknown"))
 	})
+
+	It("persists distinct token_usages rows across all WOD re-analysis steps and aggregates normalize-workout into run counters", func() {
+		Expect(database.Model(&db.Session{}).Where("id = ?", session.ID).Update("wod_evaluation_version", 1).Error).To(Succeed())
+		_, run := seedChunkAndRun()
+		expires := time.Now().UTC().Add(time.Hour)
+		testhelpers.CreateSessionReanalysisRun(database, &db.SessionReanalysisRun{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: db.SessionReanalysisStatusCompleted,
+			SourceGCSURI: sourceURI, GeminiFileURI: baseURL + "/files/wod-usage-cache",
+			GeminiFileName: "files/wod-usage-cache", GeminiMIMEType: "video/mp4", GeminiFileExpiresAt: &expires,
+		})
+		testhelpers.MockGCSDownloadWithBody(storageTransport, sourceURI, videoBytes)
+		geminiTransport.New(baseURL).Get("/v1beta/files/wod-usage-cache").MatchHeader("X-Goog-Api-Key", apiKey).
+			Reply(http.StatusOK).JSON(map[string]any{"name": "files/wod-usage-cache", "state": "ACTIVE"})
+
+		// 1. video:wod-start (QueryVideoFlash)
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			MatchBodyContains("Locate the earliest actual WOD exercise onset").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": `{"seconds":0,"target_confirmed":true,"preceding_activity":"rest_setup","evidence":"immediate start"}`}}},
+			}},
+			"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+		})
+
+		// 2. session:reanalysis (QueryVideoSegmentWithModel)
+		analysisText := "교정 라벨을 영상에서 다시 확인했습니다.\n" +
+			"```highlights\n" + `[{"start":"0:00","end":"0:00.5","type":"key_moment","movement":"Pull-up","reason":"visible movement"}]` + "\n```\n" +
+			"```wod_evidence\n" + `{"target_confirmed":true,"movement":"Pull-up","start_secs":0,"end_secs":0.75,"form_observations":["aligned pull"],"pace_observations":["steady"]}` + "\n```\n" +
+			"```workout_observations\n" + `{"intervals":[{"start_secs":0,"end_secs":0.75,"activity":"exercise","movement":"Pull-up","target_confirmed":true,"rep_events":[{"movement":"Pull-up","unit":"reps","start_secs":0.1,"end_secs":0.5,"complete":true,"evidence":"complete pull"}],"form_observations":[{"start_secs":0.1,"end_secs":0.5,"evidence":"aligned pull"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+			MatchHeader("X-Goog-Api-Key", apiKey).
+			MatchBodyContains(`"fileUri":"`+baseURL+`/files/wod-usage-cache"`).
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": analysisText}}},
+			}},
+			"usageMetadata": map[string]any{"promptTokenCount": 20, "candidatesTokenCount": 10, "totalTokenCount": 30},
+		})
+
+		// 3. session:normalize-workout (ParseText)
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			MatchBodyContains("weight_raw").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": "```movements\n{\"movements\":[]}\n```"}}},
+			}},
+			"usageMetadata": map[string]any{"promptTokenCount": 30, "candidatesTokenCount": 15, "totalTokenCount": 45},
+		})
+
+		// 4. video:wod-synthesis (ParseText)
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": `{"form":85,"intensity":80,"consistency":null,"movements":{"Pull-up":{"form":85,"intensity":80}},"summary":"좋습니다."}`}}},
+			}},
+			"usageMetadata": map[string]any{"promptTokenCount": 40, "candidatesTokenCount": 20, "totalTokenCount": 60},
+		})
+
+		task, err := NewSessionDebugReanalysisTask(run.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(w.HandleSessionDebugReanalysisTask(context.Background(), task)).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+		Expect(geminiTransport.Verify()).To(Succeed())
+
+		var completed db.SessionReanalysisRun
+		Expect(database.First(&completed, run.ID).Error).To(Succeed())
+		Expect(completed.Status).To(Equal(db.SessionReanalysisStatusCompleted))
+		Expect(completed.PromptTokens).To(Equal(int32(10 + 20 + 30 + 40)))
+		Expect(completed.CandidateTokens).To(Equal(int32(5 + 10 + 15 + 20)))
+		Expect(completed.TotalTokens).To(Equal(int32(15 + 30 + 45 + 60)))
+
+		var usages []db.TokenUsage
+		Expect(database.Where("session_id = ?", session.SessionID).Order("id ASC").Find(&usages).Error).To(Succeed())
+		Expect(usages).To(HaveLen(4))
+		Expect([]string{usages[0].TaskType, usages[1].TaskType, usages[2].TaskType, usages[3].TaskType}).To(Equal([]string{
+			"video:wod-start",
+			"session:reanalysis",
+			"session:normalize-workout",
+			"video:wod-synthesis",
+		}))
+
+		summary := cost.CalculateSessionCost(session.SessionID, usages)
+		Expect(summary.ByTaskType).To(HaveLen(4))
+		Expect(summary.PromptTokens).To(Equal(int64(100)))
+		Expect(summary.CandidateTokens).To(Equal(int64(50)))
+		Expect(summary.TotalTokens).To(Equal(int64(150)))
+	})
 })
 
 var _ = Describe("session debug re-analysis helpers", func() {
@@ -354,5 +443,16 @@ var _ = Describe("session debug re-analysis helpers", func() {
 			Expect(isSessionReanalysisTerminal(status)).To(BeTrue())
 		}
 		Expect(isSessionReanalysisTerminal(db.SessionReanalysisStatusRunning)).To(BeFalse())
+	})
+
+	It("generates distinct request keys per task within a session reanalysis run", func() {
+		startKey := sessionReanalysisTaskRequestKey(7, "video:wod-start")
+		normKey := sessionReanalysisTaskRequestKey(7, "session:normalize-workout")
+		synthKey := sessionReanalysisTaskRequestKey(7, "video:wod-synthesis")
+		Expect(startKey).To(Equal("session-reanalysis:7:video:wod-start"))
+		Expect(normKey).To(Equal("session-reanalysis:7:session:normalize-workout"))
+		Expect(synthKey).To(Equal("session-reanalysis:7:video:wod-synthesis"))
+		Expect(startKey).NotTo(Equal(normKey))
+		Expect(normKey).NotTo(Equal(synthKey))
 	})
 })

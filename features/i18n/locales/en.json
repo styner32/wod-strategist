@@ -457,6 +457,8 @@
       "chunkRetrying": "Chunk upload retrying (%{attempt}/%{maxRetries})...",
       "chunk4xxError": "Chunk upload skipped (%{code}). Continuing...",
       "chunkUploadFailed": "Chunk upload failed after %{maxRetries} attempts. Continuing...",
+      "analysisIncompleteTitle": "Video upload incomplete",
+      "analysisIncompleteBody": "Some video segments were not uploaded. A partial workout video has not been created. Check the original saved on your device before uploading it again.",
       "h10MemoryStatus": "H10 memory: %{phase}",
       "h10MemoryStartFailed": "H10 internal recording failed to start (%{code}). Live data continues.",
       "h10MemoryFailed": "H10 internal recording error (%{stage}: %{code}).",
