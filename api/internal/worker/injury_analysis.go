@@ -16,22 +16,22 @@ import (
 const InjuryAnalysisPrompt = `
 # 부상 부위 집중 분석 (Injury-Focused Supplement)
 
-당신은 전문 스포츠 재활 치료사(Physical Therapist)이자 교정 운동 전문가입니다.
+당신은 운동 영상 관찰자입니다. 현재 영상에 직접 보이는 자세만 기록하고 내부 상태를 진단하지 마세요.
 아래 타임스탬프 구간만 집중적으로 분석해 주세요. 전체 영상을 다시 분석할 필요 없습니다.
 
 ## 분석 요청 사항
 
 1. **안정성 및 통제력 분석 (Stability & Control Analysis)**:
-   - 해당 구간에서 부상 부위 관절에 무리가 없는 안전한 가동 범위(Pain-free ROM) 내에서 동작이 수행되고 있는지 평가해 주세요.
-   - 척추 중립(Neutral Spine)과 코어의 안정성이 유지되는지 확인해 주세요.
+   - 해당 구간에서 직접 보이는 관절 위치와 현재 동작의 가동 범위를 시점과 함께 기록하세요. 통증 유무나 안전한 복귀 여부를 영상으로 판정하지 마세요.
+   - 촬영 각도로 확인되는 척추·골반 정렬만 기록하고 코어 근력이나 복압을 추론하지 마세요.
 
-2. **보상 작용 및 위험 패턴 (Compensations & Risk Patterns)**:
-   - 부상 부위를 보호하기 위한 보상 작용(어깨 으쓱임, 허리 과신전, 목 빠짐, 상체 반동 등)이 관찰되는지 확인해 주세요.
-   - 부상 악화 위험이 있는 움직임 패턴을 구체적으로 지적해 주세요.
+2. **현재 자세와 위치 변화 (Posture & Position Changes)**:
+   - 어깨 위치, 허리·목 정렬, 상체 궤적 등 직접 보이는 현상만 기록하세요. 부상 보호 의도나 보상 원인을 추론하지 마세요.
+   - 통증 원인이나 부상 악화를 진단하지 마세요. 알려진 부상 정보 자체는 현재 영상의 관찰 증거가 아닙니다.
 
-3. **안전 복귀 솔루션 (Safe Return-to-Play Feedback)**:
-   - 부상 부위에 스트레스를 주지 않으면서 동작의 질을 높일 수 있는 즉각적인 자세/호흡 교정 팁 3가지를 제안해 주세요.
-   - 무리한 동작이 관찰되었다면 가동 범위를 제한하거나 난이도를 낮춘 대체 운동(Regression)을 조언해 주세요.`
+3. **현재 자세 큐 (Posture Cues)**:
+   - 직접 보이는 정렬이나 균형 변화에 대한 짧은 자세 큐만 제시하고 근거가 없으면 팁을 만들지 마세요.
+   - 가림이나 촬영 각도 때문에 확인할 수 없는 부위는 확인 불가로 남기세요.`
 
 // InjuryAnalysisPayload is the payload for the injury:analysis task.
 type InjuryAnalysisPayload struct {
@@ -417,6 +417,9 @@ func (w *Worker) buildInjuryAnalysisPrompt(p InjuryAnalysisPayload) string {
 
 	personalProfile := w.lookupProfileString(p.ProfileID)
 	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
+	prompt += ObservationOnlyRulesPrompt
+	prompt += SpinalObservationRulesPrompt
+	prompt += ObservationOnlyOutputCheckPrompt
 
 	return prompt
 }

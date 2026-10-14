@@ -167,7 +167,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelPro31Preview+":generateContent").
+				Post("/v1beta/models/"+ModelArgon4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -423,7 +423,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+defaultModel+":generateContent").
+				Post("/v1beta/models/" + defaultModel + ":generateContent").
 				Reply(http.StatusOK).
 				JSON(map[string]any{
 					"candidates": []map[string]any{
@@ -503,7 +503,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
+				Post("/v1beta/models/" + ModelArgon4 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{
@@ -545,7 +545,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
+				Post("/v1beta/models/" + ModelArgon4 + ":generateContent").
 				Reply(http.StatusOK).
 				JSON(map[string]any{
 					"candidates": []map[string]any{},
@@ -678,7 +678,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelPro31Preview+":generateContent").
+				Post("/v1beta/models/"+ModelArgon4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -733,7 +733,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
+				Post("/v1beta/models/" + ModelArgon4 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{"message": "analysis failed"},
@@ -760,7 +760,7 @@ var _ = Describe("Gemini client", func() {
 	})
 
 	Describe("Model option", func() {
-		It("defaults to "+ModelPro31Preview, func() {
+		It("defaults to "+ModelArgon4, func() {
 			transport := testhelpers.NewMockTransport()
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:     "test-key",
@@ -768,7 +768,7 @@ var _ = Describe("Gemini client", func() {
 				HTTPClient: &http.Client{Transport: transport},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(client.model).To(Equal(ModelPro31Preview))
+			Expect(client.model).To(Equal(ModelArgon4))
 		})
 
 		It("uses the configured model", func() {

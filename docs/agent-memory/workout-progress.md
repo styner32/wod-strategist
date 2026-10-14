@@ -6,6 +6,15 @@
 2. `workout_progress` assembles observed intervals and complete repetition events chronologically. It contains evidence, not fatigue, recovery or intensity scores.
 3. Final assessment reads this evidence. It must never update observations or feed its output back into the timeline builder.
 
+Argon and Flash share the observer boundary: describe visible changes and timed
+pauses without fatigue causes, strength loss or internal muscle-state claims.
+This applies to every JSON evidence string and coaching/highlight reason. New
+chunk `observed_signals` keep the existing shape with `exertion_estimate: unknown`,
+`fatigue_visually_established: false` and empty fatigue evidence arrays. Here
+false means not evaluated by the observer, not observed absence of fatigue;
+unknown intensity is not zero/low intensity. Visible changes remain in form and
+timing fields. Historical signals remain readable; there is no backfill.
+
 Current-segment posture/camera guidance remains available. Following the user's 2026-10-14 clarification, bounded `addContextualCoaching` is allowed after independent observation: at most six qualified same-movement chunks from the preceding 60 seconds, with separate `contextual_coaching` storage. It cannot rewrite observations, basic output or `workout_progress`, claim whole-session fatigue/recovery, or feed back into the video observer. The existing `ENABLE_CONTEXTUAL_COACHING` switch and default remain unchanged. Full performed-history real-time analysis remains a later phase requiring the user's acceptance of final assessment, separate storage, source/version references, and comparison against the independent observer. Context-derived signals are never automatically promoted into original observations.
 
 ## Persisted contract (version 1)

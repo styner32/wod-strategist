@@ -25,7 +25,7 @@ import (
 )
 
 const TypeAnalysisEnrichment = "analysis:enrichment"
-const enrichmentPromptVersion = "highlight-observation-v1"
+const enrichmentPromptVersion = "highlight-observation-v2"
 const maxEnrichmentCleanupAttempts = 5
 
 // enrichmentOpenPredicate must match the partial index in migration 000053.
@@ -729,7 +729,7 @@ func agenticHighlightPrompt(b AgenticHighlights, it AgenticHighlight) string {
 	return fmt.Sprintf(`Independently observe the target person in this workout video. Return Korean observations in one JSON object, without markdown fences. Video duration: %.3f seconds. Parent playback interval: %.3f–%.3f seconds. Inspect only this parent and up to two seconds of context: %.3f–%.3f seconds. Focus evidence timestamps: %s. All timestamps use the FULL VIDEO clock in seconds. These are candidate windows, not proof of exercise. Do not search elsewhere. Whole-video access means these instructions do not technically restrict tool navigation.
 %s
 Do not assign background athletes' movements to the target. If identity is ambiguous, report unclear rather than choose a person. Distinguish no exercise from an unknown exercise. Include positive technique as well as issues. Do not infer motion across gaps. Minimize redundant inspections. Prior labels and judgments are deliberately omitted.
-Schema: {"target_status":"confirmed|unclear|absent", "activity":"exercise|none|unclear", "movement":"visible movement name or Unknown", "direct_observation":"visible apparatus contact, position and motion", "evidence":[{"start":0.0,"end":0.0,"observation":"direct observation"}], "continuity":"동작 연속성 (연속적, 중단/끊김 등 상태와 구체적 이유를 한국어로 작성)", "noteworthy":["positive features or concerns"], "limitations":["uncertainties"]}. Evidence must be inside the context window. When target is not confirmed do not assert exercise or a movement.`, b.Duration, start, end, math.Max(0, start-2), math.Min(b.Duration, end+2), focus, b.Person)
+Schema: {"target_status":"confirmed|unclear|absent", "activity":"exercise|none|unclear", "movement":"visible movement name or Unknown", "direct_observation":"visible apparatus contact, position and motion", "evidence":[{"start":0.0,"end":0.0,"observation":"direct observation"}], "continuity":"동작 연속성 (연속적, 중단/끊김 등 상태와 구체적 이유를 한국어로 작성)", "noteworthy":["positive features or concerns"], "limitations":["uncertainties"]}. Evidence must be inside the context window. When target is not confirmed do not assert exercise or a movement.`, b.Duration, start, end, math.Max(0, start-2), math.Min(b.Duration, end+2), focus, b.Person) + ObservationOnlyRulesPrompt + ObservationOnlyOutputCheckPrompt
 }
 func validateAgenticObservation(raw string, b AgenticHighlights, it AgenticHighlight) (*AgenticObservation, error) {
 	var out AgenticObservation

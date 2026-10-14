@@ -24,7 +24,7 @@ import (
 const (
 	TypeSessionDebugReanalysis = "session:debug-reanalysis"
 
-	sessionDebugPromptVersion = "session-independent-observations-v2"
+	sessionDebugPromptVersion = "session-independent-observations-v3"
 	sessionDebugSchemaVersion = "session-reanalysis-progress-v2"
 	sessionDebugMaxRetries    = 2
 )
@@ -259,6 +259,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			prompt += wodSegmentEvidencePrompt
 		}
 		prompt += correctionContext
+		prompt += ObservationOnlyOutputCheckPrompt
 		defaultClientModel := ""
 		if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
 			defaultClientModel = provider.Model()

@@ -263,7 +263,7 @@ var _ = Describe("InitWorker", func() {
 	})
 
 	Context("GeminiModel and ThinkingConfig", func() {
-		It("defaults to ModelFlash38, HIGH thinking level, and LOW chunk thinking level", func() {
+		It("defaults to ModelArgon4, HIGH thinking level, and LOW chunk thinking level", func() {
 			setEnv("GEMINI_MODEL", "")
 			setEnv("GEMINI_THINKING_LEVEL", "")
 			setEnv("GEMINI_THINKING_CHUNK", "")
@@ -271,7 +271,7 @@ var _ = Describe("InitWorker", func() {
 
 			cfg, err := config.InitWorker()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.GeminiModel).To(Equal(gemini.ModelFlash38))
+			Expect(cfg.GeminiModel).To(Equal(gemini.ModelArgon4))
 			Expect(cfg.GeminiThinkingLevel).To(Equal("HIGH"))
 			Expect(cfg.GeminiThinkingChunk).To(Equal("LOW"))
 			Expect(cfg.GeminiThinkingBudget).To(BeNil())

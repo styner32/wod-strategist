@@ -91,7 +91,7 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		Expect(prompt).To(ContainSubstring("배경 인물"))
 		Expect(prompt).To(ContainSubstring("목록에 있어도 보이지 않으면 결과·점수·하이라이트에서 제외"))
 		Expect(prompt).To(ContainSubstring("걷기, 휴식, 회복, 준비, 장비 세팅, Unknown은 하이라이트"))
-		Expect(prompt).To(ContainSubstring("fatigue_onset는 심박수만으로 만들지 말고"))
+		Expect(prompt).To(ContainSubstring("fatigue_onset와 fatigue_point는 관찰 단계에서 출력하지 마세요"))
 	})
 
 	It("requests at most three exact evidence items without category quotas", func() {
@@ -104,7 +104,6 @@ var _ = Describe("buildAnalysisPrompt", func() {
 		for _, evidenceType := range []string{
 			HighlightObservationPositiveForm,
 			HighlightObservationFormIssue,
-			HighlightObservationFatigueOnset,
 			HighlightObservationTechnique,
 		} {
 			Expect(prompt).To(ContainSubstring(evidenceType))
@@ -491,7 +490,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		// The generateContent body must reference the file URI returned by the
 		// upload chain — a client that drops or mangles it fails here, not in prod.
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			MatchBodyContains(`"fileUri":"` + geminiBaseURL + `/files/mock-file"`).
 			Reply(http.StatusOK).
@@ -630,7 +629,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		// RoundTrip, so no exact request-count assertion is needed.
 		var genBody string
 		for _, r := range transport.Requests() {
-			if strings.Contains(r.URL, gemini.ModelPro31Preview+":generateContent") {
+			if strings.Contains(r.URL, gemini.ModelArgon4+":generateContent") {
 				genBody = string(r.Body)
 			}
 		}
@@ -787,7 +786,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 
 		// ...but generateContent returns no candidates
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelArgon4 + ":generateContent").
 			Reply(http.StatusOK).
 			JSON(map[string]any{"candidates": []map[string]any{}})
 
@@ -844,7 +843,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		Expect(progress.Intervals[0].FormObservations).To(HaveLen(2))
 		Expect(progress.MediaSourceID).To(HavePrefix("media-sha256:"))
 		for _, request := range transport.Requests() {
-			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
 				Expect(string(request.Body)).To(ContainSubstring("workout_observations"))
 				Expect(string(request.Body)).NotTo(ContainSubstring("개인 종목 혼동 참고"))
 				Expect(string(request.Body)).NotTo(ContainSubstring("세션 전체 구조화 피로 근거"))
@@ -942,7 +941,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		// Segment 1 (Snatch) analysis
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			MatchBodyContains(`"startOffset":"0s"`).MatchBodyContains(`"endOffset":"45s"`).
 			Reply(http.StatusOK).
@@ -956,7 +955,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		// Segment 2 (Pull-up) analysis
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			MatchBodyContains(`"startOffset":"50s"`).MatchBodyContains(`"endOffset":"90s"`).
 			Reply(http.StatusOK).
@@ -967,7 +966,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 					},
 				}},
 			})
-		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").MatchBodyContains(`"startOffset":"45s"`).MatchBodyContains(`"endOffset":"50s"`).Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": observationBlock("", 45, 50, true)}}}}}})
+		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelArgon4 + ":generateContent").MatchBodyContains(`"startOffset":"45s"`).MatchBodyContains(`"endOffset":"50s"`).Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": observationBlock("", 45, 50, true)}}}}}})
 		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("controlled early position").MatchBodyContains("controlled late position").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overall":100,"form":80,"intensity":80,"consistency":80,"movements":{"Power Snatch":{"form":80,"intensity":80},"Pull-up":{"form":80,"intensity":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`}}}}}})
 
 		return transport
@@ -1123,7 +1122,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(progress.Unassessed).To(BeEmpty())
 		for _, request := range transport.Requests() {
 			Expect(request.Method).NotTo(Equal(http.MethodDelete))
-			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
 				Expect(string(request.Body)).NotTo(ContainSubstring("모든 수신 청크 집계"))
 				Expect(string(request.Body)).NotTo(ContainSubstring("```score"))
 				Expect(string(request.Body)).To(ContainSubstring("workout_observations"))
@@ -1203,7 +1202,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(progress.Intervals).To(HaveLen(3))
 		for _, request := range transport.Requests() {
-			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
 				Expect(string(request.Body)).NotTo(ContainSubstring("```score"))
 				Expect(string(request.Body)).NotTo(ContainSubstring("모든 수신 청크 집계"))
 			}

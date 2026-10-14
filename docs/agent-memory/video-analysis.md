@@ -104,6 +104,22 @@ is evaluated at final assessment, preserving controlled early/late ROM changes.
 See [`workout-progress.md`](workout-progress.md) for storage, confirmation and
 the one-way observation/timeline/assessment boundary.
 
+Argon and Flash use the same observation-only prompt. `ObservationOnlyRulesPrompt`
+and the final `ObservationOnlyOutputCheckPrompt` apply to prose, coaching,
+highlight reasons and every form/ROM/pace/rep JSON evidence string. Record visible
+positions, trajectories, alignment, ranges and timed pauses; do not infer fatigue
+presence/onset/cause, strength/power decline, muscle weakness/activation,
+abdominal pressure or recovery, including hedged claims. Missing evidence does
+not establish no fatigue or maintained strength. Ground reaction/force-transfer
+efficiency and breathing intent are also interpretations, not direct video facts.
+Keep complete timed repetitions when removing interpretation. Inspect the entire
+claimed rest range for restarted exercise; missing frames are unassessed, not rest.
+Agentic highlight and injury-focused supplementary video inspection use the same boundary.
+Mobility `limited_*` labels describe the current movement only; new observer
+output excludes muscle-tightness/stiffness labels while parsers retain historical
+compatibility. Debug prompt versions are `chunk-debug-observations-v2` and
+`session-independent-observations-v3`; enrichment is `highlight-observation-v2`.
+
 ## File lifecycle
 Upload once and reuse the same Gemini file URI across passes.
 
@@ -221,8 +237,10 @@ Do not disable the filter based on session drift or missing capture offsets.
   migration or bulk backfill is required. New entries set `version: 2` and keep
   the legacy parent fields `start`, `end`, `type`, `movement`, and `reason`.
 - A parent is a playback event. Its `observations` keep exact visual-evidence
-  ranges and use `positive_form`, `form_issue`, `fatigue_onset`, or
-  `technique_event`, with an optional `confidence`. Never lengthen an exact
+  ranges. New observer prompts emit `positive_form`, `form_issue`, or
+  `technique_event`, with an optional `confidence`; pauses/tempo changes are
+  technique events, not fatigue diagnoses. Historical `fatigue_onset` input is
+  still accepted by the normalizer. Never lengthen an exact
   observation merely to meet the playback duration.
 - Merge observations for the same movement when they overlap or are at most
   `1.5` seconds apart. Pad the parent symmetrically to at least `5` seconds,
@@ -284,18 +302,22 @@ Chunks are processed in parallel with bounded concurrency.
 - This skips some repeated work after retries, but floating-point start equality and non-idempotent writes do not guarantee full resumability; REL-06/REL-07 remain open.
 
 ## Gemini Model & Thinking Configuration
-- Worker runtime default model: `gemini-3.8-flash` (replaces legacy `gemini-3.1-pro-preview`).
+- Worker and bare-client deep video analysis default: `gemini-4-argon` (2026-10-14). General session segments, chunk/session reanalysis, injury follow-ups, and legacy whole-video analysis inherit it.
 - Config env vars:
-  - `GEMINI_MODEL`: Model name (default `gemini-3.8-flash`).
+  - `GEMINI_MODEL`: Deep video model name (default `gemini-4-argon`). Set an explicit old model ID to roll back; existing Terraform variable overrides take precedence over defaults.
   - `GEMINI_THINKING_LEVEL`: Full video / deep segment analysis thinking level (default `HIGH`). Valid: `HIGH`, `MEDIUM`, `LOW`.
   - `GEMINI_THINKING_CHUNK`: Short video (~10s chunk) analysis thinking level (default `LOW`). Valid: `HIGH`, `MEDIUM`, `LOW`. Minimizes response latency and thinking token costs for real-time coaching feedback.
-  - `GEMINI_THINKING_BUDGET`: Optional integer thinking budget in tokens.
+  - `GEMINI_THINKING_BUDGET`: Optional integer thinking budget in tokens; omitted from Argon requests even when set.
 - Stage-specific thinking levels:
   - Short video / chunk analysis: Uses `AnalyzeChunkVideo`, which resolves to `GEMINI_THINKING_CHUNK` (`LOW` by default). Note that `MINIMAL` is not supported on Gemini 3.8 / 3.7 Flash and will be rejected.
   - Full video / deep segment analysis: Uses `AnalyzeSegmentWithModel` / `AnalyzeVideo`, which resolves to `GEMINI_THINKING_LEVEL` (`HIGH` by default) to maximize accuracy and temporal grounding.
-- Thinking config is applied via SDK `ThinkingConfig` on models that support it (the current `supportsThinking` implementation matches names containing `3.8`, `3.7`, or `2.5`). Older preview models (`gemini-3.1-pro-preview`) omit `ThinkingConfig` to prevent API errors.
+- Thinking config supports Argon plus names containing `3.8`, `3.7`, or `2.5`. Argon defaults to `HIGH` even with bare-client options. Legacy `gemini-3.1-pro-preview` keeps its existing request behavior.
+- Argon `GenerateContent` calls have `maxOutputTokens=32768` and a 20-minute context deadline, bounded by any earlier caller/task deadline. SDK remains `google.golang.org/genai v1.71.0`; no automatic continuation. `MAX_TOKENS` or a `continuationToken` returns an incomplete-output error with retained usage before any analysis parsing.
+- Reanalysis accepts `argon`, `argon4`, `gemini-4-argon`, `pro`, and `gemini-pro` as Argon. `pro31` and `gemini-3.1-pro-preview` explicitly select the old model. Stored historical model IDs are not rewritten.
 
-The bare Gemini client constructor still defaults to `gemini-3.1-pro-preview` when no model is supplied; `cmd/worker` supplies the runtime config above. Some stages use `flashModel` directly. Do not equate all stage/test defaults.
+Short chunks, indexing, video count review, real-time feedback, image/text parsing, WOD evaluation/summary, and Agentic highlights continue to use Flash explicitly. Web reanalysis omits the model and inherits the worker default; chunk creation does not accept a model field, while whole-session creation does. No UI/API schema or DB migration is required.
+
+Deployment acceptance still requires matched, annotated-video comparison of Argon HIGH against the previous model for evidence quality, counts/timestamps, complete output, latency, and tokens. Transport tests do not establish model accuracy or deployed settings.
 
 ## Whole-Workout Re-Analysis & Apply Workflow
 - **Re-analysis with custom WOD description**: When an athlete updates their workout description or appearance hints in the web app, a new `session_reanalysis_runs` record is created with `wod_description`.
@@ -311,8 +333,9 @@ The bare Gemini client constructor still defaults to `gemini-3.1-pro-preview` wh
   - `gemini-3.8-flash`: $1.50 / 1M prompt tokens, $9.00 / 1M candidate tokens.
   - `gemini-3.5-flash-lite`: $0.25 / 1M prompt tokens, $1.50 / 1M candidate tokens.
   - `gemini-3.1-pro-preview`: $1.25 / 1M prompt tokens, $5.00 / 1M candidate tokens.
+  - `gemini-4-argon`: Standard $2/$10 per 1M input/output through 2026-11-30; $4/$20 from `2026-12-01T00:00:00Z`. Use each ledger row's `created_at`, not the query date.
   - Exchange rate: 1,380 KRW / USD.
-- Current calculation uses prompt + candidate tokens and the fixed exchange rate; it has no dated pricing version or separate thinking/cache billing reconciliation. OBS-01 remains open.
+- Calculation includes prompt + tool input and candidate + thinking output with the fixed exchange rate. Argon dates are preserved in account aggregation by splitting the two pricing periods. Other configured model rates are unchanged. Cache discounts, service tiers, and invoice reconciliation remain outside these estimates; see [token-usage.md](token-usage.md).
 - Endpoints:
   - `GET /api/v1/sessions/:session_id/cost`: Cost breakdown for a single session.
   - `GET /api/v1/analytics/cost`: Cumulative token/cost totals for owned profiles (optionally one `profile_id`); task/model breakdown arrays are on the session-cost response only.

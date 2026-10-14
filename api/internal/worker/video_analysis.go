@@ -45,25 +45,24 @@ const (
 - 모든 분석 결과는 **존댓말** (~요, ~세요, ~습니다)로 작성하세요. 반말(~해, ~다, ~함)을 절대 사용하지 마세요.
 
 ## 분석 요청 사항
-당신은 전문 스포츠 생체역학 전문가이자 코치입니다. 위 컨텍스트와 첨부된 영상을 바탕으로 다음 항목을 분석해 주세요.
+당신은 운동 영상 관찰자입니다. 위 컨텍스트는 참고 정보이며 실제 수행 사실은 대상 인물의 현재 영상에서 직접 확인하세요.
 
-1. **동작 분석 및 체형 평가 (Movement & Posture Analysis)**:
-   - 전반적인 자세의 정확도와 가동 범위를 평가해주세요.
-   - 평소 체형의 불균형이나 의심되는 증상(예: 거북목, 라운드 숄더, 일자허리, 골반 비대칭 등)이 관찰된다면 함께 짚어주세요.
+1. **동작·정렬·가동범위 관찰 (Movement & Posture Observations)**:
+   - 현재 구간에서 직접 보이는 자세, 좌우 위치와 가동범위를 시점과 함께 기록하세요. 촬영 각도로 확인되지 않으면 확인 불가로 남기세요.
+   - 현재 자세에서 평소 체형, 증상 또는 내부 상태를 추론하지 마세요.
    - 영상에서 대상 인물에게 직접 확인되고 재검증된 종목의 표준 기술(Standard)과 비교해 주세요.
 
-2. **강점 및 약점 (Strengths & Weaknesses)**:
-   - 동작 수행 중 잘 유지되고 있는 부분(Core 안정성, 리듬 등)은 무엇인가요?
-   - 자세가 무너지거나 힘의 누수가 발생하는 약점은 무엇인가요?
+2. **유지되는 동작과 위치 변화 (Maintained Motion & Position Changes)**:
+   - 반복 중 유지되는 바벨 궤적, 캐치 위치, 발 간격과 정렬을 기록하세요.
+   - 같은 현재 구간에서 직접 확인되는 위치 변화만 기술하고 근력·힘의 분담이나 변화 원인을 설명하지 마세요.
 
-3. **피로도 및 페이스 분석 (Fatigue Analysis)**:
-   - 반복 속도, 케이던스, 가동범위 또는 자세의 지속적인 저하가 직접 보이는 경우에만 **정확한 시점(분:초)**을 지목해주세요.
-   - 허용되는 시각 근거가 없으면 피로 이벤트나 피로 시작 시점을 만들지 마세요.
-   - 피로가 자세에 어떤 영향을 미쳤는지(예: 등이 굽음, 무릎이 모임) 영상 근거와 함께 설명해 주세요.
+3. **반복 시각과 정지 시간 (Repetition Timing & Pauses)**:
+   - 완료된 반복의 시작·완료 시각, 반복 사이 정지와 가동범위·정렬의 변화를 현재 구간의 **정확한 시점(분:초)**과 함께 기록하세요.
+   - 변화가 보이면 현상만 기술하세요. 피로 판정, 원인 설명 또는 수행 강도 평가는 하지 마세요.
 
 4. **개선 솔루션 (Actionable Feedback)**:
-   - 다음에 이 운동을 할 때 즉시 적용할 수 있는 구체적인 팁을 3가지 제안해주세요.
-   - 입력된 **운동 목표**가 있다면, 그 목표 달성을 위한 전략적 조언을 포함해 주세요.`
+   - 직접 보인 정렬·캐치·기구 위치에 대한 짧은 동작 큐를 제시하세요. 근거가 없으면 억지로 팁을 만들지 마세요.
+   - 운동 목표를 수행 사실이나 내부 상태의 근거로 사용하지 마세요.`
 
 	HighlightSelectionPrompt = `
 
@@ -72,12 +71,12 @@ const (
    - 사용자 입력에만 있고 영상에서 보이지 않는 계획 종목은 포함하지 마세요. 힌트에 없는 실제 관찰 종목은 포함하세요.
    - 걷기, 휴식, 회복, 준비, 장비 세팅, Unknown은 하이라이트나 fatigue_point가 아닙니다.
    - 구간당 최대 3개만 출력하고, 근거가 없으면 빈 배열을 출력하세요. 카테고리별 개수 할당량은 없습니다.
-   - 세션 전반에 걸친 시간적 균형: 후반부 피로 구간에만 편중되지 않도록, 전반부 세트(00:00 이후 초기 운동 구간)의 모범 동작이나 기준 테크닉(positive_form, technique_event)과 후반부 피로/자세 변화(form_issue, fatigue_onset)를 고르게 추출하세요.
-   - type: positive_form(직접 보이는 좋은 기술), form_issue(직접 보이는 교정점), fatigue_onset(지속적인 속도·가동범위·자세 저하), technique_event(평가와 별개인 구체적인 기술·전환 장면)
+   - 현재 구간에 여러 세트가 보이면 서로 다른 시점의 좋은 기술과 직접 보이는 정렬·동작 전환 근거를 선택하세요. 이전 구간이나 후반부의 상태를 추측하지 마세요.
+   - type: positive_form(직접 보이는 좋은 기술), form_issue(직접 보이는 정렬·가동범위 교정점), technique_event(정지·템포 변화 또는 구체적인 기술·전환 장면)
 	   - 동일한 연속 동작과 같은 type을 여러 조각으로 나누지 마세요. 각 start/end는 현상이 실제로 보이는 정확한 시각이어야 합니다.
 	   - confidence는 해당 시각 근거가 영상에서 직접 확인된 확신도이며 0.0~1.0 숫자로 출력하세요.
-   - 중요한 장면이면 tags에 key_moment를 추가하세요. positive_form/form_issue/fatigue_onset와 겹치는 key_moment를 별도 항목으로 중복 출력하지 마세요.
-   - fatigue_onset는 심박수만으로 만들지 말고 반복 속도 저하, 케이던스 손실, 가동범위 감소 또는 자세 붕괴가 지속적으로 보여야 합니다.
+   - 중요한 장면이면 tags에 key_moment를 추가하세요. 기존 항목과 겹치는 key_moment를 별도 항목으로 중복 출력하지 마세요.
+   - fatigue_onset와 fatigue_point는 관찰 단계에서 출력하지 마세요. 속도·정지 변화는 technique_event, 보이는 정렬 변화는 form_issue로 기록하고 reason에 원인 해석을 넣지 마세요.
    - movement 필드에는 실제로 관찰된 운동 종목의 공식 표준 영어 명칭(예: "Power Clean", "Dumbbell Squat Snatch", "V-up")만 기입하세요. 한글이나 음차를 사용하지 마세요.
    - 반드시 아래 형식의 **highlights** JSON 코드 블록으로 출력하세요 (json이 아닌 highlights 태그 사용):
 ` + "```highlights\n" + `[{"start":"0:15","end":"0:18.5","type":"positive_form","movement":"Snatch","reason":"수직에 가까운 풀 익스텐션","confidence":0.94,"tags":["key_moment"]},{"start":"0:22","end":"0:24","type":"form_issue","movement":"Snatch","reason":"캐치 순간 무릎 내전","confidence":0.86}]` + "\n```"
@@ -794,6 +793,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		segPrompt := w.buildSegmentAnalysisPrompt(p, seg, wodContext, "", false)
 		if newWOD {
 			segPrompt += wodSegmentEvidencePrompt
+			segPrompt += ObservationOnlyOutputCheckPrompt
 		}
 
 		w.logger.Info("Pass 2: Analyzing segment",
@@ -1078,7 +1078,7 @@ func preserveWarmupTrajectories(all, selected []Segment, budget int) []Segment {
 const independentSegmentPolicy = `
 ## 독립 구간 관찰
 현재 영상 구간에서 직접 보이는 대상 인물의 동작, 완료된 반복, 반복 시점, 자세, 정렬, 가동범위와 템포만 기록하세요.
-이전 구간의 상태, 이전 점수나 이전 평가를 추측하거나 참조하지 마세요. 전체 세션 점수와 누적 강도, 피로 원인, 회복률은 최종 평가에서만 판단합니다.
+이전 구간의 상태, 이전 점수나 이전 평가를 추측하거나 참조하지 마세요. 세션 점수와 누적 강도 평가는 별도 최종 평가 단계의 역할입니다. 관찰 단계에서 피로 원인, 힘 저하 또는 회복률을 추론하지 마세요.
 현재 구간 안에서도 서로 다른 반복/세트의 관찰 시점을 보존하세요. 긴 구간을 한 문장의 평균 평가로 압축하지 마세요.
 운동 계획과 프로필은 참고 정보이며 실제 수행 사실은 현재 영상으로 확인하세요. 복압이나 근육 활성은 영상만으로 확정하지 마세요.
 현재 보이는 자세에 대한 짧은 안내는 가능하지만 과거 대비 개선/악화나 누적 피로를 코칭하지 마세요.
@@ -1091,7 +1091,7 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 	personalProfile := w.lookupProfileString(p.ProfileID)
 
 	prompt := fmt.Sprintf(`# 운동 영상 분석 요청
-전문 스포츠 생체역학 전문가로서 이 운동 구간(%s ~ %s)을 분석해 주세요.
+운동 영상 관찰자로서 이 구간(%s ~ %s)에서 직접 보이는 사실만 기록해 주세요. 내부 상태나 동작 변화의 원인을 설명하지 마세요.
 
 ## 중간 종목 라벨 (확정 아님)
 이 구간의 이전 청크 라벨은 '%s'입니다. 현재 구간의 대상 인물 영상 근거로 다시 식별하고, 근거가 모순되면 라벨을 교정하거나 Unknown으로 판단하세요.
@@ -1111,7 +1111,7 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 		prompt += RecoveryChunkPolicyPrompt
 	}
 	prompt += MovementEvidenceRulesPrompt
-	prompt += FatigueEvidenceRulesPrompt
+	prompt += ObservationOnlyRulesPrompt
 	prompt += SpinalObservationRulesPrompt
 
 	if len(p.Injuries) > 0 {
@@ -1135,6 +1135,7 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 - 클립 내의 초 단위로 부상 위험이 있는 정확한 시점을 설명하세요.`, seg.Start, seg.End)
 
 	prompt += workoutObservationPrompt
+	prompt += ObservationOnlyOutputCheckPrompt
 	return prompt
 }
 
@@ -1702,7 +1703,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 }
 
 func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs float64) string {
-	prompt := analysisPromptFor(p.WorkoutType) + MovementEvidenceRulesPrompt + FatigueEvidenceRulesPrompt + SpinalObservationRulesPrompt
+	prompt := analysisPromptFor(p.WorkoutType) + MovementEvidenceRulesPrompt + ObservationOnlyRulesPrompt + SpinalObservationRulesPrompt
 
 	if wod := buildWODContext(p.WODDescription); wod != "" {
 		prompt += wod
@@ -1750,6 +1751,7 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 		prompt += RecoveryChunkPolicyPrompt
 	}
 	prompt += workoutObservationPrompt
+	prompt += ObservationOnlyOutputCheckPrompt
 
 	return prompt
 }

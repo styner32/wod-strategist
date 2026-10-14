@@ -165,7 +165,7 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 
 	expectSegmentAnalysis := func(fileURI string) {
 		geminiTransport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			MatchBodyContains(`"fileUri":"` + fileURI + `"`).
 			Reply(http.StatusOK).
@@ -288,7 +288,7 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 
 		var analyzeBody map[string]any
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
 				Expect(json.Unmarshal(request.Body, &analyzeBody)).To(Succeed())
 			}
 		}
@@ -305,7 +305,7 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 		Expect(*completed.MediaStartSecs).To(BeNumerically("~", start))
 		Expect(completed.MediaEndSecs).NotTo(BeNil())
 		Expect(*completed.MediaEndSecs).To(BeNumerically("~", end))
-		Expect(completed.Model).To(Equal(gemini.ModelPro31Preview))
+		Expect(completed.Model).To(Equal(gemini.ModelArgon4))
 		Expect(completed.PromptTokens).To(Equal(int32(11)))
 		Expect(completed.CandidateTokens).To(Equal(int32(7)))
 		Expect(completed.TotalTokens).To(Equal(int32(18)))
@@ -384,7 +384,7 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 
 		var promptBody map[string]any
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
 				Expect(json.Unmarshal(request.Body, &promptBody)).To(Succeed())
 			}
 		}
@@ -548,7 +548,7 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 
 		var analyzeBody map[string]any
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
 				Expect(json.Unmarshal(request.Body, &analyzeBody)).To(Succeed())
 			}
 		}

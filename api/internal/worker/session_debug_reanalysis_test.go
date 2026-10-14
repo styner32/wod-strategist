@@ -43,7 +43,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 ` + "```highlights\n" + `[{"start":"0:00","end":"0:00.5","type":"key_moment","movement":"Pull-up","reason":"visible movement"}]` + "\n```\n" +
 			"```workout_observations\n" + `{"intervals":[{"start_secs":0,"end_secs":0.75,"activity":"exercise","movement":"Pull-up","target_confirmed":true,"rep_events":[{"movement":"Pull-up","unit":"reps","start_secs":0.1,"end_secs":0.5,"complete":true,"evidence":"complete pull and return"}],"form_observations":[{"start_secs":0.1,"end_secs":0.5,"evidence":"visible aligned pull"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
 		geminiTransport.New(baseURL).
-			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
 			MatchBodyContains(`"fileUri":"` + fileURI + `"`).
 			Reply(http.StatusOK).
@@ -162,7 +162,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 
 		var prompt string
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(request.URL, gemini.ModelPro31Preview+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
 				prompt = string(request.Body)
 			}
 		}
@@ -229,6 +229,39 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(completed.GeminiFileURI).To(Equal(baseURL + "/files/uploaded-session"))
 	})
 
+	It("keeps truncated Argon output out of candidates while recording billed usage", func() {
+		_, run := seedChunkAndRun()
+		Expect(database.Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Update("model", "gemini-4-argon").Error).To(Succeed())
+		expires := time.Now().UTC().Add(time.Hour)
+		testhelpers.CreateSessionReanalysisRun(database, &db.SessionReanalysisRun{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: db.SessionReanalysisStatusCompleted,
+			SourceGCSURI: sourceURI, GeminiFileURI: baseURL + "/files/truncated-cache",
+			GeminiFileName: "files/truncated-cache", GeminiMIMEType: "video/mp4", GeminiFileExpiresAt: &expires,
+		})
+		testhelpers.MockGCSDownloadWithBody(storageTransport, sourceURI, videoBytes)
+		geminiTransport.New(baseURL).Get("/v1beta/files/truncated-cache").Reply(http.StatusOK).
+			JSON(map[string]any{"name": "files/truncated-cache", "state": "ACTIVE"})
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelArgon4 + ":generateContent").Reply(http.StatusOK).
+			BodyString(`{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"partially generated observation"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":32748,"totalTokenCount":32868}}`)
+		task, err := NewSessionDebugReanalysisTask(run.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(w.HandleSessionDebugReanalysisTask(context.Background(), task)).To(MatchError(ContainSubstring("MAX_TOKENS")))
+		Expect(storageTransport.Verify()).To(Succeed())
+		Expect(geminiTransport.Verify()).To(Succeed())
+		var persisted db.SessionReanalysisRun
+		Expect(database.First(&persisted, run.ID).Error).To(Succeed())
+		Expect(persisted.Status).To(Equal(db.SessionReanalysisStatusQueued))
+		Expect(persisted.Output).To(BeEmpty())
+		Expect(persisted.CompletedAt).To(BeNil())
+		var usage db.TokenUsage
+		Expect(database.Where("session_id = ? AND task_type = ?", session.SessionID, "session:reanalysis").First(&usage).Error).To(Succeed())
+		Expect(usage.Model).To(Equal(gemini.ModelArgon4))
+		Expect(usage.TotalTokens).To(Equal(int64(32868)))
+		var metadata map[string]int64
+		Expect(json.Unmarshal(usage.UsageMetadata, &metadata)).To(Succeed())
+		Expect(metadata["thoughtsTokenCount"]).To(Equal(int64(32748)))
+	})
+
 	It("retries instead of publishing a partial candidate when any selected segment fails", func() {
 		_, run := seedChunkAndRun()
 		secondStart, secondEnd := 0.76, 0.95
@@ -247,7 +280,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		geminiTransport.New(baseURL).Get("/v1beta/files/partial-cache").MatchHeader("X-Goog-Api-Key", apiKey).
 			Reply(http.StatusOK).JSON(map[string]any{"name": "files/partial-cache", "state": "ACTIVE"})
 		expectAnalysis(baseURL+"/files/partial-cache", false)
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).MatchBodyContains("Burpee").
 			Reply(http.StatusInternalServerError).JSON(map[string]any{"error": map[string]any{"message": "temporary"}})
 

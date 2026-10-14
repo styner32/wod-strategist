@@ -22,7 +22,7 @@ import (
 const (
 	TypeChunkDebugReanalysis = "chunk:debug-reanalysis"
 
-	chunkDebugPromptVersion = "chunk-debug-reanalysis-v1"
+	chunkDebugPromptVersion = "chunk-debug-observations-v2"
 	chunkDebugSchemaVersion = "chunk-reanalysis-candidate-v1"
 	chunkDebugMaxRetries    = 2
 	geminiFileCacheTTL      = 47 * time.Hour
@@ -581,8 +581,8 @@ func (w *Worker) buildChunkDebugReanalysisPrompt(target *chunkDebugTarget) strin
 
 ## 청크 심박수 참고값
 이 청크에 저장된 심박수는 %d bpm입니다. 측정 시점의 정밀도는 보장되지 않습니다.
-심박수만으로 피로를 판정하거나 피로 구간을 선택하지 마세요. 영상에서 반복 속도, 가동범위,
-자세 또는 일관성의 지속적인 저하가 먼저 확인된 경우에만 보조 근거로 사용하세요.`, target.HeartRateBPM)
+심박수만으로 피로를 판정하거나 피로 구간을 선택하지 마세요. 관찰 단계에서는 이 참고값을
+피로·힘·강도 또는 자세 변화 원인의 근거로 사용하지 마세요.`, target.HeartRateBPM)
 	}
 	prompt += `
 
@@ -594,6 +594,7 @@ func (w *Worker) buildChunkDebugReanalysisPrompt(target *chunkDebugTarget) strin
 - 대상 인물이 운동 중인 것은 분명하지만 종목을 뒷받침할 시각적 근거가 부족하면 [EXERCISE: Unknown]을 사용하세요.
 - 대상 인물이 운동 중인지조차 시각적으로 확인할 수 없는 경우에만 [NO_EXERCISE]를 사용하세요.`
 	prompt += ObservedSignalsPrompt
+	prompt += ObservationOnlyOutputCheckPrompt
 	return prompt
 }
 

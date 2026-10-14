@@ -16,6 +16,7 @@ This document outlines architectural patterns, scoring rubrics, prompt rules, an
 
 - **Schema Column:** `analysis_results.mobility_observations` (TEXT NOT NULL DEFAULT `'[]'`)
 - **Prompt:** `worker.MobilityOutputPrompt` appended to all workout analysis prompts. Emits a ```mobility JSON block.
+- **Observation boundary:** New observer output describes current visible positions/ranges only, never inherent muscle tightness, fatigue causes, strength decline or recovery. New `limited_*` entries do not establish a fixed personal restriction. Prompts exclude `tight_hamstrings`, `tight_hip_flexors` and `general_stiffness`; historical parsers retain these labels without rewriting records. Both Argon and Flash use the shared observation boundary.
 - **Closed Vocabulary:**
   - `joint`: `Neck`, `Shoulder`, `Elbow`, `Wrist`, `Upper Back`, `Lower Back`, `Hip`, `Hamstring`, `Knee`, `Ankle`
   - `observation`: `limited_hip_flexion`, `limited_hip_internal_rotation`, `limited_ankle_dorsiflexion`, `limited_overhead_flexion`, `limited_shoulder_external_rotation`, `limited_thoracic_extension`, `tight_hamstrings`, `tight_hip_flexors`, `limited_wrist_extension`, `general_stiffness`

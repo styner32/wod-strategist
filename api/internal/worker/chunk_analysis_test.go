@@ -47,13 +47,13 @@ var _ = Describe("buildChunkAnalysisPrompt", func() {
 		Expect(prompt).To(ContainSubstring("## 개인 프로필"))
 	})
 
-	It("uses BPM only after visually established fatigue and never for walking or rest", func() {
+	It("keeps BPM as a reference without diagnosing fatigue, strength or intensity", func() {
 		prompt := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{HeartRateBPM: 168})
 
 		Expect(prompt).To(ContainSubstring("168 bpm"))
 		Expect(prompt).To(ContainSubstring("정확한 측정 시점은 알 수 없습니다"))
 		Expect(prompt).To(ContainSubstring("심박수만으로 피로를 판정하거나 피로 구간을 선택하지"))
-		Expect(prompt).To(ContainSubstring("걷기, 휴식, 회복, 준비 또는 장비 세팅"))
+		Expect(prompt).To(ContainSubstring("피로·힘·운동 강도 또는 자세 변화의 원인을 판정하는 근거로 사용하지"))
 		Expect(prompt).NotTo(ContainSubstring("심박수가 높으면 피로도와 연관"))
 	})
 
@@ -83,6 +83,20 @@ var _ = Describe("buildChunkAnalysisPrompt", func() {
 })
 
 var _ = Describe("parseObservedSignals", func() {
+	It("preserves unevaluated physiology while retaining visible form and timing", func() {
+		input := "```observed_signals\n" +
+			`{"movement":"Power Clean","activity_state":"exercise","rep_count":3,"avg_cadence_s":2.5,"exertion_estimate":"unknown","form_issues_seen":["캐치 순간 팔꿈치가 아래쪽을 향함"],"fatigue_visually_established":false,"fatigue_evidence_types":[],"fatigue_evidence":[]}` + "\n```"
+		var signals map[string]any
+		Expect(json.Unmarshal([]byte(parseObservedSignals(input)), &signals)).To(Succeed())
+		Expect(signals).To(HaveKeyWithValue("exertion_estimate", "unknown"))
+		Expect(signals).To(HaveKeyWithValue("fatigue_visually_established", false))
+		Expect(signals).To(HaveKeyWithValue("rep_count", float64(3)))
+		Expect(signals).To(HaveKeyWithValue("avg_cadence_s", 2.5))
+		Expect(signals["form_issues_seen"]).To(ContainElement("캐치 순간 팔꿈치가 아래쪽을 향함"))
+		Expect(signals["fatigue_evidence_types"]).To(BeEmpty())
+		Expect(signals["fatigue_evidence"]).To(BeEmpty())
+	})
+
 	It("extracts JSON from ```observed_signals block", func() {
 		input := "코칭 피드백\n```observed_signals\n{\"movement\": \"Deadlift\", \"rep_count\": 5}\n```"
 		result := parseObservedSignals(input)

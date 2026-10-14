@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
@@ -11,12 +12,19 @@ import (
 
 const KRWPerUSD = 1380.0
 
+// Pricing dates use UTC and the ledger's CreatedAt, not the time of the query.
+var ArgonStandardPricingStartsAt = time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC)
+
 type ModelRate struct {
 	PromptPerMillion    float64 `json:"prompt_per_million"`
 	CandidatePerMillion float64 `json:"candidate_per_million"`
 }
 
 var ModelPricing = map[string]ModelRate{
+	gemini.ModelArgon4: {
+		PromptPerMillion:    4.00,
+		CandidatePerMillion: 20.00,
+	},
 	"gemini-3.8-flash": {
 		PromptPerMillion:    1.50,
 		CandidatePerMillion: 9.00,
@@ -54,6 +62,16 @@ func GetModelRate(model string) ModelRate {
 	}
 }
 
+// Missing dates use the standard Argon rate rather than assuming eligibility
+// for introductory pricing. Existing model rates remain unchanged.
+func GetModelRateAt(model string, createdAt time.Time) ModelRate {
+	if strings.EqualFold(strings.TrimSpace(model), gemini.ModelArgon4) &&
+		!createdAt.IsZero() && createdAt.Before(ArgonStandardPricingStartsAt) {
+		return ModelRate{PromptPerMillion: 2.00, CandidatePerMillion: 10.00}
+	}
+	return GetModelRate(model)
+}
+
 func RoundUSD(usd float64) float64 {
 	return math.Round(usd*1000000) / 1000000
 }
@@ -63,11 +81,15 @@ func RoundKRW(krw float64) float64 {
 }
 
 func CalculateTokensCost(model string, promptTokens, candidateTokens int64) (float64, float64) {
+	return CalculateTokensCostAt(model, promptTokens, candidateTokens, time.Time{})
+}
+
+func CalculateTokensCostAt(model string, promptTokens, candidateTokens int64, createdAt time.Time) (float64, float64) {
 	// Lyria is priced per generation, not using the fallback text-token rate.
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "lyria-") {
 		return 0, 0
 	}
-	rate := GetModelRate(model)
+	rate := GetModelRateAt(model, createdAt)
 	promptUSD := (float64(promptTokens) / 1000000.0) * rate.PromptPerMillion
 	candidateUSD := (float64(candidateTokens) / 1000000.0) * rate.CandidatePerMillion
 	totalUSD := RoundUSD(promptUSD + candidateUSD)
@@ -119,15 +141,16 @@ type TotalCostResponse struct {
 }
 
 type ModelTokenAggregate struct {
-	UnpricedCalls   int64  `json:"unpriced_calls"`
-	ThinkingTokens  int64  `json:"thinking_tokens"`
-	ToolUseTokens   int64  `json:"tool_use_tokens"`
-	CachedTokens    int64  `json:"cached_tokens"`
-	UnmeasuredCalls int64  `json:"unmeasured_calls"`
-	Model           string `json:"model"`
-	PromptTokens    int64  `json:"prompt_tokens"`
-	CandidateTokens int64  `json:"candidate_tokens"`
-	TotalTokens     int64  `json:"total_tokens"`
+	PricingAt       time.Time `json:"-"` // representative date within one model/pricing period
+	UnpricedCalls   int64     `json:"unpriced_calls"`
+	ThinkingTokens  int64     `json:"thinking_tokens"`
+	ToolUseTokens   int64     `json:"tool_use_tokens"`
+	CachedTokens    int64     `json:"cached_tokens"`
+	UnmeasuredCalls int64     `json:"unmeasured_calls"`
+	Model           string    `json:"model"`
+	PromptTokens    int64     `json:"prompt_tokens"`
+	CandidateTokens int64     `json:"candidate_tokens"`
+	TotalTokens     int64     `json:"total_tokens"`
 }
 
 func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostResponse {
@@ -166,7 +189,7 @@ func CalculateSessionCost(sessionID string, usages []db.TokenUsage) SessionCostR
 		tool += v
 		cached += cache
 		unmeasured += missing
-		usd, _ := CalculateTokensCost(u.Model, p+v, c+t)
+		usd, _ := CalculateTokensCostAt(u.Model, p+v, c+t, u.CreatedAt)
 
 		totalPrompt += p
 		totalCandidate += c
@@ -276,7 +299,7 @@ func CalculateTotalCost(usages []db.TokenUsage) TotalCostResponse {
 		tool += v
 		cached += cache
 		unmeasured += missing
-		usd, _ := CalculateTokensCost(u.Model, p+v, c+t)
+		usd, _ := CalculateTokensCostAt(u.Model, p+v, c+t, u.CreatedAt)
 
 		totalPrompt += p
 		totalCandidate += c
@@ -309,7 +332,7 @@ func CalculateTotalCostFromAggregates(aggregates []ModelTokenAggregate) TotalCos
 		cached += a.CachedTokens
 		unmeasured += a.UnmeasuredCalls
 		unpriced += a.UnpricedCalls
-		usd, _ := CalculateTokensCost(a.Model, a.PromptTokens+a.ToolUseTokens, a.CandidateTokens+a.ThinkingTokens)
+		usd, _ := CalculateTokensCostAt(a.Model, a.PromptTokens+a.ToolUseTokens, a.CandidateTokens+a.ThinkingTokens, a.PricingAt)
 		totalPrompt += a.PromptTokens
 		totalCandidate += a.CandidateTokens
 		totalTokens += a.TotalTokens

@@ -34,9 +34,9 @@ variable "gemini_api_key" {
 }
 
 variable "gemini_model" {
-  description = "Default Gemini model for video analysis"
+  description = "Default Gemini model for deep video analysis; short chunks and indexing use Flash"
   type        = string
-  default     = "gemini-3.8-flash"
+  default     = "gemini-4-argon"
 }
 
 variable "gemini_thinking_chunk" {

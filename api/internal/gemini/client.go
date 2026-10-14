@@ -28,6 +28,7 @@ type TokenUsage struct {
 }
 
 const (
+	ModelArgon4            = "gemini-4-argon"
 	ModelPro31Preview      = "gemini-3.1-pro-preview"
 	ModelFlash35Lite       = "gemini-3.5-flash-lite"
 	ModelFlash37           = "gemini-3.7-flash"
@@ -38,7 +39,7 @@ const (
 	ModelFlash30Preview = ModelFlash35Lite
 )
 
-const defaultModel = ModelPro31Preview
+const defaultModel = ModelArgon4
 
 type Client struct {
 	client             *genai.Client
@@ -64,7 +65,7 @@ type Options struct {
 	BaseURL            string
 	APIVersion         string
 	HTTPClient         *http.Client
-	Model              string // e.g. "gemini-3.1-pro-preview", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"
+	Model              string // e.g. "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.8-flash"
 	ThinkingLevel      string // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL" (default / full video analysis)
 	ThinkingLevelChunk string // e.g. "LOW", "MEDIUM" (for short chunk analysis)
 	ThinkingBudget     *int32 // Optional token budget for thinking
@@ -239,7 +240,7 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 
 func supportsThinking(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
-	return strings.Contains(m, "3.8") || strings.Contains(m, "3.7") || strings.Contains(m, "2.5")
+	return m == ModelArgon4 || strings.Contains(m, "3.8") || strings.Contains(m, "3.7") || strings.Contains(m, "2.5")
 }
 
 func (c *Client) thinkingConfigForModel(model string) *genai.ThinkingConfig {
@@ -253,11 +254,15 @@ func (c *Client) thinkingConfigForModelAndLevel(model string, level string) *gen
 	if c == nil || !supportsThinking(model) {
 		return nil
 	}
+	argon := strings.EqualFold(strings.TrimSpace(model), ModelArgon4)
+	if argon && strings.TrimSpace(level) == "" {
+		level = "HIGH"
+	}
 	if level == "" && c.thinkingBudget == nil {
 		return nil
 	}
 	tc := &genai.ThinkingConfig{}
-	if c.thinkingBudget != nil {
+	if c.thinkingBudget != nil && !argon {
 		tc.ThinkingBudget = c.thinkingBudget
 	}
 	switch strings.ToUpper(strings.TrimSpace(level)) {
@@ -724,7 +729,7 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 }
 
 // AnalyzeSegmentWithModel performs deep biomechanical analysis on a specific time range
-// of the video using a specified model (e.g. ModelFlash36 or ModelPro31Preview).
+// of the video using a specified model (e.g. ModelArgon4 or ModelPro31Preview).
 func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *TokenUsage, error) {
 	if model == "" {
 		model = c.model

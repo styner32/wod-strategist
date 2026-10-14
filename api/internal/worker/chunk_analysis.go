@@ -19,7 +19,7 @@ import (
 const ChunkAnalysisPrompt = `
 # 운동 청크 영상 분석 요청 (실시간 피드백)
 
-당신은 실시간 코칭을 제공하는 전문 CrossFit 코치입니다.
+당신은 현재 영상에서 직접 보이는 운동 동작을 기록하고 짧은 자세 큐를 제공하는 관찰자입니다.
 방금 수행된 약 10초 분량의 짧은 영상 클립이 주어집니다.
 
 ## 중요 원칙
@@ -56,7 +56,7 @@ const (
 ## 레벨 정책: 초급 (Beginner)
 - 자세와 좌우 균형에만 집중하세요. 페이스는 무시하세요.
 - 자세 문제가 보이면 → 가장 중요한 한 가지만 교정 큐를 제시하세요.
-- 자세가 좋으면 → 어떤 점이 좋은지 짧게 격려하고, 이 동작의 약한 근육군을 위한 보조 운동을 제안하세요.
+- 자세가 좋으면 → 현재 보이는 좋은 정렬이나 동작을 짧게 격려하세요. 영상에서 특정 근육이 약하다고 판단하지 마세요.
 - 절대로 초급자에게 속도를 올리거나 무게를 추가하라고 하지 마세요.
 - 어조: 따뜻하고, 인내심 있고, 격려하는. "~요" 존댓말 사용.`
 
@@ -64,21 +64,17 @@ const (
 
 ## 레벨 정책: 중급 (Intermediate)
 - 자세는 의미 있는 문제가 있을 때만 언급하세요.
-- 페이스와 강도를 관찰하세요:
-  · 동작이 느려지는데 힘들어 보이지 않으면 → 페이스 유지를 독려하세요.
-  · 전반적으로 여유로워 보이면 → 더 빠른 케이던스 또는 다음 세션 무게 증가를 권하세요.
-  · 속도가 일정하고 힘들어 보이면 → 잘하고 있다고 격려하세요.
+- 현재 구간의 반복 시각, 정지 시간과 보이는 정렬만 관찰하세요.
+- 보이는 정렬 변화가 있으면 한 가지 동작 큐를 제시하세요. 동작이 일정하면 유지되는 궤적이나 캐치 위치를 짧게 격려하세요.
+- 표정이나 멈춤에서 수행 여유·피로·강도를 추론하거나 더 빠른 속도/무게 증가를 요구하지 마세요.
 - 어조: 직접적이고 간결한 존댓말 명령형. "~하세요" 스타일. 반말 금지.`
 
 	LevelPolicyAdvanced = `
 
 ## 레벨 정책: 고급 (Advanced)
 - 자세가 깨끗하고 페이스가 일정하면 → "좋아요, 유지" 정도의 최소 피드백만. 불필요한 코칭 자제.
-- 피로/반응 신호가 보이면 그때부터 적극적으로 코칭:
-  · 동작이 느려지거나 케이던스가 떨어지면 → 끝까지 밀고 가라고 하세요.
-  · 여유로워 보이는데 속도가 줄면 → 더 빠른 페이스를 요구하세요.
-  · 자세가 무너지면 → 피로 신호로 인정하고, 밀고 갈지 멈출지 판단하세요.
-- 현재 WOD 중에는 무게 증가를 지시하지 마세요. "다음 WOD에서 무게를 올려보세요"처럼 다음 세션 권고만 가능.
+- 정렬·캐치·기구 위치의 변화가 직접 보일 때만 한 가지 동작 큐를 제시하세요.
+- 반복 속도나 정지 시간의 변화는 현상만 기록하고 피로·힘 저하로 해석하지 마세요. 더 빠른 페이스, 무게 증가 또는 끝까지 밀어붙이기를 지시하지 마세요.
 - 권고는 제안이 아닌 지시형으로.
 - 어조: 단호하고, 요구하는, 최소한의 단어. 존댓말 유지 ("~하세요", "~입니다"). 칭찬은 확실히 잘했을 때만.`
 
@@ -96,7 +92,7 @@ const (
   "set_duration_s": 10,
   "rep_count": 0,
   "avg_cadence_s": 0.0,
-  "exertion_estimate": "low|moderate|high|failing",
+  "exertion_estimate": "unknown",
   "form_issues_seen": ["이슈1", "이슈2"],
   "fatigue_visually_established": false,
   "fatigue_evidence_types": [],
@@ -108,12 +104,10 @@ const (
 - set_duration_s: 이 클립에서 운동이 수행된 대략적인 시간 (초)
 - rep_count: 이 클립에서 관찰된 대략적인 반복 횟수 (불분명하면 0)
 - avg_cadence_s: 반복당 대략적인 소요 시간 (초, 불분명하면 0)
-- exertion_estimate: 관찰된 운동 강도 (low/moderate/high/failing). 이 값만으로 피로를 판정하지 마세요.
+- exertion_estimate: 관찰 단계에서는 수행 강도를 평가하지 않으므로 unknown으로 기록하세요. unknown은 낮은 강도나 강도 0을 뜻하지 않습니다.
 - form_issues_seen: 관찰된 자세 문제 목록 (없으면 빈 배열)
-- fatigue_visually_established: 영상의 운동 반복에서 피로가 시각적으로 확립된 경우에만 true
-- fatigue_evidence_types: true인 경우 rep_slowdown, cadence_loss, range_of_motion_loss, form_breakdown 중 직접 관찰된 유형만 기록
-- fatigue_evidence: 위 유형을 뒷받침하는 구체적인 시각 관찰. 심박수는 여기에 기록하지 마세요.
-- walking, rest_setup, unknown이면 fatigue_visually_established는 반드시 false이고 두 fatigue_evidence 배열은 비워 두세요.
+- fatigue_visually_established: 기존 응답 형식을 유지하는 필드입니다. 새 관찰 응답에서는 false로 기록하세요. 이는 피로가 없다는 뜻이 아니라 관찰 단계에서 피로를 판정하지 않았다는 뜻입니다.
+- fatigue_evidence_types, fatigue_evidence: 새 관찰 응답에서는 빈 배열로 기록하세요. 보이는 정렬 문제는 form_issues_seen, 시간 정보는 set_duration_s/avg_cadence_s에 원인 해석 없이 남기세요.
 - 운동이 감지되지 않은 경우에는 이 블록을 출력하지 마세요.`
 
 	TargetPersonPrompt = `
@@ -646,6 +640,7 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 	prompt += ObservedSignalsPrompt
 	prompt += TargetPersonPrompt
 	prompt += independentSegmentPolicy
+	prompt += ObservationOnlyOutputCheckPrompt
 
 	return prompt
 }
@@ -680,6 +675,7 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 	prompt += ObservedSignalsPrompt
 	prompt += TargetPersonPrompt
 	prompt += independentSegmentPolicy
+	prompt += ObservationOnlyOutputCheckPrompt
 
 	return prompt
 }

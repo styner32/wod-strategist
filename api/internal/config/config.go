@@ -46,7 +46,7 @@ type Worker struct {
 	ActivityCountingEnabled   bool
 	Common
 	GeminiAPIKey         string
-	GeminiModel          string // GEMINI_MODEL — default "gemini-3.8-flash"
+	GeminiModel          string // GEMINI_MODEL — default "gemini-4-argon" (deep video analysis)
 	GeminiThinkingLevel  string // GEMINI_THINKING_LEVEL — default "HIGH"
 	GeminiThinkingChunk  string // GEMINI_THINKING_CHUNK — default "LOW"
 	GeminiThinkingBudget *int32 // GEMINI_THINKING_BUDGET — optional token count
@@ -131,7 +131,7 @@ func InitWorker() (Worker, error) {
 
 	model := strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
 	if model == "" {
-		model = gemini.ModelFlash38
+		model = gemini.ModelArgon4
 	}
 
 	thinkingLevel := strings.ToUpper(strings.TrimSpace(os.Getenv("GEMINI_THINKING_LEVEL")))
