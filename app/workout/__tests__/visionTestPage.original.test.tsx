@@ -17,6 +17,7 @@ const mockReplace = jest.fn();
 const mockConfidence = jest.fn();
 const mockProcessChunk = jest.fn();
 const mockCompress = jest.fn();
+const mockCancelCompression = jest.fn();
 const mockMergeChunks = jest.fn();
 let mockContinuousRecording = true;
 let mockSkipCompression = true;
@@ -83,7 +84,12 @@ jest.mock("@/features/wod/ui/ActivitySummaryCard", () => ({ ActivitySummaryConte
 jest.mock("expo-keep-awake", () => ({ activateKeepAwakeAsync: async () => {}, deactivateKeepAwake: () => {} }));
 jest.mock("expo-media-library/legacy", () => ({ requestPermissionsAsync: async () => ({ granted: true }) }));
 jest.mock("expo-screen-orientation", () => ({ lockAsync: async () => {}, OrientationLock: { LANDSCAPE: 3, PORTRAIT_UP: 1 } }));
-jest.mock("react-native-compressor", () => ({ Video: { compress: (...args: unknown[]) => mockCompress(...args) } }));
+jest.mock("react-native-compressor", () => ({
+  Video: {
+    compress: (...args: unknown[]) => mockCompress(...args),
+    cancelCompression: (...args: unknown[]) => mockCancelCompression(...args),
+  },
+}));
 jest.mock("@/features/health/polar/polarSensorRecorder", () => ({ PolarSensorRecorder: {
   start: () => {}, pause: () => {}, resume: () => {}, stop: async () => null,
   getLiveStatus: () => ({ accSamples: 0, dropped: null }),
@@ -420,6 +426,46 @@ it.each(["exception", "missing_output", "empty_output"])("falls back to native a
   expect(mockMergeChunks.mock.calls[0][0]).toBe(mockRef.sessionId);
   await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
   view.unmount();
+});
+
+it("cancels hung compression after timeout, falls back to native analysis chunks, and completes server merge", async () => {
+  jest.useFakeTimers();
+  mockSkipCompression = false;
+  mockCompress.mockImplementationOnce((_path: string, options?: { getCancellationId?: (id: string) => void }) => {
+    options?.getCancellationId?.("cancel-hung-11");
+    return new Promise<string>(() => {});
+  });
+  const view = render(<VisionTestPage />);
+  try {
+    await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+    const callbacks = mockStartCamera.mock.calls[0][0];
+    const start = Date.now();
+    const paths = ["file:///documents/run-1/analysis/part-11.mp4", "file:///documents/run-1/analysis/part-12.mp4"];
+    await act(async () => {
+      paths.forEach((path, index) => callbacks.onRecordingSegment({ status: "ready", path,
+        captureStartTimeMs: start + index * 10000, captureEndTimeMs: start + (index + 1) * 10000 }));
+    });
+    expect(mockCompress).toHaveBeenCalledTimes(1);
+    expect(mockProcessChunk).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(8500);
+    });
+    await waitFor(() => expect(mockProcessChunk).toHaveBeenCalledTimes(2));
+    expect(mockCancelCompression).toHaveBeenCalledWith("cancel-hung-11");
+    expect(mockProcessChunk.mock.calls.map(call => call[0])).toEqual(paths);
+    expect(mockCompress).toHaveBeenCalledTimes(1);
+
+    fireEvent.press(view.getByText("square.fill"));
+    await act(async () => { callbacks.onRecordingSourceFinalized(source()); await callbacks.onRecordingFinished(source()); });
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockMergeChunks).toHaveBeenCalledTimes(1));
+    expect(mockMergeChunks.mock.calls[0][0]).toBe(mockRef.sessionId);
+    await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
+  } finally {
+    view.unmount();
+    jest.useRealTimers();
+  }
 });
 
 it("does not publish a partial server video when one upload succeeds and the next fails", async () => {

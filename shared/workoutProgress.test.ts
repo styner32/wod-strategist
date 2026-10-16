@@ -1,4 +1,4 @@
-import { confirmedPerformanceInput, observedReps, performanceDraft, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
+import { confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, getContiguousExerciseSpan, observedReps, performanceDraft, summarizeWorkoutMovements, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
 import { withoutWorkoutEvidence } from "./analysisEvidence";
 const interval: WorkoutProgressInterval = { id: "set-1", start_secs: 10, end_secs: 70, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total", status: "pending_confirmation" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 12, end_secs: 16, complete: true, evidence: "Complete cycle" }, { movement: "Power Clean", unit: "reps", start_secs: 17, end_secs: 20, complete: false, evidence: "Occluded lockout" }] };
 it("uses complete repetition evidence but preserves missing counts rather than zero", () => {
@@ -11,7 +11,7 @@ it("requires explicit review and actual load, retaining original units without c
   const before = JSON.stringify(interval);
   const draft = performanceDraft(interval);
   expect(confirmedPerformanceInput(interval, draft)).toBeNull();
-  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "5" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "unspecified" });
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "5" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
   expect(JSON.stringify(interval)).toBe(before);
 });
 it.each([{ start: "9" }, { end: "71" }, { end: "10" }, { reps: "2.5" }, { reps: "0" }, { reps: "" }, { weight: "" }, { weight: "0" }, { loadMode: "unresolved" as const }])("rejects invalid reviewed values %j", values => {
@@ -79,3 +79,111 @@ it("rejects a selected mapped span whose rounded endpoint makes elapsed time non
   const progress = { version: 1 as const, clock: "media" as const, source_version: "mapped", intervals: [mapped], unassessed: [] };
   expect(confirmedPerformanceInput(mapped, { ...performanceDraft(mapped), start: "19.999", end: "20", reps: "1", reviewed: true }, progress)).toBeNull();
 });
+
+describe("extractWodLoads and summarizeWorkoutMovements", () => {
+  it("extracts single and slash-separated weights from WOD description and infers load basis", () => {
+    expect(extractWodLoads("21-15-9\nThrusters (95/65 lb)\nPull-ups", "Thruster")).toEqual([
+      { value: 95, unit: "lb", basis: "total", status: "pending_confirmation" },
+      { value: 65, unit: "lb", basis: "total", status: "pending_confirmation" },
+    ]);
+    expect(extractWodLoads("21-15-9\nThrusters (95/65 lb)\nPull-ups", "Pull-up")).toEqual([]);
+    expect(extractWodLoads("AMRAP 12:\n10 Dumbbell Snatches 22.5/15kg", "Dumbbell Snatch")).toEqual([
+      { value: 22.5, unit: "kg", basis: "per_implement", status: "pending_confirmation" },
+      { value: 15, unit: "kg", basis: "per_implement", status: "pending_confirmation" },
+    ]);
+    const unweighted = { ...interval, load: null };
+    const singleLoad = extractWodLoads("30 Clean and Jerks 135lb", "Clean and Jerk");
+    expect(singleLoad).toEqual([{ value: 135, unit: "lb", basis: "total", status: "pending_confirmation" }]);
+    expect(performanceDraft(unweighted, undefined, singleLoad[0])).toMatchObject({
+      loadMode: "weighted",
+      weight: "135",
+      unit: "lb",
+      basis: "total",
+    });
+  });
+
+  it("summarizes performed movements with interval counts, observed complete reps, and confirmed reps", () => {
+    const intervals: WorkoutProgressInterval[] = [
+      interval,
+      { ...interval, id: "set-2", start_secs: 80, end_secs: 120, rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 82, end_secs: 86, complete: true, evidence: "Rep 1" }, { movement: "Power Clean", unit: "reps", start_secs: 88, end_secs: 92, complete: true, evidence: "Rep 2" }] },
+      { id: "rest-1", start_secs: 70, end_secs: 80, activity: "rest", movement: null, load: null, observation_refs: [] },
+      { id: "hold-1", start_secs: 120, end_secs: 150, activity: "exercise", movement: "L-Sit Hold", load: null, observation_refs: [], rep_events: [{ movement: "L-Sit Hold", unit: "seconds", start_secs: 120, end_secs: 145, complete: true, evidence: "Hold" }] },
+    ];
+    const records: PerformanceRecord[] = [
+      { id: 1, session_id: "s1", interval_id: "set-1", source_version: "a", status: "confirmed", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, load_kg: 61.2, measurement: "set", technique: "singles", workout_prescription: "test", reps_per_minute: 5, rate_basis: "normalized_per_minute", median_cycle_seconds: null, performed_at: "2026-10-12T00:00:00Z", confirmed_at: "2026-10-12T00:00:00Z" },
+    ];
+    const progress = { version: 1 as const, clock: "media" as const, source_version: "a", intervals, unassessed: [] };
+    expect(summarizeWorkoutMovements(progress, records)).toEqual([
+      { movement: "Power Clean", intervalCount: 2, observedReps: 3, observedSeconds: 0, confirmedCount: 1, confirmedReps: 5, loadLabel: "135 lb" },
+      { movement: "L-Sit Hold", intervalCount: 1, observedReps: 0, observedSeconds: 25, confirmedCount: 0, confirmedReps: 0, loadLabel: null },
+    ]);
+  });
+
+  it("permits a continuous set split across 10-second segment boundaries and incomplete_cycle gaps", () => {
+    const seg1: WorkoutProgressInterval = { ...interval, id: "seg-0", start_secs: 0, end_secs: 9 };
+    const seg2: WorkoutProgressInterval = { ...interval, id: "seg-1", start_secs: 11, end_secs: 20 };
+    const splitProgress = {
+      version: 1 as const,
+      clock: "media" as const,
+      source_version: "split",
+      intervals: [seg1, seg2],
+      unassessed: [{ start_secs: 9, end_secs: 11, clock: "media", reason: "incomplete_cycle" }],
+    };
+    expect(getContiguousExerciseSpan(seg1, splitProgress)).toEqual({
+      startSecs: 0,
+      endSecs: 20,
+      intervalCount: 2,
+      observedReps: 2,
+    });
+    const draft = { ...performanceDraft(seg1), end: "20", reps: "10", measurement: "set" as const, reviewed: true };
+    expect(confirmedPerformanceInput(seg1, draft, splitProgress)).toEqual({
+      interval_id: "seg-0",
+      start_secs: 0,
+      end_secs: 20,
+      reps: 10,
+      load: { value: 135, unit: "lb", basis: "total" },
+      measurement: "set",
+      technique: "singles",
+    });
+    expect(diagnosePerformanceDraft(seg1, { ...draft, loadMode: "unresolved" }, splitProgress)).toContain("미확인");
+
+    const seg113: WorkoutProgressInterval = {
+      ...interval,
+      id: "seg-11",
+      start_secs: 113,
+      end_secs: 120,
+      capture_start_secs: 113,
+      capture_end_secs: 120,
+    };
+    const tailProgress = {
+      version: 1 as const,
+      clock: "media" as const,
+      source_version: "tail",
+      intervals: [
+        seg113,
+        { id: "rest-12", start_secs: 125, end_secs: 150, activity: "rest" as const, movement: null, load: null, observation_refs: ["chunk:2"] },
+      ],
+      unassessed: [{ start_secs: 120, end_secs: 125, clock: "media" as const, reason: "not_analyzed" }],
+    };
+    const tailDraft = {
+      ...performanceDraft(seg113),
+      start: "113",
+      end: "125",
+      reps: "10",
+      measurement: "set" as const,
+      reviewed: true,
+    };
+    expect(diagnosePerformanceDraft(seg113, tailDraft, tailProgress)).toBeNull();
+    expect(confirmedPerformanceInput(seg113, tailDraft, tailProgress)).toEqual({
+      interval_id: "seg-11",
+      start_secs: 113,
+      end_secs: 125,
+      reps: 10,
+      load: { value: 135, unit: "lb", basis: "total" },
+      measurement: "set",
+      technique: "singles",
+    });
+  });
+});
+
+

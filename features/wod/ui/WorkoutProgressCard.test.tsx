@@ -21,7 +21,7 @@ it("saves only reviewed values and refreshes the movement benchmark", async () =
   (confirmPerformanceRecords as jest.Mock).mockResolvedValue(evidence);
   const view = render(<WorkoutProgressCard sessionId="new" profileId={1} />); await open(view); await review(view);
   await act(async () => { fireEvent.press(view.getByText("workoutProgress.save")); });
-  await waitFor(() => expect(confirmPerformanceRecords).toHaveBeenCalledWith("new", { source_version: "source-a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "unspecified" }] }));
+  await waitFor(() => expect(confirmPerformanceRecords).toHaveBeenCalledWith("new", { source_version: "source-a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" }] }));
   await waitFor(() => expect(view.getByText("workoutProgress.saved")).toBeTruthy());
   expect(getPerformanceBenchmarks).toHaveBeenCalled();
 });
@@ -99,7 +99,7 @@ it("reviews and saves a 60-second same-movement window with observed rest", asyn
   fireEvent.press(view.getByText("workoutProgress.selectedPlay")); expect(play).toHaveBeenCalledWith(10, 70);
   await act(async () => fireEvent.press(view.getByLabelText("workoutProgress.reviewed")));
   await act(async () => fireEvent.press(view.getByText("workoutProgress.save")));
-  await waitFor(() => expect(confirmPerformanceRecords).toHaveBeenCalledWith("new", { source_version: "source-a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "window", technique: "unspecified" }] }));
+  await waitFor(() => expect(confirmPerformanceRecords).toHaveBeenCalledWith("new", { source_version: "source-a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "window", technique: "singles" }] }));
 });
 it("displays observed rest duration and before/after cycle times separately, preserving nulls", async () => {
   const rest_comparisons = [

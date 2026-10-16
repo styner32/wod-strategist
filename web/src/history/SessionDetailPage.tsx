@@ -1,3 +1,4 @@
+import { SessionReviewWorkspace } from "./components/SessionReviewWorkspace";
 import { WODTrainingPanel } from "./components/WODTrainingPanel";
 import { WorkoutProgressPanel } from "./components/WorkoutProgressPanel";
 import { AnalysisOverview } from "./components/AnalysisOverview";
@@ -47,8 +48,9 @@ import { GuidanceTimeline } from "./components/GuidanceTimeline";
 
 import { formatDurationMs, SessionCostCard } from "./components/SessionCostCard";
 import { SessionReanalysisPanel } from "./components/SessionReanalysisPanel";
+import { VideoTransportBar } from "./components/VideoTransportBar";
 import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
-import { getHighlightSeekTime } from "./highlights";
+import { getHighlightSeekTime, parseHighlightSegments } from "./highlights";
 import { sensorTimelinePollInterval, sensorTimelineQueryKey } from "./timelineUtils";
 
 function formatDate(dateStr: string) {
@@ -176,6 +178,10 @@ export function SessionDetailPage() {
   const sensorPollingBudget = useRef({ sessionKey: "", startedAtMs: 0 });
   const sensorMetadataRefresh = useRef<SensorMetadataRefresh>({});
   const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState<number>();
+  const [isPaused, setIsPaused] = useState(true);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [activePanelId, setActivePanelId] = useState("summary");
   const [selectedKind, setSelectedKind] = useState<VideoKind>();
 
 
@@ -674,10 +680,11 @@ export function SessionDetailPage() {
 
   const showInspector = (chunk: ChunkAnalysisResult) => {
     setSelectedChunkId(chunk.id);
+    setActivePanelId("guidance");
     window.setTimeout(() => {
       inspectorRef.current?.scrollIntoView({
         behavior: "smooth",
-        block: "start",
+        block: "nearest",
       });
     }, 0);
   };
@@ -834,14 +841,24 @@ export function SessionDetailPage() {
     },
   });
 
-  // Track video playback position
+  const highlights = useMemo(
+    () => parseHighlightSegments(analysis?.highlight_segments),
+    [analysis?.highlight_segments],
+  );
+
+  // Track video playback position and state without ever writing currentTime
   const handleTimeUpdate = useCallback(() => {
-    if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
+    const video = videoRef.current;
+    if (!video) return;
+    setCurrentTime(video.currentTime);
+    if (Number.isFinite(video.duration) && video.duration > 0) {
+      setDuration(video.duration);
     }
+    setIsPaused(video.paused);
+    setPlaybackRate(video.playbackRate || 1);
   }, []);
 
-  // Seek video to a specific time
+  // Seek video to a specific time and play
   const handleSeek = useCallback((time: number) => {
     if (videoRef.current) {
       videoRef.current.currentTime = time;
@@ -856,11 +873,27 @@ export function SessionDetailPage() {
     }
   }, []);
 
-  // The analysis panel sits below the player, so bring the video into view.
+  const handleTogglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  }, []);
+
+  const handleRateChange = useCallback((rate: number) => {
+    setPlaybackRate(rate);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = rate;
+    }
+  }, []);
+
+  // Keep the user at their current analysis position; desktop sticky or mobile floating player stays visible.
   const handleAnalysisSeek = useCallback(
     (time: number) => {
       handleTimelineSeek(time);
-      videoRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     },
     [handleTimelineSeek],
   );
@@ -873,7 +906,6 @@ export function SessionDetailPage() {
         version,
       );
       handleSeek(targetSeconds);
-      videoRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     },
     [handleSeek],
   );
@@ -910,19 +942,26 @@ export function SessionDetailPage() {
         <h1 className="text-xl font-bold text-text-primary">Session Detail</h1>
       </div>
 
-      {/* Side-by-side layout: Video + Guidance */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {/* Left: Video player (3/5 width) */}
-        <div className="min-w-0 lg:col-span-3 space-y-4">
+      <SessionReviewWorkspace
+        key={sessionId}
+        activePanelId={activePanelId}
+        onSelectPanel={setActivePanelId}
+        player={<>
           <div className="bg-bg-elevated border border-border rounded-xl overflow-hidden">
             {videoUrl?.download_url ? (
               <video
                 ref={videoRef}
                 src={videoUrl.download_url}
                 controls
+                muted
                 preload="metadata"
+                onLoadedMetadata={handleTimeUpdate}
                 onTimeUpdate={handleTimeUpdate}
-                className="w-full aspect-video bg-black"
+                onSeeked={handleTimeUpdate}
+                onPlay={handleTimeUpdate}
+                onPause={handleTimeUpdate}
+                onRateChange={handleTimeUpdate}
+                className="w-full max-h-[36svh] bg-black object-contain sm:max-h-[50svh] lg:max-h-[calc(100dvh-20rem)]"
               />
             ) : (
               <div className="w-full aspect-video bg-bg-secondary flex items-center justify-center">
@@ -957,6 +996,19 @@ export function SessionDetailPage() {
             )}
           </div>
 
+          <VideoTransportBar
+            currentTime={currentTime}
+            duration={duration}
+            isPaused={isPaused}
+            playbackRate={playbackRate}
+            canControl={!!videoUrl?.download_url}
+            chunks={timelineOrderedChunks}
+            highlights={highlights}
+            onSeek={handleTimelineSeek}
+            onTogglePlay={handleTogglePlay}
+            onRateChange={handleRateChange}
+          />
+
           {/* Video kind selector */}
           {!!sessionId && !!profileId && (
             <div className="flex flex-wrap gap-2">
@@ -986,161 +1038,9 @@ export function SessionDetailPage() {
               })}
             </div>
           )}
-
-          {/* Session metadata */}
-          {analysis && (
-            <div className="bg-bg-elevated border border-border rounded-xl p-4">
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-text-muted">Session ID</p>
-                  <p className="text-text-primary font-mono text-xs mt-0.5 break-all">
-                    {analysis.session_id}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-text-muted">Status</p>
-                  <p className="text-text-primary mt-0.5 capitalize">
-                    {analysis.status}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-text-muted">Workout Time</p>
-                  <p className="text-text-primary mt-0.5">
-                    {formatDate(analysis.workout_at || analysis.created_at)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-text-muted">Workout Type</p>
-                  <p className="text-text-primary mt-0.5 capitalize">
-                    {analysis.workout_type || "—"}
-                  </p>
-                </div>
-                {analysisWallClockMs != null && analysisWallClockMs > 0 && (
-                  <div data-testid="metadata-analysis-duration">
-                    <p className="text-text-muted">
-                      {isAnalysisInProgress ? "분석 경과 시간" : "총 분석 소요 시간"}
-                    </p>
-                    <p className="text-text-primary mt-0.5 font-medium">
-                      {formatDurationMs(analysisWallClockMs)}
-                    </p>
-                  </div>
-                )}
-                {analysis.sensor_state && analysis.sensor_state !== "NONE" && (
-                  <div>
-                    <p className="text-text-muted">Polar Sensor</p>
-                    <p className="text-text-primary mt-0.5 capitalize">
-                      {analysis.sensor_state === "COMPLETED" ? "측정 처리 완료" : analysis.sensor_state}
-                    </p>
-                  </div>
-                )}
-                {sessionAnalysis?.coverage_status && (
-                  <div>
-                    <p className="text-text-muted">Media coverage</p>
-                    <p className="text-text-primary mt-0.5 capitalize">
-                      {sessionAnalysis.coverage_status.replaceAll("_", " ")}
-                    </p>
-                  </div>
-                )}
-                <div className="col-span-2 border-t border-border pt-3 mt-1">
-                  <div className="flex items-center justify-between">
-                    <p className="text-text-muted">WOD Description</p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const el = document.getElementById("session-reanalysis-panel");
-                        if (el) {
-                          el.scrollIntoView({ behavior: "smooth" });
-                        }
-                      }}
-                      className="text-xs font-semibold text-accent hover:underline focus:outline-none flex items-center gap-1"
-                    >
-                      <span>✏️</span> {analysis.wod_description ? "수정 및 전체 재분석" : "WOD 설명 등록 및 재분석"}
-                    </button>
-                  </div>
-                  {analysis.wod_description ? (
-                    <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
-                      {analysis.wod_description}
-                    </p>
-                  ) : (
-                    <p className="text-text-muted text-xs mt-1 italic">
-                      등록된 WOD 설명이 없습니다. 위 버튼을 눌러 WOD 설명을 입력하고 재분석할 수 있습니다.
-                    </p>
-                  )}
-                </div>
-                {sessionAnalysis?.movement_hints &&
-                  sessionAnalysis.movement_hints.length > 0 && (
-                    <div className="col-span-2 border-t border-border pt-3 mt-1">
-                      <p className="text-text-muted">
-                        Planned movements (계획된 종목)
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {sessionAnalysis.movement_hints.map((movement) => (
-                          <span
-                            key={movement}
-                            className="rounded-md bg-accent/10 px-2 py-1 text-xs text-accent font-medium"
-                          >
-                            {movement}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                {sessionAnalysis?.additional_observed_movements &&
-                  sessionAnalysis.additional_observed_movements.length > 0 && (
-                    <div className="col-span-2 border-t border-border pt-3 mt-1">
-                      <p className="text-text-muted">
-                        Additional observed movements (영상 추가 관찰 동작)
-                      </p>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {sessionAnalysis.additional_observed_movements.map(
-                          (movement) => (
-                            <span
-                              key={movement}
-                              className="rounded-md bg-info/10 px-2 py-1 text-xs text-info"
-                            >
-                              {movement}
-                            </span>
-                          ),
-                        )}
-                      </div>
-                      <p className="mt-2 text-xs text-text-muted">
-                        Video observations are shown separately and do not
-                        change the entered WOD.
-                      </p>
-                    </div>
-                  )}
-              </div>
-            </div>
-          )}
-
-          {/* Muscle Fatigue & Strain */}
-          {analysis && profileId && sessionId && <WODTrainingPanel key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} scoreJSON={analysis.session_score} currentTime={currentTime} isOriginal={effectiveVideoKind === "merged"} seek={handleTimelineSeek} />}
-          {analysis?.status === "COMPLETED" && profileId && sessionId && <WorkoutProgressPanel key={`progress:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} sourceUpdatedAt={analysis.updated_at} isOriginal={effectiveVideoKind === "merged"} seek={handleAnalysisSeek} />}
-          {analysis && <HeartRateSummaryPanel summary={analysis.heart_rate} />}
-          {sessionId && profileId && <ActivitySummaryPanel sessionId={sessionId} profileId={profileId} />}
-          {analysis && (
-            <SensorTimelinePanel
-              key={`${sessionId}:${profileId}:${effectiveVideoKind}`}
-              timelineResponse={sensorTimelineResponse}
-              isLoading={sensorTimelineLoading}
-              currentTime={currentTime}
-              onSeekMedia={handleTimelineSeek}
-              isMergedVideo={effectiveVideoKind === "merged"}
-              onReprocess={
-                sessionId && profileId
-                  ? () => reprocessSensorMutation.mutate()
-                  : undefined
-              }
-              isReprocessing={reprocessSensorMutation.isPending}
-              sessionId={sessionId}
-              profileId={profileId}
-              h10MemoryData={h10MemoryData}
-            />
-          )}
-          {analysis?.session_fatigue && (
-            <WorkoutFatiguePanel fatigue={analysis.session_fatigue} />
-          )}
-
+        </>}
+        panels={[
+          { id: "summary", label: "영상 요약", content: <>
           {/* AI Analysis */}
           <div className="bg-bg-elevated border border-border rounded-xl p-5">
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1230,15 +1130,64 @@ export function SessionDetailPage() {
               <p className="text-text-muted text-sm">No analysis data.</p>
             )}
           </div>
+          </> },
+          { id: "performance", label: "수행 이력·벤치마크", content: <>
+          {analysis?.status === "COMPLETED" && profileId && sessionId && <WorkoutProgressPanel key={`progress:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} sourceUpdatedAt={analysis.updated_at} wodDescription={analysis.wod_description} isOriginal={effectiveVideoKind === "merged"} seek={handleAnalysisSeek} />}
+          </> },
+          { id: "timeline", label: "시계열", content: <>
+          {analysis && (
+            <SensorTimelinePanel
+              key={`${sessionId}:${profileId}:${effectiveVideoKind}`}
+              timelineResponse={sensorTimelineResponse}
+              isLoading={sensorTimelineLoading}
+              currentTime={currentTime}
+              onSeekMedia={handleTimelineSeek}
+              isMergedVideo={effectiveVideoKind === "merged"}
+              onReprocess={
+                sessionId && profileId
+                  ? () => reprocessSensorMutation.mutate()
+                  : undefined
+              }
+              isReprocessing={reprocessSensorMutation.isPending}
+              sessionId={sessionId}
+              profileId={profileId}
+              h10MemoryData={h10MemoryData}
+            />
+          )}
+          {analysis && <HeartRateSummaryPanel summary={analysis.heart_rate} />}
+          {sessionId && profileId && <ActivitySummaryPanel sessionId={sessionId} profileId={profileId} />}
+      {/* Chunk metrics and H10 internal recording stay next to the main player. */}
+      {chunks.length > 0 && (
+        <div className="mt-6">
+          <ChunkMetricsChart
+            chunks={chunks}
+            currentTime={currentTime}
+            onSeek={handleSeek}
+          />
         </div>
+      )}
+      {sessionId && profileId && <H10MemoryPanel key={`h10:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} />}
 
-        {/* Right: Guidance Timeline (2/5 width) */}
-        <div className="lg:col-span-2">
-          <div className="space-y-3 lg:sticky lg:top-4">
-            <SessionCostCard
-              sessionId={sessionId!}
-              fallbackDurationMs={analysisWallClockMs}
-              isProcessing={isAnalysisInProgress}
+          </> },
+          { id: "guidance", label: "구간 피드백", content: <>
+            <GuidanceTimeline
+              chunks={chunks}
+              currentTime={currentTime}
+              selectedChunkId={selectedChunk?.id}
+              feedbackByChunk={feedbackByChunk}
+              selectedReanalysisChunkIds={selectedReanalysisChunkIds}
+              bulkRunStatusByChunk={bulkRunStatusByChunk}
+              reanalysisBusy={
+                bulkReanalysisMutation.isPending || reanalysisMutation.isPending
+              }
+              reanalysisSelectionLimitReached={
+                selectedReanalysisChunkIds.size >= BULK_REANALYSIS_LIMIT
+              }
+              onSeek={handleSeek}
+              onInspect={showInspector}
+              onCorrect={openCorrection}
+              onReanalyze={requestReanalysis}
+              onToggleReanalysisSelection={toggleReanalysisSelection}
             />
 
             <section
@@ -1351,25 +1300,41 @@ export function SessionDetailPage() {
               Automatic status updates are paused. The analysis continues on the server.{" "}
               <button type="button" className="underline" onClick={resumeChunkPolling}>Resume status updates</button>
             </p>}
-            <GuidanceTimeline
-              chunks={chunks}
-              currentTime={currentTime}
-              selectedChunkId={selectedChunk?.id}
-              feedbackByChunk={feedbackByChunk}
-              selectedReanalysisChunkIds={selectedReanalysisChunkIds}
-              bulkRunStatusByChunk={bulkRunStatusByChunk}
-              reanalysisBusy={
-                bulkReanalysisMutation.isPending || reanalysisMutation.isPending
-              }
-              reanalysisSelectionLimitReached={
-                selectedReanalysisChunkIds.size >= BULK_REANALYSIS_LIMIT
-              }
-              onSeek={handleSeek}
-              onInspect={showInspector}
-              onCorrect={openCorrection}
-              onReanalyze={requestReanalysis}
-              onToggleReanalysisSelection={toggleReanalysisSelection}
-            />
+
+            {selectedChunk && (
+              <div ref={inspectorRef}>
+                <ChunkInspector
+                  key={selectedChunk.id}
+                  sessionId={sessionId!}
+                  chunk={selectedChunk}
+                  feedback={feedbackByChunk.get(selectedChunk.id)}
+                  runs={runs}
+                  runsLoading={runsLoading}
+                  creatingRun={
+                    reanalysisMutation.isPending ||
+                    (bulkReanalysisMutation.isPending &&
+                      selectedReanalysisChunkIds.has(selectedChunk.id))
+                  }
+                  reanalysisError={
+                    reanalysisMutation.isError
+                      ? feedbackError(reanalysisMutation.error)
+                      : undefined
+                  }
+                  onCreateRun={() => requestReanalysis(selectedChunk)}
+                  onCorrect={() => openCorrection(selectedChunk)}
+                  onUndoCorrection={
+                    feedbackByChunk.has(selectedChunk.id)
+                      ? () =>
+                          void undoFeedback(feedbackByChunk.get(selectedChunk.id)!)
+                      : undefined
+                  }
+                  onUseCandidate={(correction, runId) =>
+                    openCandidateCorrection(selectedChunk, correction, runId)
+                  }
+                  onSeekMain={handleTimelineSeek}
+                />
+              </div>
+            )}
 
             {stretchRecommendations.length > 0 && (
               <section className="rounded-xl border border-border bg-bg-elevated p-4">
@@ -1415,6 +1380,7 @@ export function SessionDetailPage() {
                                 <video
                                   src={resolved.video_url}
                                   controls
+                                  muted
                                   preload="metadata"
                                   className="w-full h-40 object-contain rounded-lg"
                                 />
@@ -1498,65 +1464,170 @@ export function SessionDetailPage() {
                 </div>
               </section>
             )}
-          </div>
-        </div>
-      </div>
+          </> },
+          { id: "details", label: "세션 정보·재분석", content: <>
+          {analysis && profileId && sessionId && <WODTrainingPanel key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} scoreJSON={analysis.session_score} currentTime={currentTime} isOriginal={effectiveVideoKind === "merged"} seek={handleTimelineSeek} />}
+          {/* Session metadata */}
+          {analysis && (
+            <div className="bg-bg-elevated border border-border rounded-xl p-4">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-text-muted">Session ID</p>
+                  <p className="text-text-primary font-mono text-xs mt-0.5 break-all">
+                    {analysis.session_id}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-text-muted">Status</p>
+                  <p className="text-text-primary mt-0.5 capitalize">
+                    {analysis.status}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-text-muted">Workout Time</p>
+                  <p className="text-text-primary mt-0.5">
+                    {formatDate(analysis.workout_at || analysis.created_at)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-text-muted">Workout Type</p>
+                  <p className="text-text-primary mt-0.5 capitalize">
+                    {analysis.workout_type || "—"}
+                  </p>
+                </div>
+                {analysisWallClockMs != null && analysisWallClockMs > 0 && (
+                  <div data-testid="metadata-analysis-duration">
+                    <p className="text-text-muted">
+                      {isAnalysisInProgress ? "분석 경과 시간" : "총 분석 소요 시간"}
+                    </p>
+                    <p className="text-text-primary mt-0.5 font-medium">
+                      {formatDurationMs(analysisWallClockMs)}
+                    </p>
+                  </div>
+                )}
+                {analysis.sensor_state && analysis.sensor_state !== "NONE" && (
+                  <div>
+                    <p className="text-text-muted">Polar Sensor</p>
+                    <p className="text-text-primary mt-0.5 capitalize">
+                      {analysis.sensor_state === "COMPLETED" ? "측정 처리 완료" : analysis.sensor_state}
+                    </p>
+                  </div>
+                )}
+                {sessionAnalysis?.coverage_status && (
+                  <div>
+                    <p className="text-text-muted">Media coverage</p>
+                    <p className="text-text-primary mt-0.5 capitalize">
+                      {sessionAnalysis.coverage_status.replaceAll("_", " ")}
+                    </p>
+                  </div>
+                )}
+                <div className="col-span-2 border-t border-border pt-3 mt-1">
+                  <div className="flex items-center justify-between">
+                    <p className="text-text-muted">WOD Description</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivePanelId("details");
+                        window.setTimeout(() => {
+                          const el = document.getElementById("session-reanalysis-panel");
+                          if (el) {
+                            el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                          }
+                        }, 0);
+                      }}
+                      className="text-xs font-semibold text-accent hover:underline focus:outline-none flex items-center gap-1"
+                    >
+                      <span>✏️</span> {analysis.wod_description ? "수정 및 전체 재분석" : "WOD 설명 등록 및 재분석"}
+                    </button>
+                  </div>
+                  {analysis.wod_description ? (
+                    <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
+                      {analysis.wod_description}
+                    </p>
+                  ) : (
+                    <p className="text-text-muted text-xs mt-1 italic">
+                      등록된 WOD 설명이 없습니다. 위 버튼을 눌러 WOD 설명을 입력하고 재분석할 수 있습니다.
+                    </p>
+                  )}
+                </div>
+                {sessionAnalysis?.movement_hints &&
+                  sessionAnalysis.movement_hints.length > 0 && (
+                    <div className="col-span-2 border-t border-border pt-3 mt-1">
+                      <p className="text-text-muted">
+                        Planned movements (계획된 종목)
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {sessionAnalysis.movement_hints.map((movement) => (
+                          <span
+                            key={movement}
+                            className="rounded-md bg-accent/10 px-2 py-1 text-xs text-accent font-medium"
+                          >
+                            {movement}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                {sessionAnalysis?.additional_observed_movements &&
+                  sessionAnalysis.additional_observed_movements.length > 0 && (
+                    <div className="col-span-2 border-t border-border pt-3 mt-1">
+                      <p className="text-text-muted">
+                        Additional observed movements (영상 추가 관찰 동작)
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {sessionAnalysis.additional_observed_movements.map(
+                          (movement) => (
+                            <span
+                              key={movement}
+                              className="rounded-md bg-info/10 px-2 py-1 text-xs text-info"
+                            >
+                              {movement}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                      <p className="mt-2 text-xs text-text-muted">
+                        Video observations are shown separately and do not
+                        change the entered WOD.
+                      </p>
+                    </div>
+                  )}
+              </div>
+            </div>
+          )}
 
-      <SessionReanalysisPanel
-        sessionId={sessionId!}
-        originalAnalysis={analysis}
-        chunkBatchReady={chunkBatchReadyForSessionReanalysis}
-        chunkBatchBlockedReason={chunkBatchBlockedReason}
-        unconfirmedCandidateCount={unconfirmedBulkCandidateCount}
-      />
-
-      {selectedChunk && (
-        <div ref={inspectorRef}>
-          <ChunkInspector
-            key={selectedChunk.id}
+          <SessionReanalysisPanel
             sessionId={sessionId!}
-            chunk={selectedChunk}
-            feedback={feedbackByChunk.get(selectedChunk.id)}
-            runs={runs}
-            runsLoading={runsLoading}
-            creatingRun={
-              reanalysisMutation.isPending ||
-              (bulkReanalysisMutation.isPending &&
-                selectedReanalysisChunkIds.has(selectedChunk.id))
-            }
-            reanalysisError={
-              reanalysisMutation.isError
-                ? feedbackError(reanalysisMutation.error)
-                : undefined
-            }
-            onCreateRun={() => requestReanalysis(selectedChunk)}
-            onCorrect={() => openCorrection(selectedChunk)}
-            onUndoCorrection={
-              feedbackByChunk.has(selectedChunk.id)
-                ? () =>
-                    void undoFeedback(feedbackByChunk.get(selectedChunk.id)!)
-                : undefined
-            }
-            onUseCandidate={(correction, runId) =>
-              openCandidateCorrection(selectedChunk, correction, runId)
-            }
+            originalAnalysis={analysis}
+            chunkBatchReady={chunkBatchReadyForSessionReanalysis}
+            chunkBatchBlockedReason={chunkBatchBlockedReason}
+            unconfirmedCandidateCount={unconfirmedBulkCandidateCount}
           />
-        </div>
-      )}
 
-      {sessionId && profileId && <OnDeviceAiPanel key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} />}
-      {sessionId && profileId && <H10MemoryPanel key={`h10:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} />}
+          {analysis?.session_fatigue && (
+            <WorkoutFatiguePanel fatigue={analysis.session_fatigue} />
+          )}
 
-      {/* Chunk metrics chart — full width below */}
-      {chunks.length > 0 && (
-        <div className="mt-6">
-          <ChunkMetricsChart
-            chunks={chunks}
-            currentTime={currentTime}
-            onSeek={handleSeek}
+          <SessionCostCard
+            sessionId={sessionId!}
+            fallbackDurationMs={analysisWallClockMs}
+            isProcessing={isAnalysisInProgress}
           />
-        </div>
-      )}
+
+          </> },
+          { id: "device", label: "온디바이스 AI", content: <>
+            {sessionId && profileId && (
+              <OnDeviceAiPanel
+                key={`${profileId}:${sessionId}`}
+                sessionId={sessionId}
+                profileId={profileId}
+                onSeekMedia={handleTimelineSeek}
+                captureSegments={sensorTimelineResponse?.video_mapping?.segments}
+              />
+            )}
+          </> },
+        ]}
+      />
 
       {dialog && (
         <FeedbackDialog

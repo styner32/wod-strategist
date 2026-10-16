@@ -98,13 +98,52 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		return Record{}, err
 	}
 	for _, gap := range progress.Unassessed {
-		if gap.Clock == "media" && input.Start < gap.End && input.End > gap.Start && !countOnlyGap(gap) {
-			return Record{}, errors.New("selected window contains unavailable video evidence")
+		if gap.Clock == "media" && input.Start < gap.End && input.End > gap.Start {
+			if input.Measurement == "set" {
+				if gap.Reason == "unverified_capture_mapping" {
+					return Record{}, errors.New("selected window contains unavailable video evidence")
+				}
+			} else if !countOnlyGap(gap) {
+				return Record{}, errors.New("selected window contains unavailable video evidence")
+			}
 		}
 	}
-	elapsed, continuousClock, err := selectedElapsed(progress, spans)
-	if err != nil {
-		return Record{}, err
+	var (
+		elapsed         float64
+		continuousClock bool
+	)
+	if input.Measurement == "set" && len(spans) == 1 {
+		in := spans[0].Interval
+		if (in.CaptureStart != nil) != (in.CaptureEnd != nil) {
+			return Record{}, errors.New("capture mapping is invalid")
+		}
+		if in.CaptureStart == nil {
+			elapsed = input.End - input.Start
+			continuousClock = true
+		} else {
+			if !activity.ValidInterval(*in.CaptureStart, *in.CaptureEnd) {
+				return Record{}, errors.New("capture mapping is invalid")
+			}
+			captureDuration := *in.CaptureEnd - *in.CaptureStart
+			continuousClock = math.Abs(captureDuration-(in.End-in.Start)) <= 0.01
+			start := *in.CaptureStart + (input.Start - in.Start)
+			end := *in.CaptureStart + (input.End - in.Start)
+			if input.Start == in.Start {
+				start = *in.CaptureStart
+			}
+			if input.End == in.End {
+				end = *in.CaptureEnd
+			}
+			if !activity.ValidInterval(start, end) {
+				return Record{}, errors.New("selected subwindow capture timing cannot be verified")
+			}
+			elapsed = end - start
+		}
+	} else {
+		elapsed, continuousClock, err = selectedElapsed(progress, spans)
+		if err != nil {
+			return Record{}, err
+		}
 	}
 	movement := interval.Movement
 	if canonical := activity.CanonicalMovement(movement); canonical != "" {
@@ -279,8 +318,32 @@ func countOnlyGap(gap Gap) bool {
 	return gap.Reason == "no_countable_evidence" || gap.Reason == "incomplete_cycle" || gap.Reason == "unsupported_movement_or_unit" || gap.Reason == "unit_mismatch"
 }
 
+func coveredByCountOnlyGaps(unassessed []Gap, from, to float64) bool {
+	if to <= from+1e-6 {
+		return true
+	}
+	cursor := from
+	for _, gap := range unassessed {
+		if gap.Clock != "media" || !countOnlyGap(gap) || gap.End <= cursor {
+			continue
+		}
+		if gap.Start > cursor+1e-6 {
+			return false
+		}
+		if gap.End > cursor {
+			cursor = gap.End
+		}
+		if cursor >= to-1e-6 {
+			return true
+		}
+	}
+	return cursor >= to-1e-6
+}
+
 // Window confirmation may include visibly observed rests between repetitions;
-// a set stays bounded by its selected exercise interval.
+// a set may span contiguous same-movement exercise intervals (including across
+// 10-second segment boundaries and count-only incomplete-cycle boundary gaps)
+// as long as no rest interval is included.
 func selectObservedSpans(progress Progress, input Confirmation) ([]observedSpan, error) {
 	anchor := -1
 	for i := range progress.Intervals {
@@ -293,26 +356,90 @@ func selectObservedSpans(progress Progress, input Confirmation) ([]observedSpan,
 		return nil, errors.New("exercise interval not found")
 	}
 	first := progress.Intervals[anchor]
-	if first.Activity != "exercise" || input.Start < first.Start || input.Start >= first.End {
-		return nil, errors.New("window must start inside its selected exercise interval")
+	if first.Activity != "exercise" || input.Start >= first.End || input.End <= first.Start {
+		return nil, errors.New("window must overlap its selected exercise interval")
 	}
-	if input.Measurement == "set" && input.End > first.End {
-		return nil, errors.New("a set must stay within its exercise interval")
+	startIdx := anchor
+	if input.Start < first.Start {
+		for i := 0; i < anchor; i++ {
+			if progress.Intervals[i].End > input.Start {
+				startIdx = i
+				break
+			}
+		}
 	}
 	name := activity.CanonicalMovement(first.Movement)
 	if name == "" {
 		name = strings.TrimSpace(first.Movement)
 	}
+	if input.Measurement == "set" {
+		var exSpans []Interval
+		var candidate *Load
+		for _, in := range progress.Intervals {
+			if in.End <= input.Start || in.Start >= input.End || in.Activity != "exercise" {
+				continue
+			}
+			movement := activity.CanonicalMovement(in.Movement)
+			if movement == "" {
+				movement = strings.TrimSpace(in.Movement)
+			}
+			if movement == name {
+				if in.Load != nil {
+					if candidate != nil && (candidate.Basis != in.Load.Basis || *Kilograms(candidate) != *Kilograms(in.Load)) {
+						return nil, errors.New("selected window contains different load candidates; confirm separate windows")
+					}
+					candidate = in.Load
+				}
+				exSpans = append(exSpans, in)
+			}
+		}
+		if len(exSpans) >= 2 {
+			firstExEnd := exSpans[0].End
+			lastExStart := exSpans[len(exSpans)-1].Start
+			for _, in := range progress.Intervals {
+				if in.Activity == "rest" && in.End > firstExEnd-1e-6 && in.Start < lastExStart+1e-6 {
+					return nil, errors.New("a set cannot include rest intervals")
+				}
+			}
+		}
+		combined := first
+		if len(exSpans) > 1 {
+			events := make([]activity.Observation, 0)
+			refs := make([]string, 0)
+			seenRefs := map[string]bool{}
+			for _, in := range exSpans {
+				events = append(events, in.RepEvents...)
+				for _, ref := range in.ObservationRefs {
+					if !seenRefs[ref] {
+						seenRefs[ref] = true
+						refs = append(refs, ref)
+					}
+				}
+			}
+			combined.RepEvents = events
+			combined.ObservationRefs = refs
+		}
+		return []observedSpan{{Interval: combined, Start: input.Start, End: input.End}}, nil
+	}
 	spans := []observedSpan{}
 	cursor := input.Start
 	var candidate *Load
-	for i := anchor; i < len(progress.Intervals) && cursor < input.End; i++ {
+	for i := startIdx; i < len(progress.Intervals) && cursor < input.End; i++ {
 		in := progress.Intervals[i]
-		if in.Start > cursor+0.000001 {
-			return nil, errors.New("selected window contains an observation coverage gap")
-		}
 		if in.End <= cursor {
 			continue
+		}
+		if in.Start > cursor+0.000001 {
+			canBridge := in.CaptureStart == nil && in.CaptureEnd == nil &&
+				(len(spans) == 0 || (spans[len(spans)-1].Interval.CaptureStart == nil && spans[len(spans)-1].Interval.CaptureEnd == nil)) &&
+				coveredByCountOnlyGaps(progress.Unassessed, cursor, in.Start)
+			if !canBridge {
+				return nil, errors.New("selected window contains an observation coverage gap")
+			}
+			if len(spans) > 0 {
+				spans[len(spans)-1].End = in.Start
+				cursor = in.Start
+			}
 		}
 		if in.Activity == "exercise" {
 			movement := activity.CanonicalMovement(in.Movement)
@@ -328,18 +455,27 @@ func selectObservedSpans(progress Progress, input Confirmation) ([]observedSpan,
 				}
 				candidate = in.Load
 			}
-		} else if in.Activity != "rest" {
+		} else if in.Activity == "rest" {
+			if input.Measurement == "set" {
+				return nil, errors.New("a set cannot include rest intervals")
+			}
+		} else {
 			return nil, errors.New("selected window contains unobserved activity")
 		}
 		end := math.Min(input.End, in.End)
 		spans = append(spans, observedSpan{Interval: in, Start: cursor, End: end})
 		cursor = end
-		if input.Measurement == "set" {
-			break
-		}
 	}
-	if cursor < input.End {
-		return nil, errors.New("selected window exceeds observed coverage")
+	if cursor < input.End-1e-6 {
+		if len(spans) > 0 &&
+			spans[len(spans)-1].Interval.CaptureStart == nil &&
+			spans[len(spans)-1].Interval.CaptureEnd == nil &&
+			coveredByCountOnlyGaps(progress.Unassessed, cursor, input.End) {
+			spans[len(spans)-1].End = input.End
+			cursor = input.End
+		} else {
+			return nil, errors.New("selected window exceeds observed coverage")
+		}
 	}
 	return spans, nil
 }
@@ -374,11 +510,6 @@ func selectedElapsed(progress Progress, spans []observedSpan) (float64, bool, er
 	previousEnd := -1.0
 	for _, span := range spans {
 		in := span.Interval
-		for _, gap := range progress.Unassessed {
-			if gap.Clock == "capture" && *in.CaptureStart < gap.End && *in.CaptureEnd > gap.Start {
-				return 0, false, errors.New("selected interval crosses a recording gap")
-			}
-		}
 		captureDuration := *in.CaptureEnd - *in.CaptureStart
 		whole := span.Start == in.Start && span.End == in.End
 		if math.Abs(captureDuration-(in.End-in.Start)) > 0.01 {
@@ -397,6 +528,11 @@ func selectedElapsed(progress Progress, spans []observedSpan) (float64, bool, er
 		}
 		if !activity.ValidInterval(start, end) {
 			return 0, false, errors.New("selected subwindow capture timing cannot be verified")
+		}
+		for _, gap := range progress.Unassessed {
+			if gap.Clock == "capture" && ((start < gap.End && end > gap.Start) || (*in.CaptureStart < gap.End && *in.CaptureEnd > gap.Start)) {
+				return 0, false, errors.New("selected interval crosses a recording gap")
+			}
 		}
 		if previousEnd >= 0 && math.Abs(start-previousEnd) > 0.01 {
 			return 0, false, errors.New("selected window crosses discontinuous capture timing")

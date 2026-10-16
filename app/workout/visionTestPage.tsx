@@ -89,6 +89,8 @@ import { useProfileStore } from "@/store/useProfileStore";
 const CHUNK_DURATION_MS = 10000; // 10 seconds
 /** Upper bound on waiting before deciding whether a complete server merge is possible. */
 const MERGE_UPLOAD_WAIT_MS = 90000;
+/** Upper bound on single-chunk compression before falling back to raw chunk uploads. */
+const ANALYSIS_COMPRESSION_TIMEOUT_MS = 8000;
 type OriginalCapture = {
   ref: OriginalSessionRef;
   startedAt: number;
@@ -107,6 +109,67 @@ const IS_ANDROID = Platform.OS === "android";
 
 function localPath(uri: string): string {
   return decodeURIComponent(uri.replace(/^file:\/\//, ""));
+}
+
+function deleteDisposableFile(uri: string, sourcePath: string): void {
+  try {
+    if (localPath(uri) !== localPath(sourcePath)) {
+      const { File } = require("expo-file-system");
+      const file = new File(uri);
+      if (file.exists) file.delete();
+    }
+  } catch (_) {
+    /* A leftover disposable copy is safe. */
+  }
+}
+
+async function compressAnalysisChunk(path: string, timeoutMs: number): Promise<string> {
+  let cancellationId: string | undefined;
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const compressionPromise = Video.compress(path, {
+    compressionMethod: "auto",
+    maxSize: 720,
+    getCancellationId: (id: string) => {
+      cancellationId = id;
+    },
+  });
+  compressionPromise
+    .then((lateUri) => {
+      if (timedOut && lateUri) {
+        deleteDisposableFile(lateUri, path);
+      }
+    })
+    .catch(() => {});
+
+  const compressAndVerify = async (): Promise<string> => {
+    const uri = await compressionPromise;
+    const info = await getInfoAsync(uri);
+    if (!info.exists || info.isDirectory || info.size === 0) {
+      deleteDisposableFile(uri, path);
+      throw new Error("Compressed analysis video is unavailable");
+    }
+    return uri;
+  };
+
+  try {
+    return await Promise.race([
+      compressAndVerify(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          if (cancellationId && typeof Video.cancelCompression === "function") {
+            try {
+              Video.cancelCompression(cancellationId);
+            } catch (_) {}
+          }
+          reject(new Error(`Analysis compression timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function formatBytes(bytes: number): string {
@@ -767,9 +830,7 @@ export default function VisionTestPage() {
       let uri = path;
       try {
         if (!skipCompression && !capture.bypassCompression) {
-          uri = await Video.compress(path, { compressionMethod: "auto", maxSize: 720 });
-          const info = await getInfoAsync(uri);
-          if (!info.exists || info.isDirectory || info.size === 0) throw new Error("Compressed analysis video is unavailable");
+          uri = await compressAnalysisChunk(path, ANALYSIS_COMPRESSION_TIMEOUT_MS);
         }
       } catch (error) {
         // Compression is optional. Preserve this and subsequent native analysis
@@ -829,13 +890,7 @@ export default function VisionTestPage() {
           }
         } finally {
           // Compressor may return its input. Never delete the original/analysis input here.
-          try {
-            if (localPath(uri) !== localPath(path)) {
-              const { File } = require("expo-file-system");
-              const file = new File(uri);
-              if (file.exists) file.delete();
-            }
-          } catch (_) { /* A leftover disposable copy is safe. */ }
+          deleteDisposableFile(uri, path);
           capture.pendingUploads = Math.max(0, capture.pendingUploads - 1);
           if (originalCapture.current === capture) outstandingUploads.current = Math.max(0, outstandingUploads.current - 1);
           release();
@@ -1029,6 +1084,7 @@ export default function VisionTestPage() {
         return;
       }
       const startedAt = Date.now();
+      preparationQueue.current = Promise.resolve();
       originalCapture.current = { ref, startedAt, order: 0, complete: true, failedUploads: 0, pendingUploads: 0, completedUploads: 0, drains: [], release: holdOriginalFiles(ref) };
       heartRateWindow.current.clear();
       resetCaptureObservations();

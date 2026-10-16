@@ -533,20 +533,20 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
       )}
 
       {/* Hover Information Bar */}
-      <div className="flex flex-wrap items-center gap-4 text-xs font-mono mb-2 px-1 min-h-[20px]">
+      <div className="mb-2 flex min-h-[32px] flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-border/40 bg-bg-secondary/30 px-2.5 py-1.5 font-mono text-xs">
         {hoverValues && hoverMs != null ? (
           <>
-            <span className="text-text-primary">
+            <span className="inline-flex items-center gap-1 whitespace-nowrap text-text-primary">
               ⏱ {formatTimelineTime(hoverMs)}
             </span>
-            <span className="text-rose-400">
+            <span className="inline-flex items-center gap-1 whitespace-nowrap text-rose-400">
               ♥ {labels.heartRate}:{" "}
               {hoverValues.heartRate.status === "valid" && hoverValues.heartRate.value !== null
                 ? `${Number.isInteger(hoverValues.heartRate.value) ? hoverValues.heartRate.value : hoverValues.heartRate.value.toFixed(2)} ${labels.heartRateUnit}`
                 : getStatusLabel(hoverValues.heartRate.status)}
             </span>
             {showH10Memory && h10HoverValue && (
-              <span className="text-emerald-400">
+              <span className="inline-flex items-center gap-1 whitespace-nowrap text-emerald-400">
                 💾 H10 저장:{" "}
                 {h10HoverValue.status === "valid" && h10HoverValue.value !== null
                   ? `${Number.isInteger(h10HoverValue.value) ? h10HoverValue.value : h10HoverValue.value.toFixed(2)} bpm`
@@ -555,7 +555,7 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
                   h10HoverValue.status === "valid" &&
                   hoverValues.heartRate.value !== null &&
                   h10HoverValue.value !== null && (
-                    <span className="text-text-muted ml-1 font-sans text-[11px]">
+                    <span className="text-text-muted ml-0.5 font-sans text-[11px]">
                       ({(() => {
                         const delta = h10HoverValue.value - hoverValues.heartRate.value;
                         const absDelta = Math.abs(delta);
@@ -566,15 +566,15 @@ export const SensorTimelinePanel = memo(function SensorTimelinePanel({
                   )}
               </span>
             )}
-            <span className="text-sky-400">
+            <span className="inline-flex items-center gap-1 whitespace-nowrap text-sky-400">
               ⚡ {labels.movementVariance}:{" "}
               {hoverValues.movement.status === "valid" && hoverValues.movement.value != null
                 ? `${hoverValues.movement.value.toFixed(2)} ${labels.movementVarianceUnit}`
                 : getStatusLabel(hoverValues.movement.status)}
             </span>
             {isMergedVideo && (
-              <span className="text-text-muted">
-                🎬 {hoverMediaSec != null ? formatTimelineTime(hoverMediaSec * 1000) : "—"}
+              <span className="inline-flex items-center gap-1 whitespace-nowrap text-text-muted">
+                🎬 영상: {hoverMediaSec != null ? formatTimelineTime(hoverMediaSec * 1000) : "—"}
               </span>
             )}
           </>

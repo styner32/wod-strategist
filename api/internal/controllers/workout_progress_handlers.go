@@ -195,7 +195,7 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 				}
 			}
 			raw, _ := json.Marshal(candidate)
-			if input.Measurement == "window" {
+			if input.Measurement == "window" || input.Start < candidate.Start || input.End > candidate.End {
 				observed := []workoutprogress.Interval{}
 				gaps := []workoutprogress.Gap{}
 				for _, in := range progress.Intervals {

@@ -120,6 +120,8 @@ export interface ProcessWorkoutVideoOptions {
   appearanceHints?: string;
   maxRetries?: number;
   retryDelayMs?: number;
+  stepTimeoutMs?: number;
+  uploadTimeoutMs?: number;
 }
 
 /**
@@ -322,10 +324,12 @@ export async function getUploadUrl(
   sessionId: string,
   filename: string,
   profileId: number,
+  signal?: AbortSignal,
 ): Promise<UploadUrlResponse> {
   return apiClient<UploadUrlResponse>("/upload-url", {
     method: "POST",
     bodyPayload: { session_id: sessionId, filename, profile_id: profileId },
+    signal,
   });
 }
 

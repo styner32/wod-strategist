@@ -373,4 +373,52 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(out[0].ConditionDifferences).To(ContainElement("reps"))
 		Expect(out[0].HeavierLoadKG).To(BeNil())
 	})
+	It("confirms a continuous set split across 10-second segment boundaries, capture mappings, and unanalyzed tail segments", func() {
+		p := Build(
+			[]Interval{
+				exercise(0, 9, cleanCycle(1, 3), cleanCycle(5, 7)),
+				exercise(11, 20, cleanCycle(12, 14), cleanCycle(16, 18)),
+			},
+			[]Gap{{Start: 9, End: 11, Clock: "media", Reason: "incomplete_cycle", Movement: "Power Clean"}},
+			"video",
+		)
+		r, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Start:       0,
+			End:         20,
+			Reps:        10,
+			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "touch_and_go",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r.ElapsedSeconds).To(Equal(20.0))
+		Expect(r.Reps).To(Equal(10))
+		Expect(r.RepsPerMinute).To(Equal(30.0))
+		Expect(r.Measurement).To(Equal("set"))
+
+		capStart, capEnd := 113.0, 120.0
+		seg := exercise(113, 120, cleanCycle(114, 116), cleanCycle(117, 119))
+		seg.CaptureStart = &capStart
+		seg.CaptureEnd = &capEnd
+		tailProgress := Build(
+			[]Interval{seg},
+			[]Gap{{Start: 120, End: 130, Clock: "media", Reason: "not_analyzed"}},
+			"video-113-125",
+		)
+		r2, err := Confirm(tailProgress, Confirmation{
+			IntervalID:  tailProgress.Intervals[0].ID,
+			Start:       113,
+			End:         125,
+			Reps:        10,
+			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "unspecified",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(r2.ElapsedSeconds).To(Equal(12.0))
+		Expect(r2.Reps).To(Equal(10))
+		Expect(r2.RepsPerMinute).To(Equal(50.0))
+	})
 })
+

@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 import { t, useLocale } from "@/features/i18n";
 import { confirmPerformanceRecords, getPerformanceBenchmarks, getWorkoutProgress } from "../api";
 import {
-  confirmedPerformanceInput, observedReps, performanceDraft, performanceSelectionCovered, progressTime,
+  confirmedPerformanceInput, findCoveringConfirmedRecord, observedReps, performanceDraft, performanceSelectionCovered, progressTime,
   type PerformanceBenchmarksResponse, type PerformanceDraft, type PerformanceRecord,
   type WorkoutProgress, type WorkoutProgressInterval, type WorkoutProgressResponse,
 } from "../../../shared/workoutProgress";
@@ -52,7 +52,7 @@ function RecordEditor({ interval, progress, record, saving, onSave, onClose, onR
     {choices("loadMode", ["unresolved", "none", "weighted"], "loadMode")}
     {draft.loadMode === "weighted" && <>{field("weight", "weight")}{choices("unit", ["lb", "kg"], "unit")}{choices("basis", ["total", "per_implement"], "basis")}</>}
     {choices("measurement", ["set", "window"], "measurement")}
-    {choices("technique", ["unspecified", "singles", "touch_and_go"], "technique")}
+    {choices("technique", ["singles", "touch_and_go"], "technique")}
     {onReviewVideo && <Pressable accessibilityRole="button" disabled={!canReview} onPress={() => onReviewVideo(start, end)} style={[styles.button, !canReview && styles.disabled]}><Text style={styles.text}>{label("selectedPlay")}</Text></Pressable>}
     <Pressable accessibilityRole="checkbox" accessibilityLabel={label("reviewed")} accessibilityState={{ checked: draft.reviewed }} disabled={saving} onPress={() => update("reviewed", !draft.reviewed)} style={styles.button}><Text style={styles.text}>{draft.reviewed ? "☑" : "☐"} {label("reviewed")}</Text></Pressable>
     {draft.reviewed && !valid && <Text accessibilityRole="alert" style={styles.error}>{label("invalid")}</Text>}
@@ -152,13 +152,24 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
       {!!notice && <Text style={styles.text}>{notice}</Text>}
       {data && !data.progress && <Text style={styles.text}>{label("unavailable")}</Text>}
       {data?.progress?.intervals.map(interval => {
+        if (interval.activity === "rest") {
+          return <View key={interval.id} testID={`rest-interval-${interval.id}`} style={styles.restRow}>
+            <Text style={styles.restText}>{progressTime(interval.start_secs)}–{progressTime(interval.end_secs)} · {label("rest")}</Text>
+            {onReviewVideo && <Pressable accessibilityRole="button" onPress={() => onReviewVideo(interval.start_secs, interval.end_secs)} style={styles.compactButton}><Text style={styles.restText}>{label("play")}</Text></Pressable>}
+          </View>;
+        }
         const record = data.records.find(r => r.interval_id === interval.id);
-        return <View key={interval.id} style={styles.editor}>
-          <Text style={styles.title}>{progressTime(interval.start_secs)}–{progressTime(interval.end_secs)} · {interval.movement || label(interval.activity === "rest" ? "rest" : "unknown")}</Text>
+        const coveringConfirmed = findCoveringConfirmedRecord(interval, data.records);
+        const isConfirmed = coveringConfirmed != null;
+        return <View key={interval.id} testID={`exercise-interval-${interval.id}`} style={[styles.editor, isConfirmed && styles.confirmedEditor]}>
+          <View style={styles.headerRow}>
+            <Text style={styles.title}>{progressTime(interval.start_secs)}–{progressTime(interval.end_secs)} · {interval.movement || label("unknown")}</Text>
+            {isConfirmed && <Text style={styles.confirmedBadge}>✓ {label("confirmed")}</Text>}
+          </View>
           {interval.activity === "exercise" && <>
             <Text style={styles.text}>{label("observedReps", { count: observedReps(interval) ?? label("unknown") })}</Text>
             <Text style={styles.text}>{interval.load ? `${loadLabel(interval)} · ${label("candidate")}` : label("unknown")}</Text>
-            {record && <><Text style={styles.text}>{label(record.status === "confirmed" ? "confirmed" : "needsConfirmation")} · {progressTime(record.start_secs)}–{progressTime(record.end_secs)} · {label("recordSummary", { count: record.reps, load: loadLabel(record), duration: (record.elapsed_seconds ?? (record.end_secs - record.start_secs)).toFixed(1) })}</Text><RestCycleComparisons record={record} /></>}
+            {record && <><Text style={[styles.text, record.status === "confirmed" && styles.confirmedBadge]}>{label(record.status === "confirmed" ? "confirmed" : "needsConfirmation")} · {progressTime(record.start_secs)}–{progressTime(record.end_secs)} · {label("recordSummary", { count: record.reps, load: loadLabel(record), duration: (record.elapsed_seconds ?? (record.end_secs - record.start_secs)).toFixed(1) })}</Text><RestCycleComparisons record={record} /></>}
           </>}
           <View style={styles.row}>
             {onReviewVideo && <Pressable accessibilityRole="button" onPress={() => onReviewVideo(interval.start_secs, interval.end_secs)} style={styles.button}><Text style={styles.text}>{label("play")}</Text></Pressable>}
@@ -179,6 +190,12 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
 const styles = StyleSheet.create({
   card: { backgroundColor: "#1C1C1E", borderRadius: 12, padding: 12, marginVertical: 8, gap: 10 },
   editor: { padding: 10, borderWidth: 1, borderColor: "#555", borderRadius: 8, gap: 8 },
+  confirmedEditor: { borderColor: "#2ea043", backgroundColor: "rgba(46, 160, 67, 0.12)" },
+  restRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: "#3a3a3c", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.03)", gap: 8 },
+  restText: { color: "#999", fontSize: 11 },
+  compactButton: { paddingVertical: 4, paddingHorizontal: 8, borderWidth: 1, borderColor: "#555", borderRadius: 6 },
+  headerRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 6 },
+  confirmedBadge: { color: "#4ade80", fontSize: 12, fontWeight: "600" },
   gap: { gap: 8 }, title: { color: "#f4f4f4", fontWeight: "600", fontSize: 14 }, text: { color: "#ddd", fontSize: 12 },
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, field: { gap: 4, minWidth: 95 },
   input: { padding: 10, borderWidth: 1, borderColor: "#777", borderRadius: 6, color: "#fff" },

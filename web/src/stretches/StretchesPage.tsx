@@ -131,6 +131,7 @@ function StretchTimerModal({
                 <video
                   src={resolvedInstruction.video_url}
                   controls
+                  muted
                   preload="metadata"
                   className="w-full h-48 object-contain rounded-xl"
                 />
@@ -524,6 +525,7 @@ export function StretchesPage() {
                           <video
                             src={resolved.video_url}
                             controls
+                            muted
                             preload="metadata"
                             className="w-full h-48 object-contain rounded-xl"
                           />

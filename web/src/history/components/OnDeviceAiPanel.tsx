@@ -2,8 +2,10 @@ import { lazy, Suspense, useState } from 'react';
 const OnDeviceComparison = lazy(() => import('./OnDeviceComparison').then(m => ({default:m.OnDeviceComparison})));
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { ApiError } from '../../api/client';
+import type { VideoMappingSegment } from '../../api/history';
 import { onDeviceAiApi, onDeviceAssetPath } from '../../api/onDeviceAi';
 import { arrayValue, assetName, numberValue, object, recordView, strings, textValue } from '../onDeviceRecord';
+import { captureToMedia } from '../timelineUtils';
 
 const labels: Record<string, string> = {
   camera: '촬영 상태', behavior: '인물·운동 행동', sound: '주변 소리', space: '공간·상호작용',
@@ -26,17 +28,48 @@ function JsonDetails({ title, value }: { title: string; value: unknown }) {
   </details>;
 }
 
-function Evidence({ item, sessionId, profileId }: { item: Record<string, unknown>; sessionId: string; profileId: number }) {
+function Evidence({
+  item,
+  sessionId,
+  profileId,
+  onSeekMedia,
+  captureSegments,
+}: {
+  item: Record<string, unknown>;
+  sessionId: string;
+  profileId: number;
+  onSeekMedia?: (seconds: number) => void;
+  captureSegments?: VideoMappingSegment[];
+}) {
   const [failed, setFailed] = useState(false);
   const filename = assetName(item.filename)!;
   const url = `/api/v1${onDeviceAssetPath(sessionId, profileId, filename)}`;
-  const offset = numberValue(item.mediaOffsetMs) ?? numberValue(item.captureOffsetMs);
+  const mediaMs = numberValue(item.mediaOffsetMs);
+  const captureMs = numberValue(item.captureOffsetMs);
+  const offset = mediaMs ?? captureMs;
+  const seekSeconds =
+    mediaMs !== null
+      ? mediaMs / 1000
+      : captureMs !== null
+        ? (captureSegments?.length ? captureToMedia(captureMs, captureSegments) : null) ?? captureMs / 1000
+        : null;
   return <figure className="min-w-0 rounded-lg border border-border p-2">
     {failed ? <p className="text-sm text-amber-400">근거 파일을 불러오지 못했습니다.</p> : filename.endsWith('.jpg') ?
       <a href={url} target="_blank" rel="noreferrer"><img loading="lazy" className="max-h-80 w-full rounded object-contain" src={url} alt="AI에 전달한 입력 사진" onError={() => setFailed(true)} /></a> :
       filename.endsWith('.m4a') ? <audio controls preload="none" className="w-full" src={url} onError={() => setFailed(true)} /> : null}
     <figcaption className="mt-2 break-all text-xs text-text-muted">{offset !== null && `${item.mediaOffsetMs !== undefined ? '원본 조각 내' : '촬영 경과'} ${(offset / 1000).toFixed(2)}초 · `}{filename}</figcaption>
-    <a href={url} target="_blank" rel="noreferrer" className="text-xs text-accent">원본 열기</a>
+    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+      <a href={url} target="_blank" rel="noreferrer" className="text-xs text-accent">원본 열기</a>
+      {onSeekMedia && seekSeconds !== null && Number.isFinite(seekSeconds) && seekSeconds >= 0 && (
+        <button
+          type="button"
+          onClick={() => onSeekMedia(seekSeconds)}
+          className="rounded border border-accent/30 bg-accent/10 px-2 py-0.5 font-mono text-xs text-accent hover:bg-accent/20"
+        >
+          ▶ {seekSeconds.toFixed(1)}초 영상 이동
+        </button>
+      )}
+    </div>
   </figure>;
 }
 
@@ -65,7 +98,19 @@ function MeasurementDetails({ kind, value }: { kind: unknown; value: unknown }) 
   return null;
 }
 
-function RecordDetail({ sessionId, profileId, filename }: { sessionId: string; profileId: number; filename: string }) {
+function RecordDetail({
+  sessionId,
+  profileId,
+  filename,
+  onSeekMedia,
+  captureSegments,
+}: {
+  sessionId: string;
+  profileId: number;
+  filename: string;
+  onSeekMedia?: (seconds: number) => void;
+  captureSegments?: VideoMappingSegment[];
+}) {
   const query = useQuery({ queryKey: ['on-device-ai-record', profileId, sessionId, filename],
     queryFn: () => onDeviceAiApi.read(sessionId, profileId, filename), retry: false, staleTime: 60_000 });
   if (query.isPending) return <p role="status">기록을 불러오는 중…</p>;
@@ -95,7 +140,7 @@ function RecordDetail({ sessionId, profileId, filename }: { sessionId: string; p
     </div>}
     {Object.keys(review).length > 0 && <p className="rounded-lg bg-bg-tertiary p-3">사용자 검수: {label(review.verdict)} · {textValue(review.note) || '메모 없음'}<br /><span className="text-xs">검수 대상: {textValue(review.targetId)}</span></p>}
     {view.frames.length > 0 && <div><h4 className="mb-2 font-medium">실제 입력 근거 ({view.frames.length}개)</h4>
-      <div className="grid gap-3 sm:grid-cols-3">{view.frames.map((item, i) => <Evidence key={`${filename}-${i}`} item={item} sessionId={sessionId} profileId={profileId} />)}</div>
+      <div className="grid gap-3 sm:grid-cols-3">{view.frames.map((item, i) => <Evidence key={`${filename}-${i}`} item={item} sessionId={sessionId} profileId={profileId} onSeekMedia={onSeekMedia} captureSegments={captureSegments} />)}</div>
       <p className="mt-2 text-xs text-text-muted">사진 시각은 원본 촬영 기준이며, 병합 영상의 재생 위치와 다를 수 있습니다.</p></div>}
     <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer font-medium">질문·운동·외형 컨텍스트</summary>
       <dl className="mt-2 space-y-2 whitespace-pre-wrap break-words"><dt className="text-text-muted">WOD</dt><dd>{textValue(context.wodDescription) || '미기록'}</dd><dt className="text-text-muted">동작</dt><dd>{textValue(context.movements) || '미기록'}</dd><dt className="text-text-muted">대상 외형</dt><dd>{textValue(context.appearanceHints) || '미기록'}</dd><dt className="text-text-muted">실제 질문</dt><dd>{textValue(r.prompt) || '이 버전에는 질문 원문이 보관되지 않았습니다.'}</dd></dl>
@@ -107,7 +152,17 @@ function RecordDetail({ sessionId, profileId, filename }: { sessionId: string; p
   </article>;
 }
 
-function Journal({ sessionId, profileId }: { sessionId: string; profileId: number }) {
+function Journal({
+  sessionId,
+  profileId,
+  onSeekMedia,
+  captureSegments,
+}: {
+  sessionId: string;
+  profileId: number;
+  onSeekMedia?: (seconds: number) => void;
+  captureSegments?: VideoMappingSegment[];
+}) {
   const [selected, setSelected] = useState<string | null>(null);
   const query = useInfiniteQuery({ queryKey: ['on-device-ai', profileId, sessionId], initialPageParam: '',
     queryFn: ({ pageParam }) => onDeviceAiApi.list(sessionId, profileId, pageParam),
@@ -125,16 +180,26 @@ function Journal({ sessionId, profileId }: { sessionId: string; profileId: numbe
           <button key={name} aria-pressed={current === name} className={`block w-full rounded-lg border p-3 text-left text-sm ${current === name ? 'border-accent bg-bg-tertiary text-accent' : 'border-border text-text-secondary'}`} onClick={() => setSelected(name)}><span>{fileLabel(name)} · {i + 1}</span><span className="mt-1 block break-all text-[10px] text-text-muted">{name}</span></button>)}
         {query.hasNextPage && <button className={buttonClass} disabled={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>기록 더 보기</button>}
       </nav>
-      {current && <RecordDetail key={current} sessionId={sessionId} profileId={profileId} filename={current} />}
+      {current && <RecordDetail key={current} sessionId={sessionId} profileId={profileId} filename={current} onSeekMedia={onSeekMedia} captureSegments={captureSegments} />}
     </div>}
   </div>;
 }
 
-export function OnDeviceAiPanel({ sessionId, profileId }: { sessionId: string; profileId: number }) {
+export function OnDeviceAiPanel({
+  sessionId,
+  profileId,
+  onSeekMedia,
+  captureSegments,
+}: {
+  sessionId: string;
+  profileId: number;
+  onSeekMedia?: (seconds: number) => void;
+  captureSegments?: VideoMappingSegment[];
+}) {
   const [open, setOpen] = useState(false);
-  return <section className="mt-6 min-w-0 rounded-xl border border-border bg-bg-elevated p-4" aria-label="온디바이스 AI 관찰 기록">
+  return <section className="min-w-0 rounded-xl border border-border bg-bg-elevated p-4" aria-label="온디바이스 AI 관찰 기록">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-semibold text-text-primary">온디바이스 AI 관찰 기록</h2><p className="mt-1 text-sm text-text-muted">아이폰의 자세 분석 · 환경·행동 관찰 · 입력 근거</p></div>
       <button className={buttonClass} aria-expanded={open} onClick={() => setOpen(!open)}>{open ? '기록 접기' : '기록 확인'}</button></div>
-    {open && <Journal key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} />}
+    {open && <Journal key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} onSeekMedia={onSeekMedia} captureSegments={captureSegments} />}
   </section>;
 }

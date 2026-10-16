@@ -3,6 +3,7 @@ import {
   analysisSegments,
   formatLongTimestamps,
   legacyOverallSummary,
+  splitTextByTimestamps,
 } from "../src/history/analysisPresentation";
 
 describe("analysis presentation", () => {
@@ -69,6 +70,18 @@ describe("analysis presentation", () => {
     const raw = "## 세그먼트 1: A (6:30.5 ~ 6:59.9983333)\n본문";
     expect(analysisSegments(raw)).toEqual([
       { title: "A", start: 390.5, end: 420, body: "본문\n" },
+    ]);
+  });
+  it("tokenizes inline timestamps with MM:SS and HH:MM:SS formats", () => {
+    expect(splitTextByTimestamps("구간 01:22 ~ 01:35.5 에서 허리가 굽습니다.")).toEqual([
+      { type: "text", value: "구간 " },
+      { type: "timestamp", label: "01:22", seconds: 82 },
+      { type: "text", value: " ~ " },
+      { type: "timestamp", label: "01:35.5", seconds: 95.5 },
+      { type: "text", value: " 에서 허리가 굽습니다." },
+    ]);
+    expect(splitTextByTimestamps("타임스탬프 없음")).toEqual([
+      { type: "text", value: "타임스탬프 없음" },
     ]);
   });
 });

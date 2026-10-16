@@ -11,9 +11,9 @@ const baseline: PerformanceRecord = { id: 1, session_id: "old", interval_id: "ol
 const current: PerformanceRecord = { ...baseline, id: 2, session_id: "new", reps: 5, reps_per_minute: 5, rate_basis: "normalized_per_minute" };
 beforeEach(() => { jest.clearAllMocks(); (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(evidence); (historyApi.getPerformanceBenchmarks as jest.Mock).mockResolvedValue({ records: [current, baseline], comparisons: [{ current_record_id: 2, baseline_record_id: 1, kind: "reference", condition_differences: ["unknown_technique", "workout_prescription"], rate_change_percent: 66.7, heavier_load_kg: null, heavier_load_baseline_record_id: null }], best: [baseline] }); });
 async function flush() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); }); }
-async function mount(sessionId = "new", isOriginal = true) {
+async function mount(sessionId = "new", isOriginal = true, wodDescription?: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false, gcTime: Infinity } } }); let tree: any;
-  const seek = jest.fn(); await act(async () => { tree = create(createElement(QueryClientProvider, { client }, createElement(WorkoutProgressPanel, { sessionId, profileId: 1, isOriginal, seek }))); }); await flush(); return { tree, client, seek };
+  const seek = jest.fn(); await act(async () => { tree = create(createElement(QueryClientProvider, { client }, createElement(WorkoutProgressPanel, { sessionId, profileId: 1, isOriginal, seek, wodDescription }))); }); await flush(); return { tree, client, seek };
 }
 function allText(tree: any): string { return JSON.stringify(tree.toJSON()); }
 async function click(tree: any, label: string) { const b = tree.root.findAllByType("button").find((item: any) => item.children.join("") === label); expect(b).toBeDefined(); await act(async () => b.props.onClick()); await flush(); }
@@ -27,7 +27,7 @@ it("shows missing evidence as unknown and prevents seeking transformed media", a
 it("confirms reviewed values and distinguishes reference comparison and rate basis", async () => {
   (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({ ...evidence, records: [current] });
   const { tree, client } = await mount(); await review(tree); await click(tree, "확인한 기록 저장");
-  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", { source_version: "a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "unspecified" }] });
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", { source_version: "a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" }] });
   expect(allText(tree)).toContain("분당 환산값"); expect(allText(tree)).toContain("실제 60초 측정"); expect(allText(tree)).toContain("참고 비교"); expect(allText(tree)).toContain("WOD 구성"); expect(allText(tree)).toContain("+66.7%");
   await act(() => tree.unmount()); client.clear();
 });
@@ -83,7 +83,7 @@ it("reviews and confirms a 60-second exercise-rest-exercise window", async () =>
   await click(tree, "선택한 영상 범위 확인"); expect(seek).toHaveBeenCalledWith(10, 70);
   await act(async () => tree.root.findAllByType("input").find((i: any) => i.props.type === "checkbox").props.onChange({ target: { checked: true } }));
   await click(tree, "확인한 기록 저장");
-  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", { source_version: "a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "window", technique: "unspecified" }] });
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", { source_version: "a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "window", technique: "singles" }] });
   await act(() => tree.unmount()); client.clear();
 });
 it("displays observed rest cycle changes and missing medians without physiological percentages", async () => {
@@ -98,3 +98,70 @@ it("displays observed rest cycle changes and missing medians without physiologic
   expect(rows[1]).toContain("이전 확인 불가 → 이후 확인 불가"); expect(rows[1]).toContain("반복 소요시간 변화 확인 불가"); expect(rows[1]).not.toContain("%"); expect(rows.join("")).not.toContain("회복률");
   await act(() => tree.unmount()); client.clear();
 });
+it("renders total movement summary and applies WOD description weights with one click", async () => {
+  const unweightedEvidence: WorkoutProgressResponse = {
+    progress: {
+      version: 1,
+      clock: "media",
+      source_version: "a",
+      intervals: [
+        { id: "set-1", start_secs: 10, end_secs: 70, activity: "exercise", movement: "Power Clean", load: null, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 12, end_secs: 16, complete: true, evidence: "Rep 1" }] },
+      ],
+      unassessed: [],
+    },
+    records: [],
+  };
+  (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(unweightedEvidence);
+  (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({ ...unweightedEvidence, records: [current] });
+  const { tree, client } = await mount("new", true, "30 Power Cleans (135/95 lb)");
+  expect(allText(tree)).toContain("총 수행 운동 및 개수 요약");
+  expect(allText(tree)).toContain("총 1종목 · 1구간");
+  expect(allText(tree)).toContain("관찰 완료 1회");
+  expect(allText(tree)).toContain("135 lb · 총합 중량 (바벨·단일 기구) / 95 lb · 총합 중량 (바벨·단일 기구) · WOD 설명 중량 후보");
+  await click(tree, "반복수·구간·중량 확인/수정");
+  expect(allText(tree)).toContain("수행 중량 구분");
+  expect(allText(tree)).toContain("맨몸 수행 (추가 중량 없음)");
+  expect(allText(tree)).toContain("중량 기구 사용 (바벨·덤벨·케틀벨 등)");
+  await click(tree, "95 lb 적용");
+  await act(async () => {
+    tree.root.findAllByType("input").find((i: any) => i.props.type === "checkbox").props.onChange({ target: { checked: true } });
+  });
+  await click(tree, "확인한 기록 저장");
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
+    source_version: "a",
+    records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 1, load: { value: 95, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" }],
+  });
+  await act(() => tree.unmount()); client.clear();
+});
+it("merges contiguous 10-second segment intervals and confirms them as a single set", async () => {
+  const splitEvidence: WorkoutProgressResponse = {
+    progress: {
+      version: 1,
+      clock: "media",
+      source_version: "split",
+      intervals: [
+        { id: "seg-0", start_secs: 0, end_secs: 9, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 1, end_secs: 3, complete: true, evidence: "Rep 1" }] },
+        { id: "seg-1", start_secs: 11, end_secs: 20, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 12, end_secs: 14, complete: true, evidence: "Rep 2" }] },
+      ],
+      unassessed: [{ start_secs: 9, end_secs: 11, clock: "media", reason: "incomplete_cycle" }],
+    },
+    records: [],
+  };
+  (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(splitEvidence);
+  (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({ ...splitEvidence, records: [current] });
+  const { tree, client } = await mount("new", true);
+  await click(tree, "반복수·구간·중량 확인/수정");
+  await click(tree, "연속된 구간 합치기");
+  await act(async () => {
+    tree.root.findAllByType("input").find((i: any) => i.props["aria-label"] === "완료 반복수").props.onChange({ target: { value: "10" } });
+    tree.root.findAllByType("input").find((i: any) => i.props.type === "checkbox").props.onChange({ target: { checked: true } });
+  });
+  await click(tree, "확인한 기록 저장");
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
+    source_version: "split",
+    records: [{ interval_id: "seg-0", start_secs: 0, end_secs: 20, reps: 10, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" }],
+  });
+  await act(() => tree.unmount()); client.clear();
+});
+
+

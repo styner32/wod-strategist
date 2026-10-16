@@ -125,6 +125,7 @@ export function StretchCatalogManagePage() {
                         <video
                           src={stretch.video_url}
                           controls
+                          muted
                           preload="metadata"
                           className="w-full h-40 object-contain rounded-xl"
                         />
