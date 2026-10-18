@@ -5,10 +5,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/joho/godotenv"
 	g "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/db"
 	"gorm.io/driver/postgres"
@@ -16,10 +18,24 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
+var loadTestEnvOnce sync.Once
+
+func loadTestEnv() {
+	loadTestEnvOnce.Do(func() {
+		_ = godotenv.Load("../../.env.test")
+	})
+}
+
 func InitDB() (*gorm.DB, error) {
+	loadTestEnv()
+
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgresql://sunjinlee@localhost:5432/wod_test?sslmode=disable"
+		port := os.Getenv("POSTGRES_PORT")
+		if port == "" {
+			port = "5432"
+		}
+		dsn = fmt.Sprintf("postgresql://sunjinlee@localhost:%s/wod_test?sslmode=disable", port)
 	}
 
 	gormConfig := &gorm.Config{}

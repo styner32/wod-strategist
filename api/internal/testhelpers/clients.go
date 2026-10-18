@@ -65,8 +65,16 @@ const (
 )
 
 func testRedisAddr() string {
+	loadTestEnv()
+
 	if addr := os.Getenv("TEST_REDIS_URL"); addr != "" {
 		return addr
+	}
+	if addr := os.Getenv("REDIS_URL"); addr != "" {
+		return addr
+	}
+	if port := os.Getenv("REDIS_PORT"); port != "" {
+		return "localhost:" + port
 	}
 	return "localhost:6379"
 }
