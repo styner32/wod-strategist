@@ -5,12 +5,37 @@ import "time"
 type CreateChunkReanalysisRequest struct {
 	ClientRequestID string `json:"client_request_id" binding:"required"`
 	AppearanceHints string `json:"appearance_hints,omitempty"`
+	ReusePrevious   bool   `json:"reuse_previous,omitempty"`
 }
 
 type CreateChunkReanalysisResponse struct {
 	RunID  uint   `json:"run_id"`
 	TaskID string `json:"task_id"`
 	Status string `json:"status"`
+}
+
+type CreateBatchChunkReanalysisRequest struct {
+	ClientRequestID string `json:"client_request_id" binding:"required"`
+	ChunkIDs        []uint `json:"chunk_ids" binding:"required"`
+	AppearanceHints string `json:"appearance_hints,omitempty"`
+	ReusePrevious   *bool  `json:"reuse_previous,omitempty"`
+}
+
+type BatchChunkReanalysisQueuedItem struct {
+	ChunkID uint   `json:"chunk_id"`
+	RunID   uint   `json:"run_id"`
+	TaskID  string `json:"task_id"`
+	Status  string `json:"status"`
+}
+
+type BatchChunkReanalysisFailureItem struct {
+	ChunkID uint   `json:"chunk_id"`
+	Error   string `json:"error"`
+}
+
+type CreateBatchChunkReanalysisResponse struct {
+	QueuedRuns []BatchChunkReanalysisQueuedItem  `json:"queued_runs"`
+	Failures   []BatchChunkReanalysisFailureItem `json:"failures"`
 }
 
 type ChunkReanalysisCandidateResponse struct {

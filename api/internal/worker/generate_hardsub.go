@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
@@ -258,7 +259,14 @@ func (w *Worker) generateChunkNarration(ctx context.Context, sessionID string, p
 		zap.String("fitness_level", fitnessLevel),
 		zap.String("tone_prefix", tonePrefix))
 
-	var clips []ttsClip
+	type ttsOutcome struct {
+		valid bool
+		clip  ttsClip
+	}
+	outcomes := make([]ttsOutcome, len(chunks))
+	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
+	var wg sync.WaitGroup
+
 	for i, ch := range chunks {
 		if ch.Status != "COMPLETED" || ch.StartSecs == nil || ch.EndSecs == nil {
 			continue
@@ -277,19 +285,37 @@ func (w *Worker) generateChunkNarration(ctx context.Context, sessionID string, p
 
 		// Prepend tone directive so TTS delivers with the right energy for this level
 		ttsText := tonePrefix + text
-
 		wavPath := filepath.Join(tmpDir, fmt.Sprintf("tts_%03d.wav", i))
-		usage, err := w.GeminiClient.GenerateSpeech(ctx, ttsText, defaultTTSVoice, wavPath)
-		w.saveTokenUsage(sessionID, profileID, "hardsub:tts", usage)
-		if err != nil {
-			w.logger.Warn("TTS generation failed for chunk, skipping",
-				zap.Int("chunk_index", i),
-				zap.Float64("start_secs", *ch.StartSecs),
-				zap.Error(err))
-			continue
-		}
+		startSec := *ch.StartSecs
 
-		clips = append(clips, ttsClip{path: wavPath, startSec: *ch.StartSecs})
+		wg.Add(1)
+		go func(idx int, speechText, outWav string, start float64) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			usage, err := w.GeminiClient.GenerateSpeech(ctx, speechText, defaultTTSVoice, outWav)
+			w.saveTokenUsage(sessionID, profileID, "hardsub:tts", usage)
+			if err != nil {
+				w.logger.Warn("TTS generation failed for chunk, skipping",
+					zap.Int("chunk_index", idx),
+					zap.Float64("start_secs", start),
+					zap.Error(err))
+				return
+			}
+			outcomes[idx] = ttsOutcome{
+				valid: true,
+				clip:  ttsClip{path: outWav, startSec: start},
+			}
+		}(i, ttsText, wavPath, startSec)
+	}
+	wg.Wait()
+
+	var clips []ttsClip
+	for _, out := range outcomes {
+		if out.valid {
+			clips = append(clips, out.clip)
+		}
 	}
 
 	if len(clips) == 0 {

@@ -32,17 +32,39 @@ const MovementEvidenceRulesPrompt = `
   · Push Jerk (딥-드라이브 후 무릎을 다시 굽혀 밑으로 들어가며 캐치)
   · Split Jerk (딥-드라이브 후 앞뒤로 발을 벌리며 캐치)
   · Push Press (무릎 1회 딥-드라이브 반동으로 밀어 올리고 무릎을 다시 굽히지 않음)
-  · Strict Press (하체 반동 없이 상체 힘으로만 밀어 올림)
+  · Strict Press (무릎 딥이나 재굽힘 없이 머리 위로 밀어 올림)
 - 기구를 완전히 내려놓은 상태에서의 걷기, 휴식, 회복, 준비 또는 장비 세팅은 운동 종목이 아닙니다.`
 
-const FatigueEvidenceRulesPrompt = `
+const SpinalObservationRulesPrompt = `
 
-## 피로 판정 근거 규칙
-- 피로는 운동을 수행하는 대상 인물에게 반복 속도 저하, 케이던스 손실, 가동범위 감소 또는 자세 붕괴가 영상에서 지속적으로 보일 때만 판정하세요.
-- 단일 느린 반복, 의도적으로 조절한 템포, 단순한 멈춤 또는 힘들어 보이는 표정만으로 피로를 단정하지 마세요.
-- 심박수는 영상에서 피로가 먼저 확립된 경우에만 보조 근거입니다. 심박수만으로 피로를 만들거나 피로 시작 시점을 정하지 마세요.
-- 걷기, 휴식, 회복, 준비 또는 장비 세팅은 심박수와 관계없이 피로 동작이나 fatigue_point가 아닙니다.
-- 이전 청크의 검증된 근거가 제공되지 않았다면 피로가 "증가했다"거나 "누적됐다"는 추세를 추측하지 마세요.`
+## 현재 구간 척추·골반 관찰 경계
+- 현재 대상 인물에게 실제로 보이는 척추·골반 정렬과 변화를 동작·촬영 시점에 맞추어 관찰하세요. 모든 동작에 목부터 골반까지 일직선 기준을 적용하지 마세요.
+- 가림·촬영 각도로 확인되지 않는 정렬은 확인 불가입니다. 영상만으로 복압, 근육 활성, 진단 또는 과거 상태를 확정하지 마세요.
+- 이전 관찰·점수·누적 피로·회복 해석은 현재 관찰의 입력이나 근거가 아닙니다. 관찰에 최종 평가가 섞이지 않도록 현재 구간의 직접 시각 근거만 남기세요.`
+
+const ObservationOnlyRulesPrompt = `
+
+## 관찰 전용 경계: 보이는 현상과 원인을 분리
+- 당신의 역할은 현재 영상 구간의 관찰 기록입니다. 운동 중 보이는 위치·궤적·정렬·가동범위·반복 시각·정지 시간만 기술하세요.
+- 같은 현재 구간 안에서 직접 비교 가능한 반복이 보이면 변화와 시각을 기록할 수 있습니다. 측정할 수 없는 각도·속도·가속도 수치를 만들지 마세요.
+- 느린 반복, 긴 정지, 발 간격 변화, 상체 기울기, 표정 또는 심박수는 내부 상태의 원인을 확정하지 못합니다. 피로의 유무·수준·시작·원인, 힘/근력/파워/지지력의 저하, 힘의 누수, 근육 활성·약화, 복압, 통증 원인 또는 회복 상태를 판정하지 마세요.
+- "피로 때문", "하체 힘이 떨어져", "코어가 약해서", "팔 힘에 의존", "보상 작용"처럼 원인이나 힘의 분담을 설명하지 마세요. "가능성", "추정", "의심"을 붙여 같은 해석을 제시하는 것도 금지입니다. 근거가 없다는 이유로 "피로가 없다"거나 "힘이 유지된다"고 결론내리지 마세요.
+- 지면반력 활용, 폭발력, 힘 전달 효율 또는 호흡을 조절하려는 의도도 영상의 위치·궤적만으로 판정하지 마세요. 발이 지면에 닿는 위치, 무릎을 펴는 시점, 몸통 움직임처럼 보이는 사실로 표현하세요.
+- 아래 예시는 표현 규칙이며 실제 영상의 관찰 결과가 아닙니다. 영상에 보이지 않으면 그대로 복사하지 마세요.
+  · 금지: "피로로 케이던스가 떨어졌습니다." → 관찰: "5~7회 반복 사이에 바벨을 허벅지 높이에서 잠시 멈추는 장면이 보입니다."
+  · 금지: "하체 신전력이 저하되어 팔 힘으로 버팁니다." → 관찰: "캐치 순간 발 간격이 넓어지고 팔꿈치가 아래쪽을 향합니다."
+  · 금지: "코어 약화로 허리가 무너집니다." → 관찰: "바벨을 바닥에서 떼는 동안 상체 기울기가 바뀝니다."
+- 코칭은 직접 보인 자세에 대한 짧은 동작 큐만 허용합니다. 내부 상태를 근거로 밀어붙이기, 속도/무게 증가 또는 근육 강화 처방을 하지 마세요. 가림·촬영 각도·프레임 누락은 확인 불가/unknown/unassessed로 남기세요.
+- 이 경계는 본문, 제목, 코칭, 하이라이트 reason, form/ROM/pace evidence와 모든 JSON 문자열에 동일하게 적용됩니다. 원인 해석 대신 관찰 문장을 남기세요.`
+
+const ObservationOnlyOutputCheckPrompt = `
+
+## 관찰 결과 출력 전 점검
+본문과 모든 JSON의 문장마다 대상 인물의 현재 구간 시각 근거와 해당 시점을 확인하세요. 피로·힘 저하·근육 약화·복압·회복의 원인 해석이 있으면 삭제하고 직접 보인 위치·궤적·반복·정지 사실만 남기세요.
+확인할 수 없는 원인을 가정하지 마세요. 원인을 제거해도 완료된 반복별 시각과 직접 관찰 근거는 생략하거나 세트당 한 번으로 압축하지 마세요.
+휴식/준비 구간을 기록하기 전에 시작과 끝뿐 아니라 그 범위 전체를 확인하세요. 중간에 대상 인물이 운동을 다시 시작하면 별도 운동 구간과 완료 반복을 빠짐없이 남기세요. 여러 세트를 하나의 긴 휴식으로 덮지 마세요. 가림이나 프레임 누락으로 확인하지 못한 시간은 휴식으로 추정하지 말고 unknown/unassessed로 남기세요.
+점검 과정이나 금지 예시는 출력하지 말고, 요청된 관찰 결과 형식을 그대로 유지하세요.
+`
 
 var allowedVisualFatigueEvidenceTypes = map[string]struct{}{
 	"rep_slowdown":         {},
@@ -52,7 +74,7 @@ var allowedVisualFatigueEvidenceTypes = map[string]struct{}{
 }
 
 func baseChunkAnalysisPrompt() string {
-	return ChunkAnalysisPrompt + MovementEvidenceRulesPrompt + FatigueEvidenceRulesPrompt
+	return ChunkAnalysisPrompt + MovementEvidenceRulesPrompt + ObservationOnlyRulesPrompt + SpinalObservationRulesPrompt
 }
 
 func buildMovementHintsContext(movements []string) string {
@@ -137,7 +159,7 @@ func buildHeartRateContext(heartRateBPM int) string {
 
 ## 청크 심박수 참고값
 이 청크와 함께 수신된 심박수는 %d bpm입니다. 정확한 측정 시점은 알 수 없습니다.
-영상에서 반복 속도, 케이던스, 가동범위 또는 자세의 지속적인 저하가 먼저 확인된 경우에만 보조 근거로 사용하세요.
+이 값은 측정 사실의 참고값이며, 관찰 단계에서 피로·힘·운동 강도 또는 자세 변화의 원인을 판정하는 근거로 사용하지 마세요.
 심박수만으로 피로를 판정하거나 피로 구간을 선택하지 말고, 심박수 수치를 코칭 문장에 포함하지 마세요.`, heartRateBPM)
 }
 
@@ -259,7 +281,9 @@ func resolveReanalysisModel(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "flash", "flash38", "flash37", "flash36", "flash35", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash":
 		return gemini.ModelFlash38
-	case "pro", "pro31", "gemini-3.1-pro-preview", "gemini-pro":
+	case "argon", "argon4", "gemini-4-argon", "pro", "gemini-pro":
+		return gemini.ModelArgon4
+	case "pro31", "gemini-3.1-pro-preview":
 		return gemini.ModelPro31Preview
 	default:
 		return gemini.ModelFlash38

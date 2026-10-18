@@ -47,6 +47,7 @@ interface Props {
   highlightSegments: unknown;
   isCached?: boolean;
   onClose: () => void;
+  reviewInterval?: { start: number; end: number };
 }
 
 // ─────────────────────────────────────────
@@ -142,11 +143,14 @@ export function WorkoutVideoPlayer({
   highlightSegments,
   isCached = false,
   onClose,
+  reviewInterval,
 }: Props) {
   const locale = useLocale();
   const insets = useSafeAreaInsets();
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const reviewEnd = useRef<number | undefined>(reviewInterval?.end);
+  const reviewStarted = useRef(false);
   const [activeHighlight, setActiveHighlight] =
     useState<HighlightSegment | null>(null);
   const highlightFade = useRef(new Animated.Value(0)).current;
@@ -173,6 +177,10 @@ export function WorkoutVideoPlayer({
   useEffect(() => {
     const sub = player.addListener("timeUpdate", (ev) => {
       setCurrentTime(ev.currentTime);
+      if (reviewStarted.current && reviewEnd.current != null && ev.currentTime >= reviewEnd.current) {
+        player.pause();
+        reviewEnd.current = undefined;
+      }
     });
     return () => sub.remove();
   }, [player]);
@@ -181,9 +189,14 @@ export function WorkoutVideoPlayer({
   useEffect(() => {
     const sub = player.addListener("sourceLoad", (ev) => {
       setDuration(ev.duration);
+      if (reviewInterval && !reviewStarted.current && reviewInterval.start < ev.duration) {
+        reviewStarted.current = true;
+        reviewEnd.current = Math.min(reviewInterval.end, ev.duration);
+        player.currentTime = reviewInterval.start;
+      }
     });
     return () => sub.remove();
-  }, [player]);
+  }, [player, reviewInterval?.start, reviewInterval?.end]);
 
   // Highlight overlay dismiss timer
   const showHighlightOverlay = useCallback(
@@ -215,6 +228,7 @@ export function WorkoutVideoPlayer({
         duration,
         hl.version,
       );
+      reviewEnd.current = undefined;
       player.currentTime = targetSecs;
       player.play();
       showHighlightOverlay(hl);
@@ -460,6 +474,7 @@ export function WorkoutVideoPlayer({
                     isActive && styles.timelineCueActive,
                   ]}
                   onPress={() => {
+                    reviewEnd.current = undefined;
                     player.currentTime = cue.startSecs;
                     player.play();
                   }}

@@ -1,0 +1,34 @@
+# WOD onset, full-session scoring and training load
+
+Implementation version 1 applies only to newly registered `workout_type: wod` sessions. Migration `000055` adds `profiles.wod_tracking_started_at` (database-clock rollout/profile creation time; read-only in Gorm), `sessions.wod_evaluation_version` (existing rows remain 0), nullable `sessions.effort` (integer 1–10), and nullable `session_reanalysis_runs.wod_start_request`.
+
+- Explicit session creation opts new sessions into evaluation version 1. The recording/video worker creates missing WOD session rows; it checks the earliest existing chunk/analysis timestamp against the profile's tracking start, so old rowless recordings remain version 0. Existing version 0 sessions are never upgraded automatically. Verified pre-rollout ULIDs also exclude delayed mobile uploads.
+- New WODs use the two-pass path even if the worker's legacy mode is configured. Every indexed exercise segment is deeply analyzed; the legacy segment budget/triage remains on old/non-WOD paths. Whole-session scoring is a separate text-only `ParseText` call over validated `wod_evidence`, excluding prior-score history. Expect added onset/synthesis calls and greater latency for many-set videos.
+- Onset is visually revalidated using the original uploaded source. A returned timestamp must lie inside an indexed exercise interval, identify the target, and have visible preceding rest/setup (unless time zero). HR is optional and never sufficient for onset. Only current source-matched timeline readings are mapped through verified capture/media pairs. Missing sensor data does not delay video processing.
+- `session_score.evaluation_version: 1` adds `wod_start` (`seconds`, `end_seconds`, optional `elapsed_seconds`, `status`, `source`, `evidence`) and `evidence_status`. Start/end are original-media seconds. The end is the last successfully validated exercise observation, not an inferred completion signal. Elapsed duration uses verified capture-clock endpoints when available, retaining camera pause/rest gaps; otherwise it uses original-media elapsed time.
+- All supplied observations are made relative to WOD onset for synthesis, so prepended waiting does not dilute the scoring input. Set-to-set gaps remain in the input and must be interpreted in light of EMOM/other WOD structure. Unknown/unanalysed intervals are not assumed to be rest. Partial coverage suppresses intensity and consistency and leaves duration unresolved.
+- Scores are nullable; missing intensity must not become a default muscle-load factor. General overall weights are form/intensity/consistency 0.5/0.3/0.2, strength/skill weights 0.7/0.15/0.15. Server recomputes rounded overall; any required missing dimension leaves overall null. Legacy numeric records remain readable and untouched.
+
+## APIs and UI
+
+- `GET /api/v1/sessions/:session_id/wod-training`: eligible, effort, score, wod_start, session_load. Effort is independent of AI score and survives re-analysis.
+- `PUT /api/v1/sessions/:session_id/effort`: `{ "effort": 1..10 }`, exact owner/profile scope, eligible new WOD only. Reject missing/null/fractional/out-of-range values. This never invokes AI or changes scores.
+- `GET /api/v1/wod-training-load?profile_id=...&timezone=Asia/Seoul`: owner-scoped seven/twenty_eight windows and optional change_percent. Any IANA timezone is accepted; default Asia/Seoul.
+- Session load (AU) = elapsed WOD seconds / 60 × manual Effort. Each window includes today and the preceding 6/27 local calendar days; daily averages divide by 7/28 including rest days. Change = `(seven.daily_average / twenty_eight.daily_average - 1) * 100`. This is our defined rule, not a replica of Apple's proprietary weighting.
+- Only eligible, non-archived WODs count. Unrated, pending/failed analysis, unresolved duration or unknown workout timestamp are missing records, not zeros. Comparison is withheld for missing records, fewer than 28 tracking calendar days, or a zero baseline. Totals are always labeled as confirmed records only. Workouts outside this app are not observed.
+- Existing re-analysis POST accepts optional `wod_start_secs`: number = manual override, null = restore automatic, omitted = retain current manual setting. Stored request is replayed on retries. JSONB stores `{ "seconds": null }` for reset, a number-valued object for manual start, and SQL NULL for omission; do not store a bare JSON null through NullableJSONDocument. Re-analysis is available to authenticated owners of any session (see [video-analysis.md](video-analysis.md#whole-session-debug-re-analysis)); ownership, one active run and existing quota still apply. `wod_start_secs` is accepted only for version-1 WODs.
+- Web details show the start marker and editing controls, manual Effort and load comparison. Start correction creates a candidate, then applies the successful candidate automatically; polling can resume without a new AI request. Auto-apply may be cancelled. A changed original score/output rejects a stale candidate with 409. App history exposes Effort editing and load comparison; start editing is web-only.
+
+Automated checks do not establish onset-model accuracy, real exercise Effort calibration, deployment, or iPhone acceptance. Release order: apply migration, deploy API/worker, then deploy web/mobile. No historical backfill is intended.
+
+## Verification (2026-10-13)
+
+Executed against an isolated temporary PostgreSQL database, not the default or production database:
+
+- `go test -p 1 ./internal/wodeval ./internal/worker ./internal/controllers ./internal/fatigue -count=1 -ginkgo.focus='WOD training load|WOD full-session evaluation|/wod-training-load|/effort|WOD start|ComputeSessionMuscleLoads|parseSessionScore'` from `api/`: passed. Covers effort edits/validation/ownership, period filtering, prefix invariance, nullable scores, exact segment bounds, onset at time zero, historical/new session gating, delayed pre-rollout ULIDs, reset-vs-omission storage, and stale candidate rejection.
+- `cmd/server` and `cmd/worker` compiled through the same focused Go command with those packages added.
+- `npm test -- --runInBand web/test/wodTraining.test.tsx features/wod/ui/WODTrainingCard.test.tsx features/wod/ui/WorkoutFatigueCard.test.tsx features/wod/ui/HeartRateSummaryCard.test.tsx`: 4 suites / 16 tests passed. Tests include web automatic start-candidate application, effort save/period refresh, legacy UI exclusion and failed-save retention.
+- `npm run typecheck`, `npm --prefix web run build`, and `git diff --check`: passed. Web build retains its existing bundle-size warning.
+- Migration `000055` applied, rolled back one version, and reapplied on the temporary database. Existing analysis score checksum was unchanged.
+
+No deployment, live Gemini video inference or physical iPhone exercise acceptance was performed. Temporary PostgreSQL was stopped after verification.

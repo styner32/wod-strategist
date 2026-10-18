@@ -13,6 +13,12 @@
 - New mobile `/chunk-complete` calls send `live_analysis_version: 1`. Only these
   calls get new observations. Old recordings and uploaded-video split analysis
   are not backfilled. Both original chunk handlers implement the same contract.
+- A completed chunk can still contain `[NO_EXERCISE]` and empty coaching. Inspect
+  provider text and activity state before diagnosing delivery failure. Recovery
+  observers must treat visible equipment-free warmup, joint rotations, dynamic
+  ROM and holds as possible exercise; missing apparatus is not proof of rest.
+  Use Unknown when exercise is visible but its exact name is unclear, and keep
+  the shared observation-only boundary. Do not fabricate feedback for empty video.
 - `GET /api/v1/sessions/:session_id/activity-summary?profile_id=<owned id>`
   requires profile and session ownership. Existing chunk array responses remain
   compatible. Mobile and web use `shared/activity.ts` for the new contracts.
@@ -45,6 +51,16 @@
   exact full-workout total.
 
 ## Coaching and delivery
+
+Following the user's 2026-10-14 clarification, bounded recent-window coaching
+is restored in both live handlers and saved-chunk resumption after independent
+observations are persisted. `ENABLE_CONTEXTUAL_COACHING` still controls generation
+with its existing default. Mobile displays valid current-chunk localized coaching
+with basic output as fallback; camera feedback remains independent. Accumulated
+counts stay in post-recording review. This separate 60-second coaching layer cannot
+rewrite observations, basic output or `workout_progress`, or supply its text to
+video observers. Full performed-history real-time analysis remains a follow-up
+after the user's acceptance of final assessment; see [workout-progress.md](workout-progress.md).
 
 - Query the same profile/session only. Use up to six completed, non-overlapping
   chunks wholly inside the 60 seconds before the current capture start.

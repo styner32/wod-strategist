@@ -500,6 +500,7 @@ export function StretchFormPage() {
                     <video
                       src={editingStretch.video_url}
                       controls
+                      muted
                       preload="metadata"
                       className="w-full h-36 object-contain rounded-lg border border-border bg-black"
                     />

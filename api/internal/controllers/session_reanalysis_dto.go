@@ -1,12 +1,17 @@
 package controllers
 
-import "time"
+import (
+	"encoding/json"
+	"github.com/wod-strategist/api/internal/db"
+	"time"
+)
 
 type CreateSessionReanalysisRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	AppearanceHints string `json:"appearance_hints,omitempty"`
-	Model           string `json:"model,omitempty"`
-	WODDescription  string `json:"wod_description,omitempty"`
+	WODStartSecs    json.RawMessage `json:"wod_start_secs,omitempty"`
+	ClientRequestID string          `json:"client_request_id"`
+	AppearanceHints string          `json:"appearance_hints,omitempty"`
+	Model           string          `json:"model,omitempty"`
+	WODDescription  string          `json:"wod_description,omitempty"`
 }
 
 type CreateSessionReanalysisResponse struct {
@@ -16,10 +21,11 @@ type CreateSessionReanalysisResponse struct {
 }
 
 type SessionReanalysisCandidateResponse struct {
-	Output            string `json:"output"`
-	HighlightSegments any    `json:"highlight_segments"`
-	SessionScore      string `json:"session_score"`
-	WorkoutType       string `json:"workout_type"`
+	WorkoutProgress   db.NullableJSONDocument `json:"workout_progress" swaggertype:"object"`
+	Output            string                  `json:"output"`
+	HighlightSegments any                     `json:"highlight_segments"`
+	SessionScore      string                  `json:"session_score"`
+	WorkoutType       string                  `json:"workout_type"`
 }
 
 type SessionReanalysisRunResponse struct {

@@ -3,6 +3,7 @@ import {
   analysisSegments,
   formatLongTimestamps,
   legacyOverallSummary,
+  splitTextByTimestamps,
 } from "../src/history/analysisPresentation";
 
 describe("analysis presentation", () => {
@@ -71,4 +72,22 @@ describe("analysis presentation", () => {
       { title: "A", start: 390.5, end: 420, body: "본문\n" },
     ]);
   });
+  it("tokenizes inline timestamps with MM:SS and HH:MM:SS formats", () => {
+    expect(splitTextByTimestamps("구간 01:22 ~ 01:35.5 에서 허리가 굽습니다.")).toEqual([
+      { type: "text", value: "구간 " },
+      { type: "timestamp", label: "01:22", seconds: 82 },
+      { type: "text", value: " ~ " },
+      { type: "timestamp", label: "01:35.5", seconds: 95.5 },
+      { type: "text", value: " 에서 허리가 굽습니다." },
+    ]);
+    expect(splitTextByTimestamps("타임스탬프 없음")).toEqual([
+      { type: "text", value: "타임스탬프 없음" },
+    ]);
+  });
+});
+
+it("hides final-only workout evidence blocks while preserving the original response", () => {
+  const raw = 'Summary\n```workout_observations\n{"intervals":[]}\n```\n```wod_evidence\n{"whole_session":true}\n```\n```json\n{"workout_progress":{"version":1}}\n```\nConclusion';
+  expect(analysisProse(raw)).toBe("Summary\nConclusion");
+  expect(raw).toContain('"whole_session":true');
 });

@@ -182,7 +182,7 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 		ClientRequestID:            req.ClientRequestID,
 		TaskID:                     uuid.NewString(),
 		Status:                     db.ChunkReanalysisStatusQueued,
-		SourceContextSnapshot:      db.JSONDocument(`{}`),
+		SourceContextSnapshot:      initialChunkReanalysisContextSnapshot(req.ReusePrevious),
 		OriginalPredictionSnapshot: db.JSONDocument(originalSnapshot),
 		StructuredCandidate:        db.JSONDocument(`{}`),
 	}
@@ -267,6 +267,183 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 
 	c.JSON(http.StatusAccepted, CreateChunkReanalysisResponse{
 		RunID: run.ID, TaskID: run.TaskID, Status: run.Status,
+	})
+}
+
+// CreateBatchChunkReanalysis queues multiple chunk debug re-analyses in a single HTTP request.
+func (ctl *Controller) CreateBatchChunkReanalysis(c *gin.Context) {
+	if !ctl.requireChunkReanalysisEnabled(c) {
+		return
+	}
+	sessionID := sanitizeIdentifier(c.Param("session_id"))
+	if sessionID == "" || !isValidSessionID(sessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id"})
+		return
+	}
+
+	req, err := decodeCreateBatchChunkReanalysisRequest(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
+	if req.ClientRequestID == "" || len(req.ClientRequestID) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "client_request_id must be between 1 and 100 characters"})
+		return
+	}
+
+	seen := make(map[uint]struct{}, len(req.ChunkIDs))
+	chunkIDs := make([]uint, 0, len(req.ChunkIDs))
+	for _, id := range req.ChunkIDs {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		chunkIDs = append(chunkIDs, id)
+	}
+	if len(chunkIDs) == 0 || len(chunkIDs) > 50 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "chunk_ids must contain between 1 and 50 valid chunk IDs"})
+		return
+	}
+
+	reusePrevious := true
+	if req.ReusePrevious != nil {
+		reusePrevious = *req.ReusePrevious
+	}
+
+	queued := make([]BatchChunkReanalysisQueuedItem, 0, len(chunkIDs))
+	failures := make([]BatchChunkReanalysisFailureItem, 0)
+	appearanceSaved := false
+
+	for _, chunkID := range chunkIDs {
+		target, errMsg := ctl.loadOwnedChunkReanalysisTargetQuiet(c, sessionID, chunkID)
+		if target == nil {
+			failures = append(failures, BatchChunkReanalysisFailureItem{ChunkID: chunkID, Error: errMsg})
+			continue
+		}
+		if !appearanceSaved && strings.TrimSpace(req.AppearanceHints) != "" {
+			if err := persistSessionAppearanceHints(c.Request.Context(), ctl.db, sessionID, target.ProfileID, &AppearanceInput{Appearance: strings.TrimSpace(req.AppearanceHints)}); err != nil {
+				logger.Log.Error("failed to persist session appearance hints for batch chunk re-analysis", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save appearance hints"})
+				return
+			}
+			appearanceSaved = true
+		}
+
+		perChunkKey := fmt.Sprintf("%s:%d", req.ClientRequestID, chunkID)
+		originalSnapshot, _ := json.Marshal(map[string]any{
+			"chunk_id":           target.ID,
+			"status":             target.Status,
+			"exercise_type":      target.ExerciseType,
+			"output":             target.Output,
+			"observed_signals":   parseJSONObject(target.ObservedSignals),
+			"heart_rate_bpm":     target.HeartRateBPM,
+			"workout_confidence": target.WorkoutConfidence,
+			"motion_score":       target.MotionScore,
+			"skip_reason":        target.SkipReason,
+		})
+
+		run := db.ChunkReanalysisRun{
+			SessionID:                  sessionID,
+			ProfileID:                  target.ProfileID,
+			ChunkAnalysisResultID:      target.ID,
+			ClientRequestID:            perChunkKey,
+			TaskID:                     uuid.NewString(),
+			Status:                     db.ChunkReanalysisStatusQueued,
+			SourceContextSnapshot:      initialChunkReanalysisContextSnapshot(reusePrevious),
+			OriginalPredictionSnapshot: db.JSONDocument(originalSnapshot),
+			StructuredCandidate:        db.JSONDocument(`{}`),
+		}
+		idempotentExisting := false
+		createErr := ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+			var lockedProfile db.Profile
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&lockedProfile, target.ProfileID).Error; err != nil {
+				return err
+			}
+
+			var concurrent db.ChunkReanalysisRun
+			err := tx.Where("profile_id = ? AND client_request_id = ?", target.ProfileID, perChunkKey).
+				First(&concurrent).Error
+			if err == nil {
+				if concurrent.SessionID != sessionID || concurrent.ChunkAnalysisResultID != chunkID {
+					return errChunkReanalysisKeyConflict
+				}
+				run = concurrent
+				idempotentExisting = true
+				return nil
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+
+			var count int64
+			if err := tx.Model(&db.SessionReanalysisRun{}).
+				Where("session_id = ? AND profile_id = ? AND status IN ?", sessionID, target.ProfileID,
+					[]string{db.SessionReanalysisStatusQueued, db.SessionReanalysisStatusRunning}).
+				Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return errChunkReanalysisSessionActive
+			}
+			if err := tx.Model(&db.ChunkReanalysisRun{}).
+				Where("chunk_analysis_result_id = ? AND status IN ?", chunkID,
+					[]string{db.ChunkReanalysisStatusQueued, db.ChunkReanalysisStatusRunning}).
+				Count(&count).Error; err != nil {
+				return err
+			}
+			if count > 0 {
+				return errChunkReanalysisActive
+			}
+			if err := tx.Model(&db.ChunkReanalysisRun{}).
+				Where("profile_id = ? AND created_at >= ?", target.ProfileID, time.Now().Add(-chunkReanalysisWindow)).
+				Count(&count).Error; err != nil {
+				return err
+			}
+			if count >= chunkReanalysisDailyQuota {
+				return errChunkReanalysisQuota
+			}
+			return tx.Create(&run).Error
+		})
+		if createErr != nil {
+			msg := "failed to create re-analysis"
+			switch {
+			case errors.Is(createErr, errChunkReanalysisSessionActive):
+				msg = "whole-workout re-analysis is active for this session"
+			case errors.Is(createErr, errChunkReanalysisActive):
+				msg = "a re-analysis is already active for this chunk"
+			case errors.Is(createErr, errChunkReanalysisQuota):
+				msg = "daily re-analysis limit reached"
+			case errors.Is(createErr, errChunkReanalysisKeyConflict), isChunkReanalysisUniqueConflict(createErr):
+				msg = "a re-analysis is already active or the request was already submitted"
+			}
+			failures = append(failures, BatchChunkReanalysisFailureItem{ChunkID: chunkID, Error: msg})
+			continue
+		}
+
+		if err := ctl.ensureChunkReanalysisTask(c.Request.Context(), &run); err != nil {
+			if !idempotentExisting {
+				ctl.markReanalysisEnqueueFailed(c.Request.Context(), run.ID)
+			}
+			logger.Log.Error("failed to enqueue batch chunk re-analysis", zap.Uint("run_id", run.ID), zap.Error(err))
+			failures = append(failures, BatchChunkReanalysisFailureItem{ChunkID: chunkID, Error: "failed to enqueue re-analysis"})
+			continue
+		}
+
+		queued = append(queued, BatchChunkReanalysisQueuedItem{
+			ChunkID: chunkID,
+			RunID:   run.ID,
+			TaskID:  run.TaskID,
+			Status:  run.Status,
+		})
+	}
+
+	c.JSON(http.StatusAccepted, CreateBatchChunkReanalysisResponse{
+		QueuedRuns: queued,
+		Failures:   failures,
 	})
 }
 
@@ -621,4 +798,63 @@ func decodeCreateChunkReanalysisRequest(reader io.Reader) (CreateChunkReanalysis
 		return CreateChunkReanalysisRequest{}, errors.New("request body must contain one JSON object")
 	}
 	return request, nil
+}
+
+func decodeCreateBatchChunkReanalysisRequest(reader io.Reader) (CreateBatchChunkReanalysisRequest, error) {
+	var request CreateBatchChunkReanalysisRequest
+	decoder := json.NewDecoder(io.LimitReader(reader, 16<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return CreateBatchChunkReanalysisRequest{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return CreateBatchChunkReanalysisRequest{}, errors.New("request body must contain one JSON object")
+	}
+	if len(request.ChunkIDs) == 0 {
+		return CreateBatchChunkReanalysisRequest{}, errors.New("chunk_ids are required")
+	}
+	return request, nil
+}
+
+func initialChunkReanalysisContextSnapshot(reusePrevious bool) db.JSONDocument {
+	if reusePrevious {
+		return db.JSONDocument(`{"reuse_previous":true}`)
+	}
+	return db.JSONDocument(`{}`)
+}
+
+func (ctl *Controller) loadOwnedChunkReanalysisTargetQuiet(c *gin.Context, sessionID string, chunkID uint) (*chunkReanalysisTarget, string) {
+	query := ctl.db.WithContext(c.Request.Context()).Table("chunk_analysis_results AS chunks").
+		Select(`chunks.id, chunks.session_id, chunks.profile_id, chunks.file_path,
+			chunks.exercise_type, chunks.status, chunks.output, chunks.observed_signals,
+			chunks.heart_rate_bpm, chunks.start_secs, chunks.end_secs,
+			chunks.media_start_secs, chunks.media_end_secs, chunks.workout_confidence,
+			chunks.motion_score, chunks.skip_reason`).
+		Joins("JOIN profiles ON profiles.id = chunks.profile_id").
+		Where("chunks.id = ? AND chunks.session_id = ?", chunkID, sessionID)
+	if userID := UserIDFromContext(c); userID != 0 {
+		query = query.Where("profiles.user_id = ?", userID)
+	}
+
+	var target chunkReanalysisTarget
+	if err := query.Take(&target).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, "chunk not found"
+		}
+		logger.Log.Error("failed to load owned chunk", zap.Error(err))
+		return nil, "failed to load chunk"
+	}
+
+	var sessionProfileID uint
+	err := ctl.db.WithContext(c.Request.Context()).Model(&db.Session{}).
+		Where("session_id = ?", sessionID).Pluck("profile_id", &sessionProfileID).Error
+	if err != nil {
+		logger.Log.Error("failed to verify session profile", zap.Error(err))
+		return nil, "failed to load chunk"
+	}
+	if sessionProfileID != 0 && sessionProfileID != target.ProfileID {
+		return nil, "chunk not found"
+	}
+
+	return &target, ""
 }

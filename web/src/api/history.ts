@@ -1,5 +1,7 @@
+import type { WODTraining, WODTrainingLoad } from "../../../shared/wodTraining";
 import type { HeartRateSummary } from "../../../shared/heartRateSummary";
 import { api } from "./client";
+import type { ConfirmPerformanceRecordsRequest, PerformanceBenchmarksResponse, WorkoutProgressResponse } from "../../../shared/workoutProgress";
 
 export interface StretchRecommendation {
   stretch: string;
@@ -222,6 +224,19 @@ export interface CreateChunkReanalysisResponse {
   status: ReanalysisStatus;
 }
 
+export interface CreateBatchChunkReanalysisResponse {
+  queued_runs: Array<{
+    chunk_id: number;
+    run_id: number;
+    task_id: string;
+    status: ReanalysisStatus;
+  }>;
+  failures: Array<{
+    chunk_id: number;
+    error: string;
+  }>;
+}
+
 export type SessionReanalysisStatus =
   | "QUEUED"
   | "RUNNING"
@@ -316,6 +331,9 @@ export interface VideoDownloadResponse {
 export type VideoKind = "merged" | "hardsubbed" | "encoded";
 
 export const historyApi = {
+  getWorkoutProgress: (sessionId: string) => api.get<WorkoutProgressResponse>(`/sessions/${encodeURIComponent(sessionId)}/workout-progress`),
+  confirmPerformanceRecords: (sessionId: string, body: ConfirmPerformanceRecordsRequest) => api.put<WorkoutProgressResponse>(`/sessions/${encodeURIComponent(sessionId)}/performance-records`, body),
+  getPerformanceBenchmarks: (profileId: number, movement: string) => api.get<PerformanceBenchmarksResponse>(`/performance-benchmarks?${new URLSearchParams({ profile_id: String(profileId), movement })}`),
   list: (profileId: number, beforeId?: number, limit?: number) => {
     const params = new URLSearchParams();
     params.append("profile_id", String(profileId));
@@ -380,6 +398,7 @@ export const historyApi = {
     clientRequestId: string,
     appearanceHints?: string,
     model?: string,
+    reusePrevious?: boolean,
   ) =>
     api.post<CreateChunkReanalysisResponse>(
       `/sessions/${sessionId}/chunks/${chunkId}/reanalyses`,
@@ -387,6 +406,24 @@ export const historyApi = {
         client_request_id: clientRequestId,
         ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
         ...(model ? { model } : {}),
+        ...(reusePrevious !== undefined ? { reuse_previous: reusePrevious } : {}),
+      },
+    ),
+
+  createBatchChunkReanalysis: (
+    sessionId: string,
+    chunkIds: number[],
+    clientRequestId: string,
+    appearanceHints?: string,
+    reusePrevious: boolean = true,
+  ) =>
+    api.post<CreateBatchChunkReanalysisResponse>(
+      `/sessions/${sessionId}/chunks/batch-reanalyses`,
+      {
+        client_request_id: clientRequestId,
+        chunk_ids: chunkIds,
+        reuse_previous: reusePrevious,
+        ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
       },
     ),
 
@@ -406,6 +443,7 @@ export const historyApi = {
     appearanceHints?: string,
     model?: string,
     wodDescription?: string,
+    wodStartSecs?: number | null,
   ) =>
     api.post<CreateSessionReanalysisResponse>(
       `/sessions/${sessionId}/reanalyses`,
@@ -414,6 +452,7 @@ export const historyApi = {
         ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
         ...(model ? { model } : {}),
         ...(wodDescription !== undefined ? { wod_description: wodDescription } : {}),
+        ...(wodStartSecs !== undefined ? { wod_start_secs: wodStartSecs } : {}),
       },
     ),
 
@@ -422,6 +461,10 @@ export const historyApi = {
       `/sessions/${sessionId}/reanalyses/${runId}/apply`,
       {},
     ),
+
+  getWODTraining: (sessionId: string) => api.get<WODTraining>(`/sessions/${sessionId}/wod-training`),
+  updateWODEffort: (sessionId: string, effort: number) => api.put<WODTraining>(`/sessions/${sessionId}/effort`, { effort }),
+  getWODTrainingLoad: (profileId: number) => api.get<WODTrainingLoad>(`/wod-training-load?profile_id=${profileId}&timezone=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}`),
 
   getSessionCost: (sessionId: string) =>
     api.get<SessionCostResponse>(`/sessions/${sessionId}/cost`),
@@ -477,6 +520,12 @@ export interface CostBreakdownItem {
   cost_krw: number;
 }
 
+export interface CostStageDurationItem {
+  stage: string;
+  duration_ms: number;
+  api_calls: number;
+}
+
 export interface SessionCostResponse {
   thinking_tokens?: number;
   tool_use_tokens?: number;
@@ -489,8 +538,10 @@ export interface SessionCostResponse {
   total_tokens: number;
   cost_usd: number;
   cost_krw: number;
+  total_duration_ms?: number;
   by_task_type: CostBreakdownItem[];
   by_model: CostBreakdownItem[];
+  by_stage?: CostStageDurationItem[];
 }
 
 export interface TotalCostResponse {

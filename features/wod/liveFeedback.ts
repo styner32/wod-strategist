@@ -27,7 +27,12 @@ export function captureAdviceAt(chunk: ChunkAnalysisResult | null, elapsedSecond
 
 export function coachingText(chunk: ChunkAnalysisResult | null, locale: string): string | null {
   if (!chunk || chunk.status !== "COMPLETED") return null;
+  // Recent same-movement coaching is validated after observation on the server;
+  // select the separate result without changing the independent chunk output.
   const contextual = chunk.contextual_coaching;
-  if (contextual?.current_chunk_id === chunk.id) return (locale === "ko" ? contextual.text.ko : contextual.text.en) || chunk.output || null;
+  if (contextual?.current_chunk_id === chunk.id) {
+    const text = locale === "ko" ? contextual.text?.ko : contextual.text?.en;
+    if (typeof text === "string" && text.trim()) return text;
+  }
   return chunk.output || null;
 }

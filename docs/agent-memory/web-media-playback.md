@@ -59,6 +59,31 @@ paused, never-played video.
 - `ChunkInspector` mounts for `chunks[0]` by default, so its `<video>` loads metadata whenever a session detail page opens. Treat its handlers as always active.
 - `SessionDetailPage` `onTimeUpdate` only stores `currentTime` in state (no seek); keep it that way.
 
+## Session review layout
+
+- `SessionReviewWorkspace` keeps a single main player beside 6 workspace tabs:
+  `summary` (영상 요약), `performance` (수행 이력), `timeline` (운동 분석 + `H10MemoryPanel`),
+  `guidance` (세그먼트·가이드 + `ChunkInspector`), `details` (상세 정보 + `SessionReanalysisPanel`),
+  and `device` (온디바이스 AI + `OnDeviceAiPanel`). At `lg` widths the player stays sticky below
+  the app header; analysis content scrolls in the right column. Narrow screens stack
+  the player above the tabs. Preserve portrait video proportions and cap its height
+  to the viewport rather than forcing a landscape player.
+- When the original player slot scrolls out of the viewport (observed via `IntersectionObserver`),
+  `SessionReviewWorkspace` docks the single `<video>` wrapper into a floating mini-player card
+  (`fixed bottom-4 right-4 z-50`) while holding a height-matched placeholder in the document flow
+  to prevent scroll-height oscillation. Never mount a second main `<video>` element when docking.
+- `VideoTransportBar` renders directly beneath the player with a mini timeline scrubber
+  (chunk interval bands + highlight markers), step seek buttons (`±1s`, `±5s`, `±10s`),
+  play/pause, playback rate (`0.5x`–`2x`), and keyboard shortcuts (`←/→` ±5s, `Shift+←/→` ±1s,
+  `J/L` ±10s, `K` play/pause, suppressed when typing inside interactive controls).
+- Tab panels remain mounted with `hidden`, preserving performance editor drafts,
+  query polling budgets and the player's playback position. Keyboard arrows/Home/End
+  select and focus tabs. Do not place a second main player in each tab.
+- Analysis, highlight, workout progress, chunk inspector, and on-device AI seeks must not scroll
+  the document away from the selected evidence (`scrollIntoView` is reserved solely for the
+  explicit "원래 위치로" button on the docked mini-player). `seeked`, `pause`, `loadedmetadata`,
+  `play`, and `ratechange` only read media state without writing a new seek from those events.
+
 ## Diagnosing a suspected loop in production
 
 ```js

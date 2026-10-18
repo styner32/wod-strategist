@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/wodeval"
 )
 
 // ScoreOutputPrompt instructs the model to emit a structured score JSON block at the end
@@ -61,6 +62,10 @@ func ParseSessionScore(output string) string {
 		return "{}"
 	}
 	raw := strings.TrimSpace(match[1])
+	if score, ok := wodeval.Decode(raw); ok {
+		encoded, _ := json.Marshal(score)
+		return string(encoded)
+	}
 	// Validate it's parseable JSON with the expected structure
 	var score SessionScore
 	if err := json.Unmarshal([]byte(raw), &score); err != nil {
@@ -190,6 +195,9 @@ func (w *Worker) buildHistoryContext(profileID uint, limit int) string {
 
 	var rows []recentScoreRow
 	for _, r := range results {
+		if score, ok := wodeval.Decode(r.SessionScore); ok && score.Overall == nil {
+			continue
+		}
 		var score SessionScore
 		if jsonErr := json.Unmarshal([]byte(r.SessionScore), &score); jsonErr != nil {
 			continue

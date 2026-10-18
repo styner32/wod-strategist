@@ -72,8 +72,8 @@ function AdditionalObservation({
           ? "운동명 불명확"
           : observation.movement}
       </p>
-      <AnalysisMarkdown text={observation.direct_observation} />
-      <AnalysisMarkdown text={observation.continuity} />
+      <AnalysisMarkdown text={observation.direct_observation} onSeek={canSeek ? seek : undefined} />
+      <AnalysisMarkdown text={observation.continuity} onSeek={canSeek ? seek : undefined} />
       {observation.evidence?.map((e, i) => (
         <div key={i}>
           <button
@@ -84,17 +84,17 @@ function AdditionalObservation({
             {formatHighlightTimestamp(e.start)}–
             {formatHighlightTimestamp(e.end)} 이동
           </button>
-          <AnalysisMarkdown text={e.observation} />
+          <AnalysisMarkdown text={e.observation} onSeek={canSeek ? seek : undefined} />
         </div>
       ))}
       {observation.noteworthy?.map((t, i) => (
-        <AnalysisMarkdown key={i} text={t} />
+        <AnalysisMarkdown key={i} text={t} onSeek={canSeek ? seek : undefined} />
       ))}
       {observation.limitations?.length > 0 && (
         <div className="rounded-lg bg-bg-secondary p-3">
           <h5 className="text-sm font-medium">관찰 한계</h5>
           {observation.limitations.map((t, i) => (
-            <AnalysisMarkdown key={i} text={t} />
+            <AnalysisMarkdown key={i} text={t} onSeek={canSeek ? seek : undefined} />
           ))}
         </div>
       )}
@@ -172,6 +172,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
     () => analysisSegments(analysis.output),
     [analysis.output],
   );
+  const inlineSeek = canSeek ? seek : undefined;
   return (
     <div className="min-w-0 space-y-6">
       <section aria-labelledby={`${id}-summary`} className="min-w-0">
@@ -189,7 +190,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
         </div>
         {content ? (
           <div className="space-y-5">
-            <AnalysisMarkdown text={content.overview} />
+            <AnalysisMarkdown text={content.overview} onSeek={inlineSeek} />
             {(
               [
                 ["주요 강점", content.strengths],
@@ -204,7 +205,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
                     <ul className="space-y-2">
                       {values.map((value, i) => (
                         <li key={i}>
-                          <AnalysisMarkdown text={value} />
+                          <AnalysisMarkdown text={value} onSeek={inlineSeek} />
                         </li>
                       ))}
                     </ul>
@@ -217,7 +218,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
             <span className="text-xs text-text-secondary">
               기존 JSON의 임시 요약
             </span>
-            <AnalysisMarkdown text={legacy} />
+            <AnalysisMarkdown text={legacy} onSeek={inlineSeek} />
           </>
         ) : (
           <p className="text-sm text-text-secondary">
@@ -314,29 +315,40 @@ export const AnalysisOverview = memo(function AnalysisOverview({
                 key={cardKey}
                 className="min-w-0 overflow-hidden rounded-xl border border-border"
               >
-                <h4>
+                <div className="flex items-center justify-between gap-2 p-4">
+                  <h4 className="min-w-0 flex-1">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between gap-3 text-left focus-visible:outline-2 focus-visible:outline-accent"
+                      aria-expanded={expanded}
+                      aria-controls={`${id}-highlight-${index}`}
+                      onClick={() => setOpen(expanded ? null : cardKey)}
+                    >
+                      <span className="min-w-0">
+                        <span className="block font-semibold">
+                          {h.movement || "운동명 미확인"}
+                        </span>
+                        <span className="mt-1 block text-xs text-text-secondary">
+                          {h.startLabel}–{h.endLabel} ·{" "}
+                          {classification[h.type] ?? h.type}
+                          {item?.status && item.status !== "none" && (
+                            <> · 추가 분석 {statuses[item.status] ?? item.status}</>
+                          )}
+                        </span>
+                      </span>
+                      <span aria-hidden>{expanded ? "−" : "+"}</span>
+                    </button>
+                  </h4>
                   <button
                     type="button"
-                    className="flex w-full items-center justify-between gap-3 p-4 text-left focus-visible:outline-2 focus-visible:outline-accent"
-                    aria-expanded={expanded}
-                    aria-controls={`${id}-highlight-${index}`}
-                    onClick={() => setOpen(expanded ? null : cardKey)}
+                    disabled={!canSeek}
+                    onClick={() => seekHighlight(h.startSeconds, h.version)}
+                    aria-label={`${h.startLabel} 하이라이트 재생`}
+                    className="shrink-0 rounded-md border border-accent/30 bg-accent/10 px-2.5 py-1 font-mono text-xs font-medium text-accent hover:bg-accent/20 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-40"
                   >
-                    <span className="min-w-0">
-                      <span className="block font-semibold">
-                        {h.movement || "운동명 미확인"}
-                      </span>
-                      <span className="mt-1 block text-xs text-text-secondary">
-                        {h.startLabel}–{h.endLabel} ·{" "}
-                        {classification[h.type] ?? h.type}
-                        {item?.status && item.status !== "none" && (
-                          <> · 추가 분석 {statuses[item.status] ?? item.status}</>
-                        )}
-                      </span>
-                    </span>
-                    <span aria-hidden>{expanded ? "−" : "+"}</span>
+                    ▶ {h.startLabel}
                   </button>
-                </h4>
+                </div>
                 <div
                   id={`${id}-highlight-${index}`}
                   hidden={!expanded}
@@ -347,6 +359,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
                       <h5 className="mb-3 font-semibold">기존 관찰</h5>
                       <AnalysisMarkdown
                         text={h.reason ?? "기존 관찰 설명 없음"}
+                        onSeek={inlineSeek}
                       />
                       {h.observations?.map((o, i) => (
                         <div key={i} className="mt-3">
@@ -357,7 +370,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
                           >
                             {o.startLabel}–{o.endLabel} 이동
                           </button>
-                          <AnalysisMarkdown text={o.reason ?? ""} />
+                          <AnalysisMarkdown text={o.reason ?? ""} onSeek={inlineSeek} />
                         </div>
                       ))}
                     </section>
@@ -419,7 +432,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
                       <h5 className="mb-3 font-semibold">
                         관련 세그먼트 분석 · {connected[0].title}
                       </h5>
-                      <AnalysisMarkdown text={connected[0].body} />
+                      <AnalysisMarkdown text={connected[0].body} onSeek={inlineSeek} />
                     </section>
                   ) : (
                     <p className="mt-4 text-xs text-text-secondary">
@@ -461,7 +474,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
           </button>
         </p>
       )}
-      <AnalysisOriginal text={analysis.output} />
+      <AnalysisOriginal text={analysis.output} onSeek={inlineSeek} />
     </div>
   );
 });

@@ -31,12 +31,40 @@ describe("live feedback capture ordering", () => {
     expect(captureAdviceAt(latestCaptureResult(previous, [good], "s"), 25, "en")).toBeNull();
     expect(captureAdviceAt({ ...chunk(3, 30), status: "FAILED" }, 35, "ko")).toBeNull();
   });
-  it("uses optional contextual text only for the same chunk, otherwise keeps basic coaching", () => {
+  it("displays current contextual coaching in both locales without changing independent observations", () => {
     const row = chunk(1, 10);
     row.contextual_coaching = { current_chunk_id: 1, source_chunk_ids: [9], sources: [], text: { ko: "연결 코칭", en: "Connected cue" } };
+    const original = JSON.stringify(row);
     expect(coachingText(row, "en")).toBe("Connected cue");
-    row.contextual_coaching.current_chunk_id = 2;
+    expect(coachingText(row, "ko")).toBe("연결 코칭");
+    expect(JSON.stringify(row)).toBe(original);
+    expect(row.output).toBe("basic");
+    expect(row.contextual_coaching.source_chunk_ids).toEqual([9]);
+  });
+  it("falls back to independent coaching when the contextual current-chunk source does not match", () => {
+    const row = chunk(1, 10);
+    row.contextual_coaching = { current_chunk_id: 2, source_chunk_ids: [9], sources: [], text: { ko: "다른 구간", en: "Different chunk" } };
+    expect(coachingText(row, "en")).toBe("basic");
     expect(coachingText(row, "ko")).toBe("basic");
+    row.output = "";
+    expect(coachingText(row, "ko")).toBeNull();
+  });
+  it("uses raw current output when contextual text is unavailable in the selected locale", () => {
+    const row = chunk(1, 10);
+    row.contextual_coaching = { current_chunk_id: 1, source_chunk_ids: [9], sources: [], text: { ko: "", en: "   " } };
+    expect(coachingText(row, "en")).toBe("basic");
+    expect(coachingText(row, "ko")).toBe("basic");
+    row.contextual_coaching = null;
+    expect(coachingText(row, "en")).toBe("basic");
+    row.output = "";
+    expect(coachingText(row, "en")).toBeNull();
+  });
+  it("does not display coaching from failed or unfinished observations", () => {
+    const row = chunk(1, 10);
+    row.contextual_coaching = { current_chunk_id: 1, source_chunk_ids: [9], sources: [], text: { ko: "연결 코칭", en: "Connected cue" } };
+    expect(coachingText({ ...row, status: "FAILED" }, "en")).toBeNull();
+    expect(coachingText({ ...row, status: "PENDING" }, "ko")).toBeNull();
+    expect(coachingText(null, "ko")).toBeNull();
   });
   it("polls provisional reviews but stops at completed or partial reviews", () => {
     const summary = { available: true, review_state: "provisional" } as ActivitySummary;

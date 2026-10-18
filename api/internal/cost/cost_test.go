@@ -5,7 +5,49 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/cost"
 	"github.com/wod-strategist/api/internal/db"
+	"time"
 )
+
+var _ = Describe("Argon dated pricing", func() {
+	DescribeTable("prices by the recorded UTC date, not the query date", func(at time.Time, inputRate, outputRate float64) {
+		rate := cost.GetModelRateAt(" GEMINI-4-ARGON ", at)
+		Expect(rate.PromptPerMillion).To(Equal(inputRate))
+		Expect(rate.CandidatePerMillion).To(Equal(outputRate))
+	},
+		Entry("last promotional instant", cost.ArgonStandardPricingStartsAt.Add(-time.Nanosecond), 2.0, 10.0),
+		Entry("first standard instant", cost.ArgonStandardPricingStartsAt, 4.0, 20.0),
+		Entry("KST representation of the same boundary", time.Date(2026, 12, 1, 9, 0, 0, 0, time.FixedZone("KST", 9*60*60)), 4.0, 20.0),
+		Entry("missing date uses standard rate", time.Time{}, 4.0, 20.0),
+	)
+
+	It("combines both periods and counts thinking and tool tokens once", func() {
+		intro := cost.ArgonStandardPricingStartsAt.Add(-time.Second)
+		standard := cost.ArgonStandardPricingStartsAt
+		rows := []db.TokenUsage{
+			{Model: "gemini-4-argon", TaskType: "video:segment", CreatedAt: intro, PromptTokens: 1000000, CandidateTokens: 500000, TotalTokens: 2000000,
+				UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":1000000,"candidatesTokenCount":500000,"thoughtsTokenCount":500000,"toolUsePromptTokenCount":250000,"cachedContentTokenCount":100000,"totalTokenCount":2250000}`)},
+			{Model: "gemini-4-argon", TaskType: "video:segment", CreatedAt: standard, PromptTokens: 1000000, CandidateTokens: 1000000, TotalTokens: 2000000},
+			{Model: "gemini-3.1-pro-preview", TaskType: "video:segment", CreatedAt: standard, PromptTokens: 1000000, CandidateTokens: 1000000, TotalTokens: 2000000},
+		}
+		// Argon intro: 1.25M input + 1M output = $12.50; standard $24;
+		// the unchanged historical Pro rate contributes $6.25.
+		session := cost.CalculateSessionCost("session", rows)
+		Expect(session.CostUSD).To(Equal(42.75))
+		Expect(session.ByModel).To(HaveLen(2))
+		Expect(session.ByModel[0].CostUSD).To(Equal(36.5))
+		Expect(session.ThinkingTokens).To(Equal(int64(500000)))
+		Expect(session.ToolUseTokens).To(Equal(int64(250000)))
+		Expect(session.CachedTokens).To(Equal(int64(100000)))
+		total := cost.CalculateTotalCost(rows)
+		Expect(total.CostUSD).To(Equal(session.CostUSD))
+		aggregate := cost.CalculateTotalCostFromAggregates([]cost.ModelTokenAggregate{
+			{Model: "gemini-4-argon", PricingAt: intro, PromptTokens: 1000000, CandidateTokens: 500000, TotalTokens: 2000000, ThinkingTokens: 500000, ToolUseTokens: 250000, CachedTokens: 100000},
+			{Model: "gemini-4-argon", PricingAt: standard, PromptTokens: 1000000, CandidateTokens: 1000000, TotalTokens: 2000000},
+			{Model: "gemini-3.1-pro-preview", PricingAt: standard, PromptTokens: 1000000, CandidateTokens: 1000000, TotalTokens: 2000000},
+		})
+		Expect(aggregate).To(Equal(total))
+	})
+})
 
 var _ = Describe("Cost calculation", func() {
 	Describe("GetModelRate", func() {
@@ -177,3 +219,51 @@ var _ = Describe("Non-token-priced generation", func() {
 		Expect(result.UnpricedCalls).To(Equal(int64(1)))
 	})
 })
+
+var _ = Describe("ApplyStageMetrics", func() {
+	It("aggregates total and per-stage durations in stage order", func() {
+		resp := cost.CalculateSessionCost("s", nil)
+		cost.ApplyStageMetrics(&resp, []db.PipelineStageMetric{
+			{Stage: "video_analysis", DurationMs: 120000, APICalls: 6},
+			{Stage: "injury_analysis", DurationMs: 15000, APICalls: 1},
+			{Stage: "video_analysis", DurationMs: 30000, APICalls: 2},
+		})
+		Expect(resp.TotalDurationMs).To(Equal(int64(165000)))
+		Expect(resp.ByStage).To(Equal([]cost.StageDurationItem{
+			{Stage: "video_analysis", DurationMs: 150000, APICalls: 8},
+			{Stage: "injury_analysis", DurationMs: 15000, APICalls: 1},
+		}))
+	})
+})
+
+var _ = Describe("Batch API 50% discount", func() {
+	It("identifies :batch task types and applies a 50% discount to session and total costs", func() {
+		Expect(cost.IsBatchTaskType("video:analysis:batch")).To(BeTrue())
+		Expect(cost.IsBatchTaskType("session:reanalysis:batch")).To(BeTrue())
+		Expect(cost.IsBatchTaskType("video:analysis")).To(BeFalse())
+
+		standardRow := db.TokenUsage{
+			TaskType:        "video:analysis",
+			Model:           "gemini-4-argon",
+			PromptTokens:    1000000,
+			CandidateTokens: 1000000,
+			TotalTokens:     2000000,
+		}
+		batchRow := db.TokenUsage{
+			TaskType:        "video:analysis:batch",
+			Model:           "gemini-4-argon",
+			PromptTokens:    1000000,
+			CandidateTokens: 1000000,
+			TotalTokens:     2000000,
+		}
+
+		standardCost := cost.CalculateSessionCost("s1", []db.TokenUsage{standardRow})
+		batchCost := cost.CalculateSessionCost("s2", []db.TokenUsage{batchRow})
+		Expect(batchCost.CostUSD).To(BeNumerically("~", standardCost.CostUSD*0.5, 1e-6))
+		Expect(batchCost.CostKRW).To(BeNumerically("~", standardCost.CostKRW*0.5, 1e-3))
+
+		totalBatch := cost.CalculateTotalCost([]db.TokenUsage{batchRow})
+		Expect(totalBatch.CostUSD).To(BeNumerically("~", standardCost.CostUSD*0.5, 1e-6))
+	})
+})
+

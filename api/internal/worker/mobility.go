@@ -9,16 +9,17 @@ import (
 const MobilityOutputPrompt = `
 
 ## 관절 가동성 및 제한 관찰 (Mobility & Joint Restrictions)
-영상에서 대상 인물의 관절 가동 범위(ROM) 제한, 타이트함, 또는 비대칭이 **직접 눈으로 관찰되는 경우에만** 아래 형식의 **mobility** JSON 코드 블록으로 출력하세요 (근거가 없거나 카메라 각도로 확인이 불가능하면 빈 배열 []을 출력하세요).
+영상에서 대상 인물의 현재 동작 가동 범위(ROM)나 좌우 위치 차이가 **직접 눈으로 관찰되는 경우에만** 아래 형식의 **mobility** JSON 코드 블록으로 출력하세요 (근거가 없거나 카메라 각도로 확인이 불가능하면 빈 배열 []을 출력하세요). 현재 동작 범위가 개인의 고정된 관절 제한이나 근육 타이트함을 증명하지는 않습니다.
 
 **허용된 joint 목록 (닫힌 어휘):**
 Neck, Shoulder, Elbow, Wrist, Upper Back, Lower Back, Hip, Hamstring, Knee, Ankle
 
 **허용된 observation 목록 (닫힌 어휘):**
-limited_hip_flexion, limited_hip_internal_rotation, limited_ankle_dorsiflexion, limited_overhead_flexion, limited_shoulder_external_rotation, limited_thoracic_extension, tight_hamstrings, tight_hip_flexors, limited_wrist_extension, general_stiffness
+limited_hip_flexion, limited_hip_internal_rotation, limited_ankle_dorsiflexion, limited_overhead_flexion, limited_shoulder_external_rotation, limited_thoracic_extension, limited_wrist_extension
 
 **규칙:**
 - 의학적 진단이나 통증 판정을 하지 마세요. 오직 직접 보이는 움직임 현상만 기록하세요.
+- limited_*는 현재 동작에서 보인 범위만 뜻합니다. 원인이나 평소 관절 상태를 추론하지 마세요. tight_hamstrings, tight_hip_flexors, general_stiffness는 관찰 단계에서 출력하지 마세요.
 - side는 "left", "right", "both" 중 하나로 기입하세요.
 - evidence는 관찰된 동작과 시각 증거를 한국어 한 문장으로 구체적으로 작성하세요 (예: "스쿼트 하단에서 발뒤꿈치가 들림").
 - 카메라 가림이나 각도 문제로 평가 불가능한 경우 assessable을 false로 하거나 포함하지 마세요.

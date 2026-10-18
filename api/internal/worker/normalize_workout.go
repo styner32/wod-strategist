@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/movement"
 	"go.uber.org/zap"
 )
@@ -150,10 +151,22 @@ func (w *Worker) lookupGender(profileID uint) string {
 
 // normalizeWorkout runs text-based Gemini parsing to extract normalized workout movements.
 // On any error or empty result, it logs a warning and returns "" without failing analysis.
-func (w *Worker) normalizeWorkout(ctx context.Context, sessionID string, profileID uint, wodDescription string, hints []string) string {
+func (w *Worker) normalizeWorkout(ctx context.Context, sessionID string, profileID uint, wodDescription string, hints []string, observe ...func(string, *gemini.TokenUsage)) string {
 	trimmedDesc := strings.TrimSpace(wodDescription)
 	if trimmedDesc == "" {
 		return ""
+	}
+
+	if w.DB != nil && sessionID != "" {
+		var existing db.AnalysisResult
+		if err := w.DB.WithContext(ctx).
+			Where("session_id = ? AND profile_id = ? AND normalized_workout <> '' AND normalized_workout <> '[]'", sessionID, profileID).
+			Order("created_at DESC, id DESC").
+			First(&existing).Error; err == nil {
+			if strings.TrimSpace(existing.WODDescription) == trimmedDesc {
+				return existing.NormalizedWorkout
+			}
+		}
 	}
 
 	if w.GeminiClient == nil {
@@ -164,7 +177,11 @@ func (w *Worker) normalizeWorkout(ctx context.Context, sessionID string, profile
 	gender := w.lookupGender(profileID)
 	prompt := BuildNormalizedWorkoutPrompt(trimmedDesc, hints, gender)
 	raw, usage, err := w.GeminiClient.ParseText(ctx, prompt)
-	w.saveTokenUsage(sessionID, profileID, "session:normalize-workout", usage)
+	if len(observe) > 0 && observe[0] != nil {
+		observe[0]("session:normalize-workout", usage)
+	} else {
+		w.saveTokenUsage(sessionID, profileID, "session:normalize-workout", usage)
+	}
 	if err != nil {
 		w.logger.Warn("Failed to parse text for workout normalization",
 			zap.String("session_id", sessionID),

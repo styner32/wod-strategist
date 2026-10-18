@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/onsi/ginkgo/v2"
@@ -92,6 +93,52 @@ var _ = Describe("GET /api/v1/sessions/:session_id/cost", func() {
 		Expect(body.ByModel[0].Key).To(Equal("gemini-3.8-flash"))
 	})
 
+	It("retains both Argon pricing periods in one session model breakdown", func() {
+		for _, date := range []time.Time{cost.ArgonStandardPricingStartsAt.Add(-time.Second), cost.ArgonStandardPricingStartsAt} {
+			testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{SessionID: session.SessionID, ProfileID: profile.ID,
+				TaskType: "video:segment", Model: "gemini-4-argon", CreatedAt: date, PromptTokens: 1000000, CandidateTokens: 500000,
+				UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":1000000,"candidatesTokenCount":500000,"thoughtsTokenCount":500000,"totalTokenCount":2000000}`)})
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, fmt.Sprintf("/api/v1/sessions/%s/cost", session.SessionID), "", &user))
+		Expect(response.Code).To(Equal(http.StatusOK))
+		var body cost.SessionCostResponse
+		Expect(json.Unmarshal(response.Body.Bytes(), &body)).To(Succeed())
+		Expect(body.CostUSD).To(Equal(36.0))
+		Expect(body.ByModel).To(HaveLen(1))
+		Expect(body.ByModel[0].CostUSD).To(Equal(36.0))
+	})
+
+	It("includes total and per-stage durations from pipeline_stage_metrics", func() {
+		testhelpers.CreatePipelineStageMetric(dbConn, &db.PipelineStageMetric{
+			SessionID:  session.SessionID,
+			ProfileID:  profile.ID,
+			Stage:      "video_analysis",
+			Variant:    "B",
+			APICalls:   8,
+			DurationMs: 185000,
+		})
+		testhelpers.CreatePipelineStageMetric(dbConn, &db.PipelineStageMetric{
+			SessionID:  session.SessionID,
+			ProfileID:  profile.ID,
+			Stage:      "verify_highlights",
+			Variant:    "B",
+			APICalls:   1,
+			DurationMs: 12000,
+		})
+
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, fmt.Sprintf("/api/v1/sessions/%s/cost", session.SessionID), "", &user))
+		Expect(response.Code).To(Equal(http.StatusOK))
+		var body cost.SessionCostResponse
+		Expect(json.Unmarshal(response.Body.Bytes(), &body)).To(Succeed())
+		Expect(body.TotalDurationMs).To(Equal(int64(197000)))
+		Expect(body.ByStage).To(Equal([]cost.StageDurationItem{
+			{Stage: "video_analysis", DurationMs: 185000, APICalls: 8},
+			{Stage: "verify_highlights", DurationMs: 12000, APICalls: 1},
+		}))
+	})
+
 	It("rejects access for a session belonging to another user", func() {
 		otherProfile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		otherUser := db.User{}
@@ -145,6 +192,34 @@ var _ = Describe("GET /api/v1/analytics/cost", func() {
 		Expect(resp.Code).To(Equal(http.StatusOK))
 		Expect(json.Unmarshal(resp.Body.Bytes(), &total)).To(Succeed())
 		Expect(total.TotalTokens).To(BeZero())
+	})
+
+	It("separates Argon pricing dates while preserving account and profile ownership", func() {
+		for _, date := range []time.Time{cost.ArgonStandardPricingStartsAt.Add(-time.Second), cost.ArgonStandardPricingStartsAt} {
+			testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{ProfileID: profile1.ID, SessionID: "priced-session", TaskType: "video:segment",
+				Model: "gemini-4-argon", CreatedAt: date, PromptTokens: 1000000, CandidateTokens: 500000,
+				UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":1000000,"candidatesTokenCount":500000,"thoughtsTokenCount":500000,"totalTokenCount":2000000}`)})
+		}
+		testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{UserID: &user.ID, TaskType: "image:workout", Model: "gemini-4-argon",
+			CreatedAt: cost.ArgonStandardPricingStartsAt.Add(-time.Second), PromptTokens: 1000000, CandidateTokens: 1000000})
+		other := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{ProfileID: other.ID, SessionID: "other", TaskType: "video:segment", Model: "gemini-4-argon",
+			CreatedAt: cost.ArgonStandardPricingStartsAt, PromptTokens: 1000000, CandidateTokens: 1000000})
+		for _, test := range []struct {
+			url string
+			usd float64
+		}{
+			{"/api/v1/analytics/cost", 48.0},
+			{fmt.Sprintf("/api/v1/analytics/cost?profile_id=%d", profile1.ID), 36.0},
+			{fmt.Sprintf("/api/v1/analytics/cost?profile_id=%d", profile2.ID), 0.0},
+		} {
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, test.url, "", &user))
+			Expect(response.Code).To(Equal(http.StatusOK))
+			var body cost.TotalCostResponse
+			Expect(json.Unmarshal(response.Body.Bytes(), &body)).To(Succeed())
+			Expect(body.CostUSD).To(Equal(test.usd))
+		}
 	})
 
 	It("returns cumulative totals across all user sessions and profiles", func() {

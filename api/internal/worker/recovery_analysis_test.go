@@ -58,15 +58,16 @@ var _ = Describe("Recovery Workout Analysis & Stretch Recommendations", func() {
 			Expect(fallback).To(Equal("cooldown"))
 		})
 
-		It("buildSegmentAnalysisPrompt uses recovery framing for warmup and WOD framing for wod", func() {
+		It("buildSegmentAnalysisPrompt keeps warmup observation independent of whole-session scoring", func() {
 			warmupPrompt := w.buildSegmentAnalysisPrompt(VideoAnalysisPayload{
 				WorkoutType: WorkoutTypeWarmup,
 				SessionID:   "sess-warmup",
 				ProfileID:   profileID,
 			}, Segment{Start: "0:00", End: "0:30", Type: "Pigeon Pose"}, "", "", true)
 
-			Expect(warmupPrompt).To(ContainSubstring("# 웜업(Warm-up) 영상 분석 요청"))
-			Expect(warmupPrompt).To(ContainSubstring("overall: form×0.7 + consistency×0.3"))
+			Expect(warmupPrompt).To(ContainSubstring("Warmup & Cooldown Coaching Policy"))
+			Expect(warmupPrompt).To(ContainSubstring("독립 구간 관찰"))
+			Expect(warmupPrompt).NotTo(ContainSubstring("```score"))
 			Expect(warmupPrompt).NotTo(ContainSubstring("overall: form×0.5 + intensity×0.3"))
 
 			wodPrompt := w.buildSegmentAnalysisPrompt(VideoAnalysisPayload{
@@ -76,7 +77,8 @@ var _ = Describe("Recovery Workout Analysis & Stretch Recommendations", func() {
 			}, Segment{Start: "0:00", End: "0:30", Type: "Snatch"}, "", "", true)
 
 			Expect(wodPrompt).To(ContainSubstring("# 운동 영상 분석 요청"))
-			Expect(wodPrompt).To(ContainSubstring("overall: form×0.5 + intensity×0.3 + consistency×0.2"))
+			Expect(wodPrompt).To(ContainSubstring("workout_observations"))
+			Expect(wodPrompt).NotTo(ContainSubstring("```score"))
 		})
 
 		It("includeChunkInDeepAnalysis keeps rest_setup for warmup and excludes for wod", func() {
@@ -288,4 +290,3 @@ var _ = Describe("Mobility & Stretch Recommendations Unit Tests", func() {
 		Expect(sanitized[0].Reason).To(Equal("발목 배측굴곡 제한 완화"))
 	})
 })
-

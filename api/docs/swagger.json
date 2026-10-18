@@ -900,6 +900,198 @@
                     }
                 }
             }
+        },
+        "/sessions/{session_id}/workout-progress": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get chronological workout observations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.WorkoutProgressResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{session_id}/performance-records": {
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Confirm workout performance records",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Confirm interval, window, integer reps and actual load (or explicit null for no external load)",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.PerformanceRecordsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.WorkoutProgressResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/performance-benchmarks": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get confirmed workout performance benchmarks",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Owned profile ID",
+                        "name": "profile_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Canonical movement or recognized alias",
+                        "name": "movement",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.PerformanceBenchmarksResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -1686,6 +1878,439 @@
                 },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "controllers.WorkoutProgressResponse": {
+            "type": "object",
+            "properties": {
+                "progress": {
+                    "$ref": "#/definitions/workoutprogress.Progress"
+                },
+                "records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                }
+            }
+        },
+        "controllers.PerformanceRecordsRequest": {
+            "type": "object",
+            "properties": {
+                "records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.PerformanceConfirmationInput"
+                    }
+                },
+                "source_version": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.PerformanceBenchmarksResponse": {
+            "type": "object",
+            "properties": {
+                "best": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                },
+                "comparisons": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Comparison"
+                    }
+                },
+                "records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                }
+            }
+        },
+        "workoutprogress.Progress": {
+            "type": "object",
+            "properties": {
+                "clock": {
+                    "type": "string"
+                },
+                "intervals": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Interval"
+                    }
+                },
+                "media_source_id": {
+                    "type": "string"
+                },
+                "source_version": {
+                    "type": "string"
+                },
+                "unassessed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Gap"
+                    }
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "workoutprogress.Record": {
+            "type": "object",
+            "properties": {
+                "confirmed_at": {
+                    "type": "string"
+                },
+                "elapsed_seconds": {
+                    "type": "number"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "interval_id": {
+                    "type": "string"
+                },
+                "load": {
+                    "$ref": "#/definitions/workoutprogress.Load"
+                },
+                "load_kg": {
+                    "type": "number"
+                },
+                "measurement": {
+                    "type": "string"
+                },
+                "median_cycle_seconds": {
+                    "type": "number"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "performed_at": {
+                    "type": "string"
+                },
+                "performed_at_source": {
+                    "type": "string"
+                },
+                "rate_basis": {
+                    "type": "string"
+                },
+                "reps": {
+                    "type": "integer"
+                },
+                "reps_per_minute": {
+                    "type": "number"
+                },
+                "rest_comparisons": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.RestComparison"
+                    }
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "source_version": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "technique": {
+                    "type": "string"
+                },
+                "workout_prescription": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.PerformanceConfirmationInput": {
+            "type": "object",
+            "properties": {
+                "end_secs": {
+                    "type": "number"
+                },
+                "interval_id": {
+                    "type": "string"
+                },
+                "load": {
+                    "type": "object"
+                },
+                "measurement": {
+                    "type": "string"
+                },
+                "reps": {
+                    "type": "integer"
+                },
+                "start_secs": {
+                    "type": "number"
+                },
+                "technique": {
+                    "type": "string"
+                }
+            }
+        },
+        "workoutprogress.Comparison": {
+            "type": "object",
+            "properties": {
+                "baseline_record_id": {
+                    "type": "integer"
+                },
+                "condition_differences": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "current_record_id": {
+                    "type": "integer"
+                },
+                "heavier_load_baseline_record_id": {
+                    "type": "integer"
+                },
+                "heavier_load_kg": {
+                    "type": "number"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "rate_change_percent": {
+                    "type": "number"
+                }
+            }
+        },
+        "workoutprogress.Interval": {
+            "type": "object",
+            "properties": {
+                "activity": {
+                    "type": "string"
+                },
+                "capture_end_secs": {
+                    "type": "number"
+                },
+                "capture_start_secs": {
+                    "type": "number"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "form_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "load": {
+                    "$ref": "#/definitions/workoutprogress.Load"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "observation_refs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "pace_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "rep_events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/activity.Observation"
+                    }
+                },
+                "rom_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "workoutprogress.Gap": {
+            "type": "object",
+            "properties": {
+                "clock": {
+                    "type": "string"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "workoutprogress.Load": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "unit": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "number"
+                }
+            }
+        },
+        "workoutprogress.Observation": {
+            "type": "object",
+            "properties": {
+                "end_secs": {
+                    "type": "number"
+                },
+                "evidence": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "controllers.RelatedWODQuery": {
+            "type": "object",
+            "properties": {
+                "movement": {
+                    "type": "string"
+                },
+                "source_session_id": {
+                    "type": "string"
+                },
+                "weight_kg": {
+                    "type": "number"
+                }
+            }
+        },
+        "controllers.ScoreParts": {
+            "type": "object",
+            "properties": {
+                "main": {
+                    "type": "number"
+                },
+                "recency": {
+                    "type": "number"
+                },
+                "weight": {
+                    "type": "number"
+                }
+            }
+        },
+        "db.NormalizedMovement": {
+            "type": "object",
+            "properties": {
+                "is_main": {
+                    "type": "boolean"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "reps": {
+                    "type": "string"
+                },
+                "weight_kg": {
+                    "type": "number"
+                },
+                "weight_raw": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.RelatedWODItem": {
+            "type": "object",
+            "properties": {
+                "analysis_id": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "movement": {
+                    "$ref": "#/definitions/db.NormalizedMovement"
+                },
+                "score": {
+                    "type": "number"
+                },
+                "score_parts": {
+                    "$ref": "#/definitions/controllers.ScoreParts"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "session_score": {
+                    "type": "string"
+                },
+                "wod_description": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.RelatedWODsResponse": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "$ref": "#/definitions/controllers.RelatedWODQuery"
+                },
+                "related": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.RelatedWODItem"
+                    }
+                }
+            }
+        },
+        "workoutprogress.RestComparison": {
+            "type": "object",
+            "properties": {
+                "after_median_cycle_seconds": {
+                    "type": "number"
+                },
+                "before_median_cycle_seconds": {
+                    "type": "number"
+                },
+                "cycle_change_percent": {
+                    "type": "number"
+                },
+                "rest_elapsed_seconds": {
+                    "type": "number"
+                },
+                "rest_end_secs": {
+                    "type": "number"
+                },
+                "rest_start_secs": {
+                    "type": "number"
                 }
             }
         }

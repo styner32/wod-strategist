@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/worker"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -60,6 +62,25 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body; unexpected or invalid fields"})
 		return
 	}
+	if len(req.WODStartSecs) > 0 {
+		var session db.Session
+		if err := ctl.db.WithContext(c.Request.Context()).Where("session_id = ? AND profile_id = ? AND workout_type = ? AND wod_evaluation_version = 1", sessionID, profileID, "wod").First(&session).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.Log.Error("failed to check WOD start correction eligibility", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session re-analysis"})
+				return
+			}
+			c.JSON(http.StatusConflict, gin.H{"error": "start correction is available only for new WOD sessions"})
+			return
+		}
+		if string(req.WODStartSecs) != "null" {
+			var start float64
+			if json.Unmarshal(req.WODStartSecs, &start) != nil || start < 0 || math.IsNaN(start) || math.IsInf(start, 0) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "wod_start_secs must be a non-negative number or null"})
+				return
+			}
+		}
+	}
 	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
 	if req.ClientRequestID == "" || len(req.ClientRequestID) > 128 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "client_request_id must be between 1 and 128 characters"})
@@ -79,7 +100,7 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		Where("profile_id = ? AND client_request_id = ?", profileID, req.ClientRequestID).
 		First(&existing).Error
 	if err == nil {
-		if existing.SessionID != sessionID {
+		if existing.SessionID != sessionID || !wodStartRequestsEqual(existing.WODStartRequest, wodStartRequestDocument(req.WODStartSecs)) {
 			c.JSON(http.StatusConflict, gin.H{"error": "client_request_id was already used for another session"})
 			return
 		}
@@ -110,7 +131,11 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		// lookup and object listing.
 		if lookupErr := ctl.db.WithContext(c.Request.Context()).
 			Where("profile_id = ? AND client_request_id = ?", profileID, req.ClientRequestID).
-			First(&existing).Error; lookupErr == nil && existing.SessionID == sessionID {
+			First(&existing).Error; lookupErr == nil {
+			if existing.SessionID != sessionID || !wodStartRequestsEqual(existing.WODStartRequest, wodStartRequestDocument(req.WODStartSecs)) {
+				c.JSON(http.StatusConflict, gin.H{"error": "client_request_id was already used for another session"})
+				return
+			}
 			if err := ctl.ensureSessionReanalysisTask(c.Request.Context(), &existing); err != nil {
 				logger.Log.Error("failed to recover idempotent session re-analysis task", zap.Uint("run_id", existing.ID), zap.Error(err))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue session re-analysis"})
@@ -149,6 +174,7 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		SourceContextSnapshot:    db.JSONDocument(`{}`),
 		OriginalAnalysisSnapshot: originalSnapshot,
 		SessionScore:             `{}`,
+		WODStartRequest:          wodStartRequestDocument(req.WODStartSecs),
 		Model:                    strings.TrimSpace(req.Model),
 		WODDescription:           wodDescription,
 	}
@@ -165,7 +191,7 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		var concurrent db.SessionReanalysisRun
 		err := tx.Where("profile_id = ? AND client_request_id = ?", profileID, req.ClientRequestID).First(&concurrent).Error
 		if err == nil {
-			if concurrent.SessionID != sessionID {
+			if concurrent.SessionID != sessionID || !wodStartRequestsEqual(concurrent.WODStartRequest, run.WODStartRequest) {
 				return errSessionReanalysisKeyConflict
 			}
 			run = concurrent
@@ -338,10 +364,27 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 	now := time.Now().UTC()
 	err = ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		var analysis db.AnalysisResult
-		err := tx.Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 			Order("created_at DESC, id DESC").First(&analysis).Error
 		if err == nil {
+			if progressSnapshotStale(run.OriginalAnalysisSnapshot, analysis.WorkoutProgress) {
+				return errWODCandidateStale
+			}
+			var candidateVersion struct {
+				Version int `json:"evaluation_version"`
+			}
+			_ = json.Unmarshal([]byte(run.SessionScore), &candidateVersion)
+			if candidateVersion.Version == 1 {
+				var original struct {
+					Score  string `json:"session_score"`
+					Output string `json:"output"`
+				}
+				if json.Unmarshal(run.OriginalAnalysisSnapshot, &original) != nil || original.Score != analysis.SessionScore || original.Output != analysis.Output {
+					return errWODCandidateStale
+				}
+			}
 			updates := map[string]any{
+				"workout_progress":   run.WorkoutProgress,
 				"output":             run.Output,
 				"highlight_segments": run.HighlightSegments,
 				"session_score":      run.SessionScore,
@@ -356,6 +399,7 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 			}
 		} else if errors.Is(err, gorm.ErrRecordNotFound) {
 			analysis = db.AnalysisResult{
+				WorkoutProgress:   run.WorkoutProgress,
 				SessionID:         sessionID,
 				ProfileID:         profileID,
 				AnalysisType:      db.AnalysisTypeWOD,
@@ -371,6 +415,13 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 				return err
 			}
 		} else {
+			return err
+		}
+		sourceVersion := ""
+		if progress, err := workoutprogress.Decode(run.WorkoutProgress); err == nil {
+			sourceVersion = progress.SourceVersion
+		}
+		if err := db.InvalidatePerformanceRecords(tx, profileID, sessionID, sourceVersion); err != nil {
 			return err
 		}
 
@@ -394,6 +445,10 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 	})
 
 	if err != nil {
+		if errors.Is(err, errWODCandidateStale) {
+			c.JSON(http.StatusConflict, gin.H{"error": "analysis changed; create a new re-analysis"})
+			return
+		}
 		logger.Log.Error("failed to apply session re-analysis", zap.Uint("run_id", run.ID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to apply session re-analysis"})
 		return
@@ -510,6 +565,7 @@ func (ctl *Controller) captureOriginalSessionAnalysis(ctx context.Context, sessi
 		Order("created_at DESC, id DESC").First(&analysis).Error
 	if err == nil {
 		snapshot = map[string]any{
+			"workout_progress":   analysis.WorkoutProgress,
 			"analysis_id":        analysis.ID,
 			"status":             analysis.Status,
 			"output":             analysis.Output,
@@ -545,7 +601,8 @@ func sessionReanalysisRunResponse(run db.SessionReanalysisRun) SessionReanalysis
 			highlights = parsedHighlights
 		}
 		response.Candidate = &SessionReanalysisCandidateResponse{
-			Output: run.Output, HighlightSegments: highlights,
+			WorkoutProgress: run.WorkoutProgress,
+			Output:          run.Output, HighlightSegments: highlights,
 			SessionScore: run.SessionScore, WorkoutType: run.WorkoutType,
 		}
 		response.TokenUsage = &ChunkReanalysisTokenUsageResponse{
@@ -556,11 +613,40 @@ func sessionReanalysisRunResponse(run db.SessionReanalysisRun) SessionReanalysis
 }
 
 func (ctl *Controller) requireSessionReanalysisEnabled(c *gin.Context) bool {
-	if ctl.enableSessionReanalysis {
+	// Explicit selected-video reanalysis is available to authenticated owners of
+	// legacy/warmup sessions too. Each handler resolves exact ownership and source
+	// readiness before queuing; no historical score eligibility is upgraded.
+	if ctl.enableSessionReanalysis || UserIDFromContext(c) != 0 {
 		return true
 	}
 	c.JSON(http.StatusServiceUnavailable, gin.H{"error": "session re-analysis is disabled"})
 	return false
+}
+
+// Assessment text/version is deliberately not the progress staleness gate.
+// An old candidate cannot overwrite a newer evidence source on any workout type.
+func progressSnapshotStale(snapshot db.JSONDocument, current db.NullableJSONDocument) bool {
+	var saved map[string]json.RawMessage
+	if json.Unmarshal(snapshot, &saved) != nil {
+		return len(current) != 0 && string(current) != "null"
+	}
+	raw, present := saved["workout_progress"]
+	if !present {
+		return len(current) != 0 && string(current) != "null"
+	}
+	currentEmpty := len(current) == 0 || string(current) == "null"
+	savedEmpty := len(raw) == 0 || string(raw) == "null"
+	if currentEmpty || savedEmpty {
+		return currentEmpty != savedEmpty
+	}
+	var previous, now struct {
+		Version       int    `json:"version"`
+		SourceVersion string `json:"source_version"`
+	}
+	if json.Unmarshal(raw, &previous) != nil || json.Unmarshal(current, &now) != nil {
+		return true
+	}
+	return previous.Version != now.Version || previous.SourceVersion == "" || previous.SourceVersion != now.SourceVersion
 }
 
 // ensureSessionReanalysisTask makes a queued run recoverable through the
@@ -630,4 +716,30 @@ func decodeCreateSessionReanalysisRequest(reader io.Reader) (CreateSessionReanal
 		return CreateSessionReanalysisRequest{}, errors.New("request body must contain one JSON object")
 	}
 	return request, nil
+}
+
+var errWODCandidateStale = errors.New("WOD re-analysis source changed")
+
+// Wrap explicit JSON null so the nullable column can distinguish reset from omission.
+func wodStartRequestDocument(raw json.RawMessage) db.NullableJSONDocument {
+	if len(raw) == 0 {
+		return nil
+	}
+	doc, _ := json.Marshal(map[string]json.RawMessage{"seconds": raw})
+	return db.NullableJSONDocument(doc)
+}
+func wodStartRequestsEqual(a, b db.NullableJSONDocument) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return len(a) == len(b)
+	}
+	var x, y struct {
+		Seconds *float64 `json:"seconds"`
+	}
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	if x.Seconds == nil || y.Seconds == nil {
+		return x.Seconds == nil && y.Seconds == nil
+	}
+	return *x.Seconds == *y.Seconds
 }

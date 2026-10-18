@@ -28,6 +28,7 @@ type TokenUsage struct {
 }
 
 const (
+	ModelArgon4            = "gemini-4-argon"
 	ModelPro31Preview      = "gemini-3.1-pro-preview"
 	ModelFlash35Lite       = "gemini-3.5-flash-lite"
 	ModelFlash37           = "gemini-3.7-flash"
@@ -38,7 +39,7 @@ const (
 	ModelFlash30Preview = ModelFlash35Lite
 )
 
-const defaultModel = ModelPro31Preview
+const defaultModel = ModelArgon4
 
 type Client struct {
 	client             *genai.Client
@@ -64,7 +65,7 @@ type Options struct {
 	BaseURL            string
 	APIVersion         string
 	HTTPClient         *http.Client
-	Model              string // e.g. "gemini-3.1-pro-preview", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash"
+	Model              string // e.g. "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.8-flash"
 	ThinkingLevel      string // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL" (default / full video analysis)
 	ThinkingLevelChunk string // e.g. "LOW", "MEDIUM" (for short chunk analysis)
 	ThinkingBudget     *int32 // Optional token budget for thinking
@@ -78,6 +79,7 @@ type exactSegmentOffsets struct {
 }
 
 type exactSegmentOffsetsContextKey struct{}
+type exactBatchSegmentOffsetsContextKey struct{}
 
 // exactSegmentOffsetsTransport compensates for google.golang.org/genai's
 // VideoMetadata marshaler rounding offsets to whole seconds. Gemini accepts
@@ -89,7 +91,8 @@ type exactSegmentOffsetsTransport struct {
 
 func (t exactSegmentOffsetsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	offsets, ok := req.Context().Value(exactSegmentOffsetsContextKey{}).(exactSegmentOffsets)
-	if !ok || req.Body == nil {
+	batchOffsets, batchOK := req.Context().Value(exactBatchSegmentOffsetsContextKey{}).([]exactSegmentOffsets)
+	if (!ok && !batchOK) || req.Body == nil {
 		return t.base.RoundTrip(req)
 	}
 
@@ -105,7 +108,11 @@ func (t exactSegmentOffsetsTransport) RoundTrip(req *http.Request) (*http.Respon
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("decode segment analysis request: %w", err)
 	}
-	if !replaceVideoMetadataOffsets(payload, offsets) {
+	if batchOK {
+		if !replaceBatchVideoMetadataOffsets(payload, batchOffsets) {
+			return nil, fmt.Errorf("batch segment analysis request is missing video metadata")
+		}
+	} else if !replaceVideoMetadataOffsets(payload, offsets) {
 		return nil, fmt.Errorf("segment analysis request is missing video metadata")
 	}
 	body, err = json.Marshal(payload)
@@ -120,6 +127,34 @@ func (t exactSegmentOffsetsTransport) RoundTrip(req *http.Request) (*http.Respon
 		return io.NopCloser(bytes.NewReader(body)), nil
 	}
 	return t.base.RoundTrip(forward)
+}
+
+func replaceBatchVideoMetadataOffsets(payload map[string]any, batchOffsets []exactSegmentOffsets) bool {
+	if len(batchOffsets) == 0 {
+		return false
+	}
+	idx := 0
+	var walk func(node any)
+	walk = func(node any) {
+		switch v := node.(type) {
+		case map[string]any:
+			if _, hasContents := v["contents"]; hasContents && idx < len(batchOffsets) {
+				if replaceVideoMetadataOffsets(v, batchOffsets[idx]) {
+					idx++
+					return
+				}
+			}
+			for _, child := range v {
+				walk(child)
+			}
+		case []any:
+			for _, item := range v {
+				walk(item)
+			}
+		}
+	}
+	walk(payload)
+	return idx == len(batchOffsets)
 }
 
 func replaceVideoMetadataOffsets(payload map[string]any, offsets exactSegmentOffsets) bool {
@@ -239,7 +274,7 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 
 func supportsThinking(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
-	return strings.Contains(m, "3.8") || strings.Contains(m, "3.7") || strings.Contains(m, "2.5")
+	return m == ModelArgon4 || strings.Contains(m, "3.8") || strings.Contains(m, "3.7") || strings.Contains(m, "2.5")
 }
 
 func (c *Client) thinkingConfigForModel(model string) *genai.ThinkingConfig {
@@ -253,11 +288,15 @@ func (c *Client) thinkingConfigForModelAndLevel(model string, level string) *gen
 	if c == nil || !supportsThinking(model) {
 		return nil
 	}
+	argon := strings.EqualFold(strings.TrimSpace(model), ModelArgon4)
+	if argon && strings.TrimSpace(level) == "" {
+		level = "HIGH"
+	}
 	if level == "" && c.thinkingBudget == nil {
 		return nil
 	}
 	tc := &genai.ThinkingConfig{}
-	if c.thinkingBudget != nil {
+	if c.thinkingBudget != nil && !argon {
 		tc.ThinkingBudget = c.thinkingBudget
 	}
 	switch strings.ToUpper(strings.TrimSpace(level)) {
@@ -724,7 +763,7 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 }
 
 // AnalyzeSegmentWithModel performs deep biomechanical analysis on a specific time range
-// of the video using a specified model (e.g. ModelFlash36 or ModelPro31Preview).
+// of the video using a specified model (e.g. ModelArgon4 or ModelPro31Preview).
 func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *TokenUsage, error) {
 	if model == "" {
 		model = c.model
@@ -757,7 +796,11 @@ func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType 
 	genConfig := &genai.GenerateContentConfig{
 		MediaResolution: genai.MediaResolution(genai.MediaResolutionMedium),
 	}
-	if tc := c.thinkingConfigForModel(model); tc != nil {
+	thinkingLevel := c.thinkingLevel
+	if strings.TrimSpace(thinkingLevel) == "" {
+		thinkingLevel = "HIGH"
+	}
+	if tc := c.thinkingConfigForModelAndLevel(model, thinkingLevel); tc != nil {
 		genConfig.ThinkingConfig = tc
 	}
 	resp, usage, err := c.generateContent(exactOffsetContext, model, []*genai.Content{{
@@ -999,3 +1042,193 @@ func (c *Client) ParseText(ctx context.Context, prompt string) (string, *TokenUs
 	c.logger.Info("Text parsed", zap.Int("response_length", len(result)))
 	return result, usage, nil
 }
+
+// BatchSegmentRequest describes a single video segment analysis item in a Gemini Batch API job.
+type BatchSegmentRequest struct {
+	FileURI  string
+	MIMEType string
+	Start    time.Duration
+	End      time.Duration
+	Prompt   string
+	Metadata map[string]string
+}
+
+// BatchSegmentResult holds the output and token usage for one item in an AnalyzeSegmentsBatch job.
+type BatchSegmentResult struct {
+	Analysis string
+	Usage    *TokenUsage
+	Err      error
+}
+
+// AnalyzeSegmentsBatch submits multiple video segment requests in a single Gemini Batch API job
+// (InlinedRequests) for a 50% token cost discount and polls until completion.
+func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, requests []BatchSegmentRequest) ([]BatchSegmentResult, error) {
+	if len(requests) == 0 {
+		return nil, nil
+	}
+	if model == "" {
+		model = c.model
+	}
+	fps := float64(5)
+	thinkingLevel := c.thinkingLevel
+	if strings.TrimSpace(thinkingLevel) == "" {
+		thinkingLevel = "HIGH"
+	}
+	genConfig := &genai.GenerateContentConfig{
+		MediaResolution: genai.MediaResolution(genai.MediaResolutionMedium),
+	}
+	if tc := c.thinkingConfigForModelAndLevel(model, thinkingLevel); tc != nil {
+		genConfig.ThinkingConfig = tc
+	}
+	if strings.EqualFold(strings.TrimSpace(model), ModelArgon4) {
+		genConfig.MaxOutputTokens = argonMaxOutputTokens
+		if genConfig.ThinkingConfig != nil {
+			thinking := *genConfig.ThinkingConfig
+			thinking.ThinkingBudget = nil
+			genConfig.ThinkingConfig = &thinking
+		}
+	}
+
+	inlined := make([]*genai.InlinedRequest, 0, len(requests))
+	offsets := make([]exactSegmentOffsets, 0, len(requests))
+	for i, req := range requests {
+		if req.Start < 0 || req.End <= req.Start {
+			return nil, fmt.Errorf("invalid batch segment interval at index %d: start=%s end=%s", i, req.Start, req.End)
+		}
+		videoPart := &genai.Part{
+			FileData: &genai.FileData{
+				FileURI:  req.FileURI,
+				MIMEType: req.MIMEType,
+			},
+			VideoMetadata: &genai.VideoMetadata{
+				StartOffset: req.Start,
+				EndOffset:   req.End,
+				FPS:         &fps,
+			},
+		}
+		cfgCopy := *genConfig
+		inlined = append(inlined, &genai.InlinedRequest{
+			Model: model,
+			Contents: []*genai.Content{{
+				Role: genai.RoleUser,
+				Parts: []*genai.Part{
+					videoPart,
+					genai.NewPartFromText(req.Prompt),
+				},
+			}},
+			Config:   &cfgCopy,
+			Metadata: req.Metadata,
+		})
+		offsets = append(offsets, exactSegmentOffsets{start: req.Start, end: req.End})
+	}
+
+	batchCtx := context.WithValue(ctx, exactBatchSegmentOffsetsContextKey{}, offsets)
+	job, err := c.client.Batches.Create(batchCtx, model, &genai.BatchJobSource{
+		InlinedRequests: inlined,
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create batch segment job: %w", err)
+	}
+	if job == nil || strings.TrimSpace(job.Name) == "" {
+		return nil, errors.New("batch segment job returned empty job name")
+	}
+
+	consecutiveErrors := 0
+	for {
+		if job.State == genai.JobStateSucceeded {
+			break
+		}
+		if job.State == genai.JobStateFailed || job.State == genai.JobStateCancelled || job.State == genai.JobStateExpired {
+			if job.Error != nil && job.Error.Message != "" {
+				return nil, fmt.Errorf("batch segment job %s ended with %s: %s", job.Name, job.State, job.Error.Message)
+			}
+			return nil, fmt.Errorf("batch segment job %s ended with state %s", job.Name, job.State)
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		c.sleep(c.pollInterval)
+		polled, getErr := c.client.Batches.Get(ctx, job.Name, nil)
+		if getErr != nil {
+			if isRetryableFileGetError(getErr) && consecutiveErrors < maxConsecutiveFileGetErrors {
+				consecutiveErrors++
+				c.sleep(c.pollInterval * time.Duration(consecutiveErrors))
+				continue
+			}
+			return nil, fmt.Errorf("poll batch segment job %s: %w", job.Name, getErr)
+		}
+		consecutiveErrors = 0
+		job = polled
+	}
+
+	if job.Dest == nil || len(job.Dest.InlinedResponses) != len(requests) {
+		got := 0
+		if job.Dest != nil {
+			got = len(job.Dest.InlinedResponses)
+		}
+		return nil, fmt.Errorf("batch segment job %s returned %d responses for %d requests", job.Name, got, len(requests))
+	}
+
+	results := make([]BatchSegmentResult, len(requests))
+	for i, item := range job.Dest.InlinedResponses {
+		if item == nil {
+			results[i] = BatchSegmentResult{Err: errors.New("nil batch inlined response")}
+			continue
+		}
+		if item.Error != nil && ((item.Error.Code != nil && *item.Error.Code != 0) || item.Error.Message != "") {
+			code := int32(0)
+			if item.Error.Code != nil {
+				code = *item.Error.Code
+			}
+			results[i] = BatchSegmentResult{
+				Err: fmt.Errorf("batch item %d failed (%d): %s", i, code, item.Error.Message),
+			}
+			continue
+		}
+		resp := item.Response
+		var usage *TokenUsage
+		if resp != nil && resp.UsageMetadata != nil {
+			input := int64(resp.UsageMetadata.PromptTokenCount)
+			output := int64(resp.UsageMetadata.CandidatesTokenCount)
+			total := int64(resp.UsageMetadata.TotalTokenCount)
+			details := &ComparisonUsage{
+				Input:  &input,
+				Output: &output,
+				Total:  &total,
+			}
+			if resp.UsageMetadata.ThoughtsTokenCount > 0 {
+				thoughts := int64(resp.UsageMetadata.ThoughtsTokenCount)
+				details.Thinking = &thoughts
+			}
+			if resp.UsageMetadata.CachedContentTokenCount > 0 {
+				cached := int64(resp.UsageMetadata.CachedContentTokenCount)
+				details.Cached = &cached
+			}
+			if resp.UsageMetadata.ToolUsePromptTokenCount > 0 {
+				toolUse := int64(resp.UsageMetadata.ToolUsePromptTokenCount)
+				details.ToolUse = &toolUse
+			}
+			usage = UsageFromComparison(details, model)
+		}
+		if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0] == nil || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
+			results[i] = BatchSegmentResult{Usage: usage, Err: errors.New("no content from batch segment analysis")}
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(model), ModelArgon4) && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
+			results[i] = BatchSegmentResult{Usage: usage, Err: errors.New("Argon output is incomplete: MAX_TOKENS")}
+			continue
+		}
+		var text strings.Builder
+		for _, part := range resp.Candidates[0].Content.Parts {
+			if part != nil && !part.Thought {
+				text.WriteString(part.Text)
+			}
+		}
+		results[i] = BatchSegmentResult{
+			Analysis: text.String(),
+			Usage:    usage,
+		}
+	}
+	return results, nil
+}
+

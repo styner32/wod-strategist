@@ -25,10 +25,12 @@ import {
  * segments for a completed workout session.
  */
 export default function WorkoutPlayerPage() {
-  const { sessionId, profileId, videoKind } = useLocalSearchParams<{
+  const { sessionId, profileId, videoKind, startSecs, endSecs } = useLocalSearchParams<{
     sessionId: string;
     profileId: string;
     videoKind?: string;
+    startSecs?: string;
+    endSecs?: string;
   }>();
 
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
@@ -41,6 +43,9 @@ export default function WorkoutPlayerPage() {
 
   const pid = parseInt(profileId ?? "0", 10);
   const kind = (videoKind as "merged" | "hardsubbed" | "encoded") || "merged";
+  const start = startSecs == null ? NaN : Number(startSecs);
+  const end = endSecs == null ? NaN : Number(endSecs);
+  const reviewInterval = kind === "merged" && Number.isFinite(start) && start >= 0 && Number.isFinite(end) && end > start ? { start, end } : undefined;
 
   const loadData = useCallback(async () => {
     if (!sessionId || !pid) {
@@ -183,6 +188,7 @@ export default function WorkoutPlayerPage() {
       highlightSegments={highlights}
       isCached={isCached}
       onClose={handleClose}
+      reviewInterval={reviewInterval}
     />
   );
 }

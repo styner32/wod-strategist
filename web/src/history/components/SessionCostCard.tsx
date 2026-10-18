@@ -2,11 +2,40 @@ import { memo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { historyApi } from "../../api/history";
 
-interface SessionCostCardProps {
-  sessionId: string;
+export function formatDurationMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0초";
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}시간 ${minutes}분 ${seconds}초`;
+  }
+  if (minutes > 0) {
+    return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
+  }
+  return `${seconds}초`;
 }
 
-export const SessionCostCard = memo(function SessionCostCard({ sessionId }: SessionCostCardProps) {
+const STAGE_LABELS: Record<string, string> = {
+  video_analysis: "본 분석 (Pass 1 & 2)",
+  injury_analysis: "부상 위험 분석",
+  verify_highlights: "하이라이트 검증",
+  session_reanalysis: "전체 재분석",
+  chunk_reanalysis: "청크 재분석",
+};
+
+interface SessionCostCardProps {
+  sessionId: string;
+  fallbackDurationMs?: number | null;
+  isProcessing?: boolean;
+}
+
+export const SessionCostCard = memo(function SessionCostCard({
+  sessionId,
+  fallbackDurationMs,
+  isProcessing = false,
+}: SessionCostCardProps) {
   const [showDetails, setShowDetails] = useState(false);
 
   const { data: cost, isLoading, error } = useQuery({
@@ -33,6 +62,12 @@ export const SessionCostCard = memo(function SessionCostCard({ sessionId }: Sess
   const formatTokens = (n: number) => n.toLocaleString();
   const formatUSD = (usd: number) => `$${usd.toFixed(4)}`;
   const formatKRW = (krw: number) => `₩${Math.round(krw).toLocaleString()}`;
+  const effectiveDurationMs =
+    cost.total_duration_ms && cost.total_duration_ms > 0
+      ? cost.total_duration_ms
+      : fallbackDurationMs && fallbackDurationMs > 0
+        ? fallbackDurationMs
+        : 0;
 
   return (
     <section
@@ -65,6 +100,20 @@ export const SessionCostCard = memo(function SessionCostCard({ sessionId }: Sess
           ({formatKRW(cost.cost_krw)})
         </span>
       </div>
+
+      {effectiveDurationMs > 0 && (
+        <div
+          className="mt-2 flex items-center justify-between rounded-lg bg-bg-secondary px-2.5 py-1.5 text-[11px]"
+          data-testid="session-total-duration"
+        >
+          <span className="text-text-muted">
+            ⏱️ {isProcessing ? "현재 분석 경과 시간" : "총 분석 소요 시간"}
+          </span>
+          <span className="font-semibold text-text-primary">
+            {formatDurationMs(effectiveDurationMs)}
+          </span>
+        </div>
+      )}
 
       <div className="mt-2 grid grid-cols-3 gap-2 border-t border-border-subtle pt-2 text-[11px] text-text-secondary">
         <div>
@@ -100,6 +149,36 @@ export const SessionCostCard = memo(function SessionCostCard({ sessionId }: Sess
 
       {showDetails && (
         <div className="mt-4 space-y-3 border-t border-border pt-3">
+          {cost.by_stage && cost.by_stage.length > 0 && (
+            <div>
+              <h3 className="font-semibold text-text-secondary mb-1.5">
+                단계별 소요 시간
+              </h3>
+              <div className="space-y-1.5">
+                {cost.by_stage.map((item) => (
+                  <div
+                    key={item.stage}
+                    className="flex items-center justify-between rounded bg-bg-secondary px-2 py-1.5"
+                  >
+                    <span className="text-text-primary text-[11px]">
+                      {STAGE_LABELS[item.stage] ?? item.stage}
+                    </span>
+                    <div className="text-right">
+                      <span className="text-text-primary font-medium">
+                        {formatDurationMs(item.duration_ms)}
+                      </span>
+                      {item.api_calls > 0 && (
+                        <span className="text-text-muted ml-1.5">
+                          ({item.api_calls}회 호출)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {cost.by_task_type && cost.by_task_type.length > 0 && (
             <div>
               <h3 className="font-semibold text-text-secondary mb-1.5">
@@ -160,3 +239,4 @@ export const SessionCostCard = memo(function SessionCostCard({ sessionId }: Sess
     </section>
   );
 });
+

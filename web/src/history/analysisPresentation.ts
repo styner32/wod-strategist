@@ -8,6 +8,9 @@ const internalNames = new Set([
   "movements",
   "observed_signals",
   "target_person",
+  "workout_observations",
+  "wod_evidence",
+  "workout_progress",
 ]);
 function internalJSON(text: string): boolean {
   try {
@@ -168,3 +171,33 @@ export function legacyOverallSummary(raw: string): string | null {
     return null;
   }
 }
+
+export type TimestampToken =
+  | { type: "text"; value: string }
+  | { type: "timestamp"; label: string; seconds: number };
+
+/** Splits plain text into text and clickable timestamp tokens (MM:SS or HH:MM:SS with optional decimals). */
+export function splitTextByTimestamps(text: string): TimestampToken[] {
+  if (!text) return [];
+  const regex = /\b((?:\d{1,2}:)?\d{1,2}:\d{2}(?:\.\d{1,3})?)\b/g;
+  const tokens: TimestampToken[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    const label = match[1];
+    const seconds = parseHighlightTimestamp(label);
+    if (seconds == null) continue;
+    if (match.index > lastIndex) {
+      tokens.push({ type: "text", value: text.slice(lastIndex, match.index) });
+    }
+    tokens.push({ type: "timestamp", label, seconds });
+    lastIndex = match.index + label.length;
+  }
+
+  if (lastIndex < text.length) {
+    tokens.push({ type: "text", value: text.slice(lastIndex) });
+  }
+  return tokens.length > 0 ? tokens : [{ type: "text", value: text }];
+}
+

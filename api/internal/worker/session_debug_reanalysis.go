@@ -9,12 +9,15 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/storage"
+	"github.com/wod-strategist/api/internal/wodeval"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -22,13 +25,21 @@ import (
 const (
 	TypeSessionDebugReanalysis = "session:debug-reanalysis"
 
-	sessionDebugPromptVersion = "session-debug-reanalysis-v1"
-	sessionDebugSchemaVersion = "session-reanalysis-candidate-v1"
+	sessionDebugPromptVersion = "session-independent-observations-v3"
+	sessionDebugSchemaVersion = "session-reanalysis-progress-v2"
 	sessionDebugMaxRetries    = 2
 )
 
 type SessionDebugReanalysisPayload struct {
 	RunID uint `json:"run_id"`
+}
+
+type cachedSessionDebugSegment struct {
+	Start    string `json:"start"`
+	End      string `json:"end"`
+	Type     string `json:"type"`
+	Model    string `json:"model"`
+	Analysis string `json:"analysis"`
 }
 
 type sessionDebugContext struct {
@@ -166,8 +177,37 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 				"No exact workout segments are available within the session video.")
 		}
 	}
+	var storedStart struct {
+		Seconds json.RawMessage `json:"seconds"`
+	}
+	_ = json.Unmarshal(run.WODStartRequest, &storedStart)
+	wodStartRequest := storedStart.Seconds
+	observeWODUsage := func(task string, usage *gemini.TokenUsage) {
+		apiCalls++
+		w.saveTokenUsageForRequest(p.SessionID, p.ProfileID, task, sessionReanalysisTaskRequestKey(run.ID, task), usage)
+		addSessionDebugUsage(&aggregate, usage)
+	}
+	newWOD := w.wodEvaluationVersion(ctx, p) == 1
+	wodStart := wodeval.Start{}
+	wodComplete := true
+	if newWOD {
+		if len(wodStartRequest) > 0 && string(wodStartRequest) != "null" {
+			var seconds float64
+			if json.Unmarshal(wodStartRequest, &seconds) != nil || seconds >= file.Duration.Seconds() {
+				return w.finishSessionDebugUnavailable(ctx, run.ID, db.SessionReanalysisStatusContextUnavailable, started, "The start must be inside the original video.")
+			}
+		}
+		wodStart = w.detectWODStart(ctx, p, &gemini.UploadResult{FileURI: file.URI, MIMEType: chunkDebugMIMEType(file.MIMEType), VideoDuration: file.Duration}, segments, wodStartRequest, observeWODUsage)
+		if len(wodStartRequest) > 0 && string(wodStartRequest) != "null" && wodStart.Status != "confirmed" {
+			return w.finishSessionDebugUnavailable(ctx, run.ID, db.SessionReanalysisStatusContextUnavailable, started, "The start must precede the last confirmed exercise.")
+		}
+		segments = trimWODSegments(segments, wodStart)
+		wodComplete = w.wodCoverageComplete(ctx, p, wodStart)
+	}
+	indexedSegments := segments
 	maxSegments := maxSegmentsForDuration(file.Duration)
-	if len(segments) > maxSegments {
+	if len(segments) > maxSegments && !newWOD {
+		allSegments := append([]Segment(nil), segments...)
 		triagePrompt := buildTriagePrompt(segments, maxSegments, file.Duration, target.WorkoutType)
 		promptRecord.WriteString(triagePrompt)
 		triaged, usage, triageErr := w.triageSegments(ctx, &gemini.UploadResult{
@@ -181,20 +221,35 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		} else {
 			segments = segments[:maxSegments]
 		}
+		if target.WorkoutType == WorkoutTypeWarmup {
+			segments = preserveWarmupTrajectories(allSegments, segments, maxSegments)
+		}
 	}
+	omittedSegments := omittedIndexedSegments(indexedSegments, segments)
+	segments = addBetweenObservationWindows(segments, omittedSegments)
 
-	contextSnapshot, _ := json.Marshal(map[string]any{
-		"session_id": run.SessionID, "profile_id": run.ProfileID,
-		"profile_context": w.lookupProfileString(run.ProfileID),
-		"appearance":      w.buildTargetPersonContext(run.ProfileID, run.SessionID),
-		"wod_description": target.WODDescription, "workout_type": target.WorkoutType,
-		"movement_hints": movementHintsFromDocument(target.MovementHints),
-		"injuries":       target.Injuries, "confirmed_corrections": target.Corrections,
-		"prompt_corrections":        promptCorrections,
-		"unmapped_correction_count": len(target.Corrections) - len(promptCorrections),
-		"segments":                  segments, "source_gcs_uri": run.SourceGCSURI,
-		"prompt_version": sessionDebugPromptVersion, "schema_version": sessionDebugSchemaVersion,
-	})
+	reusableSegments := w.loadReusableSessionDebugSegments(ctx, &run)
+	buildContextSnapshot := func(completed map[string]cachedSessionDebugSegment) []byte {
+		snapshot := map[string]any{
+			"session_id": run.SessionID, "profile_id": run.ProfileID,
+			"profile_context": w.lookupProfileString(run.ProfileID),
+			"appearance":      w.buildTargetPersonContext(run.ProfileID, run.SessionID),
+			"wod_description": target.WODDescription, "workout_type": target.WorkoutType,
+			"movement_hints": movementHintsFromDocument(target.MovementHints),
+			"injuries":       target.Injuries, "confirmed_corrections": target.Corrections,
+			"prompt_corrections":        promptCorrections,
+			"unmapped_correction_count": len(target.Corrections) - len(promptCorrections),
+			"wod_start":                 wodStart, "wod_evaluation_version": w.wodEvaluationVersion(ctx, p),
+			"segments": segments, "source_gcs_uri": run.SourceGCSURI,
+			"prompt_version": sessionDebugPromptVersion, "schema_version": sessionDebugSchemaVersion,
+		}
+		if len(completed) > 0 {
+			snapshot["completed_segments"] = completed
+		}
+		raw, _ := json.Marshal(snapshot)
+		return raw
+	}
+	contextSnapshot := buildContextSnapshot(nil)
 	if err := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
 		"source_context_snapshot": string(contextSnapshot), "prompt_version": sessionDebugPromptVersion,
 		"schema_version": sessionDebugSchemaVersion, "workout_type": target.WorkoutType,
@@ -203,51 +258,186 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	}
 
 	wodContext := buildWODContext(target.WODDescription)
-	finalContext := w.buildHistoryContext(run.ProfileID, 5) + w.buildSessionDebugFatigueContext(ctx, run.SessionID, run.ProfileID, target.Corrections)
-	var output strings.Builder
-	var highlightCandidates []highlightCandidate
+	assessmentContext := buildSessionDebugAssessmentContext(target.Corrections)
+	var wodEvidence []wodSegmentEvidence
+	var progressIntervals []workoutprogress.Interval
+	var progressGaps []workoutprogress.Gap
+	for _, seg := range omittedSegments {
+		progressGaps = append(progressGaps, workoutprogress.Gap{Start: convertToSeconds(seg.Start).Seconds(), End: convertToSeconds(seg.End).Seconds(), Clock: "media", Reason: "segment_budget_omitted"})
+	}
+	defaultClientModel := ""
+	if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
+		defaultClientModel = provider.Model()
+	}
+
+	type sessionDebugSegmentOutcome struct {
+		valid    bool
+		reused   bool
+		cacheKey string
+		model    string
+		analysis string
+		usage    *gemini.TokenUsage
+		err      error
+		start    time.Duration
+		end      time.Duration
+	}
+	segOutcomes := make([]sessionDebugSegmentOutcome, len(segments))
+	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
+	var wg sync.WaitGroup
+
 	for i, segment := range segments {
 		start, end := convertToSeconds(segment.Start), convertToSeconds(segment.End)
 		if end <= start {
 			continue
 		}
-		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, finalContext, i == len(segments)-1)
-		prompt += correctionContext
-		defaultClientModel := ""
-		if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
-			defaultClientModel = provider.Model()
+		segCorrections := correctionsForSegment(promptCorrections, start.Seconds(), end.Seconds())
+		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, "", false)
+		if newWOD {
+			prompt += wodSegmentEvidencePrompt
 		}
+		prompt += buildSessionDebugCorrectionContext(segCorrections)
+		prompt += ObservationOnlyOutputCheckPrompt
+		promptRecord.WriteString(prompt)
+
 		selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
-		analysis, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(ctx, file.URI, chunkDebugMIMEType(file.MIMEType), start, end, prompt, selectedModel)
-		apiCalls++
-		w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", usage)
-		addSessionDebugUsage(&aggregate, usage)
-		if callErr != nil || strings.TrimSpace(analysis) == "" {
-			if callErr == nil {
-				callErr = errors.New("empty session debug segment result")
+		if strings.TrimSpace(run.Model) == "" && isUnknownSegment(segment) {
+			selectedModel = gemini.ModelFlash38
+		}
+		cacheKey := sessionDebugSegmentCacheKey(selectedModel, segment.Start, segment.End, prompt)
+		if cached, ok := reusableSegments[cacheKey]; ok && strings.TrimSpace(cached.Analysis) != "" {
+			cachedModel := cached.Model
+			if cachedModel == "" {
+				cachedModel = selectedModel
 			}
-			w.logger.Warn("session debug segment failed", zap.Uint("run_id", run.ID), zap.Int("segment", i+1), zap.Error(callErr))
-			return w.failSessionDebugRun(ctx, run.ID, retryCount, started,
-				"The analyzer could not complete every workout segment.", callErr)
+			segOutcomes[i] = sessionDebugSegmentOutcome{
+				valid:    true,
+				reused:   true,
+				cacheKey: cacheKey,
+				model:    cachedModel,
+				analysis: cached.Analysis,
+				start:    start,
+				end:      end,
+			}
+			continue
 		}
 
-		if usage != nil && usage.Model != "" {
-			model = usage.Model
-		}
-		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(analysis, highlightSource{
-			Index: i, Start: start.Seconds(), End: end.Seconds(), Movement: segment.Type, HasBounds: true, HardGapBoundary: true,
-		})...)
-		output.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n%s", i+1, segment.Type, segment.Start, segment.End, analysis))
+		wg.Add(1)
+		go func(idx int, segStart, segEnd time.Duration, segPrompt, segModel, key string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			analysis, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(
+				ctx, file.URI, chunkDebugMIMEType(file.MIMEType), segStart, segEnd, segPrompt, segModel,
+			)
+			resolvedModel := segModel
+			if usage != nil && usage.Model != "" {
+				resolvedModel = usage.Model
+			}
+			segOutcomes[idx] = sessionDebugSegmentOutcome{
+				valid:    true,
+				reused:   false,
+				cacheKey: key,
+				model:    resolvedModel,
+				analysis: analysis,
+				usage:    usage,
+				err:      callErr,
+				start:    segStart,
+				end:      segEnd,
+			}
+		}(i, start, end, prompt, selectedModel, cacheKey)
 	}
+	wg.Wait()
+
+	var output strings.Builder
+	var highlightCandidates []highlightCandidate
+	completedSegments := make(map[string]cachedSessionDebugSegment, len(segments))
+	skippedCalls := 0
+	var firstErr error
+	failedSegment := 0
+
+	for i, segment := range segments {
+		res := segOutcomes[i]
+		if !res.valid {
+			continue
+		}
+		if !res.reused {
+			apiCalls++
+			w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", res.usage)
+			addSessionDebugUsage(&aggregate, res.usage)
+		} else {
+			skippedCalls++
+		}
+		if res.err != nil || strings.TrimSpace(res.analysis) == "" {
+			if firstErr == nil {
+				firstErr = res.err
+				if firstErr == nil {
+					firstErr = errors.New("empty session debug segment result")
+				}
+				failedSegment = i + 1
+			}
+			continue
+		}
+		completedSegments[res.cacheKey] = cachedSessionDebugSegment{
+			Start:    segment.Start,
+			End:      segment.End,
+			Type:     segment.Type,
+			Model:    res.model,
+			Analysis: res.analysis,
+		}
+		if res.model != "" {
+			model = res.model
+		}
+		observedIntervals, observedGaps := parseWorkoutObservations(res.analysis, segment, i)
+		progressIntervals = append(progressIntervals, observedIntervals...)
+		progressGaps = append(progressGaps, observedGaps...)
+		if newWOD && !isFullyObservedRestWindow(segment, observedIntervals, observedGaps) {
+			if evidence, ok := decodeWODEvidence(res.analysis, segment); ok {
+				wodEvidence = append(wodEvidence, evidence)
+			} else {
+				wodComplete = false
+			}
+		}
+		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(res.analysis, highlightSource{
+			Index: i, Start: res.start.Seconds(), End: res.end.Seconds(), Movement: segment.Type, HasBounds: true, HardGapBoundary: true,
+		})...)
+		output.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n%s", i+1, segment.Type, segment.Start, segment.End, res.analysis))
+	}
+
+	if firstErr != nil {
+		if len(completedSegments) > 0 {
+			_ = w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+				"source_context_snapshot": string(buildContextSnapshot(completedSegments)),
+			}).Error
+		}
+		w.logger.Warn("session debug segment failed", zap.Uint("run_id", run.ID), zap.Int("segment", failedSegment), zap.Error(firstErr))
+		return w.failSessionDebugRun(ctx, run.ID, retryCount, started,
+			"The analyzer could not complete every workout segment.", firstErr)
+	}
+
 	if strings.TrimSpace(output.String()) == "" {
 		return w.failSessionDebugRun(ctx, run.ID, retryCount, started, "The analyzer could not produce a candidate.", errors.New("all session debug segments failed"))
 	}
 	if model == "" {
-		if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
-			model = provider.Model()
-		}
+		model = defaultClientModel
 	}
 	analysis := output.String()
+	normalizedWorkout := ""
+	if NormalizeWorkoutType(p.WorkoutType) == WorkoutTypeWOD && strings.TrimSpace(p.WODDescription) != "" {
+		normalizedWorkout = w.normalizeWorkout(ctx, p.SessionID, p.ProfileID, p.WODDescription, p.Movements, observeWODUsage)
+	}
+	progress := w.buildWorkoutProgress(ctx, p, file.URI, progressIntervals, progressGaps, file.Duration.Seconds(), normalizedWorkout)
+	progressJSON, encodeErr := json.Marshal(progress)
+	if encodeErr != nil {
+		return w.failSessionDebugRun(ctx, run.ID, retryCount, started, "The performed observations could not be saved.", encodeErr)
+	}
+	var sessionScore string
+	if newWOD {
+		sessionScore = w.synthesizeWODWithProgress(ctx, p, wodStart, wodEvidence, wodComplete, progress, assessmentContext, observeWODUsage)
+	} else {
+		sessionScore = w.assessWorkoutProgress(ctx, p, progress, assessmentContext, observeWODUsage)
+	}
+	analysis += "\n\n```score\n" + sessionScore + "\n```"
 	normalizedHighlights := consolidateHighlightCandidates(highlightCandidates, HighlightNormalizeOptions{
 		VideoEndSeconds: file.Duration.Seconds(),
 	})
@@ -256,21 +446,88 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		highlightSegments = MarshalHighlightSegments(normalizedHighlights)
 	}
 	hash := sha256.Sum256([]byte(promptRecord.String()))
-	w.recordStageMetrics(run.SessionID, run.ProfileID, "session_reanalysis", "current", apiCalls, 0, uploadBytes, time.Since(started))
+	w.recordStageMetrics(run.SessionID, run.ProfileID, "session_reanalysis", "current", apiCalls, skippedCalls, uploadBytes, time.Since(started))
 	return w.completeSessionDebugRun(ctx, run.ID, db.SessionReanalysisStatusCompleted, started, map[string]any{
-		"output": analysis, "highlight_segments": highlightSegments,
-		"session_score": parseSessionScore(analysis), "workout_type": target.WorkoutType,
-		"model": model, "prompt_hash": hex.EncodeToString(hash[:]),
+		"source_context_snapshot": string(buildContextSnapshot(completedSegments)),
+		"output":                  analysis, "highlight_segments": highlightSegments,
+		"session_score": sessionScore, "workout_type": target.WorkoutType,
+		"workout_progress": db.NullableJSONDocument(progressJSON),
+		"model":            model, "prompt_hash": hex.EncodeToString(hash[:]),
 		"prompt_tokens": aggregate.PromptTokens, "candidate_tokens": aggregate.CandidateTokens,
 		"total_tokens": aggregate.TotalTokens, "safe_error": "",
 	})
 }
 
-func buildSessionDebugCorrectionContext(corrections []sessionDebugCorrection) string {
+func sessionDebugSegmentCacheKey(model, start, end, prompt string) string {
+	sum := sha256.Sum256([]byte(model + "|" + start + "|" + end + "|" + prompt))
+	return hex.EncodeToString(sum[:])
+}
+
+func (w *Worker) loadReusableSessionDebugSegments(ctx context.Context, run *db.SessionReanalysisRun) map[string]cachedSessionDebugSegment {
+	result := make(map[string]cachedSessionDebugSegment)
+	mergeFromSnapshot := func(raw []byte) {
+		if len(raw) == 0 {
+			return
+		}
+		var parsed struct {
+			Completed map[string]cachedSessionDebugSegment `json:"completed_segments"`
+		}
+		if json.Unmarshal(raw, &parsed) != nil {
+			return
+		}
+		for k, v := range parsed.Completed {
+			if strings.TrimSpace(v.Analysis) != "" {
+				result[k] = v
+			}
+		}
+	}
+	if w.DB != nil {
+		var priorRuns []db.SessionReanalysisRun
+		if err := w.DB.WithContext(ctx).
+			Where("session_id = ? AND profile_id = ? AND source_gcs_uri = ? AND status = ? AND id <> ?",
+				run.SessionID, run.ProfileID, run.SourceGCSURI, db.SessionReanalysisStatusCompleted, run.ID).
+			Order("completed_at ASC, id ASC").
+			Find(&priorRuns).Error; err == nil {
+			for _, prior := range priorRuns {
+				mergeFromSnapshot(prior.SourceContextSnapshot)
+			}
+		}
+	}
+	mergeFromSnapshot(run.SourceContextSnapshot)
+	return result
+}
+
+func correctionsForSegment(corrections []sessionDebugCorrection, startSecs, endSecs float64) []sessionDebugCorrection {
 	if len(corrections) == 0 {
+		return nil
+	}
+	matched := make([]sessionDebugCorrection, 0, len(corrections))
+	for _, c := range corrections {
+		if c.MediaStartSecs == nil || c.MediaEndSecs == nil {
+			continue
+		}
+		if *c.MediaStartSecs < endSecs && *c.MediaEndSecs > startSecs {
+			matched = append(matched, c)
+		}
+	}
+	return matched
+}
+
+func buildSessionDebugCorrectionContext(corrections []sessionDebugCorrection) string {
+	// Only factual movement/activity labels are available to the observer.
+	observational := make([]sessionDebugCorrection, 0, len(corrections))
+	for _, correction := range corrections {
+		if correction.MovementName == "" && correction.ActivityState == "" {
+			continue
+		}
+		correction.FatigueState = ""
+		correction.Category = "movement_activity"
+		observational = append(observational, correction)
+	}
+	if len(observational) == 0 {
 		return ""
 	}
-	raw, err := json.Marshal(corrections)
+	raw, err := json.Marshal(observational)
 	if err != nil {
 		return ""
 	}
@@ -281,7 +538,21 @@ func buildSessionDebugCorrectionContext(corrections []sessionDebugCorrection) st
 - 이 목록에는 저장된 활성 교정만 포함되며 자유 텍스트 메모와 미확정 재분석 후보는 포함되지 않습니다.
 - 교정은 구간을 찾는 비배타적 참고 라벨입니다. 현재 영상에서 대상 인물의 기구 접촉, 몸 위치와 동작 패턴을 다시 확인하세요.
 - 영상 근거가 교정과 모순되면 영상 근거를 우선하고 Unknown 또는 실제 관찰 종목으로 판단하세요.
-- fatigue_state가 fatigued여도 시각적 피로 근거가 먼저 확인되지 않으면 피로 이벤트나 시점을 만들지 마세요.`, string(raw))
+- 이전 평가나 피로 판단은 이 관찰 입력에 포함되지 않습니다.`, string(raw))
+}
+
+func buildSessionDebugAssessmentContext(corrections []sessionDebugCorrection) string {
+	assessments := make([]sessionDebugCorrection, 0)
+	for _, correction := range corrections {
+		if correction.FatigueState != "" {
+			assessments = append(assessments, correction)
+		}
+	}
+	if len(assessments) == 0 {
+		return ""
+	}
+	raw, _ := json.Marshal(assessments)
+	return string(raw)
 }
 
 func mappedSessionDebugCorrections(corrections []sessionDebugCorrection) []sessionDebugCorrection {
@@ -578,6 +849,10 @@ func addSessionDebugUsage(total *gemini.TokenUsage, usage *gemini.TokenUsage) {
 	if usage.Model != "" {
 		total.Model = usage.Model
 	}
+}
+
+func sessionReanalysisTaskRequestKey(runID uint, task string) string {
+	return fmt.Sprintf("session-reanalysis:%d:%s", runID, strings.TrimSpace(task))
 }
 
 func (w *Worker) failSessionDebugRun(ctx context.Context, runID uint, retryCount int, started time.Time, safeError string, cause error) error {

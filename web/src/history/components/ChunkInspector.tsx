@@ -29,6 +29,7 @@ interface Props {
   onCorrect: () => void;
   onUndoCorrection?: () => void;
   onUseCandidate: (correction: FeedbackCorrection, runId: number) => void;
+  onSeekMain?: (seconds: number) => void;
 }
 
 function runId(run?: ChunkReanalysisRun) {
@@ -203,6 +204,7 @@ export function ChunkInspector({
   onCorrect,
   onUndoCorrection,
   onUseCandidate,
+  onSeekMain,
 }: Props) {
   const queryClient = useQueryClient();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -294,6 +296,8 @@ export function ChunkInspector({
     if (target != null) video.currentTime = target;
   };
 
+  const mainSeekTarget = mediaStart(chunk) ?? chunk.start_secs ?? null;
+
   return (
     <section className="mt-6 rounded-xl border border-border bg-bg-elevated p-5" aria-labelledby="chunk-inspector-heading">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -306,6 +310,15 @@ export function ChunkInspector({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {onSeekMain && mainSeekTarget != null && Number.isFinite(mainSeekTarget) && mainSeekTarget >= 0 && (
+            <button
+              type="button"
+              onClick={() => onSeekMain(mainSeekTarget)}
+              className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-medium text-accent hover:bg-accent/20 focus:outline-none focus:ring-2 focus:ring-accent"
+            >
+              메인 영상 이동 ({formatTime(mainSeekTarget)})
+            </button>
+          )}
           <button
             type="button"
             onClick={onCorrect}
@@ -358,6 +371,7 @@ export function ChunkInspector({
                 ref={videoRef}
                 src={playUrl}
                 controls
+                muted
                 onLoadedMetadata={handleLoadedMetadata}
                 onPlay={handlePlay}
                 onTimeUpdate={handleTimeUpdate}

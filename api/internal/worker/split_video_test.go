@@ -1,6 +1,13 @@
 package worker
 
 import (
+	"context"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/db"
@@ -9,14 +16,47 @@ import (
 )
 
 var _ = Describe("server-split media mapping", func() {
-	It("uses cumulative probed durations without keyframe overlaps or gaps", func() {
-		start0, end0 := splitChunkMediaInterval(0, 10.4, 30)
-		start1, end1 := splitChunkMediaInterval(end0, 9.6, 30)
-		start2, end2 := splitChunkMediaInterval(end1, 12, 30)
-
-		Expect([]float64{start0, end0}).To(Equal([]float64{0, 10.4}))
-		Expect([]float64{start1, end1}).To(Equal([]float64{10.4, 20}))
-		Expect([]float64{start2, end2}).To(Equal([]float64{20, 30}))
+	It("keeps source presentation times despite MP4 timestamp resets and rejects missing or reordered clips", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg is unavailable")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		directory, err := os.MkdirTemp("", "verified-split-test")
+		Expect(err).NotTo(HaveOccurred())
+		defer os.RemoveAll(directory)
+		source := filepath.Join(directory, "source.mp4")
+		output, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=96x64:rate=30", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "8.5", "-c:v", "libx264", "-g", "30", "-bf", "2", "-c:a", "aac", "-y", source).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(output))
+		Expect(runFFmpegSplit(ctx, zap.NewNop(), source, filepath.Join(directory, "chunk_%03d.mp4"), 2)).To(Succeed())
+		files, err := discoverChunkFiles(directory)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(len(files)).To(BeNumerically(">", 2))
+		duration := probeVideoDuration(ctx, source)
+		intervals, err := verifiedSplitMediaIntervals(ctx, source, directory, files, duration)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(intervals[0].Start).To(BeNumerically("~", 0, 1e-6))
+		// With B-frame decode delay, the muxer cuts at the 3-second keyframe.
+		Expect(intervals[1].Start).To(BeNumerically("~", 3, 1e-6))
+		Expect(intervals[len(intervals)-1].End).To(Equal(duration))
+		// The fixture has B-frames and AAC encoder delay; accumulating each
+		// standalone movie's duration creates an observable source-time drift.
+		legacyCursor := 0.0
+		maxDrift := 0.0
+		for i, name := range files {
+			maxDrift = math.Max(maxDrift, math.Abs(legacyCursor-intervals[i].Start))
+			legacyCursor += probeVideoDuration(ctx, filepath.Join(directory, name))
+			if i > 0 {
+				Expect(intervals[i-1].End).To(Equal(intervals[i].Start))
+			}
+		}
+		Expect(maxDrift).To(BeNumerically(">", 0.02))
+		reordered := append([]string(nil), files...)
+		reordered[0], reordered[1] = reordered[1], reordered[0]
+		_, err = verifiedSplitMediaIntervals(ctx, source, directory, reordered, duration)
+		Expect(err).To(HaveOccurred())
+		_, err = verifiedSplitMediaIntervals(ctx, source, directory, files[:len(files)-1], duration)
+		Expect(err).To(MatchError(ContainSubstring("omitted source video packets")))
 	})
 
 	It("persists the source-video-relative interval separately from capture timestamps", func() {

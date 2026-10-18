@@ -10,15 +10,33 @@ import (
 )
 
 var _ = Describe("chunk re-analysis response helpers", func() {
-	It("accepts only a client request ID for enqueueing", func() {
+	It("accepts client request ID and reuse_previous for enqueueing and rejects unauthorized fields", func() {
 		request, err := decodeCreateChunkReanalysisRequest(strings.NewReader(`{"client_request_id":"request-1"}`))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(request.ClientRequestID).To(Equal("request-1"))
+		Expect(request.ReusePrevious).To(BeFalse())
+
+		reuseReq, err := decodeCreateChunkReanalysisRequest(strings.NewReader(`{"client_request_id":"request-reuse","reuse_previous":true}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reuseReq.ClientRequestID).To(Equal("request-reuse"))
+		Expect(reuseReq.ReusePrevious).To(BeTrue())
 
 		_, err = decodeCreateChunkReanalysisRequest(strings.NewReader(`{"client_request_id":"request-2","model":"attacker-selected"}`))
 		Expect(err).To(HaveOccurred())
 		_, err = decodeCreateChunkReanalysisRequest(strings.NewReader(`{"client_request_id":"request-3","gcs_uri":"gs://attacker/video.mp4"}`))
 		Expect(err).To(HaveOccurred())
+	})
+
+	It("decodes batch chunk re-analysis requests and rejects empty or oversized chunk_ids", func() {
+		batchReq, err := decodeCreateBatchChunkReanalysisRequest(strings.NewReader(`{"chunk_ids":[10,20],"client_request_id":"batch-1","reuse_previous":true}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(batchReq.ChunkIDs).To(Equal([]uint{10, 20}))
+		Expect(batchReq.ClientRequestID).To(Equal("batch-1"))
+		Expect(batchReq.ReusePrevious).NotTo(BeNil())
+		Expect(*batchReq.ReusePrevious).To(BeTrue())
+
+		_, err = decodeCreateBatchChunkReanalysisRequest(strings.NewReader(`{"chunk_ids":[],"client_request_id":"batch-empty"}`))
+		Expect(err).To(MatchError("chunk_ids are required"))
 	})
 
 	It("uses the same analysis-grade session video as debug re-analysis for browser playback", func() {

@@ -4,8 +4,11 @@ ifneq (,$(wildcard $(ENV_FILE)))
   export
 endif
 
-DATABASE_URL ?= postgresql://sunjinlee@localhost:5432/wod_dev?sslmode=disable
-TEST_DATABASE_URL ?= postgresql://sunjinlee@localhost:5432/wod_test?sslmode=disable
+POSTGRES_PORT ?= 5432
+REDIS_PORT ?= 6379
+DATABASE_URL ?= postgresql://sunjinlee@localhost:$(POSTGRES_PORT)/wod_dev?sslmode=disable
+TEST_DATABASE_URL ?= postgresql://sunjinlee@localhost:$(POSTGRES_PORT)/wod_test?sslmode=disable
+TEST_REDIS_URL ?= localhost:$(REDIS_PORT)
 MIGRATIONS_DIR ?= internal/db/migrations
 IMAGE_REPO ?= $(REGION)-docker.pkg.dev/$(PROJECT_ID)/$(REPO_NAME)
 CMD_DIR ?= cmd

@@ -22,7 +22,7 @@ import (
 const (
 	TypeChunkDebugReanalysis = "chunk:debug-reanalysis"
 
-	chunkDebugPromptVersion = "chunk-debug-reanalysis-v1"
+	chunkDebugPromptVersion = "chunk-debug-observations-v2"
 	chunkDebugSchemaVersion = "chunk-reanalysis-candidate-v1"
 	chunkDebugMaxRetries    = 2
 	geminiFileCacheTTL      = 47 * time.Hour
@@ -164,6 +164,68 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 			db.ChunkReanalysisStatusFailed, "The re-analysis state could not be saved.", err)
 	}
 
+	reusePrevious := shouldReuseChunkDebugCandidate(run.SourceContextSnapshot)
+	prompt := w.buildChunkDebugReanalysisPrompt(target)
+	promptHash := sha256.Sum256([]byte(prompt))
+	promptHashHex := hex.EncodeToString(promptHash[:])
+	defaultClientModel := ""
+	if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
+		defaultClientModel = provider.Model()
+	}
+	selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
+
+	buildSnapshot := func(m chunkDebugMedia) []byte {
+		payload := map[string]any{
+			"session_id":       target.SessionID,
+			"profile_id":       target.ProfileID,
+			"profile_context":  w.lookupProfileString(target.ProfileID),
+			"appearance":       w.buildTargetPersonContext(target.ProfileID, target.SessionID),
+			"profile_injuries": target.ProfileInjuries,
+			"wod_description":  target.WODDescription,
+			"workout_type":     target.WorkoutType,
+			"movement_hints":   movementHintsFromDocument(target.MovementHints),
+			"heart_rate_bpm":   target.HeartRateBPM,
+			"source_kind":      m.Kind,
+			"source_gcs_uri":   m.GCSURI,
+			"media_start_secs": m.Start.Seconds(),
+			"media_end_secs":   m.End.Seconds(),
+			"prompt_version":   chunkDebugPromptVersion,
+			"schema_version":   chunkDebugSchemaVersion,
+		}
+		if reusePrevious {
+			payload["reuse_previous"] = true
+		}
+		raw, _ := json.Marshal(payload)
+		return raw
+	}
+
+	if reusePrevious && media.End > media.Start {
+		if cached, ok := w.findReusableChunkDebugCandidate(ctx, &run, selectedModel, promptHashHex, media); ok {
+			contextSnapshot := buildSnapshot(media)
+			if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+				"source_context_snapshot": string(contextSnapshot),
+				"media_start_secs":        media.Start.Seconds(),
+				"media_end_secs":          media.End.Seconds(),
+				"prompt_version":          chunkDebugPromptVersion,
+				"prompt_hash":             promptHashHex,
+				"schema_version":          chunkDebugSchemaVersion,
+			}).Error; err != nil {
+				return w.failChunkDebugRun(ctx, &run, retryCount, started,
+					db.ChunkReanalysisStatusFailed, "The re-analysis state could not be saved.", err)
+			}
+			w.recordStageMetrics(target.SessionID, target.ProfileID, "chunk_reanalysis", "current", 0, 1, 0, time.Since(started))
+			return w.completeChunkDebugRun(ctx, run.ID, db.ChunkReanalysisStatusCompleted, started, map[string]any{
+				"raw_output":           cached.RawOutput,
+				"structured_candidate": string(cached.StructuredCandidate),
+				"model":                cached.Model,
+				"prompt_tokens":        0,
+				"candidate_tokens":     0,
+				"total_tokens":         0,
+				"safe_error":           "",
+			})
+		}
+	}
+
 	file, uploadBytes, err := w.prepareChunkDebugGeminiFile(ctx, &run, media)
 	if err != nil {
 		return w.failChunkDebugRun(ctx, &run, retryCount, started,
@@ -195,43 +257,35 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 		return nil
 	}
 
-	prompt := w.buildChunkDebugReanalysisPrompt(target)
-	promptHash := sha256.Sum256([]byte(prompt))
-	contextSnapshot, _ := json.Marshal(map[string]any{
-		"session_id":       target.SessionID,
-		"profile_id":       target.ProfileID,
-		"profile_context":  w.lookupProfileString(target.ProfileID),
-		"appearance":       w.buildTargetPersonContext(target.ProfileID, target.SessionID),
-		"profile_injuries": target.ProfileInjuries,
-		"wod_description":  target.WODDescription,
-		"workout_type":     target.WorkoutType,
-		"movement_hints":   movementHintsFromDocument(target.MovementHints),
-		"heart_rate_bpm":   target.HeartRateBPM,
-		"source_kind":      media.Kind,
-		"source_gcs_uri":   media.GCSURI,
-		"media_start_secs": media.Start.Seconds(),
-		"media_end_secs":   media.End.Seconds(),
-		"prompt_version":   chunkDebugPromptVersion,
-		"schema_version":   chunkDebugSchemaVersion,
-	})
+	contextSnapshot := buildSnapshot(media)
 
 	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
 		"source_context_snapshot": string(contextSnapshot),
 		"media_start_secs":        media.Start.Seconds(),
 		"media_end_secs":          media.End.Seconds(),
 		"prompt_version":          chunkDebugPromptVersion,
-		"prompt_hash":             hex.EncodeToString(promptHash[:]),
+		"prompt_hash":             promptHashHex,
 		"schema_version":          chunkDebugSchemaVersion,
 	}).Error; err != nil {
 		return w.failChunkDebugRun(ctx, &run, retryCount, started,
 			db.ChunkReanalysisStatusFailed, "The re-analysis state could not be saved.", err)
 	}
 
-	defaultClientModel := ""
-	if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
-		defaultClientModel = provider.Model()
+	if reusePrevious {
+		if cached, ok := w.findReusableChunkDebugCandidate(ctx, &run, selectedModel, promptHashHex, media); ok {
+			w.recordStageMetrics(target.SessionID, target.ProfileID, "chunk_reanalysis", "current", 0, 1, uploadBytes, time.Since(started))
+			return w.completeChunkDebugRun(ctx, run.ID, db.ChunkReanalysisStatusCompleted, started, map[string]any{
+				"raw_output":           cached.RawOutput,
+				"structured_candidate": string(cached.StructuredCandidate),
+				"model":                cached.Model,
+				"prompt_tokens":        0,
+				"candidate_tokens":     0,
+				"total_tokens":         0,
+				"safe_error":           "",
+			})
+		}
 	}
-	selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
+
 	analysis, usage, err := w.GeminiClient.AnalyzeSegmentWithModel(
 		ctx, file.URI, chunkDebugMIMEType(file.MIMEType), media.Start, media.End, prompt, selectedModel,
 	)
@@ -552,7 +606,53 @@ func (w *Worker) findReusableChunkDebugGeminiFile(ctx context.Context, run *db.C
 			MIMEType: previous.GeminiMIMEType, Expires: previous.GeminiFileExpiresAt,
 		}
 	}
+
+	var sessionRun db.SessionReanalysisRun
+	err = w.DB.WithContext(ctx).
+		Where("session_id = ? AND profile_id = ? AND source_gcs_uri = ? AND gemini_file_uri <> '' AND gemini_file_name <> '' AND gemini_file_expires_at > ?",
+			run.SessionID, run.ProfileID, sourceURI, cutoff).
+		Order("created_at DESC").First(&sessionRun).Error
+	if err == nil && w.geminiFileStillExists(ctx, sessionRun.GeminiFileName) {
+		return reusableGeminiFile{
+			URI: sessionRun.GeminiFileURI, Name: sessionRun.GeminiFileName,
+			MIMEType: sessionRun.GeminiMIMEType, Expires: sessionRun.GeminiFileExpiresAt,
+		}
+	}
 	return reusableGeminiFile{}
+}
+
+func shouldReuseChunkDebugCandidate(rawSnapshot []byte) bool {
+	if len(rawSnapshot) == 0 {
+		return false
+	}
+	var flags struct {
+		ReusePrevious bool `json:"reuse_previous"`
+	}
+	return json.Unmarshal(rawSnapshot, &flags) == nil && flags.ReusePrevious
+}
+
+func (w *Worker) findReusableChunkDebugCandidate(ctx context.Context, run *db.ChunkReanalysisRun, selectedModel, promptHashHex string, media chunkDebugMedia) (db.ChunkReanalysisRun, bool) {
+	if w.DB == nil {
+		return db.ChunkReanalysisRun{}, false
+	}
+	var prev db.ChunkReanalysisRun
+	err := w.DB.WithContext(ctx).
+		Where("session_id = ? AND profile_id = ? AND chunk_analysis_result_id = ? AND id <> ?",
+			run.SessionID, run.ProfileID, run.ChunkAnalysisResultID, run.ID).
+		Where("status = ? AND source_gcs_uri = ? AND prompt_hash = ? AND schema_version = ?",
+			db.ChunkReanalysisStatusCompleted, media.GCSURI, promptHashHex, chunkDebugSchemaVersion).
+		Where("ABS(COALESCE(media_start_secs, -1) - ?) < 0.005 AND ABS(COALESCE(media_end_secs, -1) - ?) < 0.005",
+			media.Start.Seconds(), media.End.Seconds()).
+		Where("raw_output <> '' AND structured_candidate IS NOT NULL").
+		Order("completed_at DESC, id DESC").
+		First(&prev).Error
+	if err != nil {
+		return db.ChunkReanalysisRun{}, false
+	}
+	if prev.Model != "" && selectedModel != "" && !strings.EqualFold(prev.Model, selectedModel) {
+		return db.ChunkReanalysisRun{}, false
+	}
+	return prev, true
 }
 
 func (w *Worker) geminiFileStillExists(ctx context.Context, name string) bool {
@@ -581,8 +681,8 @@ func (w *Worker) buildChunkDebugReanalysisPrompt(target *chunkDebugTarget) strin
 
 ## 청크 심박수 참고값
 이 청크에 저장된 심박수는 %d bpm입니다. 측정 시점의 정밀도는 보장되지 않습니다.
-심박수만으로 피로를 판정하거나 피로 구간을 선택하지 마세요. 영상에서 반복 속도, 가동범위,
-자세 또는 일관성의 지속적인 저하가 먼저 확인된 경우에만 보조 근거로 사용하세요.`, target.HeartRateBPM)
+심박수만으로 피로를 판정하거나 피로 구간을 선택하지 마세요. 관찰 단계에서는 이 참고값을
+피로·힘·강도 또는 자세 변화 원인의 근거로 사용하지 마세요.`, target.HeartRateBPM)
 	}
 	prompt += `
 
@@ -594,6 +694,7 @@ func (w *Worker) buildChunkDebugReanalysisPrompt(target *chunkDebugTarget) strin
 - 대상 인물이 운동 중인 것은 분명하지만 종목을 뒷받침할 시각적 근거가 부족하면 [EXERCISE: Unknown]을 사용하세요.
 - 대상 인물이 운동 중인지조차 시각적으로 확인할 수 없는 경우에만 [NO_EXERCISE]를 사용하세요.`
 	prompt += ObservedSignalsPrompt
+	prompt += ObservationOnlyOutputCheckPrompt
 	return prompt
 }
 

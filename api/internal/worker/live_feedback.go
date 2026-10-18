@@ -31,6 +31,7 @@ func (w *Worker) resumeLiveChunk(ctx context.Context, version int, p VideoAnalys
 	if err = w.refreshLiveActivity(ctx, p, &existing); err != nil {
 		return true, err
 	}
+	// Resume only optional coaching; the saved video observation stays unchanged.
 	w.addContextualCoaching(ctx, version, &existing)
 	return true, nil
 }
@@ -293,6 +294,9 @@ func stripJSONFence(raw string) string {
 func (w *Worker) refreshLiveActivity(ctx context.Context, p VideoAnalysisPayload, result *db.ChunkAnalysisResult) error {
 	if len(result.MovementObservations) == 0 {
 		return nil
+	}
+	if err := w.ensureWODEvaluationSession(ctx, p); err != nil {
+		return err
 	}
 	hints, _ := json.Marshal(p.Movements)
 	if string(hints) == "null" {

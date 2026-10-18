@@ -1,13 +1,16 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/wod-strategist/api/internal/cost"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
 	"go.uber.org/zap"
 )
@@ -35,7 +38,16 @@ func (ctl *Controller) GetSessionCost(c *gin.Context) {
 		return
 	}
 
+	var stageMetrics []db.PipelineStageMetric
+	if err := ctl.db.WithContext(c.Request.Context()).
+		Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+		Order("id ASC").
+		Find(&stageMetrics).Error; err != nil {
+		logger.Log.Warn("failed to query pipeline stage metrics for session", zap.String("session_id", sessionID), zap.Error(err))
+	}
+
 	resp := cost.CalculateSessionCost(sessionID, usages)
+	cost.ApplyStageMetrics(&resp, stageMetrics)
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -70,13 +82,17 @@ func (ctl *Controller) GetTotalCost(c *gin.Context) {
 		}
 	}
 
+	// Keep introductory and standard Argon usage in separate groups. A single
+	// model-only sum loses the dates needed to price historical calls correctly.
 	query := ctl.db.WithContext(c.Request.Context()).Model(&db.TokenUsage{}).
-		Select(`model, SUM(prompt_tokens) as prompt_tokens, SUM(candidate_tokens) as candidate_tokens, SUM(total_tokens) as total_tokens,
+		Select(`model, MIN(created_at) as pricing_at, SUM(prompt_tokens) as prompt_tokens, SUM(candidate_tokens) as candidate_tokens, SUM(total_tokens) as total_tokens,
    SUM(COALESCE((usage_metadata->>'thoughtsTokenCount')::bigint,0)) as thinking_tokens,
    SUM(COALESCE((usage_metadata->>'toolUsePromptTokenCount')::bigint,0)) as tool_use_tokens,
    SUM(COALESCE((usage_metadata->>'cachedContentTokenCount')::bigint,0)) as cached_tokens,
    COUNT(*) FILTER (WHERE usage_metadata IS NOT NULL AND (usage_metadata->>'promptTokenCount' IS NULL OR usage_metadata->>'candidatesTokenCount' IS NULL OR usage_metadata->>'totalTokenCount' IS NULL)) as unmeasured_calls,
- COUNT(*) FILTER (WHERE lower(trim(model)) LIKE 'lyria-%') as unpriced_calls`).Group("model")
+ COUNT(*) FILTER (WHERE lower(trim(model)) LIKE 'lyria-%') as unpriced_calls`).
+		Group(fmt.Sprintf("model, CASE WHEN lower(trim(model)) = '%s' AND created_at < TIMESTAMPTZ '%s' THEN 1 ELSE 0 END",
+			gemini.ModelArgon4, cost.ArgonStandardPricingStartsAt.Format(time.RFC3339)))
 	if pidStr != "" {
 		query = query.Where("profile_id IN ?", profileIDs)
 	} else {

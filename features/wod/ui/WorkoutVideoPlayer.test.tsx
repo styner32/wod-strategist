@@ -1,11 +1,12 @@
 import React from "react";
-import { render } from "@testing-library/react-native";
+import { act, render } from "@testing-library/react-native";
 
 import { WorkoutVideoPlayer } from "./WorkoutVideoPlayer";
 
 const mockPlayer = {
-  addListener: jest.fn(() => ({ remove: jest.fn() })),
+  addListener: jest.fn((_name: string, _callback: (event: any) => void) => ({ remove: jest.fn() })),
   play: jest.fn(),
+  pause: jest.fn(),
   currentTime: 0,
   loop: false,
   timeUpdateEventInterval: 0,
@@ -37,6 +38,7 @@ describe("WorkoutVideoPlayer highlights", () => {
   beforeEach(() => {
     mockPlayer.addListener.mockClear();
     mockPlayer.play.mockClear();
+    mockPlayer.pause.mockClear();
   });
 
   it("renders one parent card with its tag and exact observation rows", () => {
@@ -107,5 +109,17 @@ describe("WorkoutVideoPlayer highlights", () => {
 
     expect(queryByText("⭐ player.keyMoment")).toBeNull();
     expect(queryByText("Bar transition")).toBeTruthy();
+  });
+
+  it("seeks to reviewed original-media bounds after loading and pauses once at the end", () => {
+    render(<WorkoutVideoPlayer videoUrl="https://example.test/merged.mp4" sessionLabel="Review" chunks={[]} highlightSegments={[]} onClose={jest.fn()} reviewInterval={{ start: 10, end: 15 }} />);
+    const loaded = mockPlayer.addListener.mock.calls.find(([name]) => name === "sourceLoad")![1];
+    const update = mockPlayer.addListener.mock.calls.find(([name]) => name === "timeUpdate")![1];
+    act(() => loaded({ duration: 60 }));
+    expect(mockPlayer.currentTime).toBe(10);
+    act(() => update({ currentTime: 15.1 }));
+    act(() => update({ currentTime: 15.2 }));
+    expect(mockPlayer.pause).toHaveBeenCalledTimes(1);
+    expect(mockPlayer.play).not.toHaveBeenCalled();
   });
 });

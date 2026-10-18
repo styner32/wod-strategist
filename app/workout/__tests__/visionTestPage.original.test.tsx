@@ -16,7 +16,11 @@ const mockStopCamera = jest.fn();
 const mockReplace = jest.fn();
 const mockConfidence = jest.fn();
 const mockProcessChunk = jest.fn();
+const mockCompress = jest.fn();
+const mockCancelCompression = jest.fn();
+const mockMergeChunks = jest.fn();
 let mockContinuousRecording = true;
+let mockSkipCompression = true;
 const mockEnvironment = {
   status: "off", start: jest.fn(), stop: jest.fn(), pause: jest.fn(), resume: jest.fn(),
   event: jest.fn(), offerChunk: jest.fn(),
@@ -31,7 +35,7 @@ const mockFormat = { videoWidth: 1280, videoHeight: 720, videoStabilizationModes
 jest.mock("expo-router", () => ({
   router: { replace: (...args: unknown[]) => mockReplace(...args), back: jest.fn(), push: jest.fn() },
   useFocusEffect: () => {},
-  useLocalSearchParams: () => ({ autoRecord: "true", continuousRecording: String(mockContinuousRecording), showSkeleton: "false", skipCompression: "true" }),
+  useLocalSearchParams: () => ({ autoRecord: "true", continuousRecording: String(mockContinuousRecording), showSkeleton: "false", skipCompression: String(mockSkipCompression) }),
 }));
 jest.mock("expo-router/react-navigation", () => ({ useIsFocused: () => true }));
 jest.mock("react-native-vision-camera", () => {
@@ -80,7 +84,12 @@ jest.mock("@/features/wod/ui/ActivitySummaryCard", () => ({ ActivitySummaryConte
 jest.mock("expo-keep-awake", () => ({ activateKeepAwakeAsync: async () => {}, deactivateKeepAwake: () => {} }));
 jest.mock("expo-media-library/legacy", () => ({ requestPermissionsAsync: async () => ({ granted: true }) }));
 jest.mock("expo-screen-orientation", () => ({ lockAsync: async () => {}, OrientationLock: { LANDSCAPE: 3, PORTRAIT_UP: 1 } }));
-jest.mock("react-native-compressor", () => ({ Video: { compress: async (path: string) => path } }));
+jest.mock("react-native-compressor", () => ({
+  Video: {
+    compress: (...args: unknown[]) => mockCompress(...args),
+    cancelCompression: (...args: unknown[]) => mockCancelCompression(...args),
+  },
+}));
 jest.mock("@/features/health/polar/polarSensorRecorder", () => ({ PolarSensorRecorder: {
   start: () => {}, pause: () => {}, resume: () => {}, stop: async () => null,
   getLiveStatus: () => ({ accSamples: 0, dropped: null }),
@@ -104,7 +113,7 @@ jest.mock("@/features/ai-coach/appleAiUpload", () => ({ saveAppleAiObservation: 
 jest.mock("@/features/debug/telemetryRecorder", () => ({ TelemetryRecorder: { start: () => {}, registerProvider: () => {}, stop: async () => null } }));
 jest.mock("@/features/debug/telemetryUpload", () => ({ enqueueUpload: async () => {}, flushPendingUploads: async () => {} }));
 jest.mock("@/features/wod/api", () => ({
-  mergeChunks: async () => {},
+  mergeChunks: (...args: unknown[]) => mockMergeChunks(...args),
   processWorkoutChunk: (...args: unknown[]) => mockProcessChunk(...args),
   is4xxError: (err: any) => Boolean(err?.status >= 400 && err?.status < 500),
   getErrorStatusCode: (err: any) => err?.status ?? null,
@@ -127,6 +136,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockStartCamera.mockReset();
   mockContinuousRecording = true;
+  mockSkipCompression = true;
   mockReleases.length = 0;
   mockPrepare.mockResolvedValue(mockRef);
   mockBegin.mockImplementation(async (_ref: unknown, order: number) => `file:///documents/run-${order}/`);
@@ -135,6 +145,8 @@ beforeEach(() => {
   mockSave.mockResolvedValue({ status: "saved" });
   mockConfidence.mockReturnValue(0);
   mockProcessChunk.mockResolvedValue(undefined);
+  mockCompress.mockImplementation(async (path: string) => path);
+  mockMergeChunks.mockResolvedValue(undefined);
   mockStopCamera.mockResolvedValue(undefined);
   mockAppleStop.mockResolvedValue(undefined);
   mockEnvironment.stop.mockResolvedValue(undefined);
@@ -306,7 +318,7 @@ it("keeps the resumed writer active when a source-accepted older run reports a l
   view.unmount();
 });
 
-it("resumes recording when a previous run had dropped frames or tail drain timeout during pause, and triggers server merge for uploaded chunks", async () => {
+it("resumes recording after dropped buffers but retains the incomplete original without publishing a partial server video", async () => {
   const view = render(<VisionTestPage />);
   await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
   const first = mockStartCamera.mock.calls[0][0];
@@ -363,13 +375,13 @@ it("resumes recording when a previous run had dropped frames or tail drain timeo
   expect(mockAdd.mock.calls.map(call => call[1].order)).toEqual([1, 2]);
   // Original is retained without automatic gallery save because complete is false
   expect(mockSave).not.toHaveBeenCalled();
-  // Server merge was triggered for the uploaded chunks
-  expect(mockAddPending).toHaveBeenCalledWith(mockRef.sessionId);
+  expect(mockAddPending).not.toHaveBeenCalled();
+  expect(mockMergeChunks).not.toHaveBeenCalled();
   view.unmount();
 });
 
 it.each(["network", "confidence"])("keeps complete originals saveable and releases readers after an analysis %s failure", async (failure) => {
-  if (failure === "network") mockProcessChunk.mockRejectedValueOnce(new Error("offline"));
+  if (failure === "network") mockProcessChunk.mockRejectedValue(new Error("offline"));
   else mockConfidence.mockImplementationOnce(() => { throw new Error("confidence unavailable"); });
   const view = render(<VisionTestPage />);
   await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
@@ -382,7 +394,152 @@ it.each(["network", "confidence"])("keeps complete originals saveable and releas
   expect(mockStopped).toHaveBeenCalledWith(mockRef, { complete: true, reason: undefined });
   await act(async () => { await callbacks.onRecordingFinished(source()); });
   await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
+  expect(mockMergeChunks).not.toHaveBeenCalled();
   view.unmount();
+});
+
+it.each(["exception", "missing_output", "empty_output"])("falls back to native analysis chunks after compression %s and publishes only after both uploads finish", async (failure) => {
+  mockSkipCompression = false;
+  if (failure === "exception") mockCompress.mockRejectedValueOnce(new Error("encoder failed"));
+  else {
+    mockCompress.mockResolvedValueOnce("file:///missing-compressed.mp4");
+    require("expo-file-system/legacy").getInfoAsync.mockResolvedValueOnce(
+      failure === "missing_output" ? { exists: false } : { exists: true, size: 0 },
+    );
+  }
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+  const callbacks = mockStartCamera.mock.calls[0][0];
+  const start = Date.now();
+  const paths = ["file:///documents/run-1/analysis/part-43.mp4", "file:///documents/run-1/analysis/part-44.mp4"];
+  await act(async () => {
+    paths.forEach((path, index) => callbacks.onRecordingSegment({ status: "ready", path,
+      captureStartTimeMs: start + index * 10000, captureEndTimeMs: start + (index + 1) * 10000 }));
+  });
+  await waitFor(() => expect(mockProcessChunk).toHaveBeenCalledTimes(2));
+  expect(mockProcessChunk.mock.calls.map(call => call[0])).toEqual(paths);
+  expect(mockCompress).toHaveBeenCalledTimes(1);
+  fireEvent.press(view.getByText("square.fill"));
+  await act(async () => { callbacks.onRecordingSourceFinalized(source()); await callbacks.onRecordingFinished(source()); });
+  await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(mockMergeChunks).toHaveBeenCalledTimes(1));
+  expect(mockMergeChunks.mock.calls[0][0]).toBe(mockRef.sessionId);
+  await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
+  view.unmount();
+});
+
+it("cancels hung compression after timeout, falls back to native analysis chunks, and completes server merge", async () => {
+  jest.useFakeTimers();
+  mockSkipCompression = false;
+  mockCompress.mockImplementationOnce((_path: string, options?: { getCancellationId?: (id: string) => void }) => {
+    options?.getCancellationId?.("cancel-hung-11");
+    return new Promise<string>(() => {});
+  });
+  const view = render(<VisionTestPage />);
+  try {
+    await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+    const callbacks = mockStartCamera.mock.calls[0][0];
+    const start = Date.now();
+    const paths = ["file:///documents/run-1/analysis/part-11.mp4", "file:///documents/run-1/analysis/part-12.mp4"];
+    await act(async () => {
+      paths.forEach((path, index) => callbacks.onRecordingSegment({ status: "ready", path,
+        captureStartTimeMs: start + index * 10000, captureEndTimeMs: start + (index + 1) * 10000 }));
+    });
+    expect(mockCompress).toHaveBeenCalledTimes(1);
+    expect(mockProcessChunk).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(8500);
+    });
+    await waitFor(() => expect(mockProcessChunk).toHaveBeenCalledTimes(2));
+    expect(mockCancelCompression).toHaveBeenCalledWith("cancel-hung-11");
+    expect(mockProcessChunk.mock.calls.map(call => call[0])).toEqual(paths);
+    expect(mockCompress).toHaveBeenCalledTimes(1);
+
+    fireEvent.press(view.getByText("square.fill"));
+    await act(async () => { callbacks.onRecordingSourceFinalized(source()); await callbacks.onRecordingFinished(source()); });
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockMergeChunks).toHaveBeenCalledTimes(1));
+    expect(mockMergeChunks.mock.calls[0][0]).toBe(mockRef.sessionId);
+    await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
+  } finally {
+    view.unmount();
+    jest.useRealTimers();
+  }
+});
+
+it("does not publish a partial server video when one upload succeeds and the next fails", async () => {
+  mockProcessChunk.mockResolvedValueOnce(undefined).mockRejectedValue(new Error("offline"));
+  const notice = jest.spyOn(Alert, "alert");
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+  const callbacks = mockStartCamera.mock.calls[0][0];
+  const start = Date.now();
+  await act(async () => {
+    [1, 2].forEach(index => callbacks.onRecordingSegment({ status: "ready", path: `file:///documents/run-1/analysis/part-${index}.mp4`,
+      captureStartTimeMs: start + (index - 1) * 10000, captureEndTimeMs: start + index * 10000 }));
+  });
+  await waitFor(() => expect(mockProcessChunk).toHaveBeenCalledTimes(2));
+  fireEvent.press(view.getByText("square.fill"));
+  await act(async () => { callbacks.onRecordingSourceFinalized(source()); await callbacks.onRecordingFinished(source()); });
+  await waitFor(() => expect(notice).toHaveBeenCalledWith("overlay.recording.analysisIncompleteTitle", "overlay.recording.analysisIncompleteBody"));
+  expect(mockSave).toHaveBeenCalledTimes(1);
+  expect(mockMergeChunks).not.toHaveBeenCalled();
+  await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
+  view.unmount();
+  notice.mockRestore();
+});
+
+it("recovers a failed chunk via deferred recovery queue and completes server merge", async () => {
+  mockProcessChunk
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue(undefined);
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+  const callbacks = mockStartCamera.mock.calls[0][0];
+  const start = Date.now();
+  await act(async () => {
+    [1, 2].forEach(index => callbacks.onRecordingSegment({ status: "ready", path: `file:///documents/run-1/analysis/part-${index}.mp4`,
+      captureStartTimeMs: start + (index - 1) * 10000, captureEndTimeMs: start + index * 10000 }));
+  });
+  await waitFor(() => expect(mockProcessChunk).toHaveBeenCalledTimes(3));
+  fireEvent.press(view.getByText("square.fill"));
+  await act(async () => { callbacks.onRecordingSourceFinalized(source()); await callbacks.onRecordingFinished(source()); });
+  await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(mockMergeChunks).toHaveBeenCalledTimes(1));
+  expect(mockMergeChunks.mock.calls[0][0]).toBe(mockRef.sessionId);
+  await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
+  view.unmount();
+});
+
+it("withholds server merge after the upload wait expires while preserving readers until the late upload settles", async () => {
+  jest.useFakeTimers();
+  const upload = deferred<void>();
+  mockProcessChunk.mockReturnValueOnce(upload.promise);
+  const notice = jest.spyOn(Alert, "alert");
+  const view = render(<VisionTestPage />);
+  try {
+    await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+    const callbacks = mockStartCamera.mock.calls[0][0];
+    const start = Date.now();
+    await act(async () => { callbacks.onRecordingSegment({ status: "ready", path: "file:///documents/run-1/analysis/pending.mp4",
+      captureStartTimeMs: start, captureEndTimeMs: start + 10000 }); });
+    await waitFor(() => expect(mockProcessChunk).toHaveBeenCalledTimes(1));
+    fireEvent.press(view.getByText("square.fill"));
+    await act(async () => { callbacks.onRecordingSourceFinalized(source()); await callbacks.onRecordingFinished(source()); });
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    await act(async () => { await jest.advanceTimersByTimeAsync(90500); });
+    expect(notice).toHaveBeenCalledWith("overlay.recording.analysisIncompleteTitle", "overlay.recording.analysisIncompleteBody");
+    expect(mockMergeChunks).not.toHaveBeenCalled();
+    expect(mockReleases.some(release => release.mock.calls.length === 0)).toBe(true);
+    await act(async () => { upload.resolve(); });
+    await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
+    expect(mockMergeChunks).not.toHaveBeenCalled();
+  } finally {
+    view.unmount();
+    notice.mockRestore();
+    jest.useRealTimers();
+  }
 });
 
 it.each(["callback", "throw"])("allows a new session after native startup %s failure without waiting for gallery or server", async (delivery) => {

@@ -8,12 +8,16 @@ import {
   uploadSensorToGcs,
   uploadSessionAssetToGcs,
   notifyUploadComplete,
+  notifyChunkUploadComplete,
   processWorkoutVideo,
   processWorkoutChunk,
   is4xxError,
   getErrorStatusCode,
   parseWorkoutImage,
   parseAppearanceImage,
+  getWorkoutProgress,
+  confirmPerformanceRecords,
+  getPerformanceBenchmarks,
 } from "./api";
 import { FileSystemUploadType } from "expo-file-system/legacy";
 
@@ -60,6 +64,32 @@ afterEach(() => {
 afterAll(() => server.close());
 
 describe("API Client Methods", () => {
+  describe("notifyChunkUploadComplete live observation contract", () => {
+    it.each([
+      { start: 0, end: 10, version: 1 },
+      { start: 10.25, end: 20.75, version: 1 },
+    ])("preserves live version and the capture interval %j", async ({ start, end, version }) => {
+      let body: any;
+      server.use(http.post(`${API_BASE_URL}/chunk-complete`, async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ task_id: "chunk-task", session_id: "warmup" });
+      }));
+      await notifyChunkUploadComplete("warmup", "gs://bucket/chunk.mp4", [], [], "warmup", 1, start, end);
+      expect(body.live_analysis_version).toBe(version);
+      expect(body.workout_type).toBe("warmup");
+      expect(body.start_secs).toBe(start);
+      expect(body.end_secs).toBe(end);
+    });
+  });
+
+  it.each([{ exists: false }, { exists: true, isDirectory: true }, { exists: true, size: 0 }])(
+    "rejects an invalid video %j before constructing a native upload task", async (info) => {
+      mockGetInfoAsync.mockResolvedValueOnce(info);
+      await expect(uploadToGcs("https://gcs.fake/upload", "file:///missing.mp4", "video/mp4"))
+        .rejects.toThrow("Video upload file is missing");
+      expect(mockCreateUploadTask).not.toHaveBeenCalled();
+    },
+  );
   describe("uploadSensorToGcs", () => {
     beforeEach(() => {
       mockGetInfoAsync.mockResolvedValue({ exists: true, isDirectory: false });
@@ -398,6 +428,103 @@ describe("API Client Methods", () => {
 
       expect(onRetry).toHaveBeenCalledTimes(2); // Retries after attempt 1 and attempt 2, fails on 3
     });
+
+    it("cancels hung GCS upload when uploadTimeoutMs expires and retries", async () => {
+      const mockCancelAsync = jest.fn().mockResolvedValue(undefined);
+      mockCreateUploadTask.mockImplementationOnce(() => ({
+        uploadAsync: jest.fn(() => new Promise(() => {})),
+        cancelAsync: mockCancelAsync,
+      }) as any);
+
+      const onRetry = jest.fn();
+      const res = await processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        uploadTimeoutMs: 10,
+        retryDelayMs: 1,
+        onRetry,
+      });
+
+      expect(res.taskId).toBe("chunk_task_123");
+      expect(mockCancelAsync).toHaveBeenCalledTimes(1);
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
+    it("times out hung getUploadUrl when stepTimeoutMs expires and retries", async () => {
+      let urlAttempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, async () => {
+          urlAttempts++;
+          if (urlAttempts === 1) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          return HttpResponse.json({
+            upload_url: "https://gcs.fake/upload",
+            gcs_uri: "gs://bucket/videos/1/test/chunk.mp4",
+          });
+        }),
+      );
+
+      const onRetry = jest.fn();
+      const res = await processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        stepTimeoutMs: 10,
+        retryDelayMs: 1,
+        onRetry,
+      });
+
+      expect(res.taskId).toBe("chunk_task_123");
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      expect(urlAttempts).toBe(2);
+    });
+  });
+
+  describe("mergeChunks retry behavior", () => {
+    const { mergeChunks } = require("./api");
+
+    it("retries on transient 5xx failure and succeeds", async () => {
+      let attempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/merge-chunks`, () => {
+          attempts++;
+          if (attempts === 1) {
+            return new HttpResponse(null, { status: 502, statusText: "Bad Gateway" });
+          }
+          return HttpResponse.json({
+            task_id: "merge_task_1",
+            session_id: "session_merge_1",
+            message: "Merge started",
+          });
+        }),
+      );
+
+      const res = await mergeChunks("session_merge_1", {
+        profileId: 1,
+        maxRetries: 3,
+        retryDelayMs: 1,
+      });
+
+      expect(res.taskId).toBe("merge_task_1");
+      expect(attempts).toBe(2);
+    });
+
+    it("does NOT retry on 4xx error", async () => {
+      let attempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/merge-chunks`, () => {
+          attempts++;
+          return new HttpResponse(null, { status: 400, statusText: "Bad Request" });
+        }),
+      );
+
+      await expect(
+        mergeChunks("session_merge_1", {
+          profileId: 1,
+          maxRetries: 3,
+          retryDelayMs: 1,
+        }),
+      ).rejects.toThrow(/API Error \[400\]/);
+      expect(attempts).toBe(1);
+    });
   });
 
   describe("parseWorkoutImage", () => {
@@ -491,5 +618,25 @@ describe("API Client Methods", () => {
         }),
       );
     });
+  });
+});
+
+describe("performance evidence endpoints", () => {
+  it("loads nullable progress without inventing evidence", async () => {
+    server.use(http.get(`${API_BASE_URL}/sessions/new/workout-progress`, () => HttpResponse.json({ progress: null, records: [] })));
+    await expect(getWorkoutProgress("new")).resolves.toEqual({ progress: null, records: [] });
+  });
+  it("sends current-source reviewed values and explicitly confirmed no external load", async () => {
+    const body = { source_version: "evidence-a", records: [{ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: null, measurement: "window" as const, technique: "unspecified" as const }] };
+    server.use(http.put(`${API_BASE_URL}/sessions/new/performance-records`, async ({ request }) => { expect(await request.json()).toEqual(body); return HttpResponse.json({ progress: null, records: [] }); }));
+    await expect(confirmPerformanceRecords("new", body)).resolves.toEqual({ progress: null, records: [] });
+  });
+  it("preserves the 409 source conflict so the UI requires review", async () => {
+    server.use(http.put(`${API_BASE_URL}/sessions/new/performance-records`, () => HttpResponse.json({ error: "source changed" }, { status: 409 })));
+    await expect(confirmPerformanceRecords("new", { source_version: "old", records: [] })).rejects.toMatchObject({ status: 409 });
+  });
+  it("encodes the movement query and supplies the owned profile", async () => {
+    server.use(http.get(`${API_BASE_URL}/performance-benchmarks`, ({ request }) => { const url = new URL(request.url); expect(url.searchParams.get("profile_id")).toBe("7"); expect(url.searchParams.get("movement")).toBe("Clean & Jerk"); return HttpResponse.json({ records: [], comparisons: [], best: [] }); }));
+    await expect(getPerformanceBenchmarks(7, "Clean & Jerk")).resolves.toEqual({ records: [], comparisons: [], best: [] });
   });
 });

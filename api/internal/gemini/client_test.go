@@ -167,7 +167,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelPro31Preview+":generateContent").
+				Post("/v1beta/models/"+ModelArgon4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -423,7 +423,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+defaultModel+":generateContent").
+				Post("/v1beta/models/" + defaultModel + ":generateContent").
 				Reply(http.StatusOK).
 				JSON(map[string]any{
 					"candidates": []map[string]any{
@@ -503,7 +503,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
+				Post("/v1beta/models/" + ModelArgon4 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{
@@ -545,7 +545,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
+				Post("/v1beta/models/" + ModelArgon4 + ":generateContent").
 				Reply(http.StatusOK).
 				JSON(map[string]any{
 					"candidates": []map[string]any{},
@@ -678,7 +678,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelPro31Preview+":generateContent").
+				Post("/v1beta/models/"+ModelArgon4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -733,7 +733,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").
+				Post("/v1beta/models/" + ModelArgon4 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{"message": "analysis failed"},
@@ -760,7 +760,7 @@ var _ = Describe("Gemini client", func() {
 	})
 
 	Describe("Model option", func() {
-		It("defaults to "+ModelPro31Preview, func() {
+		It("defaults to "+ModelArgon4, func() {
 			transport := testhelpers.NewMockTransport()
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:     "test-key",
@@ -768,7 +768,7 @@ var _ = Describe("Gemini client", func() {
 				HTTPClient: &http.Client{Transport: transport},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(client.model).To(Equal(ModelPro31Preview))
+			Expect(client.model).To(Equal(ModelArgon4))
 		})
 
 		It("uses the configured model", func() {
@@ -783,4 +783,100 @@ var _ = Describe("Gemini client", func() {
 			Expect(client.model).To(Equal(ModelFlash35Lite))
 		})
 	})
+
+	Describe("AnalyzeSegmentsBatch", func() {
+		const (
+			baseURL = "https://example.test"
+			apiKey  = "test-api-key"
+		)
+
+		It("submits an inline batch job with exact fractional videoMetadata offsets and returns completed responses", func() {
+			transport := testhelpers.NewMockTransport()
+
+			transport.New(baseURL).
+				Post("/v1beta/models/"+ModelArgon4+":batchGenerateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name": "batches/mock-batch-1",
+					"metadata": map[string]any{
+						"state": "JOB_STATE_SUCCEEDED",
+						"output": map[string]any{
+							"inlinedResponses": map[string]any{
+								"inlinedResponses": []map[string]any{
+									{
+										"response": map[string]any{
+											"candidates": []map[string]any{{
+												"content": map[string]any{
+													"parts": []map[string]any{{"text": "segment 1 analysis"}},
+												},
+											}},
+											"usageMetadata": map[string]any{
+												"promptTokenCount":     100,
+												"candidatesTokenCount": 40,
+												"totalTokenCount":      140,
+											},
+										},
+									},
+									{
+										"response": map[string]any{
+											"candidates": []map[string]any{{
+												"content": map[string]any{
+													"parts": []map[string]any{{"text": "segment 2 analysis"}},
+												},
+											}},
+											"usageMetadata": map[string]any{
+												"promptTokenCount":     120,
+												"candidatesTokenCount": 50,
+												"totalTokenCount":      170,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:     apiKey,
+				BaseURL:    baseURL,
+				HTTPClient: &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			results, err := client.AnalyzeSegmentsBatch(context.Background(), ModelArgon4, []BatchSegmentRequest{
+				{
+					FileURI:  "https://example.test/files/mock-file",
+					MIMEType: "video/mp4",
+					Start:    10*time.Second + 250*time.Millisecond,
+					End:      20*time.Second + 500*time.Millisecond,
+					Prompt:   "Analyze segment 1",
+				},
+				{
+					FileURI:  "https://example.test/files/mock-file",
+					MIMEType: "video/mp4",
+					Start:    30 * time.Second,
+					End:      45*time.Second + 750*time.Millisecond,
+					Prompt:   "Analyze segment 2",
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(results).To(HaveLen(2))
+			Expect(results[0].Analysis).To(Equal("segment 1 analysis"))
+			Expect(results[0].Usage).NotTo(BeNil())
+			Expect(results[0].Usage.TotalTokens).To(Equal(int32(140)))
+			Expect(results[1].Analysis).To(Equal("segment 2 analysis"))
+			Expect(results[1].Usage).NotTo(BeNil())
+			Expect(results[1].Usage.TotalTokens).To(Equal(int32(170)))
+			Expect(transport.Verify()).To(Succeed())
+
+			body := string(transport.Requests()[0].Body)
+			Expect(body).To(ContainSubstring(`"startOffset":"10.250s"`))
+			Expect(body).To(ContainSubstring(`"endOffset":"20.500s"`))
+			Expect(body).To(ContainSubstring(`"startOffset":"30s"`))
+			Expect(body).To(ContainSubstring(`"endOffset":"45.750s"`))
+		})
+	})
 })
+

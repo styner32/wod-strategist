@@ -124,7 +124,7 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 			JSON(map[string]any{"name": "files/mock-injury", "state": "ACTIVE"})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelPro31Preview+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -285,7 +285,7 @@ var _ = Describe("HandleInjuryAnalysisTask", func() {
 			JSON(map[string]any{"name": "files/mock-injury", "state": "ACTIVE"})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/" + gemini.ModelPro31Preview + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelArgon4 + ":generateContent").
 			Reply(http.StatusOK).
 			JSON(map[string]any{"candidates": []map[string]any{}})
 
