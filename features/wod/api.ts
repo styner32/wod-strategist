@@ -464,6 +464,28 @@ export async function uploadSessionAssetToGcs(
   }
 }
 
+async function withStepTimeout<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  stepName: string,
+): Promise<T> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try {
+        controller.abort();
+      } catch {}
+      reject(new Error(`${stepName} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([fn(controller.signal), timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Step 2: Stream the binary payload directly into GCS using Expo FileSystem */
 export async function uploadToGcs(
   uploadUrl: string,
@@ -471,6 +493,7 @@ export async function uploadToGcs(
   mimeType: string,
   onProgress?: (progress: number) => void,
   onCancelReady?: (cancel: () => Promise<void>) => void,
+  timeoutMs?: number,
 ): Promise<void> {
   const info = await getInfoAsync(fileUri);
   if (!info.exists || info.isDirectory || info.size === 0) {
@@ -494,7 +517,23 @@ export async function uploadToGcs(
   // Expose the cancel function to the caller before starting
   onCancelReady?.(() => uploadTask.cancelAsync());
 
-  const response = await uploadTask.uploadAsync();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const uploadPromise = uploadTask.uploadAsync();
+  const response = await (timeoutMs && timeoutMs > 0
+    ? Promise.race([
+        uploadPromise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            try {
+              void uploadTask.cancelAsync?.();
+            } catch {}
+            reject(new Error(`GCS upload timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]).finally(() => {
+        if (timer) clearTimeout(timer);
+      })
+    : uploadPromise);
 
   if (!response) {
     throw new Error("Failed to upload to GCS: No response from upload task.");
@@ -545,9 +584,11 @@ export async function notifyChunkUploadComplete(
   heartRateBpm?: number,
   workoutConfidence?: number,
   appearanceHints?: string,
+  signal?: AbortSignal,
 ): Promise<UploadCompleteResponse> {
   return apiClient<UploadCompleteResponse>("/chunk-complete", {
     method: "POST",
+    signal,
     bodyPayload: {
       live_analysis_version: 1,
       session_id: sessionId,
@@ -645,6 +686,8 @@ export async function processWorkoutChunk(
     appearanceHints,
     maxRetries = 5,
     retryDelayMs = 5000,
+    stepTimeoutMs = 15000,
+    uploadTimeoutMs = 30000,
     onRetry,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
@@ -662,25 +705,38 @@ export async function processWorkoutChunk(
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const { upload_url, gcs_uri } = await getUploadUrl(
-        sessionId,
-        filename,
-        profileId,
+      const { upload_url, gcs_uri } = await withStepTimeout(
+        (signal) => getUploadUrl(sessionId, filename, profileId, signal),
+        stepTimeoutMs,
+        "getUploadUrl",
       );
-      await uploadToGcs(upload_url, fileUri, mimeType);
+      await uploadToGcs(
+        upload_url,
+        fileUri,
+        mimeType,
+        undefined,
+        undefined,
+        uploadTimeoutMs,
+      );
 
-      const result = await notifyChunkUploadComplete(
-        sessionId,
-        gcs_uri,
-        movements,
-        injuries,
-        workoutType,
-        profileId,
-        startSecs,
-        endSecs,
-        heartRateBpm,
-        workoutConfidence,
-        appearanceHints,
+      const result = await withStepTimeout(
+        (signal) =>
+          notifyChunkUploadComplete(
+            sessionId,
+            gcs_uri,
+            movements,
+            injuries,
+            workoutType,
+            profileId,
+            startSecs,
+            endSecs,
+            heartRateBpm,
+            workoutConfidence,
+            appearanceHints,
+            signal,
+          ),
+        stepTimeoutMs,
+        "notifyChunkUploadComplete",
       );
 
       return {
@@ -731,6 +787,8 @@ export async function mergeChunks(
     enableTts?: boolean;
     wodDescription?: string;
     appearanceHints?: string;
+    maxRetries?: number;
+    retryDelayMs?: number;
   },
 ): Promise<MergeChunksResult> {
   const {
@@ -741,31 +799,52 @@ export async function mergeChunks(
     enableTts = false,
     wodDescription,
     appearanceHints,
+    maxRetries = 3,
+    retryDelayMs = 3000,
   } = options;
 
-  const result = await apiClient<{
-    task_id: string;
-    session_id: string;
-    message: string;
-  }>("/merge-chunks", {
-    method: "POST",
-    bodyPayload: {
-      session_id: sessionId,
-      workout_type: workoutType,
-      movements,
-      injuries,
-      profile_id: profileId,
-      enable_tts: enableTts,
-      ...(wodDescription ? { wod_description: wodDescription } : {}),
-      ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
-    },
-  });
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await apiClient<{
+        task_id: string;
+        session_id: string;
+        message: string;
+      }>("/merge-chunks", {
+        method: "POST",
+        bodyPayload: {
+          session_id: sessionId,
+          workout_type: workoutType,
+          movements,
+          injuries,
+          profile_id: profileId,
+          enable_tts: enableTts,
+          ...(wodDescription ? { wod_description: wodDescription } : {}),
+          ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
+        },
+      });
 
-  return {
-    taskId: result.task_id,
-    sessionId: result.session_id,
-    message: result.message,
-  };
+      return {
+        taskId: result.task_id,
+        sessionId: result.session_id,
+        message: result.message,
+      };
+    } catch (error) {
+      lastError = error;
+      if (is4xxError(error)) {
+        throw error;
+      }
+      if (attempt < maxRetries) {
+        console.warn(
+          `[mergeChunks] Failed (attempt ${attempt}/${maxRetries}). Retrying in ${retryDelayMs}ms...`,
+          error,
+        );
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 // ==========================================

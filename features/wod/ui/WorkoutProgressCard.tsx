@@ -3,8 +3,8 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 import { t, useLocale } from "@/features/i18n";
 import { confirmPerformanceRecords, getPerformanceBenchmarks, getWorkoutProgress } from "../api";
 import {
-  confirmedPerformanceInput, findCoveringConfirmedRecord, observedReps, performanceDraft, performanceSelectionCovered, progressTime,
-  type PerformanceBenchmarksResponse, type PerformanceDraft, type PerformanceRecord,
+  confirmedPerformanceInput, findCoveringConfirmedRecord, observedReps, performanceDraft, performanceSelectionCovered, progressTime, rememberedMovementDefaults,
+  type MovementDraftDefaults, type PerformanceBenchmarksResponse, type PerformanceDraft, type PerformanceRecord,
   type WorkoutProgress, type WorkoutProgressInterval, type WorkoutProgressResponse,
 } from "../../../shared/workoutProgress";
 
@@ -29,13 +29,20 @@ function ObservationEvidence({ interval }: { interval: WorkoutProgressInterval }
   </>}</View>;
 }
 
-function RecordEditor({ interval, progress, record, saving, onSave, onClose, onReviewVideo }: {
-  interval: WorkoutProgressInterval; record?: PerformanceRecord; saving: boolean;
+function RecordEditor({ interval, progress, record, initialDraft, movementDefaults, onDraftChange, saving, onSave, onClose, onReviewVideo }: {
+  interval: WorkoutProgressInterval; record?: PerformanceRecord;
+  initialDraft?: PerformanceDraft; movementDefaults?: MovementDraftDefaults; onDraftChange?: (draft: PerformanceDraft) => void;
+  saving: boolean;
   progress: WorkoutProgress; onReviewVideo?: (start: number, end: number) => void;
   onSave: (draft: PerformanceDraft) => void; onClose: () => void;
 }) {
-  const [draft, setDraft] = useState(() => performanceDraft(interval, record));
-  const update = <K extends keyof PerformanceDraft>(key: K, value: PerformanceDraft[K]) => setDraft(d => ({ ...d, [key]: value, reviewed: key === "reviewed" ? Boolean(value) : false }));
+  const [draft, setDraft] = useState(() => initialDraft ?? performanceDraft(interval, record, null, movementDefaults));
+  const update = <K extends keyof PerformanceDraft>(key: K, value: PerformanceDraft[K]) =>
+    setDraft(d => {
+      const next = { ...d, [key]: value, reviewed: key === "reviewed" ? Boolean(value) : false };
+      onDraftChange?.(next);
+      return next;
+    });
   const field = (key: "start" | "end" | "reps" | "weight", title: string) => <View style={styles.field}>
     <Text style={styles.text}>{label(title)}</Text>
     <TextInput accessibilityLabel={label(title)} keyboardType="decimal-pad" value={draft[key]} editable={!saving} onChangeText={v => update(key, v)} style={styles.input} />
@@ -108,8 +115,11 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
   const [benchmarkError, setBenchmarkError] = useState(false);
   const [movement, setMovement] = useState("");
   const [revision, setRevision] = useState(0);
+  const draftsRef = useRef<Record<string, PerformanceDraft>>({});
+  const movementDefaultsRef = useRef<Record<string, MovementDraftDefaults>>({});
   useEffect(() => {
     const number = ++request.current;
+    draftsRef.current = {}; movementDefaultsRef.current = {};
     setData(undefined); setSelected(undefined); setBenchmarks(undefined); setMovement(""); setNotice(""); setError(""); setSaving(false); setBenchmarkError(false);
     if (!expanded || !profileId) return;
     const controller = new AbortController();
@@ -132,10 +142,21 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
     try {
       const result = await confirmPerformanceRecords(sessionId, { source_version: data.progress.source_version, records: [record] });
       if (number !== request.current || activeScope.current !== scope) return;
+      delete draftsRef.current[interval.id];
+      if (interval.movement?.trim()) {
+        movementDefaultsRef.current[interval.movement.trim().toLowerCase()] = {
+          loadMode: draft.loadMode,
+          weight: draft.weight,
+          unit: draft.unit,
+          basis: draft.basis,
+          technique: draft.technique,
+        };
+      }
       setData(result); setSelected(undefined); setMovement(interval.movement ?? ""); setNotice(label("saved"));
     } catch (e) {
       if (number !== request.current || activeScope.current !== scope) return;
       if ((e as { status?: number })?.status === 409) {
+        draftsRef.current = {};
         setSelected(undefined); setBenchmarks(undefined); setError(label("stale"));
         try { const latest = await getWorkoutProgress(sessionId); if (number === request.current && activeScope.current === scope) { setData(latest); setMovement(""); } }
         catch { /* Keep the review notice; the explicit reload remains available. */ }
@@ -177,7 +198,7 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
             {interval.activity === "exercise" && interval.movement && <Pressable accessibilityRole="button" onPress={() => setMovement(interval.movement!)} style={styles.button}><Text style={styles.text}>{label("benchmarks")}</Text></Pressable>}
           </View>
           <ObservationEvidence interval={interval} />
-          {selected === interval.id && <RecordEditor key={`${data.progress?.source_version}:${interval.id}`} interval={interval} progress={data.progress!} record={record} saving={saving} onSave={draft => void save(interval, draft)} onClose={() => setSelected(undefined)} onReviewVideo={onReviewVideo} />}
+          {selected === interval.id && <RecordEditor key={`${data.progress?.source_version}:${interval.id}`} interval={interval} progress={data.progress!} record={record ?? coveringConfirmed} initialDraft={draftsRef.current[interval.id]} movementDefaults={rememberedMovementDefaults(interval.movement, data.records, movementDefaultsRef.current)} onDraftChange={nextDraft => { draftsRef.current[interval.id] = nextDraft; if (interval.movement?.trim()) { movementDefaultsRef.current[interval.movement.trim().toLowerCase()] = { loadMode: nextDraft.loadMode, weight: nextDraft.weight, unit: nextDraft.unit, basis: nextDraft.basis, technique: nextDraft.technique }; } }} saving={saving} onSave={draft => void save(interval, draft)} onClose={() => setSelected(undefined)} onReviewVideo={onReviewVideo} />}
         </View>;
       })}
       {data?.progress?.unassessed.map((gap, i) => <Text key={i} style={styles.error}>{label("unassessed")} · {label(gap.clock === "capture" ? "captureClock" : "mediaClock")} {progressTime(gap.start_secs)}–{progressTime(gap.end_secs)} · {label("unknown")}</Text>)}

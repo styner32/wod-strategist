@@ -1,4 +1,4 @@
-import { confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, getContiguousExerciseSpan, observedReps, performanceDraft, summarizeWorkoutMovements, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
+import { confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, findCoveringConfirmedRecord, getContiguousExerciseSpan, observedReps, performanceDraft, summarizeWorkoutMovements, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
 import { withoutWorkoutEvidence } from "./analysisEvidence";
 const interval: WorkoutProgressInterval = { id: "set-1", start_secs: 10, end_secs: 70, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total", status: "pending_confirmation" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 12, end_secs: 16, complete: true, evidence: "Complete cycle" }, { movement: "Power Clean", unit: "reps", start_secs: 17, end_secs: 20, complete: false, evidence: "Occluded lockout" }] };
 it("uses complete repetition evidence but preserves missing counts rather than zero", () => {
@@ -17,14 +17,35 @@ it("requires explicit review and actual load, retaining original units without c
 it.each([{ start: "9" }, { end: "71" }, { end: "10" }, { reps: "2.5" }, { reps: "0" }, { reps: "" }, { weight: "" }, { weight: "0" }, { loadMode: "unresolved" as const }])("rejects invalid reviewed values %j", values => {
   expect(confirmedPerformanceInput(interval, { ...performanceDraft(interval), reviewed: true, ...values })).toBeNull();
 });
-it("distinguishes unknown load from an explicitly confirmed unweighted movement", () => {
-  const unweighted = { ...interval, load: null };
-  expect(performanceDraft(unweighted).loadMode).toBe("unresolved");
-  expect(confirmedPerformanceInput(unweighted, { ...performanceDraft(unweighted), reviewed: true, loadMode: "none" })?.load).toBeNull();
+it("defaults loadMode and basis from movement type while leaving ambiguous movements unresolved", () => {
+  const ambiguous = { ...interval, movement: "Squat", load: null };
+  expect(performanceDraft(ambiguous).loadMode).toBe("unresolved");
+
+  const airSquat = { ...interval, movement: "Air Squat", load: null };
+  const burpee = { ...interval, movement: "Burpee", load: null };
+  expect(performanceDraft(airSquat).loadMode).toBe("none");
+  expect(performanceDraft(burpee).loadMode).toBe("none");
+  expect(confirmedPerformanceInput(airSquat, { ...performanceDraft(airSquat), reviewed: true })?.load).toBeNull();
+
+  const dbSquat = { ...interval, movement: "Dumbbell Squat", load: null };
+  const powerClean = { ...interval, movement: "Power Clean", load: null };
+  expect(performanceDraft(dbSquat)).toMatchObject({ loadMode: "weighted", weight: "", basis: "per_implement" });
+  expect(performanceDraft(powerClean)).toMatchObject({ loadMode: "weighted", weight: "", basis: "total" });
+  expect(confirmedPerformanceInput(powerClean, { ...performanceDraft(powerClean), reviewed: true })).toBeNull();
 });
 it("resets stale confirmed values to current candidate evidence", () => {
   const stale = { status: "needs_confirmation", start_secs: 20, end_secs: 40, reps: 99, load: { value: 225, unit: "lb", basis: "total" } } as PerformanceRecord;
   expect(performanceDraft(interval, stale)).toMatchObject({ start: "10", end: "70", reps: "1", weight: "135", reviewed: false });
+});
+it("normalizes legacy unspecified technique to singles and finds covering confirmed records across merged spans", () => {
+  const confirmedWithUnspecified = { id: 1, session_id: "s1", interval_id: "seg-0", source_version: "a", status: "confirmed", movement: "Power Clean", start_secs: 0, end_secs: 20, reps: 10, load: { value: 135, unit: "lb", basis: "total" }, load_kg: 61.2, measurement: "set", technique: "unspecified", workout_prescription: "test", reps_per_minute: 30, rate_basis: "normalized_per_minute", median_cycle_seconds: null, performed_at: "2026-10-12T00:00:00Z", confirmed_at: "2026-10-12T00:00:00Z" } as PerformanceRecord;
+  expect(performanceDraft(interval, confirmedWithUnspecified).technique).toBe("singles");
+  const seg0: WorkoutProgressInterval = { ...interval, id: "seg-0", start_secs: 0, end_secs: 10 };
+  const seg1: WorkoutProgressInterval = { ...interval, id: "seg-1", start_secs: 10, end_secs: 20 };
+  const seg2: WorkoutProgressInterval = { ...interval, id: "seg-2", start_secs: 20, end_secs: 30 };
+  expect(findCoveringConfirmedRecord(seg0, [confirmedWithUnspecified])?.id).toBe(1);
+  expect(findCoveringConfirmedRecord(seg1, [confirmedWithUnspecified])?.id).toBe(1);
+  expect(findCoveringConfirmedRecord(seg2, [confirmedWithUnspecified])).toBeUndefined();
 });
 it("hides machine evidence only in display text while retaining ordinary JSON and later prose", () => {
   const raw = 'Summary\n```workout_observations\n{"secret":"observations"}\n```\n```wod_evidence\n{"cycles":3}\n```\n```json\n{"workout_progress":{"version":1}}\n```\nAfter';
@@ -183,7 +204,132 @@ describe("extractWodLoads and summarizeWorkoutMovements", () => {
       measurement: "set",
       technique: "singles",
     });
+
+    const seg167: WorkoutProgressInterval = { ...interval, id: "seg-16", start_secs: 167, end_secs: 169 };
+    const seg170: WorkoutProgressInterval = { ...interval, id: "seg-17", start_secs: 170, end_secs: 177 };
+    const boundaryCutProgress = {
+      version: 1 as const,
+      clock: "media" as const,
+      source_version: "boundary-cut",
+      intervals: [seg167, seg170],
+      unassessed: [{ start_secs: 169, end_secs: 170, clock: "media" as const, reason: "not_analyzed" }],
+    };
+    expect(getContiguousExerciseSpan(seg167, boundaryCutProgress)).toEqual({
+      startSecs: 167,
+      endSecs: 177,
+      intervalCount: 2,
+      observedReps: 2,
+    });
+    expect(getContiguousExerciseSpan(seg170, boundaryCutProgress)).toEqual({
+      startSecs: 167,
+      endSecs: 177,
+      intervalCount: 2,
+      observedReps: 2,
+    });
+  });
+
+  it("supports merging contiguous intervals of different movements and selecting the target movement", () => {
+    const squatClean: WorkoutProgressInterval = {
+      id: "seg-sc",
+      start_secs: 10,
+      end_secs: 13,
+      activity: "exercise",
+      movement: "Squat Clean",
+      load: { value: 135, unit: "lb", basis: "total" },
+      observation_refs: ["chunk:1"],
+      rep_events: [{ movement: "Squat Clean", unit: "reps", start_secs: 10, end_secs: 13, complete: true, evidence: "clean" }],
+    };
+    const frontSquat: WorkoutProgressInterval = {
+      id: "seg-fs",
+      start_secs: 13,
+      end_secs: 25,
+      activity: "exercise",
+      movement: "Front Squat",
+      load: { value: 135, unit: "lb", basis: "total" },
+      observation_refs: ["chunk:1", "chunk:2"],
+      rep_events: [
+        { movement: "Front Squat", unit: "reps", start_secs: 13, end_secs: 16, complete: true, evidence: "squat 1" },
+        { movement: "Front Squat", unit: "reps", start_secs: 16, end_secs: 19, complete: true, evidence: "squat 2" },
+        { movement: "Front Squat", unit: "reps", start_secs: 19, end_secs: 22, complete: true, evidence: "squat 3" },
+        { movement: "Front Squat", unit: "reps", start_secs: 22, end_secs: 25, complete: true, evidence: "squat 4" },
+      ],
+    };
+    const multiMovementProgress = {
+      version: 1 as const,
+      clock: "media" as const,
+      source_version: "sc-fs",
+      intervals: [squatClean, frontSquat],
+      unassessed: [],
+    };
+
+    const spanFromSc = getContiguousExerciseSpan(squatClean, multiMovementProgress);
+    expect(spanFromSc).toEqual({
+      startSecs: 10,
+      endSecs: 25,
+      intervalCount: 2,
+      observedReps: 5,
+      movementOptions: [
+        { movement: "Squat Clean", intervalId: "seg-sc", observedReps: 1 },
+        { movement: "Front Squat", intervalId: "seg-fs", observedReps: 5 },
+      ],
+    });
+
+    // Confirming from Squat Clean card while selecting Front Squat as the target movement
+    const mergedAsFrontSquatDraft = {
+      ...performanceDraft(squatClean),
+      start: "10",
+      end: "25",
+      reps: "5",
+      measurement: "set" as const,
+      targetIntervalId: "seg-fs",
+      reviewed: true,
+    };
+    expect(diagnosePerformanceDraft(squatClean, mergedAsFrontSquatDraft, multiMovementProgress)).toBeNull();
+    expect(confirmedPerformanceInput(squatClean, mergedAsFrontSquatDraft, multiMovementProgress)).toEqual({
+      interval_id: "seg-fs",
+      start_secs: 10,
+      end_secs: 25,
+      reps: 5,
+      load: { value: 135, unit: "lb", basis: "total" },
+      measurement: "set",
+      technique: "singles",
+    });
+
+    // Once confirmed as Front Squat, both intervals are covered and top summary consolidates under Front Squat
+    const confirmedFsRecord: PerformanceRecord = {
+      id: 1,
+      session_id: "s1",
+      interval_id: "seg-fs",
+      source_version: "sc-fs",
+      status: "confirmed",
+      movement: "Front Squat",
+      start_secs: 10,
+      end_secs: 25,
+      elapsed_seconds: 15,
+      reps: 5,
+      load: { value: 135, unit: "lb", basis: "total" },
+      load_kg: 61.2,
+      measurement: "set",
+      technique: "singles",
+      workout_prescription: "test",
+      reps_per_minute: 20,
+      rate_basis: "normalized_per_minute",
+      median_cycle_seconds: null,
+      performed_at: "2026-10-12T00:00:00Z",
+      confirmed_at: "2026-10-12T00:00:00Z",
+    };
+    const summaries = summarizeWorkoutMovements(multiMovementProgress, [confirmedFsRecord]);
+    expect(summaries).toEqual([
+      {
+        movement: "Front Squat",
+        intervalCount: 2,
+        observedReps: 5,
+        observedSeconds: 0,
+        confirmedCount: 1,
+        confirmedReps: 5,
+        loadLabel: "135 lb",
+      },
+    ]);
   });
 });
-
 

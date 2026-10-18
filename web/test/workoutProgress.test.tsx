@@ -143,13 +143,15 @@ it("merges contiguous 10-second segment intervals and confirms them as a single 
         { id: "seg-0", start_secs: 0, end_secs: 9, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 1, end_secs: 3, complete: true, evidence: "Rep 1" }] },
         { id: "seg-1", start_secs: 11, end_secs: 20, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 12, end_secs: 14, complete: true, evidence: "Rep 2" }] },
       ],
-      unassessed: [{ start_secs: 9, end_secs: 11, clock: "media", reason: "incomplete_cycle" }],
+      unassessed: [{ start_secs: 9, end_secs: 11, clock: "media", reason: "not_analyzed" }],
     },
     records: [],
   };
   (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(splitEvidence);
   (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({ ...splitEvidence, records: [current] });
   const { tree, client } = await mount("new", true);
+  expect(tree.root.find((node: any) => node.props?.["data-testid"] === "contiguous-badge-seg-0").children.join("")).toContain("연속 구간");
+  expect(tree.root.find((node: any) => node.props?.["data-testid"] === "contiguous-badge-seg-1").children.join("")).toContain("연속 구간");
   await click(tree, "반복수·구간·중량 확인/수정");
   await click(tree, "연속된 구간 합치기");
   await act(async () => {
@@ -160,6 +162,161 @@ it("merges contiguous 10-second segment intervals and confirms them as a single 
   expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
     source_version: "split",
     records: [{ interval_id: "seg-0", start_secs: 0, end_secs: 20, reps: 10, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" }],
+  });
+  await act(() => tree.unmount()); client.clear();
+});
+
+it("renders compact rest rows, highlights confirmed records including merged spans, and offers only 끊김/연속 technique options", async () => {
+  const confirmedMerged: PerformanceRecord = { ...current, interval_id: "seg-0", source_version: "split", start_secs: 0, end_secs: 20, reps: 10 };
+  const splitWithRest: WorkoutProgressResponse = {
+    progress: {
+      version: 1,
+      clock: "media",
+      source_version: "split",
+      intervals: [
+        { id: "seg-0", start_secs: 0, end_secs: 10, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total" }, observation_refs: [], rep_events: [] },
+        { id: "seg-1", start_secs: 10, end_secs: 20, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total" }, observation_refs: [], rep_events: [] },
+        { id: "rest-2", start_secs: 20, end_secs: 30, activity: "rest", movement: null, load: null, observation_refs: [] },
+      ],
+      unassessed: [],
+    },
+    records: [confirmedMerged],
+  };
+  (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(splitWithRest);
+  const { tree, client } = await mount("new", true);
+  const restRow = tree.root.find((node: any) => node.props?.["data-testid"] === "rest-interval-rest-2");
+  expect(restRow).toBeDefined();
+  expect(restRow.findAllByType("details")).toHaveLength(0);
+  const badge0 = tree.root.find((node: any) => node.props?.["data-testid"] === "confirmed-badge-seg-0");
+  const badge1 = tree.root.find((node: any) => node.props?.["data-testid"] === "confirmed-badge-seg-1");
+  expect(badge0.children.join("")).toContain("확정 기록");
+  expect(badge1.children.join("")).toContain("확정 기록");
+  const card0 = tree.root.find((node: any) => node.props?.["data-testid"] === "exercise-interval-seg-0");
+  expect(card0.props.className).toContain("border-success/50");
+
+  await click(tree, "반복수·구간·중량 확인/수정");
+  const techniqueSelect = tree.root.findAllByType("select").find((s: any) => s.props.value === "singles");
+  expect(techniqueSelect).toBeDefined();
+  const options = techniqueSelect.findAllByType("option").map((o: any) => ({ value: o.props.value, label: o.children.join("") }));
+  expect(options).toEqual([
+    { value: "singles", label: "끊김" },
+    { value: "touch_and_go", label: "연속" },
+  ]);
+  await act(() => tree.unmount()); client.clear();
+});
+
+it("remembers edited values when closing and reopening an interval or opening the next interval of the same movement", async () => {
+  const multiSet: WorkoutProgressResponse = {
+    progress: {
+      version: 1,
+      clock: "media",
+      source_version: "multi",
+      intervals: [
+        { id: "set-1", start_secs: 0, end_secs: 20, activity: "exercise", movement: "Power Clean", load: null, observation_refs: [], rep_events: [] },
+        { id: "rest-1", start_secs: 20, end_secs: 30, activity: "rest", movement: null, load: null, observation_refs: [] },
+        { id: "set-2", start_secs: 30, end_secs: 50, activity: "exercise", movement: "Power Clean", load: null, observation_refs: [], rep_events: [] },
+      ],
+      unassessed: [],
+    },
+    records: [],
+  };
+  (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(multiSet);
+  const { tree, client } = await mount("new", true, "Power Clean 135/95 lb");
+  const editButtons = () => tree.root.findAllByType("button").filter((b: any) => b.children.join("") === "반복수·구간·중량 확인/수정");
+
+  // Open set-1 and customize reps, weight, and technique
+  await act(async () => editButtons()[0].props.onClick());
+  await flush();
+  await click(tree, "95 lb 적용");
+  await act(async () => {
+    tree.root.findAllByType("input").find((i: any) => i.props["aria-label"] === "완료 반복수").props.onChange({ target: { value: "12" } });
+    tree.root.findAllByType("select").find((s: any) => s.props.value === "singles").props.onChange({ target: { value: "touch_and_go" } });
+  });
+
+  // Switch to set-2: weight (95 lb) and technique (touch_and_go) should be remembered for Power Clean
+  await act(async () => editButtons()[1].props.onClick());
+  await flush();
+  expect(tree.root.findAllByType("input").find((i: any) => i.props["aria-label"] === "중량").props.value).toBe("95");
+  expect(tree.root.findAllByType("select").find((s: any) => s.props.value === "touch_and_go")).toBeDefined();
+
+  // Close set-2 and reopen set-1: set-1's reps ("12"), weight ("95"), and technique ("touch_and_go") are preserved
+  await click(tree, "닫기");
+  await act(async () => editButtons()[0].props.onClick());
+  await flush();
+  expect(tree.root.findAllByType("input").find((i: any) => i.props["aria-label"] === "완료 반복수").props.value).toBe("12");
+  expect(tree.root.findAllByType("input").find((i: any) => i.props["aria-label"] === "중량").props.value).toBe("95");
+  expect(tree.root.findAllByType("select").find((s: any) => s.props.value === "touch_and_go")).toBeDefined();
+  await act(() => tree.unmount()); client.clear();
+});
+
+it("lets the user choose which movement to merge as when contiguous intervals have different movements", async () => {
+  const scPlusFs: WorkoutProgressResponse = {
+    progress: {
+      version: 1,
+      clock: "media",
+      source_version: "sc-fs",
+      intervals: [
+        {
+          id: "seg-sc",
+          start_secs: 10,
+          end_secs: 13,
+          activity: "exercise",
+          movement: "Squat Clean",
+          load: { value: 135, unit: "lb", basis: "total" },
+          observation_refs: ["chunk:1"],
+          rep_events: [{ movement: "Squat Clean", unit: "reps", start_secs: 10, end_secs: 13, complete: true, evidence: "clean" }],
+        },
+        {
+          id: "seg-fs",
+          start_secs: 13,
+          end_secs: 25,
+          activity: "exercise",
+          movement: "Front Squat",
+          load: { value: 135, unit: "lb", basis: "total" },
+          observation_refs: ["chunk:1", "chunk:2"],
+          rep_events: [
+            { movement: "Front Squat", unit: "reps", start_secs: 13, end_secs: 16, complete: true, evidence: "squat 1" },
+            { movement: "Front Squat", unit: "reps", start_secs: 16, end_secs: 19, complete: true, evidence: "squat 2" },
+            { movement: "Front Squat", unit: "reps", start_secs: 19, end_secs: 22, complete: true, evidence: "squat 3" },
+            { movement: "Front Squat", unit: "reps", start_secs: 22, end_secs: 25, complete: true, evidence: "squat 4" },
+          ],
+        },
+      ],
+      unassessed: [],
+    },
+    records: [],
+  };
+  (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(scPlusFs);
+  (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue(scPlusFs);
+  const { tree, client } = await mount("new", true);
+
+  // Open the first interval (1 Squat Clean)
+  await click(tree, "반복수·구간·중량 확인/수정");
+  expect(allText(tree)).toContain("Squat Clean 기준으로 합치기");
+  expect(allText(tree)).toContain("Front Squat 기준으로 합치기");
+
+  // Merge as Front Squat: sets start=10, end=25, suggested reps=5 (1 Squat Clean + 4 Front Squat), and targetIntervalId="seg-fs"
+  await click(tree, "Front Squat 기준으로 합치기");
+  expect(tree.root.findAllByType("input").find((i: any) => i.props["aria-label"] === "완료 반복수").props.value).toBe("5");
+  expect(allText(tree)).toContain("합친 구간 기준 동작");
+  await act(async () => {
+    tree.root.findAllByType("input").find((item: any) => item.props.type === "checkbox").props.onChange({ target: { checked: true } });
+  });
+
+  await click(tree, "확인한 기록 저장");
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
+    source_version: "sc-fs",
+    records: [
+      {
+        interval_id: "seg-fs",
+        start_secs: 10,
+        end_secs: 25,
+        reps: 5,
+        load: { value: 135, unit: "lb", basis: "total" },
+        measurement: "set",
+        technique: "singles",
+      },
+    ],
   });
   await act(() => tree.unmount()); client.clear();
 });

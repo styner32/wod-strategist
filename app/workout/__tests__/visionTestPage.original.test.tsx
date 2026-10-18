@@ -381,7 +381,7 @@ it("resumes recording after dropped buffers but retains the incomplete original 
 });
 
 it.each(["network", "confidence"])("keeps complete originals saveable and releases readers after an analysis %s failure", async (failure) => {
-  if (failure === "network") mockProcessChunk.mockRejectedValueOnce(new Error("offline"));
+  if (failure === "network") mockProcessChunk.mockRejectedValue(new Error("offline"));
   else mockConfidence.mockImplementationOnce(() => { throw new Error("confidence unavailable"); });
   const view = render(<VisionTestPage />);
   await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
@@ -469,7 +469,7 @@ it("cancels hung compression after timeout, falls back to native analysis chunks
 });
 
 it("does not publish a partial server video when one upload succeeds and the next fails", async () => {
-  mockProcessChunk.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("offline"));
+  mockProcessChunk.mockResolvedValueOnce(undefined).mockRejectedValue(new Error("offline"));
   const notice = jest.spyOn(Alert, "alert");
   const view = render(<VisionTestPage />);
   await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
@@ -488,6 +488,28 @@ it("does not publish a partial server video when one upload succeeds and the nex
   await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
   view.unmount();
   notice.mockRestore();
+});
+
+it("recovers a failed chunk via deferred recovery queue and completes server merge", async () => {
+  mockProcessChunk
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue(undefined);
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+  const callbacks = mockStartCamera.mock.calls[0][0];
+  const start = Date.now();
+  await act(async () => {
+    [1, 2].forEach(index => callbacks.onRecordingSegment({ status: "ready", path: `file:///documents/run-1/analysis/part-${index}.mp4`,
+      captureStartTimeMs: start + (index - 1) * 10000, captureEndTimeMs: start + index * 10000 }));
+  });
+  await waitFor(() => expect(mockProcessChunk).toHaveBeenCalledTimes(3));
+  fireEvent.press(view.getByText("square.fill"));
+  await act(async () => { callbacks.onRecordingSourceFinalized(source()); await callbacks.onRecordingFinished(source()); });
+  await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(mockMergeChunks).toHaveBeenCalledTimes(1));
+  expect(mockMergeChunks.mock.calls[0][0]).toBe(mockRef.sessionId);
+  await waitFor(() => expect(mockReleases.every(release => release.mock.calls.length === 1)).toBe(true));
+  view.unmount();
 });
 
 it("withholds server merge after the upload wait expires while preserving readers until the late upload settles", async () => {

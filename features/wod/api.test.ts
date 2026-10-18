@@ -428,6 +428,103 @@ describe("API Client Methods", () => {
 
       expect(onRetry).toHaveBeenCalledTimes(2); // Retries after attempt 1 and attempt 2, fails on 3
     });
+
+    it("cancels hung GCS upload when uploadTimeoutMs expires and retries", async () => {
+      const mockCancelAsync = jest.fn().mockResolvedValue(undefined);
+      mockCreateUploadTask.mockImplementationOnce(() => ({
+        uploadAsync: jest.fn(() => new Promise(() => {})),
+        cancelAsync: mockCancelAsync,
+      }) as any);
+
+      const onRetry = jest.fn();
+      const res = await processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        uploadTimeoutMs: 10,
+        retryDelayMs: 1,
+        onRetry,
+      });
+
+      expect(res.taskId).toBe("chunk_task_123");
+      expect(mockCancelAsync).toHaveBeenCalledTimes(1);
+      expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
+    it("times out hung getUploadUrl when stepTimeoutMs expires and retries", async () => {
+      let urlAttempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, async () => {
+          urlAttempts++;
+          if (urlAttempts === 1) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+          return HttpResponse.json({
+            upload_url: "https://gcs.fake/upload",
+            gcs_uri: "gs://bucket/videos/1/test/chunk.mp4",
+          });
+        }),
+      );
+
+      const onRetry = jest.fn();
+      const res = await processWorkoutChunk("file:///chunk_0.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        stepTimeoutMs: 10,
+        retryDelayMs: 1,
+        onRetry,
+      });
+
+      expect(res.taskId).toBe("chunk_task_123");
+      expect(onRetry).toHaveBeenCalledTimes(1);
+      expect(urlAttempts).toBe(2);
+    });
+  });
+
+  describe("mergeChunks retry behavior", () => {
+    const { mergeChunks } = require("./api");
+
+    it("retries on transient 5xx failure and succeeds", async () => {
+      let attempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/merge-chunks`, () => {
+          attempts++;
+          if (attempts === 1) {
+            return new HttpResponse(null, { status: 502, statusText: "Bad Gateway" });
+          }
+          return HttpResponse.json({
+            task_id: "merge_task_1",
+            session_id: "session_merge_1",
+            message: "Merge started",
+          });
+        }),
+      );
+
+      const res = await mergeChunks("session_merge_1", {
+        profileId: 1,
+        maxRetries: 3,
+        retryDelayMs: 1,
+      });
+
+      expect(res.taskId).toBe("merge_task_1");
+      expect(attempts).toBe(2);
+    });
+
+    it("does NOT retry on 4xx error", async () => {
+      let attempts = 0;
+      server.use(
+        http.post(`${API_BASE_URL}/merge-chunks`, () => {
+          attempts++;
+          return new HttpResponse(null, { status: 400, statusText: "Bad Request" });
+        }),
+      );
+
+      await expect(
+        mergeChunks("session_merge_1", {
+          profileId: 1,
+          maxRetries: 3,
+          retryDelayMs: 1,
+        }),
+      ).rejects.toThrow(/API Error \[400\]/);
+      expect(attempts).toBe(1);
+    });
   });
 
   describe("parseWorkoutImage", () => {

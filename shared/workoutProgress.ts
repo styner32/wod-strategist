@@ -112,6 +112,7 @@ export interface PerformanceDraft {
   measurement: PerformanceMeasurement;
   technique: PerformanceTechnique;
   reviewed: boolean;
+  targetIntervalId?: string;
 }
 export function progressTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "—";
@@ -138,32 +139,136 @@ export function inferLoadBasis(movement?: string | null, contextText?: string): 
   return "total";
 }
 
+const WEIGHTED_MODIFIER_PATTERN =
+  /weighted|vest|dumbbell|kettlebell|barbell|\bdb\b|\bkb\b|goblet|wall\s*ball|wallball|medicine\s*ball|med\s*ball|sandbag|plate|sled|yoke|덤벨|케틀벨|바벨|중량|고블릿|월볼|메디신볼|샌드백|플레이트/i;
+
 const BODYWEIGHT_MOVEMENT_PATTERNS = [
   /pull-?up/i,
+  /chin-?up/i,
+  /chest[\s-]*to[\s-]*bar/i,
+  /\bc2b\b/i,
   /push-?up/i,
   /burpee/i,
+  /\bbbjo\b/i,
   /air\s*squat/i,
+  /pistol/i,
+  /single[\s-]*leg\s*squat/i,
   /sit-?up/i,
-  /toes-?to-?bar/i,
+  /toes[\s-]*to[\s-]*bar/i,
   /\bt2b\b/i,
+  /knees[\s-]*to[\s-]*(?:elbow|chest)/i,
+  /\bk2e\b/i,
   /handstand/i,
   /\bhspu\b/i,
+  /\bhsw\b/i,
+  /wall\s*walk/i,
   /muscle-?up/i,
+  /\bbmu\b/i,
+  /\brmu\b/i,
   /double-?under/i,
   /single-?under/i,
+  /\bdus?\b/i,
+  /\bsus?\b/i,
   /box\s*jump/i,
+  /box\s*step/i,
+  /\bbjo?\b/i,
+  /broad\s*jump/i,
   /v-?up/i,
+  /l-?sit/i,
+  /hollow\s*(?:rock|hold)/i,
+  /arch\s*hold/i,
+  /plank/i,
   /ring\s*dip/i,
+  /\bdips?\b/i,
+  /ring\s*row/i,
   /rope\s*climb/i,
+  /lunge/i,
+  /mountain\s*climber/i,
+  /jumping\s*jack/i,
+  /bear\s*crawl/i,
+  /\brow(?:ing|er)?\b/i,
+  /echo\s*bike/i,
+  /assault\s*bike/i,
+  /air\s*bike/i,
+  /airdyne/i,
+  /bike\s*erg/i,
+  /ski\s*erg/i,
+  /\brun(?:ning)?\b/i,
+  /\bsprint(?:ing)?\b/i,
+  /\bjog(?:ging)?\b/i,
+  /에어\s*스쿼트/,
+  /맨몸\s*스쿼트/,
+  /버피/,
+  /풀업/,
+  /푸쉬업|푸시업/,
+  /싯업/,
+  /토투바/,
+  /핸드스탠드/,
+  /머슬업/,
+  /더블\s*언더/,
+  /박스\s*점프/,
+  /런지/,
+  /로잉/,
+  /달리기/,
+];
+
+const WEIGHTED_MOVEMENT_PATTERNS = [
+  WEIGHTED_MODIFIER_PATTERN,
+  /snatch/i,
+  /clean/i,
+  /jerk/i,
+  /cluster/i,
+  /deadlift/i,
+  /\bdl\b/i,
+  /\bsdhp\b/i,
+  /\brdl\b/i,
+  /thruster/i,
+  /press/i,
+  /(?:back|front|overhead|dumbbell|db|kettlebell|kb|goblet|zercher|barbell|split|weighted)\s*squat/i,
+  /\bohs\b/i,
+  /\bswing/i,
+  /manmaker/i,
+  /farmer'?s?\s*(?:carry|walk)/i,
+  /turkish\s*get-?up/i,
+  /\btgu\b/i,
+  /(?:overhead|front\s*rack)\s*lunge/i,
+  /(?:pendlay|bent[\s-]*over|renegade)\s*row/i,
+  /스내치/,
+  /클린/,
+  /저크/,
+  /클러스터/,
+  /데드리프트/,
+  /쓰러스터|스러스터/,
+  /프레스/,
+  /스윙/,
+  /맨메이커/,
+  /파머스/,
 ];
 
 export function isLikelyBodyweightMovement(movement?: string | null): boolean {
   if (!movement) return false;
   const trimmed = movement.trim();
-  if (/weighted|vest|dumbbell|kettlebell|barbell|\bdb\b|\bkb\b/i.test(trimmed)) {
+  if (
+    WEIGHTED_MODIFIER_PATTERN.test(trimmed) ||
+    /(?:overhead|front\s*rack)\s*lunge/i.test(trimmed) ||
+    /(?:pendlay|bent[\s-]*over|renegade)\s*row/i.test(trimmed)
+  ) {
     return false;
   }
   return BODYWEIGHT_MOVEMENT_PATTERNS.some(pattern => pattern.test(trimmed));
+}
+
+export function isLikelyWeightedMovement(movement?: string | null): boolean {
+  if (!movement) return false;
+  const trimmed = movement.trim();
+  if (isLikelyBodyweightMovement(trimmed)) return false;
+  return WEIGHTED_MOVEMENT_PATTERNS.some(pattern => pattern.test(trimmed));
+}
+
+export function inferDefaultLoadMode(movement?: string | null): PerformanceDraft["loadMode"] {
+  if (isLikelyBodyweightMovement(movement)) return "none";
+  if (isLikelyWeightedMovement(movement)) return "weighted";
+  return "unresolved";
 }
 
 export function extractWodLoads(wodDescription?: string | null, movement?: string | null): ProgressLoad[] {
@@ -230,6 +335,21 @@ export interface WorkoutMovementSummary {
   loadLabel: string | null;
 }
 
+export function findCoveringConfirmedRecord(
+  interval: WorkoutProgressInterval,
+  records: PerformanceRecord[] = [],
+): PerformanceRecord | undefined {
+  const direct = records.find(r => r.interval_id === interval.id);
+  if (direct?.status === "confirmed") return direct;
+  if (interval.activity !== "exercise" || !interval.movement?.trim()) return undefined;
+  return records.find(
+    r =>
+      r.status === "confirmed" &&
+      r.start_secs <= interval.start_secs + 1e-6 &&
+      r.end_secs >= interval.end_secs - 1e-6,
+  );
+}
+
 export function summarizeWorkoutMovements(
   progress?: WorkoutProgress | null,
   records: PerformanceRecord[] = [],
@@ -239,7 +359,8 @@ export function summarizeWorkoutMovements(
 
   for (const interval of progress.intervals) {
     if (interval.activity !== "exercise" || !interval.movement?.trim()) continue;
-    const name = interval.movement.trim();
+    const covering = findCoveringConfirmedRecord(interval, records);
+    const name = covering?.movement?.trim() || interval.movement.trim();
     const existing = map.get(name) ?? {
       movement: name,
       intervalCount: 0,
@@ -279,43 +400,90 @@ export function summarizeWorkoutMovements(
   return [...map.values()];
 }
 
-export function findCoveringConfirmedRecord(
-  interval: WorkoutProgressInterval,
+export interface MovementDraftDefaults {
+  loadMode?: PerformanceDraft["loadMode"];
+  weight?: string;
+  unit?: "lb" | "kg";
+  basis?: "total" | "per_implement";
+  technique?: PerformanceTechnique;
+}
+
+export function rememberedMovementDefaults(
+  movement: string | null | undefined,
   records: PerformanceRecord[] = [],
-): PerformanceRecord | undefined {
-  const direct = records.find(r => r.interval_id === interval.id);
-  if (direct?.status === "confirmed") return direct;
-  if (interval.activity !== "exercise" || !interval.movement?.trim()) return undefined;
-  const movement = interval.movement.trim().toLowerCase();
-  return records.find(
-    r =>
-      r.status === "confirmed" &&
-      r.movement?.trim().toLowerCase() === movement &&
-      r.start_secs <= interval.start_secs + 1e-6 &&
-      r.end_secs >= interval.end_secs - 1e-6,
-  );
+  rememberedByMovement: Record<string, MovementDraftDefaults> = {},
+): MovementDraftDefaults | undefined {
+  const key = movement?.trim().toLowerCase();
+  if (!key) return undefined;
+  const inMemory = rememberedByMovement[key];
+  const confirmedForMovement = [...records]
+    .reverse()
+    .find(r => r.status === "confirmed" && r.movement?.trim().toLowerCase() === key);
+  if (!inMemory && !confirmedForMovement) return undefined;
+  const fromRecord: MovementDraftDefaults | undefined = confirmedForMovement
+    ? {
+        loadMode: confirmedForMovement.load ? "weighted" : "none",
+        weight: confirmedForMovement.load ? String(confirmedForMovement.load.value) : "",
+        unit: confirmedForMovement.load?.unit ?? "lb",
+        basis: confirmedForMovement.load?.basis ?? inferLoadBasis(movement),
+        technique:
+          confirmedForMovement.technique && confirmedForMovement.technique !== "unspecified"
+            ? confirmedForMovement.technique
+            : "singles",
+      }
+    : undefined;
+  return {
+    ...fromRecord,
+    ...inMemory,
+  };
 }
 
 export function performanceDraft(
   interval: WorkoutProgressInterval,
   record?: PerformanceRecord,
   fallbackLoad?: ProgressLoad | null,
+  movementDefaults?: MovementDraftDefaults,
 ): PerformanceDraft {
   // Stale confirmations must be reviewed against current evidence, not silently reused.
   const current = record?.status === "confirmed" ? record : undefined;
   const load = current?.load ?? interval.load ?? fallbackLoad ?? null;
   const reps = current?.reps ?? observedReps(interval);
+  const rememberedMode =
+    movementDefaults?.loadMode && movementDefaults.loadMode !== "unresolved"
+      ? movementDefaults.loadMode
+      : undefined;
+  const loadMode: PerformanceDraft["loadMode"] =
+    current && current.load == null
+      ? "none"
+      : load
+        ? "weighted"
+        : rememberedMode ?? inferDefaultLoadMode(interval.movement);
+  const weight =
+    load != null
+      ? String(load.value)
+      : loadMode === "weighted" && movementDefaults?.weight
+        ? movementDefaults.weight
+        : "";
+  const unit = load?.unit ?? movementDefaults?.unit ?? "lb";
+  const basis = load?.basis ?? movementDefaults?.basis ?? inferLoadBasis(interval.movement);
+  const technique: PerformanceTechnique =
+    current?.technique && current.technique !== "unspecified"
+      ? current.technique
+      : movementDefaults?.technique && movementDefaults.technique !== "unspecified"
+        ? movementDefaults.technique
+        : "singles";
   return {
     start: String(current?.start_secs ?? interval.start_secs),
     end: String(current?.end_secs ?? interval.end_secs),
     reps: reps == null ? "" : String(reps),
-    loadMode: current && current.load == null ? "none" : load ? "weighted" : "unresolved",
-    weight: load == null ? "" : String(load.value),
-    unit: load?.unit ?? "lb",
-    basis: load?.basis ?? "total",
+    loadMode,
+    weight,
+    unit,
+    basis,
     measurement: current?.measurement ?? "set",
-    technique: current?.technique && current.technique !== "unspecified" ? current.technique : "singles",
+    technique,
     reviewed: false,
+    ...(current?.interval_id && current.interval_id !== interval.id ? { targetIntervalId: current.interval_id } : {}),
   };
 }
 const COUNT_ONLY_REASONS = new Set([
@@ -343,16 +511,56 @@ function coveredByCountOnlyGaps(
   return cursor >= to - 1e-6;
 }
 
+const MAX_SEGMENT_BOUNDARY_GAP_SECS = 5;
+
+function canBridgeContiguousSetGap(
+  unassessed: WorkoutProgress["unassessed"],
+  from: number,
+  to: number,
+): boolean {
+  if (to <= from + 1e-6) return true;
+  if (coveredByCountOnlyGaps(unassessed, from, to)) return true;
+  if (to - from > MAX_SEGMENT_BOUNDARY_GAP_SECS + 1e-6) return false;
+  return !unassessed.some(
+    g =>
+      g.clock === "media" &&
+      g.reason === "unverified_capture_mapping" &&
+      g.end_secs > from + 1e-6 &&
+      g.start_secs < to - 1e-6,
+  );
+}
+
+function countsAsTargetSquatCycle(fromMovement: string, targetMovement: string): boolean {
+  const from = fromMovement.trim().toLowerCase();
+  const target = targetMovement.trim().toLowerCase();
+  if (from === target) return true;
+  if (from.includes("squat clean") && (target.includes("front squat") || target.includes("thruster") || target.includes("cluster"))) {
+    return true;
+  }
+  if (from.includes("squat snatch") && (target.includes("overhead squat") || /\bohs\b/.test(target))) {
+    return true;
+  }
+  return false;
+}
+
+export interface ContiguousMovementOption {
+  movement: string;
+  intervalId: string;
+  observedReps: number | null;
+}
+
 export interface ContiguousExerciseSpan {
   startSecs: number;
   endSecs: number;
   intervalCount: number;
   observedReps: number | null;
+  movementOptions?: ContiguousMovementOption[];
 }
 
 /**
- * Finds contiguous same-movement exercise intervals (including across 10s segment boundaries
- * or incomplete_cycle boundary gaps) so users can merge a split set with one click.
+ * Finds contiguous exercise intervals (including across 10s segment boundaries,
+ * short boundary cuts, incomplete_cycle boundary gaps, or back-to-back setup/transition movements)
+ * so users can merge a split set and choose the target movement when multiple movements are present.
  */
 export function getContiguousExerciseSpan(
   interval: WorkoutProgressInterval,
@@ -377,16 +585,31 @@ export function getContiguousExerciseSpan(
       observedReps: baseReps,
     };
   }
-  const movement = interval.movement.trim();
-  const chain: WorkoutProgressInterval[] = [sorted[idx]];
+  const beforeChain: WorkoutProgressInterval[] = [];
+  let startSecs = sorted[idx].start_secs;
+  for (let i = idx - 1; i >= 0; i--) {
+    const prev = sorted[i];
+    if (prev.activity === "rest") break;
+    if (prev.activity !== "exercise" || !prev.movement?.trim()) continue;
+    if (!canBridgeContiguousSetGap(progress.unassessed, prev.end_secs, startSecs)) {
+      break;
+    }
+    if (!performanceSelectionCovered(interval, prev.start_secs, interval.end_secs, "set", progress)) {
+      break;
+    }
+    beforeChain.unshift(prev);
+    startSecs = prev.start_secs;
+  }
+  const chain: WorkoutProgressInterval[] = [...beforeChain, sorted[idx]];
   let endSecs = sorted[idx].end_secs;
   for (let i = idx + 1; i < sorted.length; i++) {
     const next = sorted[i];
-    if (next.activity !== "exercise" || next.movement?.trim() !== movement) break;
-    if (next.start_secs > endSecs + 1e-6 && !coveredByCountOnlyGaps(progress.unassessed, endSecs, next.start_secs)) {
+    if (next.activity === "rest") break;
+    if (next.activity !== "exercise" || !next.movement?.trim()) continue;
+    if (!canBridgeContiguousSetGap(progress.unassessed, endSecs, next.start_secs)) {
       break;
     }
-    if (!performanceSelectionCovered(interval, interval.start_secs, next.end_secs, "set", progress)) {
+    if (!performanceSelectionCovered(interval, startSecs, next.end_secs, "set", progress)) {
       break;
     }
     chain.push(next);
@@ -397,29 +620,57 @@ export function getContiguousExerciseSpan(
       .filter(g => g.clock === "media" && COUNT_ONLY_REASONS.has(g.reason) && Math.abs(g.start_secs - endSecs) <= 1e-6)
       .sort((a, b) => a.start_secs - b.start_secs);
     for (const g of trailingGaps) {
-      if (performanceSelectionCovered(interval, interval.start_secs, g.end_secs, "set", progress)) {
+      if (performanceSelectionCovered(interval, startSecs, g.end_secs, "set", progress)) {
         endSecs = g.end_secs;
       }
     }
   }
   let totalReps = 0;
   let hasReps = false;
+  const distinctMovements = new Map<string, string>();
   for (const item of chain) {
     const r = observedReps(item);
     if (r != null) {
       totalReps += r;
       hasReps = true;
     }
+    const mov = item.movement?.trim();
+    if (mov && !distinctMovements.has(mov)) {
+      distinctMovements.set(mov, item.id);
+    }
+  }
+  const movementOptions: ContiguousMovementOption[] = [];
+  if (distinctMovements.size > 1) {
+    for (const [mov, repIntervalId] of distinctMovements.entries()) {
+      let optionReps = 0;
+      let optionHasReps = false;
+      for (const item of chain) {
+        const itemMov = item.movement?.trim() ?? "";
+        if (countsAsTargetSquatCycle(itemMov, mov)) {
+          const r = observedReps(item);
+          if (r != null) {
+            optionReps += r;
+            optionHasReps = true;
+          }
+        }
+      }
+      movementOptions.push({
+        movement: mov,
+        intervalId: repIntervalId,
+        observedReps: optionHasReps ? optionReps : null,
+      });
+    }
   }
   return {
-    startSecs: interval.start_secs,
+    startSecs,
     endSecs,
     intervalCount: chain.length,
     observedReps: hasReps ? totalReps : null,
+    ...(movementOptions.length > 1 ? { movementOptions } : {}),
   };
 }
 
-/** A time window may include observed rests; a set may span contiguous same-movement exercise intervals across 10s segment boundaries. */
+/** A time window may include observed rests; a set may span contiguous exercise intervals across 10s segment boundaries. */
 export function performanceSelectionCovered(interval: WorkoutProgressInterval, start: number, end: number, measurement: PerformanceMeasurement, progress?: WorkoutProgress): boolean {
   if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= interval.end_secs || end <= interval.start_secs || end <= start || interval.activity !== "exercise" || !interval.movement?.trim()) return false;
   if (!progress && (start < interval.start_secs || end > interval.end_secs)) return false;
@@ -442,15 +693,20 @@ export function performanceSelectionCovered(interval: WorkoutProgressInterval, s
       .filter(
         row =>
           row.activity === "exercise" &&
-          row.movement?.trim() === movement &&
+          Boolean(row.movement?.trim()) &&
           row.start_secs < end &&
           row.end_secs > start,
       )
       .sort((a, b) => a.start_secs - b.start_secs);
     if (exSpans.length === 0 || !exSpans.some(row => row.id === interval.id)) return false;
+    for (let i = 1; i < exSpans.length; i++) {
+      if (!canBridgeContiguousSetGap(progress.unassessed, exSpans[i - 1].end_secs, exSpans[i].start_secs)) {
+        return false;
+      }
+    }
     let candidate: ProgressLoad | null = null;
     for (const row of exSpans) {
-      if (row.load) {
+      if (row.load && row.movement?.trim() === movement) {
         if (candidate && (kg(candidate) !== kg(row.load) || candidate.basis !== row.load.basis)) return false;
         candidate = row.load;
       }
@@ -540,11 +796,26 @@ export function performanceSelectionCovered(interval: WorkoutProgressInterval, s
   return true;
 }
 
+function resolveTargetInterval(
+  interval: WorkoutProgressInterval,
+  draft: PerformanceDraft,
+  progress?: WorkoutProgress,
+): WorkoutProgressInterval {
+  if (draft.targetIntervalId && progress) {
+    const found = progress.intervals.find(
+      row => row.id === draft.targetIntervalId && row.activity === "exercise" && Boolean(row.movement?.trim()),
+    );
+    if (found) return found;
+  }
+  return interval;
+}
+
 export function diagnosePerformanceDraft(
   interval: WorkoutProgressInterval,
   draft: PerformanceDraft,
   progress?: WorkoutProgress,
 ): string | null {
+  const effectiveInterval = resolveTargetInterval(interval, draft, progress);
   if (draft.start.trim() === "" || draft.end.trim() === "") {
     return "시작(초)과 종료(초)를 입력해주세요.";
   }
@@ -552,8 +823,8 @@ export function diagnosePerformanceDraft(
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
     return "종료(초)는 시작(초)보다 커야 합니다.";
   }
-  if (start < 0 || start >= interval.end_secs || end <= interval.start_secs) {
-    return `시작~종료 범위가 현재 선택한 운동 구간(${progressTime(interval.start_secs)}–${progressTime(interval.end_secs)})과 겹쳐야 합니다.`;
+  if (start < 0 || start >= effectiveInterval.end_secs || end <= effectiveInterval.start_secs) {
+    return `시작~종료 범위가 현재 선택한 운동 구간(${progressTime(effectiveInterval.start_secs)}–${progressTime(effectiveInterval.end_secs)})과 겹쳐야 합니다.`;
   }
   const reps = Number(draft.reps);
   if (draft.reps.trim() === "" || !Number.isSafeInteger(reps) || reps <= 0) {
@@ -568,11 +839,11 @@ export function diagnosePerformanceDraft(
       return "중량 기구 사용 시 0보다 큰 중량(무게)을 입력해주세요.";
     }
   }
-  if (!performanceSelectionCovered(interval, start, end, draft.measurement, progress)) {
+  if (!performanceSelectionCovered(effectiveInterval, start, end, draft.measurement, progress)) {
     if (
       draft.measurement === "set" &&
       progress &&
-      performanceSelectionCovered(interval, start, end, "window", progress)
+      performanceSelectionCovered(effectiveInterval, start, end, "window", progress)
     ) {
       return "선택한 범위에 휴식(rest) 구간이 포함되어 있습니다. 휴식을 포함해 여러 세트를 묶으려면 측정 방식을 '시간 구간'으로 변경해주세요.";
     }
@@ -583,8 +854,9 @@ export function diagnosePerformanceDraft(
 
 export function confirmedPerformanceInput(interval: WorkoutProgressInterval, draft: PerformanceDraft, progress?: WorkoutProgress): ConfirmPerformanceRecord | null {
   if (!draft.reviewed || draft.start.trim() === "" || draft.end.trim() === "" || draft.reps.trim() === "") return null;
+  const effectiveInterval = resolveTargetInterval(interval, draft, progress);
   const start = Number(draft.start), end = Number(draft.end), reps = Number(draft.reps);
-  if (!performanceSelectionCovered(interval, start, end, draft.measurement, progress) || !Number.isSafeInteger(reps) || reps <= 0) return null;
+  if (!performanceSelectionCovered(effectiveInterval, start, end, draft.measurement, progress) || !Number.isSafeInteger(reps) || reps <= 0) return null;
   if (draft.loadMode === "unresolved") return null;
   let load: ProgressLoad | null = null;
   if (draft.loadMode === "weighted") {
@@ -592,6 +864,6 @@ export function confirmedPerformanceInput(interval: WorkoutProgressInterval, dra
     if (draft.weight.trim() === "" || !Number.isFinite(value) || value <= 0) return null;
     load = { value, unit: draft.unit, basis: draft.basis };
   }
-  return { interval_id: interval.id, start_secs: start, end_secs: end, reps, load, measurement: draft.measurement, technique: draft.technique };
+  return { interval_id: effectiveInterval.id, start_secs: start, end_secs: end, reps, load, measurement: draft.measurement, technique: draft.technique };
 }
 

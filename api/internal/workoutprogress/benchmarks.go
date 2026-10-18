@@ -383,15 +383,13 @@ func selectObservedSpans(progress Progress, input Confirmation) ([]observedSpan,
 			if movement == "" {
 				movement = strings.TrimSpace(in.Movement)
 			}
-			if movement == name {
-				if in.Load != nil {
-					if candidate != nil && (candidate.Basis != in.Load.Basis || *Kilograms(candidate) != *Kilograms(in.Load)) {
-						return nil, errors.New("selected window contains different load candidates; confirm separate windows")
-					}
-					candidate = in.Load
+			if movement == name && in.Load != nil {
+				if candidate != nil && (candidate.Basis != in.Load.Basis || *Kilograms(candidate) != *Kilograms(in.Load)) {
+					return nil, errors.New("selected window contains different load candidates; confirm separate windows")
 				}
-				exSpans = append(exSpans, in)
+				candidate = in.Load
 			}
+			exSpans = append(exSpans, in)
 		}
 		if len(exSpans) >= 2 {
 			firstExEnd := exSpans[0].End

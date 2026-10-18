@@ -420,5 +420,39 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(r2.Reps).To(Equal(10))
 		Expect(r2.RepsPerMinute).To(Equal(50.0))
 	})
+	It("confirms a merged contiguous set across two movements under whichever movement interval ID is selected", func() {
+		sc := Interval{Start: 10, End: 13, Activity: "exercise", Movement: "Squat Clean", ObservationRefs: []string{"chunk:1"}, RepEvents: []activity.Observation{cleanCycle(10, 13)}}
+		fs := Interval{Start: 13, End: 25, Activity: "exercise", Movement: "Front Squat", ObservationRefs: []string{"chunk:2"}, RepEvents: []activity.Observation{cleanCycle(13, 16), cleanCycle(16, 19), cleanCycle(19, 22), cleanCycle(22, 25)}}
+		p := Build([]Interval{sc, fs}, nil, "video-sc-fs")
+
+		asFrontSquat, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[1].ID,
+			Start:       10,
+			End:         25,
+			Reps:        5,
+			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(asFrontSquat.Movement).To(Equal("Front Squat"))
+		Expect(asFrontSquat.Start).To(Equal(10.0))
+		Expect(asFrontSquat.End).To(Equal(25.0))
+		Expect(asFrontSquat.ElapsedSeconds).To(Equal(15.0))
+		Expect(asFrontSquat.Reps).To(Equal(5))
+
+		asSquatClean, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Start:       10,
+			End:         25,
+			Reps:        5,
+			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(asSquatClean.Movement).To(Equal("Squat Clean"))
+		Expect(asSquatClean.ElapsedSeconds).To(Equal(15.0))
+	})
 })
 

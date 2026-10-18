@@ -114,4 +114,9 @@ it("displays observed rest duration and before/after cycle times separately, pre
   expect(rows[0]).toContain('workoutProgress.restSeconds'); expect(rows[0]).toContain('4.00'); expect(rows[0]).toContain('6.00'); expect(rows[0]).toContain('+50.0%');
   expect(rows[1]).toContain('workoutProgress.unknown'); expect(rows[1]).not.toContain('0.00'); expect(rows[1]).not.toContain('%');
   expect(rows.join('')).not.toContain('recovery');
+  expect(view.getByText("✓ workoutProgress.confirmed")).toBeTruthy();
+  await act(async () => fireEvent.press(view.getByText("workoutProgress.edit")));
+  expect(view.getByText("workoutProgress.singles")).toBeTruthy();
+  expect(view.getByText("workoutProgress.touch_and_go")).toBeTruthy();
+  expect(view.queryByText("workoutProgress.unspecified")).toBeNull();
 });

@@ -91,6 +91,14 @@ const CHUNK_DURATION_MS = 10000; // 10 seconds
 const MERGE_UPLOAD_WAIT_MS = 90000;
 /** Upper bound on single-chunk compression before falling back to raw chunk uploads. */
 const ANALYSIS_COMPRESSION_TIMEOUT_MS = 8000;
+type FailedChunkRecoveryItem = {
+  path: string;
+  startSecs: number;
+  endSecs: number;
+  heartRateBpm?: number;
+  workoutConfidence?: number;
+  release: () => void;
+};
 type OriginalCapture = {
   ref: OriginalSessionRef;
   startedAt: number;
@@ -100,6 +108,9 @@ type OriginalCapture = {
   failedUploads: number;
   pendingUploads: number;
   completedUploads: number;
+  failedChunks: FailedChunkRecoveryItem[];
+  recoveringChunks?: Promise<void>;
+  recoveryFinished?: boolean;
   bypassCompression?: boolean;
   drains: Promise<void>[];
   consumersFinished?: Promise<void>;
@@ -800,6 +811,68 @@ export default function VisionTestPage() {
 
   // --- Chunk Recording Logic (Raw Camera) ---
 
+  const releaseFailedChunks = (capture: OriginalCapture) => {
+    capture.recoveryFinished = true;
+    while (capture.failedChunks.length > 0) {
+      const item = capture.failedChunks.shift()!;
+      item.release();
+    }
+  };
+
+  const retryFailedChunks = async (capture: OriginalCapture, finalPass = false): Promise<void> => {
+    if (capture.recoveringChunks) {
+      await capture.recoveringChunks;
+    }
+    if (capture.failedChunks.length === 0) {
+      if (finalPass) capture.recoveryFinished = true;
+      return;
+    }
+    const run = (async () => {
+      const remaining: FailedChunkRecoveryItem[] = [];
+      while (capture.failedChunks.length > 0) {
+        const item = capture.failedChunks.shift()!;
+        try {
+          await processWorkoutChunk(item.path, capture.ref.sessionId, {
+            movements: movements ? movements.split(", ") : [],
+            injuries: injuries ? injuries.split(", ") : [],
+            workoutType,
+            profileId: capture.ref.profileId,
+            startSecs: item.startSecs,
+            endSecs: item.endSecs,
+            heartRateBpm: item.heartRateBpm,
+            workoutConfidence: item.workoutConfidence,
+            appearanceHints,
+            maxRetries: 2,
+            retryDelayMs: 2000,
+          });
+          capture.failedUploads = Math.max(0, capture.failedUploads - 1);
+          capture.completedUploads += 1;
+          clearRetryBanner();
+          item.release();
+        } catch (retryError) {
+          if (finalPass || is4xxError(retryError) || !mounted.current) {
+            item.release();
+          } else {
+            remaining.push(item, ...capture.failedChunks.splice(0));
+            break;
+          }
+        }
+      }
+      if (!finalPass && remaining.length > 0) {
+        capture.failedChunks.unshift(...remaining);
+      }
+      if (finalPass) {
+        releaseFailedChunks(capture);
+      }
+    })();
+    capture.recoveringChunks = run.finally(() => {
+      if (capture.recoveringChunks === run) {
+        capture.recoveringChunks = undefined;
+      }
+    });
+    await capture.recoveringChunks;
+  };
+
   const finishOriginalConsumers = (capture: OriginalCapture) => {
     if (!capture.consumersFinished) {
       capture.consumersFinished = Promise.all(capture.drains).then(() => environment.stop())
@@ -813,7 +886,14 @@ export default function VisionTestPage() {
     const endSecs = Math.max(startSecs, (end - capture.startedAt) / 1000);
     const heartRateBpm = heartRateWindow.current.peak(start, end);
     const workoutConfidence = getCaptureConfidence(start, end, nativeClockOffsetMs);
-    const release = holdOriginalFiles(capture.ref);
+    const rawRelease = holdOriginalFiles(capture.ref);
+    let isReleased = false;
+    const release = () => {
+      if (!isReleased) {
+        isReleased = true;
+        rawRelease();
+      }
+    };
     uploadedChunkCount.current += 1;
     outstandingUploads.current += 1;
     capture.pendingUploads += 1;
@@ -842,6 +922,7 @@ export default function VisionTestPage() {
         catch (_) { /* Diagnostic collection is optional. */ }
       }
       const upload = async () => {
+        let heldForRecovery = false;
         try {
           await processWorkoutChunk(uri, capture.ref.sessionId, {
             movements: movements ? movements.split(", ") : [],
@@ -862,6 +943,9 @@ export default function VisionTestPage() {
           });
           capture.completedUploads += 1;
           clearRetryBanner();
+          if (capture.failedChunks.length > 0 && !capture.recoveryFinished) {
+            void retryFailedChunks(capture, false);
+          }
         } catch (error) {
           capture.failedUploads += 1;
           const is4xx = is4xxError(error);
@@ -878,6 +962,17 @@ export default function VisionTestPage() {
               8000,
             );
           } else {
+            if (!capture.recoveryFinished && mounted.current) {
+              heldForRecovery = true;
+              capture.failedChunks.push({
+                path,
+                startSecs,
+                endSecs,
+                heartRateBpm,
+                workoutConfidence,
+                release,
+              });
+            }
             showUploadBanner(
               {
                 type: "error",
@@ -893,7 +988,7 @@ export default function VisionTestPage() {
           deleteDisposableFile(uri, path);
           capture.pendingUploads = Math.max(0, capture.pendingUploads - 1);
           if (originalCapture.current === capture) outstandingUploads.current = Math.max(0, outstandingUploads.current - 1);
-          release();
+          if (!heldForRecovery) release();
         }
       };
       if (serialUpload) enqueueUpload(upload);
@@ -1085,7 +1180,7 @@ export default function VisionTestPage() {
       }
       const startedAt = Date.now();
       preparationQueue.current = Promise.resolve();
-      originalCapture.current = { ref, startedAt, order: 0, complete: true, failedUploads: 0, pendingUploads: 0, completedUploads: 0, drains: [], release: holdOriginalFiles(ref) };
+      originalCapture.current = { ref, startedAt, order: 0, complete: true, failedUploads: 0, pendingUploads: 0, completedUploads: 0, failedChunks: [], drains: [], release: holdOriginalFiles(ref) };
       heartRateWindow.current.clear();
       resetCaptureObservations();
       stoppingWorkout.current = false;
@@ -1188,6 +1283,7 @@ export default function VisionTestPage() {
       const capture = originalCapture.current;
       if (capture) {
         await markOriginalRecordingStopped(capture.ref, { complete: false, reason: recordingErrorMessage(error) }).catch(console.warn);
+        releaseFailedChunks(capture);
         capture.release();
       }
       Alert.alert(t("originalVideo.captureFailedTitle"), t("originalVideo.captureFailedBody"));
@@ -1328,6 +1424,7 @@ export default function VisionTestPage() {
           await Promise.all(capture.drains);
           await waitForOutstandingUploads(capture, MERGE_UPLOAD_WAIT_MS);
           try {
+            await retryFailedChunks(capture, true);
             if (capture.completedUploads === 0 && capture.pendingUploads === 0 && capture.failedUploads === 0) {
               console.warn("Server merge skipped because no chunks were uploaded");
               return;
@@ -1351,9 +1448,12 @@ export default function VisionTestPage() {
           } catch (e) {
             console.error("❌ Auto-merge failed:", e);
           } finally {
+            releaseFailedChunks(capture);
             useMergeStatus.getState().removePending(sessionId);
           }
         })(); // IIFE — fires immediately, does not block
+      } else if (capture) {
+        void Promise.all(capture.drains).finally(() => releaseFailedChunks(capture));
       }
 
       setMergeChunkTotal(capture?.order ?? 0);
@@ -1399,7 +1499,10 @@ export default function VisionTestPage() {
         await stopChunkRecording();
         await markOriginalRecordingStopped(capture.ref, { complete: false, reason: "recording_screen_unmounted" });
       } catch (error) { console.warn("Original recovery required after leaving recording", error); }
-      finally { void finishOriginalConsumers(capture); }
+      finally {
+        releaseFailedChunks(capture);
+        void finishOriginalConsumers(capture);
+      }
     })();
     };
   });
