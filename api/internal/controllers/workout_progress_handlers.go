@@ -271,7 +271,7 @@ func (ctl *Controller) GetPerformanceBenchmarks(c *gin.Context) {
 		return
 	}
 	rows := []db.PerformanceRecord{}
-	query := ctl.db.WithContext(c.Request.Context()).Table("performance_records AS r").Select("r.*").Joins("JOIN analysis_results a ON a.id = r.analysis_id AND a.session_id = r.session_id AND a.profile_id = r.profile_id").Joins("JOIN profiles p ON p.id = r.profile_id").Where("r.profile_id = ? AND p.user_id = ? AND r.status = ? AND a.status = ? AND a.archived_at IS NULL AND a.workout_progress->>'source_version' = r.source_version", pid, uid, "confirmed", "COMPLETED")
+	query := ctl.db.WithContext(c.Request.Context()).Table("performance_records AS r").Select("r.*").Joins("JOIN analysis_results a ON a.id = r.analysis_id AND a.session_id = r.session_id AND a.profile_id = r.profile_id").Joins("JOIN profiles p ON p.id = r.profile_id").Where("r.profile_id = ? AND p.user_id = ? AND r.status = ? AND r.reps > 0 AND a.status = ? AND a.archived_at IS NULL AND a.workout_progress->>'source_version' = r.source_version", pid, uid, "confirmed", "COMPLETED")
 	if name := strings.TrimSpace(c.Query("movement")); name != "" {
 		if canonical := activity.CanonicalMovement(name); canonical != "" {
 			name = canonical

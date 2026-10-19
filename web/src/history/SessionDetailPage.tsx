@@ -221,6 +221,20 @@ export function SessionDetailPage() {
   );
 
   const analysis = sessionAnalysis?.analysis ?? analyses?.[0];
+  const wodDescription =
+    analysis?.wod_description?.trim() ||
+    sessionAnalysis?.wod_description?.trim() ||
+    analyses?.[0]?.wod_description?.trim() ||
+    "";
+  const openWodDescriptionEditor = useCallback(() => {
+    setActivePanelId("details");
+    window.setTimeout(() => {
+      const el = document.getElementById("session-reanalysis-panel");
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }, 0);
+  }, []);
   const analysisStatusUpper = analysis?.status?.toUpperCase() ?? "";
   const isAnalysisInProgress =
     analysisStatusUpper === "PROCESSING" ||
@@ -1041,6 +1055,51 @@ export function SessionDetailPage() {
         </>}
         panels={[
           { id: "summary", label: "영상 요약", content: <>
+          {/* WOD Description summary card */}
+          <div
+            data-testid="session-summary-wod-description"
+            className="bg-bg-elevated border border-border rounded-xl p-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-text-primary">
+                WOD Description
+              </h2>
+              <button
+                type="button"
+                onClick={openWodDescriptionEditor}
+                className="text-xs font-semibold text-accent hover:underline focus:outline-none flex items-center gap-1"
+              >
+                <span>✏️</span>{" "}
+                {wodDescription
+                  ? "수정 및 전체 재분석"
+                  : "WOD 설명 등록 및 재분석"}
+              </button>
+            </div>
+            {wodDescription ? (
+              <p className="text-text-primary text-sm mt-2 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
+                {wodDescription}
+              </p>
+            ) : (
+              <p className="text-text-muted text-xs mt-1.5 italic">
+                등록된 WOD 설명이 없습니다. 위 버튼을 눌러 WOD 설명을 입력하고 재분석할 수 있습니다.
+              </p>
+            )}
+            {sessionAnalysis?.movement_hints &&
+              sessionAnalysis.movement_hints.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-text-muted mr-1">계획 종목:</span>
+                  {sessionAnalysis.movement_hints.map((movement) => (
+                    <span
+                      key={movement}
+                      className="rounded-md bg-accent/10 px-2 py-0.5 text-xs text-accent font-medium"
+                    >
+                      {movement}
+                    </span>
+                  ))}
+                </div>
+              )}
+          </div>
+
           {/* AI Analysis */}
           <div className="bg-bg-elevated border border-border rounded-xl p-5">
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1132,7 +1191,7 @@ export function SessionDetailPage() {
           </div>
           </> },
           { id: "performance", label: "수행 이력·벤치마크", content: <>
-          {analysis?.status === "COMPLETED" && profileId && sessionId && <WorkoutProgressPanel key={`progress:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} sourceUpdatedAt={analysis.updated_at} wodDescription={analysis.wod_description} isOriginal={effectiveVideoKind === "merged"} seek={handleAnalysisSeek} />}
+          {analysis?.status === "COMPLETED" && profileId && sessionId && <WorkoutProgressPanel key={`progress:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} sourceUpdatedAt={analysis.updated_at} wodDescription={wodDescription} isOriginal={effectiveVideoKind === "merged"} seek={handleAnalysisSeek} />}
           </> },
           { id: "timeline", label: "시계열", content: <>
           {analysis && (
@@ -1526,23 +1585,15 @@ export function SessionDetailPage() {
                     <p className="text-text-muted">WOD Description</p>
                     <button
                       type="button"
-                      onClick={() => {
-                        setActivePanelId("details");
-                        window.setTimeout(() => {
-                          const el = document.getElementById("session-reanalysis-panel");
-                          if (el) {
-                            el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                          }
-                        }, 0);
-                      }}
+                      onClick={openWodDescriptionEditor}
                       className="text-xs font-semibold text-accent hover:underline focus:outline-none flex items-center gap-1"
                     >
-                      <span>✏️</span> {analysis.wod_description ? "수정 및 전체 재분석" : "WOD 설명 등록 및 재분석"}
+                      <span>✏️</span> {wodDescription ? "수정 및 전체 재분석" : "WOD 설명 등록 및 재분석"}
                     </button>
                   </div>
-                  {analysis.wod_description ? (
+                  {wodDescription ? (
                     <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
-                      {analysis.wod_description}
+                      {wodDescription}
                     </p>
                   ) : (
                     <p className="text-text-muted text-xs mt-1 italic">
@@ -1598,7 +1649,14 @@ export function SessionDetailPage() {
 
           <SessionReanalysisPanel
             sessionId={sessionId!}
-            originalAnalysis={analysis}
+            originalAnalysis={
+              analysis
+                ? {
+                    ...analysis,
+                    wod_description: wodDescription || analysis.wod_description,
+                  }
+                : undefined
+            }
             chunkBatchReady={chunkBatchReadyForSessionReanalysis}
             chunkBatchBlockedReason={chunkBatchBlockedReason}
             unconfirmedCandidateCount={unconfirmedBulkCandidateCount}

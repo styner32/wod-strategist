@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/timeline"
 	"github.com/wod-strategist/api/internal/worker"
 	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
@@ -26,12 +28,21 @@ import (
 )
 
 const (
-	sessionReanalysisDailyQuota  = int64(5)
+	sessionReanalysisDailyQuota  = int64(20)
 	sessionReanalysisWindow      = 24 * time.Hour
 	sessionReanalysisRunLimit    = 20
 	sessionReanalysisTaskMaxTry  = 2
 	sessionReanalysisTaskTimeout = 60 * time.Minute
 )
+
+func resolveSessionReanalysisDailyQuota() int64 {
+	if raw := strings.TrimSpace(os.Getenv("SESSION_REANALYSIS_DAILY_QUOTA")); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return sessionReanalysisDailyQuota
+}
 
 var (
 	errSessionReanalysisActive      = errors.New("session re-analysis already active")
@@ -64,13 +75,14 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 	}
 	if len(req.WODStartSecs) > 0 {
 		var session db.Session
-		if err := ctl.db.WithContext(c.Request.Context()).Where("session_id = ? AND profile_id = ? AND workout_type = ? AND wod_evaluation_version = 1", sessionID, profileID, "wod").First(&session).Error; err != nil {
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				logger.Log.Error("failed to check WOD start correction eligibility", zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session re-analysis"})
-				return
-			}
-			c.JSON(http.StatusConflict, gin.H{"error": "start correction is available only for new WOD sessions"})
+		err := ctl.db.WithContext(c.Request.Context()).Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&session).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			logger.Log.Error("failed to check WOD start correction eligibility", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session re-analysis"})
+			return
+		}
+		if err == nil && strings.TrimSpace(session.WorkoutType) != "" && worker.NormalizeWorkoutType(session.WorkoutType) != worker.WorkoutTypeWOD {
+			c.JSON(http.StatusConflict, gin.H{"error": "start correction is available only for WOD sessions"})
 			return
 		}
 		if string(req.WODStartSecs) != "null" {
@@ -223,7 +235,7 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 			Where("profile_id = ? AND created_at >= ?", profileID, time.Now().Add(-sessionReanalysisWindow)).Count(&count).Error; err != nil {
 			return err
 		}
-		if count >= sessionReanalysisDailyQuota {
+		if count >= resolveSessionReanalysisDailyQuota() {
 			return errSessionReanalysisQuota
 		}
 		return tx.Create(&run).Error
@@ -363,6 +375,14 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 
 	now := time.Now().UTC()
 	err = ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		var candidateVersion struct {
+			Version int `json:"evaluation_version"`
+		}
+		_ = json.Unmarshal([]byte(run.SessionScore), &candidateVersion)
+
+		var existingSession db.Session
+		hasSession := tx.Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&existingSession).Error == nil
+
 		var analysis db.AnalysisResult
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 			Order("created_at DESC, id DESC").First(&analysis).Error
@@ -370,10 +390,6 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 			if progressSnapshotStale(run.OriginalAnalysisSnapshot, analysis.WorkoutProgress) {
 				return errWODCandidateStale
 			}
-			var candidateVersion struct {
-				Version int `json:"evaluation_version"`
-			}
-			_ = json.Unmarshal([]byte(run.SessionScore), &candidateVersion)
 			if candidateVersion.Version == 1 {
 				var original struct {
 					Score  string `json:"session_score"`
@@ -394,6 +410,25 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 			if run.WODDescription != "" {
 				updates["wod_description"] = run.WODDescription
 			}
+			if candidateVersion.Version == 1 && analysis.WorkoutAt == nil {
+				var sessionCreatedPtr, analysisCreatedPtr *time.Time
+				if hasSession && !existingSession.CreatedAt.IsZero() {
+					t := existingSession.CreatedAt
+					sessionCreatedPtr = &t
+				}
+				if !analysis.CreatedAt.IsZero() {
+					t := analysis.CreatedAt
+					analysisCreatedPtr = &t
+				} else {
+					analysisCreatedPtr = &now
+				}
+				if resolvedAt, resolvedSource, _ := timeline.ResolveWorkoutAt(sessionID, sessionCreatedPtr, analysisCreatedPtr); !resolvedAt.IsZero() {
+					analysis.WorkoutAt = &resolvedAt
+					analysis.WorkoutAtSource = &resolvedSource
+					updates["workout_at"] = analysis.WorkoutAt
+					updates["workout_at_source"] = analysis.WorkoutAtSource
+				}
+			}
 			if err := tx.Model(&analysis).Updates(updates).Error; err != nil {
 				return err
 			}
@@ -410,6 +445,17 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 				WODDescription:    run.WODDescription,
 				CreatedAt:         now,
 				UpdatedAt:         now,
+			}
+			if candidateVersion.Version == 1 {
+				var sessionCreatedPtr *time.Time
+				if hasSession && !existingSession.CreatedAt.IsZero() {
+					t := existingSession.CreatedAt
+					sessionCreatedPtr = &t
+				}
+				if resolvedAt, resolvedSource, _ := timeline.ResolveWorkoutAt(sessionID, sessionCreatedPtr, &now); !resolvedAt.IsZero() {
+					analysis.WorkoutAt = &resolvedAt
+					analysis.WorkoutAtSource = &resolvedSource
+				}
 			}
 			if err := tx.Create(&analysis).Error; err != nil {
 				return err
@@ -434,10 +480,50 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 		if run.WorkoutType != "" {
 			sessionUpdates["workout_type"] = run.WorkoutType
 		}
-		if err := tx.Model(&db.Session{}).
-			Where("session_id = ? AND profile_id = ?", sessionID, profileID).
-			Updates(sessionUpdates).Error; err != nil {
-			return err
+		if candidateVersion.Version == 1 {
+			sessionUpdates["wod_evaluation_version"] = 1
+			if run.WorkoutType == "" {
+				sessionUpdates["workout_type"] = worker.WorkoutTypeWOD
+			}
+		}
+		if hasSession {
+			if err := tx.Model(&db.Session{}).
+				Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+				Updates(sessionUpdates).Error; err != nil {
+				return err
+			}
+		} else if candidateVersion.Version == 1 {
+			workoutType := run.WorkoutType
+			if workoutType == "" {
+				workoutType = worker.WorkoutTypeWOD
+			}
+			createdSession := db.Session{
+				SessionID:            sessionID,
+				ProfileID:            profileID,
+				IdempotencyKey:       "wod:" + sessionID,
+				Status:               db.SessionStatusCompleted,
+				WorkoutType:          workoutType,
+				WODDescription:       run.WODDescription,
+				MovementHints:        db.JSONDocument("[]"),
+				WODEvaluationVersion: 1,
+				CreatedAt:            now,
+				UpdatedAt:            now,
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "session_id"}},
+				DoUpdates: clause.Assignments(sessionUpdates),
+			}).Create(&createdSession).Error; err != nil {
+				return err
+			}
+		}
+
+		if candidateVersion.Version == 1 && analysis.WorkoutAt != nil && !analysis.WorkoutAt.IsZero() {
+			if err := tx.Exec(
+				"UPDATE profiles SET wod_tracking_started_at = ? WHERE id = ? AND (wod_tracking_started_at IS NULL OR wod_tracking_started_at > ?)",
+				*analysis.WorkoutAt, profileID, *analysis.WorkoutAt,
+			).Error; err != nil {
+				return err
+			}
 		}
 
 		ctl.enrichmentWorker().PrepareEnrichmentOutbox(c.Request.Context(), tx, sessionID)
@@ -508,7 +594,7 @@ func (ctl *Controller) loadSessionReanalysisReadiness(ctx context.Context, sessi
 		readiness.BlockedReason = "chunk re-analyses are still active"
 	case !readiness.VideoAvailable:
 		readiness.BlockedReason = "session video is unavailable"
-	case recentCount >= sessionReanalysisDailyQuota:
+	case recentCount >= resolveSessionReanalysisDailyQuota():
 		readiness.BlockedReason = "daily session re-analysis limit reached"
 	default:
 		readiness.CanCreate = true

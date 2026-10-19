@@ -13,6 +13,7 @@ type SessionAnalysisResultResponse struct {
 
 type SessionAnalysisResponse struct {
 	SessionID                   string                         `json:"session_id"`
+	WODDescription              string                         `json:"wod_description,omitempty"`
 	Analysis                    *SessionAnalysisResultResponse `json:"analysis"`
 	Chunks                      []db.ChunkAnalysisResult       `json:"chunks"`
 	Feedback                    []db.AnalysisFeedback          `json:"feedback"`

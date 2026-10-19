@@ -123,6 +123,10 @@ export function observedReps(interval: WorkoutProgressInterval): number | null {
   const complete = events.filter(event => event.complete && event.unit === "reps");
   return complete.length ? complete.length : null;
 }
+export function incompleteRepCount(interval: WorkoutProgressInterval): number {
+  const events = interval.rep_events ?? [];
+  return events.filter(event => !event.complete && event.unit === "reps").length;
+}
 
 export function inferLoadBasis(movement?: string | null, contextText?: string): "total" | "per_implement" {
   const combined = `${movement ?? ""} ${contextText ?? ""}`.toLowerCase();
@@ -418,7 +422,12 @@ export function rememberedMovementDefaults(
   const inMemory = rememberedByMovement[key];
   const confirmedForMovement = [...records]
     .reverse()
-    .find(r => r.status === "confirmed" && r.movement?.trim().toLowerCase() === key);
+    .find(
+      r =>
+        r.status === "confirmed" &&
+        r.movement?.trim().toLowerCase() === key &&
+        (r.reps > 0 || r.load != null),
+    );
   if (!inMemory && !confirmedForMovement) return undefined;
   const fromRecord: MovementDraftDefaults | undefined = confirmedForMovement
     ? {
@@ -827,15 +836,18 @@ export function diagnosePerformanceDraft(
     return `시작~종료 범위가 현재 선택한 운동 구간(${progressTime(effectiveInterval.start_secs)}–${progressTime(effectiveInterval.end_secs)})과 겹쳐야 합니다.`;
   }
   const reps = Number(draft.reps);
-  if (draft.reps.trim() === "" || !Number.isSafeInteger(reps) || reps <= 0) {
-    return "완료 반복수에 1 이상의 정수를 입력해주세요.";
+  if (draft.reps.trim() === "" || !Number.isSafeInteger(reps) || reps < 0) {
+    return "완료 반복수에 0 이상의 정수를 입력해주세요.";
   }
-  if (draft.loadMode === "unresolved") {
+  if (reps > 0 && draft.loadMode === "unresolved") {
     return "수행 중량 구분이 '미확인' 상태입니다. '맨몸 수행' 또는 '중량 기구 사용'을 선택해주세요.";
   }
   if (draft.loadMode === "weighted") {
     const val = Number(draft.weight);
-    if (draft.weight.trim() === "" || !Number.isFinite(val) || val <= 0) {
+    if (reps > 0 && (draft.weight.trim() === "" || !Number.isFinite(val) || val <= 0)) {
+      return "중량 기구 사용 시 0보다 큰 중량(무게)을 입력해주세요.";
+    }
+    if (reps === 0 && draft.weight.trim() !== "" && (!Number.isFinite(val) || val <= 0)) {
       return "중량 기구 사용 시 0보다 큰 중량(무게)을 입력해주세요.";
     }
   }
@@ -856,13 +868,17 @@ export function confirmedPerformanceInput(interval: WorkoutProgressInterval, dra
   if (!draft.reviewed || draft.start.trim() === "" || draft.end.trim() === "" || draft.reps.trim() === "") return null;
   const effectiveInterval = resolveTargetInterval(interval, draft, progress);
   const start = Number(draft.start), end = Number(draft.end), reps = Number(draft.reps);
-  if (!performanceSelectionCovered(effectiveInterval, start, end, draft.measurement, progress) || !Number.isSafeInteger(reps) || reps <= 0) return null;
-  if (draft.loadMode === "unresolved") return null;
+  if (!performanceSelectionCovered(effectiveInterval, start, end, draft.measurement, progress) || !Number.isSafeInteger(reps) || reps < 0) return null;
+  if (reps > 0 && draft.loadMode === "unresolved") return null;
   let load: ProgressLoad | null = null;
   if (draft.loadMode === "weighted") {
-    const value = Number(draft.weight);
-    if (draft.weight.trim() === "" || !Number.isFinite(value) || value <= 0) return null;
-    load = { value, unit: draft.unit, basis: draft.basis };
+    if (draft.weight.trim() === "") {
+      if (reps > 0) return null;
+    } else {
+      const value = Number(draft.weight);
+      if (!Number.isFinite(value) || value <= 0) return null;
+      load = { value, unit: draft.unit, basis: draft.basis };
+    }
   }
   return { interval_id: effectiveInterval.id, start_secs: start, end_secs: end, reps, load, measurement: draft.measurement, technique: draft.technique };
 }

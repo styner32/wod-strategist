@@ -14,6 +14,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/storage"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -69,11 +70,12 @@ type chunkDebugMedia struct {
 }
 
 type reusableGeminiFile struct {
-	URI      string
-	Name     string
-	MIMEType string
-	Expires  *time.Time
-	Duration time.Duration
+	URI       string
+	Name      string
+	MIMEType  string
+	Expires   *time.Time
+	Duration  time.Duration
+	LocalPath string
 }
 
 func NewChunkDebugReanalysisTask(runID uint) (*asynq.Task, error) {
@@ -231,6 +233,9 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 		return w.failChunkDebugRun(ctx, &run, retryCount, started,
 			db.ChunkReanalysisStatusVideoUnavailable, "The session video could not be prepared.", err)
 	}
+	if file.LocalPath != "" {
+		defer os.Remove(file.LocalPath)
+	}
 
 	if media.Kind == db.ChunkReanalysisSourceChunk {
 		// An individual chunk is itself the exact interval. Its Gemini-probed
@@ -286,9 +291,26 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 		}
 	}
 
-	analysis, usage, err := w.GeminiClient.AnalyzeSegmentWithModel(
-		ctx, file.URI, chunkDebugMIMEType(file.MIMEType), media.Start, media.End, prompt, selectedModel,
+	var (
+		analysis string
+		sheets   []FrameGridSheet
+		usage    = (*gemini.TokenUsage)(nil)
 	)
+	if file.LocalPath != "" {
+		gridOpts := FrameGridOptions{}
+		if media.Kind == db.ChunkReanalysisSourceChunk && target.MediaStartSecs != nil && *target.MediaStartSecs >= 0 {
+			offset := secondsDuration(*target.MediaStartSecs)
+			gridOpts.TimestampOffset = &offset
+		}
+		analysis, sheets, usage, err = w.AnalyzeVideoIntervalWithFrameGrids(
+			ctx, file.LocalPath, media.Start, media.End, prompt, selectedModel, gridOpts,
+		)
+	}
+	if file.LocalPath == "" || (err != nil && len(sheets) == 0) {
+		analysis, usage, err = w.GeminiClient.AnalyzeSegmentWithModel(
+			ctx, file.URI, chunkDebugMIMEType(file.MIMEType), media.Start, media.End, prompt, selectedModel,
+		)
+	}
 	w.saveTokenUsage(target.SessionID, target.ProfileID, "chunk:reanalysis", usage)
 	if err != nil || strings.TrimSpace(analysis) == "" {
 		if err == nil {
@@ -550,8 +572,8 @@ func (w *Worker) prepareChunkDebugGeminiFile(ctx context.Context, run *db.ChunkR
 	if err != nil {
 		return reusableGeminiFile{}, 0, err
 	}
-	defer os.Remove(localPath)
 	if err := w.StorageClient.DownloadFile(ctx, media.GCSURI, localPath); err != nil {
+		_ = os.Remove(localPath)
 		return reusableGeminiFile{}, 0, fmt.Errorf("download debug source: %w", err)
 	}
 	var uploadBytes int64
@@ -561,6 +583,7 @@ func (w *Worker) prepareChunkDebugGeminiFile(ctx context.Context, run *db.ChunkR
 
 	upload, err := w.GeminiClient.UploadVideo(ctx, localPath)
 	if err != nil {
+		_ = os.Remove(localPath)
 		if upload != nil && upload.FileName != "" {
 			if deleteErr := w.GeminiClient.DeleteFile(context.Background(), upload.FileName); deleteErr != nil {
 				w.logger.Warn("failed to clean up incomplete debug upload", zap.Error(deleteErr))
@@ -579,7 +602,7 @@ func (w *Worker) prepareChunkDebugGeminiFile(ctx context.Context, run *db.ChunkR
 	}
 	return reusableGeminiFile{
 		URI: upload.FileURI, Name: upload.FileName, MIMEType: upload.MIMEType,
-		Expires: &expires, Duration: upload.VideoDuration,
+		Expires: &expires, Duration: upload.VideoDuration, LocalPath: localPath,
 	}, uploadBytes, nil
 }
 

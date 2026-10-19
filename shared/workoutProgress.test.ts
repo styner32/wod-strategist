@@ -1,9 +1,11 @@
-import { confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, findCoveringConfirmedRecord, getContiguousExerciseSpan, observedReps, performanceDraft, summarizeWorkoutMovements, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
+import { confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, findCoveringConfirmedRecord, getContiguousExerciseSpan, incompleteRepCount, observedReps, performanceDraft, summarizeWorkoutMovements, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
 import { withoutWorkoutEvidence } from "./analysisEvidence";
 const interval: WorkoutProgressInterval = { id: "set-1", start_secs: 10, end_secs: 70, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total", status: "pending_confirmation" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 12, end_secs: 16, complete: true, evidence: "Complete cycle" }, { movement: "Power Clean", unit: "reps", start_secs: 17, end_secs: 20, complete: false, evidence: "Occluded lockout" }] };
 it("uses complete repetition evidence but preserves missing counts rather than zero", () => {
   expect(observedReps(interval)).toBe(1);
+  expect(incompleteRepCount(interval)).toBe(1);
   expect(observedReps({ ...interval, rep_events: [] })).toBeNull();
+  expect(incompleteRepCount({ ...interval, rep_events: [] })).toBe(0);
   expect(observedReps({ ...interval, rep_events: [{ ...interval.rep_events![0], unit: "seconds" }] })).toBeNull();
   expect(performanceDraft({ ...interval, rep_events: [] }).reps).toBe("");
 });
@@ -12,9 +14,10 @@ it("requires explicit review and actual load, retaining original units without c
   const draft = performanceDraft(interval);
   expect(confirmedPerformanceInput(interval, draft)).toBeNull();
   expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "5" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput({ ...interval, load: null }, { ...performanceDraft({ ...interval, load: null }), reviewed: true, reps: "0" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 0, load: null, measurement: "set", technique: "singles" });
   expect(JSON.stringify(interval)).toBe(before);
 });
-it.each([{ start: "9" }, { end: "71" }, { end: "10" }, { reps: "2.5" }, { reps: "0" }, { reps: "" }, { weight: "" }, { weight: "0" }, { loadMode: "unresolved" as const }])("rejects invalid reviewed values %j", values => {
+it.each([{ start: "9" }, { end: "71" }, { end: "10" }, { reps: "2.5" }, { reps: "-1" }, { reps: "" }, { weight: "" }, { weight: "0" }, { loadMode: "unresolved" as const }])("rejects invalid reviewed values %j", values => {
   expect(confirmedPerformanceInput(interval, { ...performanceDraft(interval), reviewed: true, ...values })).toBeNull();
 });
 it("defaults loadMode and basis from movement type while leaving ambiguous movements unresolved", () => {

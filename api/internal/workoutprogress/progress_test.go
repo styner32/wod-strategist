@@ -454,5 +454,66 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(asSquatClean.Movement).To(Equal("Squat Clean"))
 		Expect(asSquatClean.ElapsedSeconds).To(Equal(15.0))
 	})
+	It("allows confirming 0 repetitions for incomplete/no-rep exercise intervals while excluding them from comparisons and best records", func() {
+		incomplete := cleanCycle(11, 14)
+		incomplete.Complete = false
+		p := Build([]Interval{exercise(10, 20, incomplete)}, nil, "video-zero-reps")
+
+		zeroRec, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Start:       10,
+			End:         20,
+			Reps:        0,
+			Load:        nil,
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(zeroRec.Reps).To(Equal(0))
+		Expect(zeroRec.RepsPerMinute).To(Equal(0.0))
+		Expect(zeroRec.MedianCycleSeconds).To(BeNil())
+		Expect(zeroRec.RestComparisons).To(BeEmpty())
+
+		_, err = Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Start:       10,
+			End:         20,
+			Reps:        -1,
+			Load:        nil,
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).To(HaveOccurred())
+
+		day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+		next := day.Add(time.Hour)
+		zeroRec.ID = 1
+		zeroRec.SessionID = "s-zero"
+		zeroRec.WorkoutPrescription = "Grace"
+		zeroRec.PerformedAt = &day
+
+		validRec := Record{
+			ID:                  2,
+			SessionID:           "s-valid",
+			Status:              "confirmed",
+			Movement:            "Power Clean",
+			Start:               0,
+			End:                 30,
+			ElapsedSeconds:      30,
+			Reps:                5,
+			RepsPerMinute:       10,
+			Measurement:         "set",
+			Technique:           "singles",
+			WorkoutPrescription: "Grace",
+			PerformedAt:         &next,
+		}
+
+		Expect(Comparisons([]Record{validRec, zeroRec})).To(BeEmpty())
+		Expect(Comparisons([]Record{zeroRec})).To(BeEmpty())
+		best := Best([]Record{zeroRec, validRec})
+		Expect(best).To(HaveLen(1))
+		Expect(best[0].ID).To(Equal(uint(2)))
+		Expect(Best([]Record{zeroRec})).To(BeEmpty())
+	})
 })
 

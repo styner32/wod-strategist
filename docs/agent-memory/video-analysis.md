@@ -219,12 +219,14 @@ Do not disable the filter based on session drift or missing capture offsets.
 - Owner APIs are `POST /sessions/:session_id/reanalyses`,
   `GET /sessions/:session_id/reanalyses`, and
   `GET /sessions/:session_id/reanalyses/:run_id`. POST requires
-  `client_request_id` and accepts optional `appearance_hints`, `model`, and `wod_description` (`session_reanalysis_dto.go`). It enforces one active run per session, blocks while any
-  chunk debug run is active, and limits each profile to 5 runs per rolling 24h.
+  `client_request_id` and accepts optional `appearance_hints`, `model`, `wod_description`, and `wod_start_secs` (`session_reanalysis_dto.go`). `wod_start_secs` is allowed for all WOD sessions (including legacy `wod_evaluation_version == 0` sessions). It enforces one active run per session, blocks while any
+  chunk debug run is active, and limits each profile to 20 runs per rolling 24h (`sessionReanalysisDailyQuota = 20`, configurable via `SESSION_REANALYSIS_DAILY_QUOTA`).
 - The API resolves and snapshots the exact GCS session source. The worker may
   reuse a still-valid Gemini Files object only from a chunk or session debug run
-  with the same `source_gcs_uri`; an authoritative source duration is still
-  probed before reuse.
+  with the same `source_gcs_uri`; an authoritative source duration and local `.mp4` copy are
+  prepared so segment analysis can run via Frame-Grid contact sheets (`AnalyzeVideoIntervalWithFrameGrids`).
+- Legacy segment resolution order (`buildSessionDebugSegments`): (1) verified `media_start_secs`/`media_end_secs` on `chunk_analysis_results` (reconstructed from retained GCS chunks via `reconstructSessionDebugMediaIntervals` when NULL), (2) `## 세그먼트 N: <Movement> (<Start> ~ <End>)` headers parsed from `analysis_results.output` (`parseStoredOutputSegments`), (3) `IndexVideo` fallback filtered by `filterExerciseAndUnknownSegments`.
+- Segment selection includes exercise segments and `Unknown` segments (`Unknown` routed to `gemini-3.8-flash`), excludes explicit non-exercise (`[NO_EXERCISE]`, `Rest`, `Walking`, `Setup`), does not insert synthetic between-set `Unknown` windows (`addBetweenObservationWindows` removed), and does not truncate segments with `maxSegmentsForDuration`.
 - Only the latest active, non-retracted structured chunk corrections are
   included. Free-text notes and unconfirmed re-analysis candidates are never
   prompt context. Corrections carry `media_start_secs`/`media_end_secs`, remain
@@ -370,3 +372,12 @@ Deployment acceptance still requires matched, annotated-video comparison of Argo
   - `Client.AnalyzeSegmentsBatch` (`internal/gemini/client.go`) submits `InlinedRequests` via `c.client.Batches.Create` with exact fractional `videoMetadata` offsets (`replaceBatchVideoMetadataOffsets` in `exactSegmentOffsetsTransport`) and polls `c.client.Batches.Get`.
   - `cost.IsBatchTaskType` (`internal/cost/cost.go`) applies a 50% discount (`BatchDiscountMultiplier = 0.5`) to any `token_usages.task_type` ending in `:batch` (e.g., `video:analysis:batch`, `session:reanalysis:batch`).
 
+## Frame-Grid Contact Sheet Reanalysis (2026-10-19)
+- **FFmpeg + Go Contact Sheet Generation (`internal/worker/frame_grid.go`)**:
+  - `GenerateFrameGrids(ctx, videoPath, start, end, opts)`: Extracts frames via FFmpeg (`-vf fps=...,scale=...`), burns top-left `HH:MM:SS.mmm` timestamps (`inconsolata.Bold8x16` on semi-transparent dark badge) in pure Go (no `libfreetype`/`drawtext` requirement), and tiles into `[]FrameGridSheet` JPEG contact sheets.
+  - Default `FrameGridOptions`: `FPS=4.0`, `Cols=8`, `Rows=4` (32 frames / 8s per sheet), `MaxSheets=12` (384 frames max per call), `TileWidth=240`, `JPEGQuality=85`, `defaultFrameGridBorderPx=2`. Intervals exceeding 32 frames automatically split into multiple chronological sheets; intervals that would exceed `MaxSheets` adaptively scale down `FPS` (down to `minFrameGridFPS=0.25`) and subsample frames if needed.
+  - `TimestampOffset *time.Duration`: Optional base timestamp override when extracting `[0, duration]` from a standalone chunk file that maps to a known merged-media offset.
+- **Gemini Inline Frame-Grid Analysis (`internal/gemini/client.go`)**:
+  - `Client.AnalyzeFrameGrids` and `Client.AnalyzeFrameGridsWithModel(ctx, images, mimeType, prompt, model)` send one or more contact-sheet images inline (`InlineData`) with `MediaResolutionHigh` and configured thinking (`HIGH` default), excluding `Thought` parts from the returned text.
+  - `(w *Worker) AnalyzeVideoIntervalWithFrameGrids(ctx, videoPath, start, end, prompt, model, opts)` combines `GenerateFrameGrids`, frame-grid reading prompt instructions, and `GeminiClient.AnalyzeFrameGridsWithModel`.
+  - Both `HandleSessionDebugReanalysisTask` and `HandleChunkDebugReanalysisTask` retain the downloaded local `.mp4` for the duration of the task and analyze segments/chunks via `AnalyzeVideoIntervalWithFrameGrids` (with fallback to `AnalyzeSegmentWithModel` if a local video file is unavailable or cannot be decoded by FFmpeg).

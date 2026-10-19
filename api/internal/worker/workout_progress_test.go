@@ -85,7 +85,10 @@ var _ = Describe("Independent workout progress helpers", func() {
 		later.FormObservations = []workoutprogress.Observation{observation(41, 43, "stable catch")}
 		interior := workoutprogress.Build([]workoutprogress.Interval{in, later}, []workoutprogress.Gap{{Start: 30, End: 40, Clock: "media", Reason: "not_analyzed"}}, "source")
 		from, to = progressAssessedSpan(interior)
-		Expect(progressCoverageComplete(interior, from, to)).To(BeFalse())
+		Expect(progressCoverageComplete(interior, from, to)).To(BeTrue(), "skipped non-exercise intervals between sets do not invalidate coverage")
+		failed := workoutprogress.Build([]workoutprogress.Interval{in, later}, []workoutprogress.Gap{{Start: 30, End: 40, Clock: "media", Reason: "observations_not_available"}}, "source")
+		from, to = progressAssessedSpan(failed)
+		Expect(progressCoverageComplete(failed, from, to)).To(BeFalse())
 		omitted := workoutprogress.Build([]workoutprogress.Interval{in}, []workoutprogress.Gap{{Start: 30, End: 40, Clock: "media", Reason: "not_analyzed"}, {Start: 40, End: 50, Clock: "media", Reason: "segment_budget_omitted"}}, "source")
 		from, to = progressAssessedSpan(omitted)
 		Expect(progressCoverageComplete(omitted, from, to)).To(BeFalse(), "a budget-omitted edge segment is still part of the workout")

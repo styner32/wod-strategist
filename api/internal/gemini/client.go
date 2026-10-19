@@ -831,6 +831,87 @@ func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType 
 	return result, usage, nil
 }
 
+// AnalyzeFrameGrids performs deep analysis on one or more stitched frame-grid
+// images (contact sheets) using the default model.
+func (c *Client) AnalyzeFrameGrids(ctx context.Context, images [][]byte, mimeType, prompt string) (string, *TokenUsage, error) {
+	return c.AnalyzeFrameGridsWithModel(ctx, images, mimeType, prompt, c.model)
+}
+
+// AnalyzeFrameGridsWithModel performs deep analysis on one or more stitched
+// frame-grid images using a specified model (e.g. ModelArgon4 or ModelFlash38)
+// with MediaResolutionHigh so burned-in timestamps and pose details remain legible.
+func (c *Client) AnalyzeFrameGridsWithModel(ctx context.Context, images [][]byte, mimeType, prompt, model string) (string, *TokenUsage, error) {
+	if model == "" {
+		model = c.model
+	}
+	if len(images) == 0 {
+		return "", nil, fmt.Errorf("at least one frame grid image is required")
+	}
+
+	parts := make([]*genai.Part, 0, len(images)+1)
+	totalBytes := 0
+	for i, imgBytes := range images {
+		if len(imgBytes) == 0 {
+			return "", nil, fmt.Errorf("frame grid image at index %d is empty", i)
+		}
+		partMIME := strings.TrimSpace(mimeType)
+		if partMIME == "" {
+			partMIME = DetectImageMIME(imgBytes)
+		}
+		if partMIME == "" {
+			partMIME = "image/jpeg"
+		}
+		parts = append(parts, &genai.Part{
+			InlineData: &genai.Blob{
+				MIMEType: partMIME,
+				Data:     imgBytes,
+			},
+		})
+		totalBytes += len(imgBytes)
+	}
+	parts = append(parts, genai.NewPartFromText(prompt))
+
+	c.logger.Info("Analyzing frame grids",
+		zap.String("model", model),
+		zap.Int("image_count", len(images)),
+		zap.Int("total_image_bytes", totalBytes))
+
+	genConfig := &genai.GenerateContentConfig{
+		MediaResolution: genai.MediaResolutionHigh,
+	}
+	thinkingLevel := c.thinkingLevel
+	if strings.TrimSpace(thinkingLevel) == "" {
+		thinkingLevel = "HIGH"
+	}
+	if tc := c.thinkingConfigForModelAndLevel(model, thinkingLevel); tc != nil {
+		genConfig.ThinkingConfig = tc
+	}
+	resp, usage, err := c.generateContent(ctx, model, []*genai.Content{{
+		Role:  genai.RoleUser,
+		Parts: parts,
+	}}, genConfig)
+	if err != nil {
+		return "", usage, fmt.Errorf("failed to analyze frame grids: %w", err)
+	}
+
+	if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0] == nil || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
+		return "", usage, fmt.Errorf("no content from frame grid analysis")
+	}
+
+	var result string
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if part != nil && !part.Thought {
+			result += part.Text
+		}
+	}
+
+	c.logger.Info("Frame grids analyzed",
+		zap.Int("image_count", len(images)),
+		zap.Int("response_length", len(result)))
+
+	return result, usage, nil
+}
+
 // QueryVideoFlash sends a prompt against an already-uploaded video using the
 // lightweight Flash model. Ideal for simple verification tasks (e.g. confirming
 // whether a movement is visible at a given timestamp) where Pro-level depth

@@ -214,6 +214,28 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 		Expect(response.MovementHints).To(BeEmpty())
 		Expect(response.MovementHints).NotTo(BeNil())
 	})
+
+	It("falls back to sessions.wod_description when analysis_results.wod_description is empty", func() {
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:         session.SessionID,
+			ProfileID:         profile.ID,
+			Status:            "COMPLETED",
+			Output:            "Original final analysis",
+			HighlightSegments: `[]`,
+			WODDescription:    "",
+		})
+
+		req := newAuthorizedJSONRequest(http.MethodGet, "/api/v1/sessions/"+session.SessionID+"/analysis", "", &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+		var response controllers.SessionAnalysisResponse
+		Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+		Expect(response.WODDescription).To(Equal("5 rounds of Pull-ups"))
+		Expect(response.Analysis).NotTo(BeNil())
+		Expect(response.Analysis.WODDescription).To(Equal("5 rounds of Pull-ups"))
+	})
 })
 
 var _ = Describe("POST /api/v1/merge-chunks", func() {
@@ -243,8 +265,8 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 		})
 	})
 
-	It("updates movement hints for the exact existing session", func() {
-		body := fmt.Sprintf(`{"session_id":"%s","profile_id":%d,"movements":["Power Snatch","Custom Carry"],"workout_type":"wod"}`, session.SessionID, profile.ID)
+	It("updates movement hints and wod_description for the exact existing session", func() {
+		body := fmt.Sprintf(`{"session_id":"%s","profile_id":%d,"movements":["Power Snatch","Custom Carry"],"wod_description":"For Time: 30 Power Snatches (135 lb)","workout_type":"wod"}`, session.SessionID, profile.ID)
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -253,5 +275,6 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 		var updated db.Session
 		Expect(dbConn.First(&updated, session.ID).Error).NotTo(HaveOccurred())
 		Expect(string(updated.MovementHints)).To(MatchJSON(`["Power Snatch","Custom Carry"]`))
+		Expect(updated.WODDescription).To(Equal("For Time: 30 Power Snatches (135 lb)"))
 	})
 })

@@ -403,14 +403,15 @@ func progressAssessedSpan(progress workoutprogress.Progress) (float64, float64) 
 	return from, to
 }
 
-// Media outside [from, to] (pre-onset waiting, post-workout footage) is not part
-// of the assessed workout. Count-only uncertainty does not erase visible
-// posture/ROM, and a verified recording pause stays in capture-clock elapsed time.
+// Media outside [from, to] (pre-onset waiting, post-workout footage) and
+// intentionally skipped non-exercise intervals (not_analyzed) do not invalidate
+// workout coverage. Budget-omitted or failed exercise windows remain incomplete.
 func progressCoverageComplete(progress workoutprogress.Progress, from, to float64) bool {
 	for _, gap := range progress.Unassessed {
 		switch {
 		case gap.Reason == "no_countable_evidence" || gap.Reason == "incomplete_cycle":
 		case gap.Clock == "capture" && gap.Reason == "recording_gap":
+		case gap.Clock == "media" && gap.Reason == "not_analyzed":
 		case gap.Clock == "media" && (gap.End <= from || gap.Start >= to):
 		default:
 			return false

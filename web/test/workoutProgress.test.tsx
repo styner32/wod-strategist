@@ -114,6 +114,8 @@ it("renders total movement summary and applies WOD description weights with one 
   (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(unweightedEvidence);
   (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({ ...unweightedEvidence, records: [current] });
   const { tree, client } = await mount("new", true, "30 Power Cleans (135/95 lb)");
+  expect(allText(tree)).toContain("WOD 설명");
+  expect(allText(tree)).toContain("30 Power Cleans (135/95 lb)");
   expect(allText(tree)).toContain("총 수행 운동 및 개수 요약");
   expect(allText(tree)).toContain("총 1종목 · 1구간");
   expect(allText(tree)).toContain("관찰 완료 1회");
@@ -318,6 +320,80 @@ it("lets the user choose which movement to merge as when contiguous intervals ha
       },
     ],
   });
+  await act(() => tree.unmount()); client.clear();
+});
+
+it("shows incomplete cycle notice when observed complete reps are 0 and confirms 0-rep (incomplete/no-rep) with one click", async () => {
+  const zeroConfirmed: PerformanceRecord = {
+    ...current,
+    id: 99,
+    interval_id: "set-incomplete",
+    source_version: "zero-src",
+    start_secs: 10,
+    end_secs: 20,
+    elapsed_seconds: 10,
+    reps: 0,
+    load: null,
+    load_kg: null,
+    reps_per_minute: 0,
+  };
+  const incompleteEvidence: WorkoutProgressResponse = {
+    progress: {
+      version: 1,
+      clock: "media",
+      source_version: "zero-src",
+      intervals: [
+        {
+          id: "set-incomplete",
+          start_secs: 10,
+          end_secs: 20,
+          activity: "exercise",
+          movement: "Power Clean",
+          load: null,
+          observation_refs: ["chunk:1"],
+          rep_events: [
+            {
+              movement: "Power Clean",
+              unit: "reps",
+              start_secs: 12,
+              end_secs: 15,
+              complete: false,
+              evidence: "Failed catch before front rack lockout",
+            },
+          ],
+        },
+      ],
+      unassessed: [],
+    },
+    records: [],
+  };
+  (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(incompleteEvidence);
+  (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({
+    ...incompleteEvidence,
+    records: [zeroConfirmed],
+  });
+  const { tree, client } = await mount("new", true);
+  expect(allText(tree)).toContain("랩 기준 미달(불완전 반복) 1회 감지 · 완료 반복 0회");
+
+  await click(tree, "반복수·구간·중량 확인/수정");
+  await click(tree, "0회(미완료/노렙)로 확정");
+
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
+    source_version: "zero-src",
+    records: [
+      {
+        interval_id: "set-incomplete",
+        start_secs: 10,
+        end_secs: 20,
+        reps: 0,
+        load: null,
+        measurement: "set",
+        technique: "singles",
+      },
+    ],
+  });
+  expect(allText(tree)).toContain("0회 · 미완료/노렙");
+  expect(allText(tree)).toContain("확정 총 0회");
   await act(() => tree.unmount()); client.clear();
 });
 

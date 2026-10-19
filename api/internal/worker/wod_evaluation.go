@@ -29,6 +29,11 @@ func (w *Worker) ensureWODEvaluationSession(ctx context.Context, p VideoAnalysis
 	}
 	var existing db.Session
 	if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", p.SessionID, p.ProfileID).First(&existing).Error; err == nil {
+		if strings.TrimSpace(existing.WODDescription) == "" && strings.TrimSpace(p.WODDescription) != "" {
+			_ = w.DB.WithContext(ctx).Model(&db.Session{}).
+				Where("session_id = ? AND profile_id = ? AND wod_description = ''", p.SessionID, p.ProfileID).
+				Update("wod_description", strings.TrimSpace(p.WODDescription)).Error
+		}
 		return nil
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err

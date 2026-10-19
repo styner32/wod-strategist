@@ -8,6 +8,7 @@ import {
   extractWodLoads,
   findCoveringConfirmedRecord,
   getContiguousExerciseSpan,
+  incompleteRepCount,
   isLikelyBodyweightMovement,
   observedReps,
   performanceDraft,
@@ -211,6 +212,35 @@ function PerformanceEditor({
         {field("reps", "reps")}
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-bg-elevated/60 px-3 py-2 text-xs">
+        <span className="text-text-secondary">
+          동작은 인식되었으나 랩 기준 미달·노렙·실패·준비 동작인 경우:
+        </span>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => {
+            const zeroDraft: PerformanceDraft = {
+              ...draft,
+              reps: "0",
+              loadMode:
+                draft.loadMode === "unresolved" || (draft.loadMode === "weighted" && draft.weight.trim() === "")
+                  ? "none"
+                  : draft.loadMode,
+              reviewed: true,
+            };
+            setDraft(zeroDraft);
+            onDraftChange?.(zeroDraft);
+            if (confirmedPerformanceInput(interval, zeroDraft, progress) != null) {
+              onSave(zeroDraft);
+            }
+          }}
+          className="rounded-md border border-warning/40 bg-warning/15 px-2.5 py-1 font-semibold text-warning hover:bg-warning/25 disabled:opacity-40 transition-colors"
+        >
+          0회(미완료/노렙)로 확정
+        </button>
+      </div>
+
       <div className="space-y-2">
         <label className={labelClass}>
           {words.loadMode}
@@ -395,7 +425,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
           delete draftsRef.current[row.id];
         }
       }
-      if (confirmedMovement.trim()) {
+      if (confirmedMovement.trim() && (record.reps > 0 || record.load != null)) {
         movementDefaultsRef.current[confirmedMovement.trim().toLowerCase()] = {
           loadMode: draft.loadMode,
           weight: draft.weight,
@@ -433,6 +463,10 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
     () => movementSummaries.reduce((acc, item) => acc + item.confirmedReps, 0),
     [movementSummaries],
   );
+  const hasConfirmedIntervals = useMemo(
+    () => movementSummaries.some(item => item.confirmedCount > 0),
+    [movementSummaries],
+  );
 
   const records = benchmarks.data?.records ?? [];
   return (
@@ -454,6 +488,18 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
       {!!notice && <p role="status" className="text-sm text-success">{notice}</p>}
       {data && !data.progress && <p className="text-sm">{words.unavailable}</p>}
 
+      {wodDescription?.trim() && (
+        <div
+          data-testid="workout-progress-wod-description"
+          className="space-y-1.5 rounded-xl border border-border bg-bg-secondary/60 p-3.5"
+        >
+          <span className="text-xs font-semibold text-text-muted">WOD 설명</span>
+          <p className="whitespace-pre-wrap text-sm text-text-primary">
+            {wodDescription.trim()}
+          </p>
+        </div>
+      )}
+
       {/* Total performed movements & reps summary */}
       {movementSummaries.length > 0 && (
         <div
@@ -471,7 +517,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
               <span className="rounded-md bg-accent/15 px-2 py-0.5 font-mono font-semibold text-accent">
                 {`관찰 완료 총 ${totalObservedReps}회`}
               </span>
-              {totalConfirmedReps > 0 && (
+              {(totalConfirmedReps > 0 || hasConfirmedIntervals) && (
                 <span className="rounded-md bg-success/15 px-2 py-0.5 font-mono font-semibold text-success">
                   {`확정 총 ${totalConfirmedReps}회`}
                 </span>
@@ -597,6 +643,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
             : isLikelyBodyweightMovement(interval.movement)
               ? words.none
               : words.unknown;
+        const incompleteReps = incompleteRepCount(interval);
         return (
           <div
             key={interval.id}
@@ -622,7 +669,9 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
                     className="rounded-md border border-success/40 bg-success/15 px-2 py-0.5 text-xs font-semibold text-success"
                   >
                     {record?.status === "confirmed"
-                      ? `✓ ${words.confirmed}`
+                      ? record.reps === 0
+                        ? `✓ ${words.confirmed} (0회 · 미완료/노렙)`
+                        : `✓ ${words.confirmed}`
                       : `✓ ${words.confirmed} (${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)})`}
                   </span>
                 )}
@@ -636,18 +685,23 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
             {interval.activity === "exercise" && (
               <div className="space-y-1">
                 <p className="text-sm text-text-secondary">{text("observedReps", { count: observedReps(interval) ?? words.unknown })}</p>
+                {observedReps(interval) == null && incompleteReps > 0 && (
+                  <p className="text-xs font-medium text-warning">
+                    {`랩 기준 미달(불완전 반복) ${incompleteReps}회 감지 · 완료 반복 0회`}
+                  </p>
+                )}
                 <p className="text-sm text-text-secondary">{effectiveLoadDisplay}</p>
                 {record && (
                   <>
                     <p className={`text-sm font-medium ${record.status === "confirmed" ? "text-success" : "text-warning"}`}>
-                      {record.status === "confirmed" ? words.confirmed : words.needsConfirmation} · {progressTime(record.start_secs)}–{progressTime(record.end_secs)} · {text("recordSummary", { count: record.reps, load: loadText(record), duration: (record.elapsed_seconds ?? (record.end_secs - record.start_secs)).toFixed(1) })}
+                      {record.status === "confirmed" ? words.confirmed : words.needsConfirmation} · {progressTime(record.start_secs)}–{progressTime(record.end_secs)} · {text("recordSummary", { count: record.reps === 0 ? "0 (미완료/노렙)" : record.reps, load: loadText(record), duration: (record.elapsed_seconds ?? (record.end_secs - record.start_secs)).toFixed(1) })}
                     </p>
                     <RestCycleComparisons record={record} />
                   </>
                 )}
                 {!record && coveringConfirmed && (
                   <p className="text-xs font-medium text-success">
-                    {`${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)} 확정 기록(${coveringConfirmed.reps}회)에 포함된 구간입니다.`}
+                    {`${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)} 확정 기록(${coveringConfirmed.reps === 0 ? "0회 · 미완료/노렙" : `${coveringConfirmed.reps}회`})에 포함된 구간입니다.`}
                   </p>
                 )}
               </div>

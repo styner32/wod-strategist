@@ -40,13 +40,24 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 	)
 
 	expectAnalysis := func(fileURI string, finalCalls ...bool) {
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			MatchBodyContains("Locate the earliest actual WOD exercise onset").
+			MatchBodyContains(`"fileUri":"` + fileURI + `"`).
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": `{"seconds":0,"target_confirmed":true,"preceding_activity":"rest_setup","evidence":"immediate start"}`}}},
+			}},
+		})
 		analysisText := `교정 라벨을 영상에서 다시 확인했습니다.
 ` + "```highlights\n" + `[{"start":"0:00","end":"0:00.5","type":"key_moment","movement":"Pull-up","reason":"visible movement"}]` + "\n```\n" +
+			"```wod_evidence\n" + `{"target_confirmed":true,"movement":"Pull-up","start_secs":0,"end_secs":0.75,"form_observations":["visible aligned pull"],"pace_observations":["steady"]}` + "\n```\n" +
 			"```workout_observations\n" + `{"intervals":[{"start_secs":0,"end_secs":0.75,"activity":"exercise","movement":"Pull-up","target_confirmed":true,"rep_events":[{"movement":"Pull-up","unit":"reps","start_secs":0.1,"end_secs":0.5,"complete":true,"evidence":"complete pull and return"}],"form_observations":[{"start_secs":0.1,"end_secs":0.5,"evidence":"visible aligned pull"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
 		geminiTransport.New(baseURL).
 			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
-			MatchBodyContains(`"fileUri":"` + fileURI + `"`).
+			MatchBodyContains(`"inlineData"`).
+			MatchBodyContains("프레임 그리드(Contact Sheet) 입력 안내").
+			MatchBodyContains("00:00:00.000").
 			Reply(http.StatusOK).
 			JSON(map[string]any{
 				"candidates": []map[string]any{{
@@ -60,7 +71,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
 			MatchBodyContains("weight_raw").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "```movements\n{\"movements\":[]}\n```"}}}}}})
 		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
-			MatchBodyContains("Evaluate the complete supplied workout timeline").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":80,"consistency":80,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}`}}}}}})
+			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":80,"consistency":80,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}`}}}}}})
 	}
 
 	seedChunkAndRun := func() (db.ChunkAnalysisResult, db.SessionReanalysisRun) {
@@ -171,7 +182,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(prompt).NotTo(ContainSubstring("not_fatigued"))
 		assessmentPrompt := ""
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(string(request.Body), "Evaluate the complete supplied workout timeline") {
+			if strings.Contains(string(request.Body), "Evaluate this WOD using ONLY the supplied validated observations") {
 				assessmentPrompt = string(request.Body)
 			}
 		}
@@ -187,8 +198,22 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(completed.Status).To(Equal(db.SessionReanalysisStatusCompleted))
 		Expect(completed.Output).To(ContainSubstring("교정 라벨"))
 		Expect(completed.HighlightSegments).NotTo(BeEmpty())
-		// Footage after the last observed window is outside the assessed span.
-		Expect(completed.SessionScore).To(MatchJSON(`{"overall":null,"form":80,"intensity":80,"consistency":null,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}`))
+		// Legacy WOD reanalysis produces a Version-1 WOD candidate score; footage after the last observed window is outside the assessed span.
+		var parsedScore struct {
+			EvaluationVersion int    `json:"evaluation_version"`
+			EvidenceStatus    string `json:"evidence_status"`
+			Form              *int   `json:"form"`
+			Intensity         *int   `json:"intensity"`
+			Consistency       *int   `json:"consistency"`
+		}
+		Expect(json.Unmarshal([]byte(completed.SessionScore), &parsedScore)).To(Succeed())
+		Expect(parsedScore.EvaluationVersion).To(Equal(1))
+		Expect(parsedScore.EvidenceStatus).To(Equal("complete"))
+		Expect(parsedScore.Form).NotTo(BeNil())
+		Expect(*parsedScore.Form).To(Equal(80))
+		Expect(parsedScore.Intensity).NotTo(BeNil())
+		Expect(*parsedScore.Intensity).To(Equal(80))
+		Expect(parsedScore.Consistency).To(BeNil())
 		Expect(completed.WorkoutProgress).NotTo(BeEmpty())
 		Expect(completed.PromptTokens).To(Equal(int32(17)))
 
@@ -242,6 +267,13 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		testhelpers.MockGCSDownloadWithBody(storageTransport, sourceURI, videoBytes)
 		geminiTransport.New(baseURL).Get("/v1beta/files/truncated-cache").Reply(http.StatusOK).
 			JSON(map[string]any{"name": "files/truncated-cache", "state": "ACTIVE"})
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			MatchBodyContains("Locate the earliest actual WOD exercise onset").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": `{"seconds":0,"target_confirmed":true,"preceding_activity":"rest_setup","evidence":"immediate start"}`}}},
+			}},
+		})
 		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelArgon4 + ":generateContent").Reply(http.StatusOK).
 			BodyString(`{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"partially generated observation"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":32748,"totalTokenCount":32868}}`)
 		task, err := NewSessionDebugReanalysisTask(run.ID)
@@ -362,14 +394,14 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			"usageMetadata": map[string]any{"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
 		})
 
-		// 2. session:reanalysis (QueryVideoSegmentWithModel)
+		// 2. session:reanalysis (AnalyzeVideoIntervalWithFrameGrids)
 		analysisText := "교정 라벨을 영상에서 다시 확인했습니다.\n" +
 			"```highlights\n" + `[{"start":"0:00","end":"0:00.5","type":"key_moment","movement":"Pull-up","reason":"visible movement"}]` + "\n```\n" +
 			"```wod_evidence\n" + `{"target_confirmed":true,"movement":"Pull-up","start_secs":0,"end_secs":0.75,"form_observations":["aligned pull"],"pace_observations":["steady"]}` + "\n```\n" +
 			"```workout_observations\n" + `{"intervals":[{"start_secs":0,"end_secs":0.75,"activity":"exercise","movement":"Pull-up","target_confirmed":true,"rep_events":[{"movement":"Pull-up","unit":"reps","start_secs":0.1,"end_secs":0.5,"complete":true,"evidence":"complete pull"}],"form_observations":[{"start_secs":0.1,"end_secs":0.5,"evidence":"aligned pull"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
 		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
-			MatchBodyContains(`"fileUri":"`+baseURL+`/files/wod-usage-cache"`).
+			MatchBodyContains(`"inlineData"`).
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
 				"content": map[string]any{"parts": []map[string]any{{"text": analysisText}}},
@@ -445,7 +477,6 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		geminiTransport.New(baseURL).Get("/v1beta/files/segment-reuse-cache").MatchHeader("X-Goog-Api-Key", apiKey).
 			Reply(http.StatusOK).JSON(map[string]any{"name": "files/segment-reuse-cache", "state": "ACTIVE"})
 
-		expectAnalysis(baseURL+"/files/segment-reuse-cache", false)
 		burpeeOutput := "버피 동작이 확인됩니다.\n" +
 			"```highlights\n" + `[{"start":"0:00.8","end":"0:00.9","type":"key_moment","movement":"Burpee","reason":"burpee rep"}]` + "\n```\n" +
 			"```workout_observations\n" + `{"intervals":[{"start_secs":0.76,"end_secs":0.95,"activity":"exercise","movement":"Burpee","target_confirmed":true,"rep_events":[{"movement":"Burpee","unit":"reps","start_secs":0.8,"end_secs":0.9,"complete":true,"evidence":"burpee"}],"form_observations":[{"start_secs":0.8,"end_secs":0.9,"evidence":"steady burpee"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
@@ -458,11 +489,19 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			}},
 			"usageMetadata": map[string]any{"promptTokenCount": 14, "candidatesTokenCount": 6, "totalTokenCount": 20},
 		})
+		expectAnalysis(baseURL+"/files/segment-reuse-cache", false)
 		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
 			MatchBodyContains("weight_raw").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
 				"content": map[string]any{"parts": []map[string]any{{"text": "```movements\n{\"movements\":[]}\n```"}}},
+			}},
+		})
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": `{"form":80,"intensity":80,"consistency":80,"movements":{"Pull-up":{"form":80,"intensity":80},"Burpee":{"form":80,"intensity":80}},"summary":"good"}`}}},
 			}},
 		})
 
@@ -490,6 +529,14 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		geminiTransport.New(baseURL).Get("/v1beta/files/segment-reuse-cache").MatchHeader("X-Goog-Api-Key", apiKey).
 			Reply(http.StatusOK).JSON(map[string]any{"name": "files/segment-reuse-cache", "state": "ACTIVE"})
 
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			MatchHeader("X-Goog-Api-Key", apiKey).
+			MatchBodyContains("Locate the earliest actual WOD exercise onset").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": `{"seconds":0,"target_confirmed":true,"preceding_activity":"rest_setup","evidence":"immediate start"}`}}},
+			}},
+		})
 		boxJumpOutput := "박스 점프가 확인됩니다.\n" +
 			"```highlights\n" + `[{"start":"0:00.8","end":"0:00.9","type":"key_moment","movement":"Box Jump","reason":"box jump rep"}]` + "\n```\n" +
 			"```workout_observations\n" + `{"intervals":[{"start_secs":0.76,"end_secs":0.95,"activity":"exercise","movement":"Box Jump","target_confirmed":true,"rep_events":[{"movement":"Box Jump","unit":"reps","start_secs":0.8,"end_secs":0.9,"complete":true,"evidence":"box jump"}],"form_observations":[{"start_secs":0.8,"end_secs":0.9,"evidence":"soft landing"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
@@ -509,6 +556,14 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 				"content": map[string]any{"parts": []map[string]any{{"text": "```movements\n{\"movements\":[]}\n```"}}},
 			}},
 		})
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			MatchHeader("X-Goog-Api-Key", apiKey).
+			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").
+			Reply(http.StatusOK).JSON(map[string]any{
+			"candidates": []map[string]any{{
+				"content": map[string]any{"parts": []map[string]any{{"text": `{"form":84,"intensity":80,"consistency":81,"movements":{"Pull-up":{"form":84,"intensity":80},"Box Jump":{"form":84,"intensity":80}},"summary":"쓰러스터와 박스 점프를 수행했습니다."}`}}},
+			}},
+		})
 
 		secondTask, err := NewSessionDebugReanalysisTask(secondRun.ID)
 		Expect(err).NotTo(HaveOccurred())
@@ -520,6 +575,31 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(completed.Status).To(Equal(db.SessionReanalysisStatusCompleted))
 		Expect(completed.Output).To(ContainSubstring("교정 라벨을 영상에서 다시 확인했습니다."))
 		Expect(completed.Output).To(ContainSubstring("박스 점프가 확인됩니다."))
+	})
+
+	It("falls back to stored analysis_results.output segment headers when legacy chunk rows lack media intervals and GCS chunk files are absent", func() {
+		// Create legacy chunk row without MediaStartSecs / MediaEndSecs and non-existent GCS chunk file
+		testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED",
+			FilePath:     "gs://test-bucket/videos/missing-chunk-001.mp4",
+			ExerciseType: "Thruster", ObservedSignals: `{"movement":"Thruster","activity_state":"exercise"}`,
+		})
+		storedOutput := "## 세그먼트 1: Thruster (0:00 ~ 0:01)\n이전 쓰러스터 분석입니다.\n\n## 세그먼트 2: Rest (0:01 ~ 0:02)\n휴식 구간입니다.\n\n## 세그먼트 3: Unknown (0:02 ~ 0:03)\n미확인 동작입니다."
+		testhelpers.CreateAnalysisResult(database, &db.AnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED",
+			Output: storedOutput,
+		})
+
+		segments, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
+		Expect(err).NotTo(HaveOccurred())
+		// Should parse Thruster and Unknown from stored output, skipping Rest, without calling Gemini IndexVideo.
+		Expect(segments).To(HaveLen(2))
+		Expect(segments[0].Type).To(Equal("Thruster"))
+		Expect(segments[0].Start).To(Equal("0:00"))
+		Expect(segments[0].End).To(Equal("0:01"))
+		Expect(segments[1].Type).To(Equal("Unknown"))
+		Expect(segments[1].Start).To(Equal("0:02"))
+		Expect(segments[1].End).To(Equal("0:03"))
 	})
 })
 
@@ -550,4 +630,20 @@ var _ = Describe("session debug re-analysis helpers", func() {
 		Expect(startKey).NotTo(Equal(normKey))
 		Expect(normKey).NotTo(Equal(synthKey))
 	})
+
+	It("parses stored output segment headers keeping exercise and Unknown while filtering non-exercise and Full Video", func() {
+		raw := "## 세그먼트 1: Thruster (0:10 ~ 1:25)\n분석1\n\n" +
+			"## 세그먼트 2: [NO_EXERCISE] (1:25 ~ 2:00)\n휴식\n\n" +
+			"## 세그먼트 3: Unknown (2:00 ~ 2:45)\n미확인\n\n" +
+			"## 세그먼트 4: Full Video (0:00 ~ 3:00)\n전체"
+		segments := parseStoredOutputSegments(raw)
+		Expect(segments).To(HaveLen(2))
+		Expect(segments[0].Type).To(Equal("Thruster"))
+		Expect(segments[0].Start).To(Equal("0:10"))
+		Expect(segments[0].End).To(Equal("1:25"))
+		Expect(segments[1].Type).To(Equal("Unknown"))
+		Expect(segments[1].Start).To(Equal("2:00"))
+		Expect(segments[1].End).To(Equal("2:45"))
+	})
 })
+

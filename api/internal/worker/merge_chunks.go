@@ -60,6 +60,7 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		return err
 	}
 	p.ProfileID = profileID
+	p.WODDescription = w.resolveSessionWODDescription(ctx, p.SessionID, p.WODDescription)
 
 	w.logger.Info("Processing merge chunks",
 		zap.String("session_id", p.SessionID),

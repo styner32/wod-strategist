@@ -82,6 +82,11 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist movement hints"})
 		return
 	}
+	if err := ctl.persistSessionWODDescription(c.Request.Context(), req.SessionID, req.ProfileID, req.WODDescription); err != nil {
+		logger.Log.Error("failed to persist wod description", zap.String("session_id", req.SessionID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist wod description"})
+		return
+	}
 	if strings.TrimSpace(req.AppearanceHints) != "" {
 		if err := persistSessionAppearanceHints(c.Request.Context(), ctl.db, req.SessionID, req.ProfileID, &AppearanceInput{Appearance: req.AppearanceHints}); err != nil {
 			logger.Log.Error("failed to persist appearance hints", zap.String("session_id", req.SessionID), zap.Error(err))

@@ -183,6 +183,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 	p.ProfileID = profileID
 	p.WorkoutType = w.resolveSessionWorkoutType(ctx, p.SessionID, p.WorkoutType)
+	p.WODDescription = w.resolveSessionWODDescription(ctx, p.SessionID, p.WODDescription)
 	if err := w.ensureWODEvaluationSession(ctx, p); err != nil {
 		return err
 	}
@@ -283,7 +284,7 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 	err := w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var session db.Session
 		var sessionCreatedAt *time.Time
-		if err := tx.Select("created_at").Where("session_id = ?", p.SessionID).First(&session).Error; err == nil {
+		if err := tx.Select("created_at", "wod_description").Where("session_id = ?", p.SessionID).First(&session).Error; err == nil {
 			sessionCreatedAt = &session.CreatedAt
 		}
 
@@ -291,6 +292,16 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("session_id = ?", p.SessionID).
 			First(&existing).Error
+
+		if strings.TrimSpace(result.WODDescription) == "" {
+			if trimmed := strings.TrimSpace(p.WODDescription); trimmed != "" {
+				result.WODDescription = trimmed
+			} else if err == nil && strings.TrimSpace(existing.WODDescription) != "" {
+				result.WODDescription = strings.TrimSpace(existing.WODDescription)
+			} else if trimmed := strings.TrimSpace(session.WODDescription); trimmed != "" {
+				result.WODDescription = trimmed
+			}
+		}
 
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			result.ProfileID = p.ProfileID
@@ -782,10 +793,8 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			zap.Int("count", len(segments)),
 			zap.Any("segments", segments))
 	}
-	// The budget applies to indexed segments only. Between-set windows never
-	// bridge an omitted segment, which stays explicitly unassessed.
+	// Omitted indexed segments remain explicitly unassessed in workout_progress.
 	omittedSegments := omittedIndexedSegments(indexedSegments, segments)
-	segments = addBetweenObservationWindows(segments, omittedSegments)
 
 	// ── Pass 2: Observe each segment independently ──
 	wodContext := buildWODContext(p.WODDescription)
@@ -1012,34 +1021,6 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 
 // Reserve early/late pairs for selected warmup movements before filling the
 // remaining budget. Omitted intervals remain unassessed in workout_progress.
-// Observe recorded time between indexed sets without assigning it to rest.
-// A window spanning an omitted segment is not added, so budget omissions stay
-// explicitly unassessed. Capture pauses have no media duration and cannot
-// create an observation window.
-func addBetweenObservationWindows(segments, omitted []Segment) []Segment {
-	ordered := append([]Segment(nil), segments...)
-	sort.SliceStable(ordered, func(i, j int) bool { return convertToSeconds(ordered[i].Start) < convertToSeconds(ordered[j].Start) })
-	out := []Segment{}
-	var previousEnd time.Duration
-	for _, seg := range ordered {
-		start, end := convertToSeconds(seg.Start), convertToSeconds(seg.End)
-		if end <= start {
-			continue
-		}
-		if len(out) > 0 && start-previousEnd > 10*time.Millisecond && !segmentsOverlap(omitted, previousEnd, start) {
-			out = append(out, Segment{
-				Start: formatSegmentTimestamp(previousEnd.Seconds()), End: seg.Start, Type: "Unknown",
-				Description: "Observe the current target person's activity directly. This recorded window has no confirmed activity or movement label; do not assume rest or exercise.",
-			})
-		}
-		out = append(out, seg)
-		if end > previousEnd {
-			previousEnd = end
-		}
-	}
-	return out
-}
-
 func omittedIndexedSegments(indexed, selected []Segment) []Segment {
 	kept := map[Segment]bool{}
 	for _, seg := range selected {
@@ -1052,15 +1033,6 @@ func omittedIndexedSegments(indexed, selected []Segment) []Segment {
 		}
 	}
 	return omitted
-}
-
-func segmentsOverlap(segments []Segment, start, end time.Duration) bool {
-	for _, seg := range segments {
-		if convertToSeconds(seg.Start) < end && convertToSeconds(seg.End) > start {
-			return true
-		}
-	}
-	return false
 }
 
 // Rest is complete coverage only when the current-window observer directly

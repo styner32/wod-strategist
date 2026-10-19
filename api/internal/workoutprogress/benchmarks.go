@@ -80,7 +80,7 @@ func Kilograms(load *Load) *float64 {
 // Confirm leaves the raw interval unchanged. A null load explicitly confirms no
 // external load, while an unconfirmed candidate remains absent from benchmarks.
 func Confirm(progress Progress, input Confirmation) (Record, error) {
-	if !activity.ValidInterval(input.Start, input.End) || input.Reps <= 0 || input.Reps > math.MaxInt32 || !ValidLoad(input.Load) || (input.Measurement != "set" && input.Measurement != "window") || (input.Technique != "unspecified" && input.Technique != "singles" && input.Technique != "touch_and_go") {
+	if !activity.ValidInterval(input.Start, input.End) || input.Reps < 0 || input.Reps > math.MaxInt32 || !ValidLoad(input.Load) || (input.Measurement != "set" && input.Measurement != "window") || (input.Technique != "unspecified" && input.Technique != "singles" && input.Technique != "touch_and_go") {
 		return Record{}, errors.New("invalid performance confirmation")
 	}
 	var interval *Interval
@@ -153,7 +153,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		return Record{}, errors.New("duration movements cannot confirm repetition benchmarks")
 	}
 	record := Record{IntervalID: input.IntervalID, SourceVersion: progress.SourceVersion, Status: "confirmed", Movement: movement, Start: input.Start, End: input.End, ElapsedSeconds: elapsed, Reps: input.Reps, Measurement: input.Measurement, Technique: input.Technique, RateBasis: "normalized_per_minute", RepsPerMinute: float64(input.Reps) * 60 / elapsed}
-	if record.RepsPerMinute <= 0 || math.IsInf(record.RepsPerMinute, 0) || math.IsNaN(record.RepsPerMinute) {
+	if record.RepsPerMinute < 0 || (input.Reps > 0 && record.RepsPerMinute <= 0) || math.IsInf(record.RepsPerMinute, 0) || math.IsNaN(record.RepsPerMinute) {
 		return Record{}, errors.New("selected window cannot produce a finite performance rate")
 	}
 	if input.Load != nil {
@@ -179,7 +179,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 			completeCoverage = false
 		}
 	}
-	if continuousClock && completeCoverage && len(cycles) == input.Reps {
+	if input.Reps > 0 && continuousClock && completeCoverage && len(cycles) == input.Reps {
 		sort.Float64s(cycles)
 		median := cycles[len(cycles)/2]
 		if len(cycles)%2 == 0 {
@@ -649,13 +649,13 @@ func recordBefore(a, b Record) bool {
 func Comparisons(records []Record) []Comparison {
 	out := []Comparison{}
 	for _, current := range records {
-		if current.Status != "confirmed" || current.PerformedAt == nil {
+		if current.Status != "confirmed" || current.Reps <= 0 || current.RepsPerMinute <= 0 || current.PerformedAt == nil {
 			continue
 		}
 		var direct, reference *Record
 		for i := range records {
 			prior := &records[i]
-			if prior.ID == current.ID || prior.Status != "confirmed" || prior.Movement != current.Movement || !recordBefore(*prior, current) {
+			if prior.ID == current.ID || prior.Status != "confirmed" || prior.Reps <= 0 || prior.RepsPerMinute <= 0 || prior.Movement != current.Movement || !recordBefore(*prior, current) {
 				continue
 			}
 			if reference == nil || recordBefore(*reference, *prior) {
@@ -684,7 +684,7 @@ func Comparisons(records []Record) []Comparison {
 		var heavierBaseline *Record
 		for i := range records {
 			prior := &records[i]
-			if prior.Status != "confirmed" || prior.Movement != current.Movement || !recordBefore(*prior, current) || current.Reps != prior.Reps || current.LoadKG == nil || prior.LoadKG == nil || current.Load == nil || prior.Load == nil || current.Load.Basis != prior.Load.Basis || *current.LoadKG <= *prior.LoadKG {
+			if prior.Status != "confirmed" || prior.Reps <= 0 || prior.RepsPerMinute <= 0 || prior.Movement != current.Movement || !recordBefore(*prior, current) || current.Reps != prior.Reps || current.LoadKG == nil || prior.LoadKG == nil || current.Load == nil || prior.Load == nil || current.Load.Basis != prior.Load.Basis || *current.LoadKG <= *prior.LoadKG {
 				continue
 			}
 			compatible := true
@@ -712,7 +712,7 @@ func Comparisons(records []Record) []Comparison {
 func Best(records []Record) []Record {
 	out := []Record{}
 	for _, r := range records {
-		if r.Status != "confirmed" || r.PerformedAt == nil || r.Technique == "unspecified" || strings.TrimSpace(r.WorkoutPrescription) == "" || activity.CanonicalMovement(r.Movement) == "" {
+		if r.Status != "confirmed" || r.Reps <= 0 || r.RepsPerMinute <= 0 || r.PerformedAt == nil || r.Technique == "unspecified" || strings.TrimSpace(r.WorkoutPrescription) == "" || activity.CanonicalMovement(r.Movement) == "" {
 			continue
 		}
 		found := false

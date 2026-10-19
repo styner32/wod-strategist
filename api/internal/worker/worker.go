@@ -168,6 +168,8 @@ type GeminiClient interface {
 	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *gemini.TokenUsage, error)
+	AnalyzeFrameGrids(ctx context.Context, images [][]byte, mimeType, prompt string) (string, *gemini.TokenUsage, error)
+	AnalyzeFrameGridsWithModel(ctx context.Context, images [][]byte, mimeType, prompt, model string) (string, *gemini.TokenUsage, error)
 
 	AnalyzeHighlightAgentic(ctx context.Context, fileURI, mimeType, prompt string) gemini.StreamComparisonResult
 
@@ -274,6 +276,27 @@ func (w *Worker) resolveSessionWorkoutType(ctx context.Context, sessionID, paylo
 		}
 	}
 	return NormalizeWorkoutType(payloadType)
+}
+
+func (w *Worker) resolveSessionWODDescription(ctx context.Context, sessionID, payloadWOD string) string {
+	if trimmed := strings.TrimSpace(payloadWOD); trimmed != "" {
+		return trimmed
+	}
+	if w.DB != nil && strings.TrimSpace(sessionID) != "" {
+		var s db.Session
+		if err := w.DB.WithContext(ctx).Select("wod_description").Where("session_id = ?", sessionID).First(&s).Error; err == nil {
+			if trimmed := strings.TrimSpace(s.WODDescription); trimmed != "" {
+				return trimmed
+			}
+		}
+		var ar db.AnalysisResult
+		if err := w.DB.WithContext(ctx).Select("wod_description").Where("session_id = ?", sessionID).Order("created_at DESC, id DESC").First(&ar).Error; err == nil {
+			if trimmed := strings.TrimSpace(ar.WODDescription); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return strings.TrimSpace(payloadWOD)
 }
 
 var (
