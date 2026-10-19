@@ -79,6 +79,18 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 		Expect(decodeMapBody(w)["error"]).To(Equal("sessionId is required"))
 	})
 
+	It("returns bad request for invalid sessionId", func() {
+		router := newTestRouter(controllers.Config{})
+
+		body := fmt.Sprintf(`{"sessionId": "../invalid", "profileId": %d, "samples": []}`, profile.ID)
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusBadRequest))
+		Expect(decodeMapBody(w)["error"]).To(Equal("sessionId is invalid"))
+	})
+
 	It("returns bad request for missing profileId", func() {
 		router := newTestRouter(controllers.Config{})
 
