@@ -13,6 +13,12 @@ export const ACTIVE_REMERGE_MAX_WAIT_MS = 5 * 60 * 1000; // Advance queue if act
 export interface PendingMerge {
   sessionId: string;
   startedAt: number;
+  /**
+   * Set once the server has listed this session as pending. A fresh recording
+   * has no server row until its chunks upload and the merge is requested, so
+   * syncPendingSessions prunes only entries the server has already reported.
+   */
+  serverSeen?: boolean;
 }
 
 export interface RemergeQueueItem {
@@ -54,7 +60,7 @@ interface MergeStatusState {
   activeRemergeSessionId: string | null;
   activeStartedAt: number | null;
   hydrated: boolean;
-  addPending: (sessionId: string) => void;
+  addPending: (sessionId: string, serverSeen?: boolean) => void;
   removePending: (sessionId: string) => void;
   hydrateRemergeState: () => Promise<void>;
   isRemergeRequested: (sessionId: string, now?: number) => boolean;
@@ -102,13 +108,13 @@ export const useMergeStatus = create<MergeStatusState>((set, get) => ({
   activeStartedAt: null,
   hydrated: false,
 
-  addPending: (sessionId) =>
+  addPending: (sessionId, serverSeen = false) =>
     set((state) => {
       if (state.pending.some((p) => p.sessionId === sessionId)) {
         return state;
       }
       return {
-        pending: [...state.pending, { sessionId, startedAt: Date.now() }],
+        pending: [...state.pending, { sessionId, startedAt: Date.now(), serverSeen }],
       };
     }),
 
@@ -236,7 +242,7 @@ export const useMergeStatus = create<MergeStatusState>((set, get) => ({
 
     try {
       await executor(queueItem);
-      get().addPending(item.sessionId);
+      get().addPending(item.sessionId, true);
       return "started";
     } catch (err) {
       // Roll back so user can retry on network/server failure
@@ -277,9 +283,18 @@ export const useMergeStatus = create<MergeStatusState>((set, get) => ({
       }
     }
 
-    const nextPending = state.pending.filter((p) => pendingSet.has(p.sessionId));
-    if (nextPending.length !== state.pending.length) {
-      changed = true;
+    // An entry the server has not listed yet (a recording still uploading) is
+    // kept; its owner removes it.
+    const nextPending: PendingMerge[] = [];
+    for (const p of state.pending) {
+      if (pendingSet.has(p.sessionId)) {
+        if (!p.serverSeen) changed = true;
+        nextPending.push(p.serverSeen ? p : { ...p, serverSeen: true });
+      } else if (!p.serverSeen) {
+        nextPending.push(p);
+      } else {
+        changed = true;
+      }
     }
 
     const nextQueue = state.remergeQueue.filter((q) => pendingSet.has(q.sessionId));
@@ -342,7 +357,7 @@ export const useMergeStatus = create<MergeStatusState>((set, get) => ({
       });
       try {
         await executor(nextItem);
-        get().addPending(nextItem.sessionId);
+        get().addPending(nextItem.sessionId, true);
       } catch {
         const current = get();
         const rolledBack = { ...current.requestedRemerges };

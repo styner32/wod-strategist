@@ -66,6 +66,21 @@ describe('BLE accepted and raw HR paths', () => {
   act(()=>mockLost(null));expect(view.result.current.bpm).toBe(0);
   view.unmount();
  });
+ it('reconnects directly to the strap that dropped instead of starting an unfiltered scan', async () => {
+  const strap: any = { ...device, id: 'h10-id', connect: jest.fn(async () => strap) };
+  const view = renderHook(() => useBleHeartRate());
+  await act(async () => {mockState('PoweredOn');mockScan(null, strap);});
+  expect(strap.connect).toHaveBeenCalledTimes(1);
+  const scanBefore = mockScan;
+
+  act(() => mockLost(null));
+  await act(async () => {jest.advanceTimersByTime(1000);});
+
+  expect(strap.connect).toHaveBeenCalledTimes(2);
+  expect(mockScan).toBe(scanBefore);
+  expect(view.result.current.connectedDevice).toEqual({ id: 'h10-id', name: 'Polar H10' });
+  view.unmount();
+ });
  it('ignores non-registered sensors during scan and switches connection when registering a target sensor', async () => {
   const otherSensor: any = {
    ...device,

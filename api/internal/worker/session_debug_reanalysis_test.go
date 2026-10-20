@@ -365,7 +365,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			MediaStartSecs: &start, MediaEndSecs: &end,
 		})
 
-		segments, _, _, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, []sessionDebugCorrection{{
+		segments, _, _, _, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, []sessionDebugCorrection{{
 			ChunkID: chunk.ID, MovementName: "Unknown",
 		}}, WorkoutTypeWOD)
 		Expect(err).NotTo(HaveOccurred())
@@ -591,13 +591,51 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			Output: "## 세그먼트 1: Thruster (3:10 ~ 4:00)\n이전 쓰러스터 분석입니다.",
 		})
 
-		segments, skipped, timelineAvailable, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
+		segments, skipped, timelineAvailable, _, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(segments).To(BeEmpty())
 		Expect(skipped).To(BeEmpty())
 		Expect(timelineAvailable).To(BeFalse())
 		selected, _ := w.storedProgressSegments(context.Background(), session.SessionID, profile.ID, WorkoutTypeWOD, reusableGeminiFile{URI: baseURL + "/files/any"})
 		Expect(selected).To(BeEmpty())
+	})
+
+	It("skips a legacy timeline rebuild that recently failed for the same chunk rows", func() {
+		testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED",
+			FilePath:     "gs://test-bucket/videos/missing-chunk-001.mp4",
+			ExerciseType: "Thruster", ObservedSignals: `{"movement":"Thruster","activity_state":"exercise"}`,
+		})
+
+		_, _, _, failed, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(failed).NotTo(BeEmpty())
+		Expect(storageTransport.Requests()).NotTo(BeEmpty())
+
+		testhelpers.CreateSessionReanalysisRun(database, &db.SessionReanalysisRun{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: db.SessionReanalysisStatusCompleted,
+			SourceGCSURI: sourceURI, OriginalAnalysisSnapshot: db.JSONDocument(`{}`),
+			SourceContextSnapshot: db.JSONDocument(fmt.Sprintf(`{"timeline_rebuild_failed":%q}`, failed)),
+		})
+		storageTransport.Reset()
+
+		_, _, timelineAvailable, again, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(timelineAvailable).To(BeFalse())
+		Expect(again).To(BeEmpty(), "a skipped rebuild does not extend the retry window")
+		Expect(storageTransport.Requests()).To(BeEmpty(), "no retained chunk is downloaded again")
+	})
+
+	It("reads the workout type of a legacy session without a sessions row from its ID", func() {
+		legacyID := fmt.Sprintf("P%d-WARMUP-2025-03-01-08-00", profile.ID)
+		testhelpers.CreateAnalysisResult(database, &db.AnalysisResult{
+			SessionID: legacyID, ProfileID: profile.ID, Status: "COMPLETED", WODDescription: "Mobility flow",
+		})
+
+		target, err := w.loadSessionDebugContext(context.Background(), legacyID, profile.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(target.WorkoutType).To(Equal(WorkoutTypeWarmup))
+		Expect(target.WODDescription).To(Equal("Mobility flow"))
 	})
 
 	It("writes no rebuilt offsets when any retained chunk of the legacy timeline is unavailable", func() {
@@ -614,7 +652,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		})
 		testhelpers.MockGCSDownloadWithBody(storageTransport, available.FilePath, videoBytes)
 
-		segments, _, timelineAvailable, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
+		segments, _, timelineAvailable, _, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(segments).To(BeEmpty())
 		Expect(timelineAvailable).To(BeFalse())
@@ -646,7 +684,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		duration := probeVideoDuration(context.Background(), local)
 		Expect(duration).To(BeNumerically(">", 0))
 
-		segments, skipped, timelineAvailable, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, []sessionDebugCorrection{{
+		segments, skipped, timelineAvailable, _, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, []sessionDebugCorrection{{
 			ChunkID: duplicate.ID, MovementName: "Front Squat",
 		}}, WorkoutTypeWOD)
 		Expect(err).NotTo(HaveOccurred())

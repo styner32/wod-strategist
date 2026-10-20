@@ -487,9 +487,11 @@ export class H10MemoryRecorder {
       if (run.record.leftovers.some((l) => l.action.startsWith("recovered"))) void this.flushUploads();
       if (run.finishRequested) return;
       run.record.start.sent_epoch_ms = this.deps.now();
+      // Set before the query: the strap may accept START even when its ack is
+      // lost, so finish() must still check the status and stop it.
+      run.startSent = true;
       await this.save(run.record);
       await opened.query(PFTP_QUERY_REQUEST_START_RECORDING, encodeStartRecordingParams(run.sessionId, 1));
-      run.startSent = true;
       run.record.start.ack_epoch_ms = this.deps.now();
       run.record.transport.write_mode = opened.writeMode;
       await this.save(run.record);
@@ -497,6 +499,8 @@ export class H10MemoryRecorder {
         this.setStatus({ phase: "recording", sessionId: run.sessionId, error: null, sampleCount: null });
       }
     } catch (error) {
+      // A PS-FTP error is the sensor's answer: START was rejected, nothing records.
+      if (error instanceof PftpError) run.startSent = false;
       const entry = this.addError(run.record, "start", error);
       await this.save(run.record);
       if (!run.finishRequested) {

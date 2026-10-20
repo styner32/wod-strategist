@@ -272,6 +272,7 @@ describe("parseRecentWorkoutSetup (1-hour whiteboard/dashboard reuse)", () => {
   const now = 1775700000000;
   const sample = {
     savedAt: now - 25 * 60 * 1000, // 25 minutes ago
+    profileId: 7,
     workoutType: "wod",
     wodDescription: "For Time: 21-15-9 Thrusters + Pull-ups",
     rawText: "21-15-9 Thrusters (43kg) Pull-ups",
@@ -291,5 +292,10 @@ describe("parseRecentWorkoutSetup (1-hour whiteboard/dashboard reuse)", () => {
       savedAt: now - RECENT_WORKOUT_TTL_MS - 1000,
     };
     expect(parseRecentWorkoutSetup(JSON.stringify(expired), now)).toBeNull();
+  });
+
+  it("returns null for a snapshot that does not name the profile it belongs to", () => {
+    const { profileId: _profileId, ...unscoped } = sample;
+    expect(parseRecentWorkoutSetup(JSON.stringify(unscoped), now)).toBeNull();
   });
 });

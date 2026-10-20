@@ -1297,7 +1297,7 @@ export function ProcessingSection({
                     profileId: profileIdToUse,
                     workoutType,
                   });
-                  currentStore?.addPending?.(item.session_id);
+                  currentStore?.addPending?.(item.session_id, true);
                   setLocalRequestedIds((prev) => ({
                     ...prev,
                     [item.session_id]: true,

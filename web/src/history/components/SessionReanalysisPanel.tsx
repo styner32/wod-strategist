@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import {
   formatStartTimestamp,
+  isWodWorkout,
   newWODScore,
   parseStartTimestamp,
   wodSeconds,
@@ -23,12 +24,6 @@ interface Props {
   unconfirmedCandidateCount: number;
   currentTime?: number;
   isOriginal?: boolean;
-}
-
-function isWodWorkout(sessionId: string, workoutType?: string): boolean {
-  const normalized = workoutType?.trim().toLowerCase();
-  if (normalized) return normalized === 'wod';
-  return !/^(WARMUP|ACCESSORY|COOLDOWN)-/i.test(sessionId);
 }
 
 function isTerminal(status?: SessionReanalysisStatus) {

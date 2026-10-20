@@ -47,6 +47,16 @@ export function newWODScore(raw?: string): WODScore | undefined {
   try { const s = JSON.parse(raw || "{}"); return s.evaluation_version === 1 ? s : undefined; }
   catch { return undefined; }
 }
+/**
+ * A session is a WOD unless its stored workout type, or the type prefix of a
+ * current (`WARMUP-YYYYMMDD-{ULID}`) or legacy (`P{id}-WARMUP-YYYY-MM-DD-HH-MM`)
+ * session ID, names another workout type.
+ */
+export function isWodWorkout(sessionId: string, workoutType?: string): boolean {
+  const normalized = workoutType?.trim().toLowerCase();
+  if (normalized) return normalized === "wod";
+  return !/^(?:P\d+-)?(WARMUP|ACCESSORY|COOLDOWN)-/i.test(sessionId);
+}
 export function wodSeconds(seconds: number | null | undefined): string {
   if (seconds == null) return "—";
   return `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;

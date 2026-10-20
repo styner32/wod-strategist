@@ -253,6 +253,20 @@ func NormalizeWorkoutType(wt string) string {
 	}
 }
 
+// sessionIDWorkoutTypePattern reads the type prefix of current
+// ({TYPE}-YYYYMMDD-{ULID}) and legacy (P{id}-{TYPE}-YYYY-MM-DD-HH-MM) session IDs.
+var sessionIDWorkoutTypePattern = regexp.MustCompile(`^(?i)(?:P[0-9]+-)?(WOD|WARMUP|ACCESSORY|COOLDOWN)-`)
+
+// workoutTypeFromSessionID returns the workout type encoded in a session ID,
+// or "" when the ID carries none.
+func workoutTypeFromSessionID(sessionID string) string {
+	match := sessionIDWorkoutTypePattern.FindStringSubmatch(strings.TrimSpace(sessionID))
+	if match == nil {
+		return ""
+	}
+	return NormalizeWorkoutType(match[1])
+}
+
 func IsValidWorkoutType(wt string) bool {
 	switch strings.ToLower(strings.TrimSpace(wt)) {
 	case WorkoutTypeWOD, WorkoutTypeWarmup, WorkoutTypeAccessory, WorkoutTypeCooldown:
@@ -277,19 +291,22 @@ func (w *Worker) resolveSessionWorkoutType(ctx context.Context, sessionID, paylo
 	return NormalizeWorkoutType(payloadType)
 }
 
-func (w *Worker) resolveSessionWODDescription(ctx context.Context, sessionID, payloadWOD string) string {
+// resolveSessionWODDescription falls back to the stored description of the
+// same profile's session; legacy IDs without a profile prefix can repeat
+// across profiles.
+func (w *Worker) resolveSessionWODDescription(ctx context.Context, sessionID string, profileID uint, payloadWOD string) string {
 	if trimmed := strings.TrimSpace(payloadWOD); trimmed != "" {
 		return trimmed
 	}
 	if w.DB != nil && strings.TrimSpace(sessionID) != "" {
 		var s db.Session
-		if err := w.DB.WithContext(ctx).Select("wod_description").Where("session_id = ?", sessionID).First(&s).Error; err == nil {
+		if err := w.DB.WithContext(ctx).Select("wod_description").Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&s).Error; err == nil {
 			if trimmed := strings.TrimSpace(s.WODDescription); trimmed != "" {
 				return trimmed
 			}
 		}
 		var ar db.AnalysisResult
-		if err := w.DB.WithContext(ctx).Select("wod_description").Where("session_id = ?", sessionID).Order("created_at DESC, id DESC").First(&ar).Error; err == nil {
+		if err := w.DB.WithContext(ctx).Select("wod_description").Where("session_id = ? AND profile_id = ?", sessionID, profileID).Order("created_at DESC, id DESC").First(&ar).Error; err == nil {
 			if trimmed := strings.TrimSpace(ar.WODDescription); trimmed != "" {
 				return trimmed
 			}

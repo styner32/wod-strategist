@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -76,6 +78,61 @@ type reusableGeminiFile struct {
 	Expires   *time.Time
 	Duration  time.Duration
 	LocalPath string
+	// releaseLocal returns LocalPath's share of the retained-media budget.
+	releaseLocal func()
+}
+
+// removeLocal deletes the retained local copy and returns its budget.
+func (f reusableGeminiFile) removeLocal() {
+	if f.LocalPath != "" {
+		_ = os.Remove(f.LocalPath)
+	}
+	if f.releaseLocal != nil {
+		f.releaseLocal()
+	}
+}
+
+// Reanalysis keeps a local copy in the worker's memory-backed temp dir for the
+// whole task so frame grids can read it. Copies that do not fit this budget,
+// shared by concurrent runs, are deleted after upload or probe; those runs use
+// VideoMetadata analysis.
+const maxRetainedReanalysisMediaBytes int64 = 1 << 30
+
+var retainedReanalysisMediaBytes atomic.Int64
+
+// retainReanalysisMedia reserves size bytes of the budget and returns the
+// release func, or nil when the copy does not fit.
+func retainReanalysisMedia(size int64) func() {
+	if size <= 0 {
+		return nil
+	}
+	for {
+		current := retainedReanalysisMediaBytes.Load()
+		if current+size > maxRetainedReanalysisMediaBytes {
+			return nil
+		}
+		if retainedReanalysisMediaBytes.CompareAndSwap(current, current+size) {
+			var once sync.Once
+			return func() { once.Do(func() { retainedReanalysisMediaBytes.Add(-size) }) }
+		}
+	}
+}
+
+// keepLocalForFrameGrids keeps file.LocalPath only while it fits the
+// retained-media budget.
+func keepLocalForFrameGrids(file reusableGeminiFile) reusableGeminiFile {
+	if file.LocalPath == "" {
+		return file
+	}
+	if info, err := os.Stat(file.LocalPath); err == nil {
+		if release := retainReanalysisMedia(info.Size()); release != nil {
+			file.releaseLocal = release
+			return file
+		}
+	}
+	_ = os.Remove(file.LocalPath)
+	file.LocalPath = ""
+	return file
 }
 
 func NewChunkDebugReanalysisTask(runID uint) (*asynq.Task, error) {
@@ -236,9 +293,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 		return w.failChunkDebugRun(ctx, &run, retryCount, started,
 			db.ChunkReanalysisStatusVideoUnavailable, "The session video could not be prepared.", err)
 	}
-	if file.LocalPath != "" {
-		defer os.Remove(file.LocalPath)
-	}
+	defer file.removeLocal()
 
 	if media.Kind == db.ChunkReanalysisSourceChunk {
 		// An individual chunk is itself the exact interval. Its Gemini-probed
@@ -621,10 +676,10 @@ func (w *Worker) prepareChunkDebugGeminiFile(ctx context.Context, run *db.ChunkR
 	}).Error; err != nil {
 		w.logger.Warn("failed to persist debug Gemini cache metadata", zap.Uint("run_id", run.ID), zap.Error(err))
 	}
-	return reusableGeminiFile{
+	return keepLocalForFrameGrids(reusableGeminiFile{
 		URI: upload.FileURI, Name: upload.FileName, MIMEType: upload.MIMEType,
 		Expires: &expires, Duration: upload.VideoDuration, LocalPath: localPath,
-	}, uploadBytes, nil
+	}), uploadBytes, nil
 }
 
 func (w *Worker) findReusableChunkDebugGeminiFile(ctx context.Context, run *db.ChunkReanalysisRun, sourceURI string) reusableGeminiFile {

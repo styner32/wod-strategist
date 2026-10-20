@@ -1,6 +1,11 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
 import { validateStoredToken } from "@/features/auth/jwt";
 import { useAuthStore } from "@/features/auth/useAuthStore";
+import {
+  getRegisteredBleDevice,
+  setRegisteredBleDevice,
+  type RegisteredBleDevice,
+} from "@/features/health/useBleHeartRate";
 import { t, useLocale } from "@/features/i18n";
 import {
   fetchMovementGroups,
@@ -47,7 +52,6 @@ type InputMethod = "text" | "photo" | "movements";
 
 const VIDEO_PREFS_KEY = "wod_video_preferences";
 const ENV_ANALYSIS_DEFAULT_RESET_KEY = "wod_env_analysis_default_reset_v1";
-const REGISTERED_BLE_HR_DEVICE_KEY = "wod_registered_ble_hr_device";
 const ALL_FILTER = "All";
 
 export {
@@ -140,10 +144,8 @@ export default function WorkoutSetup() {
   const [wodDescription, setWodDescription] = useState("");
   const [rawText, setRawText] = useState("");
   const [scanning, setScanning] = useState(false);
-  const [registeredBleDevice, setRegisteredBleDeviceState] = useState<{
-    id: string;
-    name: string;
-  } | null>(null);
+  const [registeredBleDevice, setRegisteredBleDeviceState] =
+    useState<RegisteredBleDevice | null>(null);
   const [recentWorkoutSetup, setRecentWorkoutSetup] =
     useState<RecentWorkoutSetup | null>(null);
 
@@ -152,10 +154,10 @@ export default function WorkoutSetup() {
     Promise.all([
       AsyncStorage.getItem(VIDEO_PREFS_KEY),
       AsyncStorage.getItem(ENV_ANALYSIS_DEFAULT_RESET_KEY),
-      AsyncStorage.getItem(REGISTERED_BLE_HR_DEVICE_KEY),
+      getRegisteredBleDevice(),
       AsyncStorage.getItem(RECENT_WORKOUT_SETUP_KEY),
     ])
-      .then(([raw, migrated, rawBleDevice, rawRecentSetup]) => {
+      .then(([raw, migrated, bleDevice, rawRecentSetup]) => {
         if (rawRecentSetup) {
           const validRecent = parseRecentWorkoutSetup(rawRecentSetup);
           if (validRecent) {
@@ -164,19 +166,7 @@ export default function WorkoutSetup() {
             AsyncStorage.removeItem(RECENT_WORKOUT_SETUP_KEY).catch(() => {});
           }
         }
-        if (rawBleDevice) {
-          try {
-            const parsed = JSON.parse(rawBleDevice);
-            if (parsed && typeof parsed.id === "string" && parsed.id.length > 0) {
-              setRegisteredBleDeviceState({
-                id: parsed.id,
-                name: typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : parsed.id,
-              });
-            }
-          } catch {
-            // ignore
-          }
-        }
+        setRegisteredBleDeviceState(bleDevice);
         if (raw) {
           try {
             const saved = JSON.parse(raw) as Partial<VideoPreferences>;
@@ -426,7 +416,11 @@ export default function WorkoutSetup() {
     return result.assets[0].uri;
   };
 
-  const saveRecentWorkoutSetup = async (snapshot: RecentWorkoutSetup) => {
+  const saveRecentWorkoutSetup = async (
+    setup: Omit<RecentWorkoutSetup, "profileId">,
+  ) => {
+    if (!activeProfile) return;
+    const snapshot: RecentWorkoutSetup = { ...setup, profileId: activeProfile.id };
     setRecentWorkoutSetup(snapshot);
     try {
       await AsyncStorage.setItem(
@@ -707,6 +701,7 @@ export default function WorkoutSetup() {
           </View>
 
           {recentWorkoutSetup &&
+            recentWorkoutSetup.profileId === activeProfile?.id &&
             Date.now() - recentWorkoutSetup.savedAt <= RECENT_WORKOUT_TTL_MS && (
               <TouchableOpacity
                 testID="reuse-recent-workout-card"
@@ -1220,7 +1215,7 @@ export default function WorkoutSetup() {
                       style={styles.toggleBtn}
                       onPress={() => {
                         setRegisteredBleDeviceState(null);
-                        AsyncStorage.removeItem(REGISTERED_BLE_HR_DEVICE_KEY).catch(() => {});
+                        void setRegisteredBleDevice(null);
                       }}
                     >
                       <Text style={styles.toggleText}>{t("setup.bleHrDeviceClear")}</Text>

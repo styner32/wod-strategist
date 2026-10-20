@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WODTrainingPanel } from "../src/history/components/WODTrainingPanel";
 import { SessionReanalysisPanel } from "../src/history/components/SessionReanalysisPanel";
-import { formatStartTimestamp, parseStartTimestamp } from "../../shared/wodTraining";
+import { formatStartTimestamp, isWodWorkout, parseStartTimestamp } from "../../shared/wodTraining";
 import { historyApi } from "../src/api/history";
 jest.mock("../src/api/history", () => ({
   historyApi: {
@@ -60,6 +60,16 @@ it("parses and formats start timestamps in MM:SS, HH:MM:SS, and plain seconds", 
   expect(formatStartTimestamp(135)).toBe("02:15");
   expect(formatStartTimestamp(135.4)).toBe("02:15.4");
 });
+it("treats current and legacy non-WOD session IDs as non-WOD when workout_type is empty", () => {
+  expect(isWodWorkout("WARMUP-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF")).toBe(false);
+  expect(isWodWorkout("P7-WARMUP-2025-02-01-07-30")).toBe(false);
+  expect(isWodWorkout("p7-cooldown-2025-02-01-07-30")).toBe(false);
+  expect(isWodWorkout("P7-WOD-2025-02-01-07-30")).toBe(true);
+  expect(isWodWorkout("WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF")).toBe(true);
+  expect(isWodWorkout("P7-WARMUP-2025-02-01-07-30", "wod")).toBe(true);
+  expect(isWodWorkout("WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF", "accessory")).toBe(false);
+});
+
 it("hides controls and makes no API calls for historical WODs", async () => {
   const { tree, client } = await mount('{"intensity":80}');
   expect(tree.toJSON()).toBeNull();expect(historyApi.getWODTraining).not.toHaveBeenCalled();

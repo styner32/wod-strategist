@@ -348,6 +348,28 @@ describe("H10MemoryRecorder", () => {
     expect(upload).toHaveBeenCalledWith(SID, PROFILE, `mem://${SID}`);
   });
 
+  it("stops and retrieves a recording whose start was accepted but whose ack was lost", async () => {
+    const { sensor, mem, recorder } = setup();
+    const realQuery = FakeClient.prototype.query;
+    const querySpy = jest.spyOn(FakeClient.prototype, "query").mockImplementation(async function (this: FakeClient, id, params) {
+      const response = await realQuery.call(this, id, params);
+      if (id === 14) throw Object.assign(new Error("Device disconnected"), { errorCode: 201 });
+      return response;
+    });
+    recorder.begin({ sessionId: SID, profileId: PROFILE, baseEpochMs: 1000 });
+    await waitForPhase(recorder, "start_failed");
+    expect(sensor.recordingOn).toBe(true);
+
+    await recorder.finish(SID);
+
+    expect(querySpy).toHaveBeenCalledWith(15);
+    expect(sensor.recordingOn).toBe(false);
+    const record = mem.records.get(SID)!;
+    expect(record.status).toBe("complete");
+    expect(record.stop.recording_on_before_stop).toBe(true);
+    expect(sensor.files.size).toBe(0);
+  });
+
   it("skips PS-FTP internal recording silently when connected to a non-H10 Polar device (e.g. Polar Sense)", async () => {
     const senseDevice = { ...fakeDevice(), name: "Polar Sense 0DCADB36" } as Device;
     const { mem, upload, recorder } = setup({ device: senseDevice });

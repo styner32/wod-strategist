@@ -15,9 +15,9 @@ const MOVEMENTS = []
 const INJURIES = []
 const AUTO_MERGE = true;
 const KEEP_CHUNKS = false;
-const SESSION_ID = "wod-2025-03-29-004" // update
+const SESSION_ID = "wod-2026-04-01-001" // update
 
-const inputArg = './tmp/wod_2.MP4' // update
+const inputArg = 'tmp/wod_20260401.mp4' // update
 
 if (!inputArg) {
   throw new Error("No input video path provided.")

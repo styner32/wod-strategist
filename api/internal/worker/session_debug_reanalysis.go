@@ -54,7 +54,10 @@ type sessionDebugContext struct {
 	SkippedSegments []Segment
 	// ChunkTimelineAvailable is true when any chunk has verified media offsets.
 	ChunkTimelineAvailable bool
-	Corrections            []sessionDebugCorrection
+	// TimelineRebuildFailed fingerprints the chunk rows whose legacy timeline
+	// rebuild failed in this run; the run snapshot records it.
+	TimelineRebuildFailed string
+	Corrections           []sessionDebugCorrection
 }
 
 type sessionDebugCorrection struct {
@@ -143,9 +146,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	if err != nil {
 		return w.failSessionDebugRun(ctx, run.ID, retryCount, started, "The session video could not be prepared.", err)
 	}
-	if file.LocalPath != "" {
-		defer os.Remove(file.LocalPath)
-	}
+	defer file.removeLocal()
 	p := VideoAnalysisPayload{
 		SessionID: run.SessionID, ProfileID: run.ProfileID, WorkoutType: target.WorkoutType,
 		Movements: movementHintsFromDocument(target.MovementHints), Injuries: target.Injuries,
@@ -246,6 +247,9 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 		if len(completed) > 0 {
 			snapshot["completed_segments"] = completed
+		}
+		if target.TimelineRebuildFailed != "" {
+			snapshot["timeline_rebuild_failed"] = target.TimelineRebuildFailed
 		}
 		raw, _ := json.Marshal(snapshot)
 		return raw
@@ -612,6 +616,11 @@ func (w *Worker) loadSessionDebugContext(ctx context.Context, sessionID string, 
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	} else {
+		// Without a sessions row the session ID prefix is the only workout type
+		// source (analysis_results has none); an unprefixed ID stays a WOD.
+		if fromID := workoutTypeFromSessionID(sessionID); fromID != "" {
+			target.WorkoutType = fromID
+		}
 		var analysis db.AnalysisResult
 		if analysisErr := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 			Order("created_at DESC, id DESC").First(&analysis).Error; analysisErr == nil {
@@ -628,7 +637,7 @@ func (w *Worker) loadSessionDebugContext(ctx context.Context, sessionID string, 
 		return nil, err
 	}
 	target.Corrections = corrections
-	target.Segments, target.SkippedSegments, target.ChunkTimelineAvailable, err = w.buildSessionDebugSegments(ctx, sessionID, profileID, corrections, target.WorkoutType)
+	target.Segments, target.SkippedSegments, target.ChunkTimelineAvailable, target.TimelineRebuildFailed, err = w.buildSessionDebugSegments(ctx, sessionID, profileID, corrections, target.WorkoutType)
 	if err != nil {
 		return nil, err
 	}
@@ -670,20 +679,29 @@ func (w *Worker) loadActiveSessionDebugCorrections(ctx context.Context, sessionI
 
 // buildSessionDebugSegments returns the chunk segments to observe, the verified
 // media of chunks classified as non-exercise (by chunk analysis or a saved
-// correction), and whether any chunk carries a verified merged-media interval.
-func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection, workoutType string) ([]Segment, []Segment, bool, error) {
+// correction), whether any chunk carries a verified merged-media interval, and
+// the fingerprint of the chunk rows when their legacy timeline rebuild failed.
+func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection, workoutType string) ([]Segment, []Segment, bool, string, error) {
 	var chunks []db.ChunkAnalysisResult
 	if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 		Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error; err != nil {
-		return nil, nil, false, err
+		return nil, nil, false, "", err
 	}
+	rebuildFailed := ""
 	if sessionDebugTimelineIncomplete(chunks) {
-		if err := w.reconstructSessionDebugMediaIntervals(ctx, sessionID, profileID, chunks); err == nil {
+		fingerprint := sessionDebugTimelineFingerprint(chunks)
+		if w.sessionDebugTimelineRebuildFailedRecently(ctx, sessionID, profileID, fingerprint) {
+			// Rebuilding downloads and probes every retained chunk; repeat it
+			// only after the chunk rows change or the retry window passes.
+			w.logger.Info("skipping a legacy merged-media timeline rebuild that recently failed for the same chunks",
+				zap.String("session_id", sessionID))
+		} else if err := w.reconstructSessionDebugMediaIntervals(ctx, sessionID, profileID, chunks); err == nil {
 			if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 				Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error; err != nil {
-				return nil, nil, false, err
+				return nil, nil, false, "", err
 			}
 		} else {
+			rebuildFailed = fingerprint
 			w.logger.Warn("could not rebuild the legacy merged-media timeline; unmapped chunks stay unobserved",
 				zap.String("session_id", sessionID), zap.Error(err))
 		}
@@ -768,7 +786,39 @@ func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string
 		}
 		segments = append(segments, Segment{Start: formatSegmentTimestamp(*chunk.MediaStartSecs), End: formatSegmentTimestamp(*chunk.MediaEndSecs), Type: movement, Description: description})
 	}
-	return mergeSegmentsByMovement(segments), mergeSegmentsByMovement(skipped), timelineAvailable, nil
+	return mergeSegmentsByMovement(segments), mergeSegmentsByMovement(skipped), timelineAvailable, rebuildFailed, nil
+}
+
+// sessionDebugTimelineRebuildRetryAfter lets a failed legacy timeline rebuild
+// be retried for unchanged chunk rows, e.g. after a missing object is restored.
+const sessionDebugTimelineRebuildRetryAfter = 24 * time.Hour
+
+// sessionDebugTimelineFingerprint identifies the chunk rows a legacy timeline
+// rebuild reads.
+func sessionDebugTimelineFingerprint(chunks []db.ChunkAnalysisResult) string {
+	interval := func(value *float64) string {
+		if value == nil {
+			return "-"
+		}
+		return fmt.Sprintf("%.3f", *value)
+	}
+	hash := sha256.New()
+	for _, chunk := range chunks {
+		fmt.Fprintf(hash, "%d|%s|%s|%s|%s\n", chunk.ID, strings.TrimSpace(chunk.FilePath), chunk.Status,
+			interval(chunk.MediaStartSecs), interval(chunk.MediaEndSecs))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// sessionDebugTimelineRebuildFailedRecently reports whether a run within the
+// retry window recorded a failed rebuild of the same chunk rows.
+func (w *Worker) sessionDebugTimelineRebuildFailedRecently(ctx context.Context, sessionID string, profileID uint, fingerprint string) bool {
+	var count int64
+	err := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).
+		Where("session_id = ? AND profile_id = ? AND created_at > ? AND source_context_snapshot->>'timeline_rebuild_failed' = ?",
+			sessionID, profileID, time.Now().UTC().Add(-sessionDebugTimelineRebuildRetryAfter), fingerprint).
+		Count(&count).Error
+	return err == nil && count > 0
 }
 
 // sessionDebugTimelineIncomplete reports a completed original chunk whose
@@ -983,7 +1033,7 @@ func (w *Worker) prepareSessionDebugGeminiFile(ctx context.Context, run *db.Sess
 		if err == nil {
 			cached.Duration = duration
 			cached.LocalPath = localPath
-			return cached, 0, nil
+			return keepLocalForFrameGrids(cached), 0, nil
 		}
 		w.logger.Warn("could not probe cached session debug source; uploading a fresh Files object", zap.Uint("run_id", run.ID), zap.Error(err))
 	}
@@ -1019,10 +1069,10 @@ func (w *Worker) prepareSessionDebugGeminiFile(ctx context.Context, run *db.Sess
 		"gemini_file_uri": upload.FileURI, "gemini_file_name": upload.FileName,
 		"gemini_mime_type": upload.MIMEType, "gemini_file_expires_at": expires,
 	}).Error
-	return reusableGeminiFile{
+	return keepLocalForFrameGrids(reusableGeminiFile{
 		URI: upload.FileURI, Name: upload.FileName, MIMEType: upload.MIMEType,
 		Expires: &expires, Duration: upload.VideoDuration, LocalPath: localPath,
-	}, uploadBytes, nil
+	}), uploadBytes, nil
 }
 
 func (w *Worker) findReusableSessionDebugGeminiFile(ctx context.Context, run *db.SessionReanalysisRun) reusableGeminiFile {

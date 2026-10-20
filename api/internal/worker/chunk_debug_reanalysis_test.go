@@ -36,6 +36,45 @@ var _ = Describe("chunk debug re-analysis helpers", func() {
 		})
 	})
 
+	Describe("retainReanalysisMedia", func() {
+		It("keeps local copies only while they fit the budget shared by concurrent runs", func() {
+			large := retainReanalysisMedia(maxRetainedReanalysisMediaBytes - 10)
+			Expect(large).NotTo(BeNil())
+			Expect(retainReanalysisMedia(11)).To(BeNil())
+			small := retainReanalysisMedia(10)
+			Expect(small).NotTo(BeNil())
+			small()
+			large()
+			large()
+			Expect(retainedReanalysisMediaBytes.Load()).To(BeZero(), "a release is counted once")
+		})
+
+		It("deletes a local copy that does not fit and keeps the Files object", func() {
+			local, err := createTempFile("retained-media", ".mp4")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(os.WriteFile(local, []byte("video"), 0o600)).To(Succeed())
+			full := retainReanalysisMedia(maxRetainedReanalysisMediaBytes)
+			Expect(full).NotTo(BeNil())
+
+			file := keepLocalForFrameGrids(reusableGeminiFile{URI: "https://files/source", LocalPath: local})
+			full()
+
+			Expect(file.URI).To(Equal("https://files/source"))
+			Expect(file.LocalPath).To(BeEmpty())
+			_, statErr := os.Stat(local)
+			Expect(os.IsNotExist(statErr)).To(BeTrue())
+
+			Expect(os.WriteFile(local, []byte("video"), 0o600)).To(Succeed())
+			kept := keepLocalForFrameGrids(reusableGeminiFile{URI: "https://files/source", LocalPath: local})
+			Expect(kept.LocalPath).To(Equal(local))
+			Expect(retainedReanalysisMediaBytes.Load()).To(Equal(int64(len("video"))))
+			kept.removeLocal()
+			Expect(retainedReanalysisMediaBytes.Load()).To(BeZero())
+			_, statErr = os.Stat(local)
+			Expect(os.IsNotExist(statErr)).To(BeTrue())
+		})
+	})
+
 	Describe("selectChunkDebugSessionVideo", func() {
 		It("prefers the analysis copy while ignoring derived chunks", func() {
 			objects := []string{

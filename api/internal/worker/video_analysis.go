@@ -183,7 +183,7 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 	p.ProfileID = profileID
 	p.WorkoutType = w.resolveSessionWorkoutType(ctx, p.SessionID, p.WorkoutType)
-	p.WODDescription = w.resolveSessionWODDescription(ctx, p.SessionID, p.WODDescription)
+	p.WODDescription = w.resolveSessionWODDescription(ctx, p.SessionID, p.ProfileID, p.WODDescription)
 	if err := w.ensureWODEvaluationSession(ctx, p); err != nil {
 		return err
 	}

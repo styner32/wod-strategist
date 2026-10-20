@@ -195,6 +195,9 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   }, [options?.sink, batteryLevel]);
 
   const deviceRef = useRef<Device | null>(null);
+  // The strap that just dropped, kept so the reconnect can target it directly:
+  // an unfiltered scan finds nothing while iOS runs the app in the background.
+  const lostDeviceRef = useRef<Device | null>(null);
   const bleStateRef = useRef<State | null>(null);
   const isMountedRef = useRef(true);
   const isScanningRef = useRef(false);
@@ -367,7 +370,8 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
 
     try {
       console.log(`♻️ Reconnecting now (${reason})`);
-      const lastDevice = deviceRef.current;
+      const lastDevice = deviceRef.current ?? lostDeviceRef.current;
+      lostDeviceRef.current = null;
       await cleanupConnection(`reconnect-${reason}`);
       resetQuality(true);
 
@@ -463,6 +467,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
       await connected.discoverAllServicesAndCharacteristics();
       cleanupSubscriptions();
       deviceRef.current = connected;
+      lostDeviceRef.current = null;
       recordDiscoveredDevice(connected);
       setConnectedDevice({
         id: connected.id,
@@ -518,6 +523,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
         (error) => {
           console.warn("🔌 Disconnected:", error);
           clearInactivityTimer();
+          lostDeviceRef.current = connected;
           deviceRef.current = null;
           setConnectedDevice(null);
           setStatus("Scanning");
@@ -565,6 +571,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   };
 
   const rescanDevices = async () => {
+    lostDeviceRef.current = null;
     clearReconnectTimer();
     stopScan();
     await cleanupConnection("manual-rescan");

@@ -50,6 +50,8 @@ export const RECENT_WORKOUT_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 export interface RecentWorkoutSetup {
   savedAt: number;
+  /** Only this profile is offered the snapshot; it carries appearance hints. */
+  profileId: number;
   workoutType: WorkoutType;
   wodDescription: string;
   rawText: string;
@@ -69,6 +71,8 @@ export function parseRecentWorkoutSetup(
       !parsed ||
       typeof parsed.savedAt !== "number" ||
       !Number.isFinite(parsed.savedAt) ||
+      typeof parsed.profileId !== "number" ||
+      !Number.isFinite(parsed.profileId) ||
       now - parsed.savedAt > RECENT_WORKOUT_TTL_MS ||
       now < parsed.savedAt - 60_000
     ) {
@@ -101,6 +105,7 @@ export function parseRecentWorkoutSetup(
 
     return {
       savedAt: parsed.savedAt,
+      profileId: parsed.profileId,
       workoutType,
       wodDescription,
       rawText,

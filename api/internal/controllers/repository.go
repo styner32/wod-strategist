@@ -54,19 +54,16 @@ func (r *GormAnalysisResultRepository) populateMissingWODDescriptions(ctx contex
 		return
 	}
 
-	bySessionAndProfile := make(map[string]map[uint]string, len(sessions))
-	bySessionFallback := make(map[string]string, len(sessions))
+	// A sessions row describes only its own profile's workout; legacy IDs
+	// without a profile prefix can repeat across profiles.
+	type sessionKey struct {
+		sessionID string
+		profileID uint
+	}
+	descriptions := make(map[sessionKey]string, len(sessions))
 	for _, s := range sessions {
-		desc := strings.TrimSpace(s.WODDescription)
-		if desc == "" {
-			continue
-		}
-		if bySessionAndProfile[s.SessionID] == nil {
-			bySessionAndProfile[s.SessionID] = make(map[uint]string, 1)
-		}
-		bySessionAndProfile[s.SessionID][s.ProfileID] = desc
-		if _, exists := bySessionFallback[s.SessionID]; !exists {
-			bySessionFallback[s.SessionID] = desc
+		if desc := strings.TrimSpace(s.WODDescription); desc != "" {
+			descriptions[sessionKey{s.SessionID, s.ProfileID}] = desc
 		}
 	}
 
@@ -74,13 +71,7 @@ func (r *GormAnalysisResultRepository) populateMissingWODDescriptions(ctx contex
 		if strings.TrimSpace(results[i].WODDescription) != "" {
 			continue
 		}
-		if profMap, ok := bySessionAndProfile[results[i].SessionID]; ok {
-			if desc, ok := profMap[results[i].ProfileID]; ok && desc != "" {
-				results[i].WODDescription = desc
-				continue
-			}
-		}
-		if desc, ok := bySessionFallback[results[i].SessionID]; ok && desc != "" {
+		if desc, ok := descriptions[sessionKey{strings.TrimSpace(results[i].SessionID), results[i].ProfileID}]; ok {
 			results[i].WODDescription = desc
 		}
 	}
