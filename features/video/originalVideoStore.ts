@@ -292,6 +292,20 @@ export async function addOriginalChunk(ref: OriginalSessionRef, input: {
   });
 }
 
+function isRecoverableBufferDropIssue(issue?: string): boolean {
+  return typeof issue === "string" && issue.startsWith("capture dropped buffers:");
+}
+
+function hasAllFinalizedChunks(session: OriginalVideoSession): boolean {
+  return (
+    session.stoppedAt !== null &&
+    session.chunks.length > 0 &&
+    session.chunks.every(
+      (chunk) => Boolean(chunk.finalized && chunk.path && chunk.sizeBytes !== undefined && chunk.sizeBytes > 0),
+    )
+  );
+}
+
 export async function markOriginalRecordingStopped(ref: OriginalSessionRef, result: {
   complete: boolean; reason?: string;
 }): Promise<void> {
@@ -301,7 +315,10 @@ export async function markOriginalRecordingStopped(ref: OriginalSessionRef, resu
       if (session.stoppedAt !== null) return;
       session.stoppedAt = Date.now();
       if (!result.complete) session.captureIssue = result.reason ?? "recording_incomplete";
-      session.complete = result.complete && !session.captureIssue;
+      if (isRecoverableBufferDropIssue(session.captureIssue) && hasAllFinalizedChunks(session)) {
+        session.captureIssue = undefined;
+      }
+      session.complete = (result.complete || hasAllFinalizedChunks(session)) && !session.captureIssue;
       session.status = session.complete ? "pending" : "needs_attention";
       session.lastError = session.captureIssue;
       await commit(session);
@@ -313,6 +330,11 @@ export async function markOriginalRecordingStopped(ref: OriginalSessionRef, resu
 }
 
 async function validateSources(session: OriginalVideoSession): Promise<string[]> {
+  if (isRecoverableBufferDropIssue(session.captureIssue) && hasAllFinalizedChunks(session)) {
+    session.captureIssue = undefined;
+    session.lastError = undefined;
+    session.complete = true;
+  }
   if (!session.complete || session.stoppedAt === null || session.captureIssue || session.chunks.length === 0) {
     throw new Error(session.captureIssue ?? "recording_incomplete");
   }
@@ -511,6 +533,16 @@ export async function listOriginalSessions(profileId?: number | null): Promise<O
             await commit(current);
           } else if (current.status === "preparing") {
             current.status = "pending";
+            await commit(current);
+          } else if (
+            current.status === "needs_attention" &&
+            isRecoverableBufferDropIssue(current.captureIssue) &&
+            hasAllFinalizedChunks(current)
+          ) {
+            current.complete = true;
+            current.status = "pending";
+            current.captureIssue = undefined;
+            current.lastError = undefined;
             await commit(current);
           }
           if (current.status === "saved") await cleanSaved(current).catch(() => {});

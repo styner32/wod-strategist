@@ -22,6 +22,96 @@ const INACTIVITY_TIMEOUT_MS = 15000;
 const RECONNECT_MIN_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 10000;
 
+export const REGISTERED_BLE_HR_DEVICE_KEY = "wod_registered_ble_hr_device";
+
+export interface RegisteredBleDevice {
+  id: string;
+  name: string;
+}
+
+let cachedRegisteredDevice: RegisteredBleDevice | null = null;
+const registeredDeviceListeners = new Set<(device: RegisteredBleDevice | null) => void>();
+
+function getStorage(): {
+  getItem: (key: string) => Promise<string | null>;
+  setItem: (key: string, value: string) => Promise<void>;
+  removeItem: (key: string) => Promise<void>;
+} | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("@react-native-async-storage/async-storage");
+    return mod?.default ?? mod ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function getRegisteredBleDevice(): Promise<RegisteredBleDevice | null> {
+  try {
+    const storage = getStorage();
+    if (!storage) return cachedRegisteredDevice;
+    const raw = await storage.getItem(REGISTERED_BLE_HR_DEVICE_KEY);
+    if (!raw) {
+      cachedRegisteredDevice = null;
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.id === "string" && parsed.id.length > 0) {
+      cachedRegisteredDevice = {
+        id: parsed.id,
+        name: typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : parsed.id,
+      };
+      return cachedRegisteredDevice;
+    }
+  } catch {
+    // Fallback to in-memory cache when AsyncStorage is unavailable
+  }
+  return cachedRegisteredDevice;
+}
+
+export async function setRegisteredBleDevice(device: RegisteredBleDevice | null): Promise<void> {
+  cachedRegisteredDevice = device;
+  for (const listener of registeredDeviceListeners) {
+    listener(device);
+  }
+  try {
+    const storage = getStorage();
+    if (!storage) return;
+    if (device) {
+      await storage.setItem(REGISTERED_BLE_HR_DEVICE_KEY, JSON.stringify(device));
+    } else {
+      await storage.removeItem(REGISTERED_BLE_HR_DEVICE_KEY);
+    }
+  } catch {
+    // Ignore storage persistence errors in non-native environments
+  }
+}
+
+export function isHeartRateCandidateDevice(
+  device: Pick<Device, "name" | "serviceUUIDs"> | null | undefined,
+): boolean {
+  if (!device) return false;
+  const isPolarApp = device?.name?.includes("Polar mobile");
+  return Boolean(
+    !isPolarApp &&
+      ((device?.name &&
+        (device.name.includes("HeartCast") ||
+          device.name.includes("Polar"))) ||
+        (device?.serviceUUIDs && device.serviceUUIDs.includes(HR_SERVICE_UUID))),
+  );
+}
+
+export function matchesRegisteredBleDevice(
+  device: Pick<Device, "id" | "name"> | null | undefined,
+  registered: RegisteredBleDevice | null | undefined,
+): boolean {
+  if (!device) return false;
+  if (!registered) return true;
+  if (device.id === registered.id) return true;
+  if (registered.name && device.name && device.name === registered.name) return true;
+  return false;
+}
+
 export interface UseBleHeartRateOptions {
   sink?: BleSensorSink;
   recording?: boolean;
@@ -63,9 +153,35 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   const [status, setStatus] = useState<
     "Init" | "Scanning" | "Connecting" | "Live" | "Error"
   >("Init");
+  const [connectedDevice, setConnectedDevice] = useState<RegisteredBleDevice | null>(null);
+  const [registeredDevice, setRegisteredDevice] = useState<RegisteredBleDevice | null>(
+    cachedRegisteredDevice,
+  );
+  const [discoveredDevices, setDiscoveredDevices] = useState<RegisteredBleDevice[]>([]);
 
+  const registeredDeviceRef = useRef<RegisteredBleDevice | null>(cachedRegisteredDevice);
+  const discoveredDevicesRef = useRef<Map<string, Device>>(new Map());
   const sinkRef = useRef<BleSensorSink | undefined>(options?.sink);
   const hasPmdRef = useRef(false);
+
+  const recordDiscoveredDevice = (device: Device) => {
+    if (!device.id) return;
+    discoveredDevicesRef.current.set(device.id, device);
+    const entry: RegisteredBleDevice = {
+      id: device.id,
+      name: device.name || device.id,
+    };
+    setDiscoveredDevices((prev) => {
+      const existingIdx = prev.findIndex((item) => item.id === entry.id);
+      if (existingIdx >= 0) {
+        if (prev[existingIdx].name === entry.name) return prev;
+        const next = [...prev];
+        next[existingIdx] = entry;
+        return next;
+      }
+      return [...prev, entry];
+    });
+  };
 
   useEffect(() => {
     const prevSink = sinkRef.current;
@@ -90,6 +206,49 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   const monitorSubscriptionRef = useRef<Subscription | null>(null);
   const batterySubscriptionRef = useRef<Subscription | null>(null);
   const disconnectSubscriptionRef = useRef<Subscription | null>(null);
+
+  const applyRegisteredDeviceSelection = async (next: RegisteredBleDevice | null) => {
+    registeredDeviceRef.current = next;
+    if (isMountedRef.current) {
+      setRegisteredDevice(next);
+    }
+    if (!isMountedRef.current) return;
+
+    // If connected to a device that no longer matches the registered target, disconnect and switch
+    if (next && deviceRef.current && !matchesRegisteredBleDevice(deviceRef.current, next)) {
+      await cleanupConnection("switch-registered-device");
+    }
+
+    if (!deviceRef.current && !isConnectingRef.current) {
+      if (next) {
+        for (const candidate of discoveredDevicesRef.current.values()) {
+          if (matchesRegisteredBleDevice(candidate, next)) {
+            stopScan();
+            await connectToDevice(candidate);
+            return;
+          }
+        }
+      }
+      if (!isScanningRef.current && bleStateRef.current === State.PoweredOn) {
+        await startScan();
+      }
+    }
+  };
+
+  useEffect(() => {
+    const listener = (next: RegisteredBleDevice | null) => {
+      void applyRegisteredDeviceSelection(next);
+    };
+    registeredDeviceListeners.add(listener);
+    void getRegisteredBleDevice().then((stored) => {
+      if (isMountedRef.current && stored !== registeredDeviceRef.current) {
+        void applyRegisteredDeviceSelection(stored);
+      }
+    });
+    return () => {
+      registeredDeviceListeners.delete(listener);
+    };
+  }, []);
 
   useEffect(() => {
     // 1. 블루투스 상태 감지 (PoweredOn 될 때까지 대기)
@@ -168,6 +327,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
     clearInactivityTimer();
     const device = deviceRef.current;
     deviceRef.current = null;
+    setConnectedDevice(null);
     setBatteryLevel(null);
     if (device) {
       // Tear-downs that bypass onDisconnected (adapter off, inactivity
@@ -211,7 +371,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
       await cleanupConnection(`reconnect-${reason}`);
       resetQuality(true);
 
-      if (lastDevice) {
+      if (lastDevice && matchesRegisteredBleDevice(lastDevice, registeredDeviceRef.current)) {
         await connectToDevice(lastDevice);
         if (deviceRef.current) {
           return;
@@ -273,14 +433,13 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
       }
 
       const isPolarApp = device?.name?.includes("Polar mobile");
-      const isTargetDevice =
-        !isPolarApp &&
-        ((device?.name &&
-          (device.name.includes("HeartCast") ||
-            device.name.includes("Polar"))) ||
-          (device?.serviceUUIDs && device.serviceUUIDs.includes(HR_SERVICE_UUID)));
+      const isTargetDevice = !isPolarApp && isHeartRateCandidateDevice(device);
 
       if (isTargetDevice && device) {
+        recordDiscoveredDevice(device);
+        if (!matchesRegisteredBleDevice(device, registeredDeviceRef.current)) {
+          return;
+        }
         console.log("✅ Target Found:", device.name);
         stopScan();
         connectToDevice(device);
@@ -298,18 +457,23 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
       setStatus("Connecting");
       console.log(`🔗 Connecting to ${device.name}...`);
 
-      const connectedDevice = await device.connect({ timeout: CONNECTION_TIMEOUT_MS });
+      const connected = await device.connect({ timeout: CONNECTION_TIMEOUT_MS });
       console.log("🔗 Connected. Discovering services...");
 
-      await connectedDevice.discoverAllServicesAndCharacteristics();
+      await connected.discoverAllServicesAndCharacteristics();
       cleanupSubscriptions();
-      deviceRef.current = connectedDevice;
+      deviceRef.current = connected;
+      recordDiscoveredDevice(connected);
+      setConnectedDevice({
+        id: connected.id,
+        name: connected.name || connected.id,
+      });
       reconnectAttemptsRef.current = 0;
 
       // Check for PMD Service
       let hasPmd = false;
       try {
-        const services = await connectedDevice.services();
+        const services = await connected.services();
         hasPmd = services.some(
           (s) => s.uuid.toLowerCase() === PMD_SERVICE_UUID.toLowerCase(),
         );
@@ -320,7 +484,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
 
       // Read Battery Level (0x2A19)
       try {
-        const battChar = await connectedDevice.readCharacteristicForService(
+        const battChar = await connected.readCharacteristicForService(
           BATTERY_SERVICE_UUID,
           BATTERY_CHARACTERISTIC_UUID,
         );
@@ -335,7 +499,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
 
       // Monitor Battery characteristic notifications if supported
       try {
-        batterySubscriptionRef.current = connectedDevice.monitorCharacteristicForService(
+        batterySubscriptionRef.current = connected.monitorCharacteristicForService(
           BATTERY_SERVICE_UUID,
           BATTERY_CHARACTERISTIC_UUID,
           (error, characteristic) => {
@@ -350,10 +514,12 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
         // Ignored
       }
 
-      disconnectSubscriptionRef.current = connectedDevice.onDisconnected(
+      disconnectSubscriptionRef.current = connected.onDisconnected(
         (error) => {
           console.warn("🔌 Disconnected:", error);
           clearInactivityTimer();
+          deviceRef.current = null;
+          setConnectedDevice(null);
           setStatus("Scanning");
           resetQuality(true);
           setBatteryLevel(null);
@@ -363,7 +529,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
       );
 
       console.log("❤️ Monitoring Heart Rate...");
-      monitorSubscriptionRef.current = connectedDevice.monitorCharacteristicForService(
+      monitorSubscriptionRef.current = connected.monitorCharacteristicForService(
         HR_SERVICE_UUID,
         HR_CHARACTERISTIC_UUID,
         (error, characteristic) => {
@@ -381,7 +547,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
       );
 
       // Notify sink that device is ready and whether PMD is available
-      sinkRef.current?.onDeviceReady(connectedDevice, hasPmd);
+      sinkRef.current?.onDeviceReady(connected, hasPmd);
 
       resetInactivityTimer();
       setStatus("Live");
@@ -392,6 +558,17 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
     } finally {
       isConnectingRef.current = false;
     }
+  };
+
+  const registerDevice = async (device: RegisteredBleDevice | null) => {
+    await setRegisteredBleDevice(device);
+  };
+
+  const rescanDevices = async () => {
+    clearReconnectTimer();
+    stopScan();
+    await cleanupConnection("manual-rescan");
+    await startScan();
   };
 
   const parseHeartRate = (base64Value: string) => {
@@ -413,5 +590,17 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
     }
   };
 
-  return { bpm: reading.bpm ?? 0, quality: reading.reason, getReading, resetQuality, status, batteryLevel };
+  return {
+    bpm: reading.bpm ?? 0,
+    quality: reading.reason,
+    getReading,
+    resetQuality,
+    status,
+    batteryLevel,
+    connectedDevice,
+    registeredDevice,
+    discoveredDevices,
+    registerDevice,
+    rescanDevices,
+  };
 }

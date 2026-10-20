@@ -284,7 +284,14 @@
     "continuousRecording": "Continuous recording validation (experimental)",
     "continuousRecordingHelp": "Keeps recording across 10-second boundaries. Off by default pending device validation. Test 720p/1080p first.",
     "h10MemoryRecording": "H10 internal HR recording (experimental)",
-    "h10MemoryRecordingHelp": "Also records heart rate inside the Polar H10 and retrieves it after the workout, to fill signal gaps later. Live heart rate and motion stay unchanged. iOS may ask to pair the H10."
+    "h10MemoryRecordingHelp": "Also records heart rate inside the Polar H10 and retrieves it after the workout, to fill signal gaps later. Live heart rate and motion stay unchanged. iOS may ask to pair the H10.",
+    "bleHrDevice": "Heart Rate Sensor (BLE)",
+    "bleHrDeviceRegistered": "Registered: %{name} (connects only to this sensor)",
+    "bleHrDeviceUnregistered": "Not registered (tap the BPM pill on the recording screen to register your sensor)",
+    "bleHrDeviceClear": "Unregister",
+    "reuseRecentTitle": "⚡ Reuse Recent Workout Setup",
+    "reuseRecentMeta": "Saved %{minutes}m ago · Tap to apply without retaking photo",
+    "reuseRecentApply": "Reuse"
   },
   "upload": {
     "title": "Upload Video",
@@ -357,6 +364,9 @@
     "remergeConfirmBody": "Processing has taken more than 1 hour. Would you like to re-merge the uploaded video chunks and retry analysis?",
     "remergeAction": "Re-merge",
     "remergeStarted": "Re-merge and analysis requested successfully.",
+    "remergeQueuedAlert": "Added to the re-merge queue. It will run automatically after the current video finishes.",
+    "remergeInProgress": "Re-merging...",
+    "remergeQueuedWithPosition": "Queued (#%{position})",
     "remergeFailed": "Failed to request re-merge. Please try again.",
     "createHardsub": "📝 Create Guided Video",
     "hardsubStarted": "Guided video generation started! Check back in a few minutes.",
@@ -463,7 +473,16 @@
       "h10MemoryStartFailed": "H10 internal recording failed to start (%{code}). Live data continues.",
       "h10MemoryFailed": "H10 internal recording error (%{stage}: %{code}).",
       "h10MemoryHrStalled": "H10 memory ON: live heart rate stopped arriving while connected.",
-      "h10MemoryAccStalled": "H10 memory ON: live motion (ACC) stopped while heart rate continues."
+      "h10MemoryAccStalled": "H10 memory ON: live motion (ACC) stopped while heart rate continues.",
+      "hrDeviceTitle": "Heart Rate Sensor",
+      "hrDeviceConnected": "Connected: %{name}",
+      "hrDeviceDisconnected": "No sensor connected",
+      "hrDeviceRegisteredInfo": "Registered sensor: %{name}",
+      "hrDeviceUnregisteredInfo": "Registered sensor: None (auto-connects to any nearby sensor)",
+      "hrDeviceRegisterCurrent": "Register %{name} as my sensor",
+      "hrDeviceSwitchTo": "Connect & register %{name}",
+      "hrDeviceUnregister": "Unregister sensor (allow any)",
+      "hrDeviceRescan": "Rescan BLE sensors"
     },
     "sensor": {
       "heartRate": "HEART RATE",

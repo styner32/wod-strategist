@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react-native';
 import { Buffer } from 'buffer';
-import { useBleHeartRate } from '../useBleHeartRate';
+import { setRegisteredBleDevice, useBleHeartRate } from '../useBleHeartRate';
 import { HR_CHARACTERISTIC_UUID } from '../polar/polarPmdProtocol';
 let mockState: (state: string) => void;
 let mockScan: (error: unknown, device: unknown) => void;
@@ -15,7 +15,11 @@ jest.mock('react-native-ble-plx', () => ({
  })),
 }));
 describe('BLE accepted and raw HR paths', () => {
- beforeEach(() => {jest.useFakeTimers();jest.setSystemTime(10000);});
+ beforeEach(async () => {
+  jest.useFakeTimers();
+  jest.setSystemTime(10000);
+  await setRegisteredBleDevice(null);
+ });
  afterEach(() => {jest.useRealTimers();});
  const device = {
   name: 'Polar H10', id: 'test',
@@ -60,6 +64,60 @@ describe('BLE accepted and raw HR paths', () => {
   view.rerender({recording:true});receive(45,0);
   expect(view.result.current.quality).toBe('low');expect(view.result.current.bpm).toBe(45);
   act(()=>mockLost(null));expect(view.result.current.bpm).toBe(0);
+  view.unmount();
+ });
+ it('ignores non-registered sensors during scan and switches connection when registering a target sensor', async () => {
+  const otherSensor: any = {
+   ...device,
+   id: 'sense-id',
+   name: 'Polar Sense 0DCADB36',
+   connect: jest.fn(async () => otherSensor),
+   cancelConnection: jest.fn(),
+  };
+  const myH10: any = {
+   ...device,
+   id: 'h10-id',
+   name: 'Polar H10 99887766',
+   connect: jest.fn(async () => myH10),
+   cancelConnection: jest.fn(),
+  };
+
+  await setRegisteredBleDevice({ id: 'h10-id', name: 'Polar H10 99887766' });
+  const sink = { onHeartRate: jest.fn(), onDeviceReady: jest.fn(), onDeviceLost: jest.fn() };
+  const view = renderHook(() => useBleHeartRate({ sink }));
+
+  await act(async () => {
+   mockState('PoweredOn');
+   mockScan(null, otherSensor);
+  });
+
+  // Other person's Polar Sense is discovered for the UI list, but not auto-connected
+  expect(otherSensor.connect).not.toHaveBeenCalled();
+  expect(view.result.current.connectedDevice).toBeNull();
+  expect(view.result.current.discoveredDevices).toEqual([
+   { id: 'sense-id', name: 'Polar Sense 0DCADB36' },
+  ]);
+
+  // Scanning our registered H10 connects immediately
+  await act(async () => {
+   mockScan(null, myH10);
+  });
+  expect(myH10.connect).toHaveBeenCalledTimes(1);
+  expect(view.result.current.connectedDevice).toEqual({
+   id: 'h10-id',
+   name: 'Polar H10 99887766',
+  });
+
+  // Switching registered device to the discovered otherSensor disconnects myH10 and connects otherSensor
+  await act(async () => {
+   await view.result.current.registerDevice({ id: 'sense-id', name: 'Polar Sense 0DCADB36' });
+  });
+  expect(myH10.cancelConnection).toHaveBeenCalledTimes(1);
+  expect(otherSensor.connect).toHaveBeenCalledTimes(1);
+  expect(view.result.current.connectedDevice).toEqual({
+   id: 'sense-id',
+   name: 'Polar Sense 0DCADB36',
+  });
   view.unmount();
  });
 });

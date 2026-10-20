@@ -12,7 +12,14 @@ import {
 } from "@/features/wod/api";
 import { PreWodStrategyCard } from "@/features/wod/ui/PreWodStrategyCard";
 import { RelatedWodsCard } from "@/features/wod/ui/RelatedWodsCard";
-import { WORKOUT_TYPES, type WorkoutType } from "@/features/wod/workoutType";
+import {
+  parseRecentWorkoutSetup,
+  RECENT_WORKOUT_SETUP_KEY,
+  RECENT_WORKOUT_TTL_MS,
+  WORKOUT_TYPES,
+  type RecentWorkoutSetup,
+  type WorkoutType,
+} from "@/features/wod/workoutType";
 import { supports4K30Fps } from "@/features/video/cameraCapability";
 import { useActiveProfile } from "@/store/useProfileStore";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -40,7 +47,15 @@ type InputMethod = "text" | "photo" | "movements";
 
 const VIDEO_PREFS_KEY = "wod_video_preferences";
 const ENV_ANALYSIS_DEFAULT_RESET_KEY = "wod_env_analysis_default_reset_v1";
+const REGISTERED_BLE_HR_DEVICE_KEY = "wod_registered_ble_hr_device";
 const ALL_FILTER = "All";
+
+export {
+  parseRecentWorkoutSetup,
+  RECENT_WORKOUT_SETUP_KEY,
+  RECENT_WORKOUT_TTL_MS,
+  type RecentWorkoutSetup,
+};
 
 interface VideoPreferences {
   onDeviceAi: boolean;
@@ -125,14 +140,43 @@ export default function WorkoutSetup() {
   const [wodDescription, setWodDescription] = useState("");
   const [rawText, setRawText] = useState("");
   const [scanning, setScanning] = useState(false);
+  const [registeredBleDevice, setRegisteredBleDeviceState] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [recentWorkoutSetup, setRecentWorkoutSetup] =
+    useState<RecentWorkoutSetup | null>(null);
 
-  // Load persisted video preferences
+  // Load persisted video preferences, registered BLE HR sensor & recent workout setup
   useEffect(() => {
     Promise.all([
       AsyncStorage.getItem(VIDEO_PREFS_KEY),
       AsyncStorage.getItem(ENV_ANALYSIS_DEFAULT_RESET_KEY),
+      AsyncStorage.getItem(REGISTERED_BLE_HR_DEVICE_KEY),
+      AsyncStorage.getItem(RECENT_WORKOUT_SETUP_KEY),
     ])
-      .then(([raw, migrated]) => {
+      .then(([raw, migrated, rawBleDevice, rawRecentSetup]) => {
+        if (rawRecentSetup) {
+          const validRecent = parseRecentWorkoutSetup(rawRecentSetup);
+          if (validRecent) {
+            setRecentWorkoutSetup(validRecent);
+          } else {
+            AsyncStorage.removeItem(RECENT_WORKOUT_SETUP_KEY).catch(() => {});
+          }
+        }
+        if (rawBleDevice) {
+          try {
+            const parsed = JSON.parse(rawBleDevice);
+            if (parsed && typeof parsed.id === "string" && parsed.id.length > 0) {
+              setRegisteredBleDeviceState({
+                id: parsed.id,
+                name: typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : parsed.id,
+              });
+            }
+          } catch {
+            // ignore
+          }
+        }
         if (raw) {
           try {
             const saved = JSON.parse(raw) as Partial<VideoPreferences>;
@@ -382,20 +426,61 @@ export default function WorkoutSetup() {
     return result.assets[0].uri;
   };
 
+  const saveRecentWorkoutSetup = async (snapshot: RecentWorkoutSetup) => {
+    setRecentWorkoutSetup(snapshot);
+    try {
+      await AsyncStorage.setItem(
+        RECENT_WORKOUT_SETUP_KEY,
+        JSON.stringify(snapshot),
+      );
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const handleApplyRecentWorkout = (recent: RecentWorkoutSetup) => {
+    if (Date.now() - recent.savedAt > RECENT_WORKOUT_TTL_MS) {
+      setRecentWorkoutSetup(null);
+      AsyncStorage.removeItem(RECENT_WORKOUT_SETUP_KEY).catch(() => {});
+      return;
+    }
+    setWorkoutType(recent.workoutType);
+    setWodDescription(recent.wodDescription);
+    setRawText(recent.rawText);
+    setSelectedMovements(recent.selectedMovements);
+    setCustomMovements(recent.customMovements);
+    if (recent.sessionAppearance) {
+      setSessionAppearance(recent.sessionAppearance);
+    }
+    setCurrentStep("confirm");
+  };
+
   const handleScanWhiteboard = async (useCamera: boolean) => {
     const uri = await pickImage(useCamera);
     if (!uri) return;
     setScanning(true);
     try {
       const result = await parseWorkoutImage(uri);
-      setWodDescription(result.wod_description || "");
-      setRawText(result.raw_text || "");
+      const nextDescription = result.wod_description || "";
+      const nextRawText = result.raw_text || "";
+      const nextMovements =
+        result.movements?.length > 0
+          ? Array.from(new Set([...selectedMovements, ...result.movements]))
+          : selectedMovements;
+      setWodDescription(nextDescription);
+      setRawText(nextRawText);
       if (result.movements?.length > 0) {
-        setSelectedMovements((prev) => {
-          const combined = new Set([...prev, ...result.movements]);
-          return Array.from(combined);
-        });
+        setSelectedMovements(nextMovements);
       }
+      await saveRecentWorkoutSetup({
+        savedAt: Date.now(),
+        workoutType,
+        wodDescription: nextDescription,
+        rawText: nextRawText,
+        selectedMovements: nextMovements,
+        customMovements,
+        sessionAppearance,
+      });
       setCurrentStep("confirm");
     } catch (err: any) {
       console.error("Whiteboard scan failed:", err);
@@ -416,6 +501,21 @@ export default function WorkoutSetup() {
       await AsyncStorage.setItem(VIDEO_PREFS_KEY, JSON.stringify(videoPrefs));
     } catch (e) {
       console.warn("Failed to persist video prefs:", e);
+    }
+    if (
+      wodDescription.trim() ||
+      rawText.trim() ||
+      selectedMovements.length > 0
+    ) {
+      await saveRecentWorkoutSetup({
+        savedAt: Date.now(),
+        workoutType,
+        wodDescription: wodDescription.trim(),
+        rawText,
+        selectedMovements,
+        customMovements,
+        sessionAppearance: sessionAppearance.trim(),
+      });
     }
     const injuries = activeProfile?.injuries ?? [];
     const appearanceHints = sessionAppearance.trim();
@@ -605,6 +705,48 @@ export default function WorkoutSetup() {
               );
             })}
           </View>
+
+          {recentWorkoutSetup &&
+            Date.now() - recentWorkoutSetup.savedAt <= RECENT_WORKOUT_TTL_MS && (
+              <TouchableOpacity
+                testID="reuse-recent-workout-card"
+                style={styles.recentReuseCard}
+                onPress={() => handleApplyRecentWorkout(recentWorkoutSetup)}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel={t("setup.reuseRecentTitle")}
+              >
+                <View style={styles.recentReuseContent}>
+                  <Text style={styles.recentReuseTitle}>
+                    {t("setup.reuseRecentTitle")}
+                  </Text>
+                  <Text style={styles.recentReuseSummary} numberOfLines={2}>
+                    {[
+                      recentWorkoutSetup.wodDescription.trim() ||
+                        recentWorkoutSetup.rawText.trim(),
+                      recentWorkoutSetup.selectedMovements.join(", "),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </Text>
+                  <Text style={styles.recentReuseMeta}>
+                    {t("setup.reuseRecentMeta", {
+                      minutes: Math.max(
+                        1,
+                        Math.round(
+                          (Date.now() - recentWorkoutSetup.savedAt) / 60_000,
+                        ),
+                      ),
+                    })}
+                  </Text>
+                </View>
+                <View style={styles.recentReuseBadge}>
+                  <Text style={styles.recentReuseBadgeText}>
+                    {t("setup.reuseRecentApply")}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
 
           {inputMethod === "text" && (
             <ScrollView
@@ -1064,6 +1206,27 @@ export default function WorkoutSetup() {
                       onValueChange={(value) => updatePref("h10MemoryRecording", value)} />
                   </View>
                 )}
+                <View style={styles.optionRow}>
+                  <View style={{ flex: 1, marginRight: 12 }}>
+                    <Text style={styles.optionLabel}>{t("setup.bleHrDevice")}</Text>
+                    <Text style={{ color: "#aaa", fontSize: 12, marginTop: 4 }}>
+                      {registeredBleDevice
+                        ? t("setup.bleHrDeviceRegistered", { name: registeredBleDevice.name })
+                        : t("setup.bleHrDeviceUnregistered")}
+                    </Text>
+                  </View>
+                  {registeredBleDevice && (
+                    <TouchableOpacity
+                      style={styles.toggleBtn}
+                      onPress={() => {
+                        setRegisteredBleDeviceState(null);
+                        AsyncStorage.removeItem(REGISTERED_BLE_HR_DEVICE_KEY).catch(() => {});
+                      }}
+                    >
+                      <Text style={styles.toggleText}>{t("setup.bleHrDeviceClear")}</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
                 <View style={styles.optionRow}>
                   <Text style={styles.optionLabel}>
                     {t("setup.resolution")}
@@ -1693,4 +1856,47 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   rawTextValue: { color: "#888", fontSize: 13, lineHeight: 18 },
+  recentReuseCard: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "space-between" as const,
+    backgroundColor: "rgba(0, 229, 255, 0.08)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0, 229, 255, 0.35)",
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 12,
+  },
+  recentReuseContent: {
+    flex: 1,
+    gap: 3,
+  },
+  recentReuseTitle: {
+    color: "#00E5FF",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  recentReuseSummary: {
+    color: "#E2E8F0",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  recentReuseMeta: {
+    color: "#94A3B8",
+    fontSize: 11,
+  },
+  recentReuseBadge: {
+    backgroundColor: "#00E5FF",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  recentReuseBadgeText: {
+    color: "#000",
+    fontSize: 12,
+    fontWeight: "800",
+  },
 });

@@ -189,6 +189,7 @@ async function waitForPhase(recorder: H10MemoryRecorder, phase: string): Promise
 
 describe("H10MemoryRecorder", () => {
   afterEach(() => {
+    jest.restoreAllMocks();
     jest.useRealTimers();
   });
 
@@ -328,16 +329,39 @@ describe("H10MemoryRecorder", () => {
     expect(recorder.getStatus().phase).toBe("failed");
   });
 
-  it("reports a start failure without throwing", async () => {
-    const { mem, recorder } = setup();
+  it("reports a start failure without throwing and preserves it on finish without attempting fetch", async () => {
+    const { mem, upload, recorder } = setup();
     jest.spyOn(FakeClient.prototype, "query").mockImplementation(async (id: number) => {
       if (id === 16) return Uint8Array.from([0x08, 0x00]);
       throw new PftpError(209);
     });
+    const requestSpy = jest.spyOn(FakeClient.prototype, "request");
     recorder.begin({ sessionId: SID, profileId: PROFILE, baseEpochMs: 1000 });
     await waitForPhase(recorder, "start_failed");
     expect(recorder.getStatus().error).toMatchObject({ stage: "start", code: "PFTP_209_BATTERY_TOO_LOW" });
     expect(mem.records.get(SID)!.errors).toEqual([expect.objectContaining({ code: "PFTP_209_BATTERY_TOO_LOW" })]);
-    jest.restoreAllMocks();
+
+    requestSpy.mockClear();
+    await recorder.finish(SID);
+    expect(requestSpy).not.toHaveBeenCalled();
+    expect(mem.records.get(SID)!.errors).toEqual([expect.objectContaining({ stage: "start", code: "PFTP_209_BATTERY_TOO_LOW" })]);
+    expect(upload).toHaveBeenCalledWith(SID, PROFILE, `mem://${SID}`);
+  });
+
+  it("skips PS-FTP internal recording silently when connected to a non-H10 Polar device (e.g. Polar Sense)", async () => {
+    const senseDevice = { ...fakeDevice(), name: "Polar Sense 0DCADB36" } as Device;
+    const { mem, upload, recorder } = setup({ device: senseDevice });
+    const querySpy = jest.spyOn(FakeClient.prototype, "query");
+
+    recorder.begin({ sessionId: SID, profileId: PROFILE, baseEpochMs: 1000 });
+    await waitForPhase(recorder, "idle");
+    await recorder.finish(SID);
+
+    expect(querySpy).not.toHaveBeenCalled();
+    expect(recorder.getStatus()).toMatchObject({ phase: "idle", error: null });
+    const record = mem.records.get(SID)!;
+    expect(record.status).toBe("error");
+    expect(record.errors).toEqual([expect.objectContaining({ stage: "start", code: "UNSUPPORTED_DEVICE" })]);
+    expect(upload).toHaveBeenCalledWith(SID, PROFILE, `mem://${SID}`);
   });
 });

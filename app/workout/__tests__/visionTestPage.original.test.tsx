@@ -318,7 +318,7 @@ it("keeps the resumed writer active when a source-accepted older run reports a l
   view.unmount();
 });
 
-it("resumes recording after dropped buffers but retains the incomplete original without publishing a partial server video", async () => {
+it("resumes recording after pause-time dropped buffers, saves the finalized original to gallery, and triggers server merge", async () => {
   const view = render(<VisionTestPage />);
   await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
   const first = mockStartCamera.mock.calls[0][0];
@@ -337,7 +337,7 @@ it("resumes recording after dropped buffers but retains the incomplete original 
   fireEvent.press(view.getByText("pause.fill"));
   await waitFor(() => expect(mockStopCamera).toHaveBeenCalledTimes(1));
 
-  // The interrupted run reports dropped buffers and tail timeout
+  // The interrupted run finalizes its source file while reporting dropped buffers and tail timeout
   await act(async () => {
     first.onRecordingSourceFinalized({
       ...source(1),
@@ -366,17 +366,57 @@ it("resumes recording after dropped buffers but retains the incomplete original 
     await second.onRecordingFinished(source(2));
   });
 
-  // Capture was marked incomplete due to the first run's dropped buffers
+  // Finalized sources remain complete so automatic gallery save and server merge both run
   expect(mockStopped).toHaveBeenCalledWith(mockRef, {
-    complete: false,
-    reason: "capture dropped buffers: video=24, audio=0, tailTimeout=true",
+    complete: true,
+    reason: undefined,
   });
-  // Both runs were added to the manifest
   expect(mockAdd.mock.calls.map(call => call[1].order)).toEqual([1, 2]);
-  // Original is retained without automatic gallery save because complete is false
-  expect(mockSave).not.toHaveBeenCalled();
-  expect(mockAddPending).not.toHaveBeenCalled();
-  expect(mockMergeChunks).not.toHaveBeenCalled();
+  await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+  expect(mockAddPending).toHaveBeenCalledWith(mockRef.sessionId);
+  await waitFor(() => expect(mockMergeChunks).toHaveBeenCalledTimes(1));
+  expect(mockMergeChunks.mock.calls[0][0]).toBe(mockRef.sessionId);
+  view.unmount();
+});
+
+it("triggers gallery save and server merge when the only segment is emitted during drain after tailDrainTimedOut", async () => {
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+  const callbacks = mockStartCamera.mock.calls[0][0];
+
+  fireEvent.press(view.getByText("square.fill"));
+  await waitFor(() => expect(mockStopCamera).toHaveBeenCalledTimes(1));
+
+  // Native writer finalizes before the final analysis segment finishes packaging
+  await act(async () => {
+    callbacks.onRecordingSourceFinalized({
+      ...source(1),
+      droppedVideoFrames: 0,
+      droppedAudioBuffers: 0,
+      tailDrainTimedOut: true,
+    });
+    callbacks.onRecordingSegment({
+      status: "ready",
+      path: "file:///documents/run-1/analysis/part-0.mp4",
+      captureStartTimeMs: Date.now() - 1000,
+      captureEndTimeMs: Date.now(),
+    });
+    await callbacks.onRecordingFinished({
+      ...source(1),
+      droppedVideoFrames: 0,
+      droppedAudioBuffers: 0,
+      tailDrainTimedOut: true,
+    });
+  });
+
+  expect(mockStopped).toHaveBeenCalledWith(mockRef, {
+    complete: true,
+    reason: undefined,
+  });
+  await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(mockMergeChunks).toHaveBeenCalledTimes(1));
+  expect(mockAddPending).toHaveBeenCalledWith(mockRef.sessionId);
+  expect(mockMergeChunks.mock.calls[0][0]).toBe(mockRef.sessionId);
   view.unmount();
 });
 
