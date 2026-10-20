@@ -388,30 +388,68 @@ func (w *Worker) assessWorkoutProgress(ctx context.Context, p VideoAnalysisPaylo
 	return validateWorkoutProgressScore(stripJSONFence(text), p, progress)
 }
 
+// skippedNonExerciseReason marks media that chunk analysis or a saved correction
+// explicitly classified as walking/rest/setup, so it was not sent to segment
+// observation. Media nobody classified stays not_analyzed.
+const skippedNonExerciseReason = "skipped_non_exercise"
+
+// skippedNonExerciseGaps records explicitly classified non-exercise media minus
+// any span a selected segment still observes.
+func skippedNonExerciseGaps(skipped, selected []Segment) []workoutprogress.Gap {
+	out := []workoutprogress.Gap{}
+	for _, seg := range skipped {
+		pieces := [][2]float64{{convertToSeconds(seg.Start).Seconds(), convertToSeconds(seg.End).Seconds()}}
+		for _, sel := range selected {
+			start, end := convertToSeconds(sel.Start).Seconds(), convertToSeconds(sel.End).Seconds()
+			next := make([][2]float64, 0, len(pieces)+1)
+			for _, piece := range pieces {
+				if end <= piece[0] || start >= piece[1] {
+					next = append(next, piece)
+					continue
+				}
+				if start > piece[0] {
+					next = append(next, [2]float64{piece[0], start})
+				}
+				if end < piece[1] {
+					next = append(next, [2]float64{end, piece[1]})
+				}
+			}
+			pieces = next
+		}
+		for _, piece := range pieces {
+			if activity.ValidInterval(piece[0], piece[1]) {
+				out = append(out, workoutprogress.Gap{Start: piece[0], End: piece[1], Clock: "media", Reason: skippedNonExerciseReason})
+			}
+		}
+	}
+	return out
+}
+
 // The assessed span covers every attempted window, including failed or
-// budget-omitted ones, but not unindexed edges that were filled as not_analyzed.
+// budget-omitted ones, but not unindexed or classified-skipped media.
 func progressAssessedSpan(progress workoutprogress.Progress) (float64, float64) {
 	from, to := math.Inf(1), math.Inf(-1)
 	for _, in := range progress.Intervals {
 		from, to = math.Min(from, in.Start), math.Max(to, in.End)
 	}
 	for _, gap := range progress.Unassessed {
-		if gap.Clock == "media" && gap.Reason != "not_analyzed" {
+		if gap.Clock == "media" && gap.Reason != "not_analyzed" && gap.Reason != skippedNonExerciseReason {
 			from, to = math.Min(from, gap.Start), math.Max(to, gap.End)
 		}
 	}
 	return from, to
 }
 
-// Media outside [from, to] (pre-onset waiting, post-workout footage) and
-// intentionally skipped non-exercise intervals (not_analyzed) do not invalidate
-// workout coverage. Budget-omitted or failed exercise windows remain incomplete.
+// Media outside [from, to] (pre-onset waiting, post-workout footage) and media
+// explicitly classified as non-exercise do not invalidate workout coverage.
+// Interior not_analyzed media (never classified or observed), budget-omitted
+// and failed windows remain incomplete.
 func progressCoverageComplete(progress workoutprogress.Progress, from, to float64) bool {
 	for _, gap := range progress.Unassessed {
 		switch {
 		case gap.Reason == "no_countable_evidence" || gap.Reason == "incomplete_cycle":
 		case gap.Clock == "capture" && gap.Reason == "recording_gap":
-		case gap.Clock == "media" && gap.Reason == "not_analyzed":
+		case gap.Clock == "media" && gap.Reason == skippedNonExerciseReason:
 		case gap.Clock == "media" && (gap.End <= from || gap.Start >= to):
 		default:
 			return false

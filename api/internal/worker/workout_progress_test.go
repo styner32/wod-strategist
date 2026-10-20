@@ -85,7 +85,11 @@ var _ = Describe("Independent workout progress helpers", func() {
 		later.FormObservations = []workoutprogress.Observation{observation(41, 43, "stable catch")}
 		interior := workoutprogress.Build([]workoutprogress.Interval{in, later}, []workoutprogress.Gap{{Start: 30, End: 40, Clock: "media", Reason: "not_analyzed"}}, "source")
 		from, to = progressAssessedSpan(interior)
-		Expect(progressCoverageComplete(interior, from, to)).To(BeTrue(), "skipped non-exercise intervals between sets do not invalidate coverage")
+		Expect(progressCoverageComplete(interior, from, to)).To(BeFalse(), "media nobody classified or observed between sets is not assumed to be rest")
+		skipped := workoutprogress.Build([]workoutprogress.Interval{in, later}, []workoutprogress.Gap{{Start: 30, End: 40, Clock: "media", Reason: skippedNonExerciseReason}}, "source")
+		from, to = progressAssessedSpan(skipped)
+		Expect([]float64{from, to}).To(Equal([]float64{10, 60}))
+		Expect(progressCoverageComplete(skipped, from, to)).To(BeTrue(), "explicitly classified non-exercise media between sets keeps coverage complete")
 		failed := workoutprogress.Build([]workoutprogress.Interval{in, later}, []workoutprogress.Gap{{Start: 30, End: 40, Clock: "media", Reason: "observations_not_available"}}, "source")
 		from, to = progressAssessedSpan(failed)
 		Expect(progressCoverageComplete(failed, from, to)).To(BeFalse())

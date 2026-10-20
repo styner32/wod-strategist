@@ -281,6 +281,31 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 		Expect(pending).To(BeEmpty())
 	})
 
+	It("enforces the startup-configured quota instead of the default", func() {
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+		Expect(err).NotTo(HaveOccurred())
+		limited := newTestRouterWithAuthService(controllers.Config{
+			QueueClient:                 testhelpers.NewQueueClient(),
+			StorageClient:               storageClient,
+			BucketName:                  "test-bucket",
+			EnableSessionReanalysis:     true,
+			SessionReanalysisDailyQuota: 2,
+		})
+		for i := 0; i < 2; i++ {
+			testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{
+				SessionID:       session.SessionID,
+				ProfileID:       profile.ID,
+				ClientRequestID: fmt.Sprintf("configured-%d", i),
+				Status:          db.SessionReanalysisStatusCompleted,
+			})
+		}
+
+		response := httptest.NewRecorder()
+		limited.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPost, requestPath(), `{"client_request_id":"over-configured-quota"}`, &user))
+
+		Expect(response.Code).To(Equal(http.StatusTooManyRequests))
+	})
+
 	It("does not count expired or other-profile runs toward the quota", func() {
 		otherProfile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		otherSession := testhelpers.CreateSession(dbConn, &db.Session{
@@ -736,7 +761,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply", f
 			Expect(*session.Effort).To(Equal(7))
 		})
 
-		It("promotes a legacy WOD session to wod_evaluation_version=1, backfills workout_at, and advances profile wod_tracking_started_at on apply", func() {
+		It("promotes a legacy WOD session to wod_evaluation_version=1 and backfills workout_at without moving the profile rollout time", func() {
 			ensureTestDB()
 			testhelpers.CleanupDB(dbConn)
 			trackingStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
@@ -803,7 +828,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply", f
 
 			var updatedProfile db.Profile
 			Expect(dbConn.First(&updatedProfile, profile.ID).Error).To(Succeed())
-			Expect(updatedProfile.WODTrackingStartedAt).To(BeTemporally("~", *updatedAnalysis.WorkoutAt, time.Second))
+			Expect(updatedProfile.WODTrackingStartedAt).To(BeTemporally("~", trackingStart, time.Second), "wod_tracking_started_at is the rollout time and drives automatic versioning")
 		})
 	})
 

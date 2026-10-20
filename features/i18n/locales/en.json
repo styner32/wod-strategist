@@ -852,6 +852,7 @@
     "no_baseline": "No load baseline available.",
     "incomplete_records": "Comparison withheld because some workouts need effort or analysis.",
     "missing": "28-day missing: effort %{effort} · duration %{duration} · workout time %{time}",
+    "missingLegacy": "Earlier WODs without an applied re-analysis: %{count}",
     "scope": "Only confirmed new WOD records are included. Pre-WOD waiting is excluded; rests within the WOD are included. Edit the start in web history details."
   },
   "workoutProgress": {

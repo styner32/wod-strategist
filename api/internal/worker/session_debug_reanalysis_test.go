@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/testhelpers"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -363,7 +365,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			MediaStartSecs: &start, MediaEndSecs: &end,
 		})
 
-		segments, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, []sessionDebugCorrection{{
+		segments, _, _, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, []sessionDebugCorrection{{
 			ChunkID: chunk.ID, MovementName: "Unknown",
 		}}, WorkoutTypeWOD)
 		Expect(err).NotTo(HaveOccurred())
@@ -577,29 +579,122 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(completed.Output).To(ContainSubstring("박스 점프가 확인됩니다."))
 	})
 
-	It("falls back to stored analysis_results.output segment headers when legacy chunk rows lack media intervals and GCS chunk files are absent", func() {
-		// Create legacy chunk row without MediaStartSecs / MediaEndSecs and non-existent GCS chunk file
+	It("leaves legacy chunks unmapped when a retained object is missing and never reuses stored display headers", func() {
 		testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
 			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED",
 			FilePath:     "gs://test-bucket/videos/missing-chunk-001.mp4",
 			ExerciseType: "Thruster", ObservedSignals: `{"movement":"Thruster","activity_state":"exercise"}`,
 		})
-		storedOutput := "## 세그먼트 1: Thruster (0:00 ~ 0:01)\n이전 쓰러스터 분석입니다.\n\n## 세그먼트 2: Rest (0:01 ~ 0:02)\n휴식 구간입니다.\n\n## 세그먼트 3: Unknown (0:02 ~ 0:03)\n미확인 동작입니다."
+		// Legacy headers can carry capture-clock offsets that do not exist in merged media.
 		testhelpers.CreateAnalysisResult(database, &db.AnalysisResult{
 			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED",
-			Output: storedOutput,
+			Output: "## 세그먼트 1: Thruster (3:10 ~ 4:00)\n이전 쓰러스터 분석입니다.",
 		})
 
-		segments, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
+		segments, skipped, timelineAvailable, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
 		Expect(err).NotTo(HaveOccurred())
-		// Should parse Thruster and Unknown from stored output, skipping Rest, without calling Gemini IndexVideo.
-		Expect(segments).To(HaveLen(2))
-		Expect(segments[0].Type).To(Equal("Thruster"))
+		Expect(segments).To(BeEmpty())
+		Expect(skipped).To(BeEmpty())
+		Expect(timelineAvailable).To(BeFalse())
+		selected, _ := w.storedProgressSegments(context.Background(), session.SessionID, profile.ID, WorkoutTypeWOD, reusableGeminiFile{URI: baseURL + "/files/any"})
+		Expect(selected).To(BeEmpty())
+	})
+
+	It("writes no rebuilt offsets when any retained chunk of the legacy timeline is unavailable", func() {
+		first, second := 0.0, 10.0
+		available := testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", StartSecs: &first,
+			FilePath:     fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_000.mp4", profile.ID, session.SessionID),
+			ExerciseType: "Thruster", ObservedSignals: `{"movement":"Thruster","activity_state":"exercise"}`,
+		})
+		testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", StartSecs: &second,
+			FilePath:     fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_001.mp4", profile.ID, session.SessionID),
+			ExerciseType: "Thruster", ObservedSignals: `{"movement":"Thruster","activity_state":"exercise"}`,
+		})
+		testhelpers.MockGCSDownloadWithBody(storageTransport, available.FilePath, videoBytes)
+
+		segments, _, timelineAvailable, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, nil, WorkoutTypeWOD)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(segments).To(BeEmpty())
+		Expect(timelineAvailable).To(BeFalse())
+		var mapped int64
+		Expect(database.Model(&db.ChunkAnalysisResult{}).Where("session_id = ? AND media_start_secs IS NOT NULL", session.SessionID).Count(&mapped).Error).To(Succeed())
+		Expect(mapped).To(BeZero(), "a verified prefix must not hide the missing tail of the workout")
+	})
+
+	It("rebuilds the legacy timeline once per retained object and observes duplicate rows once", func() {
+		first, second := 0.0, 10.0
+		original := testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", StartSecs: &first,
+			FilePath:     fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_000.mp4", profile.ID, session.SessionID),
+			ExerciseType: "Thruster", ObservedSignals: `{"movement":"Thruster","activity_state":"exercise"}`,
+		})
+		duplicate := testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", StartSecs: &first,
+			FilePath: original.FilePath, ExerciseType: "Thruster", ObservedSignals: `{"movement":"Thruster","activity_state":"exercise"}`,
+		})
+		next := testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", StartSecs: &second,
+			FilePath:     fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_001.mp4", profile.ID, session.SessionID),
+			ExerciseType: "Rest", ObservedSignals: `{"movement":"Rest","activity_state":"rest_setup"}`,
+		})
+		testhelpers.MockGCSDownloadWithBody(storageTransport, original.FilePath, videoBytes)
+		testhelpers.MockGCSDownloadWithBody(storageTransport, next.FilePath, videoBytes)
+		local := filepath.Join(GinkgoT().TempDir(), "probe.mp4")
+		Expect(os.WriteFile(local, videoBytes, 0o600)).To(Succeed())
+		duration := probeVideoDuration(context.Background(), local)
+		Expect(duration).To(BeNumerically(">", 0))
+
+		segments, skipped, timelineAvailable, err := w.buildSessionDebugSegments(context.Background(), session.SessionID, profile.ID, []sessionDebugCorrection{{
+			ChunkID: duplicate.ID, MovementName: "Front Squat",
+		}}, WorkoutTypeWOD)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(storageTransport.Verify()).To(Succeed())
+		Expect(timelineAvailable).To(BeTrue())
+		Expect(segments).To(HaveLen(1), "duplicate rows of one object are observed once")
+		Expect(segments[0].Type).To(Equal("Front Squat"), "a correction saved on a duplicate row still applies")
 		Expect(segments[0].Start).To(Equal("0:00"))
-		Expect(segments[0].End).To(Equal("0:01"))
-		Expect(segments[1].Type).To(Equal("Unknown"))
-		Expect(segments[1].Start).To(Equal("0:02"))
-		Expect(segments[1].End).To(Equal("0:03"))
+		Expect(skipped).To(Equal([]Segment{{Start: formatSegmentTimestamp(duration), End: formatSegmentTimestamp(2 * duration), Type: "Rest"}}))
+		for _, id := range []uint{original.ID, duplicate.ID} {
+			var row db.ChunkAnalysisResult
+			Expect(database.First(&row, id).Error).To(Succeed())
+			Expect(*row.MediaStartSecs).To(Equal(0.0))
+			Expect(*row.MediaEndSecs).To(BeNumerically("~", duration, 0.001))
+		}
+		var tail db.ChunkAnalysisResult
+		Expect(database.First(&tail, next.ID).Error).To(Succeed())
+		Expect(*tail.MediaStartSecs).To(BeNumerically("~", duration, 0.001), "a duplicate row must not shift later offsets")
+	})
+
+	It("reuses stored workout_progress intervals only from the exact same observed source", func() {
+		fileURI := baseURL + "/files/stored-progress"
+		source, err := progressMediaSource(fileURI)
+		Expect(err).NotTo(HaveOccurred())
+		stored := workoutprogress.Build([]workoutprogress.Interval{
+			{ID: "a", Start: 1, End: 20, Activity: "exercise", Movement: "Thruster"},
+			{ID: "b", Start: 20, End: 30, Activity: "rest"},
+			{ID: "c", Start: 30, End: 40, Activity: "unknown"},
+		}, nil, source)
+		raw, err := json.Marshal(stored)
+		Expect(err).NotTo(HaveOccurred())
+		testhelpers.CreateAnalysisResult(database, &db.AnalysisResult{
+			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: db.NullableJSONDocument(raw),
+		})
+
+		selected, skipped := w.storedProgressSegments(context.Background(), session.SessionID, profile.ID, WorkoutTypeWOD, reusableGeminiFile{URI: fileURI})
+		Expect(selected).To(Equal([]Segment{
+			{Start: "0:01", End: "0:20", Type: "Thruster", Description: "Previously observed interval; revalidate from visible evidence."},
+			{Start: "0:30", End: "0:40", Type: "Unknown", Description: "Previously observed interval; revalidate from visible evidence."},
+		}))
+		Expect(skipped).To(Equal([]Segment{{Start: "0:20", End: "0:30", Type: "Rest"}}))
+
+		recovery, recoverySkipped := w.storedProgressSegments(context.Background(), session.SessionID, profile.ID, WorkoutTypeCooldown, reusableGeminiFile{URI: fileURI})
+		Expect(recovery).To(HaveLen(3), "recovery keeps rest-labelled holds for observation")
+		Expect(recoverySkipped).To(BeEmpty())
+
+		other, _ := w.storedProgressSegments(context.Background(), session.SessionID, profile.ID, WorkoutTypeWOD, reusableGeminiFile{URI: baseURL + "/files/other"})
+		Expect(other).To(BeEmpty(), "another source's intervals are never applied")
 	})
 })
 
@@ -631,19 +726,22 @@ var _ = Describe("session debug re-analysis helpers", func() {
 		Expect(normKey).NotTo(Equal(synthKey))
 	})
 
-	It("parses stored output segment headers keeping exercise and Unknown while filtering non-exercise and Full Video", func() {
-		raw := "## 세그먼트 1: Thruster (0:10 ~ 1:25)\n분석1\n\n" +
-			"## 세그먼트 2: [NO_EXERCISE] (1:25 ~ 2:00)\n휴식\n\n" +
-			"## 세그먼트 3: Unknown (2:00 ~ 2:45)\n미확인\n\n" +
-			"## 세그먼트 4: Full Video (0:00 ~ 3:00)\n전체"
-		segments := parseStoredOutputSegments(raw)
-		Expect(segments).To(HaveLen(2))
-		Expect(segments[0].Type).To(Equal("Thruster"))
-		Expect(segments[0].Start).To(Equal("0:10"))
-		Expect(segments[0].End).To(Equal("1:25"))
-		Expect(segments[1].Type).To(Equal("Unknown"))
-		Expect(segments[1].Start).To(Equal("2:00"))
-		Expect(segments[1].End).To(Equal("2:45"))
+	It("keys reusable segments by analysis mode", func() {
+		grid := sessionDebugSegmentCacheKey(gemini.ModelArgon4, debugAnalysisModeFrameGrid, "0:00", "0:10", "prompt")
+		video := sessionDebugSegmentCacheKey(gemini.ModelArgon4, debugAnalysisModeVideo, "0:00", "0:10", "prompt")
+		Expect(grid).NotTo(Equal(video))
+		Expect(chunkDebugAnalysisMode(true, 30*time.Second)).To(Equal(debugAnalysisModeFrameGrid))
+		Expect(chunkDebugAnalysisMode(false, 30*time.Second)).To(Equal(debugAnalysisModeVideo))
+		Expect(chunkDebugAnalysisMode(true, 10*time.Minute)).To(Equal(debugAnalysisModeVideo), "long intervals keep VideoMetadata analysis")
+		Expect(chunkDebugPromptHash("prompt", debugAnalysisModeFrameGrid)).NotTo(Equal(chunkDebugPromptHash("prompt", debugAnalysisModeVideo)))
+	})
+
+	It("checkpoints state even after the task context is cancelled", func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		persistCtx, done := sessionDebugPersistContext(ctx)
+		defer done()
+		Expect(persistCtx.Err()).NotTo(HaveOccurred())
 	})
 })
 

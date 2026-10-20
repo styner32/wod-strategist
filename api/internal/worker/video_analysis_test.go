@@ -998,6 +998,21 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			MediaStartSecs:  &mediaStart0,
 			MediaEndSecs:    &mediaEnd0,
 		})
+		// Walking is classified non-exercise for WOD and recovery sessions alike.
+		restStart, restEnd := 45.0, 50.0
+		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID:       sessionID,
+			ProfileID:       profileID,
+			FilePath:        "gs://test-bucket/videos/" + sessionID + "/chunk_walk.mp4",
+			Status:          "COMPLETED",
+			ExerciseType:    "Walking",
+			Output:          "다음 기구로 걸어갑니다",
+			ObservedSignals: `{"movement":"Walking","activity_state":"walking","fatigue_visually_established":false}`,
+			StartSecs:       &restStart,
+			EndSecs:         &restEnd,
+			MediaStartSecs:  &restStart,
+			MediaEndSecs:    &restEnd,
+		})
 		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
 			SessionID:       sessionID,
 			ProfileID:       profileID,
@@ -1126,7 +1141,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		progress, err := workoutprogress.Decode(result.WorkoutProgress)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(progress.Intervals).To(HaveLen(2))
-		Expect(progress.Unassessed).To(Equal([]workoutprogress.Gap{{Start: 45, End: 50, Clock: "media", Reason: "not_analyzed"}}))
+		Expect(progress.Unassessed).To(Equal([]workoutprogress.Gap{{Start: 45, End: 50, Clock: "media", Reason: skippedNonExerciseReason}}))
 		for _, request := range transport.Requests() {
 			Expect(request.Method).NotTo(Equal(http.MethodDelete))
 			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
@@ -1259,7 +1274,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		progress, err := workoutprogress.Decode(result.WorkoutProgress)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(progress.Intervals).To(HaveLen(2))
-		Expect(progress.Unassessed).To(Equal([]workoutprogress.Gap{{Start: 45, End: 50, Clock: "media", Reason: "not_analyzed"}}))
+		Expect(progress.Unassessed).To(Equal([]workoutprogress.Gap{{Start: 45, End: 50, Clock: "media", Reason: skippedNonExerciseReason}}))
 	})
 })
 
@@ -1485,10 +1500,43 @@ var _ = Describe("Workout progress observation windows", func() {
 			{Start: "1:00", End: "1:10", Type: "Setup"},
 			{Start: "1:10", End: "1:30", Type: "Pull-up"},
 		}
-		Expect(filterExerciseAndUnknownSegments(raw)).To(Equal([]Segment{
+		kept, skipped := filterExerciseAndUnknownSegments(raw, WorkoutTypeWOD)
+		Expect(kept).To(Equal([]Segment{
 			{Start: "0:00", End: "0:15", Type: "Power Clean"},
 			{Start: "0:45", End: "1:00", Type: "Unknown"},
 			{Start: "1:10", End: "1:30", Type: "Pull-up"},
+		}))
+		Expect(skipped).To(Equal([]Segment{
+			{Start: "0:15", End: "0:45", Type: "Rest"},
+			{Start: "1:00", End: "1:10", Type: "Rest"},
+		}))
+
+		recoveryKept, recoverySkipped := filterExerciseAndUnknownSegments(raw, WorkoutTypeCooldown)
+		Expect(recoveryKept).To(HaveLen(5), "recovery keeps rest/setup holds and skips only walking")
+		Expect(recoverySkipped).To(Equal([]Segment{{Start: "0:30", End: "0:45", Type: "Rest"}}))
+	})
+
+	It("records only explicitly classified non-exercise chunks as skipped media", func() {
+		chunk := func(movement, signals string) db.ChunkAnalysisResult {
+			return db.ChunkAnalysisResult{ExerciseType: movement, ObservedSignals: signals}
+		}
+		Expect(chunkClassifiedNonExercise(chunk("", `{"activity_state":"rest_setup"}`), WorkoutTypeWOD)).To(BeTrue())
+		Expect(chunkClassifiedNonExercise(chunk("Walking", `{}`), WorkoutTypeWOD)).To(BeTrue())
+		Expect(chunkClassifiedNonExercise(chunk("", `{}`), WorkoutTypeWOD)).To(BeFalse(), "an unlabelled chunk is unclassified, not rest")
+		Expect(chunkClassifiedNonExercise(chunk("", `{"activity_state":"unknown"}`), WorkoutTypeWOD)).To(BeFalse())
+		Expect(chunkClassifiedNonExercise(chunk("Thruster", `{"activity_state":"exercise"}`), WorkoutTypeWOD)).To(BeFalse())
+		Expect(chunkClassifiedNonExercise(chunk("Rest", `{"activity_state":"rest_setup"}`), WorkoutTypeCooldown)).To(BeFalse(), "recovery observes rest-labelled holds")
+		Expect(chunkClassifiedNonExercise(chunk("Walking", `{}`), WorkoutTypeCooldown)).To(BeTrue())
+	})
+
+	It("subtracts observed segments from skipped non-exercise media", func() {
+		gaps := skippedNonExerciseGaps(
+			[]Segment{{Start: "0:10", End: "0:40", Type: "Rest"}},
+			[]Segment{{Start: "0:00", End: "0:15"}, {Start: "0:20", End: "0:25"}},
+		)
+		Expect(gaps).To(Equal([]workoutprogress.Gap{
+			{Start: 15, End: 20, Clock: "media", Reason: skippedNonExerciseReason},
+			{Start: 25, End: 40, Clock: "media", Reason: skippedNonExerciseReason},
 		}))
 	})
 

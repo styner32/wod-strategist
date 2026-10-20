@@ -98,6 +98,8 @@ func main() {
 		EnableChunkReanalysis:   cfg.ChunkReanalysisEnabled,
 		EnableSessionReanalysis: cfg.SessionReanalysisEnabled,
 		EnableAgenticHighlights: cfg.AgenticHighlightsEnabled,
+
+		SessionReanalysisDailyQuota: cfg.SessionReanalysisDailyQuota,
 	})
 	if err != nil {
 		logger.Log.Fatal("Failed to create controller", zap.Error(err))

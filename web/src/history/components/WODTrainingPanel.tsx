@@ -54,7 +54,7 @@ export function WODTrainingPanel({ sessionId, profileId, scoreJSON, currentTime,
     <p>운동별 부하: {data?.session_load == null ? "시간·Effort 확인 필요" : `${data.session_load.toFixed(1)} AU`}</p>
     {comparison && <><p>7일 일평균: {comparison.seven.daily_average.toFixed(1)} AU · 28일 일평균: {comparison.twenty_eight.daily_average.toFixed(1)} AU</p>
       <p>{comparison.change_percent != null ? `28일 기준 대비 ${comparison.change_percent >= 0 ? "+" : ""}${comparison.change_percent.toFixed(1)}%` : comparison.status === "collecting_baseline" ? "28일 기준 수집 중" : comparison.status === "no_baseline" ? "비교할 부하 기준이 없습니다." : "입력·분석이 부족한 기록이 있어 비교를 보류합니다."}</p>
-      <p className="text-xs text-text-secondary">28일 누락: Effort {comparison.twenty_eight.missing_effort}건 · 시간 {comparison.twenty_eight.missing_duration}건 · 운동 일시 {loads.data?.missing_workout_time ?? 0}건. 합계는 확인된 기록만 반영합니다.</p></>}
+      <p className="text-xs text-text-secondary">28일 누락: Effort {comparison.twenty_eight.missing_effort}건 · 시간 {comparison.twenty_eight.missing_duration}건 · 운동 일시 {loads.data?.missing_workout_time ?? 0}건{(loads.data?.unevaluated_legacy_workouts ?? 0) > 0 ? ` · 재분석 미적용 이전 WOD ${loads.data?.unevaluated_legacy_workouts}건` : ""}. 합계는 확인된 기록만 반영합니다.</p></>}
     {error && <p role="alert">{error instanceof Error ? error.message : "저장하거나 불러오지 못했습니다."}</p>}
   </section>;
 }

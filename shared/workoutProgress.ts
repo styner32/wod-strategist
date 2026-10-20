@@ -839,15 +839,13 @@ export function diagnosePerformanceDraft(
   if (draft.reps.trim() === "" || !Number.isSafeInteger(reps) || reps < 0) {
     return "완료 반복수에 0 이상의 정수를 입력해주세요.";
   }
-  if (reps > 0 && draft.loadMode === "unresolved") {
+  // A zero-rep attempt still records its actual load; null load means no external load.
+  if (draft.loadMode === "unresolved") {
     return "수행 중량 구분이 '미확인' 상태입니다. '맨몸 수행' 또는 '중량 기구 사용'을 선택해주세요.";
   }
   if (draft.loadMode === "weighted") {
     const val = Number(draft.weight);
-    if (reps > 0 && (draft.weight.trim() === "" || !Number.isFinite(val) || val <= 0)) {
-      return "중량 기구 사용 시 0보다 큰 중량(무게)을 입력해주세요.";
-    }
-    if (reps === 0 && draft.weight.trim() !== "" && (!Number.isFinite(val) || val <= 0)) {
+    if (draft.weight.trim() === "" || !Number.isFinite(val) || val <= 0) {
       return "중량 기구 사용 시 0보다 큰 중량(무게)을 입력해주세요.";
     }
   }
@@ -869,16 +867,13 @@ export function confirmedPerformanceInput(interval: WorkoutProgressInterval, dra
   const effectiveInterval = resolveTargetInterval(interval, draft, progress);
   const start = Number(draft.start), end = Number(draft.end), reps = Number(draft.reps);
   if (!performanceSelectionCovered(effectiveInterval, start, end, draft.measurement, progress) || !Number.isSafeInteger(reps) || reps < 0) return null;
-  if (reps > 0 && draft.loadMode === "unresolved") return null;
+  // Zero reps still need the actual load: null load explicitly means no external load.
+  if (draft.loadMode === "unresolved") return null;
   let load: ProgressLoad | null = null;
   if (draft.loadMode === "weighted") {
-    if (draft.weight.trim() === "") {
-      if (reps > 0) return null;
-    } else {
-      const value = Number(draft.weight);
-      if (!Number.isFinite(value) || value <= 0) return null;
-      load = { value, unit: draft.unit, basis: draft.basis };
-    }
+    const value = Number(draft.weight);
+    if (draft.weight.trim() === "" || !Number.isFinite(value) || value <= 0) return null;
+    load = { value, unit: draft.unit, basis: draft.basis };
   }
   return { interval_id: effectiveInterval.id, start_secs: start, end_secs: end, reps, load, measurement: draft.measurement, technique: draft.technique };
 }

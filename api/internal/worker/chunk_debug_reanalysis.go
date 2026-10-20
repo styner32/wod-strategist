@@ -168,8 +168,11 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 
 	reusePrevious := shouldReuseChunkDebugCandidate(run.SourceContextSnapshot)
 	prompt := w.buildChunkDebugReanalysisPrompt(target)
-	promptHash := sha256.Sum256([]byte(prompt))
-	promptHashHex := hex.EncodeToString(promptHash[:])
+	// The analysis mode is part of the reuse identity: frame-grid and video
+	// candidates of the same prompt are different observations.
+	// Before the source is prepared either mode is possible; reuse accepts a
+	// candidate of either mode and keeps that candidate's own prompt_hash.
+	reusableHashes := []string{chunkDebugPromptHash(prompt, debugAnalysisModeFrameGrid), chunkDebugPromptHash(prompt, debugAnalysisModeVideo)}
 	defaultClientModel := ""
 	if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
 		defaultClientModel = provider.Model()
@@ -202,14 +205,14 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 	}
 
 	if reusePrevious && media.End > media.Start {
-		if cached, ok := w.findReusableChunkDebugCandidate(ctx, &run, selectedModel, promptHashHex, media); ok {
+		if cached, ok := w.findReusableChunkDebugCandidate(ctx, &run, selectedModel, reusableHashes, media); ok {
 			contextSnapshot := buildSnapshot(media)
 			if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
 				"source_context_snapshot": string(contextSnapshot),
 				"media_start_secs":        media.Start.Seconds(),
 				"media_end_secs":          media.End.Seconds(),
 				"prompt_version":          chunkDebugPromptVersion,
-				"prompt_hash":             promptHashHex,
+				"prompt_hash":             cached.PromptHash,
 				"schema_version":          chunkDebugSchemaVersion,
 			}).Error; err != nil {
 				return w.failChunkDebugRun(ctx, &run, retryCount, started,
@@ -263,6 +266,8 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 	}
 
 	contextSnapshot := buildSnapshot(media)
+	plannedMode := chunkDebugAnalysisMode(file.LocalPath != "", media.End-media.Start)
+	promptHashHex := chunkDebugPromptHash(prompt, plannedMode)
 
 	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
 		"source_context_snapshot": string(contextSnapshot),
@@ -277,11 +282,12 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 	}
 
 	if reusePrevious {
-		if cached, ok := w.findReusableChunkDebugCandidate(ctx, &run, selectedModel, promptHashHex, media); ok {
+		if cached, ok := w.findReusableChunkDebugCandidate(ctx, &run, selectedModel, reusableHashes, media); ok {
 			w.recordStageMetrics(target.SessionID, target.ProfileID, "chunk_reanalysis", "current", 0, 1, uploadBytes, time.Since(started))
 			return w.completeChunkDebugRun(ctx, run.ID, db.ChunkReanalysisStatusCompleted, started, map[string]any{
 				"raw_output":           cached.RawOutput,
 				"structured_candidate": string(cached.StructuredCandidate),
+				"prompt_hash":          cached.PromptHash,
 				"model":                cached.Model,
 				"prompt_tokens":        0,
 				"candidate_tokens":     0,
@@ -296,7 +302,8 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 		sheets   []FrameGridSheet
 		usage    = (*gemini.TokenUsage)(nil)
 	)
-	if file.LocalPath != "" {
+	usedMode := plannedMode
+	if plannedMode == debugAnalysisModeFrameGrid {
 		gridOpts := FrameGridOptions{}
 		if media.Kind == db.ChunkReanalysisSourceChunk && target.MediaStartSecs != nil && *target.MediaStartSecs >= 0 {
 			offset := secondsDuration(*target.MediaStartSecs)
@@ -306,7 +313,12 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 			ctx, file.LocalPath, media.Start, media.End, prompt, selectedModel, gridOpts,
 		)
 	}
-	if file.LocalPath == "" || (err != nil && len(sheets) == 0) {
+	if plannedMode == debugAnalysisModeVideo || (err != nil && len(sheets) == 0) {
+		if err != nil {
+			w.logger.Warn("frame grid extraction failed for chunk debug run; falling back to video segment analysis",
+				zap.Uint("run_id", run.ID), zap.Error(err))
+		}
+		usedMode = debugAnalysisModeVideo
 		analysis, usage, err = w.GeminiClient.AnalyzeSegmentWithModel(
 			ctx, file.URI, chunkDebugMIMEType(file.MIMEType), media.Start, media.End, prompt, selectedModel,
 		)
@@ -345,6 +357,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 	if err := w.completeChunkDebugRun(ctx, run.ID, db.ChunkReanalysisStatusCompleted, started, map[string]any{
 		"raw_output":           analysis,
 		"structured_candidate": string(candidateJSON),
+		"prompt_hash":          chunkDebugPromptHash(prompt, usedMode),
 		"model":                model,
 		"prompt_tokens":        promptTokens,
 		"candidate_tokens":     candidateTokens,
@@ -451,10 +464,31 @@ func (w *Worker) resolveChunkDebugMedia(ctx context.Context, target *chunkDebugT
 	}, "", nil
 }
 
-// reconstructChunkDebugMediaInterval rebuilds the cumulative concat timeline
-// from retained original chunks. It never maps capture-clock offsets directly
-// onto merged.mp4; each media duration is probed from the actual GCS object.
+// reconstructChunkDebugMediaInterval rebuilds the concat timeline up to the
+// target chunk. It never maps capture-clock offsets directly onto merged.mp4.
 func (w *Worker) reconstructChunkDebugMediaInterval(ctx context.Context, target *chunkDebugTarget) (float64, float64, error) {
+	if strings.TrimSpace(target.FilePath) == "" {
+		return 0, 0, errors.New("target chunk has no retained object")
+	}
+	intervals, err := w.retainedChunkTimeline(ctx, target.SessionID, target.ProfileID, target.FilePath)
+	if err != nil {
+		return 0, 0, err
+	}
+	// Cache every verified prefix interval so later debug runs avoid repeated
+	// downloads. A partial prefix remains valid even if a later chunk is absent.
+	if err := w.persistConcatMediaIntervals(ctx, target.SessionID, target.ProfileID, intervals); err != nil {
+		return 0, 0, fmt.Errorf("save reconstructed intervals: %w", err)
+	}
+	targetInterval := intervals[len(intervals)-1]
+	return targetInterval.Start, targetInterval.End, nil
+}
+
+// retainedChunkTimeline rebuilds the cumulative concat timeline from retained
+// original chunks. Each media duration is probed from the actual GCS object, and
+// each URI is counted once because merge includes duplicate rows' URI once.
+// With stopAt set, the walk ends at that object. Any unavailable object fails
+// the reconstruction; a partial timeline is never returned.
+func (w *Worker) retainedChunkTimeline(ctx context.Context, sessionID string, profileID uint, stopAt string) ([]concatMediaInterval, error) {
 	var chunks []struct {
 		ID       uint
 		FilePath string
@@ -462,68 +496,53 @@ func (w *Worker) reconstructChunkDebugMediaInterval(ctx context.Context, target 
 	if err := w.DB.WithContext(ctx).Table("chunk_analysis_results").
 		Select("id, file_path").
 		Where("session_id = ? AND profile_id = ? AND status IN ? AND file_path <> '' AND file_path NOT LIKE ?",
-			target.SessionID, target.ProfileID, []string{"COMPLETED", "FAILED"}, "%/split_chunk_%").
+			sessionID, profileID, []string{"COMPLETED", "FAILED"}, "%/split_chunk_%").
 		// Mirror the order used to build the legacy concat manifest. Capture
 		// timestamps determine ordering only; their values are never used as
 		// offsets in the merged media.
 		Order("start_secs ASC NULLS LAST, file_path ASC, id ASC").Find(&chunks).Error; err != nil {
-		return 0, 0, fmt.Errorf("load retained chunks for timeline reconstruction: %w", err)
+		return nil, fmt.Errorf("load retained chunks for timeline reconstruction: %w", err)
 	}
 	if len(chunks) == 0 {
-		return 0, 0, errors.New("no retained chunks for timeline reconstruction")
+		return nil, errors.New("no retained chunks for timeline reconstruction")
 	}
 
-	type interval struct {
-		id    uint
-		start float64
-		end   float64
-	}
-	intervals := make([]interval, 0, len(chunks))
+	intervals := make([]concatMediaInterval, 0, len(chunks))
+	seen := make(map[string]bool, len(chunks))
 	cumulative := 0.0
-	foundTarget := false
 	for _, chunk := range chunks {
+		if seen[chunk.FilePath] {
+			continue
+		}
+		seen[chunk.FilePath] = true
 		bucket, _, err := storage.ParseGCSURI(chunk.FilePath)
 		if err != nil || (w.BucketName != "" && bucket != w.BucketName) {
-			return 0, 0, fmt.Errorf("invalid retained chunk URI for chunk %d", chunk.ID)
+			return nil, fmt.Errorf("invalid retained chunk URI for chunk %d", chunk.ID)
 		}
 		localPath, err := createTempFile("chunk-timeline", ".mp4")
 		if err != nil {
-			return 0, 0, err
+			return nil, err
 		}
 		downloadErr := w.StorageClient.DownloadFile(ctx, chunk.FilePath, localPath)
 		if downloadErr != nil {
 			_ = os.Remove(localPath)
-			return 0, 0, fmt.Errorf("download retained chunk %d: %w", chunk.ID, downloadErr)
+			return nil, fmt.Errorf("download retained chunk %d: %w", chunk.ID, downloadErr)
 		}
 		duration := probeVideoDuration(ctx, localPath)
 		_ = os.Remove(localPath)
 		if duration <= 0 {
-			return 0, 0, fmt.Errorf("probe retained chunk %d duration", chunk.ID)
+			return nil, fmt.Errorf("probe retained chunk %d duration", chunk.ID)
 		}
-		entry := interval{id: chunk.ID, start: cumulative, end: cumulative + duration}
-		intervals = append(intervals, entry)
-		cumulative = entry.end
-		if chunk.ID == target.ID {
-			foundTarget = true
-			break
+		intervals = append(intervals, concatMediaInterval{FilePath: chunk.FilePath, Start: cumulative, End: cumulative + duration})
+		cumulative += duration
+		if stopAt != "" && chunk.FilePath == stopAt {
+			return intervals, nil
 		}
 	}
-	if !foundTarget {
-		return 0, 0, errors.New("target chunk is not in the retained concat order")
+	if stopAt != "" {
+		return nil, errors.New("target chunk is not in the retained concat order")
 	}
-
-	// Cache every verified prefix interval so later debug runs avoid repeated
-	// downloads. A partial prefix remains valid even if a later chunk is absent.
-	for _, item := range intervals {
-		if err := w.DB.WithContext(ctx).Table("chunk_analysis_results").Where("id = ?", item.id).Updates(map[string]any{
-			"media_start_secs": item.start,
-			"media_end_secs":   item.end,
-		}).Error; err != nil {
-			return 0, 0, fmt.Errorf("save reconstructed interval for chunk %d: %w", item.id, err)
-		}
-	}
-	targetInterval := intervals[len(intervals)-1]
-	return targetInterval.start, targetInterval.end, nil
+	return intervals, nil
 }
 
 func (w *Worker) listChunkDebugSessionObjects(ctx context.Context, profileID uint, sessionID string) ([]string, error) {
@@ -564,6 +583,8 @@ func selectChunkDebugSessionVideo(objects []string) string {
 func (w *Worker) prepareChunkDebugGeminiFile(ctx context.Context, run *db.ChunkReanalysisRun, media chunkDebugMedia) (reusableGeminiFile, int64, error) {
 	if media.Kind == db.ChunkReanalysisSourceSessionVideo {
 		if cached := w.findReusableChunkDebugGeminiFile(ctx, run, media.GCSURI); cached.URI != "" {
+			// A reused Files object avoids a second download of the whole session
+			// video, so this run uses VideoMetadata analysis (no local media).
 			return cached, 0, nil
 		}
 	}
@@ -644,6 +665,25 @@ func (w *Worker) findReusableChunkDebugGeminiFile(ctx context.Context, run *db.C
 	return reusableGeminiFile{}
 }
 
+const (
+	debugAnalysisModeFrameGrid = "frame-grid-v1"
+	debugAnalysisModeVideo     = "video"
+)
+
+// chunkDebugAnalysisMode plans frame grids when local media exists and the
+// interval keeps at least minReanalysisFrameGridFPS; otherwise VideoMetadata video.
+func chunkDebugAnalysisMode(hasLocalMedia bool, interval time.Duration) string {
+	if hasLocalMedia && frameGridEligible(interval, FrameGridOptions{}) {
+		return debugAnalysisModeFrameGrid
+	}
+	return debugAnalysisModeVideo
+}
+
+func chunkDebugPromptHash(prompt, mode string) string {
+	sum := sha256.Sum256([]byte(prompt + "\n#analysis-mode:" + mode))
+	return hex.EncodeToString(sum[:])
+}
+
 func shouldReuseChunkDebugCandidate(rawSnapshot []byte) bool {
 	if len(rawSnapshot) == 0 {
 		return false
@@ -654,7 +694,7 @@ func shouldReuseChunkDebugCandidate(rawSnapshot []byte) bool {
 	return json.Unmarshal(rawSnapshot, &flags) == nil && flags.ReusePrevious
 }
 
-func (w *Worker) findReusableChunkDebugCandidate(ctx context.Context, run *db.ChunkReanalysisRun, selectedModel, promptHashHex string, media chunkDebugMedia) (db.ChunkReanalysisRun, bool) {
+func (w *Worker) findReusableChunkDebugCandidate(ctx context.Context, run *db.ChunkReanalysisRun, selectedModel string, promptHashes []string, media chunkDebugMedia) (db.ChunkReanalysisRun, bool) {
 	if w.DB == nil {
 		return db.ChunkReanalysisRun{}, false
 	}
@@ -662,8 +702,8 @@ func (w *Worker) findReusableChunkDebugCandidate(ctx context.Context, run *db.Ch
 	err := w.DB.WithContext(ctx).
 		Where("session_id = ? AND profile_id = ? AND chunk_analysis_result_id = ? AND id <> ?",
 			run.SessionID, run.ProfileID, run.ChunkAnalysisResultID, run.ID).
-		Where("status = ? AND source_gcs_uri = ? AND prompt_hash = ? AND schema_version = ?",
-			db.ChunkReanalysisStatusCompleted, media.GCSURI, promptHashHex, chunkDebugSchemaVersion).
+		Where("status = ? AND source_gcs_uri = ? AND prompt_hash IN ? AND schema_version = ?",
+			db.ChunkReanalysisStatusCompleted, media.GCSURI, promptHashes, chunkDebugSchemaVersion).
 		Where("ABS(COALESCE(media_start_secs, -1) - ?) < 0.005 AND ABS(COALESCE(media_end_secs, -1) - ?) < 0.005",
 			media.Start.Seconds(), media.End.Seconds()).
 		Where("raw_output <> '' AND structured_candidate IS NOT NULL").

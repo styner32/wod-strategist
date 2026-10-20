@@ -129,6 +129,21 @@ var _ = Describe("PUT /api/v1/sessions/:session_id/performance-records", func() 
 		Expect(*row.PerformedAtSource).To(Equal("legacy_local_time"))
 		Expect(row.PerformedAt.Before(row.ConfirmedAt)).To(BeTrue())
 	})
+	It("records the session WOD description as the prescription when the analysis row has none", func() {
+		profile, user := progressOwner()
+		p, raw := progressFixture("video")
+		sid := "WOD-20261013-PRESCRIPTION"
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sid, ProfileID: profile.ID, WorkoutType: "wod", WODDescription: "30 Power Cleans (135 lb)"})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: sid, ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: raw})
+		body := fmt.Sprintf(`{"source_version":%q,"records":[{"interval_id":%q,"start_secs":0,"end_secs":60,"reps":3,"load":{"value":135,"unit":"lb","basis":"total"},"measurement":"window","technique":"singles"}]}`, p.SourceVersion, p.Intervals[0].ID)
+		router := newTestRouterWithAuthService(controllers.Config{})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPut, "/api/v1/sessions/"+sid+"/performance-records", body, &user))
+		Expect(response.Code).To(Equal(200), response.Body.String())
+		var row db.PerformanceRecord
+		Expect(dbConn.Where("profile_id = ? AND session_id = ?", profile.ID, sid).First(&row).Error).To(Succeed())
+		Expect(row.WorkoutPrescription).To(Equal("30 Power Cleans (135 lb)"), "the confirmed record carries the prescription shown to the user")
+	})
 	It("upserts a confirmed interval without touching raw observations and rejects stale sources", func() {
 		profile, user := progressOwner()
 		p, raw := progressFixture("video")

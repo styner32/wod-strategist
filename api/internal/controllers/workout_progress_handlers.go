@@ -180,6 +180,17 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 				performedAtSource = &source
 			}
 		}
+		// Reads fall back to the session's WOD description; a confirmed record
+		// must carry the same prescription the user saw.
+		prescription := strings.TrimSpace(analysis.WODDescription)
+		if prescription == "" {
+			var session db.Session
+			err := tx.Select("wod_description").Where("session_id = ? AND profile_id = ?", sid, pid).First(&session).Error
+			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			prescription = strings.TrimSpace(session.WODDescription)
+		}
 		now := time.Now().UTC()
 		for _, input := range confirmed {
 			record, err := workoutprogress.Confirm(progress, input)
@@ -210,7 +221,7 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 				}
 				raw, _ = json.Marshal(map[string]any{"version": progress.Version, "clock": progress.Clock, "interval_id": input.IntervalID, "start_secs": input.Start, "end_secs": input.End, "source_version": progress.SourceVersion, "intervals": observed, "unassessed": gaps})
 			}
-			row := db.PerformanceRecord{ProfileID: pid, AnalysisID: analysis.ID, SessionID: sid, IntervalID: record.IntervalID, SourceVersion: record.SourceVersion, Status: "confirmed", Movement: record.Movement, StartSecs: record.Start, EndSecs: record.End, Reps: record.Reps, LoadKG: record.LoadKG, Measurement: record.Measurement, Technique: record.Technique, WorkoutPrescription: strings.TrimSpace(analysis.WODDescription), RepsPerMinute: record.RepsPerMinute, RateBasis: record.RateBasis, MedianCycleSeconds: record.MedianCycleSeconds, OriginalCandidate: db.JSONDocument(raw), PerformedAt: analysis.WorkoutAt, ConfirmedAt: now, CreatedAt: now, UpdatedAt: now}
+			row := db.PerformanceRecord{ProfileID: pid, AnalysisID: analysis.ID, SessionID: sid, IntervalID: record.IntervalID, SourceVersion: record.SourceVersion, Status: "confirmed", Movement: record.Movement, StartSecs: record.Start, EndSecs: record.End, Reps: record.Reps, LoadKG: record.LoadKG, Measurement: record.Measurement, Technique: record.Technique, WorkoutPrescription: prescription, RepsPerMinute: record.RepsPerMinute, RateBasis: record.RateBasis, MedianCycleSeconds: record.MedianCycleSeconds, OriginalCandidate: db.JSONDocument(raw), PerformedAt: analysis.WorkoutAt, ConfirmedAt: now, CreatedAt: now, UpdatedAt: now}
 			row.ElapsedSeconds = record.ElapsedSeconds
 			row.PerformedAt, row.PerformedAtSource = performedAt, performedAtSource
 			if record.Load != nil {

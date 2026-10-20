@@ -669,7 +669,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	// For uploaded videos (no chunks), split into ~10s segments first to simulate
 	// the real-time recording flow and provide accurate segment data.
 	// Fall back to Flash model indexing only when splitting also fails.
-	segments := w.buildSegmentsFromChunks(p.SessionID, p.WorkoutType)
+	segments, skippedSegments := w.buildChunkSegments(p.SessionID, p.WorkoutType)
 
 	// Determine if we need to (re-)split the video.
 	// If existing chunks don't cover the full video duration (e.g. worker restarted
@@ -701,13 +701,13 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		if splitErr := w.splitAndAnalyzeChunks(ctx, geminiInputPath, p); splitErr != nil {
 			// The existing index was already found incomplete; do not reuse it
 			// when rebuilding fails. Index the full source instead.
-			segments = nil
+			segments, skippedSegments = nil, nil
 			w.logger.Warn("Chunk splitting failed, will fall back to model indexing",
 				zap.String("session_id", p.SessionID),
 				zap.Error(splitErr))
 		} else {
 			// Re-query chunks after splitting
-			segments = w.buildSegmentsFromChunks(p.SessionID, p.WorkoutType)
+			segments, skippedSegments = w.buildChunkSegments(p.SessionID, p.WorkoutType)
 		}
 	}
 
@@ -805,6 +805,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	for _, seg := range omittedSegments {
 		progressGaps = append(progressGaps, workoutprogress.Gap{Start: convertToSeconds(seg.Start).Seconds(), End: convertToSeconds(seg.End).Seconds(), Clock: "media", Reason: "segment_budget_omitted"})
 	}
+	progressGaps = append(progressGaps, skippedNonExerciseGaps(skippedSegments, indexedSegments)...)
 	var allAnalysis strings.Builder
 	var highlightCandidates []highlightCandidate
 	type segmentAnalysisResult struct {
@@ -1232,8 +1233,16 @@ func (w *Worker) queryMaxChunkEndSecs(sessionID string) float64 {
 // Walking, rest, and setup rows are omitted for WOD sessions, while Unknown
 // is retained so the deeper analyzer can revalidate it from the video.
 func (w *Worker) buildSegmentsFromChunks(sessionID string, workoutType string) []Segment {
+	segments, _ := w.buildChunkSegments(sessionID, workoutType)
+	return segments
+}
+
+// buildChunkSegments also returns the verified media of chunks that chunk
+// analysis explicitly classified as non-exercise, so their omission is recorded
+// as skipped_non_exercise instead of unobserved media.
+func (w *Worker) buildChunkSegments(sessionID string, workoutType string) ([]Segment, []Segment) {
 	if w.DB == nil {
-		return nil
+		return nil, nil
 	}
 
 	var chunks []db.ChunkAnalysisResult
@@ -1241,16 +1250,19 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string, workoutType string) [
 		Order("media_start_secs ASC NULLS LAST, id ASC").
 		Find(&chunks).Error
 	if err != nil || len(chunks) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	var segments []Segment
+	var segments, skipped []Segment
 	for _, chunk := range chunks {
 		if !debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
 			continue
 		}
 
 		if !includeChunkInDeepAnalysis(chunk, workoutType) {
+			if chunkClassifiedNonExercise(chunk, workoutType) {
+				skipped = append(skipped, Segment{Start: formatSegmentTimestamp(*chunk.MediaStartSecs), End: formatSegmentTimestamp(*chunk.MediaEndSecs), Type: "Rest"})
+			}
 			continue
 		}
 
@@ -1275,7 +1287,25 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string, workoutType string) [
 
 	// Merge consecutive chunks with the same exercise type into larger segments
 	// to avoid excessive Pro model calls (e.g. 30 Snatch chunks → 1 Snatch segment)
-	return mergeSegmentsByMovement(segments)
+	return mergeSegmentsByMovement(segments), mergeSegmentsByMovement(skipped)
+}
+
+// chunkClassifiedNonExercise reports an excluded chunk whose analysis explicitly
+// classified it as walking/rest/setup. An unlabelled chunk is unclassified, not rest.
+func chunkClassifiedNonExercise(chunk db.ChunkAnalysisResult, workoutType string) bool {
+	if includeChunkInDeepAnalysis(chunk, workoutType) {
+		return false
+	}
+	if IsRecoveryWorkoutType(workoutType) {
+		// Recovery sessions exclude only explicit walking.
+		return true
+	}
+	var signals struct {
+		ActivityState string `json:"activity_state"`
+	}
+	_ = json.Unmarshal([]byte(chunk.ObservedSignals), &signals)
+	movement := strings.TrimSpace(chunk.ExerciseType)
+	return isExplicitNonExerciseActivity(signals.ActivityState) || (movement != "" && isNonExerciseMovement(movement))
 }
 
 func includeChunkInDeepAnalysis(chunk db.ChunkAnalysisResult, workoutType string) bool {

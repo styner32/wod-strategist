@@ -97,6 +97,19 @@ var _ = Describe("frame_grid", func() {
 			Expect(images).To(HaveLen(2))
 		})
 
+		It("keeps reanalysis frame grids at or above the minimum FPS and refuses longer intervals", func() {
+			// 12 sheets x 32 frames = 384 frames: 192s is the longest interval at 2 FPS.
+			Expect(frameGridEligible(192*time.Second, FrameGridOptions{})).To(BeTrue())
+			Expect(frameGridEligible(193*time.Second, FrameGridOptions{})).To(BeFalse())
+			Expect(frameGridEligible(0, FrameGridOptions{})).To(BeFalse())
+
+			w := &Worker{GeminiClient: &gemini.Client{}}
+			_, sheets, usage, err := w.AnalyzeVideoIntervalWithFrameGrids(context.Background(), "unused.mp4", 0, 5*time.Minute, "prompt", gemini.ModelArgon4, FrameGridOptions{})
+			Expect(err).To(MatchError(errFrameGridIntervalTooLong))
+			Expect(sheets).To(BeEmpty(), "no sheets lets callers fall back to VideoMetadata analysis")
+			Expect(usage).To(BeNil())
+		})
+
 		It("adaptively reduces FPS and caps sheet count at MaxSheets for long intervals", func() {
 			opts := resolveFrameGridOptionsForDuration(240*time.Second, FrameGridOptions{})
 			Expect(opts.MaxSheets).To(Equal(12))

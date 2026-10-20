@@ -333,8 +333,8 @@ it("shows incomplete cycle notice when observed complete reps are 0 and confirms
     end_secs: 20,
     elapsed_seconds: 10,
     reps: 0,
-    load: null,
-    load_kg: null,
+    load: { value: 135, unit: "lb", basis: "total" },
+    load_kg: 61.2,
     reps_per_minute: 0,
   };
   const incompleteEvidence: WorkoutProgressResponse = {
@@ -372,10 +372,18 @@ it("shows incomplete cycle notice when observed complete reps are 0 and confirms
     ...incompleteEvidence,
     records: [zeroConfirmed],
   });
-  const { tree, client } = await mount("new", true);
+  const { tree, client } = await mount("new", true, "30 Power Cleans (135 lb)");
   expect(allText(tree)).toContain("랩 기준 미달(불완전 반복) 1회 감지 · 완료 반복 0회");
 
   await click(tree, "반복수·구간·중량 확인/수정");
+  const loadSelect = () => tree.root.findAllByType("select").find((s: any) => ["unresolved", "none", "weighted"].includes(s.props.value));
+  await act(async () => { loadSelect().props.onChange({ target: { value: "unresolved" } }); });
+  await click(tree, "0회(미완료/노렙)로 확정");
+  // A failed attempt is not a bodyweight record: the actual load must still be confirmed.
+  expect(historyApi.confirmPerformanceRecords).not.toHaveBeenCalled();
+  expect(allText(tree)).toContain("'미확인'");
+
+  await act(async () => { loadSelect().props.onChange({ target: { value: "weighted" } }); });
   await click(tree, "0회(미완료/노렙)로 확정");
 
   expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
@@ -386,7 +394,7 @@ it("shows incomplete cycle notice when observed complete reps are 0 and confirms
         start_secs: 10,
         end_secs: 20,
         reps: 0,
-        load: null,
+        load: { value: 135, unit: "lb", basis: "total" },
         measurement: "set",
         technique: "singles",
       },

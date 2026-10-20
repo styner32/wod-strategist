@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,20 +34,21 @@ const (
 	sessionReanalysisTaskTimeout = 60 * time.Minute
 )
 
-func resolveSessionReanalysisDailyQuota() int64 {
-	if raw := strings.TrimSpace(os.Getenv("SESSION_REANALYSIS_DAILY_QUOTA")); raw != "" {
-		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
-			return parsed
-		}
+// sessionReanalysisQuota is validated at startup (SESSION_REANALYSIS_DAILY_QUOTA);
+// zero selects the default.
+func (ctl *Controller) sessionReanalysisQuota() int64 {
+	if ctl.sessionReanalysisDailyQuota > 0 {
+		return ctl.sessionReanalysisDailyQuota
 	}
 	return sessionReanalysisDailyQuota
 }
 
 var (
-	errSessionReanalysisActive      = errors.New("session re-analysis already active")
-	errSessionReanalysisChunkActive = errors.New("chunk re-analysis still active")
-	errSessionReanalysisQuota       = errors.New("session re-analysis quota reached")
-	errSessionReanalysisKeyConflict = errors.New("session re-analysis idempotency conflict")
+	errSessionReanalysisActive       = errors.New("session re-analysis already active")
+	errSessionReanalysisChunkActive  = errors.New("chunk re-analysis still active")
+	errSessionReanalysisQuota        = errors.New("session re-analysis quota reached")
+	errSessionReanalysisKeyConflict  = errors.New("session re-analysis idempotency conflict")
+	errSessionReanalysisSessionOwned = errors.New("session id belongs to another profile")
 )
 
 // CreateSessionReanalysis queues an append-only whole-workout candidate. The
@@ -235,7 +235,7 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 			Where("profile_id = ? AND created_at >= ?", profileID, time.Now().Add(-sessionReanalysisWindow)).Count(&count).Error; err != nil {
 			return err
 		}
-		if count >= resolveSessionReanalysisDailyQuota() {
+		if count >= ctl.sessionReanalysisQuota() {
 			return errSessionReanalysisQuota
 		}
 		return tx.Create(&run).Error
@@ -509,20 +509,19 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 				CreatedAt:            now,
 				UpdatedAt:            now,
 			}
-			if err := tx.Clauses(clause.OnConflict{
+			// session_id is globally unique; a conflicting row of another
+			// profile must never be updated. Ownership resolution prefers sessions
+			// rows, so this guards a row inserted concurrently by another writer.
+			created := tx.Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "session_id"}},
+				Where:     clause.Where{Exprs: []clause.Expression{clause.Eq{Column: clause.Column{Table: "sessions", Name: "profile_id"}, Value: profileID}}},
 				DoUpdates: clause.Assignments(sessionUpdates),
-			}).Create(&createdSession).Error; err != nil {
-				return err
+			}).Create(&createdSession)
+			if created.Error != nil {
+				return created.Error
 			}
-		}
-
-		if candidateVersion.Version == 1 && analysis.WorkoutAt != nil && !analysis.WorkoutAt.IsZero() {
-			if err := tx.Exec(
-				"UPDATE profiles SET wod_tracking_started_at = ? WHERE id = ? AND (wod_tracking_started_at IS NULL OR wod_tracking_started_at > ?)",
-				*analysis.WorkoutAt, profileID, *analysis.WorkoutAt,
-			).Error; err != nil {
-				return err
+			if created.RowsAffected == 0 {
+				return errSessionReanalysisSessionOwned
 			}
 		}
 
@@ -533,6 +532,10 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, errWODCandidateStale) {
 			c.JSON(http.StatusConflict, gin.H{"error": "analysis changed; create a new re-analysis"})
+			return
+		}
+		if errors.Is(err, errSessionReanalysisSessionOwned) {
+			c.JSON(http.StatusConflict, gin.H{"error": "session id belongs to another profile"})
 			return
 		}
 		logger.Log.Error("failed to apply session re-analysis", zap.Uint("run_id", run.ID), zap.Error(err))
@@ -594,7 +597,7 @@ func (ctl *Controller) loadSessionReanalysisReadiness(ctx context.Context, sessi
 		readiness.BlockedReason = "chunk re-analyses are still active"
 	case !readiness.VideoAvailable:
 		readiness.BlockedReason = "session video is unavailable"
-	case recentCount >= resolveSessionReanalysisDailyQuota():
+	case recentCount >= ctl.sessionReanalysisQuota():
 		readiness.BlockedReason = "daily session re-analysis limit reached"
 	default:
 		readiness.CanCreate = true

@@ -220,15 +220,8 @@ function PerformanceEditor({
           type="button"
           disabled={saving}
           onClick={() => {
-            const zeroDraft: PerformanceDraft = {
-              ...draft,
-              reps: "0",
-              loadMode:
-                draft.loadMode === "unresolved" || (draft.loadMode === "weighted" && draft.weight.trim() === "")
-                  ? "none"
-                  : draft.loadMode,
-              reviewed: true,
-            };
+            // Keep the selected load: a failed 135 lb attempt is not a bodyweight record.
+            const zeroDraft: PerformanceDraft = { ...draft, reps: "0", reviewed: true };
             setDraft(zeroDraft);
             onDraftChange?.(zeroDraft);
             if (confirmedPerformanceInput(interval, zeroDraft, progress) != null) {

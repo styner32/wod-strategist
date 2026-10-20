@@ -129,10 +129,28 @@ func (ctl *Controller) GetWODTrainingLoad(c *gin.Context) {
 		}
 		entries = append(entries, wodeval.Workout{At: *r.WorkoutAt, Effort: r.Effort, Start: score.WODStart})
 	}
-	comparison := wodeval.Compare(entries, now, profile.WODTrackingStartedAt, location)
-	if missingTime > 0 {
+	// Applying a version-1 reanalysis promotes a legacy WOD without moving the
+	// profile's rollout time. Tracking starts at the earlier of the two.
+	trackingStart := profile.WODTrackingStartedAt
+	var earliest struct{ At *time.Time }
+	if err := ctl.db.WithContext(c.Request.Context()).Table("analysis_results AS a").Select("MIN(a.workout_at) AS at").Joins("JOIN sessions s ON s.session_id = a.session_id AND s.profile_id = a.profile_id").Where("a.profile_id = ? AND a.archived_at IS NULL AND s.workout_type = ? AND s.wod_evaluation_version = ?", pid, "wod", wodeval.Version).Scan(&earliest).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load training history"})
+		return
+	}
+	if earliest.At != nil && (trackingStart.IsZero() || earliest.At.Before(trackingStart)) {
+		trackingStart = *earliest.At
+	}
+	// Unpromoted legacy WODs in the pre-rollout period that promotion added to
+	// tracking are missing records, not rest days.
+	var unevaluated int64
+	if err := ctl.db.WithContext(c.Request.Context()).Table("analysis_results AS a").Joins("JOIN sessions s ON s.session_id = a.session_id AND s.profile_id = a.profile_id").Where("a.profile_id = ? AND a.archived_at IS NULL AND s.workout_type = ? AND s.wod_evaluation_version <> ? AND a.workout_at >= ? AND a.workout_at >= ? AND a.workout_at < ? AND a.workout_at <= ?", pid, "wod", wodeval.Version, from, trackingStart, profile.WODTrackingStartedAt, now).Count(&unevaluated).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load training history"})
+		return
+	}
+	comparison := wodeval.Compare(entries, now, trackingStart, location)
+	if missingTime > 0 || unevaluated > 0 {
 		comparison.Status = "incomplete_records"
 		comparison.ChangePercent = nil
 	}
-	c.JSON(http.StatusOK, gin.H{"comparison": comparison, "missing_workout_time": missingTime, "timezone": location.String()})
+	c.JSON(http.StatusOK, gin.H{"comparison": comparison, "missing_workout_time": missingTime, "unevaluated_legacy_workouts": unevaluated, "timezone": location.String()})
 }

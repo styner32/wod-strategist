@@ -852,6 +852,7 @@
     "no_baseline": "비교할 부하 기준이 없습니다.",
     "incomplete_records": "입력·분석이 부족한 기록이 있어 비교를 보류합니다.",
     "missing": "28일 누락: Effort %{effort}건 · 시간 %{duration}건 · 운동 일시 %{time}건",
+    "missingLegacy": "재분석을 적용하지 않은 이전 WOD: %{count}건",
     "scope": "새 WOD의 확인된 기록만 반영합니다. 시작 전 대기는 제외하고 WOD 도중 휴식은 포함합니다. 시작 시점 수정은 웹 기록 상세에서 가능합니다."
   },
   "workoutProgress": {

@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -50,7 +50,11 @@ type sessionDebugContext struct {
 	MovementHints  db.JSONDocument
 	Injuries       []string
 	Segments       []Segment
-	Corrections    []sessionDebugCorrection
+	// SkippedSegments are verified chunk media classified as non-exercise.
+	SkippedSegments []Segment
+	// ChunkTimelineAvailable is true when any chunk has verified media offsets.
+	ChunkTimelineAvailable bool
+	Corrections            []sessionDebugCorrection
 }
 
 type sessionDebugCorrection struct {
@@ -149,7 +153,12 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	}
 	promptCorrections := mappedSessionDebugCorrections(target.Corrections)
 	correctionContext := buildSessionDebugCorrectionContext(promptCorrections)
-	segments := target.Segments
+	segments, skippedSegments := target.Segments, target.SkippedSegments
+	// Stored observations are a fallback only when no chunk has a verified
+	// interval; chunks excluded by classification or corrections stay excluded.
+	if len(segments) == 0 && !target.ChunkTimelineAvailable {
+		segments, skippedSegments = w.storedProgressSegments(ctx, run.SessionID, run.ProfileID, target.WorkoutType, file)
+	}
 	var aggregate gemini.TokenUsage
 	var promptRecord strings.Builder
 	apiCalls := 0
@@ -162,10 +171,13 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", usage)
 		addSessionDebugUsage(&aggregate, usage)
 		if indexErr == nil {
-			segments = filterExerciseAndUnknownSegments(parseSegments(indexOutput))
+			indexed := parseSegments(indexOutput)
+			// Drop out-of-range pieces before merging so one hallucinated piece
+			// cannot void a touching valid one.
 			if file.Duration > 0 {
-				segments = filterSessionDebugSegments(segments, file.Duration)
+				indexed = filterSessionDebugSegments(indexed, file.Duration)
 			}
+			segments, skippedSegments = filterExerciseAndUnknownSegments(indexed, target.WorkoutType)
 		}
 		if len(segments) == 0 && file.Duration > 0 {
 			segments = []Segment{{Start: "0:00", End: formatDuration(file.Duration), Type: "Full Video", Description: "Entire workout"}}
@@ -250,7 +262,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	assessmentContext := buildSessionDebugAssessmentContext(target.Corrections)
 	var wodEvidence []wodSegmentEvidence
 	var progressIntervals []workoutprogress.Interval
-	var progressGaps []workoutprogress.Gap
+	progressGaps := skippedNonExerciseGaps(skippedSegments, segments)
 	defaultClientModel := ""
 	if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
 		defaultClientModel = provider.Model()
@@ -283,13 +295,14 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 		prompt += buildSessionDebugCorrectionContext(segCorrections)
 		prompt += ObservationOnlyOutputCheckPrompt
-		promptRecord.WriteString(prompt)
+		plannedMode := chunkDebugAnalysisMode(file.LocalPath != "", end-start)
+		promptRecord.WriteString(prompt + "\n#analysis-mode:" + plannedMode)
 
 		selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
 		if strings.TrimSpace(run.Model) == "" && isUnknownSegment(segment) {
 			selectedModel = gemini.ModelFlash38
 		}
-		cacheKey := sessionDebugSegmentCacheKey(selectedModel, segment.Start, segment.End, prompt)
+		cacheKey := sessionDebugSegmentCacheKey(selectedModel, plannedMode, segment.Start, segment.End, prompt)
 		if cached, ok := reusableSegments[cacheKey]; ok && strings.TrimSpace(cached.Analysis) != "" {
 			cachedModel := cached.Model
 			if cachedModel == "" {
@@ -308,7 +321,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 
 		wg.Add(1)
-		go func(idx int, segStart, segEnd time.Duration, segPrompt, segModel, key string) {
+		go func(idx int, seg Segment, segStart, segEnd time.Duration, segPrompt, segModel, mode string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -319,12 +332,13 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 				usage    *gemini.TokenUsage
 				callErr  error
 			)
-			if file.LocalPath != "" {
+			if mode == debugAnalysisModeFrameGrid {
 				analysis, sheets, usage, callErr = w.AnalyzeVideoIntervalWithFrameGrids(
 					ctx, file.LocalPath, segStart, segEnd, segPrompt, segModel, FrameGridOptions{},
 				)
 			}
-			if file.LocalPath == "" || (callErr != nil && len(sheets) == 0) {
+			if mode == debugAnalysisModeVideo || (callErr != nil && len(sheets) == 0) {
+				mode = debugAnalysisModeVideo
 				if callErr != nil {
 					w.logger.Warn("frame grid extraction failed for session debug segment; falling back to video segment analysis",
 						zap.Uint("run_id", run.ID),
@@ -343,7 +357,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			segOutcomes[idx] = sessionDebugSegmentOutcome{
 				valid:    true,
 				reused:   false,
-				cacheKey: key,
+				cacheKey: sessionDebugSegmentCacheKey(segModel, mode, seg.Start, seg.End, segPrompt),
 				model:    resolvedModel,
 				analysis: analysis,
 				usage:    usage,
@@ -351,7 +365,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 				start:    segStart,
 				end:      segEnd,
 			}
-		}(i, start, end, prompt, selectedModel, cacheKey)
+		}(i, segment, start, end, prompt, selectedModel, plannedMode)
 	}
 	wg.Wait()
 
@@ -418,9 +432,13 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 
 	if firstErr != nil {
 		if len(completedSegments) > 0 {
-			_ = w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+			// Checkpoint completed segments even after the task deadline cancelled
+			// ctx, so a retry resumes instead of paying for every segment again.
+			persistCtx, cancel := sessionDebugPersistContext(ctx)
+			_ = w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
 				"source_context_snapshot": string(buildContextSnapshot(completedSegments)),
 			}).Error
+			cancel()
 		}
 		w.logger.Warn("session debug segment failed", zap.Uint("run_id", run.ID), zap.Int("segment", failedSegment), zap.Error(firstErr))
 		return w.failSessionDebugRun(ctx, run.ID, retryCount, started,
@@ -470,8 +488,10 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	})
 }
 
-func sessionDebugSegmentCacheKey(model, start, end, prompt string) string {
-	sum := sha256.Sum256([]byte(model + "|" + start + "|" + end + "|" + prompt))
+// The analysis mode is part of the key: frame-grid and video observations of
+// the same prompt are not interchangeable.
+func sessionDebugSegmentCacheKey(model, mode, start, end, prompt string) string {
+	sum := sha256.Sum256([]byte(model + "|" + mode + "|" + start + "|" + end + "|" + prompt))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -608,7 +628,7 @@ func (w *Worker) loadSessionDebugContext(ctx context.Context, sessionID string, 
 		return nil, err
 	}
 	target.Corrections = corrections
-	target.Segments, err = w.buildSessionDebugSegments(ctx, sessionID, profileID, corrections, target.WorkoutType)
+	target.Segments, target.SkippedSegments, target.ChunkTimelineAvailable, err = w.buildSessionDebugSegments(ctx, sessionID, profileID, corrections, target.WorkoutType)
 	if err != nil {
 		return nil, err
 	}
@@ -648,50 +668,98 @@ func (w *Worker) loadActiveSessionDebugCorrections(ctx context.Context, sessionI
 	return result, nil
 }
 
-func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection, workoutType string) ([]Segment, error) {
+// buildSessionDebugSegments returns the chunk segments to observe, the verified
+// media of chunks classified as non-exercise (by chunk analysis or a saved
+// correction), and whether any chunk carries a verified merged-media interval.
+func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection, workoutType string) ([]Segment, []Segment, bool, error) {
 	var chunks []db.ChunkAnalysisResult
 	if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 		Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error; err != nil {
-		return nil, err
+		return nil, nil, false, err
 	}
-	if len(chunks) > 0 && !hasValidSessionDebugMediaIntervals(chunks) {
-		if err := w.reconstructSessionDebugMediaIntervals(ctx, sessionID, profileID); err == nil {
-			_ = w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
-				Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error
+	if sessionDebugTimelineIncomplete(chunks) {
+		if err := w.reconstructSessionDebugMediaIntervals(ctx, sessionID, profileID, chunks); err == nil {
+			if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+				Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error; err != nil {
+				return nil, nil, false, err
+			}
+		} else {
+			w.logger.Warn("could not rebuild the legacy merged-media timeline; unmapped chunks stay unobserved",
+				zap.String("session_id", sessionID), zap.Error(err))
+		}
+	}
+	// Duplicate rows of one retained object share its media interval. Observe
+	// the object once and keep corrections saved against any of its rows.
+	canonical := make(map[uint]uint, len(chunks))
+	firstByPath := make(map[string]uint, len(chunks))
+	for _, chunk := range chunks {
+		canonical[chunk.ID] = chunk.ID
+		if path := strings.TrimSpace(chunk.FilePath); path != "" {
+			if first, ok := firstByPath[path]; ok {
+				canonical[chunk.ID] = first
+			} else {
+				firstByPath[path] = chunk.ID
+			}
 		}
 	}
 	byChunk := make(map[uint][]int)
 	for index := range corrections {
-		byChunk[corrections[index].ChunkID] = append(byChunk[corrections[index].ChunkID], index)
+		owner, ok := canonical[corrections[index].ChunkID]
+		if !ok {
+			owner = corrections[index].ChunkID
+		}
+		byChunk[owner] = append(byChunk[owner], index)
+	}
+	recovery := IsRecoveryWorkoutType(workoutType)
+	keepMovement := func(movement string) bool {
+		if recovery {
+			return !isWalkingActivity(movement)
+		}
+		return !isNonExerciseMovement(movement) || strings.EqualFold(movement, "Unknown")
 	}
 	segments := make([]Segment, 0)
+	skipped := make([]Segment, 0)
+	timelineAvailable := false
 	for _, chunk := range chunks {
+		if canonical[chunk.ID] != chunk.ID {
+			continue
+		}
 		if !debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
 			continue
 		}
+		timelineAvailable = true
 		movement := strings.TrimSpace(chunk.ExerciseType)
-		include := strings.EqualFold(chunk.Status, "COMPLETED") && includeChunkInDeepAnalysis(chunk, workoutType)
+		completed := strings.EqualFold(chunk.Status, "COMPLETED")
+		include := completed && includeChunkInDeepAnalysis(chunk, workoutType)
+		classifiedSkip := completed && chunkClassifiedNonExercise(chunk, workoutType)
 		for _, correctionIndex := range byChunk[chunk.ID] {
 			corrections[correctionIndex].MediaStartSecs = cloneSessionDebugFloat(chunk.MediaStartSecs)
 			corrections[correctionIndex].MediaEndSecs = cloneSessionDebugFloat(chunk.MediaEndSecs)
 			correction := corrections[correctionIndex]
 			if correction.MovementName != "" {
 				movement = strings.TrimSpace(correction.MovementName)
-				include = movement != "" && (!isNonExerciseMovement(movement) || strings.EqualFold(movement, "Unknown"))
+				include = movement != "" && keepMovement(movement)
+				classifiedSkip = movement != "" && !include
 			}
 			switch correction.ActivityState {
 			case "walking", "rest_setup", "not_exercise":
-				include = false
+				include, classifiedSkip = false, true
 			case "unknown":
-				movement, include = "Unknown", true
+				movement, include, classifiedSkip = "Unknown", true, false
 			case "exercise":
-				include = true
+				include, classifiedSkip = true, false
 				if movement == "" {
 					movement = "Unknown"
 				}
 			}
 		}
-		if !include || movement == "" || (isNonExerciseMovement(movement) && !strings.EqualFold(movement, "Unknown")) {
+		if include && movement == "" && recovery {
+			movement = "Mobility"
+		}
+		if !include || movement == "" || !keepMovement(movement) {
+			if classifiedSkip {
+				skipped = append(skipped, Segment{Start: formatSegmentTimestamp(*chunk.MediaStartSecs), End: formatSegmentTimestamp(*chunk.MediaEndSecs), Type: "Rest"})
+			}
 			continue
 		}
 		description := chunk.Output
@@ -700,138 +768,123 @@ func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string
 		}
 		segments = append(segments, Segment{Start: formatSegmentTimestamp(*chunk.MediaStartSecs), End: formatSegmentTimestamp(*chunk.MediaEndSecs), Type: movement, Description: description})
 	}
-	merged := mergeSegmentsByMovement(segments)
-	if len(merged) > 0 {
-		return merged, nil
-	}
-	var analysis db.AnalysisResult
-	if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
-		Order("created_at DESC, id DESC").First(&analysis).Error; err == nil {
-		if parsed := parseStoredOutputSegments(analysis.Output); len(parsed) > 0 {
-			return parsed, nil
-		}
-	}
-	return nil, nil
+	return mergeSegmentsByMovement(segments), mergeSegmentsByMovement(skipped), timelineAvailable, nil
 }
 
-func hasValidSessionDebugMediaIntervals(chunks []db.ChunkAnalysisResult) bool {
+// sessionDebugTimelineIncomplete reports a completed original chunk whose
+// retained object has no verified merged-media interval on any of its rows.
+func sessionDebugTimelineIncomplete(chunks []db.ChunkAnalysisResult) bool {
+	mapped := make(map[string]bool, len(chunks))
 	for _, chunk := range chunks {
-		if debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
+		if path := strings.TrimSpace(chunk.FilePath); path != "" && debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
+			mapped[path] = true
+		}
+	}
+	for _, chunk := range chunks {
+		path := strings.TrimSpace(chunk.FilePath)
+		if strings.EqualFold(chunk.Status, "COMPLETED") && path != "" && !strings.Contains(path, "/split_chunk_") && !mapped[path] {
 			return true
 		}
 	}
 	return false
 }
 
-func (w *Worker) reconstructSessionDebugMediaIntervals(ctx context.Context, sessionID string, profileID uint) error {
+// reconstructSessionDebugMediaIntervals rebuilds the whole legacy concat
+// timeline. It writes nothing unless every retained chunk was probed and the
+// rebuilt offsets agree with already verified ones.
+func (w *Worker) reconstructSessionDebugMediaIntervals(ctx context.Context, sessionID string, profileID uint, chunks []db.ChunkAnalysisResult) error {
 	if w.DB == nil || w.StorageClient == nil {
 		return errors.New("storage or db client unavailable")
 	}
-	var chunks []struct {
-		ID       uint
-		FilePath string
+	intervals, err := w.retainedChunkTimeline(ctx, sessionID, profileID, "")
+	if err != nil {
+		return err
 	}
-	if err := w.DB.WithContext(ctx).Table("chunk_analysis_results").
-		Select("id, file_path").
-		Where("session_id = ? AND profile_id = ? AND status IN ? AND file_path <> '' AND file_path NOT LIKE ?",
-			sessionID, profileID, []string{"COMPLETED", "FAILED"}, "%/split_chunk_%").
-		Order("start_secs ASC NULLS LAST, file_path ASC, id ASC").Find(&chunks).Error; err != nil {
-		return fmt.Errorf("load retained chunks for timeline reconstruction: %w", err)
+	rebuilt := make(map[string]concatMediaInterval, len(intervals))
+	for _, interval := range intervals {
+		rebuilt[interval.FilePath] = interval
 	}
-	if len(chunks) == 0 {
-		return errors.New("no retained chunks for timeline reconstruction")
-	}
-
-	type interval struct {
-		id    uint
-		start float64
-		end   float64
-	}
-	intervals := make([]interval, 0, len(chunks))
-	cumulative := 0.0
 	for _, chunk := range chunks {
-		bucket, _, err := storage.ParseGCSURI(chunk.FilePath)
-		if err != nil || (w.BucketName != "" && bucket != w.BucketName) {
-			break
+		interval, ok := rebuilt[strings.TrimSpace(chunk.FilePath)]
+		if !ok || !debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
+			continue
 		}
-		localPath, err := createTempFile("session-chunk-timeline", ".mp4")
-		if err != nil {
-			break
-		}
-		downloadErr := w.StorageClient.DownloadFile(ctx, chunk.FilePath, localPath)
-		if downloadErr != nil {
-			_ = os.Remove(localPath)
-			break
-		}
-		duration := probeVideoDuration(ctx, localPath)
-		_ = os.Remove(localPath)
-		if duration <= 0 {
-			break
-		}
-		entry := interval{id: chunk.ID, start: cumulative, end: cumulative + duration}
-		intervals = append(intervals, entry)
-		cumulative = entry.end
-	}
-	if len(intervals) == 0 {
-		return errors.New("no retained chunk durations could be probed")
-	}
-	for _, item := range intervals {
-		if err := w.DB.WithContext(ctx).Table("chunk_analysis_results").Where("id = ?", item.id).Updates(map[string]any{
-			"media_start_secs": item.start,
-			"media_end_secs":   item.end,
-		}).Error; err != nil {
-			return fmt.Errorf("save reconstructed interval for chunk %d: %w", item.id, err)
+		if math.Abs(interval.Start-*chunk.MediaStartSecs) > 0.05 || math.Abs(interval.End-*chunk.MediaEndSecs) > 0.05 {
+			return fmt.Errorf("rebuilt timeline disagrees with verified offsets for chunk %d", chunk.ID)
 		}
 	}
-	return nil
+	return w.persistConcatMediaIntervals(ctx, sessionID, profileID, intervals)
 }
 
-var storedOutputSegmentHeader = regexp.MustCompile(`(?m)^##\s*세그먼트\s*\d+\s*:\s*(.+?)\s*\(\s*([^~()\s]+)\s*~\s*([^~()\s]+)\s*\)\s*$`)
-
-func parseStoredOutputSegments(output string) []Segment {
-	matches := storedOutputSegmentHeader.FindAllStringSubmatch(output, -1)
-	if len(matches) == 0 {
-		return nil
+// storedProgressSegments reuses media-clock intervals of the stored
+// workout_progress only when they were observed from the exact same media bytes
+// or Files object. Display headers in analysis_results.output are never parsed:
+// legacy headers may carry capture-clock offsets.
+func (w *Worker) storedProgressSegments(ctx context.Context, sessionID string, profileID uint, workoutType string, file reusableGeminiFile) ([]Segment, []Segment) {
+	var analysis db.AnalysisResult
+	if err := w.DB.WithContext(ctx).Select("workout_progress").Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+		Order("created_at DESC, id DESC").First(&analysis).Error; err != nil {
+		return nil, nil
 	}
-	segments := make([]Segment, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 4 {
-			continue
-		}
-		movement := strings.TrimSpace(match[1])
-		startStr := strings.TrimSpace(match[2])
-		endStr := strings.TrimSpace(match[3])
-		if movement == "" || strings.EqualFold(movement, "Full Video") {
-			continue
-		}
-		if isNonExerciseMovement(movement) && !strings.EqualFold(movement, "Unknown") {
-			continue
-		}
-		start, startOK := parseSegmentTimestamp(startStr)
-		end, endOK := parseSegmentTimestamp(endStr)
-		if !startOK || !endOK || start < 0 || end <= start {
-			continue
-		}
-		segments = append(segments, Segment{
-			Start:       formatSegmentTimestamp(start.Seconds()),
-			End:         formatSegmentTimestamp(end.Seconds()),
-			Type:        movement,
-			Description: "Previously indexed workout segment; revalidate from visible evidence.",
-		})
+	progress, err := workoutprogress.Decode(analysis.WorkoutProgress)
+	if err != nil || progress.MediaSourceID == "" || !progressSourceMatches(progress.MediaSourceID, file) {
+		return nil, nil
 	}
-	return mergeSegmentsByMovement(segments)
+	recovery := IsRecoveryWorkoutType(workoutType)
+	selected := make([]Segment, 0, len(progress.Intervals))
+	skipped := make([]Segment, 0)
+	for _, in := range progress.Intervals {
+		seg := Segment{Start: formatSegmentTimestamp(in.Start), End: formatSegmentTimestamp(in.End), Type: "Unknown", Description: "Previously observed interval; revalidate from visible evidence."}
+		switch in.Activity {
+		case "exercise":
+			if movement := strings.TrimSpace(in.Movement); movement != "" {
+				seg.Type = movement
+			}
+		case "rest":
+			if !recovery {
+				skipped = append(skipped, Segment{Start: seg.Start, End: seg.End, Type: "Rest"})
+				continue
+			}
+			seg.Type = "Rest"
+		}
+		selected = append(selected, seg)
+	}
+	return mergeSegmentsByMovement(selected), mergeSegmentsByMovement(skipped)
 }
 
-func filterExerciseAndUnknownSegments(segments []Segment) []Segment {
-	filtered := make([]Segment, 0, len(segments))
+func progressSourceMatches(stored string, file reusableGeminiFile) bool {
+	for _, path := range []string{file.URI, file.LocalPath} {
+		if path == "" {
+			continue
+		}
+		if source, err := progressMediaSource(path); err == nil && source == stored {
+			return true
+		}
+	}
+	return false
+}
+
+// filterExerciseAndUnknownSegments splits IndexVideo segments into those to
+// observe and explicitly non-exercise ones. Recovery sessions keep rest/setup
+// (stretch holds are routinely labelled rest) and skip only walking. An
+// unlabelled segment is observed as Unknown.
+func filterExerciseAndUnknownSegments(segments []Segment, workoutType string) ([]Segment, []Segment) {
+	recovery := IsRecoveryWorkoutType(workoutType)
+	kept := make([]Segment, 0, len(segments))
+	skipped := make([]Segment, 0)
 	for _, seg := range segments {
 		movement := strings.TrimSpace(seg.Type)
-		if movement == "" || (isNonExerciseMovement(movement) && !strings.EqualFold(movement, "Unknown")) {
+		switch {
+		case movement == "":
+			seg.Type = "Unknown"
+		case recovery && isWalkingActivity(movement),
+			!recovery && isNonExerciseMovement(movement) && !strings.EqualFold(movement, "Unknown"):
+			skipped = append(skipped, Segment{Start: seg.Start, End: seg.End, Type: "Rest"})
 			continue
 		}
-		filtered = append(filtered, seg)
+		kept = append(kept, seg)
 	}
-	return mergeSegmentsByMovement(filtered)
+	return mergeSegmentsByMovement(kept), mergeSegmentsByMovement(skipped)
 }
 
 func wodEvidenceFromObservedIntervals(intervals []workoutprogress.Interval) ([]wodSegmentEvidence, bool) {
@@ -1052,9 +1105,17 @@ func sessionReanalysisTaskRequestKey(runID uint, task string) string {
 	return fmt.Sprintf("session-reanalysis:%d:%s", runID, strings.TrimSpace(task))
 }
 
+// sessionDebugPersistContext keeps state writes alive after the task deadline
+// cancels ctx; otherwise a timed-out run stays RUNNING and is never reclaimed.
+func sessionDebugPersistContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+}
+
 func (w *Worker) failSessionDebugRun(ctx context.Context, runID uint, retryCount int, started time.Time, safeError string, cause error) error {
 	if retryCount < sessionDebugMaxRetries {
-		_ = w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(map[string]any{
+		persistCtx, cancel := sessionDebugPersistContext(ctx)
+		defer cancel()
+		_ = w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(map[string]any{
 			"status": db.SessionReanalysisStatusQueued, "safe_error": "", "duration_ms": time.Since(started).Milliseconds(),
 		}).Error
 		return cause
@@ -1074,7 +1135,9 @@ func (w *Worker) completeSessionDebugRun(ctx context.Context, runID uint, status
 	values["status"] = status
 	values["duration_ms"] = time.Since(started).Milliseconds()
 	values["completed_at"] = now
-	if err := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(values).Error; err != nil {
+	persistCtx, cancel := sessionDebugPersistContext(ctx)
+	defer cancel()
+	if err := w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(values).Error; err != nil {
 		return fmt.Errorf("persist terminal session re-analysis state: %w", err)
 	}
 	return nil

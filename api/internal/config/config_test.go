@@ -92,6 +92,29 @@ var _ = Describe("InitServer", func() {
 		Expect(cfg.SessionReanalysisEnabled).To(BeTrue())
 	})
 
+	It("leaves the session re-analysis quota to the controller default when unset and parses an explicit value", func() {
+		setEnv("SESSION_REANALYSIS_DAILY_QUOTA", "")
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.SessionReanalysisDailyQuota).To(BeZero())
+
+		setEnv("SESSION_REANALYSIS_DAILY_QUOTA", " 7 ")
+		cfg, err = config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.SessionReanalysisDailyQuota).To(Equal(int64(7)))
+	})
+
+	DescribeTable("rejects an invalid session re-analysis quota at startup",
+		func(value string) {
+			setEnv("SESSION_REANALYSIS_DAILY_QUOTA", value)
+			_, err := config.InitServer()
+			Expect(err).To(MatchError(ContainSubstring("SESSION_REANALYSIS_DAILY_QUOTA must be a positive integer")))
+		},
+		Entry("non-numeric", "20x"),
+		Entry("zero", "0"),
+		Entry("negative", "-3"),
+	)
+
 	It("returns an error listing all missing required variables", func() {
 		setEnv("DATABASE_URL", "")
 		setEnv("REDIS_URL", "")

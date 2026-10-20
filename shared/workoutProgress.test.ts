@@ -14,7 +14,11 @@ it("requires explicit review and actual load, retaining original units without c
   const draft = performanceDraft(interval);
   expect(confirmedPerformanceInput(interval, draft)).toBeNull();
   expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "5" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
-  expect(confirmedPerformanceInput({ ...interval, load: null }, { ...performanceDraft({ ...interval, load: null }), reviewed: true, reps: "0" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 0, load: null, measurement: "set", technique: "singles" });
+  // A zero-rep attempt keeps its actual load; null load would claim no external load.
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 0, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "none" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 0, load: null, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "unresolved" })).toBeNull();
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "weighted", weight: "" })).toBeNull();
   expect(JSON.stringify(interval)).toBe(before);
 });
 it.each([{ start: "9" }, { end: "71" }, { end: "10" }, { reps: "2.5" }, { reps: "-1" }, { reps: "" }, { weight: "" }, { weight: "0" }, { loadMode: "unresolved" as const }])("rejects invalid reviewed values %j", values => {

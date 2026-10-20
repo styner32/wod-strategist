@@ -32,6 +32,17 @@ const (
 	defaultFrameGridTileWidth   = 240
 	defaultFrameGridJPEGQuality = 85
 	defaultFrameGridBorderPx    = 2
+
+	// Below this rate a contact sheet no longer shows individual repetitions.
+	// Longer reanalysis intervals use VideoMetadata video analysis instead.
+	minReanalysisFrameGridFPS = 2.0
+	// Each extraction holds up to MaxSheets*Cols*Rows decoded frames in memory.
+	maxConcurrentFrameGridExtractions = 2
+)
+
+var (
+	errFrameGridIntervalTooLong = errors.New("frame grid interval exceeds the sheet budget at the minimum reanalysis FPS")
+	frameGridExtractionSlots    = make(chan struct{}, maxConcurrentFrameGridExtractions)
 )
 
 // FrameGridOptions configures how a video interval is sampled and tiled into
@@ -102,6 +113,15 @@ func resolveFrameGridOptionsForDuration(duration time.Duration, opts FrameGridOp
 		}
 	}
 	return opts
+}
+
+// frameGridEligible reports whether a reanalysis interval fits the sheet budget
+// at minReanalysisFrameGridFPS or faster.
+func frameGridEligible(duration time.Duration, opts FrameGridOptions) bool {
+	if duration <= 0 {
+		return false
+	}
+	return resolveFrameGridOptionsForDuration(duration, opts).FPS >= minReanalysisFrameGridFPS-1e-9
 }
 
 // formatFrameTimestamp formats a duration as HH:MM:SS.mmm (e.g. "00:10:24.250")
@@ -373,8 +393,17 @@ func (w *Worker) AnalyzeVideoIntervalWithFrameGrids(
 	if w == nil || w.GeminiClient == nil {
 		return "", nil, nil, errors.New("gemini client is not configured")
 	}
+	if !frameGridEligible(end-start, opts) {
+		return "", nil, nil, errFrameGridIntervalTooLong
+	}
 	opts = resolveFrameGridOptionsForDuration(end-start, opts)
+	select {
+	case frameGridExtractionSlots <- struct{}{}:
+	case <-ctx.Done():
+		return "", nil, nil, ctx.Err()
+	}
 	sheets, err := GenerateFrameGrids(ctx, videoPath, start, end, opts)
+	<-frameGridExtractionSlots
 	if err != nil {
 		return "", nil, nil, err
 	}

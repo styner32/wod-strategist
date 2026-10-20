@@ -168,7 +168,6 @@ type GeminiClient interface {
 	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *gemini.TokenUsage, error)
-	AnalyzeFrameGrids(ctx context.Context, images [][]byte, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeFrameGridsWithModel(ctx context.Context, images [][]byte, mimeType, prompt, model string) (string, *gemini.TokenUsage, error)
 
 	AnalyzeHighlightAgentic(ctx context.Context, fileURI, mimeType, prompt string) gemini.StreamComparisonResult

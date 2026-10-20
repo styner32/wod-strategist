@@ -39,6 +39,8 @@ export interface WODTrainingLoad {
     tracking_started_at: string;
   };
   missing_workout_time: number;
+  /** Legacy WODs in the tracking period whose version-1 reanalysis was not applied. */
+  unevaluated_legacy_workouts?: number;
   timezone: string;
 }
 export function newWODScore(raw?: string): WODScore | undefined {
