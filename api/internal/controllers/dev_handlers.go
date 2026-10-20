@@ -18,7 +18,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const playURLExpiry = 15 * time.Minute
+const playURLExpiry = time.Hour
 
 var workoutSessionPattern = regexp.MustCompile(`^(?:P\d+-)?[A-Z]+-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}`)
 

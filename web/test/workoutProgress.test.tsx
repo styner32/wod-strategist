@@ -405,4 +405,72 @@ it("shows incomplete cycle notice when observed complete reps are 0 and confirms
   await act(() => tree.unmount()); client.clear();
 });
 
+it("supersedes an earlier Power Clean sub-interval confirmation when merged into Clean & Jerk and counts only 1 rep", async () => {
+  const pcSubRecord: PerformanceRecord = {
+    ...current,
+    id: 10,
+    interval_id: "seg-488",
+    source_version: "pc-cj",
+    movement: "Power Clean",
+    start_secs: 488,
+    end_secs: 490,
+    elapsed_seconds: 2,
+    reps: 1,
+    load: { value: 135, unit: "lb", basis: "total" },
+    confirmed_at: "2026-10-20T09:00:00Z",
+  };
+  const cjMergedRecord: PerformanceRecord = {
+    ...current,
+    id: 11,
+    interval_id: "seg-490",
+    source_version: "pc-cj",
+    movement: "Clean & Jerk",
+    start_secs: 488,
+    end_secs: 491.8,
+    elapsed_seconds: 3.8,
+    reps: 1,
+    load: { value: 135, unit: "lb", basis: "total" },
+    confirmed_at: "2026-10-20T09:01:00Z",
+  };
+  const pcCjProgress: WorkoutProgressResponse = {
+    progress: {
+      version: 1,
+      clock: "media",
+      source_version: "pc-cj",
+      intervals: [
+        {
+          id: "seg-488",
+          start_secs: 488,
+          end_secs: 490,
+          activity: "exercise",
+          movement: "Power Clean",
+          load: null,
+          observation_refs: ["chunk:48"],
+          rep_events: [],
+        },
+        {
+          id: "seg-490",
+          start_secs: 490,
+          end_secs: 491.8,
+          activity: "exercise",
+          movement: "Clean & Jerk",
+          load: null,
+          observation_refs: ["chunk:49"],
+          rep_events: [],
+        },
+      ],
+      unassessed: [],
+    },
+    records: [pcSubRecord, cjMergedRecord],
+  };
+  (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(pcCjProgress);
+  const { tree, client } = await mount("new", true, "30 Clean & Jerks (135/95 lb)");
+  const rendered = allText(tree);
+  expect(rendered).toContain("확정 총 1회");
+  expect(rendered).not.toContain("확정 총 2회");
+  expect(rendered).toContain("08:08–08:11 · Clean & Jerk 확정 기록(1회)에 포함된 구간입니다.");
+  expect(rendered).not.toContain("2.0초");
+  await act(() => tree.unmount()); client.clear();
+});
+
 

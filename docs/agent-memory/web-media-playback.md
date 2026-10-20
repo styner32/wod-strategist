@@ -95,3 +95,11 @@ setTimeout(() => { v.removeEventListener('seeked', h); console.log('seeked/s', n
 
 Thousands per second confirms a loop; compare `v.currentTime`, `v.duration`, `v.paused` with the
 `/sessions/:id/chunks/:chunk_id/play-url` `media_start_secs`/`media_end_secs`.
+
+## Signed URL expiry & recovery (`videoUrlExpiry.ts`)
+
+- Backend playback signed URLs (`GET /video-download/:session_id`, `GET /sessions/:id/chunks/:chunk_id/play-url`, `GET /dev/sessions/:id/play-url`) use `playURLExpiry = time.Hour` (1 hour), and Cloud Run IAM-signed GCS V4 URLs also rotate with the ~1-hour service-account token lifetime.
+- Because `web/src/App.tsx` sets `refetchOnWindowFocus: false`, `staleTime` alone never refreshes signed URLs on a mounted `SessionDetailPage` or `ChunkInspector`.
+- **Proactive refresh**: Schedule a timer via `getSignedUrlRefreshDelayMs` (`SIGNED_URL_REFRESH_BUFFER_MS = 2m` before `expires_at`, capped at `MAX_PROACTIVE_REFRESH_DELAY_MS = 50m`) and check on `visibilitychange`/`focus`/`onPause`. Refresh only while the `<video>` is paused/idle so active streaming is never interrupted.
+- **Reactive recovery (`onError`)**: When `<video onError>` fires (or when the user seeks/plays after `isSignedUrlExpiredOrExpiring`), guard with `shouldAttemptVideoErrorRecovery` (`MAX_VIDEO_ERROR_RECOVERY_ATTEMPTS = 2`, skipping duplicate URLs), save `{ sessionKey, currentTime, playbackRate, wasPlaying }` in a ref, and refetch the signed URL.
+- **State restoration**: Restore `playbackRate`, `currentTime`, and `play()` **only once** inside `onLoadedMetadata` by popping `pendingVideoRestoreRef.current = null` before setting `video.currentTime`. Never restore inside `timeupdate` or `seeked`.

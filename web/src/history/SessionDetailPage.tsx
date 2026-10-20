@@ -52,6 +52,14 @@ import { VideoTransportBar } from "./components/VideoTransportBar";
 import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
 import { getHighlightSeekTime, parseHighlightSegments } from "./highlights";
 import { sensorTimelinePollInterval, sensorTimelineQueryKey } from "./timelineUtils";
+import {
+  getSignedUrlRefreshDelayMs,
+  isSignedUrlExpiredOrExpiring,
+  MIN_PROACTIVE_REFRESH_DELAY_MS,
+  shouldAttemptVideoErrorRecovery,
+  type VideoErrorRecoveryTracker,
+  type VideoRestoreState,
+} from "./videoUrlExpiry";
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("en-US", {
@@ -772,8 +780,11 @@ export function SessionDetailPage() {
 
   const {
     data: videoUrl,
+    dataUpdatedAt: videoUrlUpdatedAt,
     error: videoError,
     isLoading: videoLoading,
+    isFetching: videoFetching,
+    refetch: refetchVideoUrl,
   } = useQuery({
     queryKey: ["video-url", sessionId, profileId, selectedKind ?? "default"],
     queryFn: () => loadTargetVideo(sessionId!, profileId!, selectedKind),
@@ -782,6 +793,83 @@ export function SessionDetailPage() {
     retry: false,
   });
   const effectiveVideoKind = selectedKind ?? videoUrl?.kind ?? "merged";
+  const activeVideoSessionKey = `${sessionId ?? ""}:${effectiveVideoKind}`;
+  const pendingVideoRestoreRef = useRef<VideoRestoreState | null>(null);
+  const videoErrorRecoveryRef = useRef<VideoErrorRecoveryTracker>({ attempts: 0 });
+  const wantPlayingRef = useRef(false);
+  const [videoPlaybackError, setVideoPlaybackError] = useState(false);
+
+  const refreshSignedVideoUrl = useCallback(
+    (overrides?: Partial<Omit<VideoRestoreState, "sessionKey">>) => {
+      const video = videoRef.current;
+      const savedTime =
+        overrides?.currentTime ??
+        (video && video.currentTime > 0 ? video.currentTime : currentTime);
+      const savedRate =
+        overrides?.playbackRate ??
+        (video && video.playbackRate > 0 ? video.playbackRate : playbackRate);
+      const savedPlaying =
+        overrides?.wasPlaying ??
+        (video ? !video.paused && !video.ended : !isPaused);
+      pendingVideoRestoreRef.current = {
+        sessionKey: activeVideoSessionKey,
+        currentTime: savedTime,
+        playbackRate: savedRate,
+        wasPlaying: savedPlaying,
+      };
+      void refetchVideoUrl();
+    },
+    [activeVideoSessionKey, currentTime, isPaused, playbackRate, refetchVideoUrl],
+  );
+
+  // Proactively refresh the signed URL before it expires while paused or when returning to the tab.
+  useEffect(() => {
+    if (!videoUrl?.download_url) return;
+
+    const maybeRefreshWhenPaused = () => {
+      const video = videoRef.current;
+      const pausedOrIdle = !video || video.paused || video.ended;
+      if (
+        pausedOrIdle &&
+        !videoFetching &&
+        isSignedUrlExpiredOrExpiring(videoUrl.expires_at, videoUrlUpdatedAt)
+      ) {
+        refreshSignedVideoUrl({ wasPlaying: false });
+      }
+    };
+
+    const delayMs = getSignedUrlRefreshDelayMs(
+      videoUrl.expires_at,
+      videoUrlUpdatedAt,
+    );
+    const timerId =
+      delayMs != null
+        ? window.setTimeout(
+            maybeRefreshWhenPaused,
+            Math.max(MIN_PROACTIVE_REFRESH_DELAY_MS, delayMs),
+          )
+        : undefined;
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        maybeRefreshWhenPaused();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", maybeRefreshWhenPaused);
+
+    return () => {
+      if (timerId != null) window.clearTimeout(timerId);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", maybeRefreshWhenPaused);
+    };
+  }, [
+    refreshSignedVideoUrl,
+    videoFetching,
+    videoUrl?.download_url,
+    videoUrl?.expires_at,
+    videoUrlUpdatedAt,
+  ]);
 
   const { data: sensorTimelineResponse, isLoading: sensorTimelineLoading } =
     useQuery({
@@ -864,6 +952,13 @@ export function SessionDetailPage() {
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
+    if (
+      pendingVideoRestoreRef.current != null &&
+      video.readyState < 1 &&
+      video.currentTime === 0
+    ) {
+      return;
+    }
     setCurrentTime(video.currentTime);
     if (Number.isFinite(video.duration) && video.duration > 0) {
       setDuration(video.duration);
@@ -872,30 +967,154 @@ export function SessionDetailPage() {
     setPlaybackRate(video.playbackRate || 1);
   }, []);
 
-  // Seek video to a specific time and play
-  const handleSeek = useCallback((time: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
-      videoRef.current.play().catch(() => {});
+  const handleLoadedMetadata = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    videoErrorRecoveryRef.current = { attempts: 0 };
+    setVideoPlaybackError(false);
+
+    const restore = pendingVideoRestoreRef.current;
+    if (restore && restore.sessionKey === activeVideoSessionKey) {
+      pendingVideoRestoreRef.current = null;
+      if (Number.isFinite(restore.playbackRate) && restore.playbackRate > 0) {
+        video.playbackRate = restore.playbackRate;
+      }
+      if (
+        Number.isFinite(restore.currentTime) &&
+        restore.currentTime > 0.05 &&
+        (!Number.isFinite(video.duration) || restore.currentTime < video.duration)
+      ) {
+        video.currentTime = restore.currentTime;
+      }
+      if (restore.wasPlaying) {
+        wantPlayingRef.current = true;
+        video.play().catch(() => {});
+      }
     }
-  }, []);
+    handleTimeUpdate();
+  }, [activeVideoSessionKey, handleTimeUpdate]);
+
+  const handleVideoPlay = useCallback(() => {
+    wantPlayingRef.current = true;
+    setVideoPlaybackError(false);
+    handleTimeUpdate();
+  }, [handleTimeUpdate]);
+
+  const handleVideoPause = useCallback(() => {
+    const video = videoRef.current;
+    if (video && !video.error) {
+      wantPlayingRef.current = false;
+      if (
+        !videoFetching &&
+        isSignedUrlExpiredOrExpiring(videoUrl?.expires_at, videoUrlUpdatedAt)
+      ) {
+        refreshSignedVideoUrl({ wasPlaying: false });
+      }
+    }
+    handleTimeUpdate();
+  }, [
+    handleTimeUpdate,
+    refreshSignedVideoUrl,
+    videoFetching,
+    videoUrl?.expires_at,
+    videoUrlUpdatedAt,
+  ]);
+
+  const handleVideoError = useCallback(() => {
+    const video = videoRef.current;
+    const currentUrl = videoUrl?.download_url;
+    if (shouldAttemptVideoErrorRecovery(videoErrorRecoveryRef.current, currentUrl)) {
+      videoErrorRecoveryRef.current = {
+        attempts: videoErrorRecoveryRef.current.attempts + 1,
+        lastFailedUrl: currentUrl,
+      };
+      refreshSignedVideoUrl({
+        wasPlaying: wantPlayingRef.current || Boolean(video && !video.paused),
+      });
+      return;
+    }
+    setVideoPlaybackError(true);
+  }, [refreshSignedVideoUrl, videoUrl?.download_url]);
+
+  // Seek video to a specific time and play
+  const handleSeek = useCallback(
+    (time: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      wantPlayingRef.current = true;
+      if (
+        video.error != null ||
+        videoPlaybackError ||
+        isSignedUrlExpiredOrExpiring(videoUrl?.expires_at, videoUrlUpdatedAt)
+      ) {
+        videoErrorRecoveryRef.current = { attempts: 0 };
+        setVideoPlaybackError(false);
+        refreshSignedVideoUrl({ currentTime: time, wasPlaying: true });
+        return;
+      }
+      video.currentTime = time;
+      video.play().catch(() => {});
+    },
+    [
+      refreshSignedVideoUrl,
+      videoPlaybackError,
+      videoUrl?.expires_at,
+      videoUrlUpdatedAt,
+    ],
+  );
 
   // Seek video without altering play/pause state
-  const handleTimelineSeek = useCallback((time: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
-    }
-  }, []);
+  const handleTimelineSeek = useCallback(
+    (time: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (
+        video.error != null ||
+        videoPlaybackError ||
+        isSignedUrlExpiredOrExpiring(videoUrl?.expires_at, videoUrlUpdatedAt)
+      ) {
+        videoErrorRecoveryRef.current = { attempts: 0 };
+        setVideoPlaybackError(false);
+        refreshSignedVideoUrl({ currentTime: time, wasPlaying: !isPaused });
+        return;
+      }
+      video.currentTime = time;
+    },
+    [
+      isPaused,
+      refreshSignedVideoUrl,
+      videoPlaybackError,
+      videoUrl?.expires_at,
+      videoUrlUpdatedAt,
+    ],
+  );
 
   const handleTogglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
+      wantPlayingRef.current = true;
+      if (
+        video.error != null ||
+        videoPlaybackError ||
+        isSignedUrlExpiredOrExpiring(videoUrl?.expires_at, videoUrlUpdatedAt)
+      ) {
+        videoErrorRecoveryRef.current = { attempts: 0 };
+        setVideoPlaybackError(false);
+        refreshSignedVideoUrl({ wasPlaying: true });
+        return;
+      }
       video.play().catch(() => {});
     } else {
+      wantPlayingRef.current = false;
       video.pause();
     }
-  }, []);
+  }, [
+    refreshSignedVideoUrl,
+    videoPlaybackError,
+    videoUrl?.expires_at,
+    videoUrlUpdatedAt,
+  ]);
 
   const handleRateChange = useCallback((rate: number) => {
     setPlaybackRate(rate);
@@ -963,20 +1182,45 @@ export function SessionDetailPage() {
         player={<>
           <div className="bg-bg-elevated border border-border rounded-xl overflow-hidden">
             {videoUrl?.download_url ? (
-              <video
-                ref={videoRef}
-                src={videoUrl.download_url}
-                controls
-                muted
-                preload="metadata"
-                onLoadedMetadata={handleTimeUpdate}
-                onTimeUpdate={handleTimeUpdate}
-                onSeeked={handleTimeUpdate}
-                onPlay={handleTimeUpdate}
-                onPause={handleTimeUpdate}
-                onRateChange={handleTimeUpdate}
-                className="w-full max-h-[36svh] bg-black object-contain sm:max-h-[50svh] lg:max-h-[calc(100dvh-20rem)]"
-              />
+              <>
+                <video
+                  ref={videoRef}
+                  src={videoUrl.download_url}
+                  controls
+                  muted
+                  preload="metadata"
+                  onLoadedMetadata={handleLoadedMetadata}
+                  onTimeUpdate={handleTimeUpdate}
+                  onSeeked={handleTimeUpdate}
+                  onPlay={handleVideoPlay}
+                  onPause={handleVideoPause}
+                  onRateChange={handleTimeUpdate}
+                  onError={handleVideoError}
+                  className="w-full max-h-[36svh] bg-black object-contain sm:max-h-[50svh] lg:max-h-[calc(100dvh-20rem)]"
+                />
+                {videoPlaybackError && (
+                  <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-2 border-t border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+                  >
+                    <span>
+                      동영상 재생 세션이 만료되었거나 연결이 끊어졌습니다.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        videoErrorRecoveryRef.current = { attempts: 0 };
+                        setVideoPlaybackError(false);
+                        wantPlayingRef.current = true;
+                        refreshSignedVideoUrl({ wasPlaying: true });
+                      }}
+                      className="rounded border border-warning/40 bg-warning/15 px-2.5 py-1 font-medium text-warning hover:bg-warning/25"
+                    >
+                      동영상 다시 불러오기
+                    </button>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="w-full aspect-video bg-bg-secondary flex items-center justify-center">
                 <div className="text-center">
@@ -1660,6 +1904,8 @@ export function SessionDetailPage() {
             chunkBatchReady={chunkBatchReadyForSessionReanalysis}
             chunkBatchBlockedReason={chunkBatchBlockedReason}
             unconfirmedCandidateCount={unconfirmedBulkCandidateCount}
+            currentTime={currentTime}
+            isOriginal={effectiveVideoKind === "merged"}
           />
 
           {analysis?.session_fatigue && (

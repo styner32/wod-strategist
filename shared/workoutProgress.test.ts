@@ -337,6 +337,73 @@ describe("extractWodLoads and summarizeWorkoutMovements", () => {
         loadLabel: "135 lb",
       },
     ]);
+
+    // When a sub-interval (e.g. 08:08-08:10 Power Clean) was confirmed before being merged into 08:08-08:11 Clean & Jerk,
+    // the wider covering confirmation supersedes the sub-interval confirmation so it is never double-counted as 2 reps.
+    const pcInterval: WorkoutProgressInterval = {
+      id: "seg-488",
+      start_secs: 488,
+      end_secs: 490,
+      activity: "exercise",
+      movement: "Power Clean",
+      load: null,
+      observation_refs: ["chunk:48"],
+      rep_events: [],
+    };
+    const cjInterval: WorkoutProgressInterval = {
+      id: "seg-490",
+      start_secs: 490,
+      end_secs: 491.8,
+      activity: "exercise",
+      movement: "Clean & Jerk",
+      load: null,
+      observation_refs: ["chunk:49"],
+      rep_events: [],
+    };
+    const pcToCjProgress = {
+      version: 1 as const,
+      clock: "media" as const,
+      source_version: "pc-cj",
+      intervals: [pcInterval, cjInterval],
+      unassessed: [],
+    };
+    const oldSubRecord: PerformanceRecord = {
+      ...confirmedFsRecord,
+      id: 10,
+      interval_id: "seg-488",
+      source_version: "pc-cj",
+      movement: "Power Clean",
+      start_secs: 488,
+      end_secs: 490,
+      elapsed_seconds: 2,
+      reps: 1,
+      confirmed_at: "2026-10-20T09:00:00Z",
+    };
+    const mergedCjRecord: PerformanceRecord = {
+      ...confirmedFsRecord,
+      id: 11,
+      interval_id: "seg-490",
+      source_version: "pc-cj",
+      movement: "Clean & Jerk",
+      start_secs: 488,
+      end_secs: 491.8,
+      elapsed_seconds: 3.8,
+      reps: 1,
+      confirmed_at: "2026-10-20T09:01:00Z",
+    };
+    expect(findCoveringConfirmedRecord(pcInterval, [oldSubRecord, mergedCjRecord])?.id).toBe(11);
+    expect(findCoveringConfirmedRecord(cjInterval, [oldSubRecord, mergedCjRecord])?.id).toBe(11);
+    expect(summarizeWorkoutMovements(pcToCjProgress, [oldSubRecord, mergedCjRecord])).toEqual([
+      {
+        movement: "Clean & Jerk",
+        intervalCount: 2,
+        observedReps: 0,
+        observedSeconds: 0,
+        confirmedCount: 1,
+        confirmedReps: 1,
+        loadLabel: "135 lb",
+      },
+    ]);
   });
 });
 

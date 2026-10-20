@@ -91,6 +91,7 @@ func (ctl *Controller) GetWorkoutProgress(c *gin.Context) {
 		}
 		out.Records = append(out.Records, record)
 	}
+	out.Records = workoutprogress.ActiveRecords(out.Records)
 	c.JSON(http.StatusOK, out)
 }
 
@@ -141,6 +142,12 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 		if input.IntervalID == "" || seen[input.IntervalID] || len(input.Load) == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "confirm each interval once and specify actual load or null"})
 			return
+		}
+		for _, prev := range confirmed {
+			if prev.Start < input.End-1e-6 && prev.End > input.Start+1e-6 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "confirmed windows in the same request cannot overlap"})
+				return
+			}
 		}
 		seen[input.IntervalID] = true
 		var load *workoutprogress.Load
@@ -232,6 +239,21 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "profile_id"}, {Name: "session_id"}, {Name: "interval_id"}}, DoUpdates: clause.AssignmentColumns([]string{"analysis_id", "source_version", "status", "movement", "start_secs", "end_secs", "elapsed_seconds", "reps", "load_value", "load_unit", "load_basis", "load_kg", "measurement", "technique", "workout_prescription", "reps_per_minute", "rate_basis", "median_cycle_seconds", "original_candidate", "performed_at", "performed_at_source", "confirmed_at", "updated_at"})}).Create(&row).Error; err != nil {
 				return err
 			}
+			coveredIDs := []string{}
+			for _, in := range progress.Intervals {
+				if in.ID != record.IntervalID && in.Start < record.End-1e-6 && in.End > record.Start+1e-6 {
+					coveredIDs = append(coveredIDs, in.ID)
+				}
+			}
+			cleanup := tx.Where("profile_id = ? AND session_id = ? AND interval_id <> ?", pid, sid, record.IntervalID)
+			if len(coveredIDs) > 0 {
+				cleanup = cleanup.Where("(start_secs < ? AND end_secs > ?) OR interval_id IN ?", record.End-1e-6, record.Start+1e-6, coveredIDs)
+			} else {
+				cleanup = cleanup.Where("start_secs < ? AND end_secs > ?", record.End-1e-6, record.Start+1e-6)
+			}
+			if err := cleanup.Delete(&db.PerformanceRecord{}).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -283,19 +305,26 @@ func (ctl *Controller) GetPerformanceBenchmarks(c *gin.Context) {
 	}
 	rows := []db.PerformanceRecord{}
 	query := ctl.db.WithContext(c.Request.Context()).Table("performance_records AS r").Select("r.*").Joins("JOIN analysis_results a ON a.id = r.analysis_id AND a.session_id = r.session_id AND a.profile_id = r.profile_id").Joins("JOIN profiles p ON p.id = r.profile_id").Where("r.profile_id = ? AND p.user_id = ? AND r.status = ? AND r.reps > 0 AND a.status = ? AND a.archived_at IS NULL AND a.workout_progress->>'source_version' = r.source_version", pid, uid, "confirmed", "COMPLETED")
-	if name := strings.TrimSpace(c.Query("movement")); name != "" {
-		if canonical := activity.CanonicalMovement(name); canonical != "" {
-			name = canonical
-		}
-		query = query.Where("r.movement = ?", name)
-	}
 	if err := query.Order("r.performed_at DESC NULLS LAST, r.id DESC").Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load performance benchmarks"})
 		return
 	}
-	records := []workoutprogress.Record{}
+	allRecords := []workoutprogress.Record{}
 	for _, row := range rows {
-		records = append(records, performanceRecordResponse(row))
+		allRecords = append(allRecords, performanceRecordResponse(row))
+	}
+	active := workoutprogress.ActiveRecords(allRecords)
+	name := strings.TrimSpace(c.Query("movement"))
+	if name != "" {
+		if canonical := activity.CanonicalMovement(name); canonical != "" {
+			name = canonical
+		}
+	}
+	records := []workoutprogress.Record{}
+	for _, r := range active {
+		if name == "" || r.Movement == name {
+			records = append(records, r)
+		}
 	}
 	c.JSON(http.StatusOK, PerformanceBenchmarksResponse{Records: records, Comparisons: workoutprogress.Comparisons(records), Best: workoutprogress.Best(records)})
 }

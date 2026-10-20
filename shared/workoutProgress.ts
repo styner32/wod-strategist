@@ -339,14 +339,53 @@ export interface WorkoutMovementSummary {
   loadLabel: string | null;
 }
 
+function recordSupersedes(candidate: PerformanceRecord, target: PerformanceRecord, candidateIdx: number, targetIdx: number): boolean {
+  if (candidateIdx === targetIdx) return false;
+  if ((candidate.session_id ?? "") !== (target.session_id ?? "")) return false;
+  if (!(candidate.start_secs < target.end_secs - 1e-6 && candidate.end_secs > target.start_secs + 1e-6)) {
+    return false;
+  }
+  if (candidate.status === "confirmed" && target.status !== "confirmed") return true;
+  if (candidate.status !== "confirmed" && target.status === "confirmed") return false;
+  const candidateDur = candidate.end_secs - candidate.start_secs;
+  const targetDur = target.end_secs - target.start_secs;
+  const candidateContainsTarget =
+    candidate.start_secs <= target.start_secs + 1e-6 &&
+    candidate.end_secs >= target.end_secs - 1e-6 &&
+    candidateDur > targetDur + 1e-6;
+  const targetContainsCandidate =
+    target.start_secs <= candidate.start_secs + 1e-6 &&
+    target.end_secs >= candidate.end_secs - 1e-6 &&
+    targetDur > candidateDur + 1e-6;
+  if (candidateContainsTarget && !targetContainsCandidate) return true;
+  if (targetContainsCandidate && !candidateContainsTarget) return false;
+  const candidateTime = candidate.confirmed_at ? Date.parse(candidate.confirmed_at) : NaN;
+  const targetTime = target.confirmed_at ? Date.parse(target.confirmed_at) : NaN;
+  if (Number.isFinite(candidateTime) && Number.isFinite(targetTime) && candidateTime !== targetTime) {
+    return candidateTime > targetTime;
+  }
+  if (candidate.id !== target.id) {
+    return candidate.id > target.id;
+  }
+  return candidateIdx > targetIdx;
+}
+
+export function activePerformanceRecords(records: PerformanceRecord[] = []): PerformanceRecord[] {
+  return records.filter(
+    (target, targetIdx) =>
+      !records.some((candidate, candidateIdx) => recordSupersedes(candidate, target, candidateIdx, targetIdx)),
+  );
+}
+
 export function findCoveringConfirmedRecord(
   interval: WorkoutProgressInterval,
   records: PerformanceRecord[] = [],
 ): PerformanceRecord | undefined {
-  const direct = records.find(r => r.interval_id === interval.id);
+  const active = activePerformanceRecords(records);
+  const direct = active.find(r => r.interval_id === interval.id);
   if (direct?.status === "confirmed") return direct;
   if (interval.activity !== "exercise" || !interval.movement?.trim()) return undefined;
-  return records.find(
+  return active.find(
     r =>
       r.status === "confirmed" &&
       r.start_secs <= interval.start_secs + 1e-6 &&
@@ -359,11 +398,12 @@ export function summarizeWorkoutMovements(
   records: PerformanceRecord[] = [],
 ): WorkoutMovementSummary[] {
   if (!progress) return [];
+  const active = activePerformanceRecords(records);
   const map = new Map<string, WorkoutMovementSummary>();
 
   for (const interval of progress.intervals) {
     if (interval.activity !== "exercise" || !interval.movement?.trim()) continue;
-    const covering = findCoveringConfirmedRecord(interval, records);
+    const covering = findCoveringConfirmedRecord(interval, active);
     const name = covering?.movement?.trim() || interval.movement.trim();
     const existing = map.get(name) ?? {
       movement: name,
@@ -389,7 +429,7 @@ export function summarizeWorkoutMovements(
     map.set(name, existing);
   }
 
-  for (const rec of records) {
+  for (const rec of active) {
     if (rec.status !== "confirmed" || !rec.movement?.trim()) continue;
     const name = rec.movement.trim();
     const existing = map.get(name);
@@ -420,7 +460,8 @@ export function rememberedMovementDefaults(
   const key = movement?.trim().toLowerCase();
   if (!key) return undefined;
   const inMemory = rememberedByMovement[key];
-  const confirmedForMovement = [...records]
+  const active = activePerformanceRecords(records);
+  const confirmedForMovement = [...active]
     .reverse()
     .find(
       r =>

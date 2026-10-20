@@ -646,6 +646,63 @@ func recordBefore(a, b Record) bool {
 	return a.PerformedAt.Before(*b.PerformedAt)
 }
 
+func recordSupersedes(candidate, target Record, candidateIdx, targetIdx int) bool {
+	if candidateIdx == targetIdx {
+		return false
+	}
+	if candidate.SessionID != target.SessionID {
+		return false
+	}
+	if candidate.PerformedAt != nil && target.PerformedAt != nil && !candidate.PerformedAt.Equal(*target.PerformedAt) {
+		return false
+	}
+	if !(candidate.Start < target.End-1e-6 && candidate.End > target.Start+1e-6) {
+		return false
+	}
+	if candidate.Status == "confirmed" && target.Status != "confirmed" {
+		return true
+	}
+	if candidate.Status != "confirmed" && target.Status == "confirmed" {
+		return false
+	}
+	candidateDur := candidate.End - candidate.Start
+	targetDur := target.End - target.Start
+	candidateContainsTarget := candidate.Start <= target.Start+1e-6 && candidate.End >= target.End-1e-6 && candidateDur > targetDur+1e-6
+	targetContainsCandidate := target.Start <= candidate.Start+1e-6 && target.End >= candidate.End-1e-6 && targetDur > candidateDur+1e-6
+	if candidateContainsTarget && !targetContainsCandidate {
+		return true
+	}
+	if targetContainsCandidate && !candidateContainsTarget {
+		return false
+	}
+	if !candidate.ConfirmedAt.IsZero() && !target.ConfirmedAt.IsZero() && !candidate.ConfirmedAt.Equal(target.ConfirmedAt) {
+		return candidate.ConfirmedAt.After(target.ConfirmedAt)
+	}
+	if candidate.ID != target.ID {
+		return candidate.ID > target.ID
+	}
+	return candidateIdx > targetIdx
+}
+
+// ActiveRecords filters out same-session records that have been superseded by a
+// wider merged confirmation or a more recent overlapping confirmation.
+func ActiveRecords(records []Record) []Record {
+	out := make([]Record, 0, len(records))
+	for targetIdx, target := range records {
+		superseded := false
+		for candidateIdx, candidate := range records {
+			if recordSupersedes(candidate, target, candidateIdx, targetIdx) {
+				superseded = true
+				break
+			}
+		}
+		if !superseded {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
 func Comparisons(records []Record) []Comparison {
 	out := []Comparison{}
 	for _, current := range records {

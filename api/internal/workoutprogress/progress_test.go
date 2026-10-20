@@ -515,5 +515,36 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(best[0].ID).To(Equal(uint(2)))
 		Expect(Best([]Record{zeroRec})).To(BeEmpty())
 	})
+	It("supersedes a narrower overlapping same-session confirmation when a merged record covers the span", func() {
+		day := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+		sub := Record{
+			ID:          10,
+			SessionID:   "WOD-20260930-01M3QZH8TPXYMBGP9ER5W6SMBB",
+			IntervalID:  "seg-488",
+			Status:      "confirmed",
+			Movement:    "Power Clean",
+			Start:       488,
+			End:         490,
+			Reps:        1,
+			PerformedAt: &day,
+			ConfirmedAt: day,
+		}
+		merged := Record{
+			ID:          11,
+			SessionID:   "WOD-20260930-01M3QZH8TPXYMBGP9ER5W6SMBB",
+			IntervalID:  "seg-490",
+			Status:      "confirmed",
+			Movement:    "Clean & Jerk",
+			Start:       488,
+			End:         491.8,
+			Reps:        1,
+			PerformedAt: &day,
+			ConfirmedAt: day.Add(time.Minute),
+		}
+		active := ActiveRecords([]Record{sub, merged})
+		Expect(active).To(HaveLen(1))
+		Expect(active[0].ID).To(Equal(uint(11)))
+		Expect(active[0].Movement).To(Equal("Clean & Jerk"))
+	})
 })
 

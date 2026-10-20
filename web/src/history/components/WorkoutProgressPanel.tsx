@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { historyApi } from "../../api/history";
 import ko from "../../../../features/i18n/locales/ko.json";
 import {
+  activePerformanceRecords,
   confirmedPerformanceInput,
   diagnosePerformanceDraft,
   extractWodLoads,
@@ -50,6 +51,7 @@ function PerformanceEditor({
   wodLoads = [],
   initialDraft,
   movementDefaults,
+  resolveMovementDefaults,
   onDraftChange,
   saving,
   onSave,
@@ -61,6 +63,7 @@ function PerformanceEditor({
   wodLoads?: ProgressLoad[];
   initialDraft?: PerformanceDraft;
   movementDefaults?: MovementDraftDefaults;
+  resolveMovementDefaults?: (movement?: string | null) => MovementDraftDefaults | undefined;
   onDraftChange?: (draft: PerformanceDraft) => void;
   saving: boolean;
   progress: WorkoutProgress;
@@ -79,6 +82,24 @@ function PerformanceEditor({
       onDraftChange?.(next);
       return next;
     });
+  const applyTargetMovementDefaults = (prev: PerformanceDraft, targetMovement?: string | null): Partial<PerformanceDraft> => {
+    const targetDefaults = resolveMovementDefaults?.(targetMovement);
+    if (!targetDefaults) return {};
+    const patch: Partial<PerformanceDraft> = {};
+    if (prev.loadMode === "unresolved" && targetDefaults.loadMode) {
+      patch.loadMode = targetDefaults.loadMode;
+    }
+    if (prev.weight.trim() === "" && targetDefaults.weight) {
+      patch.loadMode = targetDefaults.loadMode ?? "weighted";
+      patch.weight = targetDefaults.weight;
+      if (targetDefaults.unit) patch.unit = targetDefaults.unit;
+      if (targetDefaults.basis) patch.basis = targetDefaults.basis;
+    }
+    if (targetDefaults.technique && targetDefaults.technique !== "unspecified") {
+      patch.technique = targetDefaults.technique;
+    }
+    return patch;
+  };
   const update = <K extends keyof PerformanceDraft>(key: K, value: PerformanceDraft[K]) =>
     updateDraft(d => {
       const next = { ...d, [key]: value, reviewed: key === "reviewed" ? Boolean(value) : false };
@@ -130,6 +151,7 @@ function PerformanceEditor({
                   onClick={() =>
                     updateDraft(d => ({
                       ...d,
+                      ...applyTargetMovementDefaults(d, opt.movement),
                       start: String(contiguousSpan.startSecs),
                       end: String(contiguousSpan.endSecs),
                       targetIntervalId: opt.intervalId,
@@ -187,6 +209,7 @@ function PerformanceEditor({
                   onClick={() =>
                     updateDraft(d => ({
                       ...d,
+                      ...applyTargetMovementDefaults(d, opt.movement),
                       targetIntervalId: opt.intervalId,
                       reps: opt.observedReps != null ? String(opt.observedReps) : d.reps,
                       reviewed: false,
@@ -428,7 +451,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
         };
       }
       client.setQueryData(queryKey, result); setSelected(undefined); setNotice(words.saved); setMovement(confirmedMovement);
-      await client.invalidateQueries({ queryKey: ["performance-benchmarks", profileId, confirmedMovement] });
+      await client.invalidateQueries({ queryKey: ["performance-benchmarks", profileId] });
     } catch (e) {
       if (currentScope.current !== requestScope) return;
       if ((e as { status?: number })?.status === 409) {
@@ -440,9 +463,13 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
     } finally { if (currentScope.current === requestScope) setSaving(false); }
   };
 
+  const activeRecords = useMemo(
+    () => activePerformanceRecords(data?.records ?? []),
+    [data?.records],
+  );
   const movementSummaries = useMemo(
-    () => summarizeWorkoutMovements(data?.progress, data?.records ?? []),
-    [data?.progress, data?.records],
+    () => summarizeWorkoutMovements(data?.progress, activeRecords),
+    [data?.progress, activeRecords],
   );
   const totalExerciseIntervals = useMemo(
     () => movementSummaries.reduce((acc, item) => acc + item.intervalCount, 0),
@@ -615,13 +642,17 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
           );
         }
 
-        const record = data.records.find(r => r.interval_id === interval.id);
-        const coveringConfirmed = findCoveringConfirmedRecord(interval, data.records);
+        const record = activeRecords.find(r => r.interval_id === interval.id);
+        const coveringConfirmed = findCoveringConfirmedRecord(interval, activeRecords);
         const isConfirmed = coveringConfirmed != null;
         const isNeedsConfirmation = !isConfirmed && record?.status === "needs_confirmation";
         const contiguousSpan = getContiguousExerciseSpan(interval, data.progress);
+        const isMergedContiguous =
+          coveringConfirmed != null &&
+          coveringConfirmed.start_secs <= contiguousSpan.startSecs + 1e-6 &&
+          coveringConfirmed.end_secs >= contiguousSpan.endSecs - 1e-6;
         const canMergeContiguous =
-          !isConfirmed &&
+          !isMergedContiguous &&
           (contiguousSpan.startSecs < interval.start_secs || contiguousSpan.endSecs > interval.end_secs);
         const cardToneClass = isConfirmed
           ? "border-success/50 bg-success/10"
@@ -665,7 +696,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
                       ? record.reps === 0
                         ? `✓ ${words.confirmed} (0회 · 미완료/노렙)`
                         : `✓ ${words.confirmed}`
-                      : `✓ ${words.confirmed} (${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)})`}
+                      : `✓ ${words.confirmed} (${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)}${coveringConfirmed.movement && coveringConfirmed.movement !== interval.movement ? ` · ${coveringConfirmed.movement}` : ""})`}
                   </span>
                 )}
                 {isNeedsConfirmation && (
@@ -694,7 +725,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
                 )}
                 {!record && coveringConfirmed && (
                   <p className="text-xs font-medium text-success">
-                    {`${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)} 확정 기록(${coveringConfirmed.reps === 0 ? "0회 · 미완료/노렙" : `${coveringConfirmed.reps}회`})에 포함된 구간입니다.`}
+                    {`${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)}${coveringConfirmed.movement && coveringConfirmed.movement !== interval.movement ? ` · ${coveringConfirmed.movement}` : ""} 확정 기록(${coveringConfirmed.reps === 0 ? "0회 · 미완료/노렙" : `${coveringConfirmed.reps}회`})에 포함된 구간입니다.`}
                   </p>
                 )}
               </div>
@@ -742,10 +773,11 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
                 key={`${data.progress?.source_version}:${interval.id}`}
                 interval={interval}
                 progress={data.progress!}
-                record={record ?? coveringConfirmed}
+                record={coveringConfirmed ?? record}
                 wodLoads={wodLoads}
                 initialDraft={draftsRef.current[interval.id]}
-                movementDefaults={rememberedMovementDefaults(interval.movement, data.records, movementDefaultsRef.current)}
+                movementDefaults={rememberedMovementDefaults(interval.movement, activeRecords, movementDefaultsRef.current)}
+                resolveMovementDefaults={mov => rememberedMovementDefaults(mov, activeRecords, movementDefaultsRef.current)}
                 onDraftChange={nextDraft => {
                   draftsRef.current[interval.id] = nextDraft;
                   if (interval.movement?.trim()) {
@@ -768,7 +800,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
         );
       })}
       {data?.progress?.unassessed.map((gap, i) => <p key={i} className="text-sm text-warning">{words.unassessed} · {gap.clock === "capture" ? words.captureClock : words.mediaClock} {progressTime(gap.start_secs)}–{progressTime(gap.end_secs)} · {words.unknown}</p>)}
-      {data?.records.filter(r => r.status === "needs_confirmation" && !data.progress?.intervals.some(i => i.id === r.interval_id)).map(r => <p key={`stale:${r.id}`} className="text-sm text-warning">{words.needsConfirmation} · {r.movement} · {text("recordSummary", { count: r.reps, load: loadText(r), duration: (r.elapsed_seconds ?? (r.end_secs - r.start_secs)).toFixed(1) })}</p>)}
+      {activeRecords.filter(r => r.status === "needs_confirmation" && !data?.progress?.intervals.some(i => i.id === r.interval_id)).map(r => <p key={`stale:${r.id}`} className="text-sm text-warning">{words.needsConfirmation} · {r.movement} · {text("recordSummary", { count: r.reps, load: loadText(r), duration: (r.elapsed_seconds ?? (r.end_secs - r.start_secs)).toFixed(1) })}</p>)}
       {benchmarks.isError && <div role="alert"><p>{words.benchmarkFailed}</p><button className={button} onClick={() => void benchmarks.refetch()}>{words.retry}</button></div>}
       {!!movement && <div className="space-y-2 pt-2 border-t border-border"><h4 className="font-medium text-text-primary">{words.history} · {movement}</h4>{benchmarks.isLoading && <p>{words.loading}</p>}{benchmarks.data && !records.length && <p className="text-sm text-text-secondary">{words.noRecords}</p>}
         {records.map(r => {

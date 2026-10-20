@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { historyApi } from "../../api/history";
-import { newWODScore, wodSeconds } from "../../../../shared/wodTraining";
+import { newWODScore, parseStartTimestamp, wodSeconds } from "../../../../shared/wodTraining";
 import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from "../historyPolling";
 
 export function WODTrainingPanel({ sessionId, profileId, scoreJSON, currentTime, isOriginal, seek }: {
@@ -29,6 +29,7 @@ export function WODTrainingPanel({ sessionId, profileId, scoreJSON, currentTime,
   const comparison = loads.data?.comparison;
   const waiting = runId != null && (!run.data || run.data.status === "RUNNING" || run.data.status === "QUEUED" || run.data.status === "COMPLETED");
   const error = training.error || loads.error || save.error || create.error || apply.error || run.error;
+  const parsedStart = parseStartTimestamp(startInput);
   const button = "rounded border border-border px-3 py-2 text-sm disabled:opacity-40";
   return <section className="space-y-3 rounded-xl border border-border bg-bg-elevated p-4">
     <h3 className="font-semibold">WOD 훈련 부하</h3>
@@ -37,9 +38,9 @@ export function WODTrainingPanel({ sessionId, profileId, scoreJSON, currentTime,
     {start?.seconds != null && start.end_seconds != null && <div className="relative h-3 rounded bg-accent/20" role="img" aria-label={`시작 ${wodSeconds(start.seconds)}, 마지막 수행 ${wodSeconds(start.end_seconds)}`}><span className="absolute inset-y-0 w-1 bg-accent" style={{ left: `${start.seconds / start.end_seconds * 100}%` }} /></div>}
     <p className="text-xs text-text-secondary">{start?.evidence} 시작 전 대기는 제외하고, WOD 도중 휴식은 포함합니다.</p>
     <div className="flex flex-wrap items-center gap-2">
-      <label>시작(초) <input aria-label="WOD 시작 초" className="w-24 rounded border border-border bg-bg-base p-2" type="number" min="0" step="0.1" value={startInput} onChange={e => setStartInput(e.target.value)} /></label>
+      <label>시작(MM:SS 또는 초) <input aria-label="WOD 시작 초" placeholder="예: 02:15 또는 135" className="w-36 rounded border border-border bg-bg-base p-2" type="text" value={startInput} onChange={e => setStartInput(e.target.value)} /></label>
       <button className={button} disabled={!isOriginal || waiting} onClick={() => setStartInput(currentTime.toFixed(1))}>현재 영상 위치 지정</button>
-      <button className={button} disabled={waiting || create.isPending || startInput === "" || !Number.isFinite(Number(startInput)) || Number(startInput) < 0} onClick={() => { apply.reset(); create.mutate(Number(startInput)); }}>시작 수정 후 재평가</button>
+      <button className={button} disabled={waiting || create.isPending || parsedStart == null} onClick={() => { if (parsedStart != null) { apply.reset(); create.mutate(parsedStart); } }}>시작 수정 후 재평가</button>
       <button className={button} disabled={waiting || create.isPending} onClick={() => { apply.reset(); create.mutate(null); }}>자동 추정 복원</button>
     </div>
     {waiting && <p>시작 시점을 반영해 전체 WOD를 재평가하고 있습니다.</p>}
