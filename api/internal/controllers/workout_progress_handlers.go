@@ -76,6 +76,7 @@ func (ctl *Controller) GetWorkoutProgress(c *gin.Context) {
 	}
 	if err == nil && analysis.Status == "COMPLETED" {
 		if progress, e := workoutprogress.Decode(analysis.WorkoutProgress); e == nil {
+			ctl.enrichUnassessedMovementsFromChunks(c, sid, pid, &progress)
 			out.Progress = &progress
 		}
 	}
@@ -95,8 +96,73 @@ func (ctl *Controller) GetWorkoutProgress(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+func (ctl *Controller) enrichUnassessedMovementsFromChunks(c *gin.Context, sid string, pid uint, progress *workoutprogress.Progress) {
+	if progress == nil || len(progress.Unassessed) == 0 {
+		return
+	}
+	needsLookup := false
+	for _, g := range progress.Unassessed {
+		if g.Clock == "media" && strings.TrimSpace(g.Movement) == "" {
+			needsLookup = true
+			break
+		}
+	}
+	if !needsLookup {
+		return
+	}
+	var chunks []db.ChunkAnalysisResult
+	if err := ctl.db.WithContext(c.Request.Context()).
+		Select("id, exercise_type, media_start_secs, media_end_secs, movement_observations").
+		Where("session_id = ? AND profile_id = ? AND status = ?", sid, pid, "COMPLETED").
+		Order("media_start_secs ASC NULLS LAST, id ASC").
+		Find(&chunks).Error; err != nil || len(chunks) == 0 {
+		return
+	}
+	for i := range progress.Unassessed {
+		gap := &progress.Unassessed[i]
+		if gap.Clock != "media" || strings.TrimSpace(gap.Movement) != "" {
+			continue
+		}
+		for _, ch := range chunks {
+			if ch.MediaStartSecs == nil || ch.MediaEndSecs == nil || *ch.MediaEndSecs <= gap.Start+1e-6 || *ch.MediaStartSecs >= gap.End-1e-6 {
+				continue
+			}
+			// Do not stamp a chunk's movement onto a plain not_analyzed padding slice if that chunk already produced an exercise interval.
+			if gap.Reason == "not_analyzed" && chunkHasExerciseInterval(progress.Intervals, *ch.MediaStartSecs, *ch.MediaEndSecs) {
+				continue
+			}
+			mov := activity.CanonicalMovement(ch.ExerciseType)
+			if mov == "" && len(ch.MovementObservations) > 0 {
+				var obs activity.Observations
+				if json.Unmarshal(ch.MovementObservations, &obs) == nil {
+					for _, ev := range obs.Events {
+						if cMov := activity.CanonicalMovement(ev.Movement); cMov != "" {
+							mov = cMov
+							break
+						}
+					}
+				}
+			}
+			if mov != "" {
+				gap.Movement = mov
+				break
+			}
+		}
+	}
+}
+
+func chunkHasExerciseInterval(intervals []workoutprogress.Interval, start, end float64) bool {
+	for _, in := range intervals {
+		if in.Activity == "exercise" && in.End > start+1e-6 && in.Start < end-1e-6 {
+			return true
+		}
+	}
+	return false
+}
+
 type PerformanceConfirmationInput struct {
 	IntervalID  string          `json:"interval_id"`
+	Movement    string          `json:"movement,omitempty"`
 	Start       float64         `json:"start_secs"`
 	End         float64         `json:"end_secs"`
 	Reps        int             `json:"reps"`
@@ -155,7 +221,7 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid actual load"})
 			return
 		}
-		confirmed = append(confirmed, workoutprogress.Confirmation{IntervalID: input.IntervalID, Start: input.Start, End: input.End, Reps: input.Reps, Load: load, Measurement: input.Measurement, Technique: input.Technique})
+		confirmed = append(confirmed, workoutprogress.Confirmation{IntervalID: input.IntervalID, Movement: input.Movement, Start: input.Start, End: input.End, Reps: input.Reps, Load: load, Measurement: input.Measurement, Technique: input.Technique})
 	}
 	badRequest := false
 	err := ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
@@ -206,10 +272,26 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 				return err
 			}
 			var candidate workoutprogress.Interval
+			foundCandidate := false
 			for _, in := range progress.Intervals {
 				if in.ID == input.IntervalID {
 					candidate = in
+					foundCandidate = true
 					break
+				}
+			}
+			if !foundCandidate {
+				candidate = workoutprogress.Interval{
+					ID:               record.IntervalID,
+					Start:            record.Start,
+					End:              record.End,
+					Activity:         "exercise",
+					Movement:         record.Movement,
+					ObservationRefs:  []string{},
+					RepEvents:        []activity.Observation{},
+					FormObservations: []workoutprogress.Observation{},
+					ROMObservations:  []workoutprogress.Observation{},
+					PaceObservations: []workoutprogress.Observation{},
 				}
 			}
 			raw, _ := json.Marshal(candidate)

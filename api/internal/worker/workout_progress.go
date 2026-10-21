@@ -62,6 +62,7 @@ func parseWorkoutObservations(text string, seg Segment, index int) ([]workoutpro
 	var intervals []workoutprogress.Interval
 	var gaps []workoutprogress.Gap
 	for i, item := range raw.Intervals {
+		item.Start, item.End = normalizeSegmentBounds(item.Start, item.End, start, end)
 		if !activity.ValidInterval(item.Start, item.End) || item.Start < start || item.End > end {
 			gaps = append(gaps, localizedProgressGap(item.Start, item.End, start, end, "invalid_observation_bounds"))
 			continue
@@ -83,24 +84,36 @@ func parseWorkoutObservations(text string, seg Segment, index int) ([]workoutpro
 				if canonical != "" {
 					in.Movement = canonical
 				}
+				for k := range in.RepEvents {
+					in.RepEvents[k].Start, in.RepEvents[k].End = normalizeSegmentBounds(in.RepEvents[k].Start, in.RepEvents[k].End, start, end)
+				}
+				in.Movement = resolveIntervalMovementFromEvents(in.Movement, in.RepEvents)
 				if strings.TrimSpace(in.Movement) == "" || isNonExerciseMovement(in.Movement) {
 					in.Activity, in.Movement = "unknown", ""
 					in.RepEvents = []activity.Observation{}
 					gaps = append(gaps, workoutprogress.Gap{Start: in.Start, End: in.End, Clock: "media", Reason: "unknown_movement"})
 				}
 			}
-			in.FormObservations = boundedProgressObservations(in.FormObservations, in.Start, in.End)
-			in.ROMObservations = boundedProgressObservations(in.ROMObservations, in.Start, in.End)
-			in.PaceObservations = boundedProgressObservations(in.PaceObservations, in.Start, in.End)
+			in.FormObservations = boundedProgressObservations(normalizeObservationSliceBounds(in.FormObservations, start, end), in.Start, in.End)
+			in.ROMObservations = boundedProgressObservations(normalizeObservationSliceBounds(in.ROMObservations, start, end), in.Start, in.End)
+			in.PaceObservations = boundedProgressObservations(normalizeObservationSliceBounds(in.PaceObservations, start, end), in.Start, in.End)
 			events := make([]activity.Observation, 0, len(in.RepEvents))
 			for j, event := range in.RepEvents {
 				if !activity.ValidInterval(event.Start, event.End) || event.Start < start || event.End > end || strings.TrimSpace(event.Evidence) == "" {
 					gaps = append(gaps, localizedProgressGap(event.Start, event.End, in.Start, in.End, "invalid_event_bounds_or_evidence"))
 					continue
 				}
-				if in.Movement != "" && activity.CanonicalMovement(event.Movement) != activity.CanonicalMovement(in.Movement) {
-					gaps = append(gaps, workoutprogress.Gap{Start: event.Start, End: event.End, Clock: "media", Reason: "event_movement_conflict"})
-					continue
+				eventCanonical := activity.CanonicalMovement(event.Movement)
+				if in.Movement != "" && eventCanonical != activity.CanonicalMovement(in.Movement) {
+					if eventCanonical != "" && !isNonExerciseMovement(eventCanonical) && activity.UnitForMovement(eventCanonical) == activity.UnitForMovement(in.Movement) {
+						if isCompositeMovementUpgrade(in.Movement, eventCanonical) {
+							in.Movement = eventCanonical
+						}
+						event.Movement = in.Movement
+					} else {
+						gaps = append(gaps, workoutprogress.Gap{Start: event.Start, End: event.End, Clock: "media", Reason: "event_movement_conflict"})
+						continue
+					}
 				}
 				events = append(events, event)
 				in.ObservationRefs = append(in.ObservationRefs, fmt.Sprintf("%s:event-%d", in.ID, j))
@@ -110,6 +123,9 @@ func parseWorkoutObservations(text string, seg Segment, index int) ([]workoutpro
 		intervals = append(intervals, in)
 	}
 	for _, gap := range raw.Unassessed {
+		if gap.Clock == "media" {
+			gap.Start, gap.End = normalizeSegmentBounds(gap.Start, gap.End, start, end)
+		}
 		if gap.Clock == "media" && activity.ValidInterval(gap.Start, gap.End) && gap.Start >= start && gap.End <= end && strings.TrimSpace(gap.Reason) != "" {
 			gaps = append(gaps, gap)
 		} else {
@@ -119,6 +135,73 @@ func parseWorkoutObservations(text string, seg Segment, index int) ([]workoutpro
 	// Domain validation reuses activity.Decode/Own, including incomplete cycles.
 	validated := workoutprogress.Build(intervals, gaps, "segment-observations")
 	return validated.Intervals, validated.Unassessed
+}
+
+// normalizeSegmentBounds shifts clip-relative timestamps (0..segDuration) to
+// full-video media seconds when the segment starts after its own duration.
+func normalizeSegmentBounds(s, e, segStart, segEnd float64) (float64, float64) {
+	segDuration := segEnd - segStart
+	if segStart > 0 && activity.ValidInterval(s, e) && e <= segDuration+1e-6 && e <= segStart {
+		return s + segStart, e + segStart
+	}
+	return s, e
+}
+
+func normalizeObservationSliceBounds(items []workoutprogress.Observation, segStart, segEnd float64) []workoutprogress.Observation {
+	if len(items) == 0 {
+		return items
+	}
+	out := make([]workoutprogress.Observation, len(items))
+	for i, item := range items {
+		item.Start, item.End = normalizeSegmentBounds(item.Start, item.End, segStart, segEnd)
+		out[i] = item
+	}
+	return out
+}
+
+func isCompositeMovementUpgrade(base, candidate string) bool {
+	b := strings.ToLower(strings.TrimSpace(activity.CanonicalMovement(base)))
+	c := strings.ToLower(strings.TrimSpace(activity.CanonicalMovement(candidate)))
+	if b == "" || c == "" || b == c {
+		return false
+	}
+	if (strings.Contains(c, "clean & jerk") || strings.Contains(c, "clean and jerk")) &&
+		!strings.Contains(b, "clean & jerk") && !strings.Contains(b, "clean and jerk") &&
+		(strings.Contains(b, "clean") || strings.Contains(b, "jerk")) {
+		return true
+	}
+	if (c == "thruster" || c == "cluster") && (strings.Contains(b, "front squat") || strings.Contains(b, "push press") || strings.Contains(b, "clean")) {
+		return true
+	}
+	return false
+}
+
+func resolveIntervalMovementFromEvents(intervalMovement string, events []activity.Observation) string {
+	current := strings.TrimSpace(intervalMovement)
+	if canonical := activity.CanonicalMovement(current); canonical != "" {
+		current = canonical
+	}
+	agreed := ""
+	for _, ev := range events {
+		evCanon := activity.CanonicalMovement(ev.Movement)
+		if evCanon == "" || isNonExerciseMovement(evCanon) {
+			continue
+		}
+		if isCompositeMovementUpgrade(current, evCanon) {
+			return evCanon
+		}
+		if agreed == "" {
+			agreed = evCanon
+		} else if agreed != evCanon {
+			agreed = "*"
+		}
+	}
+	if agreed != "" && agreed != "*" && agreed != current {
+		if current == "" || isNonExerciseMovement(current) || !isCompositeMovementUpgrade(agreed, current) {
+			return agreed
+		}
+	}
+	return current
 }
 
 // A rejected entry voids only the part of the window it claimed, so one malformed
@@ -176,6 +259,7 @@ func (w *Worker) buildWorkoutProgress(ctx context.Context, p VideoAnalysisPayloa
 		}
 		var chunks []db.ChunkAnalysisResult
 		if w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", p.SessionID, p.ProfileID).Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error == nil {
+			intervals, gaps = mergeChunkFallbackObservations(intervals, gaps, chunks, p.WorkoutType)
 			intervals, gaps = mapProgressCaptureTimes(intervals, gaps, chunks)
 		}
 	}
@@ -200,6 +284,184 @@ func (w *Worker) buildWorkoutProgress(ctx context.Context, p VideoAnalysisPayloa
 		gaps = append(gaps, missingProgressCoverage(intervals, gaps, coverageStart, duration)...)
 	}
 	return workoutprogress.Build(intervals, gaps, source)
+}
+
+// mergeChunkFallbackObservations restores verified chunk-level repetition events
+// (target_state == "identified", activity_state == "exercise", complete == true)
+// when Pass 2 segment observation omitted or rejected the chunk window.
+func mergeChunkFallbackObservations(intervals []workoutprogress.Interval, gaps []workoutprogress.Gap, chunks []db.ChunkAnalysisResult, workoutType string) ([]workoutprogress.Interval, []workoutprogress.Gap) {
+	if len(chunks) == 0 {
+		return intervals, gaps
+	}
+	minOnset := 0.0
+	if strings.EqualFold(workoutType, WorkoutTypeWOD) && len(intervals) > 0 {
+		minOnset = math.Inf(1)
+		for _, in := range intervals {
+			minOnset = math.Min(minOnset, in.Start)
+		}
+		if math.IsInf(minOnset, 1) {
+			minOnset = 0.0
+		}
+	}
+	outIntervals := append([]workoutprogress.Interval(nil), intervals...)
+	outGaps := append([]workoutprogress.Gap(nil), gaps...)
+	for _, chunk := range activity.CanonicalChunks(chunks) {
+		if chunk.Status != "COMPLETED" || chunk.MediaStartSecs == nil || chunk.MediaEndSecs == nil || !activity.ValidInterval(*chunk.MediaStartSecs, *chunk.MediaEndSecs) || len(chunk.MovementObservations) == 0 {
+			continue
+		}
+		cStart, cEnd := *chunk.MediaStartSecs, *chunk.MediaEndSecs
+		if cEnd <= minOnset+1e-6 {
+			continue
+		}
+		var local activity.Observations
+		if json.Unmarshal(chunk.MovementObservations, &local) != nil {
+			continue
+		}
+		dur := local.DurationSecs
+		if dur <= 0 {
+			dur = cEnd - cStart
+		}
+		doc, err := activity.Decode(chunk.MovementObservations, 0, dur)
+		if err != nil || doc.TargetState != "identified" || doc.ActivityState != "exercise" || len(doc.Events) == 0 {
+			continue
+		}
+		scale := 1.0
+		if dur > 0 && math.Abs((cEnd-cStart)-dur) > 0.01 {
+			scale = (cEnd - cStart) / dur
+		}
+		mapped := make([]activity.Observation, 0, len(doc.Events))
+		for _, ev := range doc.Events {
+			if !ev.Complete {
+				continue
+			}
+			evStart := math.Max(cStart, cStart+ev.Start*scale)
+			evEnd := math.Min(cEnd, cStart+ev.End*scale)
+			if !activity.ValidInterval(evStart, evEnd) {
+				continue
+			}
+			ev.Start = evStart
+			ev.End = evEnd
+			mapped = append(mapped, ev)
+		}
+		if len(mapped) == 0 {
+			continue
+		}
+		missing := make([]activity.Observation, 0, len(mapped))
+		for _, ev := range mapped {
+			covered := false
+			for _, in := range outIntervals {
+				for _, existing := range in.RepEvents {
+					if existing.Complete && existing.Start < ev.End-1e-6 && existing.End > ev.Start+1e-6 {
+						covered = true
+						break
+					}
+				}
+				if covered {
+					break
+				}
+			}
+			if !covered {
+				missing = append(missing, ev)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		targetIdx := -1
+		hasPartialOverlap := false
+		for idx := range outIntervals {
+			in := outIntervals[idx]
+			if in.Start <= cStart+0.05 && in.End >= cEnd-0.05 {
+				targetIdx = idx
+				break
+			}
+			if in.Start <= missing[0].Start+0.05 && in.End >= missing[len(missing)-1].End-0.05 {
+				targetIdx = idx
+				break
+			}
+			if in.Start < cEnd-1e-6 && in.End > cStart+1e-6 {
+				hasPartialOverlap = true
+			}
+		}
+		ref := fmt.Sprintf("chunk-%d", chunk.ID)
+		if targetIdx >= 0 {
+			in := &outIntervals[targetIdx]
+			if in.Activity == "rest" {
+				continue
+			}
+			if in.Activity == "unknown" || strings.TrimSpace(in.Movement) == "" {
+				in.Activity = "exercise"
+				in.Movement = missing[0].Movement
+			} else {
+				in.Movement = resolveIntervalMovementFromEvents(in.Movement, missing)
+			}
+			in.RepEvents = append([]activity.Observation(nil), in.RepEvents...)
+			for i, ev := range missing {
+				if activity.UnitForMovement(ev.Movement) == activity.UnitForMovement(in.Movement) {
+					ev.Movement = in.Movement
+				}
+				in.RepEvents = append(in.RepEvents, ev)
+				in.ObservationRefs = append(in.ObservationRefs, fmt.Sprintf("%s:event-%d", ref, i))
+				outGaps = subtractMediaSpanFromGaps(outGaps, ev.Start, ev.End)
+			}
+			sort.SliceStable(in.RepEvents, func(i, j int) bool { return in.RepEvents[i].Start < in.RepEvents[j].Start })
+			outGaps = subtractMediaSpanFromGaps(outGaps, cStart, cEnd)
+		} else if !hasPartialOverlap {
+			mov := missing[0].Movement
+			for i := range missing {
+				if activity.UnitForMovement(missing[i].Movement) == activity.UnitForMovement(mov) {
+					missing[i].Movement = mov
+				}
+			}
+			refs := []string{ref}
+			for i := range missing {
+				refs = append(refs, fmt.Sprintf("%s:event-%d", ref, i))
+			}
+			outIntervals = append(outIntervals, workoutprogress.Interval{
+				ID:               ref,
+				Start:            cStart,
+				End:              cEnd,
+				Activity:         "exercise",
+				Movement:         mov,
+				ObservationRefs:  refs,
+				RepEvents:        missing,
+				FormObservations: []workoutprogress.Observation{},
+				ROMObservations:  []workoutprogress.Observation{},
+				PaceObservations: []workoutprogress.Observation{},
+			})
+			outGaps = subtractMediaSpanFromGaps(outGaps, cStart, cEnd)
+		}
+	}
+	sort.SliceStable(outIntervals, func(i, j int) bool { return outIntervals[i].Start < outIntervals[j].Start })
+	return outIntervals, outGaps
+}
+
+func subtractMediaSpanFromGaps(gaps []workoutprogress.Gap, spanStart, spanEnd float64) []workoutprogress.Gap {
+	if !activity.ValidInterval(spanStart, spanEnd) {
+		return gaps
+	}
+	out := make([]workoutprogress.Gap, 0, len(gaps))
+	for _, g := range gaps {
+		if g.Clock != "media" || g.Reason == "unverified_capture_mapping" || g.End <= spanStart+1e-6 || g.Start >= spanEnd-1e-6 {
+			out = append(out, g)
+			continue
+		}
+		if g.Start < spanStart-1e-6 {
+			left := g
+			left.End = spanStart
+			if activity.ValidInterval(left.Start, left.End) {
+				out = append(out, left)
+			}
+		}
+		if g.End > spanEnd+1e-6 {
+			right := g
+			right.Start = spanEnd
+			if activity.ValidInterval(right.Start, right.End) {
+				out = append(out, right)
+			}
+		}
+	}
+	return out
 }
 
 func missingProgressCoverage(intervals []workoutprogress.Interval, gaps []workoutprogress.Gap, coverageStart, duration float64) []workoutprogress.Gap {

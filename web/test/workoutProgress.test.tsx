@@ -473,4 +473,151 @@ it("supersedes an earlier Power Clean sub-interval confirmation when merged into
   await act(() => tree.unmount()); client.clear();
 });
 
+it("allows overriding an interval movement (e.g. Power Clean to Clean & Jerk) and adjusting reps with +1/-1 buttons", async () => {
+  const overriddenRecord: PerformanceRecord = {
+    ...current,
+    id: 50,
+    interval_id: "set-1",
+    source_version: "a",
+    movement: "Clean & Jerk",
+    start_secs: 10,
+    end_secs: 70,
+    reps: 1,
+    load: { value: 135, unit: "lb", basis: "total" },
+  };
+  (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({
+    ...evidence,
+    records: [overriddenRecord],
+  });
+  const { tree, client } = await mount("new", true, "30 Clean & Jerks (135/95 lb)");
+  await click(tree, "반복수·구간·중량 확인/수정");
+
+  // Quick-select "Clean & Jerk" movement chip and use +1 button to set reps = 1
+  await click(tree, "Clean & Jerk");
+  await click(tree, "+1");
+  await act(async () => {
+    tree.root.findAllByType("input").find((item: any) => item.props.type === "checkbox").props.onChange({ target: { checked: true } });
+  });
+  await click(tree, "확인한 기록 저장");
+
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
+    source_version: "a",
+    records: [
+      {
+        interval_id: "set-1",
+        movement: "Clean & Jerk",
+        start_secs: 10,
+        end_secs: 70,
+        reps: 1,
+        load: { value: 135, unit: "lb", basis: "total" },
+        measurement: "set",
+        technique: "singles",
+      },
+    ],
+  });
+  expect(allText(tree)).toContain("Clean & Jerk");
+  expect(allText(tree)).toContain("(원본 감지: Power Clean)");
+  await act(() => tree.unmount()); client.clear();
+});
+
+it("renders unassessed gaps inline with Korean reasons and lets the user add a missing rep record directly", async () => {
+  const gapProgress: WorkoutProgressResponse = {
+    progress: {
+      version: 1,
+      clock: "media",
+      source_version: "gap-v1",
+      intervals: [
+        {
+          id: "seg-24-ex-1",
+          start_secs: 240,
+          end_secs: 242,
+          activity: "exercise",
+          movement: "Power Clean",
+          load: null,
+          observation_refs: ["chunk:24"],
+          rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 240, end_secs: 242, complete: true, evidence: "Rep" }],
+        },
+        {
+          id: "seg-46-ex-1",
+          start_secs: 460,
+          end_secs: 467.7,
+          activity: "exercise",
+          movement: "Clean & Jerk",
+          load: null,
+          observation_refs: ["chunk:46"],
+          rep_events: [{ movement: "Clean & Jerk", unit: "reps", start_secs: 462, end_secs: 467, complete: true, evidence: "Rep" }],
+        },
+      ],
+      unassessed: [
+        { start_secs: 250, end_secs: 260, clock: "media", reason: "not_analyzed", movement: "Power Clean" },
+        { start_secs: 467.7, end_secs: 470, clock: "media", reason: "not_analyzed" },
+        { start_secs: 470, end_secs: 480, clock: "media", reason: "skipped_non_exercise" },
+        { start_secs: 480, end_secs: 482.5, clock: "media", reason: "not_analyzed" },
+        { start_secs: 487.5, end_secs: 490, clock: "media", reason: "incomplete_cycle", movement: "Clean & Jerk" },
+        { start_secs: 490, end_secs: 502.2, clock: "media", reason: "not_analyzed" },
+      ],
+    },
+    records: [],
+  };
+  const addedGapRecord: PerformanceRecord = {
+    ...current,
+    id: 77,
+    interval_id: "unassessed-250-260",
+    source_version: "gap-v1",
+    movement: "Clean & Jerk",
+    start_secs: 255.5,
+    end_secs: 258,
+    elapsed_seconds: 2.5,
+    reps: 1,
+    load: { value: 95, unit: "lb", basis: "total" },
+  };
+  (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(gapProgress);
+  (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({
+    ...gapProgress,
+    records: [addedGapRecord],
+  });
+
+  const { tree, client } = await mount("new", true, "30 Clean & Jerks (135/95 lb)");
+  const rendered = allText(tree);
+  expect(rendered).toContain("04:10–04:20");
+  expect(rendered).toContain("Power Clean (청크 감지 후보)");
+  expect(rendered).toContain("07:47–08:02");
+  expect(rendered).toContain("휴식·전환으로 자동 스킵됨 (청크 스킵)");
+  expect(rendered).toContain("08:07–08:22");
+  expect(rendered).toContain("미완료 반복 또는 화면 잘림 (완료 판정 보류)");
+
+  // Click "+ 운동 기록 추가" on the 04:10-04:20 unassessed gap and type Korean movement name "클린앤저크"
+  await click(tree, "+ 운동 기록 추가");
+  await act(async () => {
+    tree.root.findAllByType("input").find((i: any) => i.props["aria-label"] === "운동 종목").props.onChange({ target: { value: "클린앤저크" } });
+  });
+  await click(tree, "95 lb 적용");
+  await click(tree, "+1");
+  await act(async () => {
+    tree.root.findAllByType("input").find((i: any) => i.props["aria-label"] === "시작(초)").props.onChange({ target: { value: "255.5" } });
+    tree.root.findAllByType("input").find((i: any) => i.props["aria-label"] === "종료(초)").props.onChange({ target: { value: "258" } });
+    tree.root.findAllByType("input").find((item: any) => item.props.type === "checkbox").props.onChange({ target: { checked: true } });
+  });
+  await click(tree, "확인한 기록 저장");
+
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
+    source_version: "gap-v1",
+    records: [
+      {
+        interval_id: "unassessed-250-260",
+        movement: "Clean & Jerk",
+        start_secs: 255.5,
+        end_secs: 258,
+        reps: 1,
+        load: { value: 95, unit: "lb", basis: "total" },
+        measurement: "set",
+        technique: "singles",
+      },
+    ],
+  });
+  expect(allText(tree)).toContain("확정 총 1회");
+  await act(() => tree.unmount()); client.clear();
+});
+
+
 

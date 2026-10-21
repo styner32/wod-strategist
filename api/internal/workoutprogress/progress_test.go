@@ -546,5 +546,69 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(active[0].ID).To(Equal(uint(11)))
 		Expect(active[0].Movement).To(Equal("Clean & Jerk"))
 	})
+	It("allows overriding an interval movement and confirming an unassessed set window when movement is explicitly supplied", func() {
+		p := Build(
+			[]Interval{exercise(260, 270, cleanCycle(262, 265))},
+			[]Gap{{Start: 250, End: 260, Clock: "media", Reason: "incomplete_cycle", Movement: "Power Clean"}},
+			"video",
+		)
+		overridden, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Movement:    "Clean and Jerk",
+			Start:       260,
+			End:         270,
+			Reps:        1,
+			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(overridden.Movement).To(Equal("Clean & Jerk"))
+		Expect(overridden.Reps).To(Equal(1))
+
+		gapConfirmed, err := Confirm(p, Confirmation{
+			IntervalID:  "unassessed-250-260",
+			Movement:    "클린앤저크",
+			Start:       255.5,
+			End:         258.0,
+			Reps:        1,
+			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(gapConfirmed.IntervalID).To(Equal("unassessed-250-260"))
+		Expect(gapConfirmed.Movement).To(Equal("Clean & Jerk"))
+		Expect(gapConfirmed.ElapsedSeconds).To(Equal(2.5))
+		Expect(gapConfirmed.Reps).To(Equal(1))
+
+		shuttleConfirmed, err := Confirm(p, Confirmation{
+			IntervalID:  "unassessed-470-480",
+			Movement:    "Shuttle Run",
+			Start:       470.1,
+			End:         480.1,
+			Reps:        2,
+			Load:        nil,
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(shuttleConfirmed.Movement).To(Equal("Shuttle Run"))
+		Expect(shuttleConfirmed.Reps).To(Equal(2))
+
+		customConfirmed, err := Confirm(p, Confirmation{
+			IntervalID:  "unassessed-500-510",
+			Movement:    "Sandbag Clean",
+			Start:       500,
+			End:         510,
+			Reps:        3,
+			Load:        &Load{Value: 100, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(customConfirmed.Movement).To(Equal("Sandbag Clean"))
+		Expect(customConfirmed.Reps).To(Equal(3))
+	})
 })
 

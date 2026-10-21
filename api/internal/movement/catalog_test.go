@@ -71,6 +71,13 @@ var _ = Describe("movement catalog", func() {
 		Entry("Air Squats", "Air Squats", "Air Squat"),
 		Entry("Box Jump Overs", "Box Jump Overs", "Box Jump Over"),
 		Entry("Burpee Box Jump Overs", "Burpee Box Jump Overs", "Burpee Box Jump Over"),
+		Entry("Shuttle Run", "Shuttle Run", "Shuttle Run"),
+		Entry("Shuttle Runs", "Shuttle Runs", "Shuttle Run"),
+		Entry("Plate Ground-to-Overhead", "Plate Ground-to-Overhead", "Plate Ground-to-Overhead"),
+		Entry("Korean Clean & Jerk", "클린앤저크", "Clean & Jerk"),
+		Entry("Korean Clean and Jerk spaced", "클린 앤 저크", "Clean & Jerk"),
+		Entry("Korean Power Clean", "파워 클린", "Power Clean"),
+		Entry("Korean Shuttle Run", "셔틀런", "Shuttle Run"),
 
 		// Unknown / empty
 		Entry("empty", "", ""),

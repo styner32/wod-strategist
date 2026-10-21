@@ -13,6 +13,7 @@ import (
 
 type Confirmation struct {
 	IntervalID  string  `json:"interval_id"`
+	Movement    string  `json:"movement,omitempty"`
 	Start       float64 `json:"start_secs"`
 	End         float64 `json:"end_secs"`
 	Reps        int     `json:"reps"`
@@ -83,6 +84,15 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 	if !activity.ValidInterval(input.Start, input.End) || input.Reps < 0 || input.Reps > math.MaxInt32 || !ValidLoad(input.Load) || (input.Measurement != "set" && input.Measurement != "window") || (input.Technique != "unspecified" && input.Technique != "singles" && input.Technique != "touch_and_go") {
 		return Record{}, errors.New("invalid performance confirmation")
 	}
+	explicitMovement := strings.TrimSpace(input.Movement)
+	if explicitMovement != "" {
+		if strings.EqualFold(explicitMovement, "rest") || strings.EqualFold(explicitMovement, "unknown") || strings.EqualFold(explicitMovement, "none") {
+			return Record{}, errors.New("unknown exercise movement")
+		}
+		if canonical := activity.CanonicalMovement(explicitMovement); canonical != "" {
+			explicitMovement = canonical
+		}
+	}
 	var interval *Interval
 	for i := range progress.Intervals {
 		if progress.Intervals[i].ID == input.IntervalID {
@@ -90,16 +100,46 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 			break
 		}
 	}
-	if interval == nil || interval.Activity != "exercise" || strings.TrimSpace(interval.Movement) == "" {
-		return Record{}, errors.New("selected window is not within an observed exercise interval")
-	}
-	spans, err := selectObservedSpans(progress, input)
-	if err != nil {
-		return Record{}, err
+	var (
+		spans []observedSpan
+		err   error
+	)
+	isSyntheticInterval := interval == nil || interval.Activity != "exercise" || strings.TrimSpace(interval.Movement) == ""
+	if isSyntheticInterval {
+		if explicitMovement == "" {
+			return Record{}, errors.New("selected window is not within an observed exercise interval")
+		}
+		if input.Measurement == "set" {
+			for _, in := range progress.Intervals {
+				if in.Activity == "rest" && in.End > input.Start+1e-6 && in.Start < input.End-1e-6 {
+					return Record{}, errors.New("a set cannot include rest intervals")
+				}
+			}
+		}
+		synthetic := Interval{
+			ID:       input.IntervalID,
+			Start:    input.Start,
+			End:      input.End,
+			Activity: "exercise",
+			Movement: explicitMovement,
+		}
+		if interval != nil && interval.CaptureStart != nil && interval.CaptureEnd != nil && activity.ValidInterval(*interval.CaptureStart, *interval.CaptureEnd) {
+			synthetic.Start = interval.Start
+			synthetic.End = interval.End
+			synthetic.CaptureStart = interval.CaptureStart
+			synthetic.CaptureEnd = interval.CaptureEnd
+		}
+		interval = &synthetic
+		spans = []observedSpan{{Interval: synthetic, Start: input.Start, End: input.End}}
+	} else {
+		spans, err = selectObservedSpans(progress, input)
+		if err != nil {
+			return Record{}, err
+		}
 	}
 	for _, gap := range progress.Unassessed {
 		if gap.Clock == "media" && input.Start < gap.End && input.End > gap.Start {
-			if input.Measurement == "set" {
+			if input.Measurement == "set" || isSyntheticInterval {
 				if gap.Reason == "unverified_capture_mapping" {
 					return Record{}, errors.New("selected window contains unavailable video evidence")
 				}
@@ -112,7 +152,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		elapsed         float64
 		continuousClock bool
 	)
-	if input.Measurement == "set" && len(spans) == 1 {
+	if (input.Measurement == "set" || isSyntheticInterval) && len(spans) == 1 {
 		in := spans[0].Interval
 		if (in.CaptureStart != nil) != (in.CaptureEnd != nil) {
 			return Record{}, errors.New("capture mapping is invalid")
@@ -134,6 +174,10 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 			if input.End == in.End {
 				end = *in.CaptureEnd
 			}
+			if start < 0 && input.Start < in.Start {
+				end -= start
+				start = 0
+			}
 			if !activity.ValidInterval(start, end) {
 				return Record{}, errors.New("selected subwindow capture timing cannot be verified")
 			}
@@ -146,6 +190,9 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		}
 	}
 	movement := interval.Movement
+	if explicitMovement != "" {
+		movement = explicitMovement
+	}
 	if canonical := activity.CanonicalMovement(movement); canonical != "" {
 		movement = canonical
 	}
