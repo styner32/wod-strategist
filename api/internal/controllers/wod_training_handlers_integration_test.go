@@ -108,4 +108,57 @@ var _ = Describe("GET /api/v1/wod-training-load", func() {
 		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, path, "", &otherUser))
 		Expect(response.Code).To(Equal(403))
 	})
+
+	It("starts tracking at the earliest promoted WOD and withholds comparison while legacy WODs in that period are unpromoted", func() {
+		ensureTestDB()
+		testhelpers.CleanupDB(dbConn)
+		now := time.Now()
+		rollout := now.AddDate(0, 0, -10)
+		profile := testhelpers.CreateProfile(dbConn, &db.Profile{WODTrackingStartedAt: rollout})
+		var user db.User
+		Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())
+		start, end := 120.0, 1320.0
+		effort := 8
+		score, _ := json.Marshal(wodeval.Score{EvaluationVersion: 1, WODStart: wodeval.Start{Seconds: &start, EndSeconds: &end, Status: "confirmed"}})
+		promotedAt, legacyAt := now.AddDate(0, 0, -40), now.AddDate(0, 0, -20)
+		for _, item := range []struct {
+			sid     string
+			version int
+			at      time.Time
+			score   string
+		}{
+			{"WOD-20260910-PROMOTED", 1, promotedAt, string(score)},
+			{"WOD-20260930-LEGACY", 0, legacyAt, `{"overall":70}`},
+			{"WOD-20261019-RECENT", 1, now, string(score)},
+		} {
+			at := item.at
+			testhelpers.CreateSession(dbConn, &db.Session{SessionID: item.sid, ProfileID: profile.ID, WorkoutType: "wod", WODEvaluationVersion: item.version, Effort: &effort})
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: item.sid, ProfileID: profile.ID, Status: "COMPLETED", SessionScore: item.score, WorkoutAt: &at})
+		}
+		router := newTestRouterWithAuthService(controllers.Config{})
+		path := fmt.Sprintf("/api/v1/wod-training-load?profile_id=%d&timezone=Asia%%2FSeoul", profile.ID)
+		var payload struct {
+			Comparison  wodeval.Comparison
+			Unevaluated int `json:"unevaluated_legacy_workouts"`
+		}
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, path, "", &user))
+		Expect(response.Code).To(Equal(200))
+		Expect(json.Unmarshal(response.Body.Bytes(), &payload)).To(Succeed())
+		Expect(payload.Comparison.TrackingStartedAt).To(BeTemporally("~", promotedAt, time.Second))
+		Expect(payload.Unevaluated).To(Equal(1))
+		Expect(payload.Comparison.Status).To(Equal("incomplete_records"), "an unpromoted legacy WOD is a missing record, not a rest day")
+		Expect(payload.Comparison.ChangePercent).To(BeNil())
+
+		Expect(dbConn.Model(&db.Session{}).Where("session_id = ?", "WOD-20260930-LEGACY").Update("wod_evaluation_version", 1).Error).To(Succeed())
+		Expect(dbConn.Model(&db.AnalysisResult{}).Where("session_id = ?", "WOD-20260930-LEGACY").Update("session_score", string(score)).Error).To(Succeed())
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, path, "", &user))
+		Expect(response.Code).To(Equal(200))
+		payload.Unevaluated = -1
+		Expect(json.Unmarshal(response.Body.Bytes(), &payload)).To(Succeed())
+		Expect(payload.Unevaluated).To(BeZero())
+		Expect(payload.Comparison.Status).To(Equal("available"))
+		Expect(payload.Comparison.ChangePercent).NotTo(BeNil())
+	})
 })

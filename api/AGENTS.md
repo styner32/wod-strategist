@@ -59,7 +59,7 @@ Follow the **4-layer real-client strategy** (see [backend-testing.md](../docs/ag
 
 ## Video Analysis Architecture (Two-Pass)
 * **Pass 1 (Indexing):** Prefer verified `media_start_secs` and `media_end_secs` from `chunk_analysis_results`. Never apply capture-clock `start_secs`/`end_secs` to merged media. If no usable verified segments remain, fallback to `IndexVideo` with strict video duration constraints.
-* **Pass 2 (Deep Analysis):** Analyze segments independently using `VideoMetadata` (Start/End offset) to prevent hallucination.
+* **Pass 2 (Deep Analysis):** Analyze segments independently using `VideoMetadata` (Start/End offset) to prevent hallucination. Exception: owner-requested chunk/session **reanalysis** may analyze an interval as timestamped frame-grid contact sheets (`AnalyzeVideoIntervalWithFrameGrids`) only when local media exists and the interval keeps at least `minReanalysisFrameGridFPS` (2 FPS); otherwise it uses `VideoMetadata`. The production two-pass pipeline always uses `VideoMetadata`. See [video-analysis.md](../docs/agent-memory/video-analysis.md#frame-grid-contact-sheet-reanalysis-2026-10-19).
 * **File Lifecycle:** Two-pass analysis uploads once and reuses the file URI. Current success paths retain file metadata for reuse; explicit cleanup is not guaranteed on every success/injury path. Follow the current lifecycle and remaining COST-07 work in [video-analysis.md](../docs/agent-memory/video-analysis.md#file-lifecycle).
 
 ## Error Handling & Initialization

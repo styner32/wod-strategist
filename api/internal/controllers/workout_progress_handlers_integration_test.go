@@ -129,6 +129,21 @@ var _ = Describe("PUT /api/v1/sessions/:session_id/performance-records", func() 
 		Expect(*row.PerformedAtSource).To(Equal("legacy_local_time"))
 		Expect(row.PerformedAt.Before(row.ConfirmedAt)).To(BeTrue())
 	})
+	It("records the session WOD description as the prescription when the analysis row has none", func() {
+		profile, user := progressOwner()
+		p, raw := progressFixture("video")
+		sid := "WOD-20261013-PRESCRIPTION"
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sid, ProfileID: profile.ID, WorkoutType: "wod", WODDescription: "30 Power Cleans (135 lb)"})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: sid, ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: raw})
+		body := fmt.Sprintf(`{"source_version":%q,"records":[{"interval_id":%q,"start_secs":0,"end_secs":60,"reps":3,"load":{"value":135,"unit":"lb","basis":"total"},"measurement":"window","technique":"singles"}]}`, p.SourceVersion, p.Intervals[0].ID)
+		router := newTestRouterWithAuthService(controllers.Config{})
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPut, "/api/v1/sessions/"+sid+"/performance-records", body, &user))
+		Expect(response.Code).To(Equal(200), response.Body.String())
+		var row db.PerformanceRecord
+		Expect(dbConn.Where("profile_id = ? AND session_id = ?", profile.ID, sid).First(&row).Error).To(Succeed())
+		Expect(row.WorkoutPrescription).To(Equal("30 Power Cleans (135 lb)"), "the confirmed record carries the prescription shown to the user")
+	})
 	It("upserts a confirmed interval without touching raw observations and rejects stale sources", func() {
 		profile, user := progressOwner()
 		p, raw := progressFixture("video")
@@ -176,6 +191,50 @@ var _ = Describe("PUT /api/v1/sessions/:session_id/performance-records", func() 
 		Expect(response.Code).To(Equal(200))
 		Expect(dbConn.First(&rows[0], rows[0].ID).Error).To(Succeed())
 		Expect(rows[0].LoadValue).To(BeNil())
+	})
+	It("replaces an overlapping sub-interval record when merging contiguous intervals across movements", func() {
+		profile, user := progressOwner()
+		p := workoutprogress.Build(
+			[]workoutprogress.Interval{
+				{Start: 488, End: 490, Activity: "exercise", Movement: "Power Clean", ObservationRefs: []string{"chunk:48"}},
+				{Start: 490, End: 491.8, Activity: "exercise", Movement: "Clean & Jerk", ObservationRefs: []string{"chunk:49"}},
+			},
+			nil,
+			"merge-pc-cj",
+		)
+		raw, err := json.Marshal(p)
+		Expect(err).NotTo(HaveOccurred())
+		sid := "WOD-20260930-MERGEPCCJ"
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sid, ProfileID: profile.ID, WorkoutType: "wod", WODDescription: "30 Clean & Jerks (135/95 lb)"})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: sid, ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: db.NullableJSONDocument(raw)})
+		router := newTestRouterWithAuthService(controllers.Config{})
+		path := "/api/v1/sessions/" + sid + "/performance-records"
+
+		// Step 1: confirm 08:08-08:10 Power Clean alone
+		firstBody := fmt.Sprintf(`{"source_version":%q,"records":[{"interval_id":%q,"start_secs":488,"end_secs":490,"reps":1,"load":{"value":135,"unit":"lb","basis":"total"},"measurement":"set","technique":"singles"}]}`, p.SourceVersion, p.Intervals[0].ID)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPut, path, firstBody, &user))
+		Expect(response.Code).To(Equal(200), response.Body.String())
+
+		// Step 2: merge 08:08-08:11 as Clean & Jerk under the second interval's ID
+		mergedBody := fmt.Sprintf(`{"source_version":%q,"records":[{"interval_id":%q,"start_secs":488,"end_secs":491.8,"reps":1,"load":{"value":135,"unit":"lb","basis":"total"},"measurement":"set","technique":"singles"}]}`, p.SourceVersion, p.Intervals[1].ID)
+		response = httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPut, path, mergedBody, &user))
+		Expect(response.Code).To(Equal(200), response.Body.String())
+
+		var got controllers.WorkoutProgressResponse
+		Expect(json.Unmarshal(response.Body.Bytes(), &got)).To(Succeed())
+		Expect(got.Records).To(HaveLen(1))
+		Expect(got.Records[0].IntervalID).To(Equal(p.Intervals[1].ID))
+		Expect(got.Records[0].Movement).To(Equal("Clean and Jerk"))
+		Expect(got.Records[0].Start).To(Equal(488.0))
+		Expect(got.Records[0].End).To(Equal(491.8))
+		Expect(got.Records[0].Reps).To(Equal(1))
+
+		var rows []db.PerformanceRecord
+		Expect(dbConn.Where("profile_id = ? AND session_id = ?", profile.ID, sid).Find(&rows).Error).To(Succeed())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0].IntervalID).To(Equal(p.Intervals[1].ID))
 	})
 })
 

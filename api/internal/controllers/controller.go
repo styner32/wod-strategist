@@ -98,6 +98,8 @@ type Config struct {
 	NewGenerateHardSub      HardSubTaskFactory
 	EnableChunkReanalysis   bool
 	EnableSessionReanalysis bool
+	// SessionReanalysisDailyQuota is the rolling 24h run limit per profile; 0 uses the default.
+	SessionReanalysisDailyQuota int64
 }
 
 type Controller struct {
@@ -120,6 +122,8 @@ type Controller struct {
 	newGenerateHardSub      HardSubTaskFactory
 	enableChunkReanalysis   bool
 	enableSessionReanalysis bool
+	// sessionReanalysisDailyQuota is the startup-validated rolling 24h limit; 0 uses the default.
+	sessionReanalysisDailyQuota int64
 }
 
 func New(config Config) (*Controller, error) {
@@ -183,5 +187,7 @@ func New(config Config) (*Controller, error) {
 		enableChunkReanalysis:   config.EnableChunkReanalysis,
 		enableSessionReanalysis: config.EnableSessionReanalysis,
 		enableAgenticHighlights: config.EnableAgenticHighlights,
+
+		sessionReanalysisDailyQuota: config.SessionReanalysisDailyQuota,
 	}, nil
 }

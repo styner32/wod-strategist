@@ -454,5 +454,161 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(asSquatClean.Movement).To(Equal("Squat Clean"))
 		Expect(asSquatClean.ElapsedSeconds).To(Equal(15.0))
 	})
+	It("allows confirming 0 repetitions for incomplete/no-rep exercise intervals while excluding them from comparisons and best records", func() {
+		incomplete := cleanCycle(11, 14)
+		incomplete.Complete = false
+		p := Build([]Interval{exercise(10, 20, incomplete)}, nil, "video-zero-reps")
+
+		zeroRec, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Start:       10,
+			End:         20,
+			Reps:        0,
+			Load:        nil,
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(zeroRec.Reps).To(Equal(0))
+		Expect(zeroRec.RepsPerMinute).To(Equal(0.0))
+		Expect(zeroRec.MedianCycleSeconds).To(BeNil())
+		Expect(zeroRec.RestComparisons).To(BeEmpty())
+
+		_, err = Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Start:       10,
+			End:         20,
+			Reps:        -1,
+			Load:        nil,
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).To(HaveOccurred())
+
+		day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+		next := day.Add(time.Hour)
+		zeroRec.ID = 1
+		zeroRec.SessionID = "s-zero"
+		zeroRec.WorkoutPrescription = "Grace"
+		zeroRec.PerformedAt = &day
+
+		validRec := Record{
+			ID:                  2,
+			SessionID:           "s-valid",
+			Status:              "confirmed",
+			Movement:            "Power Clean",
+			Start:               0,
+			End:                 30,
+			ElapsedSeconds:      30,
+			Reps:                5,
+			RepsPerMinute:       10,
+			Measurement:         "set",
+			Technique:           "singles",
+			WorkoutPrescription: "Grace",
+			PerformedAt:         &next,
+		}
+
+		Expect(Comparisons([]Record{validRec, zeroRec})).To(BeEmpty())
+		Expect(Comparisons([]Record{zeroRec})).To(BeEmpty())
+		best := Best([]Record{zeroRec, validRec})
+		Expect(best).To(HaveLen(1))
+		Expect(best[0].ID).To(Equal(uint(2)))
+		Expect(Best([]Record{zeroRec})).To(BeEmpty())
+	})
+	It("supersedes a narrower overlapping same-session confirmation when a merged record covers the span", func() {
+		day := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+		sub := Record{
+			ID:          10,
+			SessionID:   "WOD-20260930-01M3QZH8TPXYMBGP9ER5W6SMBB",
+			IntervalID:  "seg-488",
+			Status:      "confirmed",
+			Movement:    "Power Clean",
+			Start:       488,
+			End:         490,
+			Reps:        1,
+			PerformedAt: &day,
+			ConfirmedAt: day,
+		}
+		merged := Record{
+			ID:          11,
+			SessionID:   "WOD-20260930-01M3QZH8TPXYMBGP9ER5W6SMBB",
+			IntervalID:  "seg-490",
+			Status:      "confirmed",
+			Movement:    "Clean & Jerk",
+			Start:       488,
+			End:         491.8,
+			Reps:        1,
+			PerformedAt: &day,
+			ConfirmedAt: day.Add(time.Minute),
+		}
+		active := ActiveRecords([]Record{sub, merged})
+		Expect(active).To(HaveLen(1))
+		Expect(active[0].ID).To(Equal(uint(11)))
+		Expect(active[0].Movement).To(Equal("Clean & Jerk"))
+	})
+	It("allows overriding an interval movement and confirming an unassessed set window when movement is explicitly supplied", func() {
+		p := Build(
+			[]Interval{exercise(260, 270, cleanCycle(262, 265))},
+			[]Gap{{Start: 250, End: 260, Clock: "media", Reason: "incomplete_cycle", Movement: "Power Clean"}},
+			"video",
+		)
+		overridden, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Movement:    "Clean and Jerk",
+			Start:       260,
+			End:         270,
+			Reps:        1,
+			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(overridden.Movement).To(Equal("Clean & Jerk"))
+		Expect(overridden.Reps).To(Equal(1))
+
+		gapConfirmed, err := Confirm(p, Confirmation{
+			IntervalID:  "unassessed-250-260",
+			Movement:    "클린앤저크",
+			Start:       255.5,
+			End:         258.0,
+			Reps:        1,
+			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(gapConfirmed.IntervalID).To(Equal("unassessed-250-260"))
+		Expect(gapConfirmed.Movement).To(Equal("Clean & Jerk"))
+		Expect(gapConfirmed.ElapsedSeconds).To(Equal(2.5))
+		Expect(gapConfirmed.Reps).To(Equal(1))
+
+		shuttleConfirmed, err := Confirm(p, Confirmation{
+			IntervalID:  "unassessed-470-480",
+			Movement:    "Shuttle Run",
+			Start:       470.1,
+			End:         480.1,
+			Reps:        2,
+			Load:        nil,
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(shuttleConfirmed.Movement).To(Equal("Shuttle Run"))
+		Expect(shuttleConfirmed.Reps).To(Equal(2))
+
+		customConfirmed, err := Confirm(p, Confirmation{
+			IntervalID:  "unassessed-500-510",
+			Movement:    "Sandbag Clean",
+			Start:       500,
+			End:         510,
+			Reps:        3,
+			Load:        &Load{Value: 100, Unit: "lb", Basis: "total"},
+			Measurement: "set",
+			Technique:   "singles",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(customConfirmed.Movement).To(Equal("Sandbag Clean"))
+		Expect(customConfirmed.Reps).To(Equal(3))
+	})
 })
 

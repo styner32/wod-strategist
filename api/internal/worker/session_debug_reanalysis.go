@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/storage"
@@ -48,7 +50,14 @@ type sessionDebugContext struct {
 	MovementHints  db.JSONDocument
 	Injuries       []string
 	Segments       []Segment
-	Corrections    []sessionDebugCorrection
+	// SkippedSegments are verified chunk media classified as non-exercise.
+	SkippedSegments []Segment
+	// ChunkTimelineAvailable is true when any chunk has verified media offsets.
+	ChunkTimelineAvailable bool
+	// TimelineRebuildFailed fingerprints the chunk rows whose legacy timeline
+	// rebuild failed in this run; the run snapshot records it.
+	TimelineRebuildFailed string
+	Corrections           []sessionDebugCorrection
 }
 
 type sessionDebugCorrection struct {
@@ -137,6 +146,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	if err != nil {
 		return w.failSessionDebugRun(ctx, run.ID, retryCount, started, "The session video could not be prepared.", err)
 	}
+	defer file.removeLocal()
 	p := VideoAnalysisPayload{
 		SessionID: run.SessionID, ProfileID: run.ProfileID, WorkoutType: target.WorkoutType,
 		Movements: movementHintsFromDocument(target.MovementHints), Injuries: target.Injuries,
@@ -144,7 +154,12 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	}
 	promptCorrections := mappedSessionDebugCorrections(target.Corrections)
 	correctionContext := buildSessionDebugCorrectionContext(promptCorrections)
-	segments := target.Segments
+	segments, skippedSegments := target.Segments, target.SkippedSegments
+	// Stored observations are a fallback only when no chunk has a verified
+	// interval; chunks excluded by classification or corrections stay excluded.
+	if len(segments) == 0 && !target.ChunkTimelineAvailable {
+		segments, skippedSegments = w.storedProgressSegments(ctx, run.SessionID, run.ProfileID, target.WorkoutType, file)
+	}
 	var aggregate gemini.TokenUsage
 	var promptRecord strings.Builder
 	apiCalls := 0
@@ -157,10 +172,13 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", usage)
 		addSessionDebugUsage(&aggregate, usage)
 		if indexErr == nil {
-			segments = parseSegments(indexOutput)
+			indexed := parseSegments(indexOutput)
+			// Drop out-of-range pieces before merging so one hallucinated piece
+			// cannot void a touching valid one.
 			if file.Duration > 0 {
-				segments = filterSessionDebugSegments(segments, file.Duration)
+				indexed = filterSessionDebugSegments(indexed, file.Duration)
 			}
+			segments, skippedSegments = filterExerciseAndUnknownSegments(indexed, target.WorkoutType)
 		}
 		if len(segments) == 0 && file.Duration > 0 {
 			segments = []Segment{{Start: "0:00", End: formatDuration(file.Duration), Type: "Full Video", Description: "Entire workout"}}
@@ -183,11 +201,14 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	_ = json.Unmarshal(run.WODStartRequest, &storedStart)
 	wodStartRequest := storedStart.Seconds
 	observeWODUsage := func(task string, usage *gemini.TokenUsage) {
+		if usage == nil {
+			return
+		}
 		apiCalls++
 		w.saveTokenUsageForRequest(p.SessionID, p.ProfileID, task, sessionReanalysisTaskRequestKey(run.ID, task), usage)
 		addSessionDebugUsage(&aggregate, usage)
 	}
-	newWOD := w.wodEvaluationVersion(ctx, p) == 1
+	newWOD := NormalizeWorkoutType(p.WorkoutType) == WorkoutTypeWOD
 	wodStart := wodeval.Start{}
 	wodComplete := true
 	if newWOD {
@@ -204,29 +225,10 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		segments = trimWODSegments(segments, wodStart)
 		wodComplete = w.wodCoverageComplete(ctx, p, wodStart)
 	}
-	indexedSegments := segments
-	maxSegments := maxSegmentsForDuration(file.Duration)
-	if len(segments) > maxSegments && !newWOD {
-		allSegments := append([]Segment(nil), segments...)
-		triagePrompt := buildTriagePrompt(segments, maxSegments, file.Duration, target.WorkoutType)
-		promptRecord.WriteString(triagePrompt)
-		triaged, usage, triageErr := w.triageSegments(ctx, &gemini.UploadResult{
-			FileName: file.Name, FileURI: file.URI, MIMEType: chunkDebugMIMEType(file.MIMEType), VideoDuration: file.Duration,
-		}, segments, maxSegments, target.WorkoutType)
-		apiCalls++
-		w.saveTokenUsage(run.SessionID, run.ProfileID, "session:reanalysis", usage)
-		addSessionDebugUsage(&aggregate, usage)
-		if triageErr == nil && len(triaged) > 0 {
-			segments = triaged
-		} else {
-			segments = segments[:maxSegments]
-		}
-		if target.WorkoutType == WorkoutTypeWarmup {
-			segments = preserveWarmupTrajectories(allSegments, segments, maxSegments)
-		}
+	evalVersion := w.wodEvaluationVersion(ctx, p)
+	if newWOD {
+		evalVersion = wodeval.Version
 	}
-	omittedSegments := omittedIndexedSegments(indexedSegments, segments)
-	segments = addBetweenObservationWindows(segments, omittedSegments)
 
 	reusableSegments := w.loadReusableSessionDebugSegments(ctx, &run)
 	buildContextSnapshot := func(completed map[string]cachedSessionDebugSegment) []byte {
@@ -239,12 +241,15 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			"injuries":       target.Injuries, "confirmed_corrections": target.Corrections,
 			"prompt_corrections":        promptCorrections,
 			"unmapped_correction_count": len(target.Corrections) - len(promptCorrections),
-			"wod_start":                 wodStart, "wod_evaluation_version": w.wodEvaluationVersion(ctx, p),
+			"wod_start":                 wodStart, "wod_evaluation_version": evalVersion,
 			"segments": segments, "source_gcs_uri": run.SourceGCSURI,
 			"prompt_version": sessionDebugPromptVersion, "schema_version": sessionDebugSchemaVersion,
 		}
 		if len(completed) > 0 {
 			snapshot["completed_segments"] = completed
+		}
+		if target.TimelineRebuildFailed != "" {
+			snapshot["timeline_rebuild_failed"] = target.TimelineRebuildFailed
 		}
 		raw, _ := json.Marshal(snapshot)
 		return raw
@@ -261,10 +266,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	assessmentContext := buildSessionDebugAssessmentContext(target.Corrections)
 	var wodEvidence []wodSegmentEvidence
 	var progressIntervals []workoutprogress.Interval
-	var progressGaps []workoutprogress.Gap
-	for _, seg := range omittedSegments {
-		progressGaps = append(progressGaps, workoutprogress.Gap{Start: convertToSeconds(seg.Start).Seconds(), End: convertToSeconds(seg.End).Seconds(), Clock: "media", Reason: "segment_budget_omitted"})
-	}
+	progressGaps := skippedNonExerciseGaps(skippedSegments, segments)
 	defaultClientModel := ""
 	if provider, ok := w.GeminiClient.(interface{ Model() string }); ok {
 		defaultClientModel = provider.Model()
@@ -297,13 +299,14 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 		prompt += buildSessionDebugCorrectionContext(segCorrections)
 		prompt += ObservationOnlyOutputCheckPrompt
-		promptRecord.WriteString(prompt)
+		plannedMode := chunkDebugAnalysisMode(file.LocalPath != "", end-start)
+		promptRecord.WriteString(prompt + "\n#analysis-mode:" + plannedMode)
 
 		selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
 		if strings.TrimSpace(run.Model) == "" && isUnknownSegment(segment) {
 			selectedModel = gemini.ModelFlash38
 		}
-		cacheKey := sessionDebugSegmentCacheKey(selectedModel, segment.Start, segment.End, prompt)
+		cacheKey := sessionDebugSegmentCacheKey(selectedModel, plannedMode, segment.Start, segment.End, prompt)
 		if cached, ok := reusableSegments[cacheKey]; ok && strings.TrimSpace(cached.Analysis) != "" {
 			cachedModel := cached.Model
 			if cachedModel == "" {
@@ -322,14 +325,35 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 
 		wg.Add(1)
-		go func(idx int, segStart, segEnd time.Duration, segPrompt, segModel, key string) {
+		go func(idx int, seg Segment, segStart, segEnd time.Duration, segPrompt, segModel, mode string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			analysis, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(
-				ctx, file.URI, chunkDebugMIMEType(file.MIMEType), segStart, segEnd, segPrompt, segModel,
+			var (
+				analysis string
+				sheets   []FrameGridSheet
+				usage    *gemini.TokenUsage
+				callErr  error
 			)
+			if mode == debugAnalysisModeFrameGrid {
+				analysis, sheets, usage, callErr = w.AnalyzeVideoIntervalWithFrameGrids(
+					ctx, file.LocalPath, segStart, segEnd, segPrompt, segModel, FrameGridOptions{},
+				)
+			}
+			if mode == debugAnalysisModeVideo || (callErr != nil && len(sheets) == 0) {
+				mode = debugAnalysisModeVideo
+				if callErr != nil {
+					w.logger.Warn("frame grid extraction failed for session debug segment; falling back to video segment analysis",
+						zap.Uint("run_id", run.ID),
+						zap.Duration("start", segStart),
+						zap.Duration("end", segEnd),
+						zap.Error(callErr))
+				}
+				analysis, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModel(
+					ctx, file.URI, chunkDebugMIMEType(file.MIMEType), segStart, segEnd, segPrompt, segModel,
+				)
+			}
 			resolvedModel := segModel
 			if usage != nil && usage.Model != "" {
 				resolvedModel = usage.Model
@@ -337,7 +361,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			segOutcomes[idx] = sessionDebugSegmentOutcome{
 				valid:    true,
 				reused:   false,
-				cacheKey: key,
+				cacheKey: sessionDebugSegmentCacheKey(segModel, mode, seg.Start, seg.End, segPrompt),
 				model:    resolvedModel,
 				analysis: analysis,
 				usage:    usage,
@@ -345,7 +369,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 				start:    segStart,
 				end:      segEnd,
 			}
-		}(i, start, end, prompt, selectedModel, cacheKey)
+		}(i, segment, start, end, prompt, selectedModel, plannedMode)
 	}
 	wg.Wait()
 
@@ -394,6 +418,12 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		if newWOD && !isFullyObservedRestWindow(segment, observedIntervals, observedGaps) {
 			if evidence, ok := decodeWODEvidence(res.analysis, segment); ok {
 				wodEvidence = append(wodEvidence, evidence)
+			} else if !strings.Contains(res.analysis, "```wod_evidence") {
+				if fallback, ok := wodEvidenceFromObservedIntervals(observedIntervals); ok {
+					wodEvidence = append(wodEvidence, fallback...)
+				} else {
+					wodComplete = false
+				}
 			} else {
 				wodComplete = false
 			}
@@ -406,9 +436,13 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 
 	if firstErr != nil {
 		if len(completedSegments) > 0 {
-			_ = w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+			// Checkpoint completed segments even after the task deadline cancelled
+			// ctx, so a retry resumes instead of paying for every segment again.
+			persistCtx, cancel := sessionDebugPersistContext(ctx)
+			_ = w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
 				"source_context_snapshot": string(buildContextSnapshot(completedSegments)),
 			}).Error
+			cancel()
 		}
 		w.logger.Warn("session debug segment failed", zap.Uint("run_id", run.ID), zap.Int("segment", failedSegment), zap.Error(firstErr))
 		return w.failSessionDebugRun(ctx, run.ID, retryCount, started,
@@ -458,8 +492,10 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	})
 }
 
-func sessionDebugSegmentCacheKey(model, start, end, prompt string) string {
-	sum := sha256.Sum256([]byte(model + "|" + start + "|" + end + "|" + prompt))
+// The analysis mode is part of the key: frame-grid and video observations of
+// the same prompt are not interchangeable.
+func sessionDebugSegmentCacheKey(model, mode, start, end, prompt string) string {
+	sum := sha256.Sum256([]byte(model + "|" + mode + "|" + start + "|" + end + "|" + prompt))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -580,6 +616,11 @@ func (w *Worker) loadSessionDebugContext(ctx context.Context, sessionID string, 
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	} else {
+		// Without a sessions row the session ID prefix is the only workout type
+		// source (analysis_results has none); an unprefixed ID stays a WOD.
+		if fromID := workoutTypeFromSessionID(sessionID); fromID != "" {
+			target.WorkoutType = fromID
+		}
 		var analysis db.AnalysisResult
 		if analysisErr := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 			Order("created_at DESC, id DESC").First(&analysis).Error; analysisErr == nil {
@@ -596,7 +637,7 @@ func (w *Worker) loadSessionDebugContext(ctx context.Context, sessionID string, 
 		return nil, err
 	}
 	target.Corrections = corrections
-	target.Segments, err = w.buildSessionDebugSegments(ctx, sessionID, profileID, corrections, target.WorkoutType)
+	target.Segments, target.SkippedSegments, target.ChunkTimelineAvailable, target.TimelineRebuildFailed, err = w.buildSessionDebugSegments(ctx, sessionID, profileID, corrections, target.WorkoutType)
 	if err != nil {
 		return nil, err
 	}
@@ -636,44 +677,107 @@ func (w *Worker) loadActiveSessionDebugCorrections(ctx context.Context, sessionI
 	return result, nil
 }
 
-func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection, workoutType string) ([]Segment, error) {
+// buildSessionDebugSegments returns the chunk segments to observe, the verified
+// media of chunks classified as non-exercise (by chunk analysis or a saved
+// correction), whether any chunk carries a verified merged-media interval, and
+// the fingerprint of the chunk rows when their legacy timeline rebuild failed.
+func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection, workoutType string) ([]Segment, []Segment, bool, string, error) {
 	var chunks []db.ChunkAnalysisResult
 	if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 		Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error; err != nil {
-		return nil, err
+		return nil, nil, false, "", err
+	}
+	rebuildFailed := ""
+	if sessionDebugTimelineIncomplete(chunks) {
+		fingerprint := sessionDebugTimelineFingerprint(chunks)
+		if w.sessionDebugTimelineRebuildFailedRecently(ctx, sessionID, profileID, fingerprint) {
+			// Rebuilding downloads and probes every retained chunk; repeat it
+			// only after the chunk rows change or the retry window passes.
+			w.logger.Info("skipping a legacy merged-media timeline rebuild that recently failed for the same chunks",
+				zap.String("session_id", sessionID))
+		} else if err := w.reconstructSessionDebugMediaIntervals(ctx, sessionID, profileID, chunks); err == nil {
+			if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+				Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error; err != nil {
+				return nil, nil, false, "", err
+			}
+		} else {
+			rebuildFailed = fingerprint
+			w.logger.Warn("could not rebuild the legacy merged-media timeline; unmapped chunks stay unobserved",
+				zap.String("session_id", sessionID), zap.Error(err))
+		}
+	}
+	// Duplicate rows of one retained object share its media interval. Observe
+	// the object once and keep corrections saved against any of its rows.
+	canonical := make(map[uint]uint, len(chunks))
+	firstByPath := make(map[string]uint, len(chunks))
+	for _, chunk := range chunks {
+		canonical[chunk.ID] = chunk.ID
+		if path := strings.TrimSpace(chunk.FilePath); path != "" {
+			if first, ok := firstByPath[path]; ok {
+				canonical[chunk.ID] = first
+			} else {
+				firstByPath[path] = chunk.ID
+			}
+		}
 	}
 	byChunk := make(map[uint][]int)
 	for index := range corrections {
-		byChunk[corrections[index].ChunkID] = append(byChunk[corrections[index].ChunkID], index)
+		owner, ok := canonical[corrections[index].ChunkID]
+		if !ok {
+			owner = corrections[index].ChunkID
+		}
+		byChunk[owner] = append(byChunk[owner], index)
+	}
+	recovery := IsRecoveryWorkoutType(workoutType)
+	keepMovement := func(movement string) bool {
+		if recovery {
+			return !isWalkingActivity(movement)
+		}
+		return !isNonExerciseMovement(movement) || strings.EqualFold(movement, "Unknown")
 	}
 	segments := make([]Segment, 0)
+	skipped := make([]Segment, 0)
+	timelineAvailable := false
 	for _, chunk := range chunks {
+		if canonical[chunk.ID] != chunk.ID {
+			continue
+		}
 		if !debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
 			continue
 		}
+		timelineAvailable = true
 		movement := strings.TrimSpace(chunk.ExerciseType)
-		include := strings.EqualFold(chunk.Status, "COMPLETED") && includeChunkInDeepAnalysis(chunk, workoutType)
+		completed := strings.EqualFold(chunk.Status, "COMPLETED")
+		include := completed && includeChunkInDeepAnalysis(chunk, workoutType)
+		classifiedSkip := completed && chunkClassifiedNonExercise(chunk, workoutType)
 		for _, correctionIndex := range byChunk[chunk.ID] {
 			corrections[correctionIndex].MediaStartSecs = cloneSessionDebugFloat(chunk.MediaStartSecs)
 			corrections[correctionIndex].MediaEndSecs = cloneSessionDebugFloat(chunk.MediaEndSecs)
 			correction := corrections[correctionIndex]
 			if correction.MovementName != "" {
 				movement = strings.TrimSpace(correction.MovementName)
-				include = movement != "" && (!isNonExerciseMovement(movement) || strings.EqualFold(movement, "Unknown"))
+				include = movement != "" && keepMovement(movement)
+				classifiedSkip = movement != "" && !include
 			}
 			switch correction.ActivityState {
 			case "walking", "rest_setup", "not_exercise":
-				include = false
+				include, classifiedSkip = false, true
 			case "unknown":
-				movement, include = "Unknown", true
+				movement, include, classifiedSkip = "Unknown", true, false
 			case "exercise":
-				include = true
+				include, classifiedSkip = true, false
 				if movement == "" {
 					movement = "Unknown"
 				}
 			}
 		}
-		if !include || movement == "" || (isNonExerciseMovement(movement) && !strings.EqualFold(movement, "Unknown")) {
+		if include && movement == "" && recovery {
+			movement = "Mobility"
+		}
+		if !include || movement == "" || !keepMovement(movement) {
+			if classifiedSkip {
+				skipped = append(skipped, Segment{Start: formatSegmentTimestamp(*chunk.MediaStartSecs), End: formatSegmentTimestamp(*chunk.MediaEndSecs), Type: "Rest"})
+			}
 			continue
 		}
 		description := chunk.Output
@@ -682,7 +786,197 @@ func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string
 		}
 		segments = append(segments, Segment{Start: formatSegmentTimestamp(*chunk.MediaStartSecs), End: formatSegmentTimestamp(*chunk.MediaEndSecs), Type: movement, Description: description})
 	}
-	return mergeSegmentsByMovement(segments), nil
+	return mergeSegmentsByMovement(segments), mergeSegmentsByMovement(skipped), timelineAvailable, rebuildFailed, nil
+}
+
+// sessionDebugTimelineRebuildRetryAfter lets a failed legacy timeline rebuild
+// be retried for unchanged chunk rows, e.g. after a missing object is restored.
+const sessionDebugTimelineRebuildRetryAfter = 24 * time.Hour
+
+// sessionDebugTimelineFingerprint identifies the chunk rows a legacy timeline
+// rebuild reads.
+func sessionDebugTimelineFingerprint(chunks []db.ChunkAnalysisResult) string {
+	interval := func(value *float64) string {
+		if value == nil {
+			return "-"
+		}
+		return fmt.Sprintf("%.3f", *value)
+	}
+	hash := sha256.New()
+	for _, chunk := range chunks {
+		fmt.Fprintf(hash, "%d|%s|%s|%s|%s\n", chunk.ID, strings.TrimSpace(chunk.FilePath), chunk.Status,
+			interval(chunk.MediaStartSecs), interval(chunk.MediaEndSecs))
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// sessionDebugTimelineRebuildFailedRecently reports whether a run within the
+// retry window recorded a failed rebuild of the same chunk rows.
+func (w *Worker) sessionDebugTimelineRebuildFailedRecently(ctx context.Context, sessionID string, profileID uint, fingerprint string) bool {
+	var count int64
+	err := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).
+		Where("session_id = ? AND profile_id = ? AND created_at > ? AND source_context_snapshot->>'timeline_rebuild_failed' = ?",
+			sessionID, profileID, time.Now().UTC().Add(-sessionDebugTimelineRebuildRetryAfter), fingerprint).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
+// sessionDebugTimelineIncomplete reports a completed original chunk whose
+// retained object has no verified merged-media interval on any of its rows.
+func sessionDebugTimelineIncomplete(chunks []db.ChunkAnalysisResult) bool {
+	mapped := make(map[string]bool, len(chunks))
+	for _, chunk := range chunks {
+		if path := strings.TrimSpace(chunk.FilePath); path != "" && debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
+			mapped[path] = true
+		}
+	}
+	for _, chunk := range chunks {
+		path := strings.TrimSpace(chunk.FilePath)
+		if strings.EqualFold(chunk.Status, "COMPLETED") && path != "" && !strings.Contains(path, "/split_chunk_") && !mapped[path] {
+			return true
+		}
+	}
+	return false
+}
+
+// reconstructSessionDebugMediaIntervals rebuilds the whole legacy concat
+// timeline. It writes nothing unless every retained chunk was probed and the
+// rebuilt offsets agree with already verified ones.
+func (w *Worker) reconstructSessionDebugMediaIntervals(ctx context.Context, sessionID string, profileID uint, chunks []db.ChunkAnalysisResult) error {
+	if w.DB == nil || w.StorageClient == nil {
+		return errors.New("storage or db client unavailable")
+	}
+	intervals, err := w.retainedChunkTimeline(ctx, sessionID, profileID, "")
+	if err != nil {
+		return err
+	}
+	rebuilt := make(map[string]concatMediaInterval, len(intervals))
+	for _, interval := range intervals {
+		rebuilt[interval.FilePath] = interval
+	}
+	for _, chunk := range chunks {
+		interval, ok := rebuilt[strings.TrimSpace(chunk.FilePath)]
+		if !ok || !debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
+			continue
+		}
+		if math.Abs(interval.Start-*chunk.MediaStartSecs) > 0.05 || math.Abs(interval.End-*chunk.MediaEndSecs) > 0.05 {
+			return fmt.Errorf("rebuilt timeline disagrees with verified offsets for chunk %d", chunk.ID)
+		}
+	}
+	return w.persistConcatMediaIntervals(ctx, sessionID, profileID, intervals)
+}
+
+// storedProgressSegments reuses media-clock intervals of the stored
+// workout_progress only when they were observed from the exact same media bytes
+// or Files object. Display headers in analysis_results.output are never parsed:
+// legacy headers may carry capture-clock offsets.
+func (w *Worker) storedProgressSegments(ctx context.Context, sessionID string, profileID uint, workoutType string, file reusableGeminiFile) ([]Segment, []Segment) {
+	var analysis db.AnalysisResult
+	if err := w.DB.WithContext(ctx).Select("workout_progress").Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+		Order("created_at DESC, id DESC").First(&analysis).Error; err != nil {
+		return nil, nil
+	}
+	progress, err := workoutprogress.Decode(analysis.WorkoutProgress)
+	if err != nil || progress.MediaSourceID == "" || !progressSourceMatches(progress.MediaSourceID, file) {
+		return nil, nil
+	}
+	recovery := IsRecoveryWorkoutType(workoutType)
+	selected := make([]Segment, 0, len(progress.Intervals))
+	skipped := make([]Segment, 0)
+	for _, in := range progress.Intervals {
+		seg := Segment{Start: formatSegmentTimestamp(in.Start), End: formatSegmentTimestamp(in.End), Type: "Unknown", Description: "Previously observed interval; revalidate from visible evidence."}
+		switch in.Activity {
+		case "exercise":
+			if movement := strings.TrimSpace(in.Movement); movement != "" {
+				seg.Type = movement
+			}
+		case "rest":
+			if !recovery {
+				skipped = append(skipped, Segment{Start: seg.Start, End: seg.End, Type: "Rest"})
+				continue
+			}
+			seg.Type = "Rest"
+		}
+		selected = append(selected, seg)
+	}
+	return mergeSegmentsByMovement(selected), mergeSegmentsByMovement(skipped)
+}
+
+func progressSourceMatches(stored string, file reusableGeminiFile) bool {
+	for _, path := range []string{file.URI, file.LocalPath} {
+		if path == "" {
+			continue
+		}
+		if source, err := progressMediaSource(path); err == nil && source == stored {
+			return true
+		}
+	}
+	return false
+}
+
+// filterExerciseAndUnknownSegments splits IndexVideo segments into those to
+// observe and explicitly non-exercise ones. Recovery sessions keep rest/setup
+// (stretch holds are routinely labelled rest) and skip only walking. An
+// unlabelled segment is observed as Unknown.
+func filterExerciseAndUnknownSegments(segments []Segment, workoutType string) ([]Segment, []Segment) {
+	recovery := IsRecoveryWorkoutType(workoutType)
+	kept := make([]Segment, 0, len(segments))
+	skipped := make([]Segment, 0)
+	for _, seg := range segments {
+		movement := strings.TrimSpace(seg.Type)
+		switch {
+		case movement == "":
+			seg.Type = "Unknown"
+		case recovery && isWalkingActivity(movement),
+			!recovery && isNonExerciseMovement(movement) && !strings.EqualFold(movement, "Unknown"):
+			skipped = append(skipped, Segment{Start: seg.Start, End: seg.End, Type: "Rest"})
+			continue
+		}
+		kept = append(kept, seg)
+	}
+	return mergeSegmentsByMovement(kept), mergeSegmentsByMovement(skipped)
+}
+
+func wodEvidenceFromObservedIntervals(intervals []workoutprogress.Interval) ([]wodSegmentEvidence, bool) {
+	out := make([]wodSegmentEvidence, 0, len(intervals))
+	for _, in := range intervals {
+		if in.Activity != "exercise" || isNonExerciseMovement(in.Movement) || !activity.ValidInterval(in.Start, in.End) {
+			continue
+		}
+		form := make([]string, 0, len(in.FormObservations)+len(in.ROMObservations))
+		for _, obs := range in.FormObservations {
+			if strings.TrimSpace(obs.Evidence) != "" {
+				form = append(form, obs.Evidence)
+			}
+		}
+		for _, obs := range in.ROMObservations {
+			if strings.TrimSpace(obs.Evidence) != "" {
+				form = append(form, obs.Evidence)
+			}
+		}
+		pace := make([]string, 0, len(in.PaceObservations)+len(in.RepEvents))
+		for _, obs := range in.PaceObservations {
+			if strings.TrimSpace(obs.Evidence) != "" {
+				pace = append(pace, obs.Evidence)
+			}
+		}
+		if len(pace) == 0 {
+			for _, ev := range in.RepEvents {
+				if ev.Complete && strings.TrimSpace(ev.Evidence) != "" {
+					pace = append(pace, ev.Evidence)
+				}
+			}
+		}
+		out = append(out, wodSegmentEvidence{
+			TargetConfirmed: true,
+			Movement:        in.Movement,
+			StartSecs:       in.Start,
+			EndSecs:         in.End,
+			Form:            form,
+			Pace:            pace,
+		})
+	}
+	return out, len(out) > 0
 }
 
 // buildSessionDebugFatigueContext applies only active structured corrections
@@ -735,10 +1029,11 @@ func (w *Worker) buildSessionDebugFatigueContext(ctx context.Context, sessionID 
 
 func (w *Worker) prepareSessionDebugGeminiFile(ctx context.Context, run *db.SessionReanalysisRun) (reusableGeminiFile, int64, error) {
 	if cached := w.findReusableSessionDebugGeminiFile(ctx, run); cached.URI != "" {
-		duration, err := w.probeSessionDebugSourceDuration(ctx, run.SourceGCSURI)
+		duration, localPath, err := w.downloadAndProbeSessionDebugSource(ctx, run.SourceGCSURI)
 		if err == nil {
 			cached.Duration = duration
-			return cached, 0, nil
+			cached.LocalPath = localPath
+			return keepLocalForFrameGrids(cached), 0, nil
 		}
 		w.logger.Warn("could not probe cached session debug source; uploading a fresh Files object", zap.Uint("run_id", run.ID), zap.Error(err))
 	}
@@ -746,8 +1041,8 @@ func (w *Worker) prepareSessionDebugGeminiFile(ctx context.Context, run *db.Sess
 	if err != nil {
 		return reusableGeminiFile{}, 0, err
 	}
-	defer os.Remove(localPath)
 	if err := w.StorageClient.DownloadFile(ctx, run.SourceGCSURI, localPath); err != nil {
+		_ = os.Remove(localPath)
 		return reusableGeminiFile{}, 0, fmt.Errorf("download session debug source: %w", err)
 	}
 	var uploadBytes int64
@@ -756,6 +1051,7 @@ func (w *Worker) prepareSessionDebugGeminiFile(ctx context.Context, run *db.Sess
 	}
 	upload, err := w.GeminiClient.UploadVideo(ctx, localPath)
 	if err != nil {
+		_ = os.Remove(localPath)
 		if upload != nil && upload.FileName != "" {
 			if deleteErr := w.GeminiClient.DeleteFile(context.Background(), upload.FileName); deleteErr != nil {
 				w.logger.Warn("failed to clean up incomplete session debug upload", zap.Error(deleteErr))
@@ -773,7 +1069,10 @@ func (w *Worker) prepareSessionDebugGeminiFile(ctx context.Context, run *db.Sess
 		"gemini_file_uri": upload.FileURI, "gemini_file_name": upload.FileName,
 		"gemini_mime_type": upload.MIMEType, "gemini_file_expires_at": expires,
 	}).Error
-	return reusableGeminiFile{URI: upload.FileURI, Name: upload.FileName, MIMEType: upload.MIMEType, Expires: &expires, Duration: upload.VideoDuration}, uploadBytes, nil
+	return keepLocalForFrameGrids(reusableGeminiFile{
+		URI: upload.FileURI, Name: upload.FileName, MIMEType: upload.MIMEType,
+		Expires: &expires, Duration: upload.VideoDuration, LocalPath: localPath,
+	}), uploadBytes, nil
 }
 
 func (w *Worker) findReusableSessionDebugGeminiFile(ctx context.Context, run *db.SessionReanalysisRun) reusableGeminiFile {
@@ -794,20 +1093,21 @@ func (w *Worker) findReusableSessionDebugGeminiFile(ctx context.Context, run *db
 	return reusableGeminiFile{}
 }
 
-func (w *Worker) probeSessionDebugSourceDuration(ctx context.Context, sourceURI string) (time.Duration, error) {
+func (w *Worker) downloadAndProbeSessionDebugSource(ctx context.Context, sourceURI string) (time.Duration, string, error) {
 	localPath, err := createTempFile("session-debug-duration", ".mp4")
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	defer os.Remove(localPath)
 	if err := w.StorageClient.DownloadFile(ctx, sourceURI, localPath); err != nil {
-		return 0, fmt.Errorf("download session debug source for duration: %w", err)
+		_ = os.Remove(localPath)
+		return 0, "", fmt.Errorf("download session debug source for duration: %w", err)
 	}
 	seconds := probeVideoDuration(ctx, localPath)
 	if seconds <= 0 {
-		return 0, errors.New("session debug source duration is unavailable")
+		_ = os.Remove(localPath)
+		return 0, "", errors.New("session debug source duration is unavailable")
 	}
-	return secondsDuration(seconds), nil
+	return secondsDuration(seconds), localPath, nil
 }
 
 func validateSessionDebugSource(uri, bucketName string) error {
@@ -855,9 +1155,17 @@ func sessionReanalysisTaskRequestKey(runID uint, task string) string {
 	return fmt.Sprintf("session-reanalysis:%d:%s", runID, strings.TrimSpace(task))
 }
 
+// sessionDebugPersistContext keeps state writes alive after the task deadline
+// cancels ctx; otherwise a timed-out run stays RUNNING and is never reclaimed.
+func sessionDebugPersistContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+}
+
 func (w *Worker) failSessionDebugRun(ctx context.Context, runID uint, retryCount int, started time.Time, safeError string, cause error) error {
 	if retryCount < sessionDebugMaxRetries {
-		_ = w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(map[string]any{
+		persistCtx, cancel := sessionDebugPersistContext(ctx)
+		defer cancel()
+		_ = w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(map[string]any{
 			"status": db.SessionReanalysisStatusQueued, "safe_error": "", "duration_ms": time.Since(started).Milliseconds(),
 		}).Error
 		return cause
@@ -877,7 +1185,9 @@ func (w *Worker) completeSessionDebugRun(ctx context.Context, runID uint, status
 	values["status"] = status
 	values["duration_ms"] = time.Since(started).Milliseconds()
 	values["completed_at"] = now
-	if err := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(values).Error; err != nil {
+	persistCtx, cancel := sessionDebugPersistContext(ctx)
+	defer cancel()
+	if err := w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(values).Error; err != nil {
 		return fmt.Errorf("persist terminal session re-analysis state: %w", err)
 	}
 	return nil

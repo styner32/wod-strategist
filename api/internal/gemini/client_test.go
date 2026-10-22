@@ -878,5 +878,117 @@ var _ = Describe("Gemini client", func() {
 			Expect(body).To(ContainSubstring(`"endOffset":"45.750s"`))
 		})
 	})
-})
 
+	Describe("AnalyzeFrameGrids", func() {
+		const (
+			baseURL = "https://example.test"
+			apiKey  = "test-api-key"
+		)
+
+		It("sends multiple inline frame-grid images with HIGH media resolution and thinking config", func() {
+			transport := testhelpers.NewMockTransport()
+			transport.New(baseURL).
+				Post("/v1beta/models/"+ModelArgon4+":generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"parts": []map[string]any{
+								{"text": "internal reasoning", "thought": true},
+								{"text": "Burpee Over Bar 4 reps observed"},
+							},
+						},
+					}},
+					"usageMetadata": map[string]any{
+						"promptTokenCount":     2240,
+						"candidatesTokenCount": 120,
+						"totalTokenCount":      2360,
+					},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:        apiKey,
+				BaseURL:       baseURL,
+				Model:         ModelArgon4,
+				ThinkingLevel: "HIGH",
+				HTTPClient:    &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			sheet1 := encodeJPEG(makeTestImage(64, 32))
+			sheet2 := encodeJPEG(makeTestImage(64, 16))
+
+			result, usage, err := client.AnalyzeFrameGrids(
+				context.Background(),
+				[][]byte{sheet1, sheet2},
+				"image/jpeg",
+				"Analyze these frame grids",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("Burpee Over Bar 4 reps observed"))
+			Expect(usage).NotTo(BeNil())
+			Expect(usage.PromptTokens).To(Equal(int32(2240)))
+			Expect(usage.CandidateTokens).To(Equal(int32(120)))
+			Expect(usage.TotalTokens).To(Equal(int32(2360)))
+			Expect(transport.Verify()).To(Succeed())
+
+			body := string(transport.Requests()[0].Body)
+			Expect(body).To(ContainSubstring(`"mediaResolution":"MEDIA_RESOLUTION_HIGH"`))
+			Expect(body).To(ContainSubstring(`"thinkingLevel":"HIGH"`))
+			Expect(body).To(ContainSubstring(`"mimeType":"image/jpeg"`))
+			Expect(body).To(ContainSubstring(`"text":"Analyze these frame grids"`))
+		})
+
+		It("returns validation errors when images slice is empty or contains empty image data", func() {
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey: apiKey,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			_, _, err = client.AnalyzeFrameGrids(context.Background(), nil, "image/jpeg", "prompt")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("at least one frame grid image is required"))
+
+			_, _, err = client.AnalyzeFrameGridsWithModel(context.Background(), [][]byte{nil}, "image/jpeg", "prompt", ModelFlash38)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("frame grid image at index 0 is empty"))
+		})
+
+		It("honors per-call WithThinkingLevel override on AnalyzeFrameGridsWithModel", func() {
+			transport := testhelpers.NewMockTransport()
+			transport.New(baseURL).
+				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"parts": []map[string]any{
+								{"text": "ok"},
+							},
+						},
+					}},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:        apiKey,
+				BaseURL:       baseURL,
+				Model:         ModelArgon4,
+				ThinkingLevel: "HIGH",
+				HTTPClient:    &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			sheet := encodeJPEG(makeTestImage(64, 32))
+			ctx := WithThinkingLevel(context.Background(), "MEDIUM")
+			result, _, err := client.AnalyzeFrameGridsWithModel(ctx, [][]byte{sheet}, "image/jpeg", "prompt", ModelFlash38)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("ok"))
+			Expect(transport.Verify()).To(Succeed())
+
+			body := string(transport.Requests()[0].Body)
+			Expect(body).To(ContainSubstring(`"thinkingLevel":"MEDIUM"`))
+		})
+	})
+})

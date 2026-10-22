@@ -13,6 +13,7 @@ import (
 
 type Confirmation struct {
 	IntervalID  string  `json:"interval_id"`
+	Movement    string  `json:"movement,omitempty"`
 	Start       float64 `json:"start_secs"`
 	End         float64 `json:"end_secs"`
 	Reps        int     `json:"reps"`
@@ -80,8 +81,17 @@ func Kilograms(load *Load) *float64 {
 // Confirm leaves the raw interval unchanged. A null load explicitly confirms no
 // external load, while an unconfirmed candidate remains absent from benchmarks.
 func Confirm(progress Progress, input Confirmation) (Record, error) {
-	if !activity.ValidInterval(input.Start, input.End) || input.Reps <= 0 || input.Reps > math.MaxInt32 || !ValidLoad(input.Load) || (input.Measurement != "set" && input.Measurement != "window") || (input.Technique != "unspecified" && input.Technique != "singles" && input.Technique != "touch_and_go") {
+	if !activity.ValidInterval(input.Start, input.End) || input.Reps < 0 || input.Reps > math.MaxInt32 || !ValidLoad(input.Load) || (input.Measurement != "set" && input.Measurement != "window") || (input.Technique != "unspecified" && input.Technique != "singles" && input.Technique != "touch_and_go") {
 		return Record{}, errors.New("invalid performance confirmation")
+	}
+	explicitMovement := strings.TrimSpace(input.Movement)
+	if explicitMovement != "" {
+		if strings.EqualFold(explicitMovement, "rest") || strings.EqualFold(explicitMovement, "unknown") || strings.EqualFold(explicitMovement, "none") {
+			return Record{}, errors.New("unknown exercise movement")
+		}
+		if canonical := activity.CanonicalMovement(explicitMovement); canonical != "" {
+			explicitMovement = canonical
+		}
 	}
 	var interval *Interval
 	for i := range progress.Intervals {
@@ -90,16 +100,46 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 			break
 		}
 	}
-	if interval == nil || interval.Activity != "exercise" || strings.TrimSpace(interval.Movement) == "" {
-		return Record{}, errors.New("selected window is not within an observed exercise interval")
-	}
-	spans, err := selectObservedSpans(progress, input)
-	if err != nil {
-		return Record{}, err
+	var (
+		spans []observedSpan
+		err   error
+	)
+	isSyntheticInterval := interval == nil || interval.Activity != "exercise" || strings.TrimSpace(interval.Movement) == ""
+	if isSyntheticInterval {
+		if explicitMovement == "" {
+			return Record{}, errors.New("selected window is not within an observed exercise interval")
+		}
+		if input.Measurement == "set" {
+			for _, in := range progress.Intervals {
+				if in.Activity == "rest" && in.End > input.Start+1e-6 && in.Start < input.End-1e-6 {
+					return Record{}, errors.New("a set cannot include rest intervals")
+				}
+			}
+		}
+		synthetic := Interval{
+			ID:       input.IntervalID,
+			Start:    input.Start,
+			End:      input.End,
+			Activity: "exercise",
+			Movement: explicitMovement,
+		}
+		if interval != nil && interval.CaptureStart != nil && interval.CaptureEnd != nil && activity.ValidInterval(*interval.CaptureStart, *interval.CaptureEnd) {
+			synthetic.Start = interval.Start
+			synthetic.End = interval.End
+			synthetic.CaptureStart = interval.CaptureStart
+			synthetic.CaptureEnd = interval.CaptureEnd
+		}
+		interval = &synthetic
+		spans = []observedSpan{{Interval: synthetic, Start: input.Start, End: input.End}}
+	} else {
+		spans, err = selectObservedSpans(progress, input)
+		if err != nil {
+			return Record{}, err
+		}
 	}
 	for _, gap := range progress.Unassessed {
 		if gap.Clock == "media" && input.Start < gap.End && input.End > gap.Start {
-			if input.Measurement == "set" {
+			if input.Measurement == "set" || isSyntheticInterval {
 				if gap.Reason == "unverified_capture_mapping" {
 					return Record{}, errors.New("selected window contains unavailable video evidence")
 				}
@@ -112,7 +152,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		elapsed         float64
 		continuousClock bool
 	)
-	if input.Measurement == "set" && len(spans) == 1 {
+	if (input.Measurement == "set" || isSyntheticInterval) && len(spans) == 1 {
 		in := spans[0].Interval
 		if (in.CaptureStart != nil) != (in.CaptureEnd != nil) {
 			return Record{}, errors.New("capture mapping is invalid")
@@ -134,6 +174,10 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 			if input.End == in.End {
 				end = *in.CaptureEnd
 			}
+			if start < 0 && input.Start < in.Start {
+				end -= start
+				start = 0
+			}
 			if !activity.ValidInterval(start, end) {
 				return Record{}, errors.New("selected subwindow capture timing cannot be verified")
 			}
@@ -146,6 +190,9 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		}
 	}
 	movement := interval.Movement
+	if explicitMovement != "" {
+		movement = explicitMovement
+	}
 	if canonical := activity.CanonicalMovement(movement); canonical != "" {
 		movement = canonical
 	}
@@ -153,7 +200,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		return Record{}, errors.New("duration movements cannot confirm repetition benchmarks")
 	}
 	record := Record{IntervalID: input.IntervalID, SourceVersion: progress.SourceVersion, Status: "confirmed", Movement: movement, Start: input.Start, End: input.End, ElapsedSeconds: elapsed, Reps: input.Reps, Measurement: input.Measurement, Technique: input.Technique, RateBasis: "normalized_per_minute", RepsPerMinute: float64(input.Reps) * 60 / elapsed}
-	if record.RepsPerMinute <= 0 || math.IsInf(record.RepsPerMinute, 0) || math.IsNaN(record.RepsPerMinute) {
+	if record.RepsPerMinute < 0 || (input.Reps > 0 && record.RepsPerMinute <= 0) || math.IsInf(record.RepsPerMinute, 0) || math.IsNaN(record.RepsPerMinute) {
 		return Record{}, errors.New("selected window cannot produce a finite performance rate")
 	}
 	if input.Load != nil {
@@ -179,7 +226,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 			completeCoverage = false
 		}
 	}
-	if continuousClock && completeCoverage && len(cycles) == input.Reps {
+	if input.Reps > 0 && continuousClock && completeCoverage && len(cycles) == input.Reps {
 		sort.Float64s(cycles)
 		median := cycles[len(cycles)/2]
 		if len(cycles)%2 == 0 {
@@ -646,16 +693,73 @@ func recordBefore(a, b Record) bool {
 	return a.PerformedAt.Before(*b.PerformedAt)
 }
 
+func recordSupersedes(candidate, target Record, candidateIdx, targetIdx int) bool {
+	if candidateIdx == targetIdx {
+		return false
+	}
+	if candidate.SessionID != target.SessionID {
+		return false
+	}
+	if candidate.PerformedAt != nil && target.PerformedAt != nil && !candidate.PerformedAt.Equal(*target.PerformedAt) {
+		return false
+	}
+	if !(candidate.Start < target.End-1e-6 && candidate.End > target.Start+1e-6) {
+		return false
+	}
+	if candidate.Status == "confirmed" && target.Status != "confirmed" {
+		return true
+	}
+	if candidate.Status != "confirmed" && target.Status == "confirmed" {
+		return false
+	}
+	candidateDur := candidate.End - candidate.Start
+	targetDur := target.End - target.Start
+	candidateContainsTarget := candidate.Start <= target.Start+1e-6 && candidate.End >= target.End-1e-6 && candidateDur > targetDur+1e-6
+	targetContainsCandidate := target.Start <= candidate.Start+1e-6 && target.End >= candidate.End-1e-6 && targetDur > candidateDur+1e-6
+	if candidateContainsTarget && !targetContainsCandidate {
+		return true
+	}
+	if targetContainsCandidate && !candidateContainsTarget {
+		return false
+	}
+	if !candidate.ConfirmedAt.IsZero() && !target.ConfirmedAt.IsZero() && !candidate.ConfirmedAt.Equal(target.ConfirmedAt) {
+		return candidate.ConfirmedAt.After(target.ConfirmedAt)
+	}
+	if candidate.ID != target.ID {
+		return candidate.ID > target.ID
+	}
+	return candidateIdx > targetIdx
+}
+
+// ActiveRecords filters out same-session records that have been superseded by a
+// wider merged confirmation or a more recent overlapping confirmation.
+func ActiveRecords(records []Record) []Record {
+	out := make([]Record, 0, len(records))
+	for targetIdx, target := range records {
+		superseded := false
+		for candidateIdx, candidate := range records {
+			if recordSupersedes(candidate, target, candidateIdx, targetIdx) {
+				superseded = true
+				break
+			}
+		}
+		if !superseded {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
 func Comparisons(records []Record) []Comparison {
 	out := []Comparison{}
 	for _, current := range records {
-		if current.Status != "confirmed" || current.PerformedAt == nil {
+		if current.Status != "confirmed" || current.Reps <= 0 || current.RepsPerMinute <= 0 || current.PerformedAt == nil {
 			continue
 		}
 		var direct, reference *Record
 		for i := range records {
 			prior := &records[i]
-			if prior.ID == current.ID || prior.Status != "confirmed" || prior.Movement != current.Movement || !recordBefore(*prior, current) {
+			if prior.ID == current.ID || prior.Status != "confirmed" || prior.Reps <= 0 || prior.RepsPerMinute <= 0 || prior.Movement != current.Movement || !recordBefore(*prior, current) {
 				continue
 			}
 			if reference == nil || recordBefore(*reference, *prior) {
@@ -684,7 +788,7 @@ func Comparisons(records []Record) []Comparison {
 		var heavierBaseline *Record
 		for i := range records {
 			prior := &records[i]
-			if prior.Status != "confirmed" || prior.Movement != current.Movement || !recordBefore(*prior, current) || current.Reps != prior.Reps || current.LoadKG == nil || prior.LoadKG == nil || current.Load == nil || prior.Load == nil || current.Load.Basis != prior.Load.Basis || *current.LoadKG <= *prior.LoadKG {
+			if prior.Status != "confirmed" || prior.Reps <= 0 || prior.RepsPerMinute <= 0 || prior.Movement != current.Movement || !recordBefore(*prior, current) || current.Reps != prior.Reps || current.LoadKG == nil || prior.LoadKG == nil || current.Load == nil || prior.Load == nil || current.Load.Basis != prior.Load.Basis || *current.LoadKG <= *prior.LoadKG {
 				continue
 			}
 			compatible := true
@@ -712,7 +816,7 @@ func Comparisons(records []Record) []Comparison {
 func Best(records []Record) []Record {
 	out := []Record{}
 	for _, r := range records {
-		if r.Status != "confirmed" || r.PerformedAt == nil || r.Technique == "unspecified" || strings.TrimSpace(r.WorkoutPrescription) == "" || activity.CanonicalMovement(r.Movement) == "" {
+		if r.Status != "confirmed" || r.Reps <= 0 || r.RepsPerMinute <= 0 || r.PerformedAt == nil || r.Technique == "unspecified" || strings.TrimSpace(r.WorkoutPrescription) == "" || activity.CanonicalMovement(r.Movement) == "" {
 			continue
 		}
 		found := false

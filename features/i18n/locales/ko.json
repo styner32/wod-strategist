@@ -284,7 +284,14 @@
     "continuousRecording": "연속 녹화 검증 옵션 (실험 기능)",
     "continuousRecordingHelp": "10초 경계에서 녹화를 멈추지 않습니다. 실기기 검증 전 기능으로 기본값은 꺼짐입니다. 우선 720p/1080p에서 시험하세요.",
     "h10MemoryRecording": "H10 내부 심박 저장 (실험 기능)",
-    "h10MemoryRecordingHelp": "운동 중 Polar H10 내부에도 심박수를 저장하고 운동 후 회수합니다. 신호가 끊긴 구간을 나중에 채우기 위한 기능입니다. 실시간 심박·움직임 기록은 그대로 유지됩니다. iOS에서 H10 페어링 요청이 뜰 수 있습니다."
+    "h10MemoryRecordingHelp": "운동 중 Polar H10 내부에도 심박수를 저장하고 운동 후 회수합니다. 신호가 끊긴 구간을 나중에 채우기 위한 기능입니다. 실시간 심박·움직임 기록은 그대로 유지됩니다. iOS에서 H10 페어링 요청이 뜰 수 있습니다.",
+    "bleHrDevice": "블루투스 심박 센서",
+    "bleHrDeviceRegistered": "등록된 내 기기: %{name} (이 기기만 연결)",
+    "bleHrDeviceUnregistered": "미등록 (녹화 화면 상단 BPM 표시를 탭해 내 기기로 등록 가능)",
+    "bleHrDeviceClear": "등록 해제",
+    "reuseRecentTitle": "⚡ 최근 촬영·설정한 운동 다시 쓰기",
+    "reuseRecentMeta": "%{minutes}분 전 저장됨 · 탭하면 다시 찍지 않고 바로 적용",
+    "reuseRecentApply": "불러오기"
   },
   "upload": {
     "title": "영상 업로드",
@@ -357,6 +364,9 @@
     "remergeConfirmBody": "1시간 이상 처리가 지연되었습니다. 업로드된 영상 조각들을 다시 병합하여 분석을 진행하시겠습니까?",
     "remergeAction": "재병합",
     "remergeStarted": "재병합 요청이 완료되었습니다.",
+    "remergeQueuedAlert": "재병합 대기열에 추가되었습니다. 이전 영상 처리가 끝나면 순서대로 자동 실행됩니다.",
+    "remergeInProgress": "재병합 진행 중",
+    "remergeQueuedWithPosition": "대기열 (#%{position})",
     "remergeFailed": "재병합 요청에 실패했습니다. 다시 시도해주세요.",
     "createHardsub": "📝 가이드 영상 만들기",
     "hardsubStarted": "가이드 영상 생성이 시작되었습니다! 몇 분 후에 다시 확인해주세요.",
@@ -463,7 +473,16 @@
       "h10MemoryStartFailed": "H10 내부 저장 시작 실패 (%{code}). 실시간 기록은 계속됩니다.",
       "h10MemoryFailed": "H10 내부 저장 오류 (%{stage}: %{code}).",
       "h10MemoryHrStalled": "H10 내부 저장 ON: 연결 중인데 실시간 심박이 들어오지 않습니다.",
-      "h10MemoryAccStalled": "H10 내부 저장 ON: 심박은 들어오는데 움직임(ACC) 수신이 멈췄습니다."
+      "h10MemoryAccStalled": "H10 내부 저장 ON: 심박은 들어오는데 움직임(ACC) 수신이 멈췄습니다.",
+      "hrDeviceTitle": "심박 센서 설정",
+      "hrDeviceConnected": "현재 연결됨: %{name}",
+      "hrDeviceDisconnected": "연결된 센서 없음",
+      "hrDeviceRegisteredInfo": "등록된 내 기기: %{name}",
+      "hrDeviceUnregisteredInfo": "등록된 내 기기: 없음 (주변 아무 센서에나 자동 연결)",
+      "hrDeviceRegisterCurrent": "%{name} 기기를 내 기기로 등록",
+      "hrDeviceSwitchTo": "%{name} 연결 및 내 기기로 등록",
+      "hrDeviceUnregister": "기기 등록 해제 (모든 기기 허용)",
+      "hrDeviceRescan": "주변 센서 다시 스캔"
     },
     "sensor": {
       "heartRate": "심박수",
@@ -852,6 +871,7 @@
     "no_baseline": "비교할 부하 기준이 없습니다.",
     "incomplete_records": "입력·분석이 부족한 기록이 있어 비교를 보류합니다.",
     "missing": "28일 누락: Effort %{effort}건 · 시간 %{duration}건 · 운동 일시 %{time}건",
+    "missingLegacy": "재분석을 적용하지 않은 이전 WOD: %{count}건",
     "scope": "새 WOD의 확인된 기록만 반영합니다. 시작 전 대기는 제외하고 WOD 도중 휴식은 포함합니다. 시작 시점 수정은 웹 기록 상세에서 가능합니다."
   },
   "workoutProgress": {

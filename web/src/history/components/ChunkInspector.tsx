@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from '../historyPolling';
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   historyApi,
   type AnalysisFeedback,
@@ -16,6 +16,7 @@ import {
   reachableChunkStart,
   type ChunkMediaState,
 } from '../chunkPlayback';
+import { useSignedVideoUrl } from '../useSignedVideoUrl';
 
 interface Props {
   sessionId: string;
@@ -219,7 +220,14 @@ export function ChunkInspector({
   );
   const selectedRunId = explicitRunId ?? runId(sortedRuns[0]);
 
-  const { data: playData, error: playError, isLoading: playLoading } = useQuery({
+  const {
+    data: playData,
+    dataUpdatedAt: playDataUpdatedAt,
+    error: playError,
+    isLoading: playLoading,
+    isFetching: playFetching,
+    refetch: refetchPlayUrl,
+  } = useQuery({
     queryKey: ['chunk-play-url', sessionId, chunk.id],
     queryFn: () => historyApi.getChunkPlayUrl(sessionId, chunk.id),
     staleTime: 10 * 60 * 1000,
@@ -264,9 +272,39 @@ export function ChunkInspector({
     (run) => run.status === 'QUEUED' || run.status === 'RUNNING',
   );
 
+  const refetchSignedPlayUrl = useCallback(async () => {
+    const result = await refetchPlayUrl();
+    if (result.isError) throw result.error;
+    return result.data?.play_url ?? result.data?.download_url;
+  }, [refetchPlayUrl]);
+  const {
+    playbackError,
+    wantPlayingRef,
+    needsReload,
+    reload,
+    handleError: handleVideoError,
+    handlePlay: markPlaying,
+    handlePause,
+    takeRestore,
+  } = useSignedVideoUrl({
+    videoRef,
+    sourceKey: `chunk:${chunk.id}`,
+    url: playUrl,
+    expiresAt: playData?.expires_at,
+    fetchedAtMs: playDataUpdatedAt,
+    fetching: playFetching,
+    refetchUrl: refetchSignedPlayUrl,
+    fallbackTime: start ?? 0,
+  });
+
   const playInterval = () => {
     const video = videoRef.current;
     if (!video) return;
+    wantPlayingRef.current = true;
+    if (needsReload()) {
+      reload({ currentTime: start ?? 0, wasPlaying: true });
+      return;
+    }
     const target = reachableChunkStart(start, video.duration);
     if (target == null) return;
     video.currentTime = target;
@@ -278,13 +316,18 @@ export function ChunkInspector({
     const video = videoRef.current;
     if (!video) return;
     const action = chunkTimeUpdateAction(mediaState(video), start, end);
-    if (action.kind === 'pause') video.pause();
-    else if (action.kind === 'seek') video.currentTime = action.to;
+    if (action.kind === 'pause') {
+      wantPlayingRef.current = false;
+      video.pause();
+    } else if (action.kind === 'seek') {
+      video.currentTime = action.to;
+    }
   };
 
   const handlePlay = () => {
     const video = videoRef.current;
     if (!video) return;
+    markPlaying();
     const target = chunkPlaySeek(mediaState(video), start, end);
     if (target != null) video.currentTime = target;
   };
@@ -292,6 +335,19 @@ export function ChunkInspector({
   const handleLoadedMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
+    const restore = takeRestore();
+    if (restore) {
+      if (Number.isFinite(restore.playbackRate) && restore.playbackRate > 0) {
+        video.playbackRate = restore.playbackRate;
+      }
+      const desiredTime = restore.currentTime > (start ?? 0) ? restore.currentTime : start;
+      const target = reachableChunkStart(desiredTime, video.duration) ?? chunkInitialSeek(mediaState(video), start);
+      if (target != null) video.currentTime = target;
+      if (restore.wasPlaying) {
+        void video.play().catch(() => {});
+      }
+      return;
+    }
     const target = chunkInitialSeek(mediaState(video), start);
     if (target != null) video.currentTime = target;
   };
@@ -374,9 +430,29 @@ export function ChunkInspector({
                 muted
                 onLoadedMetadata={handleLoadedMetadata}
                 onPlay={handlePlay}
+                onPause={handlePause}
                 onTimeUpdate={handleTimeUpdate}
+                onError={handleVideoError}
                 className="aspect-video w-full"
               />
+              {playbackError && (
+                <div
+                  role="alert"
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+                >
+                  <span>The video could not be loaded. Its playback link may have expired or the connection dropped.</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      wantPlayingRef.current = true;
+                      reload({ wasPlaying: true });
+                    }}
+                    className="rounded border border-warning/40 bg-warning/15 px-2.5 py-1 font-medium text-warning hover:bg-warning/25"
+                  >
+                    Reload video
+                  </button>
+                </div>
+              )}
               <div className="flex items-center justify-between gap-3 bg-bg-secondary px-3 py-2">
                 <span className="text-xs text-text-muted">
                   {end == null

@@ -7,5 +7,5 @@
   "ios.deploymentTarget": "16.4",
   "expo.inlineModules.watchedDirectories": "[]",
   "expo.inlineModules.xcodeProjectTargets": "{\"mainTarget\":\"WODStrategist\",\"targets\":[]}",
-  "EXPO_USE_PRECOMPILED_MODULES": "true"
+  "EXPO_USE_PRECOMPILED_MODULES": "false"
 }

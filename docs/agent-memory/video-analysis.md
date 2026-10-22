@@ -77,12 +77,18 @@ For standard WODs, current code removes walking/rest/setup rows, retains `Unknow
 visual revalidation, and merges only touching segments with the same free-text
 movement. Recovery workouts retain low-motion/rest/setup chunks and exclude explicit walking; see [recovery-and-mobility.md](recovery-and-mobility.md). A filtered rest gap is never merged into the surrounding movement.
 
-Detailed analysis adds independent observation windows between indexed sets.
-Their activity is initially unknown; only direct target-person evidence can
-establish rest. Prefix waiting and post-workout tail are not automatically
-classified. Budget omissions and failed windows remain explicitly unassessed.
-Warmup selection reserves early/late observations of repeated movements when
-the segment budget permits a pair.
+Detailed analysis no longer adds observation windows between indexed sets
+(`addBetweenObservationWindows` was removed 2026-10-19), so no rest between sets
+is directly observed. Verified media of chunks that chunk analysis explicitly
+classified as non-exercise (`activity_state` walking/rest_setup/not_exercise, or
+a non-empty non-exercise movement such as `Rest`; recovery: walking only) is
+recorded as a `skipped_non_exercise` media gap (`skippedNonExerciseGaps`). Media
+nobody classified or observed (unlabelled chunks, missing media offsets, sets the
+indexer missed) is filled as `not_analyzed` and keeps interior coverage incomplete.
+Prefix waiting and post-workout tail are not automatically classified. Budget
+omissions and failed windows remain explicitly unassessed. Production warmup
+triage reserves early/late observations of repeated movements when the segment
+budget permits a pair.
 
 Fallback:
 - if no usable verified chunk segments remain after split/recovery attempts, use model-based indexing
@@ -96,7 +102,7 @@ Constrain analysis to the exact time range.
 
 - `NewVideoAnalysisTask` sets an explicit 1-hour Asynq timeout (`videoAnalysisTaskTimeout = time.Hour`).
 - Pass 2 analyzes segments concurrently against the uploaded full-video URI (`maxConcurrentSegmentAnalyses = 5`), then aggregates token usage, `wodEvidence`, `workout_progress` intervals/gaps, highlights, and markdown output in chronological segment index order (`0..len(segments)-1`).
-- Segments with `Type == "Unknown"` (case-insensitive, including between-set observation windows and `Unknown` chunk windows) route to `gemini-3.8-flash` with `HIGH` thinking (`AnalyzeSegmentWithModel(..., gemini.ModelFlash38)`); non-`Unknown` exercise segments use the client's Pro model (`gemini-4-argon`, `HIGH` thinking).
+- Segments with `Type == "Unknown"` (case-insensitive, including `Unknown` chunk windows) route to `gemini-3.8-flash` with `HIGH` thinking (`AnalyzeSegmentWithModel(..., gemini.ModelFlash38)`); non-`Unknown` exercise segments use the client's Pro model (`gemini-4-argon`, `HIGH` thinking).
 - `GET /api/v1/sessions/:session_id/cost` returns `total_duration_ms` and `by_stage` (`[]StageDurationItem`) aggregated from `pipeline_stage_metrics` so the web UI (`SessionCostCard` and `SessionDetailPage`) can display total and per-stage analysis duration.
 
 Current-window observation includes time-bounded complete-cycle/form/ROM/pace
@@ -104,7 +110,9 @@ evidence in `workout_observations`. Do not send history, previous assessments,
 session fatigue aggregates, or score requests to any segment, including the last.
 `workout_progress` assembles these observations before a separate text-only final
 assessment. WOD version-1 eligibility alone controls onset trimming and version-1
-scores; a new timeline must not upgrade historical sessions. Warmup progression
+scores in production; a new timeline never upgrades historical sessions. Only an
+explicitly applied version-1 whole-session reanalysis promotes one (see
+[`wod-training-load.md`](wod-training-load.md)). Warmup progression
 is evaluated at final assessment, preserving controlled early/late ROM changes.
 See [`workout-progress.md`](workout-progress.md) for storage, confirmation and
 the one-way observation/timeline/assessment boundary.
@@ -219,12 +227,22 @@ Do not disable the filter based on session drift or missing capture offsets.
 - Owner APIs are `POST /sessions/:session_id/reanalyses`,
   `GET /sessions/:session_id/reanalyses`, and
   `GET /sessions/:session_id/reanalyses/:run_id`. POST requires
-  `client_request_id` and accepts optional `appearance_hints`, `model`, and `wod_description` (`session_reanalysis_dto.go`). It enforces one active run per session, blocks while any
-  chunk debug run is active, and limits each profile to 5 runs per rolling 24h.
+  `client_request_id` and accepts optional `appearance_hints`, `model`, `wod_description`, and `wod_start_secs` (`session_reanalysis_dto.go`). `wod_start_secs` is allowed for all WOD sessions (including legacy `wod_evaluation_version == 0` sessions). It enforces one active run per session, blocks while any
+  chunk debug run is active, and limits each profile to 20 runs per rolling 24h (`sessionReanalysisDailyQuota = 20`). `SESSION_REANALYSIS_DAILY_QUOTA` overrides it; `config.InitServer` rejects a non-positive or non-integer value at startup and passes it as `controllers.Config.SessionReanalysisDailyQuota` (0 = default).
 - The API resolves and snapshots the exact GCS session source. The worker may
   reuse a still-valid Gemini Files object only from a chunk or session debug run
-  with the same `source_gcs_uri`; an authoritative source duration is still
-  probed before reuse.
+  with the same `source_gcs_uri`; an authoritative source duration and local `.mp4` copy are
+  prepared so segment analysis can run via Frame-Grid contact sheets (`AnalyzeVideoIntervalWithFrameGrids`).
+- Workout type (`loadSessionDebugContext`): `sessions.workout_type`; without a sessions row, the
+  session-ID type prefix of a current or legacy `P{id}-` ID (`workoutTypeFromSessionID`).
+  `analysis_results` has no workout type. Only an unprefixed ID defaults to WOD. Only a WOD enters
+  the version-1 WOD path (start detection, trimming, `wod_evaluation_version = 1` on Apply).
+- Segment resolution order:
+  1. Verified `media_start_secs`/`media_end_secs` on `chunk_analysis_results` (`buildSessionDebugSegments`). When a completed original chunk's object has no verified interval on any row (`sessionDebugTimelineIncomplete`), `reconstructSessionDebugMediaIntervals` rebuilds the **whole** concat timeline with `retainedChunkTimeline` (shared with chunk debug). Each retained URI is probed once (duplicate rows share it, like merge). Any unavailable object writes nothing, and rebuilt offsets that disagree with verified ones by >0.05s abort. Unmapped chunks stay unobserved (`not_analyzed`). Duplicate rows are observed once; corrections on any duplicate row apply. A failed rebuild records `sessionDebugTimelineFingerprint(chunks)` (id, file_path, status, media offsets) as `source_context_snapshot.timeline_rebuild_failed` on the run; later runs skip the rebuild (no chunk downloads) while a run within `sessionDebugTimelineRebuildRetryAfter = 24h` recorded the same fingerprint. A skipped rebuild does not re-record it.
+  2. Only when no chunk has a verified interval: stored `analysis_results.workout_progress` intervals (`storedProgressSegments`), and only if `MediaSourceID` equals `progressMediaSource` of this run's Files URI or local file. `analysis_results.output` headers are never parsed: legacy headers can carry capture-clock offsets.
+  3. `IndexVideo`, filtered to the source duration before `filterExerciseAndUnknownSegments(segments, workoutType)` merges.
+- Selection keeps exercise and `Unknown` segments (`Unknown` routed to `gemini-3.8-flash`; an unlabelled index segment becomes `Unknown`). Explicit non-exercise (`[NO_EXERCISE]`, `Rest`, `Walking`, `Setup`) is skipped and recorded as `skipped_non_exercise`; recovery workouts keep rest/setup and skip only walking (same as `includeChunkInDeepAnalysis`). No between-set `Unknown` windows are inserted and `maxSegmentsForDuration` does not truncate session reanalysis.
+- Completed-segment checkpoints and terminal/retry state writes use `sessionDebugPersistContext` (`context.WithoutCancel` + 30s timeout), so a task deadline cannot leave a run `RUNNING` or lose finished segments; retries reuse checkpointed segments.
 - Only the latest active, non-retracted structured chunk corrections are
   included. Free-text notes and unconfirmed re-analysis candidates are never
   prompt context. Corrections carry `media_start_secs`/`media_end_secs`, remain
@@ -360,8 +378,8 @@ Deployment acceptance still requires matched, annotated-video comparison of Argo
 - **Previous-value & checkpoint reuse**:
   - `detectWODStart` (`wod_evaluation.go`): When `len(request) == 0`, reuses `s.WODStart` from `analysis_results.session_score` if `s.WODStart.Status == "confirmed"` and either `s.WODStart.Source == "manual"` or `startCoveredBySegment(*s.WODStart.Seconds, segments)` is true.
   - `normalizeWorkout` (`normalize_workout.go`): Reuses `existing.NormalizedWorkout` from `analysis_results` without calling Gemini when `strings.TrimSpace(existing.WODDescription) == strings.TrimSpace(wodDescription)` and `NormalizedWorkout` is non-empty (`<> ''` and `<> '[]'`).
-  - `chunk_debug_reanalysis.go`: Supports `reuse_previous: true` in `SourceContextSnapshot` (reusing a matching `COMPLETED` `ChunkReanalysisRun` with identical `(chunk_analysis_result_id, model, prompt_hash, source_gcs_uri, media_start_secs, media_end_secs, schema_version)`) and checks both `ChunkReanalysisRun` and `SessionReanalysisRun` when reusing active Gemini Files uploads.
-  - `session_debug_reanalysis.go`: Filters prompt corrections per segment (`correctionsForSegment`) and caches/reuses completed segments by `sha256(model|start|end|prompt)` across both intra-run retries (`run.SourceContextSnapshot["completed_segments"]`) and prior `COMPLETED` `SessionReanalysisRun` rows for the same `(session_id, profile_id, source_gcs_uri)`.
+  - `chunk_debug_reanalysis.go`: Supports `reuse_previous: true` in `SourceContextSnapshot` (reusing a matching `COMPLETED` `ChunkReanalysisRun` with identical `(chunk_analysis_result_id, model, source_gcs_uri, media_start_secs, media_end_secs, schema_version)` and a `prompt_hash` of either analysis mode, `chunkDebugPromptHash`) and checks both `ChunkReanalysisRun` and `SessionReanalysisRun` when reusing active Gemini Files uploads.
+  - `session_debug_reanalysis.go`: Filters prompt corrections per segment (`correctionsForSegment`) and caches/reuses completed segments by `sha256(model|mode|start|end|prompt)` (analysis mode: `frame-grid-v1`/`video`) across both intra-run retries (`run.SourceContextSnapshot["completed_segments"]`) and prior `COMPLETED` `SessionReanalysisRun` rows for the same `(session_id, profile_id, source_gcs_uri)`.
 - **Bounded parallelism (`maxConcurrentSegmentAnalyses = 5`)**:
   - Applied across `video_analysis.go` (Pass 2), `session_debug_reanalysis.go` (Pass 2 + `Unknown` routing to `gemini-3.8-flash`), `activity_review.go` (rows loop with mutex-protected DB checkpointing), `injury_analysis.go` (intervals loop), and `generate_hardsub.go` (TTS chunks loop).
 - **Batch chunk re-analysis API**:
@@ -370,3 +388,17 @@ Deployment acceptance still requires matched, annotated-video comparison of Argo
   - `Client.AnalyzeSegmentsBatch` (`internal/gemini/client.go`) submits `InlinedRequests` via `c.client.Batches.Create` with exact fractional `videoMetadata` offsets (`replaceBatchVideoMetadataOffsets` in `exactSegmentOffsetsTransport`) and polls `c.client.Batches.Get`.
   - `cost.IsBatchTaskType` (`internal/cost/cost.go`) applies a 50% discount (`BatchDiscountMultiplier = 0.5`) to any `token_usages.task_type` ending in `:batch` (e.g., `video:analysis:batch`, `session:reanalysis:batch`).
 
+## Frame-Grid Contact Sheet Reanalysis (2026-10-19)
+- **FFmpeg + Go Contact Sheet Generation (`internal/worker/frame_grid.go`)**:
+  - `GenerateFrameGrids(ctx, videoPath, start, end, opts)`: Extracts frames via FFmpeg (`-vf fps=...,scale=...`), burns top-left `HH:MM:SS.mmm` timestamps (`inconsolata.Bold8x16` on semi-transparent dark badge) in pure Go (no `libfreetype`/`drawtext` requirement), and tiles into `[]FrameGridSheet` JPEG contact sheets.
+  - Default `FrameGridOptions`: `FPS=4.0`, `Cols=8`, `Rows=4` (32 frames / 8s per sheet), `MaxSheets=12` (384 frames max per call), `TileWidth=240`, `JPEGQuality=85`, `defaultFrameGridBorderPx=2`. Intervals exceeding 32 frames automatically split into multiple chronological sheets; `GenerateFrameGrids` itself can scale `FPS` down to `minFrameGridFPS=0.25` and subsample.
+  - Reanalysis uses frame grids only when `frameGridEligible`: the interval fits the sheet budget at `minReanalysisFrameGridFPS = 2.0` or faster (≤192s at defaults). `AnalyzeVideoIntervalWithFrameGrids` returns `errFrameGridIntervalTooLong` with no sheets otherwise, and callers use `AnalyzeSegmentWithModel` (VideoMetadata). At most `maxConcurrentFrameGridExtractions = 2` extractions decode frames at once.
+  - `TimestampOffset *time.Duration`: Optional base timestamp override when extracting `[0, duration]` from a standalone chunk file that maps to a known merged-media offset.
+  - `FormatSecondsBadge bool`: When `true` (used by `activity:review`), burns decimal media seconds (`%.2fs`, e.g. `124.25s`) instead of `HH:MM:SS.mmm` onto each tile and emits decimal-second prompt instructions in `buildFrameGridPromptContext`.
+  - `ThinkingLevel string`: Optional per-call thinking level override (e.g. `"MEDIUM"` for `activity:review`), passed via `gemini.WithThinkingLevel(ctx, opts.ThinkingLevel)` to `AnalyzeFrameGridsWithModel`.
+- **Gemini Inline Frame-Grid Analysis (`internal/gemini/client.go`)**:
+  - `Client.AnalyzeFrameGrids` and `Client.AnalyzeFrameGridsWithModel(ctx, images, mimeType, prompt, model)` send one or more contact-sheet images inline (`InlineData`) with `MediaResolutionHigh` and configured thinking (`HIGH` default, overridable per call via `gemini.WithThinkingLevel`), excluding `Thought` parts from the returned text. The worker `GeminiClient` interface exposes only `AnalyzeFrameGridsWithModel`.
+  - `(w *Worker) AnalyzeVideoIntervalWithFrameGrids(ctx, videoPath, start, end, prompt, model, opts)` combines `GenerateFrameGrids`, frame-grid reading prompt instructions, and `GeminiClient.AnalyzeFrameGridsWithModel`.
+  - `HandleActivityReviewTask` (`activity_review.go`) uses `AnalyzeVideoIntervalWithFrameGrids` (`FormatSecondsBadge: true`, `ThinkingLevel: "MEDIUM"`, `gemini-3.8-flash`) for each 30s sliding window when `probeVideoDuration` succeeds on the downloaded merged video, skipping `UploadVideo` and avoiding Gemini gateway HTTP 504 `DEADLINE_EXCEEDED` timeouts on concurrent `VideoMetadata` calls (lazily uploading and falling back to `AnalyzeSegmentWithModel` only if local probing/extraction fails). For future cost reduction via multi-chunk Frame-Grid batching (Option 2: Batch-2 windows), see [`live-activity-feedback.md`](live-activity-feedback.md#review-lifecycle).
+  - Both `HandleSessionDebugReanalysisTask` and `HandleChunkDebugReanalysisTask` may retain the downloaded local `.mp4` for the duration of the task and analyze eligible segments/chunks via `AnalyzeVideoIntervalWithFrameGrids` (with fallback to `AnalyzeSegmentWithModel` if a local video file is unavailable, the interval is too long, or FFmpeg cannot decode it). The worker's temp dir is memory-backed on Cloud Run, so a copy is kept only while it fits `maxRetainedReanalysisMediaBytes = 1 GiB`, a budget shared by all concurrent runs (`keepLocalForFrameGrids` / `retainReanalysisMedia`). A copy that does not fit is deleted right after upload or duration probe, and that run uses VideoMetadata. Clean up with `defer file.removeLocal()` (deletes the file and returns the budget), never a bare `os.Remove(file.LocalPath)`. A chunk run on a session video that reuses a cached Files object has no local media and deliberately uses VideoMetadata, avoiding a second download of the whole session video.
+  - The analysis mode (`debugAnalysisModeFrameGrid = "frame-grid-v1"` or `debugAnalysisModeVideo = "video"`) is part of the reuse identity: `sessionDebugSegmentCacheKey(model, mode, start, end, prompt)` and `chunkDebugPromptHash(prompt, mode)` (stored as `prompt_hash`, with the mode actually used). `reuse_previous` accepts a completed candidate of either mode and keeps that candidate's own `prompt_hash`.

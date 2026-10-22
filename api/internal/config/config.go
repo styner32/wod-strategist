@@ -38,6 +38,8 @@ type Server struct {
 	CookieSecure             bool   // COOKIE_SECURE — set Secure flag on cookie; default true in prod, false for local dev
 	ChunkReanalysisEnabled   bool   // ENABLE_CHUNK_REANALYSIS — owner-only web debugging; default false
 	SessionReanalysisEnabled bool   // ENABLE_SESSION_REANALYSIS — owner-only whole-workout debugging; default false
+	// SESSION_REANALYSIS_DAILY_QUOTA — optional positive integer runs per profile per rolling 24h; 0 (unset) uses the controller default
+	SessionReanalysisDailyQuota int64
 }
 
 type Worker struct {
@@ -99,10 +101,14 @@ func InitServer() (Server, error) {
 		return Server{}, err
 	}
 
+	quota, quotaErr := parseOptionalPositiveInt("SESSION_REANALYSIS_DAILY_QUOTA")
+	cfg.SessionReanalysisDailyQuota = quota
+
 	if err := validateValues(
 		validatePort(cfg.Port),
 		validateDatabaseURL(cfg.DatabaseURL),
 		validateRedisURL(cfg.RedisURL),
+		quotaErr,
 	); err != nil {
 		return Server{}, err
 	}
@@ -266,6 +272,19 @@ func validateRedisURL(url string) error {
 		return fmt.Errorf("REDIS_URL port must not be empty")
 	}
 	return nil
+}
+
+// parseOptionalPositiveInt returns 0 when name is unset.
+func parseOptionalPositiveInt(name string) (int64, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer, got %q", name, raw)
+	}
+	return value, nil
 }
 
 func validateThinkingLevel(name, level string) error {

@@ -52,6 +52,7 @@ import { VideoTransportBar } from "./components/VideoTransportBar";
 import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
 import { getHighlightSeekTime, parseHighlightSegments } from "./highlights";
 import { sensorTimelinePollInterval, sensorTimelineQueryKey } from "./timelineUtils";
+import { useSignedVideoUrl } from "./useSignedVideoUrl";
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("en-US", {
@@ -221,6 +222,20 @@ export function SessionDetailPage() {
   );
 
   const analysis = sessionAnalysis?.analysis ?? analyses?.[0];
+  const wodDescription =
+    analysis?.wod_description?.trim() ||
+    sessionAnalysis?.wod_description?.trim() ||
+    analyses?.[0]?.wod_description?.trim() ||
+    "";
+  const openWodDescriptionEditor = useCallback(() => {
+    setActivePanelId("details");
+    window.setTimeout(() => {
+      const el = document.getElementById("session-reanalysis-panel");
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }, 0);
+  }, []);
   const analysisStatusUpper = analysis?.status?.toUpperCase() ?? "";
   const isAnalysisInProgress =
     analysisStatusUpper === "PROCESSING" ||
@@ -758,8 +773,11 @@ export function SessionDetailPage() {
 
   const {
     data: videoUrl,
+    dataUpdatedAt: videoUrlUpdatedAt,
     error: videoError,
     isLoading: videoLoading,
+    isFetching: videoFetching,
+    refetch: refetchVideoUrl,
   } = useQuery({
     queryKey: ["video-url", sessionId, profileId, selectedKind ?? "default"],
     queryFn: () => loadTargetVideo(sessionId!, profileId!, selectedKind),
@@ -768,6 +786,32 @@ export function SessionDetailPage() {
     retry: false,
   });
   const effectiveVideoKind = selectedKind ?? videoUrl?.kind ?? "merged";
+  const activeVideoSessionKey = `${sessionId ?? ""}:${effectiveVideoKind}`;
+  const refetchSignedVideoUrl = useCallback(async () => {
+    const result = await refetchVideoUrl();
+    if (result.isError) throw result.error;
+    return result.data?.download_url;
+  }, [refetchVideoUrl]);
+  const {
+    playbackError: videoPlaybackError,
+    pendingRestoreRef: pendingVideoRestoreRef,
+    wantPlayingRef,
+    needsReload: videoNeedsReload,
+    reload: reloadVideo,
+    handleError: handleVideoError,
+    handlePlay: markVideoPlaying,
+    handlePause: markVideoPaused,
+    takeRestore: takeVideoRestore,
+  } = useSignedVideoUrl({
+    videoRef,
+    sourceKey: activeVideoSessionKey,
+    url: videoUrl?.download_url,
+    expiresAt: videoUrl?.expires_at,
+    fetchedAtMs: videoUrlUpdatedAt,
+    fetching: videoFetching,
+    refetchUrl: refetchSignedVideoUrl,
+    fallbackTime: currentTime,
+  });
 
   const { data: sensorTimelineResponse, isLoading: sensorTimelineLoading } =
     useQuery({
@@ -850,38 +894,98 @@ export function SessionDetailPage() {
   const handleTimeUpdate = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
+    if (
+      pendingVideoRestoreRef.current != null &&
+      video.readyState < 1 &&
+      video.currentTime === 0
+    ) {
+      return;
+    }
     setCurrentTime(video.currentTime);
     if (Number.isFinite(video.duration) && video.duration > 0) {
       setDuration(video.duration);
     }
     setIsPaused(video.paused);
     setPlaybackRate(video.playbackRate || 1);
-  }, []);
+  }, [pendingVideoRestoreRef]);
+
+  const handleLoadedMetadata = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const restore = takeVideoRestore();
+    if (restore) {
+      if (Number.isFinite(restore.playbackRate) && restore.playbackRate > 0) {
+        video.playbackRate = restore.playbackRate;
+      }
+      if (
+        Number.isFinite(restore.currentTime) &&
+        restore.currentTime > 0.05 &&
+        (!Number.isFinite(video.duration) || restore.currentTime < video.duration)
+      ) {
+        video.currentTime = restore.currentTime;
+      }
+      if (restore.wasPlaying) {
+        video.play().catch(() => {});
+      }
+    }
+    handleTimeUpdate();
+  }, [handleTimeUpdate, takeVideoRestore]);
+
+  const handleVideoPlay = useCallback(() => {
+    markVideoPlaying();
+    handleTimeUpdate();
+  }, [handleTimeUpdate, markVideoPlaying]);
+
+  const handleVideoPause = useCallback(() => {
+    markVideoPaused();
+    handleTimeUpdate();
+  }, [handleTimeUpdate, markVideoPaused]);
 
   // Seek video to a specific time and play
-  const handleSeek = useCallback((time: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
-      videoRef.current.play().catch(() => {});
-    }
-  }, []);
+  const handleSeek = useCallback(
+    (time: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      wantPlayingRef.current = true;
+      if (videoNeedsReload()) {
+        reloadVideo({ currentTime: time, wasPlaying: true });
+        return;
+      }
+      video.currentTime = time;
+      video.play().catch(() => {});
+    },
+    [reloadVideo, videoNeedsReload, wantPlayingRef],
+  );
 
   // Seek video without altering play/pause state
-  const handleTimelineSeek = useCallback((time: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
-    }
-  }, []);
+  const handleTimelineSeek = useCallback(
+    (time: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (videoNeedsReload()) {
+        reloadVideo({ currentTime: time, wasPlaying: !video.paused });
+        return;
+      }
+      video.currentTime = time;
+    },
+    [reloadVideo, videoNeedsReload],
+  );
 
   const handleTogglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
     if (video.paused) {
+      wantPlayingRef.current = true;
+      if (videoNeedsReload()) {
+        reloadVideo({ wasPlaying: true });
+        return;
+      }
       video.play().catch(() => {});
     } else {
+      wantPlayingRef.current = false;
       video.pause();
     }
-  }, []);
+  }, [reloadVideo, videoNeedsReload, wantPlayingRef]);
 
   const handleRateChange = useCallback((rate: number) => {
     setPlaybackRate(rate);
@@ -949,20 +1053,43 @@ export function SessionDetailPage() {
         player={<>
           <div className="bg-bg-elevated border border-border rounded-xl overflow-hidden">
             {videoUrl?.download_url ? (
-              <video
-                ref={videoRef}
-                src={videoUrl.download_url}
-                controls
-                muted
-                preload="metadata"
-                onLoadedMetadata={handleTimeUpdate}
-                onTimeUpdate={handleTimeUpdate}
-                onSeeked={handleTimeUpdate}
-                onPlay={handleTimeUpdate}
-                onPause={handleTimeUpdate}
-                onRateChange={handleTimeUpdate}
-                className="w-full max-h-[36svh] bg-black object-contain sm:max-h-[50svh] lg:max-h-[calc(100dvh-20rem)]"
-              />
+              <>
+                <video
+                  ref={videoRef}
+                  src={videoUrl.download_url}
+                  controls
+                  muted
+                  preload="metadata"
+                  onLoadedMetadata={handleLoadedMetadata}
+                  onTimeUpdate={handleTimeUpdate}
+                  onSeeked={handleTimeUpdate}
+                  onPlay={handleVideoPlay}
+                  onPause={handleVideoPause}
+                  onRateChange={handleTimeUpdate}
+                  onError={handleVideoError}
+                  className="w-full max-h-[36svh] bg-black object-contain sm:max-h-[50svh] lg:max-h-[calc(100dvh-20rem)]"
+                />
+                {videoPlaybackError && (
+                  <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-2 border-t border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+                  >
+                    <span>
+                      동영상 재생 세션이 만료되었거나 연결이 끊어졌습니다.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        wantPlayingRef.current = true;
+                        reloadVideo({ wasPlaying: true });
+                      }}
+                      className="rounded border border-warning/40 bg-warning/15 px-2.5 py-1 font-medium text-warning hover:bg-warning/25"
+                    >
+                      동영상 다시 불러오기
+                    </button>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="w-full aspect-video bg-bg-secondary flex items-center justify-center">
                 <div className="text-center">
@@ -1041,6 +1168,51 @@ export function SessionDetailPage() {
         </>}
         panels={[
           { id: "summary", label: "영상 요약", content: <>
+          {/* WOD Description summary card */}
+          <div
+            data-testid="session-summary-wod-description"
+            className="bg-bg-elevated border border-border rounded-xl p-4"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-text-primary">
+                WOD Description
+              </h2>
+              <button
+                type="button"
+                onClick={openWodDescriptionEditor}
+                className="text-xs font-semibold text-accent hover:underline focus:outline-none flex items-center gap-1"
+              >
+                <span>✏️</span>{" "}
+                {wodDescription
+                  ? "수정 및 전체 재분석"
+                  : "WOD 설명 등록 및 재분석"}
+              </button>
+            </div>
+            {wodDescription ? (
+              <p className="text-text-primary text-sm mt-2 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
+                {wodDescription}
+              </p>
+            ) : (
+              <p className="text-text-muted text-xs mt-1.5 italic">
+                등록된 WOD 설명이 없습니다. 위 버튼을 눌러 WOD 설명을 입력하고 재분석할 수 있습니다.
+              </p>
+            )}
+            {sessionAnalysis?.movement_hints &&
+              sessionAnalysis.movement_hints.length > 0 && (
+                <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-text-muted mr-1">계획 종목:</span>
+                  {sessionAnalysis.movement_hints.map((movement) => (
+                    <span
+                      key={movement}
+                      className="rounded-md bg-accent/10 px-2 py-0.5 text-xs text-accent font-medium"
+                    >
+                      {movement}
+                    </span>
+                  ))}
+                </div>
+              )}
+          </div>
+
           {/* AI Analysis */}
           <div className="bg-bg-elevated border border-border rounded-xl p-5">
             <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
@@ -1132,7 +1304,7 @@ export function SessionDetailPage() {
           </div>
           </> },
           { id: "performance", label: "수행 이력·벤치마크", content: <>
-          {analysis?.status === "COMPLETED" && profileId && sessionId && <WorkoutProgressPanel key={`progress:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} sourceUpdatedAt={analysis.updated_at} wodDescription={analysis.wod_description} isOriginal={effectiveVideoKind === "merged"} seek={handleAnalysisSeek} />}
+          {analysis?.status === "COMPLETED" && profileId && sessionId && <WorkoutProgressPanel key={`progress:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} sourceUpdatedAt={analysis.updated_at} wodDescription={wodDescription} isOriginal={effectiveVideoKind === "merged"} seek={handleAnalysisSeek} />}
           </> },
           { id: "timeline", label: "시계열", content: <>
           {analysis && (
@@ -1526,23 +1698,15 @@ export function SessionDetailPage() {
                     <p className="text-text-muted">WOD Description</p>
                     <button
                       type="button"
-                      onClick={() => {
-                        setActivePanelId("details");
-                        window.setTimeout(() => {
-                          const el = document.getElementById("session-reanalysis-panel");
-                          if (el) {
-                            el.scrollIntoView({ behavior: "smooth", block: "nearest" });
-                          }
-                        }, 0);
-                      }}
+                      onClick={openWodDescriptionEditor}
                       className="text-xs font-semibold text-accent hover:underline focus:outline-none flex items-center gap-1"
                     >
-                      <span>✏️</span> {analysis.wod_description ? "수정 및 전체 재분석" : "WOD 설명 등록 및 재분석"}
+                      <span>✏️</span> {wodDescription ? "수정 및 전체 재분석" : "WOD 설명 등록 및 재분석"}
                     </button>
                   </div>
-                  {analysis.wod_description ? (
+                  {wodDescription ? (
                     <p className="text-text-primary text-sm mt-1 whitespace-pre-wrap bg-bg-secondary p-3 rounded-lg border border-border">
-                      {analysis.wod_description}
+                      {wodDescription}
                     </p>
                   ) : (
                     <p className="text-text-muted text-xs mt-1 italic">
@@ -1598,10 +1762,19 @@ export function SessionDetailPage() {
 
           <SessionReanalysisPanel
             sessionId={sessionId!}
-            originalAnalysis={analysis}
+            originalAnalysis={
+              analysis
+                ? {
+                    ...analysis,
+                    wod_description: wodDescription || analysis.wod_description,
+                  }
+                : undefined
+            }
             chunkBatchReady={chunkBatchReadyForSessionReanalysis}
             chunkBatchBlockedReason={chunkBatchBlockedReason}
             unconfirmedCandidateCount={unconfirmedBulkCandidateCount}
+            currentTime={currentTime}
+            isOriginal={effectiveVideoKind === "merged"}
           />
 
           {analysis?.session_fatigue && (

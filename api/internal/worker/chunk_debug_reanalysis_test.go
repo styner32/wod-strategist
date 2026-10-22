@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -32,6 +33,45 @@ var _ = Describe("chunk debug re-analysis helpers", func() {
 		It("rejects a missing run ID", func() {
 			_, err := NewChunkDebugReanalysisTask(0)
 			Expect(err).To(MatchError("run_id is required"))
+		})
+	})
+
+	Describe("retainReanalysisMedia", func() {
+		It("keeps local copies only while they fit the budget shared by concurrent runs", func() {
+			large := retainReanalysisMedia(maxRetainedReanalysisMediaBytes - 10)
+			Expect(large).NotTo(BeNil())
+			Expect(retainReanalysisMedia(11)).To(BeNil())
+			small := retainReanalysisMedia(10)
+			Expect(small).NotTo(BeNil())
+			small()
+			large()
+			large()
+			Expect(retainedReanalysisMediaBytes.Load()).To(BeZero(), "a release is counted once")
+		})
+
+		It("deletes a local copy that does not fit and keeps the Files object", func() {
+			local, err := createTempFile("retained-media", ".mp4")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(os.WriteFile(local, []byte("video"), 0o600)).To(Succeed())
+			full := retainReanalysisMedia(maxRetainedReanalysisMediaBytes)
+			Expect(full).NotTo(BeNil())
+
+			file := keepLocalForFrameGrids(reusableGeminiFile{URI: "https://files/source", LocalPath: local})
+			full()
+
+			Expect(file.URI).To(Equal("https://files/source"))
+			Expect(file.LocalPath).To(BeEmpty())
+			_, statErr := os.Stat(local)
+			Expect(os.IsNotExist(statErr)).To(BeTrue())
+
+			Expect(os.WriteFile(local, []byte("video"), 0o600)).To(Succeed())
+			kept := keepLocalForFrameGrids(reusableGeminiFile{URI: "https://files/source", LocalPath: local})
+			Expect(kept.LocalPath).To(Equal(local))
+			Expect(retainedReanalysisMediaBytes.Load()).To(Equal(int64(len("video"))))
+			kept.removeLocal()
+			Expect(retainedReanalysisMediaBytes.Load()).To(BeZero())
+			_, statErr = os.Stat(local)
+			Expect(os.IsNotExist(statErr)).To(BeTrue())
 		})
 	})
 
@@ -662,6 +702,80 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 		Expect(completed.Status).To(Equal(db.ChunkReanalysisStatusCompleted))
 		Expect(string(completed.StructuredCandidate)).To(MatchJSON(`{"exercise_type":"Pull-up","output":"대상 인물이 바를 직접 잡고 당기고 있습니다.","observed_signals":{"fatigue_detected":false,"movement":"Pull-up","rep_count":3}}`))
 		Expect(completed.TotalTokens).To(BeZero())
+	})
+
+	It("extracts contact-sheet frame grids with session TimestampOffset when downloading a valid MP4 chunk", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg is required for frame grid chunk reanalysis test")
+		}
+		mp4Path := createTinyMP4(GinkgoT())
+		mp4Bytes, err := os.ReadFile(mp4Path)
+		Expect(err).NotTo(HaveOccurred())
+
+		mediaStart, mediaEnd := 100.0, 101.0
+		chunkURI := "gs://test-bucket/videos/1/" + session.SessionID + "/chunk_001.mp4"
+		_, run := seedRun("frame-grid-chunk-run", chunkURI, &mediaStart, &mediaEnd)
+
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/1/"+session.SessionID+"/", nil)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/"+session.SessionID+"_", nil)
+		testhelpers.MockGCSDownloadWithBody(storageTransport, chunkURI, mp4Bytes)
+
+		geminiTransport.New(geminiBaseURL).
+			Post("/upload/v1beta/files").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			Header("X-Goog-Upload-Url", geminiBaseURL+"/upload-frame-grid-chunk").
+			JSON(map[string]any{})
+		geminiTransport.New(geminiBaseURL).
+			Post("/upload-frame-grid-chunk").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			Header("X-Goog-Upload-Status", "final").
+			JSON(map[string]any{"file": map[string]any{
+				"name": "files/frame-grid-chunk",
+				"uri":  geminiBaseURL + "/files/frame-grid-chunk",
+			}})
+		geminiTransport.New(geminiBaseURL).
+			Get("/v1beta/files/frame-grid-chunk").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			Reply(http.StatusOK).
+			JSON(map[string]any{
+				"name":          "files/frame-grid-chunk",
+				"state":         "ACTIVE",
+				"videoMetadata": map[string]any{"videoDuration": "1s"},
+			})
+		geminiTransport.New(geminiBaseURL).
+			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
+			MatchBodyContains(`"inlineData"`).
+			MatchBodyContains("00:01:40.000").
+			Reply(http.StatusOK).
+			JSON(map[string]any{
+				"candidates": []map[string]any{{
+					"content": map[string]any{
+						"parts": []map[string]any{{"text": `[EXERCISE: Thruster]
+바벨 쓰러스터 3회가 확인됩니다.
+` + "```observed_signals\n" + `{"movement":"Thruster","rep_count":3,"fatigue_detected":false}` + "\n```"}},
+					},
+				}},
+				"usageMetadata": map[string]any{
+					"promptTokenCount":     210,
+					"candidatesTokenCount": 25,
+					"totalTokenCount":      235,
+				},
+			})
+
+		task, err := NewChunkDebugReanalysisTask(run.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(w.HandleChunkDebugReanalysisTask(context.Background(), task)).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+		Expect(geminiTransport.Verify()).To(Succeed())
+
+		var completed db.ChunkReanalysisRun
+		Expect(dbConn.First(&completed, run.ID).Error).To(Succeed())
+		Expect(completed.Status).To(Equal(db.ChunkReanalysisStatusCompleted))
+		Expect(string(completed.StructuredCandidate)).To(ContainSubstring("Thruster"))
+		Expect(completed.TotalTokens).To(Equal(int32(235)))
 	})
 })
 

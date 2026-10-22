@@ -79,6 +79,7 @@ func (ctl *Controller) GetSessionAnalysis(c *gin.Context) {
 
 	movementHints := make([]string, 0)
 	workoutType := ""
+	wodDescription := strings.TrimSpace(analysis.WODDescription)
 	if sessionFound {
 		var err error
 		movementHints, err = decodeMovementHints(session.MovementHints)
@@ -88,10 +89,16 @@ func (ctl *Controller) GetSessionAnalysis(c *gin.Context) {
 			return
 		}
 		workoutType = session.WorkoutType
+		if wodDescription == "" {
+			wodDescription = strings.TrimSpace(session.WODDescription)
+		}
 	}
 
 	var analysisResponse *SessionAnalysisResultResponse
 	if hasAnalysis {
+		if strings.TrimSpace(analysis.WODDescription) == "" && wodDescription != "" {
+			analysis.WODDescription = wodDescription
+		}
 		analysis.HighlightSegments = normalizeHighlightJSONForResponse(analysis.HighlightSegments)
 		populateSessionFatigueWithSchema(&analysis, workoutLoadSchemaVersion(c))
 		analysisResponse = &SessionAnalysisResultResponse{
@@ -108,6 +115,7 @@ func (ctl *Controller) GetSessionAnalysis(c *gin.Context) {
 
 	c.JSON(http.StatusOK, SessionAnalysisResponse{
 		SessionID:                   sessionID,
+		WODDescription:              wodDescription,
 		Analysis:                    analysisResponse,
 		Chunks:                      chunks,
 		Feedback:                    activeFeedback,

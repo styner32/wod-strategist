@@ -41,6 +41,7 @@ export function WODTrainingCard({ sessionId, profileId, scoreJSON }: { sessionId
         <Text style={styles.text}>{t("wodTraining.averages", { seven: comparison.seven.daily_average.toFixed(1), twentyEight: comparison.twenty_eight.daily_average.toFixed(1) })}</Text>
         <Text style={styles.text}>{comparison.change_percent == null ? t(`wodTraining.${comparison.status}`) : t("wodTraining.change", { value: `${comparison.change_percent >= 0 ? "+" : ""}${comparison.change_percent.toFixed(1)}` })}</Text>
         <Text style={styles.text}>{t("wodTraining.missing", { effort: comparison.twenty_eight.missing_effort, duration: comparison.twenty_eight.missing_duration, time: loads?.missing_workout_time ?? 0 })}</Text>
+        {(loads?.unevaluated_legacy_workouts ?? 0) > 0 && <Text style={styles.text}>{t("wodTraining.missingLegacy", { count: loads?.unevaluated_legacy_workouts ?? 0 })}</Text>}
       </>}
       <Text style={styles.text}>{t("wodTraining.scope")}</Text>
       {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}

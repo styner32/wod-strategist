@@ -126,6 +126,13 @@ func (w *Worker) enqueueActivityReview(ctx context.Context, p VideoAnalysisPaylo
 	return err
 }
 
+func activityReviewFrameGridOptions() FrameGridOptions {
+	return FrameGridOptions{
+		FormatSecondsBadge: true,
+		ThinkingLevel:      "MEDIUM",
+	}
+}
+
 func reviewBounds(rows []db.ChunkAnalysisResult, i int) (float64, float64, bool) {
 	row := rows[i]
 	if !activity.Timed(row) || !activity.MediaTimed(row) {
@@ -223,20 +230,41 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 	if closeErr != nil {
 		return closeErr
 	}
-	uploaded, err := w.GeminiClient.UploadVideo(ctx, local.Name())
-	if uploaded != nil && uploaded.FileName != "" {
-		defer func() {
+	var (
+		uploadMu sync.Mutex
+		uploaded *gemini.UploadResult
+	)
+	defer func() {
+		if uploaded != nil && uploaded.FileName != "" {
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			defer cancel()
 			_ = w.GeminiClient.DeleteFile(cleanup, uploaded.FileName)
-		}()
+		}
+	}()
+	ensureUploaded := func(callCtx context.Context) (*gemini.UploadResult, error) {
+		uploadMu.Lock()
+		defer uploadMu.Unlock()
+		if uploaded != nil && uploaded.FileURI != "" {
+			return uploaded, nil
+		}
+		res, upErr := w.GeminiClient.UploadVideo(callCtx, local.Name())
+		if res != nil && res.FileName != "" {
+			uploaded = res
+		}
+		if upErr != nil {
+			return nil, upErr
+		}
+		return uploaded, nil
 	}
-	if err != nil {
-		return err
-	}
-	duration := uploaded.VideoDuration.Seconds()
-	if duration <= 0 {
-		duration = probeVideoDuration(ctx, local.Name())
+
+	duration := probeVideoDuration(ctx, local.Name())
+	localProbed := duration > 0
+	if !localProbed {
+		up, upErr := ensureUploaded(ctx)
+		if upErr != nil {
+			return upErr
+		}
+		duration = up.VideoDuration.Seconds()
 	}
 	if duration <= 0 {
 		return errors.New("activity review media duration unavailable")
@@ -285,7 +313,38 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 				prompt := movementObservationPrompt + target + fmt.Sprintf("\n검토 영상의 절대 media 초를 사용하세요. 문맥 구간 %.6f~%.6f초. 현재 집계 소유 구간은 (%.6f, %.6f]초입니다. 문맥에서 사이클 시작과 끝을 확인하고 기록하되, 이전 합계나 목표 횟수로 추측하지 마세요. 대상이 불명확하면 unknown입니다.", start, end, *chunkRow.MediaStartSecs, *chunkRow.MediaEndSecs)
 				started := time.Now()
 				callCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-				raw, usage, callErr := w.GeminiClient.AnalyzeSegmentWithModel(callCtx, uploaded.FileURI, uploaded.MIMEType, time.Duration(start*float64(time.Second)), time.Duration(end*float64(time.Second)), prompt, gemini.ModelFlash38)
+				segStart := time.Duration(start * float64(time.Second))
+				segEnd := time.Duration(end * float64(time.Second))
+				gridOpts := activityReviewFrameGridOptions()
+				var (
+					raw     string
+					sheets  []FrameGridSheet
+					usage   *gemini.TokenUsage
+					callErr error
+				)
+				useFrameGrid := localProbed && frameGridEligible(segEnd-segStart, gridOpts)
+				if useFrameGrid {
+					raw, sheets, usage, callErr = w.AnalyzeVideoIntervalWithFrameGrids(
+						callCtx, local.Name(), segStart, segEnd, prompt, gemini.ModelFlash38, gridOpts,
+					)
+				}
+				if !useFrameGrid || (callErr != nil && len(sheets) == 0) {
+					if callErr != nil {
+						w.logger.Warn("frame grid extraction failed for activity review window; falling back to video segment analysis",
+							zap.Uint("chunk_id", chunkRow.ID),
+							zap.Duration("start", segStart),
+							zap.Duration("end", segEnd),
+							zap.Error(callErr))
+					}
+					up, upErr := ensureUploaded(callCtx)
+					if upErr != nil {
+						callErr = upErr
+					} else {
+						raw, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModel(
+							callCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38,
+						)
+					}
+				}
 				cancel()
 				w.saveTokenUsage(p.SessionID, p.ProfileID, "activity:review", usage)
 				w.logger.Info("activity review window", zap.Uint("chunk_id", chunkRow.ID), zap.Duration("duration", time.Since(started)), zap.Bool("failed", callErr != nil))

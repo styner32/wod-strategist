@@ -179,6 +179,11 @@ function identifierFromPath(path: string): string {
   return path.split("/").filter(Boolean)[0] ?? "";
 }
 
+function isH10Device(device: Device): boolean {
+  const name = device.name?.trim();
+  return !name || /^Polar H10\b/i.test(name);
+}
+
 function appInfo(): { platform: string; version: string } {
   return { platform: Platform.OS, version: Constants.expoConfig?.version ?? "1.0.0" };
 }
@@ -457,6 +462,17 @@ export class H10MemoryRecorder {
     await this.save(run.record);
     const device = await this.waitForDevice(run);
     if (!device) return; // finish() records NO_DEVICE
+    run.record.device_name = device.name ?? run.record.device_name;
+    if (!isH10Device(device)) {
+      this.addError(
+        run.record,
+        "start",
+        new StageError("UNSUPPORTED_DEVICE", `H10 internal recording requires Polar H10 (connected: ${device.name})`),
+      );
+      await this.save(run.record);
+      this.setStatus({ phase: "idle", sessionId: run.sessionId, error: null, sampleCount: null });
+      return;
+    }
     this.setStatus({ phase: "starting", sessionId: run.sessionId, error: null, sampleCount: null });
     let client: H10PsftpLike | null = null;
     try {
@@ -471,6 +487,8 @@ export class H10MemoryRecorder {
       if (run.record.leftovers.some((l) => l.action.startsWith("recovered"))) void this.flushUploads();
       if (run.finishRequested) return;
       run.record.start.sent_epoch_ms = this.deps.now();
+      // Set before the query: the strap may accept START even when its ack is
+      // lost, so finish() must still check the status and stop it.
       run.startSent = true;
       await this.save(run.record);
       await opened.query(PFTP_QUERY_REQUEST_START_RECORDING, encodeStartRecordingParams(run.sessionId, 1));
@@ -481,6 +499,8 @@ export class H10MemoryRecorder {
         this.setStatus({ phase: "recording", sessionId: run.sessionId, error: null, sampleCount: null });
       }
     } catch (error) {
+      // A PS-FTP error is the sensor's answer: START was rejected, nothing records.
+      if (error instanceof PftpError) run.startSent = false;
       const entry = this.addError(run.record, "start", error);
       await this.save(run.record);
       if (!run.finishRequested) {
@@ -501,7 +521,13 @@ export class H10MemoryRecorder {
       }
       record.status = "error";
       await this.save(record);
-      this.setStatus({ phase: "failed", sessionId: run.sessionId, error: record.errors[0], sampleCount: null });
+      const isUnsupported = record.errors[0]?.code === "UNSUPPORTED_DEVICE";
+      this.setStatus({
+        phase: isUnsupported ? "idle" : "failed",
+        sessionId: run.sessionId,
+        error: isUnsupported ? null : record.errors[0],
+        sampleCount: null,
+      });
       await this.flushUploads();
       return;
     }

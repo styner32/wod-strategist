@@ -44,3 +44,76 @@ export function buildWorkoutSessionId(
 
   return `${workoutType.toUpperCase()}-${year}${month}${day}-${ulid(now.getTime())}`;
 }
+
+export const RECENT_WORKOUT_SETUP_KEY = "wod_recent_workout_setup_v1";
+export const RECENT_WORKOUT_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+export interface RecentWorkoutSetup {
+  savedAt: number;
+  /** Only this profile is offered the snapshot; it carries appearance hints. */
+  profileId: number;
+  workoutType: WorkoutType;
+  wodDescription: string;
+  rawText: string;
+  selectedMovements: string[];
+  customMovements: string[];
+  sessionAppearance: string;
+}
+
+export function parseRecentWorkoutSetup(
+  raw: string | null | undefined,
+  now: number = Date.now(),
+): RecentWorkoutSetup | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<RecentWorkoutSetup>;
+    if (
+      !parsed ||
+      typeof parsed.savedAt !== "number" ||
+      !Number.isFinite(parsed.savedAt) ||
+      typeof parsed.profileId !== "number" ||
+      !Number.isFinite(parsed.profileId) ||
+      now - parsed.savedAt > RECENT_WORKOUT_TTL_MS ||
+      now < parsed.savedAt - 60_000
+    ) {
+      return null;
+    }
+    const wodDescription =
+      typeof parsed.wodDescription === "string" ? parsed.wodDescription : "";
+    const rawText = typeof parsed.rawText === "string" ? parsed.rawText : "";
+    const selectedMovements = Array.isArray(parsed.selectedMovements)
+      ? parsed.selectedMovements.filter((m): m is string => typeof m === "string")
+      : [];
+    const customMovements = Array.isArray(parsed.customMovements)
+      ? parsed.customMovements.filter((m): m is string => typeof m === "string")
+      : [];
+    const sessionAppearance =
+      typeof parsed.sessionAppearance === "string" ? parsed.sessionAppearance : "";
+    const workoutType: WorkoutType = WORKOUT_TYPES.includes(
+      parsed.workoutType as WorkoutType,
+    )
+      ? (parsed.workoutType as WorkoutType)
+      : "wod";
+
+    if (
+      !wodDescription.trim() &&
+      !rawText.trim() &&
+      selectedMovements.length === 0
+    ) {
+      return null;
+    }
+
+    return {
+      savedAt: parsed.savedAt,
+      profileId: parsed.profileId,
+      workoutType,
+      wodDescription,
+      rawText,
+      selectedMovements,
+      customMovements,
+      sessionAppearance,
+    };
+  } catch {
+    return null;
+  }
+}

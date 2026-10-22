@@ -103,6 +103,7 @@ export interface StructuredChunkInference {
 
 export interface SessionAnalysisResponse {
   session_id: string;
+  wod_description?: string;
   analysis?: AnalysisResult | null;
   chunks?: ChunkAnalysisResult[];
   feedback?: AnalysisFeedback[];

@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/wod-strategist/api/internal/db"
@@ -19,6 +20,63 @@ func NewGormAnalysisResultRepository(dbConn *gorm.DB) *GormAnalysisResultReposit
 	return &GormAnalysisResultRepository{db: dbConn}
 }
 
+func (r *GormAnalysisResultRepository) populateMissingWODDescriptions(ctx context.Context, results []db.AnalysisResult) {
+	if r.db == nil || len(results) == 0 {
+		return
+	}
+	missingSessionIDs := make([]string, 0, len(results))
+	seen := make(map[string]struct{}, len(results))
+	for i := range results {
+		if strings.TrimSpace(results[i].WODDescription) != "" {
+			continue
+		}
+		sid := strings.TrimSpace(results[i].SessionID)
+		if sid == "" {
+			continue
+		}
+		if _, exists := seen[sid]; !exists {
+			seen[sid] = struct{}{}
+			missingSessionIDs = append(missingSessionIDs, sid)
+		}
+	}
+	if len(missingSessionIDs) == 0 {
+		return
+	}
+
+	var sessions []db.Session
+	if err := r.db.WithContext(ctx).
+		Select("session_id", "profile_id", "wod_description").
+		Where("session_id IN ? AND wod_description <> ''", missingSessionIDs).
+		Find(&sessions).Error; err != nil {
+		return
+	}
+	if len(sessions) == 0 {
+		return
+	}
+
+	// A sessions row describes only its own profile's workout; legacy IDs
+	// without a profile prefix can repeat across profiles.
+	type sessionKey struct {
+		sessionID string
+		profileID uint
+	}
+	descriptions := make(map[sessionKey]string, len(sessions))
+	for _, s := range sessions {
+		if desc := strings.TrimSpace(s.WODDescription); desc != "" {
+			descriptions[sessionKey{s.SessionID, s.ProfileID}] = desc
+		}
+	}
+
+	for i := range results {
+		if strings.TrimSpace(results[i].WODDescription) != "" {
+			continue
+		}
+		if desc, ok := descriptions[sessionKey{strings.TrimSpace(results[i].SessionID), results[i].ProfileID}]; ok {
+			results[i].WODDescription = desc
+		}
+	}
+}
+
 func (r *GormAnalysisResultRepository) FindBySessionID(ctx context.Context, sessionID string) ([]db.AnalysisResult, error) {
 	if r.db == nil {
 		return nil, errRepositoryNotConfigured
@@ -28,6 +86,7 @@ func (r *GormAnalysisResultRepository) FindBySessionID(ctx context.Context, sess
 	if err := r.db.WithContext(ctx).Where("session_id = ?", sessionID).Find(&results).Error; err != nil {
 		return nil, err
 	}
+	r.populateMissingWODDescriptions(ctx, results)
 
 	return results, nil
 }
@@ -48,6 +107,7 @@ func (r *GormAnalysisResultRepository) ListRecent(ctx context.Context, limit int
 	if err := q.Find(&results).Error; err != nil {
 		return nil, err
 	}
+	r.populateMissingWODDescriptions(ctx, results)
 
 	return results, nil
 }
@@ -64,6 +124,7 @@ func (r *GormAnalysisResultRepository) ListByDateRange(ctx context.Context, prof
 	if err := q.Find(&results).Error; err != nil {
 		return nil, err
 	}
+	r.populateMissingWODDescriptions(ctx, results)
 
 	return results, nil
 }

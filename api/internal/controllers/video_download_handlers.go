@@ -137,7 +137,7 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 		return
 	}
 
-	signedURL, err := ctl.storageClient.GenerateSignedURL(objectName, http.MethodGet, 15*time.Minute)
+	signedURL, err := ctl.storageClient.GenerateSignedURL(objectName, http.MethodGet, playURLExpiry)
 	if err != nil {
 		logger.Log.Error("failed to generate download signed URL",
 			zap.String("session_id", sessionID),
@@ -152,7 +152,7 @@ func (ctl *Controller) GetVideoDownloadURL(c *gin.Context) {
 		Kind:        kind,
 		DownloadURL: signedURL,
 		Filename:    sessionID + "_" + kind + ".mp4",
-		ExpiresAt:   time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339),
+		ExpiresAt:   time.Now().Add(playURLExpiry).UTC().Format(time.RFC3339),
 	})
 }
 
