@@ -40,6 +40,15 @@ var _ = Describe("frame_grid", func() {
 		Entry("over 1 hour", time.Hour+2*time.Minute+3*time.Second+50*time.Millisecond, "01:02:03.050"),
 	)
 
+	DescribeTable("formatFrameSecondsTimestamp",
+		func(d time.Duration, expected string) {
+			Expect(formatFrameSecondsTimestamp(d)).To(Equal(expected))
+		},
+		Entry("negative duration clamps to zero", -500*time.Millisecond, "0.00s"),
+		Entry("quarter second step", 2*time.Minute+4*time.Second+250*time.Millisecond, "124.25s"),
+		Entry("exact 30s", 30*time.Second, "30.00s"),
+	)
+
 	Describe("composeFrameGridImages", func() {
 		It("composes 32 frames into a single 8x4 contact sheet with burned-in timestamps", func() {
 			const (
@@ -208,6 +217,85 @@ var _ = Describe("frame_grid", func() {
 			reqBody := string(transport.Requests()[0].Body)
 			Expect(reqBody).To(ContainSubstring("00:00:00.500"))
 			Expect(reqBody).To(ContainSubstring("MEDIA_RESOLUTION_HIGH"))
+		})
+
+		It("formats decimal media seconds badges and overrides thinking level when configured", func() {
+			if !hasFfmpeg() {
+				Skip("ffmpeg is required for GenerateFrameGrids integration test")
+			}
+
+			tmpDir := GinkgoT().TempDir()
+			videoPath := filepath.Join(tmpDir, "sample_secs.mp4")
+			cmd := exec.Command(
+				"ffmpeg", "-v", "error",
+				"-f", "lavfi", "-i", "testsrc2=size=320x200:rate=20",
+				"-t", "10.0",
+				"-c:v", "libx264", "-pix_fmt", "yuv420p",
+				"-y", videoPath,
+			)
+			output, err := cmd.CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), "ffmpeg test video creation failed: %s", string(output))
+
+			const (
+				baseURL = "https://example.test"
+				apiKey  = "test-api-key"
+			)
+			transport := testhelpers.NewMockTransport()
+			transport.New(baseURL).
+				Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"parts": []map[string]any{
+								{"text": `{"version":1,"target_state":"identified","activity_state":"exercise","events":[],"unassessed":[]}`},
+							},
+						},
+					}},
+					"usageMetadata": map[string]any{
+						"promptTokenCount":     1400,
+						"candidatesTokenCount": 40,
+						"totalTokenCount":      1440,
+					},
+				})
+
+			client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+				APIKey:        apiKey,
+				BaseURL:       baseURL,
+				Model:         gemini.ModelArgon4,
+				ThinkingLevel: "HIGH",
+				HTTPClient:    &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			w := &Worker{
+				GeminiClient: client,
+				logger:       zap.NewNop(),
+			}
+
+			analysis, sheets, usage, err := w.AnalyzeVideoIntervalWithFrameGrids(
+				context.Background(),
+				videoPath,
+				2*time.Second,
+				10*time.Second,
+				"Review interval.",
+				gemini.ModelFlash38,
+				FrameGridOptions{
+					FormatSecondsBadge: true,
+					ThinkingLevel:      "MEDIUM",
+				},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(sheets).To(HaveLen(1))
+			Expect(analysis).To(ContainSubstring(`"target_state":"identified"`))
+			Expect(usage).NotTo(BeNil())
+			Expect(transport.Verify()).To(Succeed())
+
+			reqBody := string(transport.Requests()[0].Body)
+			Expect(reqBody).To(ContainSubstring("2.00s ~ 10.00s"))
+			Expect(reqBody).To(ContainSubstring("절대 media 초"))
+			Expect(reqBody).To(ContainSubstring(`"thinkingLevel":"MEDIUM"`))
 		})
 	})
 })

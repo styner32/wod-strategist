@@ -58,6 +58,13 @@ type FrameGridOptions struct {
 	// TimestampOffset overrides the base timestamp burned into the first extracted
 	// frame. When nil, the start offset passed to GenerateFrameGrids is used.
 	TimestampOffset *time.Duration
+	// FormatSecondsBadge burns decimal seconds (e.g. "124.25s") instead of
+	// HH:MM:SS.mmm onto each frame tile, matching prompts that require decimal
+	// media seconds (such as activity:review).
+	FormatSecondsBadge bool
+	// ThinkingLevel optionally overrides the Gemini thinking level (e.g. "MEDIUM")
+	// for AnalyzeVideoIntervalWithFrameGrids.
+	ThinkingLevel string
 }
 
 // FrameGridSheet holds one generated contact-sheet image and its covered media interval.
@@ -138,6 +145,22 @@ func formatFrameTimestamp(d time.Duration) string {
 	minutes := totalMinutes % 60
 	hours := totalMinutes / 60
 	return fmt.Sprintf("%02d:%02d:%02d.%03d", hours, minutes, seconds, millis)
+}
+
+// formatFrameSecondsTimestamp formats a duration as decimal seconds (e.g. "124.25s")
+// for prompts that require absolute media seconds (such as activity:review).
+func formatFrameSecondsTimestamp(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	return fmt.Sprintf("%.2fs", d.Seconds())
+}
+
+func formatFrameBadgeTimestamp(d time.Duration, opts FrameGridOptions) string {
+	if opts.FormatSecondsBadge {
+		return formatFrameSecondsTimestamp(d)
+	}
+	return formatFrameTimestamp(d)
 }
 
 func formatFFmpegSeconds(d time.Duration) string {
@@ -302,7 +325,7 @@ func composeFrameGridImages(frames []image.Image, baseOffset, totalDuration time
 			cellRect := image.Rect(x0, y0, x0+tileW, y0+tileH)
 
 			draw.Draw(canvas, cellRect, frame, frame.Bounds().Min, draw.Src)
-			drawFrameTimestampBadge(canvas, cellRect, formatFrameTimestamp(frameTS))
+			drawFrameTimestampBadge(canvas, cellRect, formatFrameBadgeTimestamp(frameTS, opts))
 		}
 
 		var buf bytes.Buffer
@@ -367,12 +390,22 @@ func buildFrameGridPromptContext(sheets []FrameGridSheet, opts FrameGridOptions)
 	if len(sheets) == 0 {
 		return ""
 	}
-	startLabel := formatFrameTimestamp(sheets[0].Start)
-	endLabel := formatFrameTimestamp(sheets[len(sheets)-1].End)
 	totalFrames := 0
 	for _, s := range sheets {
 		totalFrames += s.FrameCount
 	}
+	if opts.FormatSecondsBadge {
+		startLabel := formatFrameSecondsTimestamp(sheets[0].Start)
+		endLabel := formatFrameSecondsTimestamp(sheets[len(sheets)-1].End)
+		return fmt.Sprintf(
+			"\n\n[프레임 그리드(Contact Sheet) 입력 안내]\n"+
+				"- 제공된 %d장의 이미지는 영상 구간(%s ~ %s)을 %.2g FPS(%.0fms 간격)로 추출한 총 %d개 프레임의 연속 타일(가로 %d열 × 세로 최대 %d행, 좌→우 후 상→하 순서)입니다.\n"+
+				"- 각 타일 좌측 상단에 각인된 절대 media 초(예: 124.25s)를 직접 읽어 동작 시작·종료 시각(start_secs, end_secs)과 반복(Rep) 횟수를 정확히 기록하세요.",
+			len(sheets), startLabel, endLabel, opts.FPS, 1000.0/opts.FPS, totalFrames, opts.Cols, opts.Rows,
+		)
+	}
+	startLabel := formatFrameTimestamp(sheets[0].Start)
+	endLabel := formatFrameTimestamp(sheets[len(sheets)-1].End)
 	return fmt.Sprintf(
 		"\n\n[프레임 그리드(Contact Sheet) 입력 안내]\n"+
 			"- 제공된 %d장의 이미지는 영상 구간(%s ~ %s)을 %.2g FPS(%.0fms 간격)로 추출한 총 %d개 프레임의 연속 타일(가로 %d열 × 세로 최대 %d행, 좌→우 후 상→하 순서)입니다.\n"+
@@ -409,7 +442,11 @@ func (w *Worker) AnalyzeVideoIntervalWithFrameGrids(
 	}
 	images := FrameGridImageBytes(sheets)
 	fullPrompt := prompt + buildFrameGridPromptContext(sheets, opts)
-	analysis, usage, err := w.GeminiClient.AnalyzeFrameGridsWithModel(ctx, images, "image/jpeg", fullPrompt, model)
+	callCtx := ctx
+	if strings.TrimSpace(opts.ThinkingLevel) != "" {
+		callCtx = gemini.WithThinkingLevel(ctx, opts.ThinkingLevel)
+	}
+	analysis, usage, err := w.GeminiClient.AnalyzeFrameGridsWithModel(callCtx, images, "image/jpeg", fullPrompt, model)
 	if err != nil {
 		return "", sheets, usage, err
 	}

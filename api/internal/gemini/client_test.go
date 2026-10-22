@@ -954,5 +954,41 @@ var _ = Describe("Gemini client", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("frame grid image at index 0 is empty"))
 		})
+
+		It("honors per-call WithThinkingLevel override on AnalyzeFrameGridsWithModel", func() {
+			transport := testhelpers.NewMockTransport()
+			transport.New(baseURL).
+				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"parts": []map[string]any{
+								{"text": "ok"},
+							},
+						},
+					}},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:        apiKey,
+				BaseURL:       baseURL,
+				Model:         ModelArgon4,
+				ThinkingLevel: "HIGH",
+				HTTPClient:    &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			sheet := encodeJPEG(makeTestImage(64, 32))
+			ctx := WithThinkingLevel(context.Background(), "MEDIUM")
+			result, _, err := client.AnalyzeFrameGridsWithModel(ctx, [][]byte{sheet}, "image/jpeg", "prompt", ModelFlash38)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("ok"))
+			Expect(transport.Verify()).To(Succeed())
+
+			body := string(transport.Requests()[0].Body)
+			Expect(body).To(ContainSubstring(`"thinkingLevel":"MEDIUM"`))
+		})
 	})
 })

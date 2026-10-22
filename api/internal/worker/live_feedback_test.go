@@ -90,6 +90,12 @@ var _ = Describe("Live coaching evidence window", func() {
 		Expect(ok).To(BeTrue())
 		Expect(end).To(Equal(20.0))
 	})
+	It("configures activity review frame grids with decimal seconds badges and MEDIUM thinking", func() {
+		opts := activityReviewFrameGridOptions()
+		Expect(opts.FormatSecondsBadge).To(BeTrue())
+		Expect(opts.ThinkingLevel).To(Equal("MEDIUM"))
+		Expect(frameGridEligible(30*time.Second, opts)).To(BeTrue())
+	})
 })
 
 var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure, func() {
@@ -316,6 +322,55 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 				Expect(string(request.Body)).To(ContainSubstring("videoMetadata"))
 				Expect(string(request.Body)).NotTo(ContainSubstring("rep_count"))
 			}
+		}
+	})
+	It("reviews valid MP4 windows with frame-grid contact sheets without uploading to Files API", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg is required for frame-grid activity review test")
+		}
+		tmpDir := GinkgoT().TempDir()
+		videoPath := filepath.Join(tmpDir, "merged.mp4")
+		cmd := exec.Command(
+			"ffmpeg", "-v", "error",
+			"-f", "lavfi", "-i", "testsrc2=size=320x200:rate=20",
+			"-t", "20.0",
+			"-c:v", "libx264", "-pix_fmt", "yuv420p",
+			"-y", videoPath,
+		)
+		output, err := cmd.CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), "ffmpeg test video creation failed: %s", string(output))
+		videoBytes, err := os.ReadFile(videoPath)
+		Expect(err).NotTo(HaveOccurred())
+
+		first, second := createRow(0, 10), createRow(10, 20)
+		rows := []db.ChunkAnalysisResult{first, second}
+		version := activity.SourceVersion(rows)
+		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+object, videoBytes)
+		// No mockFile(...) — Files API upload must NOT be called when local MP4 probes validly.
+		mockGeneration("```movement_observations\n" + string(liveTestObservations(8, 12)) + "\n```")
+		mockGeneration("```movement_observations\n" + string(liveTestObservations(8, 12)) + "\n```")
+		payload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, version, object, 1})
+		task := asynq.NewTask(TypeActivityReview, payload)
+		Expect(w.HandleActivityReviewTask(context.Background(), task)).To(Succeed())
+
+		Expect(conn.First(&session, session.ID).Error).To(Succeed())
+		var summary activity.Summary
+		Expect(json.Unmarshal(session.ActivitySummary, &summary)).To(Succeed())
+		Expect(summary.Movements).To(HaveLen(1))
+		Expect(summary.Movements[0].Count).To(Equal(1))
+		Expect(summary.ReviewState).To(Equal("completed"))
+		Expect(transport.Requests()).To(HaveLen(2), "only 2 generateContent calls; no Files API upload/get/delete")
+		Expect(transport.Verify()).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+		for _, request := range transport.Requests() {
+			Expect(request.URL).To(ContainSubstring(":generateContent"))
+			body := string(request.Body)
+			Expect(body).To(ContainSubstring(`"inlineData"`))
+			Expect(body).To(ContainSubstring(`"mimeType":"image/jpeg"`))
+			Expect(body).To(ContainSubstring(`"thinkingLevel":"MEDIUM"`))
+			Expect(body).To(ContainSubstring("절대 media 초"))
+			Expect(body).NotTo(ContainSubstring("videoMetadata"))
 		}
 	})
 	It("rejects a stale review before reading video or changing newer results", func() {

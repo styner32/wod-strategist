@@ -80,6 +80,22 @@ type exactSegmentOffsets struct {
 
 type exactSegmentOffsetsContextKey struct{}
 type exactBatchSegmentOffsetsContextKey struct{}
+type thinkingLevelContextKey struct{}
+
+// WithThinkingLevel returns a context that overrides the client's default
+// ThinkingLevel for a single GenerateContent call (such as AnalyzeFrameGridsWithModel).
+func WithThinkingLevel(ctx context.Context, level string) context.Context {
+	return context.WithValue(ctx, thinkingLevelContextKey{}, strings.TrimSpace(level))
+}
+
+func thinkingLevelFromContext(ctx context.Context, fallback string) string {
+	if ctx != nil {
+		if level, ok := ctx.Value(thinkingLevelContextKey{}).(string); ok && strings.TrimSpace(level) != "" {
+			return strings.TrimSpace(level)
+		}
+	}
+	return fallback
+}
 
 // exactSegmentOffsetsTransport compensates for google.golang.org/genai's
 // VideoMetadata marshaler rounding offsets to whole seconds. Gemini accepts
@@ -879,7 +895,7 @@ func (c *Client) AnalyzeFrameGridsWithModel(ctx context.Context, images [][]byte
 	genConfig := &genai.GenerateContentConfig{
 		MediaResolution: genai.MediaResolutionHigh,
 	}
-	thinkingLevel := c.thinkingLevel
+	thinkingLevel := thinkingLevelFromContext(ctx, c.thinkingLevel)
 	if strings.TrimSpace(thinkingLevel) == "" {
 		thinkingLevel = "HIGH"
 	}
