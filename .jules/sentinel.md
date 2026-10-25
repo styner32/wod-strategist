@@ -39,3 +39,7 @@
 1. Always validate raw input for path traversal before transformation using cross-platform checks (`strings.ContainsAny(input, "/\\")`).
 2. Wrap path parameters functioning as identifiers with `sanitizeIdentifier()` and enforce strict format validation (e.g., `isValidSessionID()`) immediately upon extraction.
 3. In workers, apply `filepath.Base()` to any dynamic components before constructing local filesystem paths in `filepath.Join()`.
+## 2026-10-19 - Missing Session ID Validation in Telemetry Upload
+**Vulnerability:** The `UploadDebugTelemetry` endpoint in `api/internal/controllers/debug_handlers.go` lacked `isValidSessionID` and `sanitizeIdentifier` checks on `req.SessionID`. While `sanitizeObjectPart` provided basic directory traversal protection for the GCS upload, missing these primary validations could expose the system to bypasses or unexpected behavior.
+**Learning:** Even fields coming from JSON payloads (not just path parameters) that are subsequently used for object naming or backend logic must be strictly validated using the standard identifier validation functions.
+**Prevention:** Ensure all `session_id` identifiers, whether in the path, query, or body, are validated using `isValidSessionID()` and sanitized with `sanitizeIdentifier()` before any downstream processing.

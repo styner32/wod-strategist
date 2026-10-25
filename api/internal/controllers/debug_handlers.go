@@ -63,8 +63,13 @@ func (ctl *Controller) UploadDebugTelemetry(c *gin.Context) {
 	}
 
 	// Validation
+	req.SessionID = sanitizeIdentifier(req.SessionID)
 	if req.SessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "sessionId is required"})
+		return
+	}
+	if !isValidSessionID(req.SessionID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "sessionId is invalid"})
 		return
 	}
 	if req.ProfileID <= 0 {
