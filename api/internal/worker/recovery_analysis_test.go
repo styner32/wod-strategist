@@ -58,6 +58,18 @@ var _ = Describe("Recovery Workout Analysis & Stretch Recommendations", func() {
 			Expect(fallback).To(Equal("cooldown"))
 		})
 
+		It("resolveSessionWODDescription reads only the same profile's stored description", func() {
+			other := testhelpers.CreateProfile(dbConn, &db.Profile{Name: "Other Profile"})
+			testhelpers.CreateSession(dbConn, &db.Session{ProfileID: other.ID, WODDescription: "Other profile's WOD", SessionID: "WOD-2025-01-01-10-00"})
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{ProfileID: other.ID, WODDescription: "Other profile's analysis", SessionID: "WOD-2025-01-02-10-00", Status: "COMPLETED"})
+			testhelpers.CreateSession(dbConn, &db.Session{ProfileID: profileID, WODDescription: "Fran", SessionID: "WOD-2025-01-03-10-00"})
+
+			Expect(w.resolveSessionWODDescription(context.Background(), "WOD-2025-01-01-10-00", profileID, "")).To(BeEmpty())
+			Expect(w.resolveSessionWODDescription(context.Background(), "WOD-2025-01-02-10-00", profileID, "")).To(BeEmpty())
+			Expect(w.resolveSessionWODDescription(context.Background(), "WOD-2025-01-03-10-00", profileID, "")).To(Equal("Fran"))
+			Expect(w.resolveSessionWODDescription(context.Background(), "WOD-2025-01-03-10-00", profileID, " Cindy ")).To(Equal("Cindy"))
+		})
+
 		It("buildSegmentAnalysisPrompt keeps warmup observation independent of whole-session scoring", func() {
 			warmupPrompt := w.buildSegmentAnalysisPrompt(VideoAnalysisPayload{
 				WorkoutType: WorkoutTypeWarmup,

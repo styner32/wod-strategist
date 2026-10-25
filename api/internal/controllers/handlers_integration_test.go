@@ -673,6 +673,31 @@ var _ = Describe("Controller handlers", func() {
 			Expect(results[0]["available_videos"]).To(ContainElement("merged"))
 		})
 
+		It("fills a missing WOD description only from the same profile's session", func() {
+			router := newTestRouter(controllers.Config{})
+			other := testhelpers.CreateProfile(dbConn, &db.Profile{})
+			testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WOD-2025-01-01-10-00", ProfileID: other.ID, WODDescription: "Other profile's WOD"})
+			testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WOD-2025-01-02-10-00", ProfileID: profileID, WODDescription: "Fran"})
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: "WOD-2025-01-01-10-00", Status: "COMPLETED", Output: "ok", ProfileID: profileID})
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: "WOD-2025-01-02-10-00", Status: "COMPLETED", Output: "ok", ProfileID: profileID})
+
+			req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/history?profile_id=%d", profileID), nil)
+			authorizeRequest(req)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+			var results []map[string]any
+			Expect(json.Unmarshal(w.Body.Bytes(), &results)).To(Succeed())
+			descriptions := map[string]any{}
+			for _, r := range results {
+				descriptions[r["session_id"].(string)] = r["wod_description"]
+			}
+			Expect(descriptions).To(HaveLen(2))
+			Expect(descriptions["WOD-2025-01-01-10-00"]).To(BeNil())
+			Expect(descriptions["WOD-2025-01-02-10-00"]).To(Equal("Fran"))
+		})
+
 		It("omits empty analysis summary fields so clients keep the legacy overview", func() {
 			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: "summary-empty", Status: "COMPLETED", Output: `{"overall_summary":"legacy"}`, ProfileID: profileID})
 			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: "summary-failed", Status: "COMPLETED", Output: "ok", ProfileID: profileID, AnalysisSummary: db.JSONDocument(`{"status":"failed","last_success":{"overview":"kept"}}`)})

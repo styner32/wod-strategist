@@ -299,7 +299,7 @@ func resolveReanalysisModelWithDefault(raw string, defaultModel string) string {
 
 func isNonExerciseMovement(value string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(value))
-	normalized = strings.NewReplacer("_", " ", "-", " ", "/", " ").Replace(normalized)
+	normalized = strings.NewReplacer("_", " ", "-", " ", "/", " ", "[", " ", "]", " ").Replace(normalized)
 	normalized = strings.Join(strings.Fields(normalized), " ")
 
 	switch normalized {
@@ -314,7 +314,7 @@ func isNonExerciseMovement(value string) bool {
 
 func isExplicitNonExerciseActivity(value string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(value))
-	normalized = strings.NewReplacer("_", " ", "-", " ", "/", " ").Replace(normalized)
+	normalized = strings.NewReplacer("_", " ", "-", " ", "/", " ", "[", " ", "]", " ").Replace(normalized)
 	normalized = strings.Join(strings.Fields(normalized), " ")
 	switch normalized {
 	case "walk", "walking", "rest", "setup", "rest setup", "recovery", "not exercise", "no exercise", "noexercise":

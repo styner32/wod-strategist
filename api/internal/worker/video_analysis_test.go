@@ -971,7 +971,6 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 					},
 				}},
 			})
-		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains(`"startOffset":"45s"`).MatchBodyContains(`"endOffset":"50s"`).MatchBodyContains(`"thinkingLevel":"HIGH"`).Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": observationBlock("", 45, 50, true)}}}}}})
 		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("controlled early position").MatchBodyContains("controlled late position").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overall":100,"form":80,"intensity":80,"consistency":80,"movements":{"Power Snatch":{"form":80,"intensity":80},"Pull-up":{"form":80,"intensity":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`}}}}}})
 
 		return transport
@@ -998,6 +997,21 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			EndSecs:         &end0,
 			MediaStartSecs:  &mediaStart0,
 			MediaEndSecs:    &mediaEnd0,
+		})
+		// Walking is classified non-exercise for WOD and recovery sessions alike.
+		restStart, restEnd := 45.0, 50.0
+		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID:       sessionID,
+			ProfileID:       profileID,
+			FilePath:        "gs://test-bucket/videos/" + sessionID + "/chunk_walk.mp4",
+			Status:          "COMPLETED",
+			ExerciseType:    "Walking",
+			Output:          "다음 기구로 걸어갑니다",
+			ObservedSignals: `{"movement":"Walking","activity_state":"walking","fatigue_visually_established":false}`,
+			StartSecs:       &restStart,
+			EndSecs:         &restEnd,
+			MediaStartSecs:  &restStart,
+			MediaEndSecs:    &restEnd,
 		})
 		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
 			SessionID:       sessionID,
@@ -1120,17 +1134,14 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(result.Status).To(Equal("COMPLETED"))
 		Expect(result.Output).To(ContainSubstring("훌륭한 운동이었습니다"))
 		seg1Idx := strings.Index(result.Output, "## 세그먼트 1: Snatch (0:00 ~ 0:45)")
-		seg2Idx := strings.Index(result.Output, "## 세그먼트 2: Unknown (0:45 ~ 0:50)")
-		seg3Idx := strings.Index(result.Output, "## 세그먼트 3: Pull-up (0:50 ~ 1:30)")
+		seg2Idx := strings.Index(result.Output, "## 세그먼트 2: Pull-up (0:50 ~ 1:30)")
 		Expect(seg1Idx).To(BeNumerically(">=", 0))
 		Expect(seg2Idx).To(BeNumerically(">", seg1Idx))
-		Expect(seg3Idx).To(BeNumerically(">", seg2Idx))
 		Expect(result.SessionScore).To(MatchJSON(`{"overall":80,"form":80,"intensity":80,"consistency":80,"movements":{"Power Snatch":{"form":80,"intensity":80},"Pull-up":{"form":80,"intensity":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`))
 		progress, err := workoutprogress.Decode(result.WorkoutProgress)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(progress.Intervals).To(HaveLen(3))
-		Expect(progress.Intervals[1].Activity).To(Equal("rest"))
-		Expect(progress.Unassessed).To(BeEmpty())
+		Expect(progress.Intervals).To(HaveLen(2))
+		Expect(progress.Unassessed).To(Equal([]workoutprogress.Gap{{Start: 45, End: 50, Clock: "media", Reason: skippedNonExerciseReason}}))
 		for _, request := range transport.Requests() {
 			Expect(request.Method).NotTo(Equal(http.MethodDelete))
 			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
@@ -1139,13 +1150,8 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 				Expect(string(request.Body)).To(ContainSubstring("workout_observations"))
 			} else if strings.Contains(request.URL, gemini.ModelFlash38+":generateContent") {
 				body := string(request.Body)
-				if strings.Contains(body, `"startOffset":"45s"`) {
-					Expect(body).To(ContainSubstring(`"thinkingLevel":"HIGH"`))
-					Expect(body).To(ContainSubstring("workout_observations"))
-				} else {
-					Expect(body).To(ContainSubstring("workout_progress"))
-					Expect(body).NotTo(ContainSubstring("fileUri"))
-				}
+				Expect(body).To(ContainSubstring("workout_progress"))
+				Expect(body).NotTo(ContainSubstring("fileUri"))
 			}
 		}
 
@@ -1217,7 +1223,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(result.SessionScore).To(MatchJSON(`{"overall":80,"form":80,"intensity":0,"consistency":80,"movements":{"Power Snatch":{"form":80},"Pull-up":{"form":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`))
 		progress, err := workoutprogress.Decode(result.WorkoutProgress)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(progress.Intervals).To(HaveLen(3))
+		Expect(progress.Intervals).To(HaveLen(2))
 		for _, request := range transport.Requests() {
 			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
 				Expect(string(request.Body)).NotTo(ContainSubstring("```score"))
@@ -1225,7 +1231,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			}
 		}
 	})
-	It("keeps version-one WOD onset and complete observed rest in the production final assessment", func() {
+	It("keeps version-one WOD onset and complete coverage across skipped non-exercise gaps in the production final assessment", func() {
 		const sessionID = "WOD-20261013-01JV1PROGRESSONSETTEST00000"
 		w.UseCache = false
 		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sessionID, ProfileID: profileID, WorkoutType: WorkoutTypeWOD, WODEvaluationVersion: 1})
@@ -1267,9 +1273,8 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(*score.Consistency).To(Equal(80))
 		progress, err := workoutprogress.Decode(result.WorkoutProgress)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(progress.Intervals).To(HaveLen(3))
-		Expect(progress.Intervals[1].Activity).To(Equal("rest"))
-		Expect(progress.Unassessed).To(BeEmpty())
+		Expect(progress.Intervals).To(HaveLen(2))
+		Expect(progress.Unassessed).To(Equal([]workoutprogress.Gap{{Start: 45, End: 50, Clock: "media", Reason: skippedNonExerciseReason}}))
 	})
 })
 
@@ -1479,33 +1484,60 @@ var _ = Describe("mergeSegmentsByMovement", func() {
 // ---------------------------------------------------------------------------
 
 var _ = Describe("Workout progress observation windows", func() {
-	It("observes only media gaps between sets without presuming rest", func() {
-		sets := []Segment{{Start: "0:40", End: "1:00", Type: "Power Clean"}, {Start: "0:10", End: "0:20", Type: "Power Clean"}}
-		windows := addBetweenObservationWindows(sets, nil)
-		Expect(windows).To(HaveLen(3))
-		Expect(windows[0].Start).To(Equal("0:10"))
-		Expect(windows[1].Start).To(Equal("0:20"))
-		Expect(windows[1].End).To(Equal("0:40"))
-		Expect(windows[1].Type).To(Equal("Unknown"))
-		Expect(windows[1].Description).To(ContainSubstring("do not assume rest or exercise"))
-		Expect(windows[2].End).To(Equal("1:00"))
-		Expect(sets[0].Start).To(Equal("0:40"), "selection cannot mutate original indexing")
-	})
-
-	It("keeps touching or overlapping indexed windows without inventing a rest", func() {
-		sets := []Segment{{Start: "0:00", End: "0:20", Type: "Power Clean"}, {Start: "0:10", End: "0:15", Type: "Unknown"}, {Start: "0:20", End: "0:30", Type: "Power Clean"}}
-		Expect(addBetweenObservationWindows(sets, nil)).To(HaveLen(3))
-	})
-
-	It("does not bridge a segment omitted by the triage budget", func() {
+	It("tracks segments omitted by the triage budget without synthesizing between-set windows", func() {
 		indexed := []Segment{{Start: "0:00", End: "0:10", Type: "Squat"}, {Start: "0:20", End: "0:30", Type: "Lunge"}, {Start: "0:40", End: "0:50", Type: "Squat"}, {Start: "1:00", End: "1:10", Type: "Squat"}}
 		selected := []Segment{indexed[0], indexed[2], indexed[3]}
 		omitted := omittedIndexedSegments(indexed, selected)
 		Expect(omitted).To(Equal([]Segment{indexed[1]}))
-		windows := addBetweenObservationWindows(selected, omitted)
-		Expect(windows).To(HaveLen(4)) // 0:00-0:40 spans the omitted lunge; 0:50-1:00 is observed
-		Expect(windows[2].Start).To(Equal("0:50"))
-		Expect(windows[2].Type).To(Equal("Unknown"))
+	})
+
+	It("retains exercise and Unknown segments while excluding explicit non-exercise segments", func() {
+		raw := []Segment{
+			{Start: "0:00", End: "0:15", Type: "Power Clean"},
+			{Start: "0:15", End: "0:30", Type: "Rest"},
+			{Start: "0:30", End: "0:45", Type: "Walking"},
+			{Start: "0:45", End: "1:00", Type: "Unknown"},
+			{Start: "1:00", End: "1:10", Type: "Setup"},
+			{Start: "1:10", End: "1:30", Type: "Pull-up"},
+		}
+		kept, skipped := filterExerciseAndUnknownSegments(raw, WorkoutTypeWOD)
+		Expect(kept).To(Equal([]Segment{
+			{Start: "0:00", End: "0:15", Type: "Power Clean"},
+			{Start: "0:45", End: "1:00", Type: "Unknown"},
+			{Start: "1:10", End: "1:30", Type: "Pull-up"},
+		}))
+		Expect(skipped).To(Equal([]Segment{
+			{Start: "0:15", End: "0:45", Type: "Rest"},
+			{Start: "1:00", End: "1:10", Type: "Rest"},
+		}))
+
+		recoveryKept, recoverySkipped := filterExerciseAndUnknownSegments(raw, WorkoutTypeCooldown)
+		Expect(recoveryKept).To(HaveLen(5), "recovery keeps rest/setup holds and skips only walking")
+		Expect(recoverySkipped).To(Equal([]Segment{{Start: "0:30", End: "0:45", Type: "Rest"}}))
+	})
+
+	It("records only explicitly classified non-exercise chunks as skipped media", func() {
+		chunk := func(movement, signals string) db.ChunkAnalysisResult {
+			return db.ChunkAnalysisResult{ExerciseType: movement, ObservedSignals: signals}
+		}
+		Expect(chunkClassifiedNonExercise(chunk("", `{"activity_state":"rest_setup"}`), WorkoutTypeWOD)).To(BeTrue())
+		Expect(chunkClassifiedNonExercise(chunk("Walking", `{}`), WorkoutTypeWOD)).To(BeTrue())
+		Expect(chunkClassifiedNonExercise(chunk("", `{}`), WorkoutTypeWOD)).To(BeFalse(), "an unlabelled chunk is unclassified, not rest")
+		Expect(chunkClassifiedNonExercise(chunk("", `{"activity_state":"unknown"}`), WorkoutTypeWOD)).To(BeFalse())
+		Expect(chunkClassifiedNonExercise(chunk("Thruster", `{"activity_state":"exercise"}`), WorkoutTypeWOD)).To(BeFalse())
+		Expect(chunkClassifiedNonExercise(chunk("Rest", `{"activity_state":"rest_setup"}`), WorkoutTypeCooldown)).To(BeFalse(), "recovery observes rest-labelled holds")
+		Expect(chunkClassifiedNonExercise(chunk("Walking", `{}`), WorkoutTypeCooldown)).To(BeTrue())
+	})
+
+	It("subtracts observed segments from skipped non-exercise media", func() {
+		gaps := skippedNonExerciseGaps(
+			[]Segment{{Start: "0:10", End: "0:40", Type: "Rest"}},
+			[]Segment{{Start: "0:00", End: "0:15"}, {Start: "0:20", End: "0:25"}},
+		)
+		Expect(gaps).To(Equal([]workoutprogress.Gap{
+			{Start: 15, End: 20, Clock: "media", Reason: skippedNonExerciseReason},
+			{Start: 25, End: 40, Clock: "media", Reason: skippedNonExerciseReason},
+		}))
 	})
 
 	It("requires direct full-window rest evidence before omitting exercise scoring", func() {

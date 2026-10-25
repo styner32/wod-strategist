@@ -471,3 +471,37 @@ it("prevents discarding an active recording or held session", async () => {
   await store.discardOriginalSession(ref);
   expect((await store.listOriginalSessions(3)).length).toBe(0);
 });
+
+it("recovers finalized sessions previously marked incomplete by buffer drop diagnostics and saves to Photos", async () => {
+  const ref = await prepared("continuous");
+  const first = await part(ref, 0);
+  const second = await part(ref, 1);
+  await store.markOriginalRecordingStopped(ref, {
+    complete: false,
+    reason: "capture dropped buffers: video=24, audio=0, tailTimeout=true",
+  });
+  // Simulate an older persisted manifest that was written with complete=false and status=needs_attention
+  const directory = store.getOriginalDirectory(ref);
+  for (const [path, value] of mockFiles) {
+    if (!path.startsWith(directory) || !/manifest-\d+\.json$/.test(path)) continue;
+    const session = JSON.parse(value);
+    session.complete = false;
+    session.status = "needs_attention";
+    session.captureIssue = "capture dropped buffers: video=24, audio=0, tailTimeout=true";
+    session.lastError = session.captureIssue;
+    mockFiles.set(path, JSON.stringify(session));
+  }
+  restart();
+
+  const listed = await store.listOriginalSessions(3);
+  expect(listed[0]).toMatchObject({
+    status: "pending",
+    complete: true,
+  });
+  expect(listed[0].captureIssue).toBeUndefined();
+
+  const saved = await store.finalizeAndSaveOriginal(ref);
+  expect(saved.status).toBe("saved");
+  expect(mockMerge).toHaveBeenCalledWith([first, second], expect.stringContaining(mockDocuments));
+  expect(mockSave).toHaveBeenCalledTimes(1);
+});

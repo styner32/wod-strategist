@@ -32,3 +32,19 @@ var _ = Describe("validateSessionID", func() {
 		Entry("empty", "", true),
 	)
 })
+
+var _ = Describe("workoutTypeFromSessionID", func() {
+	DescribeTable("reads the type prefix of current and legacy session IDs",
+		func(sessionID, want string) {
+			Expect(workoutTypeFromSessionID(sessionID)).To(Equal(want))
+		},
+		Entry("current warmup", "WARMUP-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF", WorkoutTypeWarmup),
+		Entry("current wod", "WOD-20260407-01JQXYZ3K4M5N6P7Q8R9ABCDEF", WorkoutTypeWOD),
+		Entry("legacy warmup", "P12-WARMUP-2025-03-01-08-00", WorkoutTypeWarmup),
+		Entry("legacy cooldown lowercase", "p7-cooldown-2025-02-01-07-30", WorkoutTypeCooldown),
+		Entry("legacy accessory without profile", "ACCESSORY-2025-01-01-10-00", WorkoutTypeAccessory),
+		Entry("legacy wod", "P3-WOD-2025-01-01-10-00", WorkoutTypeWOD),
+		Entry("no type prefix", "session-hints", ""),
+		Entry("type word later in the ID", "split-WARMUP-session", ""),
+	)
+})

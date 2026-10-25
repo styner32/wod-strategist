@@ -1,0 +1,15 @@
+diff --git a/node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh b/node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh
+index 4c50653..dc3aa14 100755
+--- a/node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh
++++ b/node_modules/expo-modules-jsi/apple/scripts/build-xcframework.sh
+@@ -107,6 +107,10 @@ compute_hash() {
+     # source problems. swiftc --version reports the swiftlang/clang tags and the
+     # target triple, so any toolchain change forces a clean rebuild.
+     echo "TOOLCHAIN_VERSION=$(xcrun swiftc --version 2>/dev/null || true)"
++    # Xcode can update its SDKs without changing the Swift compiler version.
++    # Binary Swift modules also depend on the SDK, so invalidate cached slices
++    # when the selected Xcode build changes (for example, 27.0 to 27.1).
++    echo "XCODE_VERSION=$(xcodebuild -version 2>/dev/null || true)"
+     echo "$all_files" | LC_ALL=C sort | while IFS= read -r file; do
+       echo "$file"
+       cat "$file"

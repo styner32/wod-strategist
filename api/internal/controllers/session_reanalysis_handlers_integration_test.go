@@ -256,14 +256,14 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 		Expect(pending).To(BeEmpty())
 	})
 
-	It("enforces five whole-session runs per profile in a rolling 24-hour window", func() {
-		for i := 0; i < 5; i++ {
+	It("enforces twenty whole-session runs per profile in a rolling 24-hour window", func() {
+		for i := 0; i < 20; i++ {
 			testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{
 				SessionID:       session.SessionID,
 				ProfileID:       profile.ID,
 				ClientRequestID: fmt.Sprintf("recent-%d", i),
 				Status:          db.SessionReanalysisStatusCompleted,
-				CreatedAt:       time.Now().UTC().Add(-time.Duration(i) * time.Hour),
+				CreatedAt:       time.Now().UTC().Add(-time.Duration(i) * time.Minute),
 			})
 		}
 
@@ -281,13 +281,38 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 		Expect(pending).To(BeEmpty())
 	})
 
+	It("enforces the startup-configured quota instead of the default", func() {
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
+		Expect(err).NotTo(HaveOccurred())
+		limited := newTestRouterWithAuthService(controllers.Config{
+			QueueClient:                 testhelpers.NewQueueClient(),
+			StorageClient:               storageClient,
+			BucketName:                  "test-bucket",
+			EnableSessionReanalysis:     true,
+			SessionReanalysisDailyQuota: 2,
+		})
+		for i := 0; i < 2; i++ {
+			testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{
+				SessionID:       session.SessionID,
+				ProfileID:       profile.ID,
+				ClientRequestID: fmt.Sprintf("configured-%d", i),
+				Status:          db.SessionReanalysisStatusCompleted,
+			})
+		}
+
+		response := httptest.NewRecorder()
+		limited.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodPost, requestPath(), `{"client_request_id":"over-configured-quota"}`, &user))
+
+		Expect(response.Code).To(Equal(http.StatusTooManyRequests))
+	})
+
 	It("does not count expired or other-profile runs toward the quota", func() {
 		otherProfile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		otherSession := testhelpers.CreateSession(dbConn, &db.Session{
 			SessionID: "WOD-20260716-01JOTHERPROFILESESSION000",
 			ProfileID: otherProfile.ID,
 		})
-		for i := 0; i < 5; i++ {
+		for i := 0; i < 20; i++ {
 			testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{
 				SessionID:       session.SessionID,
 				ProfileID:       profile.ID,
@@ -300,7 +325,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 				ProfileID:       otherProfile.ID,
 				ClientRequestID: fmt.Sprintf("other-profile-%d", i),
 				Status:          db.SessionReanalysisStatusCompleted,
-				CreatedAt:       time.Now().UTC().Add(-time.Duration(i) * time.Hour),
+				CreatedAt:       time.Now().UTC().Add(-time.Duration(i) * time.Minute),
 			})
 		}
 
@@ -316,7 +341,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 	})
 
 	It("serializes concurrent profile requests so the rolling quota cannot be exceeded", func() {
-		for i := 0; i < 4; i++ {
+		for i := 0; i < 19; i++ {
 			testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{
 				SessionID: session.SessionID, ProfileID: profile.ID,
 				ClientRequestID: fmt.Sprintf("existing-quota-%d", i),
@@ -349,10 +374,35 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 		Expect([]int{responses[0].Code, responses[1].Code}).To(ConsistOf(http.StatusAccepted, http.StatusTooManyRequests))
 		var count int64
 		Expect(dbConn.Model(&db.SessionReanalysisRun{}).Where("profile_id = ?", profile.ID).Count(&count).Error).To(Succeed())
-		Expect(count).To(Equal(int64(5)))
+		Expect(count).To(Equal(int64(20)))
 		pending, err := inspector.ListPendingTasks("default")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(pending).To(HaveLen(1))
+	})
+
+	It("allows wod_start_secs on legacy WOD sessions and rejects it on non-WOD sessions", func() {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, newAuthorizedJSONRequest(
+			http.MethodPost,
+			requestPath(),
+			`{"client_request_id":"legacy-wod-start","wod_start_secs":12.5}`,
+			&user,
+		))
+		Expect(response.Code).To(Equal(http.StatusAccepted), response.Body.String())
+
+		warmupSession := testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:   "WARMUP-20260716-01JWARMUPSTARTREJECT00",
+			ProfileID:   profile.ID,
+			WorkoutType: "warmup",
+		})
+		warmupResp := httptest.NewRecorder()
+		router.ServeHTTP(warmupResp, newAuthorizedJSONRequest(
+			http.MethodPost,
+			fmt.Sprintf("/api/v1/sessions/%s/reanalyses", warmupSession.SessionID),
+			`{"client_request_id":"warmup-wod-start","wod_start_secs":5}`,
+			&user,
+		))
+		Expect(warmupResp.Code).To(Equal(http.StatusConflict))
 	})
 
 	It("allows explicit owned legacy video reanalysis without upgrading score eligibility", func() {
@@ -709,6 +759,76 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply", f
 			Expect(dbConn.First(&session, session.ID).Error).To(Succeed())
 			Expect(session.Effort).NotTo(BeNil())
 			Expect(*session.Effort).To(Equal(7))
+		})
+
+		It("promotes a legacy WOD session to wod_evaluation_version=1 and backfills workout_at without moving the profile rollout time", func() {
+			ensureTestDB()
+			testhelpers.CleanupDB(dbConn)
+			trackingStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+			profile := testhelpers.CreateProfile(dbConn, &db.Profile{
+				WODTrackingStartedAt: trackingStart,
+			})
+			var user db.User
+			Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())
+
+			legacySessionID := fmt.Sprintf("P%d-WOD-2026-03-10-18-30", profile.ID)
+			legacySession := testhelpers.CreateSession(dbConn, &db.Session{
+				SessionID:            legacySessionID,
+				ProfileID:            profile.ID,
+				WorkoutType:          "wod",
+				WODEvaluationVersion: 0,
+			})
+			analysis := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				SessionID:    legacySession.SessionID,
+				ProfileID:    profile.ID,
+				Status:       "COMPLETED",
+				Output:       "legacy output",
+				SessionScore: `{"overall":75}`,
+				CreatedAt:    time.Date(2026, 3, 10, 10, 0, 0, 0, time.UTC),
+			})
+			snapshot, err := json.Marshal(map[string]any{
+				"output":        analysis.Output,
+				"session_score": analysis.SessionScore,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			candidateScore := `{"evaluation_version":1,"evidence_status":"complete","form":85,"intensity":82,"summary":"solid"}`
+			run := testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{
+				SessionID:                legacySession.SessionID,
+				ProfileID:                profile.ID,
+				Status:                   db.SessionReanalysisStatusCompleted,
+				OriginalAnalysisSnapshot: db.JSONDocument(snapshot),
+				Output:                   "new version-1 output",
+				SessionScore:             candidateScore,
+				WorkoutType:              "wod",
+			})
+
+			router := newTestRouterWithAuthService(controllers.Config{
+				EnableSessionReanalysis: true,
+			})
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, newAuthorizedJSONRequest(
+				http.MethodPost,
+				fmt.Sprintf("/api/v1/sessions/%s/reanalyses/%d/apply", legacySession.SessionID, run.ID),
+				`{}`,
+				&user,
+			))
+			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+
+			var updatedSession db.Session
+			Expect(dbConn.First(&updatedSession, legacySession.ID).Error).To(Succeed())
+			Expect(updatedSession.WODEvaluationVersion).To(Equal(1))
+
+			var updatedAnalysis db.AnalysisResult
+			Expect(dbConn.First(&updatedAnalysis, analysis.ID).Error).To(Succeed())
+			Expect(updatedAnalysis.SessionScore).To(Equal(candidateScore))
+			Expect(updatedAnalysis.WorkoutAt).NotTo(BeNil())
+			Expect(updatedAnalysis.WorkoutAtSource).NotTo(BeNil())
+			Expect(*updatedAnalysis.WorkoutAtSource).To(Equal("legacy_local_time"))
+
+			var updatedProfile db.Profile
+			Expect(dbConn.First(&updatedProfile, profile.ID).Error).To(Succeed())
+			Expect(updatedProfile.WODTrackingStartedAt).To(BeTemporally("~", trackingStart, time.Second), "wod_tracking_started_at is the rollout time and drives automatic versioning")
 		})
 	})
 

@@ -298,7 +298,9 @@ export default function VisionTestPage() {
   const [appState, setAppState] = useState<AppStateStatus>(
     AppState.currentState,
   );
-  const isCameraActive = isFocused && appState === "active";
+  // Keep AVCaptureSession running during transient iOS "inactive" states so
+  // SegmentedRecordingSession can finish draining its stabilization buffer on pause/stop.
+  const isCameraActive = isFocused && appState !== "background";
   const [cameraPosition, setCameraPosition] = useState<"back" | "front">("back");
   const device = useCameraDevice(cameraPosition);
   const handleFlipCamera = useCallback(() => {
@@ -671,6 +673,11 @@ export default function VisionTestPage() {
     resetQuality,
     status: hrStatus,
     batteryLevel,
+    connectedDevice = null,
+    registeredDevice = null,
+    discoveredDevices = [],
+    registerDevice,
+    rescanDevices,
   } = useBleHeartRate({
     sink: PolarSensorRecorder,
     recording: isRecording,
@@ -688,6 +695,62 @@ export default function VisionTestPage() {
     },
   });
   // const { bpm, status: hrStatus } = useHeartRate();
+
+  const handleOpenHrDevicePicker = useCallback(() => {
+    const lines = [
+      connectedDevice
+        ? t("overlay.recording.hrDeviceConnected", { name: connectedDevice.name })
+        : t("overlay.recording.hrDeviceDisconnected"),
+      registeredDevice
+        ? t("overlay.recording.hrDeviceRegisteredInfo", { name: registeredDevice.name })
+        : t("overlay.recording.hrDeviceUnregisteredInfo"),
+    ];
+    const buttons: {
+      text: string;
+      style?: "default" | "cancel" | "destructive";
+      onPress?: () => void;
+    }[] = [];
+
+    if (connectedDevice && (!registeredDevice || registeredDevice.id !== connectedDevice.id)) {
+      buttons.push({
+        text: t("overlay.recording.hrDeviceRegisterCurrent", { name: connectedDevice.name }),
+        onPress: () => {
+          void registerDevice?.(connectedDevice);
+        },
+      });
+    }
+
+    for (const candidate of discoveredDevices) {
+      if (candidate.id === connectedDevice?.id) continue;
+      if (buttons.length >= 3) break;
+      buttons.push({
+        text: t("overlay.recording.hrDeviceSwitchTo", { name: candidate.name }),
+        onPress: () => {
+          void registerDevice?.(candidate);
+        },
+      });
+    }
+
+    if (registeredDevice) {
+      buttons.push({
+        text: t("overlay.recording.hrDeviceUnregister"),
+        style: "destructive",
+        onPress: () => {
+          void registerDevice?.(null);
+        },
+      });
+    }
+
+    buttons.push({
+      text: t("overlay.recording.hrDeviceRescan"),
+      onPress: () => {
+        void rescanDevices?.();
+      },
+    });
+    buttons.push({ text: t("common.cancel"), style: "cancel" });
+
+    Alert.alert(t("overlay.recording.hrDeviceTitle"), lines.join("\n"), buttons);
+  }, [connectedDevice, discoveredDevices, registerDevice, registeredDevice, rescanDevices]);
 
   // Poll Polar sensor live status at 1Hz during recording (avoids 50Hz re-renders)
   useEffect(() => {
@@ -1054,8 +1117,9 @@ export default function VisionTestPage() {
             sourceAccepted = true;
             if (video.segmented) {
               if (video.droppedVideoFrames || video.droppedAudioBuffers || video.tailDrainTimedOut) {
-                capture.complete = false;
-                capture.failure = `capture dropped buffers: video=${video.droppedVideoFrames}, audio=${video.droppedAudioBuffers}, tailTimeout=${video.tailDrainTimedOut}`;
+                console.warn(
+                  `⚠️ Capture finalized with buffer diagnostics: video=${video.droppedVideoFrames}, audio=${video.droppedAudioBuffers}, tailTimeout=${video.tailDrainTimedOut}`,
+                );
               }
             } else {
               try { queueAnalysis(capture, video.path, startedAt, startedAt + video.duration * 1000); }
@@ -1410,18 +1474,34 @@ export default function VisionTestPage() {
       // before the user can background the app.
       // Use the ref, not `chunkCount` state: the final chunk increments it
       // inside an async callback that this closure may not have observed yet.
-      if (capture?.complete && capture.order > 0) {
+      if (capture && capture.order > 0) {
         const movementsArray = movements ? movements.split(", ") : [];
         const injuriesArray = injuries ? injuries.split(", ") : [];
 
-        // Track the merge globally so History page can show a banner
-        useMergeStatus.getState().addPending(sessionId);
+        // Track the merge globally so History page can show a banner when
+        // capture is complete or segments have already been queued for upload.
+        let trackedPending = false;
+        if (capture.complete || uploadedChunkCount.current > 0) {
+          useMergeStatus.getState().addPending(sessionId);
+          trackedPending = true;
+        }
 
         (async () => {
           // Merge only once every chunk has actually reached GCS. A fixed
           // delay merged incomplete sessions whenever compression or the
           // network ran long.
           await Promise.all(capture.drains);
+          if (!capture.complete && uploadedChunkCount.current === 0) {
+            releaseFailedChunks(capture);
+            if (trackedPending) {
+              useMergeStatus.getState().removePending(sessionId);
+            }
+            return;
+          }
+          if (!trackedPending) {
+            useMergeStatus.getState().addPending(sessionId);
+            trackedPending = true;
+          }
           await waitForOutstandingUploads(capture, MERGE_UPLOAD_WAIT_MS);
           try {
             await retryFailedChunks(capture, true);
@@ -1449,7 +1529,9 @@ export default function VisionTestPage() {
             console.error("❌ Auto-merge failed:", e);
           } finally {
             releaseFailedChunks(capture);
-            useMergeStatus.getState().removePending(sessionId);
+            if (trackedPending) {
+              useMergeStatus.getState().removePending(sessionId);
+            }
           }
         })(); // IIFE — fires immediately, does not block
       } else if (capture) {
@@ -1634,14 +1716,21 @@ export default function VisionTestPage() {
             </Text>
           </View>
 
-          {/* Center: Heart Rate (BPM) */}
-          <View style={styles.statusHrPill}>
-            <Text style={styles.statusHrHeart}>♥</Text>
+          {/* Center: Heart Rate (BPM) & BLE Sensor Registration */}
+          <TouchableOpacity
+            testID="ble-hr-device-pill"
+            style={styles.statusHrPill}
+            onPress={handleOpenHrDevicePicker}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel={t("overlay.recording.hrDeviceTitle")}
+          >
+            <Text style={styles.statusHrHeart}>{registeredDevice ? "📌♥" : "♥"}</Text>
             <Text style={styles.statusHrValue}>
               {bpm > 0 ? bpm : "--"}
             </Text>
             <Text style={styles.statusHrUnit}>BPM</Text>
-          </View>
+          </TouchableOpacity>
 
           {/* Right: Heart Rate Sensor (Polar H10) Battery */}
           <View style={styles.statusBatterySection}>

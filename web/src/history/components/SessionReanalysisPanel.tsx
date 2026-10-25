@@ -1,6 +1,13 @@
 import { AnalysisOriginal } from "./AnalysisMarkdown";
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
+import {
+  formatStartTimestamp,
+  isWodWorkout,
+  newWODScore,
+  parseStartTimestamp,
+  wodSeconds,
+} from '../../../../shared/wodTraining';
 import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from '../historyPolling';
 import {
   historyApi,
@@ -15,6 +22,8 @@ interface Props {
   chunkBatchReady: boolean;
   chunkBatchBlockedReason?: string;
   unconfirmedCandidateCount: number;
+  currentTime?: number;
+  isOriginal?: boolean;
 }
 
 function isTerminal(status?: SessionReanalysisStatus) {
@@ -46,12 +55,22 @@ export function SessionReanalysisPanel({
   chunkBatchReady,
   chunkBatchBlockedReason,
   unconfirmedCandidateCount,
+  currentTime,
+  isOriginal,
 }: Props) {
   const queryClient = useQueryClient();
   const [explicitRunId, setExplicitRunId] = useState<number>();
   const [appearanceHints, setAppearanceHints] = useState('');
   const [wodDescription, setWodDescription] = useState(originalAnalysis?.wod_description ?? '');
   const [isEditingWod, setIsEditingWod] = useState(false);
+  const [startTimestampInput, setStartTimestampInput] = useState('');
+  const [resetStartToAuto, setResetStartToAuto] = useState(false);
+
+  const canSpecifyStart = isWodWorkout(sessionId, originalAnalysis?.workout_type);
+  const trimmedStartInput = startTimestampInput.trim();
+  const parsedStartSecs = trimmedStartInput ? parseStartTimestamp(trimmedStartInput) : null;
+  const hasInvalidStartInput = canSpecifyStart && trimmedStartInput !== '' && parsedStartSecs == null;
+  const currentWodStart = newWODScore(originalAnalysis?.session_score)?.wod_start;
 
   useEffect(() => {
     if (originalAnalysis?.wod_description && !isEditingWod) {
@@ -101,12 +120,20 @@ export function SessionReanalysisPanel({
 
   const createMutation = useMutation({
     mutationFn: () => {
+      const wodStartArg = !canSpecifyStart
+        ? undefined
+        : resetStartToAuto
+          ? null
+          : parsedStartSecs != null
+            ? parsedStartSecs
+            : undefined;
       return historyApi.createSessionReanalysis(
         sessionId,
         crypto.randomUUID(),
         appearanceHints.trim() || undefined,
         undefined,
         wodDescription.trim() || undefined,
+        wodStartArg,
       );
     },
     onSuccess: async (response) => {
@@ -129,6 +156,8 @@ export function SessionReanalysisPanel({
         queryClient.invalidateQueries({ queryKey: ['session-cost', sessionId] }),
         queryClient.invalidateQueries({ queryKey: ['total-cost'] }),
         queryClient.invalidateQueries({ queryKey: ['related-wods'] }),
+        queryClient.invalidateQueries({ queryKey: ['wod-training'] }),
+        queryClient.invalidateQueries({ queryKey: ['wod-training-load'] }),
       ]);
     },
   });
@@ -145,7 +174,8 @@ export function SessionReanalysisPanel({
   const readiness = listResponse?.readiness;
   const canCreate = chunkBatchReady
     && readiness?.can_create === true
-    && !createMutation.isPending;
+    && !createMutation.isPending
+    && !hasInvalidStartInput;
   const blockedReason = chunkBatchBlockedReason
     ?? readiness?.blocked_reason
     ?? (!listLoading && !listResponse ? 'Whole-workout re-analysis is unavailable.' : undefined);
@@ -196,6 +226,76 @@ export function SessionReanalysisPanel({
                 className="w-full rounded-lg border border-border bg-bg-surface px-2.5 py-1.5 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
               />
             </label>
+            {canSpecifyStart && (
+              <div className="flex flex-col gap-1 text-text-secondary">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label htmlFor="reanalysis-start-timestamp" className="font-semibold text-text-primary">
+                    운동 시작 타임스탬프 (Start timestamp, 선택)
+                  </label>
+                  {currentWodStart?.seconds != null && (
+                    <span className="text-[11px] text-text-muted">
+                      현재 시작 시점: {wodSeconds(currentWodStart.seconds)} ({currentWodStart.source === 'manual' ? '직접 지정' : '자동 추정'})
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    id="reanalysis-start-timestamp"
+                    aria-label="운동 시작 타임스탬프"
+                    type="text"
+                    placeholder={resetStartToAuto ? '자동 추정으로 초기화됨' : '예: 02:15 또는 135 (비워두면 유지)'}
+                    value={startTimestampInput}
+                    onChange={(e) => {
+                      setResetStartToAuto(false);
+                      setStartTimestampInput(e.target.value);
+                    }}
+                    className="w-52 rounded-lg border border-border bg-bg-surface px-2.5 py-1.5 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
+                  />
+                  <button
+                    type="button"
+                    disabled={!isOriginal || currentTime == null}
+                    onClick={() => {
+                      if (currentTime != null) {
+                        setResetStartToAuto(false);
+                        setStartTimestampInput(formatStartTimestamp(currentTime));
+                      }
+                    }}
+                    className="rounded-lg border border-border bg-bg-surface px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-bg-tertiary disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    현재 영상 위치 가져오기
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStartTimestampInput('');
+                      setResetStartToAuto((prev) => !prev);
+                    }}
+                    className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                      resetStartToAuto
+                        ? 'border-accent/50 bg-accent/15 text-accent'
+                        : 'border-border bg-bg-surface text-text-secondary hover:bg-bg-tertiary'
+                    }`}
+                  >
+                    {resetStartToAuto ? '자동 추정 복원 선택됨' : '자동 추정으로 초기화'}
+                  </button>
+                </div>
+                {parsedStartSecs != null && (
+                  <span className="text-[11px] text-accent">
+                    지정된 시작 시점: {wodSeconds(parsedStartSecs)} ({parsedStartSecs}초 지점부터 본 운동으로 분석)
+                  </span>
+                )}
+                {resetStartToAuto && trimmedStartInput === '' && (
+                  <span className="text-[11px] text-accent">
+                    재분석 시 수동 시작 시점을 해제하고 영상에서 운동 시작 시점을 다시 자동 추정합니다.
+                  </span>
+                )}
+                {hasInvalidStartInput && (
+                  <span role="alert" className="text-[11px] text-error">
+                    올바른 타임스탬프 형식(예: 02:15, 1:02:15 또는 135)을 입력해 주세요.
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <button

@@ -1177,6 +1177,8 @@ export function ProcessingSection({
   const isDark = scheme === "dark";
   const activeProfileId = useProfileId();
   const [remergingId, setRemergingId] = useState<string | null>(null);
+  const [localRequestedIds, setLocalRequestedIds] = useState<Record<string, boolean>>({});
+  const [, setStoreRevision] = useState(0);
 
   // Pull ALL non-completed items from the local video queue
   // useShallow prevents infinite re-renders from .filter() creating new array refs
@@ -1184,8 +1186,65 @@ export function ProcessingSection({
     useShallow((s) => s.items.filter((i) => i.status !== "UPLOADED")),
   );
 
+  const executeRemerge = useCallback(
+    async ({
+      sessionId,
+      profileId,
+      workoutType,
+    }: {
+      sessionId: string;
+      profileId: number;
+      workoutType: ReturnType<typeof parseWorkoutType>;
+    }) => {
+      await mergeChunks(sessionId, {
+        profileId,
+        workoutType,
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const store = useMergeStatus as any;
+    void store.getState?.()?.hydrateRemergeState?.();
+    if (typeof store.subscribe === "function") {
+      return store.subscribe(() => {
+        setStoreRevision((rev) => rev + 1);
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    const pendingSessionIds = items.map((i) => i.session_id);
+    const pendingSet = new Set(pendingSessionIds);
+    setLocalRequestedIds((prev) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      for (const sid of Object.keys(prev)) {
+        if (pendingSet.has(sid)) {
+          next[sid] = true;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    const storeState = (useMergeStatus as any).getState?.();
+    if (typeof storeState?.syncPendingSessions === "function") {
+      void storeState.syncPendingSessions(pendingSessionIds, executeRemerge);
+    }
+  }, [items, executeRemerge]);
+
   const handleRemerge = useCallback(
     (item: AnalysisResult) => {
+      const storeState = (useMergeStatus as any).getState?.();
+      const alreadyRequested =
+        Boolean(localRequestedIds[item.session_id]) ||
+        Boolean(storeState?.isRemergeRequested?.(item.session_id));
+      if (alreadyRequested || remergingId === item.session_id) {
+        return;
+      }
+
       const profileIdToUse = item.profile_id ?? activeProfileId;
       if (!profileIdToUse) {
         Alert.alert(t("common.error"), t("historyList.remergeFailed"));
@@ -1209,13 +1268,42 @@ export function ProcessingSection({
                     : parts[0];
                 const workoutType = parseWorkoutType(rawType);
 
-                await mergeChunks(item.session_id, {
-                  profileId: profileIdToUse,
-                  workoutType,
-                });
-
-                useMergeStatus.getState().addPending(item.session_id);
-                Alert.alert(t("upload.success"), t("historyList.remergeStarted"));
+                const currentStore = (useMergeStatus as any).getState?.();
+                if (typeof currentStore?.enqueueRemerge === "function") {
+                  const outcome = await currentStore.enqueueRemerge(
+                    {
+                      sessionId: item.session_id,
+                      profileId: profileIdToUse,
+                      workoutType,
+                    },
+                    executeRemerge,
+                  );
+                  setLocalRequestedIds((prev) => ({
+                    ...prev,
+                    [item.session_id]: true,
+                  }));
+                  if (outcome === "duplicate") {
+                    return;
+                  }
+                  Alert.alert(
+                    t("upload.success"),
+                    outcome === "queued"
+                      ? t("historyList.remergeQueuedAlert")
+                      : t("historyList.remergeStarted"),
+                  );
+                } else {
+                  await executeRemerge({
+                    sessionId: item.session_id,
+                    profileId: profileIdToUse,
+                    workoutType,
+                  });
+                  currentStore?.addPending?.(item.session_id, true);
+                  setLocalRequestedIds((prev) => ({
+                    ...prev,
+                    [item.session_id]: true,
+                  }));
+                  Alert.alert(t("upload.success"), t("historyList.remergeStarted"));
+                }
                 onRefresh?.();
               } catch (err) {
                 console.error("Failed to re-merge chunks:", err);
@@ -1228,7 +1316,7 @@ export function ProcessingSection({
         ],
       );
     },
-    [activeProfileId, onRefresh],
+    [activeProfileId, executeRemerge, localRequestedIds, onRefresh, remergingId],
   );
 
   if (items.length === 0 && queueItems.length === 0) return null;
@@ -1254,7 +1342,19 @@ export function ProcessingSection({
       {/* Server-side PENDING analysis results */}
       {items.map((item) => {
         const stale = isStaleProcessing(item.created_at);
+        const storeState = (useMergeStatus as any).getState?.();
         const isRemerging = remergingId === item.session_id;
+        const isRequested =
+          Boolean(localRequestedIds[item.session_id]) ||
+          Boolean(storeState?.isRemergeRequested?.(item.session_id));
+        const queuePos: number =
+          storeState?.getRemergeQueuePosition?.(item.session_id) ?? -1;
+        const isDisabled = isRemerging || isRequested;
+        const buttonLabel = isRequested
+          ? queuePos > 0
+            ? t("historyList.remergeQueuedWithPosition", { position: queuePos })
+            : t("historyList.remergeInProgress")
+          : t("historyList.remerge");
 
         return (
           <View
@@ -1296,20 +1396,22 @@ export function ProcessingSection({
                 <TouchableOpacity
                   style={[
                     processingStyles.remergeBtn,
-                    isRemerging && { opacity: 0.6 },
+                    isDisabled && { opacity: 0.6 },
                   ]}
-                  disabled={isRemerging}
+                  disabled={isDisabled}
                   onPress={() => handleRemerge(item)}
                   accessibilityRole="button"
-                  accessibilityLabel={t("historyList.remerge")}
+                  accessibilityLabel={buttonLabel}
                 >
                   {isRemerging ? (
                     <ActivityIndicator size="small" color="#FFD60A" />
                   ) : (
                     <>
-                      <Text style={processingStyles.remergeIcon}>🔄</Text>
+                      <Text style={processingStyles.remergeIcon}>
+                        {isRequested ? "⏳" : "🔄"}
+                      </Text>
                       <Text style={processingStyles.remergeBtnText}>
-                        {t("historyList.remerge")}
+                        {buttonLabel}
                       </Text>
                     </>
                   )}

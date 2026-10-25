@@ -71,3 +71,18 @@ func (ctl *Controller) persistSessionMovementHints(ctx context.Context, sessionI
 	}
 	return nil
 }
+
+func (ctl *Controller) persistSessionWODDescription(ctx context.Context, sessionID string, profileID uint, wodDescription string) error {
+	trimmed := strings.TrimSpace(wodDescription)
+	if trimmed == "" || ctl.db == nil {
+		return nil
+	}
+	result := ctl.db.WithContext(ctx).
+		Model(&db.Session{}).
+		Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+		Update("wod_description", trimmed)
+	if result.Error != nil {
+		return fmt.Errorf("persist session wod description: %w", result.Error)
+	}
+	return nil
+}

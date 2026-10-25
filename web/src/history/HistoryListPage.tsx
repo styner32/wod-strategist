@@ -155,6 +155,17 @@ const HistoryCard = memo(function HistoryCard({ result }: { result: AnalysisResu
         )}
       </div>
 
+      {result.wod_description?.trim() && (
+        <div className="mb-2 rounded-lg border border-border/70 bg-bg-secondary/70 px-3 py-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+            WOD
+          </p>
+          <p className="mt-0.5 text-xs text-text-primary line-clamp-2 whitespace-pre-wrap">
+            {result.wod_description.trim()}
+          </p>
+        </div>
+      )}
+
       {parsed.summary && (
         <p className="text-sm text-text-secondary line-clamp-2">
           {parsed.summary}

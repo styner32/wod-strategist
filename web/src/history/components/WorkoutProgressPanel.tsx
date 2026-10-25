@@ -3,11 +3,18 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { historyApi } from "../../api/history";
 import ko from "../../../../features/i18n/locales/ko.json";
 import {
+  activePerformanceRecords,
+  buildUnassessedIntervals,
   confirmedPerformanceInput,
+  describeUnassessedReason,
   diagnosePerformanceDraft,
+  extractSuggestedMovements,
   extractWodLoads,
   findCoveringConfirmedRecord,
   getContiguousExerciseSpan,
+  incompleteRepCount,
+  inferDefaultLoadMode,
+  inferLoadBasis,
   isLikelyBodyweightMovement,
   observedReps,
   performanceDraft,
@@ -47,8 +54,10 @@ function PerformanceEditor({
   progress,
   record,
   wodLoads = [],
+  suggestedMovements = [],
   initialDraft,
   movementDefaults,
+  resolveMovementDefaults,
   onDraftChange,
   saving,
   onSave,
@@ -58,8 +67,10 @@ function PerformanceEditor({
   interval: WorkoutProgressInterval;
   record?: PerformanceRecord;
   wodLoads?: ProgressLoad[];
+  suggestedMovements?: string[];
   initialDraft?: PerformanceDraft;
   movementDefaults?: MovementDraftDefaults;
+  resolveMovementDefaults?: (movement?: string | null) => MovementDraftDefaults | undefined;
   onDraftChange?: (draft: PerformanceDraft) => void;
   saving: boolean;
   progress: WorkoutProgress;
@@ -78,6 +89,38 @@ function PerformanceEditor({
       onDraftChange?.(next);
       return next;
     });
+  const applyTargetMovementDefaults = (prev: PerformanceDraft, targetMovement?: string | null): Partial<PerformanceDraft> => {
+    const targetDefaults = resolveMovementDefaults?.(targetMovement);
+    const patch: Partial<PerformanceDraft> = {};
+    if (targetDefaults) {
+      if (prev.loadMode === "unresolved" && targetDefaults.loadMode) {
+        patch.loadMode = targetDefaults.loadMode;
+      }
+      if (prev.weight.trim() === "" && targetDefaults.weight) {
+        patch.loadMode = targetDefaults.loadMode ?? "weighted";
+        patch.weight = targetDefaults.weight;
+        if (targetDefaults.unit) patch.unit = targetDefaults.unit;
+        if (targetDefaults.basis) patch.basis = targetDefaults.basis;
+      }
+      if (targetDefaults.technique && targetDefaults.technique !== "unspecified") {
+        patch.technique = targetDefaults.technique;
+      }
+      return patch;
+    }
+    if (prev.loadMode === "unresolved" && targetMovement?.trim()) {
+      const inferredMode = inferDefaultLoadMode(targetMovement);
+      if (inferredMode !== "unresolved") {
+        patch.loadMode = inferredMode;
+        patch.basis = inferLoadBasis(targetMovement);
+        if (inferredMode === "weighted" && prev.weight.trim() === "" && wodLoads.length === 1) {
+          patch.weight = String(wodLoads[0].value);
+          patch.unit = wodLoads[0].unit;
+          patch.basis = wodLoads[0].basis;
+        }
+      }
+    }
+    return patch;
+  };
   const update = <K extends keyof PerformanceDraft>(key: K, value: PerformanceDraft[K]) =>
     updateDraft(d => {
       const next = { ...d, [key]: value, reviewed: key === "reviewed" ? Boolean(value) : false };
@@ -91,24 +134,115 @@ function PerformanceEditor({
   const field = (key: "start" | "end" | "reps" | "weight", title: string) => (
     <label className={labelClass}>
       {text(title)}
-      <input
-        className={fieldControlClass}
-        aria-label={text(title)}
-        type="number"
-        step={key === "reps" ? "1" : "0.1"}
-        value={draft[key]}
-        disabled={saving}
-        onChange={e => update(key, e.target.value)}
-      />
+      <div className="flex items-center gap-1.5">
+        <input
+          className={fieldControlClass}
+          aria-label={text(title)}
+          type="number"
+          step={key === "reps" ? "1" : "0.1"}
+          value={draft[key]}
+          disabled={saving}
+          onChange={e => update(key, e.target.value)}
+        />
+        {key === "reps" && (
+          <>
+            <button
+              type="button"
+              aria-label="반복수 1 감소"
+              disabled={saving}
+              onClick={() => {
+                const cur = Number.parseInt(draft.reps || "0", 10);
+                const nextReps = Number.isFinite(cur) ? Math.max(0, cur - 1) : 0;
+                update("reps", String(nextReps));
+              }}
+              className="h-10 shrink-0 rounded-lg border border-border bg-bg-secondary/60 px-2.5 font-mono text-xs font-semibold text-text-primary hover:bg-bg-tertiary disabled:opacity-40"
+            >
+              -1
+            </button>
+            <button
+              type="button"
+              aria-label="반복수 1 증가"
+              disabled={saving}
+              onClick={() => {
+                const cur = Number.parseInt(draft.reps || "0", 10);
+                const nextReps = Number.isFinite(cur) ? Math.max(0, cur + 1) : 1;
+                update("reps", String(nextReps));
+              }}
+              className="h-10 shrink-0 rounded-lg border border-accent/40 bg-accent/15 px-2.5 font-mono text-xs font-semibold text-accent hover:bg-accent/25 disabled:opacity-40"
+            >
+              +1
+            </button>
+          </>
+        )}
+      </div>
     </label>
   );
   const valid = confirmedPerformanceInput(interval, draft, progress) != null;
   const diagnostic = draft.reviewed && !valid ? (diagnosePerformanceDraft(interval, draft, progress) ?? words.invalid) : null;
   const start = Number(draft.start), end = Number(draft.end);
-  const canReview = draft.start.trim() !== "" && draft.end.trim() !== "" && performanceSelectionCovered(interval, start, end, draft.measurement, progress);
+  const effectiveForCoverage: WorkoutProgressInterval =
+    draft.movement !== undefined
+      ? { ...interval, activity: "exercise", movement: draft.movement.trim() }
+      : interval;
+  const canReview =
+    draft.start.trim() !== "" &&
+    draft.end.trim() !== "" &&
+    performanceSelectionCovered(effectiveForCoverage, start, end, draft.measurement, progress);
   return (
     <div className="mt-3 space-y-3.5 rounded-xl border border-border bg-bg-secondary/40 p-4">
       <p className="text-xs leading-relaxed text-text-secondary">{words.reviewHelp}</p>
+
+      <div className="space-y-2">
+        <label className={labelClass}>
+          운동 종목
+          <input
+            type="text"
+            aria-label="운동 종목"
+            placeholder="예: Clean & Jerk, Power Clean"
+            className={fieldControlClass}
+            value={draft.movement ?? ""}
+            disabled={saving}
+            onChange={e =>
+              updateDraft(d => ({
+                ...d,
+                ...applyTargetMovementDefaults(d, e.target.value),
+                movement: e.target.value,
+                reviewed: false,
+              }))
+            }
+          />
+        </label>
+        {suggestedMovements.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-text-muted">종목 빠른 선택:</span>
+            {suggestedMovements.map(mov => {
+              const active = (draft.movement ?? "").trim().toLowerCase() === mov.toLowerCase();
+              return (
+                <button
+                  key={`suggest-mov-${mov}`}
+                  type="button"
+                  disabled={saving}
+                  onClick={() =>
+                    updateDraft(d => ({
+                      ...d,
+                      ...applyTargetMovementDefaults(d, mov),
+                      movement: mov,
+                      reviewed: false,
+                    }))
+                  }
+                  className={`rounded-md border px-2 py-0.5 font-medium transition-colors disabled:opacity-40 ${
+                    active
+                      ? "border-accent bg-accent/20 text-accent"
+                      : "border-border bg-bg-secondary/60 text-text-secondary hover:bg-bg-tertiary"
+                  }`}
+                >
+                  {mov}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {(contiguousSpan.startSecs < interval.start_secs || contiguousSpan.endSecs > interval.end_secs) &&
         (Number(draft.start) > contiguousSpan.startSecs || Number(draft.end) < contiguousSpan.endSecs) && (
@@ -129,6 +263,8 @@ function PerformanceEditor({
                   onClick={() =>
                     updateDraft(d => ({
                       ...d,
+                      ...applyTargetMovementDefaults(d, opt.movement),
+                      movement: opt.movement,
                       start: String(contiguousSpan.startSecs),
                       end: String(contiguousSpan.endSecs),
                       targetIntervalId: opt.intervalId,
@@ -186,6 +322,8 @@ function PerformanceEditor({
                   onClick={() =>
                     updateDraft(d => ({
                       ...d,
+                      ...applyTargetMovementDefaults(d, opt.movement),
+                      movement: opt.movement,
                       targetIntervalId: opt.intervalId,
                       reps: opt.observedReps != null ? String(opt.observedReps) : d.reps,
                       reviewed: false,
@@ -209,6 +347,28 @@ function PerformanceEditor({
         {field("start", "start")}
         {field("end", "end")}
         {field("reps", "reps")}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-bg-elevated/60 px-3 py-2 text-xs">
+        <span className="text-text-secondary">
+          동작은 인식되었으나 랩 기준 미달·노렙·실패·준비 동작인 경우:
+        </span>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => {
+            // Keep the selected load: a failed 135 lb attempt is not a bodyweight record.
+            const zeroDraft: PerformanceDraft = { ...draft, reps: "0", reviewed: true };
+            setDraft(zeroDraft);
+            onDraftChange?.(zeroDraft);
+            if (confirmedPerformanceInput(interval, zeroDraft, progress) != null) {
+              onSave(zeroDraft);
+            }
+          }}
+          className="rounded-md border border-warning/40 bg-warning/15 px-2.5 py-1 font-semibold text-warning hover:bg-warning/25 disabled:opacity-40 transition-colors"
+        >
+          0회(미완료/노렙)로 확정
+        </button>
       </div>
 
       <div className="space-y-2">
@@ -383,7 +543,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
       const result = await historyApi.confirmPerformanceRecords(sessionId, { source_version: data.progress.source_version, records: [record] });
       if (currentScope.current !== requestScope || currentSource.current !== submittedSource) return;
       const confirmedInterval = data.progress.intervals.find(row => row.id === record.interval_id) ?? interval;
-      const confirmedMovement = confirmedInterval.movement ?? interval.movement ?? "";
+      const confirmedMovement = record.movement ?? confirmedInterval.movement ?? interval.movement ?? "";
       delete draftsRef.current[interval.id];
       delete draftsRef.current[record.interval_id];
       for (const row of data.progress.intervals) {
@@ -395,7 +555,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
           delete draftsRef.current[row.id];
         }
       }
-      if (confirmedMovement.trim()) {
+      if (confirmedMovement.trim() && (record.reps > 0 || record.load != null)) {
         movementDefaultsRef.current[confirmedMovement.trim().toLowerCase()] = {
           loadMode: draft.loadMode,
           weight: draft.weight,
@@ -405,7 +565,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
         };
       }
       client.setQueryData(queryKey, result); setSelected(undefined); setNotice(words.saved); setMovement(confirmedMovement);
-      await client.invalidateQueries({ queryKey: ["performance-benchmarks", profileId, confirmedMovement] });
+      await client.invalidateQueries({ queryKey: ["performance-benchmarks", profileId] });
     } catch (e) {
       if (currentScope.current !== requestScope) return;
       if ((e as { status?: number })?.status === 409) {
@@ -413,13 +573,53 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
         setSelected(undefined); setMovement("");
         await progressQuery.refetch();
         if (currentScope.current === requestScope) setError(words.stale);
-      } else setError(words.failed);
+      } else {
+        const detail =
+          e instanceof Error &&
+          e.message &&
+          e.message !== "offline" &&
+          !e.message.startsWith("Request failed:")
+            ? ` (${e.message})`
+            : "";
+        setError(`${words.failed}${detail}`);
+      }
     } finally { if (currentScope.current === requestScope) setSaving(false); }
   };
 
+  const activeRecords = useMemo(
+    () => activePerformanceRecords(data?.records ?? []),
+    [data?.records],
+  );
+  const suggestedMovements = useMemo(
+    () => extractSuggestedMovements(wodDescription, data?.progress, activeRecords),
+    [wodDescription, data?.progress, activeRecords],
+  );
+  const unassessedIntervals = useMemo(
+    () => buildUnassessedIntervals(data?.progress, activeRecords),
+    [data?.progress, activeRecords],
+  );
+  const timelineItems = useMemo(() => {
+    if (!data?.progress) return [];
+    const items: (
+      | { kind: "interval"; start_secs: number; interval: WorkoutProgressInterval }
+      | { kind: "unassessed"; start_secs: number; gap: (typeof unassessedIntervals)[number] }
+    )[] = [
+      ...data.progress.intervals.map(interval => ({
+        kind: "interval" as const,
+        start_secs: interval.start_secs,
+        interval,
+      })),
+      ...unassessedIntervals.map(gap => ({
+        kind: "unassessed" as const,
+        start_secs: gap.start_secs,
+        gap,
+      })),
+    ];
+    return items.sort((a, b) => a.start_secs - b.start_secs);
+  }, [data?.progress, unassessedIntervals]);
   const movementSummaries = useMemo(
-    () => summarizeWorkoutMovements(data?.progress, data?.records ?? []),
-    [data?.progress, data?.records],
+    () => summarizeWorkoutMovements(data?.progress, activeRecords),
+    [data?.progress, activeRecords],
   );
   const totalExerciseIntervals = useMemo(
     () => movementSummaries.reduce((acc, item) => acc + item.intervalCount, 0),
@@ -431,6 +631,10 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
   );
   const totalConfirmedReps = useMemo(
     () => movementSummaries.reduce((acc, item) => acc + item.confirmedReps, 0),
+    [movementSummaries],
+  );
+  const hasConfirmedIntervals = useMemo(
+    () => movementSummaries.some(item => item.confirmedCount > 0),
     [movementSummaries],
   );
 
@@ -454,6 +658,18 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
       {!!notice && <p role="status" className="text-sm text-success">{notice}</p>}
       {data && !data.progress && <p className="text-sm">{words.unavailable}</p>}
 
+      {wodDescription?.trim() && (
+        <div
+          data-testid="workout-progress-wod-description"
+          className="space-y-1.5 rounded-xl border border-border bg-bg-secondary/60 p-3.5"
+        >
+          <span className="text-xs font-semibold text-text-muted">WOD 설명</span>
+          <p className="whitespace-pre-wrap text-sm text-text-primary">
+            {wodDescription.trim()}
+          </p>
+        </div>
+      )}
+
       {/* Total performed movements & reps summary */}
       {movementSummaries.length > 0 && (
         <div
@@ -471,7 +687,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
               <span className="rounded-md bg-accent/15 px-2 py-0.5 font-mono font-semibold text-accent">
                 {`관찰 완료 총 ${totalObservedReps}회`}
               </span>
-              {totalConfirmedReps > 0 && (
+              {(totalConfirmedReps > 0 || hasConfirmedIntervals) && (
                 <span className="rounded-md bg-success/15 px-2 py-0.5 font-mono font-semibold text-success">
                   {`확정 총 ${totalConfirmedReps}회`}
                 </span>
@@ -531,7 +747,162 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
         </div>
       )}
 
-      {data?.progress?.intervals.map(interval => {
+      {timelineItems.map(item => {
+        if (item.kind === "unassessed") {
+          const { gap } = item;
+          const record = activeRecords.find(r => r.interval_id === gap.id);
+          const nearbyMovement = (() => {
+            if (!data?.progress?.intervals) return "";
+            let best = "";
+            let bestDist = Infinity;
+            for (const row of data.progress.intervals) {
+              if (row.activity !== "exercise" || !row.movement?.trim()) continue;
+              const dist =
+                row.end_secs <= gap.start_secs
+                  ? gap.start_secs - row.end_secs
+                  : row.start_secs >= gap.end_secs
+                    ? row.start_secs - gap.end_secs
+                    : 0;
+              if (dist < bestDist) {
+                bestDist = dist;
+                best = row.movement.trim();
+              }
+            }
+            return bestDist <= 30 ? best : "";
+          })();
+          const defaultMovement =
+            record?.movement?.trim() ||
+            gap.movement?.trim() ||
+            nearbyMovement ||
+            suggestedMovements[0] ||
+            "";
+          const syntheticInterval: WorkoutProgressInterval = {
+            id: gap.id,
+            start_secs: gap.start_secs,
+            end_secs: gap.end_secs,
+            activity: "exercise",
+            movement: defaultMovement,
+            load: null,
+            observation_refs: [],
+            rep_events: [],
+          };
+          const coveringConfirmed = findCoveringConfirmedRecord(syntheticInterval, activeRecords);
+          const isConfirmed = coveringConfirmed != null;
+          const isNeedsConfirmation = !isConfirmed && record?.status === "needs_confirmation";
+          const effectiveMovement = coveringConfirmed?.movement?.trim() || record?.movement?.trim() || gap.movement?.trim() || "";
+          const wodLoads = extractWodLoads(wodDescription, effectiveMovement || defaultMovement);
+          const cardToneClass = isConfirmed
+            ? "border-success/50 bg-success/10"
+            : isNeedsConfirmation
+              ? "border-warning/50 bg-warning/10"
+              : "border-warning/35 bg-warning/5";
+          return (
+            <div
+              key={gap.id}
+              data-testid={`unassessed-interval-${gap.id}`}
+              className={`space-y-2 rounded-xl border p-3.5 transition-colors ${cardToneClass}`}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h4 className="font-medium text-text-primary">
+                  {`${progressTime(gap.start_secs)}–${progressTime(gap.end_secs)} · ${
+                    coveringConfirmed?.movement?.trim() ||
+                    record?.movement?.trim() ||
+                    (gap.movement ? `${gap.movement} (청크 감지 후보)` : words.unassessed)
+                  }`}
+                </h4>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span
+                    data-testid={`unassessed-reason-${gap.id}`}
+                    className="rounded-md border border-warning/40 bg-warning/15 px-2 py-0.5 text-xs font-medium text-warning"
+                  >
+                    {describeUnassessedReason(gap.reason)}
+                  </span>
+                  {isConfirmed && coveringConfirmed && (
+                    <span
+                      data-testid={`confirmed-badge-${gap.id}`}
+                      className="rounded-md border border-success/40 bg-success/15 px-2 py-0.5 text-xs font-semibold text-success"
+                    >
+                      {coveringConfirmed.reps === 0
+                        ? `✓ ${words.confirmed} (0회 · 미완료/노렙)`
+                        : `✓ ${words.confirmed}`}
+                    </span>
+                  )}
+                </div>
+              </div>
+              {coveringConfirmed && (
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-success">
+                    {words.confirmed} · {coveringConfirmed.movement} · {progressTime(coveringConfirmed.start_secs)}–{progressTime(coveringConfirmed.end_secs)} ·{" "}
+                    {text("recordSummary", {
+                      count: coveringConfirmed.reps === 0 ? "0 (미완료/노렙)" : coveringConfirmed.reps,
+                      load: loadText(coveringConfirmed),
+                      duration: (coveringConfirmed.elapsed_seconds ?? (coveringConfirmed.end_secs - coveringConfirmed.start_secs)).toFixed(1),
+                    })}
+                  </p>
+                  <RestCycleComparisons record={coveringConfirmed} />
+                </div>
+              )}
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <button
+                  className={button}
+                  disabled={!isOriginal}
+                  title={isOriginal ? undefined : words.originalOnly}
+                  onClick={() => seek(gap.start_secs)}
+                >
+                  {words.play}
+                </button>
+                <button
+                  className={button}
+                  disabled={saving}
+                  onClick={() => {
+                    setSelected(gap.id);
+                    if (defaultMovement) setMovement(defaultMovement);
+                    setNotice("");
+                  }}
+                >
+                  {isConfirmed ? words.edit : "+ 운동 기록 추가"}
+                </button>
+                {effectiveMovement && (
+                  <button className={button} onClick={() => setMovement(effectiveMovement)}>
+                    {words.benchmarks}
+                  </button>
+                )}
+              </div>
+              {selected === gap.id && (
+                <PerformanceEditor
+                  key={`${data?.progress?.source_version}:${gap.id}`}
+                  interval={syntheticInterval}
+                  progress={data!.progress!}
+                  record={coveringConfirmed ?? record}
+                  wodLoads={wodLoads}
+                  suggestedMovements={suggestedMovements}
+                  initialDraft={draftsRef.current[gap.id]}
+                  movementDefaults={rememberedMovementDefaults(defaultMovement, activeRecords, movementDefaultsRef.current)}
+                  resolveMovementDefaults={mov => rememberedMovementDefaults(mov, activeRecords, movementDefaultsRef.current)}
+                  onDraftChange={nextDraft => {
+                    draftsRef.current[gap.id] = nextDraft;
+                    const movKey = (nextDraft.movement ?? defaultMovement).trim().toLowerCase();
+                    if (movKey) {
+                      movementDefaultsRef.current[movKey] = {
+                        loadMode: nextDraft.loadMode,
+                        weight: nextDraft.weight,
+                        unit: nextDraft.unit,
+                        basis: nextDraft.basis,
+                        technique: nextDraft.technique,
+                      };
+                    }
+                  }}
+                  saving={saving}
+                  onSave={draft => void save(syntheticInterval, draft)}
+                  close={() => setSelected(undefined)}
+                  onReviewVideo={isOriginal ? seek : undefined}
+                />
+              )}
+            </div>
+          );
+        }
+
+        const { interval } = item;
         if (interval.activity === "rest") {
           const restDuration = Math.max(0, interval.end_secs - interval.start_secs);
           const hasRestObservations = Boolean(
@@ -576,27 +947,36 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
           );
         }
 
-        const record = data.records.find(r => r.interval_id === interval.id);
-        const coveringConfirmed = findCoveringConfirmedRecord(interval, data.records);
+        const record = activeRecords.find(r => r.interval_id === interval.id);
+        const coveringConfirmed = findCoveringConfirmedRecord(interval, activeRecords);
         const isConfirmed = coveringConfirmed != null;
         const isNeedsConfirmation = !isConfirmed && record?.status === "needs_confirmation";
-        const contiguousSpan = getContiguousExerciseSpan(interval, data.progress);
+        const contiguousSpan = getContiguousExerciseSpan(interval, data?.progress);
+        const isMergedContiguous =
+          coveringConfirmed != null &&
+          coveringConfirmed.start_secs <= contiguousSpan.startSecs + 1e-6 &&
+          coveringConfirmed.end_secs >= contiguousSpan.endSecs - 1e-6;
         const canMergeContiguous =
-          !isConfirmed &&
+          !isMergedContiguous &&
           (contiguousSpan.startSecs < interval.start_secs || contiguousSpan.endSecs > interval.end_secs);
         const cardToneClass = isConfirmed
           ? "border-success/50 bg-success/10"
           : isNeedsConfirmation
             ? "border-warning/50 bg-warning/10"
             : "border-border bg-bg-secondary/20";
-        const wodLoads = interval.activity === "exercise" ? extractWodLoads(wodDescription, interval.movement) : [];
+        const displayMovement =
+          record?.status === "confirmed" && record.movement?.trim()
+            ? record.movement.trim()
+            : interval.movement || words.unknown;
+        const wodLoads = extractWodLoads(wodDescription, displayMovement !== words.unknown ? displayMovement : suggestedMovements[0]);
         const effectiveLoadDisplay = interval.load
           ? `${loadText(interval)} · ${words.candidate}`
           : wodLoads.length > 0
             ? `${wodLoads.map(l => `${l.value} ${l.unit} · ${text(l.basis)}`).join(" / ")} · WOD 설명 중량 후보`
-            : isLikelyBodyweightMovement(interval.movement)
+            : isLikelyBodyweightMovement(displayMovement)
               ? words.none
               : words.unknown;
+        const incompleteReps = incompleteRepCount(interval);
         return (
           <div
             key={interval.id}
@@ -605,7 +985,15 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 className="font-medium text-text-primary">
-                {progressTime(interval.start_secs)}–{progressTime(interval.end_secs)} · {interval.movement || words.unknown}
+                {progressTime(interval.start_secs)}–{progressTime(interval.end_secs)} · {displayMovement}
+                {record?.status === "confirmed" &&
+                  record.movement?.trim() &&
+                  interval.movement?.trim() &&
+                  record.movement.trim() !== interval.movement.trim() && (
+                    <span className="ml-1.5 text-xs font-normal text-text-muted">
+                      {`(원본 감지: ${interval.movement.trim()})`}
+                    </span>
+                  )}
               </h4>
               <div className="flex flex-wrap items-center gap-1.5">
                 {canMergeContiguous && (
@@ -622,8 +1010,10 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
                     className="rounded-md border border-success/40 bg-success/15 px-2 py-0.5 text-xs font-semibold text-success"
                   >
                     {record?.status === "confirmed"
-                      ? `✓ ${words.confirmed}`
-                      : `✓ ${words.confirmed} (${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)})`}
+                      ? record.reps === 0
+                        ? `✓ ${words.confirmed} (0회 · 미완료/노렙)`
+                        : `✓ ${words.confirmed}`
+                      : `✓ ${words.confirmed} (${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)}${coveringConfirmed.movement && coveringConfirmed.movement !== interval.movement ? ` · ${coveringConfirmed.movement}` : ""})`}
                   </span>
                 )}
                 {isNeedsConfirmation && (
@@ -636,18 +1026,23 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
             {interval.activity === "exercise" && (
               <div className="space-y-1">
                 <p className="text-sm text-text-secondary">{text("observedReps", { count: observedReps(interval) ?? words.unknown })}</p>
+                {observedReps(interval) == null && incompleteReps > 0 && (
+                  <p className="text-xs font-medium text-warning">
+                    {`랩 기준 미달(불완전 반복) ${incompleteReps}회 감지 · 완료 반복 0회`}
+                  </p>
+                )}
                 <p className="text-sm text-text-secondary">{effectiveLoadDisplay}</p>
                 {record && (
                   <>
                     <p className={`text-sm font-medium ${record.status === "confirmed" ? "text-success" : "text-warning"}`}>
-                      {record.status === "confirmed" ? words.confirmed : words.needsConfirmation} · {progressTime(record.start_secs)}–{progressTime(record.end_secs)} · {text("recordSummary", { count: record.reps, load: loadText(record), duration: (record.elapsed_seconds ?? (record.end_secs - record.start_secs)).toFixed(1) })}
+                      {record.status === "confirmed" ? words.confirmed : words.needsConfirmation} · {progressTime(record.start_secs)}–{progressTime(record.end_secs)} · {text("recordSummary", { count: record.reps === 0 ? "0 (미완료/노렙)" : record.reps, load: loadText(record), duration: (record.elapsed_seconds ?? (record.end_secs - record.start_secs)).toFixed(1) })}
                     </p>
                     <RestCycleComparisons record={record} />
                   </>
                 )}
                 {!record && coveringConfirmed && (
                   <p className="text-xs font-medium text-success">
-                    {`${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)} 확정 기록(${coveringConfirmed.reps}회)에 포함된 구간입니다.`}
+                    {`${progressTime(coveringConfirmed.start_secs)}–${progressTime(coveringConfirmed.end_secs)}${coveringConfirmed.movement && coveringConfirmed.movement !== interval.movement ? ` · ${coveringConfirmed.movement}` : ""} 확정 기록(${coveringConfirmed.reps === 0 ? "0회 · 미완료/노렙" : `${coveringConfirmed.reps}회`})에 포함된 구간입니다.`}
                   </p>
                 )}
               </div>
@@ -656,13 +1051,17 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
               <button className={button} disabled={!isOriginal} title={isOriginal ? undefined : words.originalOnly} onClick={() => seek(interval.start_secs)}>
                 {words.play}
               </button>
-              {interval.activity === "exercise" && interval.movement && (
-                <button className={button} disabled={saving} onClick={() => { setSelected(interval.id); setMovement(interval.movement!); setNotice(""); }}>
+              {interval.activity === "exercise" && interval.movement ? (
+                <button className={button} disabled={saving} onClick={() => { setSelected(interval.id); setMovement(displayMovement); setNotice(""); }}>
                   {words.edit}
+                </button>
+              ) : (
+                <button className={button} disabled={saving} onClick={() => { setSelected(interval.id); if (suggestedMovements[0]) setMovement(suggestedMovements[0]); setNotice(""); }}>
+                  {isConfirmed ? words.edit : "+ 운동 기록 추가"}
                 </button>
               )}
               {interval.activity === "exercise" && interval.movement && (
-                <button className={button} onClick={() => setMovement(interval.movement!)}>
+                <button className={button} onClick={() => setMovement(displayMovement)}>
                   {words.benchmarks}
                 </button>
               )}
@@ -692,17 +1091,20 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
             </details>
             {selected === interval.id && (
               <PerformanceEditor
-                key={`${data.progress?.source_version}:${interval.id}`}
+                key={`${data?.progress?.source_version}:${interval.id}`}
                 interval={interval}
-                progress={data.progress!}
-                record={record ?? coveringConfirmed}
+                progress={data!.progress!}
+                record={coveringConfirmed ?? record}
                 wodLoads={wodLoads}
+                suggestedMovements={suggestedMovements}
                 initialDraft={draftsRef.current[interval.id]}
-                movementDefaults={rememberedMovementDefaults(interval.movement, data.records, movementDefaultsRef.current)}
+                movementDefaults={rememberedMovementDefaults(displayMovement !== words.unknown ? displayMovement : suggestedMovements[0], activeRecords, movementDefaultsRef.current)}
+                resolveMovementDefaults={mov => rememberedMovementDefaults(mov, activeRecords, movementDefaultsRef.current)}
                 onDraftChange={nextDraft => {
                   draftsRef.current[interval.id] = nextDraft;
-                  if (interval.movement?.trim()) {
-                    movementDefaultsRef.current[interval.movement.trim().toLowerCase()] = {
+                  const movKey = (nextDraft.movement || interval.movement || "").trim().toLowerCase();
+                  if (movKey) {
+                    movementDefaultsRef.current[movKey] = {
                       loadMode: nextDraft.loadMode,
                       weight: nextDraft.weight,
                       unit: nextDraft.unit,
@@ -720,8 +1122,8 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
           </div>
         );
       })}
-      {data?.progress?.unassessed.map((gap, i) => <p key={i} className="text-sm text-warning">{words.unassessed} · {gap.clock === "capture" ? words.captureClock : words.mediaClock} {progressTime(gap.start_secs)}–{progressTime(gap.end_secs)} · {words.unknown}</p>)}
-      {data?.records.filter(r => r.status === "needs_confirmation" && !data.progress?.intervals.some(i => i.id === r.interval_id)).map(r => <p key={`stale:${r.id}`} className="text-sm text-warning">{words.needsConfirmation} · {r.movement} · {text("recordSummary", { count: r.reps, load: loadText(r), duration: (r.elapsed_seconds ?? (r.end_secs - r.start_secs)).toFixed(1) })}</p>)}
+      {data?.progress?.unassessed.filter(gap => gap.clock === "capture").map((gap, i) => <p key={i} className="text-sm text-warning">{words.unassessed} · {words.captureClock} {progressTime(gap.start_secs)}–{progressTime(gap.end_secs)} · {words.unknown}</p>)}
+      {activeRecords.filter(r => r.status === "needs_confirmation" && !data?.progress?.intervals.some(i => i.id === r.interval_id)).map(r => <p key={`stale:${r.id}`} className="text-sm text-warning">{words.needsConfirmation} · {r.movement} · {text("recordSummary", { count: r.reps, load: loadText(r), duration: (r.elapsed_seconds ?? (r.end_secs - r.start_secs)).toFixed(1) })}</p>)}
       {benchmarks.isError && <div role="alert"><p>{words.benchmarkFailed}</p><button className={button} onClick={() => void benchmarks.refetch()}>{words.retry}</button></div>}
       {!!movement && <div className="space-y-2 pt-2 border-t border-border"><h4 className="font-medium text-text-primary">{words.history} · {movement}</h4>{benchmarks.isLoading && <p>{words.loading}</p>}{benchmarks.data && !records.length && <p className="text-sm text-text-secondary">{words.noRecords}</p>}
         {records.map(r => {

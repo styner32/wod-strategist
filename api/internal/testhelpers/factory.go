@@ -120,6 +120,12 @@ func CreateProfile(dbConn *gorm.DB, profileAttr *db.Profile) db.Profile {
 	}
 
 	g.Expect(dbConn.Create(&p).Error).NotTo(g.HaveOccurred())
+	// wod_tracking_started_at is read-only in gorm (`->`), so a requested
+	// rollout time is written explicitly.
+	if !profileAttr.WODTrackingStartedAt.IsZero() {
+		g.Expect(dbConn.Exec("UPDATE profiles SET wod_tracking_started_at = ? WHERE id = ?", profileAttr.WODTrackingStartedAt, p.ID).Error).NotTo(g.HaveOccurred())
+		p.WODTrackingStartedAt = profileAttr.WODTrackingStartedAt
+	}
 	return p
 }
 

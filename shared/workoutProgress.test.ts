@@ -1,9 +1,11 @@
-import { confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, findCoveringConfirmedRecord, getContiguousExerciseSpan, observedReps, performanceDraft, summarizeWorkoutMovements, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
+import { confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, findCoveringConfirmedRecord, getContiguousExerciseSpan, incompleteRepCount, observedReps, performanceDraft, summarizeWorkoutMovements, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
 import { withoutWorkoutEvidence } from "./analysisEvidence";
 const interval: WorkoutProgressInterval = { id: "set-1", start_secs: 10, end_secs: 70, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total", status: "pending_confirmation" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 12, end_secs: 16, complete: true, evidence: "Complete cycle" }, { movement: "Power Clean", unit: "reps", start_secs: 17, end_secs: 20, complete: false, evidence: "Occluded lockout" }] };
 it("uses complete repetition evidence but preserves missing counts rather than zero", () => {
   expect(observedReps(interval)).toBe(1);
+  expect(incompleteRepCount(interval)).toBe(1);
   expect(observedReps({ ...interval, rep_events: [] })).toBeNull();
+  expect(incompleteRepCount({ ...interval, rep_events: [] })).toBe(0);
   expect(observedReps({ ...interval, rep_events: [{ ...interval.rep_events![0], unit: "seconds" }] })).toBeNull();
   expect(performanceDraft({ ...interval, rep_events: [] }).reps).toBe("");
 });
@@ -12,9 +14,14 @@ it("requires explicit review and actual load, retaining original units without c
   const draft = performanceDraft(interval);
   expect(confirmedPerformanceInput(interval, draft)).toBeNull();
   expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "5" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
+  // A zero-rep attempt keeps its actual load; null load would claim no external load.
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 0, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "none" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 0, load: null, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "unresolved" })).toBeNull();
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "weighted", weight: "" })).toBeNull();
   expect(JSON.stringify(interval)).toBe(before);
 });
-it.each([{ start: "9" }, { end: "71" }, { end: "10" }, { reps: "2.5" }, { reps: "0" }, { reps: "" }, { weight: "" }, { weight: "0" }, { loadMode: "unresolved" as const }])("rejects invalid reviewed values %j", values => {
+it.each([{ start: "9" }, { end: "71" }, { end: "10" }, { reps: "2.5" }, { reps: "-1" }, { reps: "" }, { weight: "" }, { weight: "0" }, { loadMode: "unresolved" as const }])("rejects invalid reviewed values %j", values => {
   expect(confirmedPerformanceInput(interval, { ...performanceDraft(interval), reviewed: true, ...values })).toBeNull();
 });
 it("defaults loadMode and basis from movement type while leaving ambiguous movements unresolved", () => {
@@ -327,6 +334,73 @@ describe("extractWodLoads and summarizeWorkoutMovements", () => {
         observedSeconds: 0,
         confirmedCount: 1,
         confirmedReps: 5,
+        loadLabel: "135 lb",
+      },
+    ]);
+
+    // When a sub-interval (e.g. 08:08-08:10 Power Clean) was confirmed before being merged into 08:08-08:11 Clean & Jerk,
+    // the wider covering confirmation supersedes the sub-interval confirmation so it is never double-counted as 2 reps.
+    const pcInterval: WorkoutProgressInterval = {
+      id: "seg-488",
+      start_secs: 488,
+      end_secs: 490,
+      activity: "exercise",
+      movement: "Power Clean",
+      load: null,
+      observation_refs: ["chunk:48"],
+      rep_events: [],
+    };
+    const cjInterval: WorkoutProgressInterval = {
+      id: "seg-490",
+      start_secs: 490,
+      end_secs: 491.8,
+      activity: "exercise",
+      movement: "Clean & Jerk",
+      load: null,
+      observation_refs: ["chunk:49"],
+      rep_events: [],
+    };
+    const pcToCjProgress = {
+      version: 1 as const,
+      clock: "media" as const,
+      source_version: "pc-cj",
+      intervals: [pcInterval, cjInterval],
+      unassessed: [],
+    };
+    const oldSubRecord: PerformanceRecord = {
+      ...confirmedFsRecord,
+      id: 10,
+      interval_id: "seg-488",
+      source_version: "pc-cj",
+      movement: "Power Clean",
+      start_secs: 488,
+      end_secs: 490,
+      elapsed_seconds: 2,
+      reps: 1,
+      confirmed_at: "2026-10-20T09:00:00Z",
+    };
+    const mergedCjRecord: PerformanceRecord = {
+      ...confirmedFsRecord,
+      id: 11,
+      interval_id: "seg-490",
+      source_version: "pc-cj",
+      movement: "Clean & Jerk",
+      start_secs: 488,
+      end_secs: 491.8,
+      elapsed_seconds: 3.8,
+      reps: 1,
+      confirmed_at: "2026-10-20T09:01:00Z",
+    };
+    expect(findCoveringConfirmedRecord(pcInterval, [oldSubRecord, mergedCjRecord])?.id).toBe(11);
+    expect(findCoveringConfirmedRecord(cjInterval, [oldSubRecord, mergedCjRecord])?.id).toBe(11);
+    expect(summarizeWorkoutMovements(pcToCjProgress, [oldSubRecord, mergedCjRecord])).toEqual([
+      {
+        movement: "Clean & Jerk",
+        intervalCount: 2,
+        observedReps: 0,
+        observedSeconds: 0,
+        confirmedCount: 1,
+        confirmedReps: 1,
         loadLabel: "135 lb",
       },
     ]);

@@ -43,6 +43,8 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - Never remove the `"Polar mobile"` exclusion from scan filtering.
 - Keep `BleManager` as a singleton outside React components to prevent memory leaks.
 - `react-native-ble-plx` v3.5.1+ is required — earlier versions crash on Android (RN 0.76+) when `Promise.reject` receives a `null` error code.
+- Optional device registration is stored in `AsyncStorage` under `wod_registered_ble_hr_device` (`{ id, name }`). When registered, `useBleHeartRate` only auto-connects to a matching device (`id` or `name`) while still populating `discoveredDevices` so the user can switch or register from the recording screen's BPM pill (`ble-hr-device-pill`) or clear registration in `setup.tsx`.
+- `H10MemoryRecorder` checks `isH10Device` (`"polar h10"` case-insensitive) before issuing PS-FTP commands; non-H10 sensors (such as Polar Sense) record `UNSUPPORTED_DEVICE` without showing an error banner.
 
 ### Chunk heart rate sampling (Peak BPM)
 - Accepted readings are retained in `CaptureWindow` with their original `receivedAt` timestamps. Query each video's capture interval to send its peak as `heartRateBpm` to `processWorkoutChunk`.
