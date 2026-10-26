@@ -88,18 +88,29 @@ type Comparison struct {
 	TrackingStartedAt time.Time `json:"tracking_started_at"`
 }
 
-func SessionLoad(e Workout) *float64 {
-	if e.Effort == nil || *e.Effort < 1 || *e.Effort > 10 || !ValidWindow(e.Start) {
+func DurationSeconds(start Start) *float64 {
+	if !ValidWindow(start) {
 		return nil
 	}
-	seconds := *e.Start.EndSeconds - *e.Start.Seconds
-	if e.Start.ElapsedSeconds != nil {
-		seconds = *e.Start.ElapsedSeconds
+	seconds := *start.EndSeconds - *start.Seconds
+	if start.ElapsedSeconds != nil {
+		seconds = *start.ElapsedSeconds
 	}
 	if math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 {
 		return nil
 	}
-	v := seconds / 60 * float64(*e.Effort)
+	return &seconds
+}
+
+func SessionLoad(e Workout) *float64 {
+	if e.Effort == nil || *e.Effort < 1 || *e.Effort > 10 {
+		return nil
+	}
+	seconds := DurationSeconds(e.Start)
+	if seconds == nil {
+		return nil
+	}
+	v := *seconds / 60 * float64(*e.Effort)
 	return &v
 }
 

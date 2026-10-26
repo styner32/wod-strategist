@@ -58,22 +58,28 @@ type User struct {
 }
 
 type Profile struct {
-	WODTrackingStartedAt time.Time    `gorm:"->" json:"wod_tracking_started_at"`
-	ID                   uint         `gorm:"primaryKey" json:"id"`
-	UserID               uint         `gorm:"index;not null" json:"user_id"`
-	Name                 string       `gorm:"not null" json:"name"`
-	BirthYear            *int         `json:"birth_year,omitempty"`
-	BirthMonth           *int         `json:"birth_month,omitempty"`
-	BirthDay             *int         `json:"birth_day,omitempty"`
-	Gender               *string      `json:"gender,omitempty"` // male, female, other
-	HeightCm             *int         `json:"height_cm,omitempty"`
-	WeightKg             *float64     `json:"weight_kg,omitempty"`
-	FitnessLevel         string       `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
-	Injuries             *string      `gorm:"type:text;not null;default:'[]'" json:"injuries"`                // JSON array of injury strings
-	Appearance           JSONDocument `json:"appearance"`
-	ArchivedAt           *time.Time   `json:"archived_at,omitempty"`
-	CreatedAt            time.Time    `json:"created_at"`
-	UpdatedAt            time.Time    `json:"updated_at"`
+	WODTrackingStartedAt      time.Time    `gorm:"->" json:"wod_tracking_started_at"`
+	SensorENMORestG           *float64     `gorm:"->;column:sensor_enmo_rest_g" json:"sensor_enmo_rest_g,omitempty"`
+	SensorENMORefG            *float64     `gorm:"->;column:sensor_enmo_ref_g" json:"sensor_enmo_ref_g,omitempty"`
+	SensorCalibrationVersion  *string      `gorm:"->;column:sensor_calibration_version" json:"sensor_calibration_version,omitempty"`
+	SensorCalibratedAt        *time.Time   `gorm:"->;column:sensor_calibrated_at" json:"sensor_calibrated_at,omitempty"`
+	SensorCalibrationSessions int          `gorm:"->;column:sensor_calibration_sessions" json:"sensor_calibration_sessions,omitempty"`
+	ID                        uint         `gorm:"primaryKey" json:"id"`
+	UserID                    uint         `gorm:"index;not null" json:"user_id"`
+	Name                      string       `gorm:"not null" json:"name"`
+	BirthYear                 *int         `json:"birth_year,omitempty"`
+	BirthMonth                *int         `json:"birth_month,omitempty"`
+	BirthDay                  *int         `json:"birth_day,omitempty"`
+	Gender                    *string      `json:"gender,omitempty"` // male, female, other
+	HeightCm                  *int         `json:"height_cm,omitempty"`
+	WeightKg                  *float64     `json:"weight_kg,omitempty"`
+	RestingHRBPM              *int         `gorm:"column:resting_hr_bpm" json:"resting_hr_bpm,omitempty"`
+	FitnessLevel              string       `gorm:"type:text;not null;default:'intermediate'" json:"fitness_level"` // beginner, intermediate, advanced
+	Injuries                  *string      `gorm:"type:text;not null;default:'[]'" json:"injuries"`                // JSON array of injury strings
+	Appearance                JSONDocument `json:"appearance"`
+	ArchivedAt                *time.Time   `json:"archived_at,omitempty"`
+	CreatedAt                 time.Time    `json:"created_at"`
+	UpdatedAt                 time.Time    `json:"updated_at"`
 }
 
 const (
@@ -320,32 +326,45 @@ type PipelineStageMetric struct {
 
 // HeartRateSummaryDTO is response-only; it is never persisted as a column.
 type HeartRateSummaryDTO struct {
-	Status             string             `json:"status"`
-	ProcessingState    string             `json:"processing_state"`
-	QualityStatus      string             `json:"quality_status"`
-	CalculationVersion int                `json:"calculation_version,omitempty"`
-	DeviceName         string             `json:"device_name,omitempty"`
-	AvgBPM             *float64           `json:"avg_bpm,omitempty"`
-	PeakBPM            *int               `json:"peak_bpm,omitempty"`
-	MinBPM             *int               `json:"min_bpm,omitempty"`
-	Coverage           *float64           `json:"coverage,omitempty"`
-	ValidSeconds       *float64           `json:"valid_seconds,omitempty"`
-	ExcludedSeconds    *float64           `json:"excluded_seconds,omitempty"`
-	UnknownSeconds     *float64           `json:"unknown_seconds,omitempty"`
-	ExcludedByReason   map[string]float64 `json:"excluded_by_reason,omitempty"`
-	LowBPMSeconds      *float64           `json:"low_bpm_seconds,omitempty"`
-	ContactCoverage    *float64           `json:"contact_coverage,omitempty"`
-	Zones              []HeartRateZoneDTO `json:"zones,omitempty"`
-	MaxBPM             *int               `json:"max_bpm,omitempty"`
-	MaxBPMSource       *string            `json:"max_bpm_source,omitempty"`
-	Applied            bool               `json:"applied"`
-	ApplicationReason  string             `json:"application_reason"`
-	CardioBefore       *float64           `json:"cardio_before,omitempty"`
-	CardioAfter        *float64           `json:"cardio_after,omitempty"`
-	CardioDelta        *float64           `json:"cardio_delta,omitempty"`
+	Status             string                     `json:"status"`
+	ProcessingState    string                     `json:"processing_state"`
+	QualityStatus      string                     `json:"quality_status"`
+	CalculationVersion int                        `json:"calculation_version,omitempty"`
+	DeviceName         string                     `json:"device_name,omitempty"`
+	AvgBPM             *float64                   `json:"avg_bpm,omitempty"`
+	PeakBPM            *int                       `json:"peak_bpm,omitempty"`
+	MinBPM             *int                       `json:"min_bpm,omitempty"`
+	Coverage           *float64                   `json:"coverage,omitempty"`
+	ValidSeconds       *float64                   `json:"valid_seconds,omitempty"`
+	ExcludedSeconds    *float64                   `json:"excluded_seconds,omitempty"`
+	UnknownSeconds     *float64                   `json:"unknown_seconds,omitempty"`
+	ExcludedByReason   map[string]float64         `json:"excluded_by_reason,omitempty"`
+	LowBPMSeconds      *float64                   `json:"low_bpm_seconds,omitempty"`
+	ContactCoverage    *float64                   `json:"contact_coverage,omitempty"`
+	Zones              []HeartRateZoneDTO         `json:"zones,omitempty"`
+	MaxBPM             *int                       `json:"max_bpm,omitempty"`
+	MaxBPMSource       *string                    `json:"max_bpm_source,omitempty"`
+	Hybrid             *HybridIntensitySummaryDTO `json:"hybrid,omitempty"`
+	Applied            bool                       `json:"applied"`
+	ApplicationReason  string                     `json:"application_reason"`
+	CardioBefore       *float64                   `json:"cardio_before,omitempty"`
+	CardioAfter        *float64                   `json:"cardio_after,omitempty"`
+	CardioDelta        *float64                   `json:"cardio_delta,omitempty"`
 }
 type HeartRateZoneDTO struct {
 	Zone    int     `json:"zone"`
 	Seconds float64 `json:"seconds"`
 	Ratio   float64 `json:"ratio"`
+}
+type HybridIntensitySummaryDTO struct {
+	HeartIntensity     *float64 `json:"heart_intensity"`
+	MotionIntensity    *float64 `json:"motion_intensity"`
+	HybridIntensity    *float64 `json:"hybrid_intensity"`
+	HybridLoadAU       *float64 `json:"hybrid_load_au"`
+	ValidHybridSeconds float64  `json:"valid_hybrid_seconds"`
+	DataCoverage       float64  `json:"data_coverage"`
+	PeakExceededMaxHR  bool     `json:"peak_exceeded_max_hr,omitempty"`
+	QualityFlags       []string `json:"quality_flags"`
+	CalibrationVersion string   `json:"calibration_version"`
+	AlgorithmVersion   string   `json:"algorithm_version"`
 }

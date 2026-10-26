@@ -23,7 +23,7 @@ export type SensorUploadStage =
   | "NEEDS_ATTENTION";
 
 export interface SensorQueueEntry {
-  calculationVersion?: 1 | 2;
+  calculationVersion?: 1 | 2 | 3;
   sessionId: string;
   profileId: number;
   filePath: string;
@@ -409,7 +409,7 @@ export async function enqueueSensorUpload(
       filePath,
       requestId,
       expectedVersion: "0",
-      calculationVersion: 2,
+      calculationVersion: 3,
       sizeBytes,
       sha256,
       stage: "PREPARE_PENDING",
@@ -438,7 +438,7 @@ export async function uploadSensorTelemetry(
   const requestId = generateUUID();
 
   const prep = await prepareSensorUpload(sessionId, {
-    calculation_version: 2,
+    calculation_version: 3,
     profile_id: profileId,
     request_id: requestId,
     expected_version: "0",

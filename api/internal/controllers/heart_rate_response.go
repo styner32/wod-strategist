@@ -56,16 +56,41 @@ func populateHeartRateSummary(res *db.AnalysisResult) {
 	dto.Coverage = &hr.Coverage
 	dto.ValidSeconds = &hr.ValidSeconds
 	dto.UnknownSeconds = &hr.UnknownSeconds
-	if summary.CalculationVersion == 2 {
+	if summary.CalculationVersion >= 2 {
 		dto.ExcludedSeconds = &hr.ExcludedSeconds
 		dto.ExcludedByReason = hr.ExcludedByReason
 		dto.LowBPMSeconds = &hr.LowBPMSeconds
 		dto.ContactCoverage = hr.ContactCoverage
 	}
+	if summary.CalculationVersion >= 3 && summary.Metrics.Hybrid != nil {
+		hy := summary.Metrics.Hybrid
+		flags := hy.QualityFlags
+		if flags == nil {
+			flags = []string{}
+		}
+		dto.Hybrid = &db.HybridIntensitySummaryDTO{
+			HeartIntensity:     hy.HeartIntensity,
+			MotionIntensity:    hy.MotionIntensity,
+			HybridIntensity:    hy.HybridIntensity,
+			HybridLoadAU:       hy.HybridLoadAU,
+			ValidHybridSeconds: hy.ValidHybridSeconds,
+			DataCoverage:       hy.DataCoverage,
+			PeakExceededMaxHR:  hy.PeakExceededMaxHR,
+			QualityFlags:       flags,
+			CalibrationVersion: hy.CalibrationVersion,
+			AlgorithmVersion:   hy.AlgorithmVersion,
+		}
+	}
 	dto.MaxBPM = hr.EstimatedMaxHR
 	dto.MaxBPMSource = summary.CalculationInputs.MaxHRSource
 	if z := hr.Zones; z != nil && hr.HasHRZones && hr.EstimatedMaxHR != nil && *hr.EstimatedMaxHR > 0 && hr.ValidSeconds > 0 {
-		dto.Zones = []db.HeartRateZoneDTO{{1, z.Zone1Seconds, z.Zone1Ratio}, {2, z.Zone2Seconds, z.Zone2Ratio}, {3, z.Zone3Seconds, z.Zone3Ratio}, {4, z.Zone4Seconds, z.Zone4Ratio}, {5, z.Zone5Seconds, z.Zone5Ratio}}
+		dto.Zones = []db.HeartRateZoneDTO{
+			{Zone: 1, Seconds: z.Zone1Seconds, Ratio: z.Zone1Ratio},
+			{Zone: 2, Seconds: z.Zone2Seconds, Ratio: z.Zone2Ratio},
+			{Zone: 3, Seconds: z.Zone3Seconds, Ratio: z.Zone3Ratio},
+			{Zone: 4, Seconds: z.Zone4Seconds, Ratio: z.Zone4Ratio},
+			{Zone: 5, Seconds: z.Zone5Seconds, Ratio: z.Zone5Ratio},
+		}
 	}
 	dto.ApplicationReason = "quality_insufficient"
 	if !fresh.ValidHR {

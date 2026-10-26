@@ -14,10 +14,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/sensor"
 	"github.com/wod-strategist/api/internal/testhelpers"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"strings"
 )
 
 type mockSensorStorageClient struct {
@@ -212,5 +214,98 @@ var _ = Describe("SensorTelemetry", func() {
 		var current db.AnalysisResult
 		Expect(dbConn.First(&current, analysis.ID).Error).NotTo(HaveOccurred())
 		Expect(current.SensorState).To(Equal(db.SensorStateFailed))
+	})
+
+	It("computes v3 HRR+ENMO hybrid intensity and promotes profile to personal_chest_v1 after 3 valid completed sessions without mutating past summaries", func() {
+		buildV3NDJSON := func(sessionID string) string {
+			const totalSec = 125
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf(`{"k":"meta","t":0,"schema_version":"2.0.0","workout_session_id":"%s","profile_id":%d,"clock_source":"capture_clock","base_epoch_ms":1700000000000}`+"\n", sessionID, profile.ID))
+			sb.WriteString(`{"k":"stream_start","t":0,"stream_id":1,"sampling":{"acc_hz":25,"acc_range_g":8,"acc_resolution_bits":16}}` + "\n")
+			accSamples := strings.Repeat("[0,0,1.25],", 24) + "[0,0,1.25]"
+			for sec := 0; sec <= totalSec; sec++ {
+				tMs := sec * 1000
+				sb.WriteString(fmt.Sprintf(`{"k":"hr","t":%d,"bpm":150,"contact":true}`+"\n", tMs))
+				if sec < totalSec {
+					// 1.25g -> ENMO = 0.25g across 25Hz samples
+					sb.WriteString(fmt.Sprintf(`{"k":"acc","t":%d,"stream_id":1,"dt":40,"v":[%s]}`+"\n", tMs, accSamples))
+				}
+			}
+			sb.WriteString(fmt.Sprintf(`{"k":"end","t":%d,"pause_intervals":[],"device":{"battery_percent_end":88},"summary":{"hr_samples":%d,"acc_samples":%d,"dropped_packets":null,"gaps":0,"write_failures":0,"dropped_lines":0}}`+"\n", totalSec*1000, totalSec+1, totalSec*25))
+			return sb.String()
+		}
+
+		var firstRowID uint
+		for idx := 1; idx <= 3; idx++ {
+			sid := fmt.Sprintf("WOD-20261025-01HYBRIDV3000%d", idx)
+			reqID := fmt.Sprintf("d0000000-0000-0000-0000-00000000000%d", idx)
+			ndjson := buildV3NDJSON(sid)
+			mockStorage.content = ndjson
+			sumHash := sha256.Sum256([]byte(ndjson))
+
+			procData := map[string]any{
+				"schema_version":    1,
+				"request_id":        reqID,
+				"object_name":       fmt.Sprintf("videos/%d/%s/sensor_telemetry_v1_%s.ndjson", profile.ID, sid, reqID),
+				"target_generation": "100",
+				"size_bytes":        int64(len(ndjson)),
+				"sha256":            hex.EncodeToString(sumHash[:]),
+				"attempts":          0,
+				"calculation_inputs": map[string]any{
+					"calculation_version": 3,
+					"age":                 36,
+					"max_hr":              180,
+					"max_hr_source":       "estimated_220_minus_age",
+					"has_hr_zones":        true,
+					"resting_hr":          60,
+					"enmo_rest_g":         0.01,
+					"enmo_ref_g":          0.31,
+					"calibration_version": "bootstrap_chest_v1",
+				},
+			}
+			procJSON, _ := json.Marshal(procData)
+			now := time.Now().UTC()
+			row := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				SessionID:           sid,
+				ProfileID:           profile.ID,
+				Status:              "COMPLETED",
+				SensorState:         db.SensorStatePending,
+				SensorVersion:       1,
+				SensorProcessing:    db.JSONDocument(procJSON),
+				SensorNextAttemptAt: &now,
+			})
+			if idx == 1 {
+				firstRowID = row.ID
+			}
+
+			task, err := worker.NewSensorTelemetryTask(row.ID, profile.ID, reqID, 1)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(w.HandleSensorTelemetryTask(context.Background(), task)).To(Succeed())
+
+			var updatedRow db.AnalysisResult
+			Expect(dbConn.First(&updatedRow, row.ID).Error).NotTo(HaveOccurred())
+			Expect(updatedRow.SensorState).To(Equal(db.SensorStateCompleted), string(updatedRow.SensorProcessing))
+
+			var refreshedProfile db.Profile
+			Expect(dbConn.First(&refreshedProfile, profile.ID).Error).NotTo(HaveOccurred())
+			if idx < 3 {
+				Expect(refreshedProfile.SensorCalibrationVersion).To(BeNil())
+			} else {
+				Expect(refreshedProfile.SensorCalibrationVersion).To(HaveValue(Equal(sensor.PersonalCalibrationVersion)))
+				Expect(refreshedProfile.SensorENMORestG).NotTo(BeNil())
+				Expect(refreshedProfile.SensorENMORefG).NotTo(BeNil())
+				Expect(refreshedProfile.SensorCalibrationSessions).To(Equal(3))
+			}
+		}
+
+		// Past session 1 must retain its frozen bootstrap_chest_v1 summary
+		var firstRow db.AnalysisResult
+		Expect(dbConn.First(&firstRow, firstRowID).Error).NotTo(HaveOccurred())
+		var firstSum sensor.SensorSummaryResult
+		Expect(json.Unmarshal(firstRow.SensorSummary, &firstSum)).To(Succeed())
+		Expect(firstSum.CalculationVersion).To(Equal(3))
+		Expect(firstSum.Metrics.Hybrid).NotTo(BeNil())
+		Expect(firstSum.Metrics.Hybrid.CalibrationVersion).To(Equal("bootstrap_chest_v1"))
+		Expect(firstSum.Metrics.Hybrid.HybridIntensity).To(HaveValue(BeNumerically("~", 76.25, 0.05)))
 	})
 })

@@ -23,10 +23,12 @@ type TimelineValue struct {
 }
 
 type SensorTimelinePoint struct {
-	StartMs          int64         `json:"start_ms"`
-	EndMs            int64         `json:"end_ms"`
-	HeartRateBPM     TimelineValue `json:"heart_rate_bpm"`
-	AccMagnitudeStdG TimelineValue `json:"acc_magnitude_std_g"`
+	StartMs          int64          `json:"start_ms"`
+	EndMs            int64          `json:"end_ms"`
+	HeartRateBPM     TimelineValue  `json:"heart_rate_bpm"`
+	AccMagnitudeStdG TimelineValue  `json:"acc_magnitude_std_g"`
+	EnmoG            *TimelineValue `json:"enmo_g,omitempty"`
+	HybridIntensity  *TimelineValue `json:"hybrid_intensity,omitempty"`
 }
 
 type TimelineGap struct {
@@ -70,6 +72,7 @@ type accBucketAccumulator struct {
 	maxGapMs     float64
 	mean         float64
 	m2           float64
+	enmoSum      float64
 	hasError     bool
 	errorReason  string
 }
@@ -259,6 +262,7 @@ func (tb *timelineAccumulator) HandleAcc(acce AccEvent) {
 			continue
 		}
 		b.sampleCount++
+		b.enmoSum += math.Max(m-1.0, 0)
 		delta := m - b.mean
 		b.mean += delta / float64(b.sampleCount)
 		delta2 := m - b.mean

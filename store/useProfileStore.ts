@@ -27,6 +27,8 @@ export interface Profile {
   gender: Gender;
   heightCm: number;
   weightKg: number;
+  restingHrBpm?: number;
+  sensorCalibrationVersion?: string;
   fitnessLevel: FitnessLevel;
   injuries: string[];
   appearance?: string;
@@ -80,6 +82,8 @@ function toProfile(res: ProfileResponse): Profile {
     gender: res.gender as Gender,
     heightCm: res.height_cm,
     weightKg: res.weight_kg,
+    restingHrBpm: res.resting_hr_bpm ?? undefined,
+    sensorCalibrationVersion: res.sensor_calibration_version ?? undefined,
     fitnessLevel: (res.fitness_level as FitnessLevel) || 'intermediate',
     injuries: res.injuries ?? [],
     appearance: typeof res.appearance === "string" ? res.appearance : (res.appearance ? JSON.stringify(res.appearance) : undefined),

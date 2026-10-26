@@ -18,6 +18,7 @@ import (
 	"github.com/wod-strategist/api/internal/fatigue"
 	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/testhelpers"
+	"github.com/wod-strategist/api/internal/wodeval"
 )
 
 type mockTextParser struct {
@@ -228,5 +229,193 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 		Expect(resp.TargetRPE).To(BeNil())
 		Expect(resp.AdviceCode).To(Equal("check_condition"))
 		Expect(resp.OverallSummary).To(ContainSubstring("판단할 수 없습니다"))
+		Expect(resp.EffortReflection).To(BeNil())
+	})
+
+	It("injects recent 3 WODs Effort, confirmed duration, movements, and verified v3 hybrid sensor summary without guessing missing values", func() {
+		now := time.Now().UTC()
+		source := "session_ulid"
+
+		// Session 1 (most recent): manual Effort 9 + confirmed 8m15s duration + verified v3 hybrid sensor (82.0)
+		t1 := now.Add(-12 * time.Hour)
+		s1 := "WOD-20261024-01RECENTWOD001"
+		effort9 := 9
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:            s1,
+			ProfileID:            profile.ID,
+			WorkoutType:          "wod",
+			WODEvaluationVersion: wodeval.Version,
+			Effort:               &effort9,
+		})
+		start1, end1 := 10.0, 505.0 // 495s = 8m 15s
+		score1, _ := json.Marshal(map[string]any{
+			"evaluation_version": 1,
+			"intensity":          80,
+			"movements":          map[string]any{"Thruster": map[string]int{"form": 80}, "Pull-up": map[string]int{"form": 85}},
+			"wod_start":          wodeval.Start{Seconds: &start1, EndSeconds: &end1, Status: "confirmed"},
+		})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:        s1,
+			ProfileID:        profile.ID,
+			Status:           "COMPLETED",
+			AnalysisType:     db.AnalysisTypeWOD,
+			SessionScore:     string(score1),
+			WorkoutAt:        &t1,
+			WorkoutAtSource:  &source,
+			SensorState:      db.SensorStateCompleted,
+			SensorVersion:    1,
+			SensorProcessing: db.JSONDocument(`{"request_id":"req-1","target_generation":"77","calculation_inputs":{"calculation_version":3}}`),
+			SensorSummary: db.JSONDocument(`{
+				"version":1,
+				"request_id":"req-1",
+				"source_generation":"77",
+				"calculation_version":3,
+				"quality":{"valid_hr":true,"is_complete":true},
+				"metrics":{
+					"hr":{"weighted_mean_bpm":158,"coverage":0.95,"valid_seconds":470},
+					"hybrid":{
+						"heart_intensity":0.82,
+						"motion_intensity":0.82,
+						"hybrid_intensity":82.0,
+						"hybrid_load_au":5.4,
+						"valid_hybrid_seconds":470,
+						"valid_acc_seconds":470,
+						"data_coverage":0.95,
+						"calibration_version":"personal_chest_v1",
+						"algorithm_version":"hybrid-0.75-0.25-gamma2"
+					}
+				}
+			}`),
+		})
+
+		// Session 2 (second recent): unrated Effort + unresolved wod_start -> must remain nil without guessing
+		t2 := now.Add(-36 * time.Hour)
+		s2 := "WOD-20261023-01RECENTWOD002"
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:            s2,
+			ProfileID:            profile.ID,
+			WorkoutType:          "wod",
+			WODEvaluationVersion: wodeval.Version,
+		})
+		score2, _ := json.Marshal(map[string]any{
+			"evaluation_version": 1,
+			"intensity":          65,
+			"movements":          map[string]any{"Deadlift": map[string]int{"form": 85}},
+			"wod_start":          wodeval.Start{Status: "unresolved"},
+		})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:       s2,
+			ProfileID:       profile.ID,
+			Status:          "COMPLETED",
+			AnalysisType:    db.AnalysisTypeWOD,
+			SessionScore:    string(score2),
+			WorkoutAt:       &t2,
+			WorkoutAtSource: &source,
+		})
+
+		// Warmup session must be excluded from recent WOD feedback list
+		tWarm := now.Add(-6 * time.Hour)
+		sWarm := "WARMUP-20261024-01WARMUP001"
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:   sWarm,
+			ProfileID:   profile.ID,
+			WorkoutType: "warmup",
+		})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:       sWarm,
+			ProfileID:       profile.ID,
+			Status:          "COMPLETED",
+			AnalysisType:    db.AnalysisTypeWOD,
+			SessionScore:    `{"intensity":40,"movements":{"Air Squat":{"reps":20}}}`,
+			WorkoutAt:       &tWarm,
+			WorkoutAtSource: &source,
+		})
+
+		transport := testhelpers.NewMockTransport()
+		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:     "test",
+			HTTPClient: &http.Client{Transport: transport},
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		geminiPayload := `{"candidates":[{"content":{"parts":[{"text":"{\"target_rpe\":{\"score\":7,\"label\":\"RPE 7 (조절된 페이스)\",\"pacing_strategy\":\"초반 세트를 나누어 호흡을 안정시키세요.\"},\"effort_reflection_reason\":\"직전 Pull-up·Thruster WOD(8분 15초)를 Effort 9/10으로 소화했으므로 초반 오버페이스를 막기 위해 목표 RPE를 7로 낮췄습니다.\",\"scaling_advice\":[],\"mobility_warmup\":[],\"overall_summary\":\"최근 고강도 수행을 반영해 템포를 조절하세요.\"}"}]}}],"usageMetadata":{"promptTokenCount":50,"totalTokenCount":90}}`
+		transport.New("https://generativelanguage.googleapis.com").
+			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			MatchBodyContains("자기보고 Effort 9/10").
+			MatchBodyContains("수행시간 8분 15초").
+			MatchBodyContains("하이브리드 활동강도 82/100").
+			MatchBodyContains("자기보고 Effort 미입력 (추측 금지)").
+			Reply(http.StatusOK).
+			BodyString(geminiPayload)
+
+		router = newTestRouterWithAuthService(controllers.Config{TextParser: client})
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/strategies/pre-wod-advice", fmt.Sprintf(`{"profile_id":%d,"wod_description":"Cindy","movements":["Pull-up","Push-up","Air Squat"]}`, profile.ID), &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(transport.Verify()).To(Succeed())
+
+		var resp controllers.PreWODAdviceResponse
+		Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
+		Expect(resp.EffortReflectionReason).To(BeEmpty())
+		Expect(resp.EffortReflection).NotTo(BeNil())
+		Expect(resp.EffortReflection.Applied).To(BeTrue())
+		Expect(resp.EffortReflection.RatedCount).To(Equal(1))
+		Expect(resp.EffortReflection.SensorCount).To(Equal(1))
+		Expect(resp.EffortReflection.TotalRecent).To(Equal(2))
+		Expect(resp.EffortReflection.Reason).To(ContainSubstring("Effort 9/10"))
+		Expect(resp.EffortReflection.RecentWorkouts).To(HaveLen(2))
+		Expect(resp.EffortReflection.RecentWorkouts[0].SessionID).To(Equal(s1))
+		Expect(resp.EffortReflection.RecentWorkouts[0].DurationSeconds).To(HaveValue(Equal(495)))
+		Expect(resp.EffortReflection.RecentWorkouts[0].Effort).To(HaveValue(Equal(9)))
+		Expect(resp.EffortReflection.RecentWorkouts[0].HybridSensor).NotTo(BeNil())
+		Expect(resp.EffortReflection.RecentWorkouts[0].HybridSensor.HybridIntensity).To(Equal(82.0))
+		Expect(resp.EffortReflection.RecentWorkouts[1].SessionID).To(Equal(s2))
+		Expect(resp.EffortReflection.RecentWorkouts[1].DurationSeconds).To(BeNil())
+		Expect(resp.EffortReflection.RecentWorkouts[1].Effort).To(BeNil())
+		Expect(resp.EffortReflection.RecentWorkouts[1].HybridSensor).To(BeNil())
+	})
+
+	It("caps TargetRPE at 6 when 6-muscle fatigue is >= 60 even if recent WOD had low Effort and low hybrid sensor intensity", func() {
+		router = newTestRouterWithAuthService(controllers.Config{})
+		now := time.Now().UTC()
+		source := "session_ulid"
+
+		for i := 0; i < 3; i++ {
+			ts := now.Add(-time.Duration(i+1) * 2 * time.Hour)
+			sid := fmt.Sprintf("WOD-20261025-01HEAVYFATIGUE%d", i)
+			lowEffort := 3
+			testhelpers.CreateSession(dbConn, &db.Session{
+				SessionID:            sid,
+				ProfileID:            profile.ID,
+				WorkoutType:          "wod",
+				WODEvaluationVersion: wodeval.Version,
+				Effort:               &lowEffort,
+			})
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				SessionID:       sid,
+				ProfileID:       profile.ID,
+				Status:          "COMPLETED",
+				AnalysisType:    db.AnalysisTypeWOD,
+				SessionScore:    `{"intensity":100,"movements":{"Thruster":{"reps":45},"Deadlift":{"reps":45},"Pull-up":{"reps":45},"Burpee":{"reps":45}}}`,
+				WorkoutAt:       &ts,
+				WorkoutAtSource: &source,
+			})
+		}
+
+		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/strategies/pre-wod-advice", fmt.Sprintf(`{"profile_id":%d,"wod_description":"Heavy DT"}`, profile.ID), &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusOK))
+
+		var resp controllers.PreWODAdviceResponse
+		Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
+		Expect(resp.OverallFatigueScore).NotTo(BeNil())
+		Expect(*resp.OverallFatigueScore).To(BeNumerically(">=", 60))
+		Expect(resp.TargetRPE).NotTo(BeNil())
+		Expect(resp.TargetRPE.Score).To(BeNumerically("<=", 6))
+		Expect(resp.EffortReflection).NotTo(BeNil())
+		Expect(resp.EffortReflection.Applied).To(BeTrue())
+		Expect(resp.EffortReflection.Reason).To(ContainSubstring("회복 완료로 단정하지 않고"))
 	})
 })

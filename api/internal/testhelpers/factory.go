@@ -106,6 +106,7 @@ func CreateProfile(dbConn *gorm.DB, profileAttr *db.Profile) db.Profile {
 		Gender:       profileAttr.Gender,
 		HeightCm:     profileAttr.HeightCm,
 		WeightKg:     profileAttr.WeightKg,
+		RestingHRBPM: profileAttr.RestingHRBPM,
 		FitnessLevel: profileAttr.FitnessLevel,
 		Injuries:     profileAttr.Injuries,
 		ArchivedAt:   profileAttr.ArchivedAt,
@@ -120,11 +121,33 @@ func CreateProfile(dbConn *gorm.DB, profileAttr *db.Profile) db.Profile {
 	}
 
 	g.Expect(dbConn.Create(&p).Error).NotTo(g.HaveOccurred())
-	// wod_tracking_started_at is read-only in gorm (`->`), so a requested
-	// rollout time is written explicitly.
+	// wod_tracking_started_at and sensor calibration columns are read-only in gorm (`->`),
+	// so requested values in tests are written explicitly.
 	if !profileAttr.WODTrackingStartedAt.IsZero() {
 		g.Expect(dbConn.Exec("UPDATE profiles SET wod_tracking_started_at = ? WHERE id = ?", profileAttr.WODTrackingStartedAt, p.ID).Error).NotTo(g.HaveOccurred())
 		p.WODTrackingStartedAt = profileAttr.WODTrackingStartedAt
+	}
+	if profileAttr.SensorENMORestG != nil || profileAttr.SensorENMORefG != nil || profileAttr.SensorCalibrationVersion != nil || profileAttr.SensorCalibratedAt != nil || profileAttr.SensorCalibrationSessions > 0 {
+		g.Expect(dbConn.Exec(
+			`UPDATE profiles
+			 SET sensor_enmo_rest_g = ?,
+			     sensor_enmo_ref_g = ?,
+			     sensor_calibration_version = ?,
+			     sensor_calibrated_at = ?,
+			     sensor_calibration_sessions = ?
+			 WHERE id = ?`,
+			profileAttr.SensorENMORestG,
+			profileAttr.SensorENMORefG,
+			profileAttr.SensorCalibrationVersion,
+			profileAttr.SensorCalibratedAt,
+			profileAttr.SensorCalibrationSessions,
+			p.ID,
+		).Error).NotTo(g.HaveOccurred())
+		p.SensorENMORestG = profileAttr.SensorENMORestG
+		p.SensorENMORefG = profileAttr.SensorENMORefG
+		p.SensorCalibrationVersion = profileAttr.SensorCalibrationVersion
+		p.SensorCalibratedAt = profileAttr.SensorCalibratedAt
+		p.SensorCalibrationSessions = profileAttr.SensorCalibrationSessions
 	}
 	return p
 }

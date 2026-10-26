@@ -2,8 +2,16 @@ import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { t, useLocale } from "@/features/i18n";
 import {
-  HEART_RATE_ZONE_COLORS, hrNumber, hrPercent, type HeartRateSummary,
+  HEART_RATE_ZONE_COLORS, hrDecimal, hrNumber, hrPercent, type HeartRateSummary,
 } from "@/shared/heartRateSummary";
+
+const HYBRID_FLAG_KEYS = new Set([
+  "missing_resting_hr",
+  "missing_max_hr",
+  "peak_hr_exceeded_max",
+  "missing_acc",
+  "low_hybrid_coverage",
+]);
 
 export function HeartRateSummaryCard({ summary }: { summary?: HeartRateSummary }) {
   useLocale();
@@ -35,12 +43,59 @@ export function HeartRateSummaryCard({ summary }: { summary?: HeartRateSummary }
         {summary?.avg_bpm !== undefined && (
           <Text style={styles.text}>
             {label("average")} {hrNumber(summary.avg_bpm)} bpm · {label("peak")} {hrNumber(summary.peak_bpm)} bpm
+            {summary?.hybrid?.hybrid_intensity != null
+              ? ` · ${label("hybridTitle")} ${hrNumber(summary.hybrid.hybrid_intensity, "/100")}`
+              : ""}
           </Text>
         )}
         {summary?.calculation_version === 1 && <Text style={styles.warning}>{label("legacy")}</Text>}
       </Pressable>
       {expanded && summary && status !== "none" && (
         <View style={styles.details}>
+          {summary.hybrid && (
+            <View style={styles.hybridBox}>
+              <Text style={styles.title}>{label("hybridTitle")}</Text>
+              <View style={styles.row}>
+                <Text style={styles.text}>{label("hybridTitle")}</Text>
+                <Text style={styles.text}>{hrNumber(summary.hybrid.hybrid_intensity, "/100")}</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.text}>{label("heartIntensity")}</Text>
+                <Text style={styles.text}>
+                  {summary.hybrid.heart_intensity != null
+                    ? hrNumber(summary.hybrid.heart_intensity * 100, "/100")
+                    : "—"}
+                </Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.text}>{label("motionIntensity")}</Text>
+                <Text style={styles.text}>
+                  {summary.hybrid.motion_intensity != null
+                    ? hrNumber(summary.hybrid.motion_intensity * 100, "/100")
+                    : "—"}
+                </Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.text}>{label("hybridLoad")}</Text>
+                <Text style={styles.text}>{hrDecimal(summary.hybrid.hybrid_load_au, 1, " AU")}</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.text}>{label("hybridCoverage")}</Text>
+                <Text style={styles.text}>{hrPercent(summary.hybrid.data_coverage)}</Text>
+              </View>
+              <Text style={styles.note}>
+                {summary.hybrid.calibration_version === "personal_chest_v1"
+                  ? label("calibrationPersonal")
+                  : label("calibrationBootstrap")}
+              </Text>
+              {(summary.hybrid.quality_flags ?? [])
+                .filter((flag) => HYBRID_FLAG_KEYS.has(flag))
+                .map((flag) => (
+                  <Text key={flag} style={styles.warning}>{label(flag)}</Text>
+                ))}
+              <Text style={styles.note}>{label("hybridScaleNote")}</Text>
+            </View>
+          )}
           {summary.coverage !== undefined && rows.map(([key, value]) => (
             <View style={styles.row} key={key}>
               <Text style={styles.text}>{label(key)}</Text><Text style={styles.text}>{value}</Text>
@@ -101,8 +156,10 @@ const styles = StyleSheet.create({
   card: { backgroundColor: "#1C1C1E", borderRadius: 12, padding: 12, marginVertical: 8 },
   title: { color: "#f4f4f4", fontWeight: "600", fontSize: 13, marginBottom: 4 },
   text: { color: "#ddd", fontSize: 12, marginVertical: 2 },
+  note: { color: "#9da8b6", fontSize: 11, marginVertical: 2, lineHeight: 15 },
   warning: { color: "#ffbe72", fontSize: 12, marginVertical: 2 },
   details: { marginTop: 8, gap: 4 },
+  hybridBox: { backgroundColor: "#252529", borderRadius: 8, padding: 10, marginBottom: 6, gap: 2 },
   row: { flexDirection: "row", justifyContent: "space-between" },
   bar: { flexDirection: "row", height: 12, borderRadius: 6, overflow: "hidden", backgroundColor: "#444" },
 });

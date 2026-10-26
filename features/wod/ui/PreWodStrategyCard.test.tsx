@@ -8,7 +8,8 @@ jest.mock("@/components/ui/icon-symbol", () => ({
 }));
 
 jest.mock("@/features/i18n", () => ({
-  t: (key: string) => key,
+  t: (key: string, opts?: Record<string, unknown>) =>
+    opts ? `${key}:${JSON.stringify(opts)}` : key,
   useLocale: () => "ko",
 }));
 
@@ -174,5 +175,60 @@ describe("PreWodStrategyCard", () => {
     expect(getByText("preWod.partialHistoryBadge")).toBeTruthy();
     expect(getByText("보통 (55/100)")).toBeTruthy();
     expect(getByText("60/100")).toBeTruthy();
+  });
+
+  it("renders recent 3 WOD effort reflection reason, movements, duration, manual Effort, and separate hybrid sensor badge", () => {
+    const adviceWithReflection: PreWodAdviceResponse = {
+      ...mockAdvice,
+      evidence_status: "complete",
+      effort_reflection: {
+        applied: true,
+        rated_count: 1,
+        sensor_count: 1,
+        total_recent: 2,
+        reason:
+          "직전 Thruster·Pull-up WOD(8분 15초)에서 높은 체감 강도(Effort 9/10)가 기록되어 초반 페이스를 조정했습니다.",
+        recent_workouts: [
+          {
+            session_id: "WOD-20261024-01A",
+            workout_at: "2026-10-24T09:30:00Z",
+            movements: ["Thruster", "Pull-up"],
+            duration_seconds: 495,
+            effort: 9,
+            hybrid_sensor: {
+              heart_intensity: 0.82,
+              motion_intensity: 0.82,
+              hybrid_intensity: 82.2,
+              data_coverage: 0.96,
+            },
+          },
+          {
+            session_id: "WOD-20261022-01B",
+            workout_at: "2026-10-22T10:00:00Z",
+            movements: ["Deadlift"],
+            duration_seconds: null,
+            effort: null,
+          },
+        ],
+      },
+    };
+
+    const { getByText } = render(
+      <PreWodStrategyCard advice={adviceWithReflection} />,
+    );
+
+    expect(getByText("preWod.recentFeedbackTitle")).toBeTruthy();
+    expect(
+      getByText(
+        "직전 Thruster·Pull-up WOD(8분 15초)에서 높은 체감 강도(Effort 9/10)가 기록되어 초반 페이스를 조정했습니다.",
+      ),
+    ).toBeTruthy();
+    expect(getByText("Thruster · Pull-up · 8:15")).toBeTruthy();
+    expect(getByText('preWod.effortBadge:{"effort":9}')).toBeTruthy();
+    expect(getByText('preWod.hybridSensorBadge:{"score":82}')).toBeTruthy();
+    expect(
+      getByText("Deadlift · preWod.durationUnconfirmed"),
+    ).toBeTruthy();
+    expect(getByText("preWod.effortUnrated")).toBeTruthy();
   });
 });

@@ -16,4 +16,7 @@ type MuscleReadinessItem = fatigue.MuscleReadinessItem
 type TargetRPEInfo = fatigue.TargetRPEInfo
 type ScalingAdviceItem = fatigue.ScalingAdviceItem
 type MobilityWarmupItem = fatigue.MobilityWarmupItem
+type HybridSensorBrief = fatigue.HybridSensorBrief
+type RecentWorkoutSummary = fatigue.RecentWorkoutSummary
+type EffortReflectionInfo = fatigue.EffortReflectionInfo
 type PreWODAdviceResponse = fatigue.PreWODAdviceResponse

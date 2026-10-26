@@ -120,5 +120,61 @@ var _ = Describe("Heart rate response", func() {
 		populateHeartRateSummary(&row)
 		Expect(row.HeartRate.Zones).To(BeNil())
 	})
+	It("exposes calculation version 3 hybrid intensity metrics while keeping deterministic fatigue unchanged", func() {
+		row := db.AnalysisResult{
+			Status:        "COMPLETED",
+			SensorState:   db.SensorStateCompleted,
+			SensorVersion: 3,
+			SensorProcessing: db.JSONDocument(`{
+				"request_id":"r3",
+				"target_generation":"105",
+				"calculation_inputs":{"calculation_version":3,"resting_hr":60,"enmo_rest_g":0.01,"enmo_ref_g":0.31,"calibration_version":"personal_chest_v1"}
+			}`),
+			SensorSummary: db.JSONDocument(`{
+				"version":3,
+				"request_id":"r3",
+				"source_generation":"105",
+				"calculation_version":3,
+				"device_name":"Polar H10 ABC",
+				"calculation_inputs":{"calculation_version":3,"max_hr_source":"estimated_220_minus_age","resting_hr":60,"enmo_rest_g":0.01,"enmo_ref_g":0.31,"calibration_version":"personal_chest_v1"},
+				"quality":{"valid_hr":true,"is_complete":true},
+				"hr_bonus":0,
+				"metrics":{
+					"hr":{"weighted_mean_bpm":150,"min_bpm":120,"peak_bpm":185,"coverage":0.98,"valid_seconds":588,"excluded_seconds":12,"unknown_seconds":0,"contact_coverage":0.98,"has_hr_zones":true,"estimated_max_hr":180,"zones":{"zone4_seconds":588,"zone4_ratio":1}},
+					"hybrid":{
+						"heart_intensity":0.75,
+						"motion_intensity":0.80,
+						"hybrid_intensity":76.25,
+						"hybrid_load_au":5.81,
+						"valid_hybrid_seconds":588,
+						"valid_acc_seconds":588,
+						"data_coverage":0.98,
+						"peak_exceeded_max_hr":true,
+						"quality_flags":["peak_hr_exceeded_max"],
+						"calibration_version":"personal_chest_v1",
+						"algorithm_version":"hybrid-0.75-0.25-gamma2"
+					}
+				}
+			}`),
+			SessionScore: `{"intensity":70,"movements":{"Thruster":{},"Pull-up":{}}}`,
+		}
+
+		populateSessionFatigueWithSchema(&row, 1)
+		Expect(row.HeartRate).NotTo(BeNil())
+		Expect(row.HeartRate.Status).To(Equal("completed"))
+		Expect(row.HeartRate.CalculationVersion).To(Equal(3))
+		Expect(row.HeartRate.Hybrid).NotTo(BeNil())
+		Expect(row.HeartRate.Hybrid.HeartIntensity).To(HaveValue(Equal(0.75)))
+		Expect(row.HeartRate.Hybrid.MotionIntensity).To(HaveValue(Equal(0.80)))
+		Expect(row.HeartRate.Hybrid.HybridIntensity).To(HaveValue(Equal(76.25)))
+		Expect(row.HeartRate.Hybrid.HybridLoadAU).To(HaveValue(Equal(5.81)))
+		Expect(row.HeartRate.Hybrid.DataCoverage).To(Equal(0.98))
+		Expect(row.HeartRate.Hybrid.PeakExceededMaxHR).To(BeTrue())
+		Expect(row.HeartRate.Hybrid.QualityFlags).To(Equal([]string{"peak_hr_exceeded_max"}))
+		Expect(row.HeartRate.Hybrid.CalibrationVersion).To(Equal("personal_chest_v1"))
+		Expect(row.HeartRate.Hybrid.AlgorithmVersion).To(Equal("hybrid-0.75-0.25-gamma2"))
+		Expect(row.SessionFatigue).NotTo(BeNil())
+		Expect(row.SessionFatigue.HeartRateAdjusted).To(BeFalse())
+	})
 
 })

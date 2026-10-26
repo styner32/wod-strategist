@@ -100,7 +100,7 @@ describe("sensorTelemetryUpload", () => {
           profile_id: 42,
           expected_version: "0",
           size_bytes: SAMPLE_NDJSON.length,
-          calculation_version: 2,
+          calculation_version: 3,
         }),
       );
       expect(mockUploadSensorToGcs).toHaveBeenCalledWith(
@@ -129,7 +129,7 @@ describe("sensorTelemetryUpload", () => {
       };
     }
 
-    it.each([undefined, 1, 2] as const)("pins calculation version %s through a failed prepare retry", async (version) => {
+    it.each([undefined, 1, 2, 3] as const)("pins calculation version %s through a failed prepare retry", async (version) => {
       const entry = pendingEntry({ stage: "PREPARE_PENDING", calculationVersion: version });
       mockFiles.set(QUEUE_PATH, JSON.stringify([entry]));
       mockPrepareSensorUpload.mockRejectedValue(new Error("offline"));
@@ -204,6 +204,7 @@ describe("sensorTelemetryUpload", () => {
         /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/,
       );
       expect(entries[0].expectedVersion).toBe("0");
+      expect(entries[0].calculationVersion).toBe(3);
       expect(entries[0].sha256).toBe(await computeSha256(SAMPLE_NDJSON));
     });
 

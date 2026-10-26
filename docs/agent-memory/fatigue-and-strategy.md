@@ -57,10 +57,19 @@ $$\text{ResidualFatigue}(t) = \sum_{s \in \text{Sessions}} \text{Load}_s \times 
   ```
 - **Response**:
   - `muscle_readiness`: 6 muscle group items with scores and coaching notes
-  - `target_rpe`: Recommended RPE and pacing strategy
+  - `target_rpe`: Recommended RPE and pacing strategy (withheld as `null` unless `evidence_status == "complete"`)
+  - `effort_reflection`: Optional recent-WOD feedback summary (`applied`, `rated_count`, `sensor_count`, `total_recent`, `reason`, `recent_workouts`) — strictly `null`/omitted unless `evidence_status == "complete"` and at least 1 recent main WOD exists in `[asOf-28d, asOf]`
   - `scaling_advice`: List of specific movement scaling/substitutions
   - `mobility_warmup`: 1-2 targeted pre-WOD mobility movements
   - `overall_summary`: Head coach executive briefing
+
+### Recent 3 WOD Feedback & Hybrid Sensor Rules (`GetPreWODAdvice` / `FinalizePreWODAdvice`)
+- **Query scope**: Inside the same `REPEATABLE READ READ ONLY` transaction, queries up to 3 completed non-archived main WODs (`analysis_type = 'wod'`, `COALESCE(s.workout_type, 'wod') = 'wod'`, `workout_at_source IN ('session_ulid', 'legacy_local_time')`) in `[asOf-28d, asOf]`.
+- **No guessing or scale conflation**:
+  - `recent_workouts[i].effort` comes strictly from manual `sessions.effort` (`1..10`) when `workout_type == "wod" && wod_evaluation_version == 1`. Unrated workouts stay `nil` (never inferred from HR/sensor or mapped 1:1 to RIR).
+  - `recent_workouts[i].duration_seconds` comes strictly from `wodeval.DurationSeconds(score.WODStart)` (`evaluation_version == 1` and `ValidWindow`); unresolved windows stay `nil`.
+  - `recent_workouts[i].hybrid_sensor` comes only from verified fresh `CalculationVersion >= 3` `sensor_summary` rows with `hybrid_intensity != nil`, `data_coverage >= 0.50`, and `valid_hybrid_seconds >= 60`.
+- **Safety cap (`OverallFatigueScore >= 60`)**: `FinalizePreWODAdvice` forces `TargetRPE.Score <= 6` whenever `OverallFatigueScore >= 60` so low manual `Effort` or low `hybrid_intensity` (e.g., slow heavy barbell work where external weight is unmeasured) can never assert biological recovery or override high 6-muscle fatigue. RIR-mapping and recovery-guarantee claims in `effort_reflection_reason` fall back to `BuildDeterministicEffortReflectionReason`.
 
 ## 5. UI Integration
 

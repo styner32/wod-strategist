@@ -257,8 +257,10 @@ var _ = Describe("Fatigue Calculation & Readiness", func() {
 				EvidenceStatus: "insufficient",
 				AsOf:           time.Now(),
 			}
+			effort := 8
 			resp := fatigue.PreWODAdviceResponse{
-				TargetRPE: &fatigue.TargetRPEInfo{Score: 9},
+				TargetRPE:              &fatigue.TargetRPEInfo{Score: 9},
+				EffortReflectionReason: "직전 운동을 반영했습니다.",
 				MuscleReadiness: []fatigue.MuscleReadinessItem{
 					{Group: "shoulders_push", FatigueScore: 80},
 				},
@@ -267,14 +269,111 @@ var _ = Describe("Fatigue Calculation & Readiness", func() {
 				},
 			}
 
-			fatigue.FinalizePreWODAdvice(&resp, readiness)
+			fatigue.FinalizePreWODAdvice(&resp, readiness, fatigue.RecentWorkoutSummary{
+				SessionID: "WOD-20261024-01TEST",
+				WorkoutAt: time.Now().Add(-12 * time.Hour),
+				Movements: []string{"Snatch"},
+				Effort:    &effort,
+			})
 
 			Expect(resp.OverallFatigueScore).To(BeNil())
 			Expect(resp.TargetRPE).To(BeNil())
+			Expect(resp.EffortReflection).To(BeNil())
+			Expect(resp.EffortReflectionReason).To(BeEmpty())
 			Expect(resp.MuscleReadiness).To(BeNil())
 			Expect(resp.ScalingAdvice).To(BeEmpty())
 			Expect(resp.AdviceCode).To(Equal("check_condition"))
 			Expect(resp.OverallSummary).To(ContainSubstring("최근 운동 근거만으로"))
+		})
+
+		It("caps TargetRPE at 6 when OverallFatigueScore >= 60 despite low Effort or low hybrid sensor score, and sanitizes RIR/recovery claims", func() {
+			highScore := 68
+			readiness := fatigue.ProfileReadinessState{
+				EvidenceStatus:      "complete",
+				OverallFatigueScore: &highScore,
+				OverallState:        "fatigued",
+				OverallStateKO:      "피로 주의",
+				Muscles: map[string]fatigue.MuscleReadinessStatus{
+					fatigue.GroupPosteriorChain: {
+						Group:        fatigue.GroupPosteriorChain,
+						NameKO:       "허리 / 후면사슬",
+						FatigueScore: 82,
+						State:        "exhausted",
+						StateKO:      "극심한 피로",
+					},
+				},
+				AsOf: time.Now(),
+			}
+			lowEffort := 3
+			dur := 720
+			heart := 0.50
+			motion := 0.10
+			resp := fatigue.PreWODAdviceResponse{
+				TargetRPE: &fatigue.TargetRPEInfo{
+					Score:          9,
+					Label:          "RPE 9 (최대 수행 도전)",
+					PacingStrategy: "완전히 회복되었으므로 최대 강도로 도전하세요.",
+				},
+				EffortReflectionReason: "RIR 7 수준으로 완전히 회복되었으므로 쉬운 근력 운동으로 판단해 고강도를 추천합니다.",
+			}
+
+			fatigue.FinalizePreWODAdvice(&resp, readiness, fatigue.RecentWorkoutSummary{
+				SessionID:       "WOD-20261024-01HEAVY",
+				WorkoutAt:       time.Now().Add(-16 * time.Hour),
+				Movements:       []string{"Deadlift", "Strict Press"},
+				DurationSeconds: &dur,
+				Effort:          &lowEffort,
+				HybridSensor: &fatigue.HybridSensorBrief{
+					HeartIntensity:  &heart,
+					MotionIntensity: &motion,
+					HybridIntensity: 40.0,
+					DataCoverage:    0.95,
+				},
+			})
+
+			Expect(resp.TargetRPE).NotTo(BeNil())
+			Expect(resp.TargetRPE.Score).To(Equal(6))
+			Expect(resp.TargetRPE.PacingStrategy).NotTo(ContainSubstring("완전히 회복되었"))
+			Expect(resp.TargetRPE.PacingStrategy).NotTo(ContainSubstring("최대 강도로 도전"))
+			Expect(resp.EffortReflectionReason).To(BeEmpty())
+			Expect(resp.EffortReflection).NotTo(BeNil())
+			Expect(resp.EffortReflection.Applied).To(BeTrue())
+			Expect(resp.EffortReflection.RatedCount).To(Equal(1))
+			Expect(resp.EffortReflection.SensorCount).To(Equal(1))
+			Expect(resp.EffortReflection.Reason).NotTo(ContainSubstring("RIR"))
+			Expect(resp.EffortReflection.Reason).NotTo(ContainSubstring("완전히 회복"))
+			Expect(resp.EffortReflection.Reason).To(ContainSubstring("회복 완료로 단정하지 않고"))
+		})
+
+		It("discards hallucinated reflection reason when recent workouts have neither Effort nor verified sensor summary", func() {
+			score := 35
+			readiness := fatigue.ProfileReadinessState{
+				EvidenceStatus:      "complete",
+				OverallFatigueScore: &score,
+				OverallState:        "moderate",
+				OverallStateKO:      "보통",
+				AsOf:                time.Now(),
+			}
+			dur := 510
+			resp := fatigue.PreWODAdviceResponse{
+				TargetRPE:              &fatigue.TargetRPEInfo{Score: 8, Label: "RPE 8", PacingStrategy: "일정한 페이스 유지"},
+				EffortReflectionReason: "지난 운동의 Effort를 추측해 반영했습니다.",
+			}
+
+			fatigue.FinalizePreWODAdvice(&resp, readiness, fatigue.RecentWorkoutSummary{
+				SessionID:       "WOD-20261024-01UNRATED",
+				WorkoutAt:       time.Now().Add(-20 * time.Hour),
+				Movements:       []string{"Thruster", "Pull-up"},
+				DurationSeconds: &dur,
+			})
+
+			Expect(resp.EffortReflection).NotTo(BeNil())
+			Expect(resp.EffortReflection.Applied).To(BeFalse())
+			Expect(resp.EffortReflection.RatedCount).To(Equal(0))
+			Expect(resp.EffortReflection.SensorCount).To(Equal(0))
+			Expect(resp.EffortReflection.TotalRecent).To(Equal(1))
+			Expect(resp.EffortReflection.Reason).To(BeEmpty())
+			Expect(resp.EffortReflection.RecentWorkouts[0].Effort).To(BeNil())
 		})
 	})
 
@@ -306,6 +405,53 @@ var _ = Describe("Fatigue Calculation & Readiness", func() {
 			Expect(prompt).To(ContainSubstring("Thruster, Pull-up"))
 			Expect(prompt).To(ContainSubstring("Shoulder"))
 			Expect(prompt).To(ContainSubstring("어깨 / 상체 밀기"))
+		})
+
+		It("formats recent up to 3 WODs with movements, duration, manual Effort, and separate hybrid sensor metrics", func() {
+			score := 42
+			readiness := fatigue.ProfileReadinessState{
+				OverallFatigueScore: &score,
+				OverallState:        "moderate",
+				OverallStateKO:      "보통",
+			}
+			effort9 := 9
+			dur495 := 495
+			heart := 0.75
+			motion := 0.80
+			loadAU := 12.8
+			recent := []fatigue.RecentWorkoutSummary{
+				{
+					SessionID:       "WOD-20261024-01A",
+					WorkoutAt:       time.Date(2026, 10, 24, 9, 30, 0, 0, time.UTC),
+					Movements:       []string{"Thruster", "Pull-up"},
+					DurationSeconds: &dur495,
+					Effort:          &effort9,
+					HybridSensor: &fatigue.HybridSensorBrief{
+						HeartIntensity:  &heart,
+						MotionIntensity: &motion,
+						HybridIntensity: 76.25,
+						HybridLoadAU:    &loadAU,
+						DataCoverage:    0.98,
+					},
+				},
+				{
+					SessionID: "WOD-20261022-01B",
+					WorkoutAt: time.Date(2026, 10, 22, 10, 0, 0, 0, time.UTC),
+					Movements: []string{"Deadlift"},
+				},
+			}
+
+			prompt := fatigue.BuildPreWODAdvicePrompt(readiness, db.Profile{FitnessLevel: "intermediate"}, "Cindy", []string{"Pull-up", "Push-up", "Air Squat"}, nil, recent...)
+
+			Expect(prompt).To(ContainSubstring("최근 본 운동(WOD) 수행 및 강도 피드백"))
+			Expect(prompt).To(ContainSubstring("종목 [Thruster, Pull-up]"))
+			Expect(prompt).To(ContainSubstring("수행시간 8분 15초"))
+			Expect(prompt).To(ContainSubstring("자기보고 Effort 9/10"))
+			Expect(prompt).To(ContainSubstring("센서 보조지표: 하이브리드 활동강도 76/100 (심박 75 · 움직임 80 · 누적부하 12.8 AU · 커버리지 98%)"))
+			Expect(prompt).To(ContainSubstring("수행시간 시간 미확정"))
+			Expect(prompt).To(ContainSubstring("자기보고 Effort 미입력 (추측 금지)"))
+			Expect(prompt).To(ContainSubstring("RIR"))
+			Expect(prompt).To(ContainSubstring("effort_reflection_reason"))
 		})
 	})
 })
