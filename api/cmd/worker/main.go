@@ -73,6 +73,7 @@ func main() {
 		ThinkingLevel:      cfg.GeminiThinkingLevel,
 		ThinkingLevelChunk: cfg.GeminiThinkingChunk,
 		ThinkingBudget:     cfg.GeminiThinkingBudget,
+		IncludeThoughts:    cfg.GeminiIncludeThoughts,
 	})
 	if err != nil {
 		logger.Log.Fatal("Failed to create gemini client", zap.Error(err))

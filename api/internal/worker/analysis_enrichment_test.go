@@ -480,10 +480,67 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 		Expect(b.Items[0].Status).To(Equal("interrupted"))
 	})
 	It("does not expose raw responses or thought text in persisted metrics", func() {
-		b := AgenticHighlights{Items: []AgenticHighlight{{Metrics: &gemini.VideoModeResult{Text: "secret thought", Request: []byte("api-key"), Response: []byte("raw SSE")}}}}
+		b := AgenticHighlights{Items: []AgenticHighlight{{Metrics: &gemini.VideoModeResult{Text: "secret thought", ThoughtSummary: "secret thought summary", Request: []byte("api-key"), Response: []byte("raw SSE")}}}}
 		raw := string(enrichmentJSON(b))
 		Expect(strings.Contains(raw, "secret thought")).To(BeFalse())
+		Expect(raw).NotTo(ContainSubstring("secret thought summary"))
 		Expect(raw).NotTo(ContainSubstring("api-key"))
 		Expect(raw).NotTo(ContainSubstring("raw SSE"))
+	})
+	It("persists thought summaries in gemini_thought_logs while keeping token_usages and agentic_highlight_analysis clean", func() {
+		thoughtClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:          "test",
+			HTTPClient:      &http.Client{Transport: transport},
+			ThinkingLevel:   "LOW",
+			IncludeThoughts: true,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		w.GeminiClient = thoughtClient
+
+		id, err := w.ScheduleAnalysisEnrichment(context.Background(), sid, true, false)
+		Expect(err).NotTo(HaveOccurred())
+		transport.New(base).Get("/v1beta/files/shared").Reply(200).JSON(map[string]any{
+			"name": "files/shared", "state": "ACTIVE", "videoMetadata": map[string]string{"videoDuration": "60s"},
+		})
+		task(id, "prepare", 0)
+
+		sseBody, _ := json.Marshal(map[string]any{
+			"candidates": []any{map[string]any{
+				"finishReason": "STOP",
+				"content": map[string]any{"parts": []any{
+					map[string]any{"thought": true, "text": "private agentic reasoning step"},
+					map[string]any{"toolCall": map[string]string{"toolType": "MEDIA_PROCESSING"}},
+					map[string]any{"toolResponse": map[string]string{"toolType": "MEDIA_PROCESSING"}},
+					map[string]string{"text": `{"target_status":"confirmed","activity":"exercise","movement":"Snatch","direct_observation":"바벨 캐치","evidence":[{"start":11,"end":12,"observation":"안정적"}],"continuity":"continuous","noteworthy":["좋은 자세"],"limitations":[]}`},
+				}},
+			}},
+			"usageMetadata": map[string]int{"promptTokenCount": 10, "candidatesTokenCount": 5, "thoughtsTokenCount": 42, "toolUsePromptTokenCount": 65, "totalTokenCount": 122},
+		})
+		transport.New(base).
+			Post("/v1beta/models/" + gemini.ModelFlash38 + ":streamGenerateContent?alt=sse").
+			MatchBodyContains(`"includeThoughts":true`).
+			Reply(200).
+			Header("Content-Type", "text/event-stream").
+			Body([]byte("data: " + string(sseBody) + "\n\n"))
+
+		task(id, "highlight", 0)
+
+		var row db.AnalysisResult
+		Expect(conn.First(&row, a.ID).Error).To(Succeed())
+		Expect(string(row.AgenticHighlightAnalysis)).NotTo(ContainSubstring("private agentic reasoning step"))
+
+		var usages []db.TokenUsage
+		Expect(conn.Where("session_id = ?", sid).Find(&usages).Error).To(Succeed())
+		Expect(usages).To(HaveLen(1))
+		Expect(string(usages[0].UsageMetadata)).NotTo(ContainSubstring("private agentic reasoning step"))
+
+		var thoughts []db.GeminiThoughtLog
+		Expect(conn.Where("session_id = ?", sid).Find(&thoughts).Error).To(Succeed())
+		Expect(thoughts).To(HaveLen(1))
+		Expect(thoughts[0].TokenUsageID).NotTo(BeNil())
+		Expect(*thoughts[0].TokenUsageID).To(Equal(usages[0].ID))
+		Expect(thoughts[0].TaskType).To(Equal("highlight:agentic"))
+		Expect(thoughts[0].ThinkingTokens).To(Equal(int64(42)))
+		Expect(thoughts[0].ThoughtSummary).To(Equal("private agentic reasoning step"))
 	})
 }, Ordered)

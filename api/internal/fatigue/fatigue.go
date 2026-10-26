@@ -87,7 +87,11 @@ var movementLoadCatalog = map[string]MovementMuscleWeights{
 	"db thruster":      {ShouldersPush: 0.9, UpperPullGrip: 0.2, PosteriorChain: 0.5, QuadsSquat: 0.9, CoreMidline: 0.7, CardioMetabolic: 0.8},
 	"kb swing":         {ShouldersPush: 0.3, UpperPullGrip: 0.6, PosteriorChain: 0.9, QuadsSquat: 0.3, CoreMidline: 0.6, CardioMetabolic: 0.7},
 	"kettlebell swing": {ShouldersPush: 0.3, UpperPullGrip: 0.6, PosteriorChain: 0.9, QuadsSquat: 0.3, CoreMidline: 0.6, CardioMetabolic: 0.7},
-	"devil press":      {ShouldersPush: 0.8, UpperPullGrip: 0.5, PosteriorChain: 0.8, QuadsSquat: 0.5, CoreMidline: 0.7, CardioMetabolic: 0.9},
+	"devil press":          {ShouldersPush: 0.8, UpperPullGrip: 0.5, PosteriorChain: 0.8, QuadsSquat: 0.5, CoreMidline: 0.7, CardioMetabolic: 0.9},
+	"db box step up":       {ShouldersPush: 0.2, UpperPullGrip: 0.6, PosteriorChain: 0.6, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.7},
+	"db box step over":     {ShouldersPush: 0.2, UpperPullGrip: 0.6, PosteriorChain: 0.6, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.8},
+	"sandbag box step up":  {ShouldersPush: 0.3, UpperPullGrip: 0.5, PosteriorChain: 0.7, QuadsSquat: 0.9, CoreMidline: 0.7, CardioMetabolic: 0.7},
+	"sandbag box step over": {ShouldersPush: 0.3, UpperPullGrip: 0.5, PosteriorChain: 0.7, QuadsSquat: 0.9, CoreMidline: 0.7, CardioMetabolic: 0.8},
 
 	// Gymnastics
 	"pull up":           {ShouldersPush: 0.2, UpperPullGrip: 1.0, PosteriorChain: 0.2, QuadsSquat: 0.0, CoreMidline: 0.5, CardioMetabolic: 0.5},
@@ -113,8 +117,12 @@ var movementLoadCatalog = map[string]MovementMuscleWeights{
 	"sit up":        {ShouldersPush: 0.0, UpperPullGrip: 0.0, PosteriorChain: 0.1, QuadsSquat: 0.2, CoreMidline: 0.9, CardioMetabolic: 0.3},
 	"sit-up":        {ShouldersPush: 0.0, UpperPullGrip: 0.0, PosteriorChain: 0.1, QuadsSquat: 0.2, CoreMidline: 0.9, CardioMetabolic: 0.3},
 	"lunge":         {ShouldersPush: 0.0, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.9, CoreMidline: 0.5, CardioMetabolic: 0.5},
-	"box jump":      {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.6, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.8},
-	"box step-up":   {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.6},
+	"box jump":               {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.6, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.8},
+	"box step-up":            {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.6},
+	"box step up":            {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.6},
+	"box step over":          {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.7},
+	"weighted box step up":   {ShouldersPush: 0.2, UpperPullGrip: 0.2, PosteriorChain: 0.6, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.7},
+	"weighted box step over": {ShouldersPush: 0.2, UpperPullGrip: 0.2, PosteriorChain: 0.6, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.8},
 	"wallball shot": {ShouldersPush: 0.8, UpperPullGrip: 0.1, PosteriorChain: 0.4, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.8},
 	"wall ball":     {ShouldersPush: 0.8, UpperPullGrip: 0.1, PosteriorChain: 0.4, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.8},
 

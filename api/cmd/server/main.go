@@ -72,8 +72,9 @@ func main() {
 	var textParser controllers.TextParser
 	if cfg.GeminiAPIKey != "" {
 		geminiClient, geminiErr := gemini.NewClientWithOptions(context.Background(), logger.Log, gemini.Options{
-			APIKey: cfg.GeminiAPIKey,
-			Model:  gemini.ModelFlash38,
+			APIKey:          cfg.GeminiAPIKey,
+			Model:           gemini.ModelFlash38,
+			IncludeThoughts: cfg.GeminiIncludeThoughts,
 		})
 		if geminiErr != nil {
 			logger.Log.Warn("Failed to create Gemini client for image/text parsing", zap.Error(geminiErr))

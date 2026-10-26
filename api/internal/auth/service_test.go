@@ -8,7 +8,9 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wod-strategist/api/internal/auth"
+	"github.com/wod-strategist/api/internal/cost"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/testhelpers"
 )
 
@@ -235,15 +237,19 @@ var _ = Describe("Auth Service", func() {
 				Status:    db.SessionReanalysisStatusCompleted,
 			})
 
-			Expect(dbConn.Create(&db.TokenUsage{
-				SessionID:       "sess-delete-001",
-				ProfileID:       profile.ID,
-				TaskType:        "video:analysis",
+			thinking := int64(25)
+			Expect(cost.RecordUsage(dbConn, "sess-delete-001", profile.ID, userID, "video:analysis", "delete-test-req-1", &gemini.TokenUsage{
 				Model:           "gemini-test",
 				PromptTokens:    100,
 				CandidateTokens: 50,
-				TotalTokens:     150,
-			}).Error).NotTo(HaveOccurred())
+				TotalTokens:     175,
+				Details:         &gemini.ComparisonUsage{Thinking: &thinking},
+				ThoughtSummary:  "ephemeral thought log to delete",
+			})).To(Succeed())
+			Expect(cost.RecordUsage(dbConn, "", 0, userID, "profile:advice", "delete-test-req-2", &gemini.TokenUsage{
+				Model:          "gemini-test",
+				ThoughtSummary: "user-scoped thought log without profile",
+			})).To(Succeed())
 		})
 
 		It("soft-deletes user and cascades leaf data", func() {
@@ -274,6 +280,10 @@ var _ = Describe("Auth Service", func() {
 			var tokenCount int64
 			dbConn.Model(&db.TokenUsage{}).Where("session_id = ?", "sess-delete-001").Count(&tokenCount)
 			Expect(tokenCount).To(BeZero())
+
+			var thoughtCount int64
+			dbConn.Model(&db.GeminiThoughtLog{}).Where("profile_id = ? OR user_id = ?", profileID, userID).Count(&thoughtCount)
+			Expect(thoughtCount).To(BeZero())
 
 			var feedbackCount int64
 			dbConn.Model(&db.AnalysisFeedback{}).Where("profile_id = ?", profileID).Count(&feedbackCount)

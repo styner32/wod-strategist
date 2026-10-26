@@ -25,12 +25,26 @@ var _ = Describe("Movement evidence and accumulation", func() {
 	It("assigns a boundary completion once and clips timed activity", func() {
 		doc, err := Decode(observationJSON(cycle(8, 10), cycle(11, 13)), 0, 20)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(Own(doc, 0, 10).Events).To(HaveLen(1))
-		Expect(Own(doc, 10, 20).Events).To(HaveLen(1))
+		firstOwned := Own(doc, 0, 10)
+		secondOwned := Own(doc, 10, 20)
+		Expect(firstOwned.Events).To(HaveLen(1))
+		Expect(firstOwned.DurationSecs).To(Equal(10.0))
+		Expect(secondOwned.Events).To(HaveLen(1))
+		Expect(secondOwned.DurationSecs).To(Equal(10.0))
 		timed, err := Decode(observationJSON(Observation{"Run", "seconds", 2, 18, true, "continuous running"}), 0, 20)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(Own(timed, 0, 10).Events[0].End).To(Equal(10.0))
 		Expect(Own(timed, 10, 20).Events[0].Start).To(Equal(10.0))
+	})
+	It("builds clean rest observations via ConfirmedRest", func() {
+		rest := ConfirmedRest(10.0)
+		Expect(rest.DurationSecs).To(Equal(10.0))
+		Expect(rest.Version).To(Equal(Version))
+		Expect(rest.TargetState).To(Equal("identified"))
+		Expect(rest.ActivityState).To(Equal("rest"))
+		Expect(rest.Events).To(BeEmpty())
+		Expect(rest.Unassessed).To(BeEmpty())
+		Expect(ConfirmedRest(-5).DurationSecs).To(Equal(0.0))
 	})
 	It("never counts a partial cycle or supplies a default estimate", func() {
 		partial := cycle(8, 10)
@@ -100,6 +114,15 @@ var _ = Describe("Movement evidence and accumulation", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(doc.Events).To(HaveLen(1))
 		Expect(doc.Events[0].Movement).To(Equal("Deadlift"))
+
+		dbStepOver := Observation{Movement: "Dumbbell Box Step-Over", Unit: "reps", Start: 1, End: 4, Complete: true, Evidence: "steps up and over box holding dumbbells"}
+		sandbagStepOver := Observation{Movement: "Sandbag Box Step-over", Unit: "reps", Start: 5, End: 9, Complete: true, Evidence: "steps over box with sandbag"}
+		doc, err = Decode(observationJSON(dbStepOver, sandbagStepOver), 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(doc.Unassessed).To(BeEmpty())
+		Expect(doc.Events).To(HaveLen(2))
+		Expect(doc.Events[0].Movement).To(Equal("DB Box Step-over"))
+		Expect(doc.Events[1].Movement).To(Equal("Sandbag Box Step-over"))
 	})
 	It("preserves unspecified variants as gaps instead of counting a specific subtype", func() {
 		for _, raw := range []string{"Snatch", "Muscle-up", "Dips", "Squats", "Press", "Jump Rope"} {

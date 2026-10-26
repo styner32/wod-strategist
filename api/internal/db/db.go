@@ -229,6 +229,20 @@ type TokenUsage struct {
 	UserID          *uint                `json:"user_id,omitempty"`
 }
 
+type GeminiThoughtLog struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	TokenUsageID   *uint     `json:"token_usage_id,omitempty"`
+	UserID         *uint     `json:"user_id,omitempty"`
+	ProfileID      uint      `json:"profile_id"`
+	SessionID      string    `json:"session_id"`
+	TaskType       string    `json:"task_type"`
+	Model          string    `json:"model"`
+	RequestKey     *string   `json:"request_key,omitempty"`
+	ThinkingTokens int64     `json:"thinking_tokens"`
+	ThoughtSummary string    `json:"thought_summary"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
 const (
 	SessionStatusStarted   = "started"
 	SessionStatusCompleted = "completed"

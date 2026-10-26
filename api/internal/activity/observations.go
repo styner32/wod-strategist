@@ -66,6 +66,20 @@ func UnknownWithMovement(start, end float64, reason, movement string) Observatio
 	}
 }
 
+func ConfirmedRest(duration float64) Observations {
+	if math.IsNaN(duration) || math.IsInf(duration, 0) || duration < 0 {
+		duration = 0
+	}
+	return Observations{
+		DurationSecs:  duration,
+		Version:       Version,
+		TargetState:   "identified",
+		ActivityState: "rest",
+		Events:        []Observation{},
+		Unassessed:    []Interval{},
+	}
+}
+
 func observedMovements(events []Observation, unassessed []Interval) string {
 	seen := map[string]bool{}
 	var list []string
@@ -221,6 +235,9 @@ func Decode(raw []byte, start, end float64) (Observations, error) {
 // Duration observations are clipped, so overlapping review context is never added.
 func Own(doc Observations, start, end float64) Observations {
 	result := doc
+	if ValidInterval(start, end) {
+		result.DurationSecs = end - start
+	}
 	result.Events = []Observation{}
 	result.Unassessed = []Interval{}
 	for _, event := range doc.Events {

@@ -764,10 +764,11 @@ func validateAgenticObservation(raw string, b AgenticHighlights, it AgenticHighl
 func (w *Worker) generateAgenticHighlight(ctx context.Context, a db.AnalysisResult, b AgenticHighlights, index int) {
 	it := &b.Items[index]
 	response := w.GeminiClient.AnalyzeHighlightAgentic(ctx, b.FileURI, b.MIMEType, agenticHighlightPrompt(b, *it))
-	w.saveTokenUsageForRequest(a.SessionID, a.ProfileID, "highlight:agentic", fmt.Sprintf("agentic:%s:%d:%s", b.RunID, index, it.Key), gemini.UsageFromComparison(response.Usage, gemini.ModelFlash38))
+	w.saveTokenUsageForRequest(a.SessionID, a.ProfileID, "highlight:agentic", fmt.Sprintf("agentic:%s:%d:%s", b.RunID, index, it.Key), gemini.UsageFromComparisonWithThoughts(response.Usage, gemini.ModelFlash38, response.ThoughtSummary))
 	// The public metrics contain neither raw SSE nor thought/request text.
 	metrics := response.VideoModeResult
 	metrics.Text = ""
+	metrics.ThoughtSummary = ""
 	metrics.Request = nil
 	metrics.Response = nil
 	metrics.Error = ""

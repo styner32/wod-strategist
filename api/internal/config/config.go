@@ -21,6 +21,7 @@ var defaultDevAllowedOrigins = []string{
 
 type Common struct {
 	AgenticHighlightsEnabled bool
+	GeminiIncludeThoughts    bool // GEMINI_INCLUDE_THOUGHTS — optional; stores Gemini thought summaries in gemini_thought_logs
 	DatabaseURL              string
 	RedisURL                 string
 	GCSBucketName            string
@@ -73,6 +74,7 @@ func InitServer() (Server, error) {
 	cfg := Server{
 		Common: Common{
 			AgenticHighlightsEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_AGENTIC_HIGHLIGHTS")), "true"),
+			GeminiIncludeThoughts:    strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_INCLUDE_THOUGHTS")), "true"),
 			DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 			RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
 			GCSBucketName:            strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
@@ -169,6 +171,7 @@ func InitWorker() (Worker, error) {
 		TrackingContinuityEnabled: trackingContinuityEnabled(os.Getenv("ENABLE_TRACKING_CONTINUITY"), appEnv),
 		Common: Common{
 			AgenticHighlightsEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_AGENTIC_HIGHLIGHTS")), "true"),
+			GeminiIncludeThoughts:    strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_INCLUDE_THOUGHTS")), "true"),
 			DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 			RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
 			GCSBucketName:            strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),

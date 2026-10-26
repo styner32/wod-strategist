@@ -2,9 +2,11 @@ package gemini
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -47,5 +49,53 @@ var _ = Describe("Generation usage accounting", func() {
 		usage, err := client.GenerateWorkoutMusic(context.Background(), "lyria-3-clip-preview", "music", filepath.Join(dir, "music.mp3"))
 		Expect(err).To(HaveOccurred())
 		Expect(usage.Details.Total).To(HaveValue(Equal(int64(10))))
+	})
+	It("requests thought summaries when IncludeThoughts is enabled, separates thought parts from answer text, and omits ThoughtSummary in JSON", func() {
+		thoughtClient, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+			APIKey:          "test",
+			HTTPClient:      &http.Client{Transport: transport},
+			ThinkingLevel:   "MEDIUM",
+			IncludeThoughts: true,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		replyBody := []byte(`{"candidates":[{"content":{"parts":[{"thought":true,"text":"checking frame 12.50s"},{"text":"clean answer"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":12,"thoughtsTokenCount":250,"totalTokenCount":362}}`)
+		transport.New("https://generativelanguage.googleapis.com").
+			Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+			MatchBodyContains(`"includeThoughts":true`).
+			Reply(200).
+			Body(replyBody)
+		text, usage, err := thoughtClient.ParseText(context.Background(), "prompt")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(text).To(Equal("clean answer"))
+		Expect(usage.ThoughtSummary).To(Equal("checking frame 12.50s"))
+		Expect(usage.Details.Thinking).To(HaveValue(Equal(int64(250))))
+		encodedUsage, err := json.Marshal(usage)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(encodedUsage)).NotTo(ContainSubstring("checking frame 12.50s"))
+
+		transport.New("https://generativelanguage.googleapis.com").
+			Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+			MatchBodyContains(`"includeThoughts":true`).
+			Reply(200).
+			Body(replyBody)
+		gridText, gridUsage, err := thoughtClient.AnalyzeFrameGridsWithModel(
+			context.Background(), [][]byte{[]byte("fake-jpeg")}, "grid prompt", "MEDIUM", ModelFlash38,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(gridText).To(Equal("clean answer"))
+		Expect(gridUsage.ThoughtSummary).To(Equal("checking frame 12.50s"))
+
+		transport.New("https://generativelanguage.googleapis.com").
+			Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+			MatchBodyContains(`"includeThoughts":true`).
+			Reply(200).
+			Body(replyBody)
+		segText, segUsage, err := thoughtClient.AnalyzeSegmentWithModel(
+			context.Background(), "https://generativelanguage.googleapis.com/files/f1", "video/mp4", 0, 10*time.Second, "seg prompt", ModelFlash38,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(segText).To(Equal("clean answer"))
+		Expect(segUsage.ThoughtSummary).To(Equal("checking frame 12.50s"))
 	})
 })
