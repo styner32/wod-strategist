@@ -814,14 +814,21 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		err      error
 	}
 
-	segResults := make([]segmentAnalysisResult, len(segments))
+	// Continuous bouts are observed whole; only bouts longer than
+	// maxPass2WindowSecs are split, with overlap, and stitched back later.
+	windows := splitPass2Windows(segments)
+	trackingRefs := w.loadTrackingReferences(ctx, p.SessionID, p.ProfileID)
+	segResults := make([]segmentAnalysisResult, len(windows))
 	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
 	var segWG sync.WaitGroup
-	for i, seg := range segments {
+	for i, win := range windows {
+		seg := win.Seg
 		start := convertToSeconds(seg.Start)
 		end := convertToSeconds(seg.End)
 
 		segPrompt := w.buildSegmentAnalysisPrompt(p, seg, wodContext, "", false)
+		trackingPrompt, trackingImages := w.pass2TrackingInputs(ctx, trackingRefs, start.Seconds(), end.Seconds())
+		segPrompt += trackingPrompt
 		if newWOD {
 			segPrompt += wodSegmentEvidencePrompt
 			segPrompt += ObservationOnlyOutputCheckPrompt
@@ -829,30 +836,40 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		useFlash := isUnknownSegment(seg)
 
 		segWG.Add(1)
-		go func(idx int, s Segment, segStart, segEnd time.Duration, prompt string, flash bool) {
+		go func(idx int, s Segment, segStart, segEnd time.Duration, prompt string, flash bool, images [][]byte) {
 			defer segWG.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			w.logger.Info("Pass 2: Analyzing segment",
 				zap.Int("segment", idx+1),
-				zap.Int("total", len(segments)),
+				zap.Int("total", len(windows)),
 				zap.String("type", s.Type),
 				zap.Duration("start", segStart),
 				zap.Duration("end", segEnd),
 				zap.Bool("score_prompt", false),
-				zap.Bool("flash_model", flash))
+				zap.Bool("flash_model", flash),
+				zap.Int("tracking_references", len(images)))
 
 			var (
 				segAnalysis string
 				segUsage    *gemini.TokenUsage
 				err         error
 			)
-			if flash {
+			switch {
+			case len(images) > 0:
+				model := ""
+				if flash {
+					model = gemini.ModelFlash38
+				}
+				segAnalysis, segUsage, err = w.GeminiClient.AnalyzeSegmentWithModelAndImages(
+					ctx, upload.FileURI, upload.MIMEType, segStart, segEnd, prompt, model, images,
+				)
+			case flash:
 				segAnalysis, segUsage, err = w.GeminiClient.AnalyzeSegmentWithModel(
 					ctx, upload.FileURI, upload.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38,
 				)
-			} else {
+			default:
 				segAnalysis, segUsage, err = w.GeminiClient.AnalyzeSegment(
 					ctx, upload.FileURI, upload.MIMEType, segStart, segEnd, prompt,
 				)
@@ -862,11 +879,12 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				usage:    segUsage,
 				err:      err,
 			}
-		}(i, seg, start, end, segPrompt, useFlash)
+		}(i, seg, start, end, segPrompt, useFlash, trackingImages)
 	}
 	segWG.Wait()
 
-	for i, seg := range segments {
+	for i, win := range windows {
+		seg := win.Seg
 		start := convertToSeconds(seg.Start)
 		end := convertToSeconds(seg.End)
 		res := segResults[i]
@@ -875,7 +893,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		w.saveTokenUsage(p.SessionID, p.ProfileID, "video:segment", res.usage)
 		if res.err != nil {
 			wodComplete = false
-			_, failedGaps := parseWorkoutObservations("", seg, i)
+			_, failedGaps := parseWorkoutObservations("", win.core(), i)
 			progressGaps = append(progressGaps, failedGaps...)
 			w.logger.Error("Segment analysis failed, skipping",
 				zap.Int("segment", i+1),
@@ -886,9 +904,16 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		segAnalysis := res.analysis
 
 		observedIntervals, observedGaps := parseWorkoutObservations(segAnalysis, seg, i)
-		if newWOD && !isFullyObservedRestWindow(seg, observedIntervals, observedGaps) {
-			if evidence, ok := decodeWODEvidence(segAnalysis, seg); ok {
-				wodEvidence = append(wodEvidence, evidence)
+		observedIntervals, observedGaps = ownWindowObservations(observedIntervals, observedGaps, win)
+		if newWOD && !isFullyObservedRestWindow(win.core(), observedIntervals, observedGaps) {
+			if evidence, ok := decodeWODEvidenceList(segAnalysis, seg); ok {
+				wodEvidence = append(wodEvidence, clipWODEvidence(evidence, win)...)
+			} else if !strings.Contains(segAnalysis, "```wod_evidence") {
+				if fallback, ok := wodEvidenceFromObservedIntervals(observedIntervals); ok {
+					wodEvidence = append(wodEvidence, fallback...)
+				} else {
+					wodComplete = false
+				}
 			} else {
 				wodComplete = false
 			}
@@ -901,12 +926,13 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			End:             end.Seconds(),
 			Movement:        seg.Type,
 			HasBounds:       true,
-			HardGapBoundary: true,
+			HardGapBoundary: !win.Split,
 		})...)
 
 		allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n", i+1, seg.Type, seg.Start, seg.End))
 		allAnalysis.WriteString(segAnalysis)
 	}
+	sortWODEvidence(wodEvidence)
 
 	analysis := allAnalysis.String()
 	if analysis == "" {
@@ -1113,6 +1139,16 @@ const independentSegmentPolicy = `
 세션 점수(score) 블록을 생성하지 마세요.
 `
 
+// continuousSegmentPolicy: the window follows one person's continuous activity
+// (Tracking), while movement assessment stays current-window only.
+const continuousSegmentPolicy = `
+## 연속 활동 구간
+이 구간은 휴식으로 끊기지 않고 이어진 대상 인물의 활동 구간이며, 10초 청크 경계로 자르지 않았습니다.
+구간 안에서 종목 전환이나 실제 휴식이 보이면 보이는 시각 그대로 별도 interval로 나누어 기록하세요. 같은 종목이 이어지면 하나의 interval로 기록하세요.
+청크 라벨과 후보 종목은 대상 인물과 활동을 따라가기 위한 참고 정보입니다. 현재 영상과 모순되면 현재 영상을 따르세요.
+자세·가동범위·템포 평가는 현재 구간에서 보이는 것만 기록하고, 직전 운동이나 누적 수행을 원인이나 변명으로 쓰지 마세요.
+`
+
 // Legacy history/final parameters are deliberately ignored. A video observer
 // has the same inputs at the beginning and end of a session.
 func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment, wodContext, _ string, _ bool) string {
@@ -1127,6 +1163,10 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 ## 개인 프로필
 %s
 `, seg.Start, seg.End, seg.Type, personalProfile)
+	if candidates := segmentCandidateMovements(seg); len(candidates) > 1 {
+		prompt += fmt.Sprintf("\n이 구간의 청크 후보 종목(확정 아님): %s\n", strings.Join(candidates, ", "))
+	}
+	prompt += continuousSegmentPolicy
 	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 
 	// WOD context (type-specific analysis guidance)
@@ -1253,89 +1293,31 @@ func (w *Worker) buildChunkSegments(sessionID string, workoutType string) ([]Seg
 		return nil, nil
 	}
 
-	var segments, skipped []Segment
+	timeline := make([]timelineChunk, 0, len(chunks))
 	for _, chunk := range chunks {
 		if !debugMediaIntervalValid(chunk.MediaStartSecs, chunk.MediaEndSecs) {
 			continue
 		}
-
-		if !includeChunkInDeepAnalysis(chunk, workoutType) {
-			if chunkClassifiedNonExercise(chunk, workoutType) {
-				skipped = append(skipped, Segment{Start: formatSegmentTimestamp(*chunk.MediaStartSecs), End: formatSegmentTimestamp(*chunk.MediaEndSecs), Type: "Rest"})
-			}
-			continue
-		}
-
-		// Use the chunk output (1-2 sentence coaching feedback) as the description.
-		desc := chunk.Output
-		if len(desc) > 200 {
-			desc = desc[:200] + "..."
-		}
-
-		exerciseType := chunk.ExerciseType
-		if IsRecoveryWorkoutType(workoutType) && strings.TrimSpace(exerciseType) == "" {
-			exerciseType = "Mobility"
-		}
-
-		segments = append(segments, Segment{
-			Start:       formatSegmentTimestamp(*chunk.MediaStartSecs),
-			End:         formatSegmentTimestamp(*chunk.MediaEndSecs),
-			Type:        exerciseType,
-			Description: desc,
-		})
+		timeline = append(timeline, newTimelineChunk(chunk, workoutType))
 	}
-
-	// Merge consecutive chunks with the same exercise type into larger segments
-	// to avoid excessive Pro model calls (e.g. 30 Snatch chunks → 1 Snatch segment)
-	return mergeSegmentsByMovement(segments), mergeSegmentsByMovement(skipped)
+	// Continuous active chunks form one bout regardless of chunk edges or
+	// label jitter; a single non-active chunk between active ones is bridged.
+	return buildContinuousSegments(timeline)
 }
 
-// chunkClassifiedNonExercise reports an excluded chunk whose analysis explicitly
+// chunkClassifiedNonExercise reports a chunk whose analysis explicitly
 // classified it as walking/rest/setup. An unlabelled chunk is unclassified, not rest.
 func chunkClassifiedNonExercise(chunk db.ChunkAnalysisResult, workoutType string) bool {
-	if includeChunkInDeepAnalysis(chunk, workoutType) {
-		return false
-	}
-	if IsRecoveryWorkoutType(workoutType) {
-		// Recovery sessions exclude only explicit walking.
-		return true
-	}
-	var signals struct {
-		ActivityState string `json:"activity_state"`
-	}
-	_ = json.Unmarshal([]byte(chunk.ObservedSignals), &signals)
-	movement := strings.TrimSpace(chunk.ExerciseType)
-	return isExplicitNonExerciseActivity(signals.ActivityState) || (movement != "" && isNonExerciseMovement(movement))
+	class, _ := classifyChunkActivity(chunk, workoutType)
+	return class == chunkExplicitRest
 }
 
+// includeChunkInDeepAnalysis reports a chunk that, on its own, is observed by
+// Pass 2. Sequence smoothing (buildContinuousSegments) can additionally bridge
+// a single non-active chunk between active neighbours.
 func includeChunkInDeepAnalysis(chunk db.ChunkAnalysisResult, workoutType string) bool {
-	movement := strings.TrimSpace(chunk.ExerciseType)
-
-	var signals struct {
-		ActivityState string `json:"activity_state"`
-	}
-	_ = json.Unmarshal([]byte(chunk.ObservedSignals), &signals)
-
-	if IsRecoveryWorkoutType(workoutType) {
-		// Recovery sessions keep rest/setup/unknown chunks (stretch holds are routinely mislabeled as rest), excluding only explicit walking.
-		if isWalkingActivity(movement) || isWalkingActivity(signals.ActivityState) {
-			return false
-		}
-		return true
-	}
-
-	if movement == "" {
-		return false
-	}
-
-	if isExplicitNonExerciseActivity(signals.ActivityState) {
-		return false
-	}
-
-	if strings.EqualFold(movement, "unknown") {
-		return true
-	}
-	return !isNonExerciseMovement(movement)
+	class, _ := classifyChunkActivity(chunk, workoutType)
+	return class == chunkActive
 }
 
 func isWalkingActivity(val string) bool {

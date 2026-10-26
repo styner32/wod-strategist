@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 import { t, useLocale } from "@/features/i18n";
 import { confirmPerformanceRecords, getPerformanceBenchmarks, getWorkoutProgress } from "../api";
 import {
-  confirmedPerformanceInput, findCoveringConfirmedRecord, observedReps, performanceDraft, performanceSelectionCovered, progressTime, rememberedMovementDefaults,
+  confirmedPerformanceInput, findCoveringConfirmedRecord, isDisplayableProgressGap, observedReps, performanceDraft, performanceSelectionCovered, progressTime, rememberedMovementDefaults, timelineProgressIntervals,
   type MovementDraftDefaults, type PerformanceBenchmarksResponse, type PerformanceDraft, type PerformanceRecord,
   type WorkoutProgress, type WorkoutProgressInterval, type WorkoutProgressResponse,
 } from "../../../shared/workoutProgress";
@@ -172,7 +172,7 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
       {!!error && <><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => setRevision(v => v + 1)} style={styles.button}><Text style={styles.text}>{label("refresh")}</Text></Pressable></>}
       {!!notice && <Text style={styles.text}>{notice}</Text>}
       {data && !data.progress && <Text style={styles.text}>{label("unavailable")}</Text>}
-      {data?.progress?.intervals.map(interval => {
+      {data && timelineProgressIntervals(data.progress, data.records).map(interval => {
         if (interval.activity === "rest") {
           return <View key={interval.id} testID={`rest-interval-${interval.id}`} style={styles.restRow}>
             <Text style={styles.restText}>{progressTime(interval.start_secs)}–{progressTime(interval.end_secs)} · {label("rest")}</Text>
@@ -201,7 +201,7 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
           {selected === interval.id && <RecordEditor key={`${data.progress?.source_version}:${interval.id}`} interval={interval} progress={data.progress!} record={record ?? coveringConfirmed} initialDraft={draftsRef.current[interval.id]} movementDefaults={rememberedMovementDefaults(interval.movement, data.records, movementDefaultsRef.current)} onDraftChange={nextDraft => { draftsRef.current[interval.id] = nextDraft; if (interval.movement?.trim()) { movementDefaultsRef.current[interval.movement.trim().toLowerCase()] = { loadMode: nextDraft.loadMode, weight: nextDraft.weight, unit: nextDraft.unit, basis: nextDraft.basis, technique: nextDraft.technique }; } }} saving={saving} onSave={draft => void save(interval, draft)} onClose={() => setSelected(undefined)} onReviewVideo={onReviewVideo} />}
         </View>;
       })}
-      {data?.progress?.unassessed.map((gap, i) => <Text key={i} style={styles.error}>{label("unassessed")} · {label(gap.clock === "capture" ? "captureClock" : "mediaClock")} {progressTime(gap.start_secs)}–{progressTime(gap.end_secs)} · {label("unknown")}</Text>)}
+      {data?.progress?.unassessed.filter(isDisplayableProgressGap).map((gap, i) => <Text key={i} style={styles.error}>{label("unassessed")} · {label(gap.clock === "capture" ? "captureClock" : "mediaClock")} {progressTime(gap.start_secs)}–{progressTime(gap.end_secs)} · {label("unknown")}</Text>)}
       {data?.records.filter(r => r.status === "needs_confirmation" && !data.progress?.intervals.some(i => i.id === r.interval_id)).map(r => <Text key={`stale:${r.id}`} style={styles.error}>{label("needsConfirmation")} · {r.movement} · {label("recordSummary", { count: r.reps, load: loadLabel(r), duration: (r.elapsed_seconds ?? (r.end_secs - r.start_secs)).toFixed(1) })}</Text>)}
       {benchmarkError && <><Text accessibilityRole="alert" style={styles.error}>{label("benchmarkFailed")}</Text><Pressable accessibilityRole="button" onPress={() => setData(d => d ? { ...d } : d)} style={styles.button}><Text style={styles.text}>{label("retry")}</Text></Pressable></>}
       {benchmarks && <BenchmarkHistory data={benchmarks} sessionId={sessionId} />}

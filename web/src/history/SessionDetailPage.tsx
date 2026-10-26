@@ -49,6 +49,7 @@ import { GuidanceTimeline } from "./components/GuidanceTimeline";
 import { formatDurationMs, SessionCostCard } from "./components/SessionCostCard";
 import { SessionReanalysisPanel } from "./components/SessionReanalysisPanel";
 import { VideoTransportBar } from "./components/VideoTransportBar";
+import { TrackingBoxOverlay } from "./components/TrackingBoxOverlay";
 import { WorkoutFatiguePanel } from "./components/WorkoutFatiguePanel";
 import { getHighlightSeekTime, parseHighlightSegments } from "./highlights";
 import { sensorTimelinePollInterval, sensorTimelineQueryKey } from "./timelineUtils";
@@ -1054,21 +1055,24 @@ export function SessionDetailPage() {
           <div className="bg-bg-elevated border border-border rounded-xl overflow-hidden">
             {videoUrl?.download_url ? (
               <>
-                <video
-                  ref={videoRef}
-                  src={videoUrl.download_url}
-                  controls
-                  muted
-                  preload="metadata"
-                  onLoadedMetadata={handleLoadedMetadata}
-                  onTimeUpdate={handleTimeUpdate}
-                  onSeeked={handleTimeUpdate}
-                  onPlay={handleVideoPlay}
-                  onPause={handleVideoPause}
-                  onRateChange={handleTimeUpdate}
-                  onError={handleVideoError}
-                  className="w-full max-h-[36svh] bg-black object-contain sm:max-h-[50svh] lg:max-h-[calc(100dvh-20rem)]"
-                />
+                <div className="relative">
+                  <video
+                    ref={videoRef}
+                    src={videoUrl.download_url}
+                    controls
+                    muted
+                    preload="metadata"
+                    onLoadedMetadata={handleLoadedMetadata}
+                    onTimeUpdate={handleTimeUpdate}
+                    onSeeked={handleTimeUpdate}
+                    onPlay={handleVideoPlay}
+                    onPause={handleVideoPause}
+                    onRateChange={handleTimeUpdate}
+                    onError={handleVideoError}
+                    className="w-full max-h-[36svh] bg-black object-contain sm:max-h-[50svh] lg:max-h-[calc(100dvh-20rem)]"
+                  />
+                  <TrackingBoxOverlay videoRef={videoRef} chunks={chunks} />
+                </div>
                 {videoPlaybackError && (
                   <div
                     role="alert"

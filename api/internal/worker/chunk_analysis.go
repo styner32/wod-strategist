@@ -40,6 +40,7 @@ const ChunkAnalysisPrompt = `
   (예: [EXERCISE: Hang Power Clean], [EXERCISE: Push Jerk], [EXERCISE: Deadlift], [EXERCISE: Power Snatch], [EXERCISE: Back Squat], [EXERCISE: Pull-up], [EXERCISE: Burpee])
   * 클린과 스내치는 포괄적인 [EXERCISE: Hang Clean] 또는 [EXERCISE: Snatch]를 쓰지 말고, [EXERCISE: Hang Power Clean], [EXERCISE: Hang Squat Clean], [EXERCISE: Power Clean], [EXERCISE: Squat Clean], [EXERCISE: Hang Power Snatch], [EXERCISE: Hang Squat Snatch] 등으로 구체적인 표준 종목명을 쓰세요.
   * 바벨/덤벨을 손에 쥐고 행(Hang) 위치에 들고 세트를 이어가는 구간은 운동 진행 중([EXERCISE: ...])입니다. 기구를 완전히 바닥에 내려놓았을 때만 [NO_EXERCISE]를 출력하세요.
+  * 로잉(Row), 바이크 에르그(Bike Erg), 에코 바이크(Echo Bike), 스키에르그(Skierg)에 앉거나 선 채로 핸들·핸들바·페달과 접촉해 팔·다리·상체 움직임이 이어지면 앉아 있어도 운동 진행 중([EXERCISE: ...])입니다. 속도가 느려진 것은 휴식이 아닙니다. 기구에서 손발을 떼고 내려왔을 때만 [NO_EXERCISE]를 출력하세요.
 - 대상 인물이 운동 중인 것은 분명하지만 정확한 종목 근거가 부족하면 → 첫 줄에 [EXERCISE: Unknown] 태그를 출력하세요.
 - 운동이 보이지 않으면 (기구를 내려놓은 휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그만 출력하세요.
 
@@ -181,6 +182,12 @@ type targetPersonOutput struct {
 	MatchedCues []string `json:"matched_cues"`
 	Ambiguous   bool     `json:"ambiguous"`
 	Confidence  float64  `json:"confidence"`
+	// Tracking channel (only when tracking continuity is enabled): where the
+	// person is, never how they move.
+	Boxes          []trackingBox `json:"boxes,omitempty"`
+	FrameRegion    string        `json:"frame_region,omitempty"`
+	Station        string        `json:"station,omitempty"`
+	ReferenceImage string        `json:"reference_image,omitempty"`
 }
 
 func parseTargetPerson(analysis string) (string, float64) {
@@ -207,6 +214,10 @@ func parseTargetPerson(analysis string) (string, float64) {
 	}
 
 	tp.Confidence = conf
+	tp.Boxes = validTrackingBoxes(tp.Boxes)
+	tp.FrameRegion = sanitizeTrackingLabel(tp.FrameRegion)
+	tp.Station = sanitizeTrackingLabel(tp.Station)
+	tp.ReferenceImage = "" // set only by the worker after it renders the image
 	cleanedJSON, err := json.Marshal(tp)
 	if err != nil {
 		return "{}", conf
@@ -344,8 +355,10 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}()
 
 	prompt := w.buildChunkAnalysisPrompt(p) + w.livePrompt(p.LiveAnalysisVersion)
+	trackingPrompt, trackingImages := w.trackingInputs(ctx, p.ProfileID, p.SessionID, p.WorkoutType, p.FilePath, p.StartSecs)
+	prompt += trackingPrompt
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38)
+	analysis, geminiFile, usage, err := w.analyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38, trackingImages)
 
 	// Wait for motion probe to finish
 	var motionScore *float64
@@ -418,6 +431,8 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	if err := w.persistChunkAnalysisResult(ctx, chunkResult); err != nil {
 		return fmt.Errorf("failed to save chunk analysis result: %w", err)
 	}
+	// Tracking channel for the next chunk; never fails this chunk.
+	w.saveTrackingReference(ctx, localFilePath, chunkResult)
 
 	if err := w.refreshLiveActivity(ctx, p, chunkResult); err != nil {
 		return err
@@ -521,8 +536,10 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	}()
 
 	prompt := w.buildChunkAnalysisWithSessionPrompt(p, &profile, &session) + w.livePrompt(p.LiveAnalysisVersion)
+	trackingPrompt, trackingImages := w.trackingInputs(ctx, p.ProfileID, p.SessionID, session.WorkoutType, p.FilePath, p.StartSecs)
+	prompt += trackingPrompt
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38)
+	analysis, geminiFile, usage, err := w.analyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38, trackingImages)
 
 	// Wait for motion probe to finish
 	var motionScoreWithSession *float64
@@ -595,6 +612,8 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	if err := w.persistChunkAnalysisResult(ctx, chunkResult); err != nil {
 		return fmt.Errorf("failed to save chunk analysis result: %w", err)
 	}
+	// Tracking channel for the next chunk; never fails this chunk.
+	w.saveTrackingReference(ctx, localFilePath, chunkResult)
 
 	if err := w.refreshLiveActivity(ctx, VideoAnalysisPayload{SessionID: p.SessionID, ProfileID: p.ProfileID, WorkoutType: session.WorkoutType, WODDescription: session.WODDescription, Movements: movementHintsFromDocument(session.MovementHints)}, chunkResult); err != nil {
 		return err

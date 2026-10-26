@@ -25,7 +25,23 @@
 
 ## Evidence and clocks
 
-- Base chunk inference sees no recent-chunk history. New structured blocks are
+- Base chunk inference sees no recent-chunk assessment history (form, counts,
+  coaching, fatigue). Since 2026-10-26 it may receive the Tracking channel only
+  (`ENABLE_TRACKING_CONTINUITY`; explicit `true`/`false`, unset = on outside
+  production): `trackingInputs` attaches up to two marked reference JPEGs (the
+  latest within 60 s of the chunk start, plus the session's first) and a
+  whitelisted `trackingHandoff` (matched cues, frame region, station, previous
+  activity state, non-authoritative movement hint). It never waits for a late
+  previous chunk. The chunk reports `target_person.boxes` (≤3, `{t, box_2d}` in
+  normalized [ymin,xmin,ymax,xmax] 0..1000), `frame_region`, `station` inside
+  the existing `target_cues` text column (no migration). When
+  `target_confidence ≥ 0.7` and not ambiguous, `saveTrackingReference` renders
+  the last box onto that frame (ffmpeg + `image/draw`) to
+  `videos/{pid}/{sid}/tracking/{chunkID}.jpg` and records `reference_image`;
+  failures never fail the chunk. Pass 2 (production and reanalysis) attaches the
+  reference nearest the window plus the session anchor. The web player overlays
+  the same boxes (toggle, default off; see [web-media-playback.md](web-media-playback.md)).
+  New structured blocks are
   stripped before the legacy observed-signals regex is applied. Independent
   `output`, movement tags, and observed signals are never replaced by connected
   coaching or post-recording count review.

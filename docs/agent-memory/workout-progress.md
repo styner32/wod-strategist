@@ -2,9 +2,23 @@
 
 ## One-way data boundary
 
-1. Segment observers see the current video window, target identity, profile and user workout hints. Never provide previous observations, historical scores, cumulative fatigue, or previous assessments to an observer.
+1. Segment observers see the current video window, target identity, profile and user workout hints. Never provide previous observations, historical scores, cumulative fatigue, or previous assessments to an observer. Tracking-only context (marked reference frames, appearance cues, location/station, previous activity state, non-authoritative movement hint) is allowed so one person is followed continuously; see the two-channel contract in [video-analysis.md](video-analysis.md).
 2. `workout_progress` assembles observed intervals and complete repetition events chronologically. It contains evidence, not fatigue, recovery or intensity scores.
 3. Final assessment reads this evidence. It must never update observations or feed its output back into the timeline builder.
+
+Before `Build`, `buildWorkoutProgress` runs `workoutprogress.NormalizeContinuity`
+(after coverage gaps are added): `MinIntervalDurationSecs = 1.0`. A sub-second
+interval is attached to the following touching interval (≤1 s apart; the
+preceding one when it is last) — evidence moves only when activity/movement
+match. A sub-second media gap outside every interval is absorbed the same way
+(count-only markers stay inside the extended interval; gaps already inside an
+interval stay). Touching intervals with the same activity, canonical movement
+and load are stitched into one (first ID kept; touching `seconds` events join).
+Nothing is attached or stitched across a capture pause
+(`captureDiscontinuityPoints`) or discontinuous capture endpoints.
+`workoutprogress.Decode` still accepts stored sub-second entries; the web/mobile
+timelines hide them (`timelineProgressIntervals`, `isDisplayableProgressGap`,
+`buildUnassessedIntervals`) unless a record references them.
 
 Argon and Flash share the observer boundary: describe visible changes and timed
 pauses without fatigue causes, strength loss or internal muscle-state claims.

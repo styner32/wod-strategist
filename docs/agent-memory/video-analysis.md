@@ -73,9 +73,34 @@ Preferred source of truth is verified `media_start_secs` and
 used as merged-video offsets. Rows without verified media offsets are skipped,
 which causes model-based indexing to remain the safe fallback.
 
-For standard WODs, current code removes walking/rest/setup rows, retains `Unknown` for deeper
-visual revalidation, and merges only touching segments with the same free-text
-movement. Recovery workouts retain low-motion/rest/setup chunks and exclude explicit walking; see [recovery-and-mobility.md](recovery-and-mobility.md). A filtered rest gap is never merged into the surrounding movement.
+For standard WODs, Pass 1 reads chunks as one continuous sequence of the same
+person (`chunk_continuity.go`, shared by `buildChunkSegments` and
+`buildSessionDebugSegments`; since 2026-10-26):
+
+- `classifyChunkActivity` combines tag, `observed_signals` and
+  `movement_observations`. Visible cycles (complete or `incomplete_cycle`) are
+  exercise even under a rest label. Explicit rest is walking/rest/setup signals,
+  a non-exercise movement, or `movement_observations` `target_state: identified`
+  + `activity_state: rest` (`[NO_EXERCISE]` chunks store `observed_signals: {}`,
+  so this is the only rest evidence they carry). An unlabelled chunk with
+  exercise/unknown activity is observed as `Unknown`. A chunk with no evidence
+  at all is unclassified (neither exercise nor rest).
+- Hysteresis (`smoothChunkSequence`): state and label change only when the new
+  state lasts two chunks. A **single** non-active chunk between two continuous
+  active chunks is bridged; two or more consecutive rest chunks are real rest.
+  A single deviating label between identical neighbours is treated as the
+  neighbours' movement unless it has ≥2 complete cycles of its own. Saved user
+  corrections are never smoothed. Continuity requires touching media
+  (≤0.05 s) and no capture pause.
+- Continuous active chunks form one bout regardless of label changes (Row →
+  Burpee without rest is one bout). Type is the majority concrete label
+  (`Unknown` → Flash only when every chunk is Unknown); several labels are
+  listed as `청크 후보 종목: ...` at the start of `Description`. Only that
+  label list reaches the Pass 2 prompt — chunk coaching text never does.
+- Bouts are not padded into adjacent rest: skipped media stays skipped so
+  coverage stays complete and no claimed repetition overlaps a skipped gap.
+
+Recovery workouts retain low-motion/rest/setup chunks and exclude explicit walking; see [recovery-and-mobility.md](recovery-and-mobility.md).
 
 Detailed analysis no longer adds observation windows between indexed sets
 (`addBetweenObservationWindows` was removed 2026-10-19), so no rest between sets
@@ -97,7 +122,27 @@ Fallback:
 - post-filter timestamps beyond real duration
 
 ## Pass 2: segment analysis
-Analyze each segment independently with `VideoMetadata` offsets.
+Analyze each continuous bout with `VideoMetadata` offsets (frame grids in
+reanalysis). A bout up to `maxPass2WindowSecs = 150` is one call; a longer bout
+(e.g. an AMRAP without rest) is split into equal cores with
+`pass2OverlapSecs = 5` context on internal edges (`splitPass2Windows`).
+`ownWindowObservations` keeps a repetition in the core where it completes
+`(coreStart, coreEnd]`, clips timed events/observations/gaps to the core, and
+`workoutprogress.NormalizeContinuity` stitches the windows back into one
+interval. Internal edges use `HardGapBoundary: false` for highlights.
+`wod_evidence` may be an array (one entry per movement span in a bout); a
+response without the block falls back to `wodEvidenceFromObservedIntervals` in
+both production and reanalysis.
+
+Observer inputs follow a two-channel contract (user decision 2026-10-26):
+movement assessment is independent per window (prior work must not enlarge
+context or excuse a later form breakdown, which final assessment judges over
+the long term), but following the one target person is continuous. The
+**Tracking** channel (marked reference frames, appearance cues, frame region,
+station, previous activity state and a non-authoritative movement hint) may be
+passed forward; the **Assessment** channel (form/ROM/tempo observations, counts,
+coaching text, fatigue, scores, previous assessments) never is. See
+`tracking_handoff.go` and [live-activity-feedback.md](live-activity-feedback.md).
 Constrain analysis to the exact time range.
 
 - `NewVideoAnalysisTask` sets an explicit 1-hour Asynq timeout (`videoAnalysisTaskTimeout = time.Hour`).
@@ -131,7 +176,7 @@ Agentic highlight and injury-focused supplementary video inspection use the same
 Mobility `limited_*` labels describe the current movement only; new observer
 output excludes muscle-tightness/stiffness labels while parsers retain historical
 compatibility. Debug prompt versions are `chunk-debug-observations-v2` and
-`session-independent-observations-v3`; enrichment is `highlight-observation-v2`.
+`session-continuous-observations-v4`; enrichment is `highlight-observation-v2`.
 
 ## File lifecycle
 Upload once and reuse the same Gemini file URI across passes.

@@ -46,6 +46,10 @@ type Worker struct {
 	CaptureFeedbackEnabled    bool
 	ContextualCoachingEnabled bool
 	ActivityCountingEnabled   bool
+	// TrackingContinuityEnabled — ENABLE_TRACKING_CONTINUITY. Chunk analysis
+	// receives the tracked person marked in previous frames (Tracking channel
+	// only). "true"/"false" override; unset defaults to on outside production.
+	TrackingContinuityEnabled bool
 	Common
 	GeminiAPIKey         string
 	GeminiModel          string // GEMINI_MODEL — default "gemini-4-argon" (deep video analysis)
@@ -162,6 +166,7 @@ func InitWorker() (Worker, error) {
 		CaptureFeedbackEnabled:    strings.EqualFold(os.Getenv("ENABLE_CAPTURE_FEEDBACK"), "true"),
 		ContextualCoachingEnabled: strings.EqualFold(os.Getenv("ENABLE_CONTEXTUAL_COACHING"), "true"),
 		ActivityCountingEnabled:   strings.EqualFold(os.Getenv("ENABLE_ACTIVITY_COUNTING"), "true"),
+		TrackingContinuityEnabled: trackingContinuityEnabled(os.Getenv("ENABLE_TRACKING_CONTINUITY"), appEnv),
 		Common: Common{
 			AgenticHighlightsEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_AGENTIC_HIGHLIGHTS")), "true"),
 			DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
@@ -326,4 +331,16 @@ func parseListEnv(name string, fallback []string) []string {
 	}
 
 	return values
+}
+
+// trackingContinuityEnabled honours an explicit "true"/"false"; when unset the
+// tracking channel is on outside production (dev evaluates it by default).
+func trackingContinuityEnabled(raw, appEnv string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(appEnv), "production")
 }

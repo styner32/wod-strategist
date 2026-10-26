@@ -390,8 +390,23 @@ func (c *Client) AnalyzeChunkVideo(ctx context.Context, filePath string, prompt 
 	return c.AnalyzeVideoWithThinking(ctx, filePath, prompt, model, level)
 }
 
+// AnalyzeChunkVideoWithImages is AnalyzeChunkVideo with reference images
+// (e.g. the tracked person marked in a previous frame) placed before the
+// video. The prompt must explain what each image is.
+func (c *Client) AnalyzeChunkVideoWithImages(ctx context.Context, filePath string, prompt string, model string, images [][]byte) (string, string, *TokenUsage, error) {
+	level := ""
+	if c != nil {
+		level = c.thinkingLevelChunk
+	}
+	return c.analyzeVideoWithParts(ctx, filePath, prompt, model, level, images)
+}
+
 // AnalyzeVideoWithThinking returns the analysis result, the name of the uploaded file on Gemini, and token usage using the specified model and thinking level.
 func (c *Client) AnalyzeVideoWithThinking(ctx context.Context, filePath string, prompt string, model string, thinkingLevel string) (string, string, *TokenUsage, error) {
+	return c.analyzeVideoWithParts(ctx, filePath, prompt, model, thinkingLevel, nil)
+}
+
+func (c *Client) analyzeVideoWithParts(ctx context.Context, filePath string, prompt string, model string, thinkingLevel string, images [][]byte) (string, string, *TokenUsage, error) {
 	// Upload file
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -435,12 +450,24 @@ func (c *Client) AnalyzeVideoWithThinking(ctx context.Context, filePath string, 
 			ThinkingConfig: tc,
 		}
 	}
+	parts := make([]*genai.Part, 0, len(images)+2)
+	for _, img := range images {
+		if len(img) == 0 {
+			continue
+		}
+		mime := DetectImageMIME(img)
+		if mime == "" {
+			mime = "image/jpeg"
+		}
+		parts = append(parts, &genai.Part{InlineData: &genai.Blob{MIMEType: mime, Data: img}})
+	}
+	parts = append(parts,
+		&genai.Part{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}},
+		&genai.Part{Text: prompt},
+	)
 	resp, usage, err := c.generateContent(ctx, model, []*genai.Content{{
-		Role: genai.RoleUser,
-		Parts: []*genai.Part{
-			{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}},
-			{Text: prompt},
-		},
+		Role:  genai.RoleUser,
+		Parts: parts,
 	}}, genConfig)
 	if err != nil {
 		return "", uploadResult.Name, usage, fmt.Errorf("failed to generate content: %w", err)
@@ -781,6 +808,12 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 // AnalyzeSegmentWithModel performs deep biomechanical analysis on a specific time range
 // of the video using a specified model (e.g. ModelArgon4 or ModelPro31Preview).
 func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *TokenUsage, error) {
+	return c.AnalyzeSegmentWithModelAndImages(ctx, fileURI, mimeType, start, end, prompt, model, nil)
+}
+
+// AnalyzeSegmentWithModelAndImages is AnalyzeSegmentWithModel with reference
+// images (tracked-person markers) placed before the video segment.
+func (c *Client) AnalyzeSegmentWithModelAndImages(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string, images [][]byte) (string, *TokenUsage, error) {
 	if model == "" {
 		model = c.model
 	}
@@ -819,12 +852,21 @@ func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType 
 	if tc := c.thinkingConfigForModelAndLevel(model, thinkingLevel); tc != nil {
 		genConfig.ThinkingConfig = tc
 	}
+	segmentParts := make([]*genai.Part, 0, len(images)+2)
+	for _, img := range images {
+		if len(img) == 0 {
+			continue
+		}
+		imgMIME := DetectImageMIME(img)
+		if imgMIME == "" {
+			imgMIME = "image/jpeg"
+		}
+		segmentParts = append(segmentParts, &genai.Part{InlineData: &genai.Blob{MIMEType: imgMIME, Data: img}})
+	}
+	segmentParts = append(segmentParts, videoPart, genai.NewPartFromText(prompt))
 	resp, usage, err := c.generateContent(exactOffsetContext, model, []*genai.Content{{
-		Role: genai.RoleUser,
-		Parts: []*genai.Part{
-			videoPart,
-			genai.NewPartFromText(prompt),
-		},
+		Role:  genai.RoleUser,
+		Parts: segmentParts,
 	}}, genConfig)
 	if err != nil {
 		return "", usage, fmt.Errorf("failed to analyze segment: %w", err)

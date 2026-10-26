@@ -283,6 +283,27 @@ var _ = Describe("InitWorker", func() {
 			Expect(cfg.CaptureFeedbackEnabled).To(BeFalse())
 			Expect(cfg.ContextualCoachingEnabled).To(BeFalse())
 		})
+
+		It("enables tracking continuity by default outside production and honours explicit values", func() {
+			setEnv("ENABLE_TRACKING_CONTINUITY", "")
+			setEnv("APP_ENV", "development")
+			cfg, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.TrackingContinuityEnabled).To(BeTrue())
+			setEnv("APP_ENV", "production")
+			cfg, err = config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.TrackingContinuityEnabled).To(BeFalse())
+			setEnv("ENABLE_TRACKING_CONTINUITY", "true")
+			cfg, err = config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.TrackingContinuityEnabled).To(BeTrue())
+			setEnv("APP_ENV", "development")
+			setEnv("ENABLE_TRACKING_CONTINUITY", "false")
+			cfg, err = config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.TrackingContinuityEnabled).To(BeFalse())
+		})
 	})
 
 	Context("GeminiModel and ThinkingConfig", func() {

@@ -27,7 +27,7 @@ import (
 const (
 	TypeSessionDebugReanalysis = "session:debug-reanalysis"
 
-	sessionDebugPromptVersion = "session-independent-observations-v3"
+	sessionDebugPromptVersion = "session-continuous-observations-v4"
 	sessionDebugSchemaVersion = "session-reanalysis-progress-v2"
 	sessionDebugMaxRetries    = 2
 )
@@ -283,17 +283,22 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		start    time.Duration
 		end      time.Duration
 	}
-	segOutcomes := make([]sessionDebugSegmentOutcome, len(segments))
+	windows := splitPass2Windows(segments)
+	trackingRefs := w.loadTrackingReferences(ctx, run.SessionID, run.ProfileID)
+	segOutcomes := make([]sessionDebugSegmentOutcome, len(windows))
 	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
 	var wg sync.WaitGroup
 
-	for i, segment := range segments {
+	for i, win := range windows {
+		segment := win.Seg
 		start, end := convertToSeconds(segment.Start), convertToSeconds(segment.End)
 		if end <= start {
 			continue
 		}
 		segCorrections := correctionsForSegment(promptCorrections, start.Seconds(), end.Seconds())
 		prompt := w.buildSegmentAnalysisPrompt(p, segment, wodContext, "", false)
+		trackingPrompt, trackingImages := w.pass2TrackingInputs(ctx, trackingRefs, start.Seconds(), end.Seconds())
+		prompt += trackingPrompt
 		if newWOD {
 			prompt += wodSegmentEvidencePrompt
 		}
@@ -325,7 +330,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		}
 
 		wg.Add(1)
-		go func(idx int, seg Segment, segStart, segEnd time.Duration, segPrompt, segModel, mode string) {
+		go func(idx int, seg Segment, segStart, segEnd time.Duration, segPrompt, segModel, mode string, images [][]byte) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -338,7 +343,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			)
 			if mode == debugAnalysisModeFrameGrid {
 				analysis, sheets, usage, callErr = w.AnalyzeVideoIntervalWithFrameGrids(
-					ctx, file.LocalPath, segStart, segEnd, segPrompt, segModel, FrameGridOptions{},
+					ctx, file.LocalPath, segStart, segEnd, segPrompt, segModel, FrameGridOptions{ReferenceImages: images},
 				)
 			}
 			if mode == debugAnalysisModeVideo || (callErr != nil && len(sheets) == 0) {
@@ -350,9 +355,15 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 						zap.Duration("end", segEnd),
 						zap.Error(callErr))
 				}
-				analysis, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModel(
-					ctx, file.URI, chunkDebugMIMEType(file.MIMEType), segStart, segEnd, segPrompt, segModel,
-				)
+				if len(images) > 0 {
+					analysis, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModelAndImages(
+						ctx, file.URI, chunkDebugMIMEType(file.MIMEType), segStart, segEnd, segPrompt, segModel, images,
+					)
+				} else {
+					analysis, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModel(
+						ctx, file.URI, chunkDebugMIMEType(file.MIMEType), segStart, segEnd, segPrompt, segModel,
+					)
+				}
 			}
 			resolvedModel := segModel
 			if usage != nil && usage.Model != "" {
@@ -369,18 +380,19 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 				start:    segStart,
 				end:      segEnd,
 			}
-		}(i, segment, start, end, prompt, selectedModel, plannedMode)
+		}(i, segment, start, end, prompt, selectedModel, plannedMode, trackingImages)
 	}
 	wg.Wait()
 
 	var output strings.Builder
 	var highlightCandidates []highlightCandidate
-	completedSegments := make(map[string]cachedSessionDebugSegment, len(segments))
+	completedSegments := make(map[string]cachedSessionDebugSegment, len(windows))
 	skippedCalls := 0
 	var firstErr error
 	failedSegment := 0
 
-	for i, segment := range segments {
+	for i, win := range windows {
+		segment := win.Seg
 		res := segOutcomes[i]
 		if !res.valid {
 			continue
@@ -413,11 +425,12 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			model = res.model
 		}
 		observedIntervals, observedGaps := parseWorkoutObservations(res.analysis, segment, i)
+		observedIntervals, observedGaps = ownWindowObservations(observedIntervals, observedGaps, win)
 		progressIntervals = append(progressIntervals, observedIntervals...)
 		progressGaps = append(progressGaps, observedGaps...)
-		if newWOD && !isFullyObservedRestWindow(segment, observedIntervals, observedGaps) {
-			if evidence, ok := decodeWODEvidence(res.analysis, segment); ok {
-				wodEvidence = append(wodEvidence, evidence)
+		if newWOD && !isFullyObservedRestWindow(win.core(), observedIntervals, observedGaps) {
+			if evidence, ok := decodeWODEvidenceList(res.analysis, segment); ok {
+				wodEvidence = append(wodEvidence, clipWODEvidence(evidence, win)...)
 			} else if !strings.Contains(res.analysis, "```wod_evidence") {
 				if fallback, ok := wodEvidenceFromObservedIntervals(observedIntervals); ok {
 					wodEvidence = append(wodEvidence, fallback...)
@@ -429,10 +442,11 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			}
 		}
 		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(res.analysis, highlightSource{
-			Index: i, Start: res.start.Seconds(), End: res.end.Seconds(), Movement: segment.Type, HasBounds: true, HardGapBoundary: true,
+			Index: i, Start: res.start.Seconds(), End: res.end.Seconds(), Movement: segment.Type, HasBounds: true, HardGapBoundary: !win.Split,
 		})...)
 		output.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n%s", i+1, segment.Type, segment.Start, segment.End, res.analysis))
 	}
+	sortWODEvidence(wodEvidence)
 
 	if firstErr != nil {
 		if len(completedSegments) > 0 {
@@ -735,8 +749,7 @@ func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string
 		}
 		return !isNonExerciseMovement(movement) || strings.EqualFold(movement, "Unknown")
 	}
-	segments := make([]Segment, 0)
-	skipped := make([]Segment, 0)
+	timeline := make([]timelineChunk, 0, len(chunks))
 	timelineAvailable := false
 	for _, chunk := range chunks {
 		if canonical[chunk.ID] != chunk.ID {
@@ -746,47 +759,54 @@ func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string
 			continue
 		}
 		timelineAvailable = true
-		movement := strings.TrimSpace(chunk.ExerciseType)
-		completed := strings.EqualFold(chunk.Status, "COMPLETED")
-		include := completed && includeChunkInDeepAnalysis(chunk, workoutType)
-		classifiedSkip := completed && chunkClassifiedNonExercise(chunk, workoutType)
+		tc := newTimelineChunk(chunk, workoutType)
+		if !strings.EqualFold(chunk.Status, "COMPLETED") {
+			// A failed chunk has no evidence; it can still be bridged when isolated.
+			tc.Class, tc.Movement, tc.Candidates = chunkUnclassified, "", nil
+		}
+		movement := tc.Movement
 		for _, correctionIndex := range byChunk[chunk.ID] {
 			corrections[correctionIndex].MediaStartSecs = cloneSessionDebugFloat(chunk.MediaStartSecs)
 			corrections[correctionIndex].MediaEndSecs = cloneSessionDebugFloat(chunk.MediaEndSecs)
 			correction := corrections[correctionIndex]
 			if correction.MovementName != "" {
 				movement = strings.TrimSpace(correction.MovementName)
-				include = movement != "" && keepMovement(movement)
-				classifiedSkip = movement != "" && !include
+				tc.UserFixed = true
+				tc.Class = chunkExplicitRest
+				if movement != "" && keepMovement(movement) {
+					tc.Class = chunkActive
+				}
 			}
 			switch correction.ActivityState {
 			case "walking", "rest_setup", "not_exercise":
-				include, classifiedSkip = false, true
+				tc.Class, tc.UserFixed = chunkExplicitRest, true
 			case "unknown":
-				movement, include, classifiedSkip = "Unknown", true, false
+				movement, tc.Class, tc.UserFixed = "Unknown", chunkActive, true
 			case "exercise":
-				include, classifiedSkip = true, false
+				tc.Class, tc.UserFixed = chunkActive, true
 				if movement == "" {
 					movement = "Unknown"
 				}
 			}
 		}
-		if include && movement == "" && recovery {
-			movement = "Mobility"
-		}
-		if !include || movement == "" || !keepMovement(movement) {
-			if classifiedSkip {
-				skipped = append(skipped, Segment{Start: formatSegmentTimestamp(*chunk.MediaStartSecs), End: formatSegmentTimestamp(*chunk.MediaEndSecs), Type: "Rest"})
+		if tc.Class == chunkActive && movement == "" {
+			movement = "Unknown"
+			if recovery {
+				movement = "Mobility"
 			}
-			continue
 		}
-		description := chunk.Output
+		if tc.Class == chunkActive {
+			tc.Movement, tc.Candidates = movement, addCandidate(nil, movement)
+		} else {
+			tc.Movement, tc.Candidates = "", nil
+		}
 		if len(byChunk[chunk.ID]) > 0 {
-			description = "Saved user correction (non-authoritative label); revalidate from visible evidence."
+			tc.Description = "Saved user correction (non-authoritative label); revalidate from visible evidence."
 		}
-		segments = append(segments, Segment{Start: formatSegmentTimestamp(*chunk.MediaStartSecs), End: formatSegmentTimestamp(*chunk.MediaEndSecs), Type: movement, Description: description})
+		timeline = append(timeline, tc)
 	}
-	return mergeSegmentsByMovement(segments), mergeSegmentsByMovement(skipped), timelineAvailable, rebuildFailed, nil
+	segments, skipped := buildContinuousSegments(timeline)
+	return segments, skipped, timelineAvailable, rebuildFailed, nil
 }
 
 // sessionDebugTimelineRebuildRetryAfter lets a failed legacy timeline rebuild

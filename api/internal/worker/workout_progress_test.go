@@ -284,3 +284,41 @@ var _ = Describe("Workout summary source fingerprint", func() {
 		Expect(summaryFingerprint(a, WorkoutTypeWarmup)).NotTo(Equal(before))
 	})
 })
+
+var _ = Describe("Workout progress continuity", func() {
+	row := func(id string, start, end float64) workoutprogress.Interval {
+		return workoutprogress.Interval{ID: id, Start: start, End: end, Activity: "exercise", Movement: "Row", ObservationRefs: []string{id},
+			RepEvents: []activity.Observation{{Movement: "Row", Unit: "seconds", Start: start, End: end, Complete: true, Evidence: "continuous strokes"}}}
+	}
+
+	It("attaches a sub-second boundary fragment to the next interval and stitches touching windows", func() {
+		video := filepath.Join(GinkgoT().TempDir(), "session.mp4")
+		Expect(os.WriteFile(video, []byte("media"), 0o600)).To(Succeed())
+		w := &Worker{}
+		progress := w.buildWorkoutProgress(context.Background(), VideoAnalysisPayload{SessionID: "s", ProfileID: 1, WorkoutType: WorkoutTypeWOD}, video,
+			[]workoutprogress.Interval{row("a", 1100.37, 1130.37), row("fragment", 1140.40, 1140.60), row("b", 1140.60, 1155), row("c", 1155, 1170.40)},
+			[]workoutprogress.Gap{{Start: 1140.40, End: 1140.60, Clock: "media", Reason: "incomplete_cycle", Movement: "Row"}}, 1170.40, "")
+		Expect(progress.Intervals).To(HaveLen(2), "the 10-second not_analyzed gap still separates the windows")
+		Expect(progress.Intervals[0].End).To(Equal(1130.37))
+		Expect(progress.Intervals[1].Start).To(Equal(1140.40))
+		Expect(progress.Intervals[1].End).To(Equal(1170.40))
+		for _, in := range progress.Intervals {
+			Expect(in.End - in.Start).To(BeNumerically(">=", workoutprogress.MinIntervalDurationSecs))
+		}
+		for _, gap := range progress.Unassessed {
+			if gap.Clock == "media" && (gap.End <= progress.Intervals[1].Start || gap.Start >= progress.Intervals[1].End) {
+				Expect(gap.End - gap.Start).To(BeNumerically(">=", workoutprogress.MinIntervalDurationSecs))
+			}
+		}
+	})
+
+	It("finds recording pauses from the capture and media clocks of adjacent chunks", func() {
+		f := func(v float64) *float64 { return &v }
+		chunks := []db.ChunkAnalysisResult{
+			{StartSecs: f(0), EndSecs: f(10), MediaStartSecs: f(0), MediaEndSecs: f(10)},
+			{StartSecs: f(10), EndSecs: f(20), MediaStartSecs: f(10), MediaEndSecs: f(20)},
+			{StartSecs: f(45), EndSecs: f(55), MediaStartSecs: f(20), MediaEndSecs: f(30)},
+		}
+		Expect(captureDiscontinuityPoints(chunks)).To(Equal([]float64{20}))
+	})
+})

@@ -81,6 +81,7 @@ const wodSegmentEvidencePrompt = `
 ## Whole-WOD evidence
 Do not produce a session score in this segment response. Append a wod_evidence JSON block:
 {"target_confirmed":true,"movement":"verified exercise name","start_secs":0,"end_secs":0,"form_observations":["direct observations"],"pace_observations":["direct cadence/effort observations"]}.
+If the segment contains more than one exercise, the block may instead be a JSON array with one such object per exercise span, in time order.
 Use absolute source-video seconds within this segment, and only the target athlete's visible exercise.
 If athlete/exercise is unconfirmed, target_confirmed must be false. Do not invent repetitions or measurements.
 `

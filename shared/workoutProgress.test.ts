@@ -1,4 +1,4 @@
-import { confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, findCoveringConfirmedRecord, getContiguousExerciseSpan, incompleteRepCount, observedReps, performanceDraft, summarizeWorkoutMovements, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
+import { buildUnassessedIntervals, confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, findCoveringConfirmedRecord, getContiguousExerciseSpan, incompleteRepCount, isDisplayableProgressGap, observedReps, performanceDraft, summarizeWorkoutMovements, timelineProgressIntervals, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
 import { withoutWorkoutEvidence } from "./analysisEvidence";
 const interval: WorkoutProgressInterval = { id: "set-1", start_secs: 10, end_secs: 70, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total", status: "pending_confirmation" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 12, end_secs: 16, complete: true, evidence: "Complete cycle" }, { movement: "Power Clean", unit: "reps", start_secs: 17, end_secs: 20, complete: false, evidence: "Occluded lockout" }] };
 it("uses complete repetition evidence but preserves missing counts rather than zero", () => {
@@ -407,3 +407,32 @@ describe("extractWodLoads and summarizeWorkoutMovements", () => {
   });
 });
 
+
+describe("sub-second timeline fragments", () => {
+  const row = (id: string, start: number, end: number): WorkoutProgressInterval => ({ id, start_secs: start, end_secs: end, activity: "exercise", movement: "Row", load: null, observation_refs: [], rep_events: [] });
+  const progress = {
+    version: 1 as const,
+    clock: "media" as const,
+    source_version: "boundary",
+    intervals: [row("a", 1103, 1130.37), row("fragment", 1140.4, 1140.6), row("b", 1140.6, 1169.5)],
+    unassessed: [
+      { start_secs: 1130.37, end_secs: 1140.4, clock: "media", reason: "not_analyzed" },
+      { start_secs: 1140.4, end_secs: 1140.6, clock: "media", reason: "incomplete_cycle", movement: "Row" },
+      { start_secs: 1169.5, end_secs: 1169.8, clock: "media", reason: "incomplete_cycle", movement: "Row" },
+    ],
+  };
+
+  it("hides sub-second intervals and gaps from the timeline but keeps real unassessed spans", () => {
+    expect(timelineProgressIntervals(progress).map(row => row.id)).toEqual(["a", "b"]);
+    const gaps = buildUnassessedIntervals(progress);
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]).toMatchObject({ start_secs: 1130.37, end_secs: 1140.4, reason: "not_analyzed" });
+    expect(isDisplayableProgressGap(progress.unassessed[1])).toBe(false);
+    expect(isDisplayableProgressGap({ start_secs: 0, end_secs: 0.5, clock: "capture", reason: "recording_gap" })).toBe(true);
+  });
+
+  it("keeps a sub-second interval that a performance record references", () => {
+    const record = { id: 1, interval_id: "fragment", status: "confirmed" } as PerformanceRecord;
+    expect(timelineProgressIntervals(progress, [record]).map(row => row.id)).toContain("fragment");
+  });
+});
