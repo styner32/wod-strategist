@@ -2,6 +2,7 @@ package sensor
 
 import (
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -32,12 +33,6 @@ type validAccSecond struct {
 	streamID    int64
 	sampleCount int
 	enmoSum     float64
-	durSec      float64
-}
-
-type validHRSecond struct {
-	validMs     float64
-	weightedBPM float64
 	durSec      float64
 }
 
@@ -82,23 +77,18 @@ func quantileSorted(sorted []float64, q float64) float64 {
 	return sorted[lo]*(1-frac) + sorted[hi]*frac
 }
 
-func isBucketPaused(idx int64, totalDurationInt int64, pauses []PauseInterval) bool {
-	startMs := float64(idx * 1000)
-	endMs := float64(min((idx+1)*1000, totalDurationInt))
-	if endMs <= startMs {
-		return false
+var timelineErrorCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// timelineErrorCode returns a timeline error's snake_case code, or "" for
+// free-text errors (e.g. JSON decoding).
+func timelineErrorCode(err error) string {
+	if err != nil && timelineErrorCodePattern.MatchString(err.Error()) {
+		return err.Error()
 	}
-	for _, p := range pauses {
-		overlapStart := math.Max(startMs, p.StartOffsetMs)
-		overlapEnd := math.Min(endMs, p.EndOffsetMs)
-		if overlapEnd > overlapStart {
-			return true
-		}
-	}
-	return false
+	return ""
 }
 
-// calculateHybridFromAccumulator computes CalculationVersion 3 Hybrid Activity Intensity:
+// calculateHybrid computes CalculationVersion 3 Hybrid Activity Intensity:
 //   - H_k = clip_{0,1}((HR_5s - HR_rest) / (HR_max - HR_rest))
 //   - A_k = (1 / N_k) * sum_{i in W_k} max(||a_i|| - 1, 0)  [5-second rolling ENMO in g]
 //   - M_k = clip_{0,1}((A_k - A_rest) / (A_ref - A_rest))
@@ -108,13 +98,22 @@ func isBucketPaused(idx int64, totalDurationInt int64, pauses []PauseInterval) b
 //
 // Missing or invalid HR/ACC buckets are never substituted with 0 or penalized by a
 // confidence multiplier; they are excluded and reflected in data_coverage.
+// motion_intensity covers every valid ACC second, so it does not change with
+// resting HR or HR contact; heart/hybrid intensity cover seconds where HR and
+// ACC are both valid.
+//
+// A nil receiver means the ACC replay failed. sensorErr (the replay error, or
+// an HR bucketing error with hrBuckets nil) is flagged as
+// "sensor_data_unreadable" plus its code, so unreadable data is not reported
+// as missing data.
 func (tb *timelineAccumulator) calculateHybrid(
 	timeline *SensorTimelineData,
 	durationMs float64,
 	pauses []PauseInterval,
-	hrEvents []hrObservation,
+	hrBuckets map[int64]hrSecond,
 	hrSummary HRMetrics,
 	opts ParseOptions,
+	sensorErr error,
 ) *HybridMetrics {
 	enmoRest, enmoRef, calibVer := ResolveENMOCalibration(opts)
 	flags := make([]string, 0)
@@ -159,7 +158,32 @@ func (tb *timelineAccumulator) calculateHybrid(
 		addFlag("hr_sudden_drop_present")
 	}
 
+	unavailable := func() *HybridMetrics {
+		return &HybridMetrics{
+			PeakExceededMaxHR:  peakExceeded,
+			QualityFlags:       flags,
+			CalibrationVersion: calibVer,
+			AlgorithmVersion:   HybridAlgorithmVersion,
+		}
+	}
+	if tb != nil && tb.err != nil && sensorErr == nil {
+		sensorErr = tb.err
+	}
+	if sensorErr != nil {
+		addFlag("sensor_data_unreadable")
+		if code := timelineErrorCode(sensorErr); code != "" {
+			addFlag(code)
+		}
+	}
 	totalDurationInt := int64(math.Round(durationMs))
+	if tb == nil || tb.err != nil {
+		return unavailable()
+	}
+	if totalDurationInt <= 0 {
+		addFlag("no_valid_hybrid_windows")
+		return unavailable()
+	}
+
 	pauseMs := 0.0
 	for _, p := range pauses {
 		s := math.Max(0, p.StartOffsetMs)
@@ -169,22 +193,13 @@ func (tb *timelineAccumulator) calculateHybrid(
 		}
 	}
 	effectiveCaptureSec := math.Max(0, durationMs-pauseMs) / 1000.0
+	paused := newPauseIndex(pauses)
+	bucketEnd := func(idx int64) int64 { return min((idx+1)*1000, totalDurationInt) }
+	isPaused := func(idx int64) bool { return paused.overlaps(idx*1000, bucketEnd(idx)) }
 
-	if totalDurationInt <= 0 || tb == nil || tb.err != nil {
-		addFlag("no_valid_hybrid_windows")
-		return &HybridMetrics{
-			PeakExceededMaxHR:  peakExceeded,
-			QualityFlags:       flags,
-			CalibrationVersion: calibVer,
-			AlgorithmVersion:   HybridAlgorithmVersion,
-		}
-	}
-
-	// 1. Collect valid ACC 1-second buckets using identical quality gates to TimelineBuilder.
+	// 1. Valid ACC seconds: the timeline graph's ACC gate, outside pauses.
 	validACC := make(map[int64]validAccSecond, len(tb.buckets))
-	candidateIdxSet := make(map[int64]struct{}, len(tb.buckets))
 	hasSaturation := false
-
 	for idx, b := range tb.buckets {
 		if b == nil || idx < 0 || idx*1000 >= totalDurationInt {
 			continue
@@ -192,88 +207,38 @@ func (tb *timelineAccumulator) calculateHybrid(
 		if b.hasError && b.errorReason == "saturation" {
 			hasSaturation = true
 		}
-		candidateIdxSet[idx] = struct{}{}
-		if isBucketPaused(idx, totalDurationInt, pauses) {
+		if isPaused(idx) {
 			continue
 		}
-		if b.hasError || b.sampleCount == 0 || b.hz <= 0 {
-			continue
-		}
-		startMs := idx * 1000
-		endMs := min((idx+1)*1000, totalDurationInt)
-		bucketDurMs := float64(endMs - startMs)
-		if bucketDurMs <= 0 {
-			continue
-		}
-		nominalDt := 1000.0 / b.hz
-		expectedSamples := (bucketDurMs / 1000.0) * b.hz
-		minRequiredSamples := math.Max(2, math.Ceil(0.80*expectedSamples))
-		maxAllowedGap := 3.0 * nominalDt
-		startEdgeGap := b.firstSampleT - float64(startMs)
-		endEdgeGap := float64(endMs) - b.lastSampleT
-
-		if float64(b.sampleCount) < minRequiredSamples ||
-			b.maxGapMs > maxAllowedGap ||
-			startEdgeGap > maxAllowedGap ||
-			endEdgeGap < 0 || endEdgeGap > maxAllowedGap {
+		startMs, endMs := idx*1000, bucketEnd(idx)
+		if status, _ := accBucketQuality(b, startMs, endMs); status != StatusValid {
 			continue
 		}
 		validACC[idx] = validAccSecond{
 			streamID:    b.streamID,
 			sampleCount: b.sampleCount,
 			enmoSum:     b.enmoSum,
-			durSec:      bucketDurMs / 1000.0,
+			durSec:      float64(endMs-startMs) / 1000.0,
 		}
 	}
 	if hasSaturation {
 		addFlag("acc_saturation_present")
 	}
 
-	// 2. Collect valid HR 1-second buckets from evaluated HR intervals.
-	type rawHRBucket struct{ validMs, weightedBPM float64 }
-	rawHR := make(map[int64]rawHRBucket)
-	_, _, intervals := extractHREvaluationsV2(hrEvents, pauses, durationMs)
-	for _, iv := range intervals {
-		if iv.Reason != "valid" && iv.Reason != "low" {
+	// 2. Valid HR seconds: the timeline graph's 80% coverage rule, outside pauses.
+	validHR := make(map[int64]hrSecond, len(hrBuckets))
+	for idx, hr := range hrBuckets {
+		if idx < 0 || idx*1000 >= totalDurationInt || isPaused(idx) {
 			continue
 		}
-		start, stop := math.Max(0, iv.StartMs), math.Min(float64(totalDurationInt), iv.EndMs)
-		if !validTimelineTime(start) || !validTimelineTime(stop) {
-			continue
-		}
-		for cursor := start; cursor < stop; {
-			idx := int64(math.Floor(cursor / 1000))
-			end := math.Min(float64((idx+1)*1000), stop)
-			if len(candidateIdxSet) < MaxTimelineBuckets {
-				candidateIdxSet[idx] = struct{}{}
-			}
-			cur := rawHR[idx]
-			cur.validMs += end - cursor
-			cur.weightedBPM += float64(iv.BPM) * (end - cursor)
-			rawHR[idx] = cur
-			cursor = end
+		if hr.valid(float64(bucketEnd(idx) - idx*1000)) {
+			validHR[idx] = hr
 		}
 	}
 
-	validHR := make(map[int64]validHRSecond, len(rawHR))
-	for idx, hr := range rawHR {
-		if idx < 0 || idx*1000 >= totalDurationInt || isBucketPaused(idx, totalDurationInt, pauses) {
-			continue
-		}
-		startMs := idx * 1000
-		endMs := min((idx+1)*1000, totalDurationInt)
-		bucketDurMs := float64(endMs - startMs)
-		if bucketDurMs > 0 && hr.validMs >= 0.80*bucketDurMs {
-			validHR[idx] = validHRSecond{
-				validMs:     hr.validMs,
-				weightedBPM: hr.weightedBPM,
-				durSec:      bucketDurMs / 1000.0,
-			}
-		}
-	}
-
-	ordered := make([]int64, 0, len(candidateIdxSet))
-	for idx := range candidateIdxSet {
+	// Every contribution needs a valid ACC second, so only those are visited.
+	ordered := make([]int64, 0, len(validACC))
+	for idx := range validACC {
 		ordered = append(ordered, idx)
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
@@ -287,13 +252,12 @@ func (tb *timelineAccumulator) calculateHybrid(
 	}
 
 	var (
-		validHybridSec       float64
-		validACCSec          float64
-		sumHybridSqMin       float64
-		sumHeartSqMin        float64
-		sumMotionHybridSqMin float64
-		motionOnlySqMin      float64
-		accEnmoValues        []float64
+		validHybridSec  float64
+		validACCSec     float64
+		sumHybridSqMin  float64
+		sumHeartSqMin   float64
+		motionOnlySqMin float64
+		accEnmoValues   []float64
 	)
 
 	var hrRestF, hrReserveDenom float64
@@ -304,44 +268,38 @@ func (tb *timelineAccumulator) calculateHybrid(
 	enmoDenom := enmoRef - enmoRest
 
 	for _, idx := range ordered {
-		accSec, hasAcc := validACC[idx]
-		var mk float64
-		if hasAcc {
-			winSamples := accSec.sampleCount
-			winEnmoSum := accSec.enmoSum
-			minIdx := idx - (hybridRollingSec - 1)
-			if minIdx < 0 {
-				minIdx = 0
+		accSec := validACC[idx]
+		winSamples := accSec.sampleCount
+		winEnmoSum := accSec.enmoSum
+		minIdx := max(idx-(hybridRollingSec-1), 0)
+		for j := idx - 1; j >= minIdx; j-- {
+			if isPaused(j) {
+				break
 			}
-			for j := idx - 1; j >= minIdx; j-- {
-				if isBucketPaused(j, totalDurationInt, pauses) {
+			if prevAcc, ok := validACC[j]; ok {
+				if prevAcc.streamID != accSec.streamID {
 					break
 				}
-				if prevAcc, ok := validACC[j]; ok {
-					if prevAcc.streamID != accSec.streamID {
-						break
-					}
-					winSamples += prevAcc.sampleCount
-					winEnmoSum += prevAcc.enmoSum
-				}
+				winSamples += prevAcc.sampleCount
+				winEnmoSum += prevAcc.enmoSum
 			}
-			ak := winEnmoSum / float64(winSamples)
-			mk = clip01((ak - enmoRest) / enmoDenom)
-			validACCSec += accSec.durSec
-			accEnmoValues = append(accEnmoValues, ak)
-			motionOnlySqMin += mk * mk * (accSec.durSec / 60.0)
+		}
+		ak := winEnmoSum / float64(winSamples)
+		mk := clip01((ak - enmoRest) / enmoDenom)
+		validACCSec += accSec.durSec
+		accEnmoValues = append(accEnmoValues, ak)
+		motionOnlySqMin += mk * mk * (accSec.durSec / 60.0)
 
-			if pIdx, ok := pointIdxByStartMs[idx*1000]; ok {
-				akRounded := round4(ak)
-				timeline.Points[pIdx].EnmoG = &TimelineValue{
-					Value:  &akRounded,
-					Status: StatusValid,
-				}
+		if pIdx, ok := pointIdxByStartMs[idx*1000]; ok {
+			akRounded := round4(ak)
+			timeline.Points[pIdx].EnmoG = &TimelineValue{
+				Value:  &akRounded,
+				Status: StatusValid,
 			}
 		}
 
 		hrSec, hasHR := validHR[idx]
-		if !hasAcc || !hasHR {
+		if !hasHR {
 			continue
 		}
 
@@ -354,12 +312,8 @@ func (tb *timelineAccumulator) calculateHybrid(
 		if validHRReserve {
 			winHRMs := hrSec.validMs
 			winHRWeighted := hrSec.weightedBPM
-			minIdx := idx - (hybridRollingSec - 1)
-			if minIdx < 0 {
-				minIdx = 0
-			}
 			for j := idx - 1; j >= minIdx; j-- {
-				if isBucketPaused(j, totalDurationInt, pauses) {
+				if isPaused(j) {
 					break
 				}
 				if prevHR, ok := validHR[j]; ok {
@@ -374,7 +328,6 @@ func (tb *timelineAccumulator) calculateHybrid(
 
 			sumHybridSqMin += xk * xk * dtMin
 			sumHeartSqMin += hk * hk * dtMin
-			sumMotionHybridSqMin += mk * mk * dtMin
 
 			if pIdx, ok := pointIdxByStartMs[idx*1000]; ok {
 				ikRounded := round2(ik)
@@ -407,22 +360,18 @@ func (tb *timelineAccumulator) calculateHybrid(
 		AlgorithmVersion:   HybridAlgorithmVersion,
 	}
 
+	if validACCSec > 0 {
+		mOnly := round4(math.Sqrt(motionOnlySqMin / (validACCSec / 60.0)))
+		out.MotionIntensity = &mOnly
+	}
 	if validHRReserve && validHybridSec > 0 {
 		validHybridMin := validHybridSec / 60.0
 		loadAU := round4(sumHybridSqMin)
 		iSession := round2(100.0 * math.Sqrt(sumHybridSqMin/validHybridMin))
-		hSession := round4(math.Sqrt(sumHeartSqMin/validHybridMin))
-		mSession := round4(math.Sqrt(sumMotionHybridSqMin/validHybridMin))
+		hSession := round4(math.Sqrt(sumHeartSqMin / validHybridMin))
 		out.HeartIntensity = &hSession
-		out.MotionIntensity = &mSession
 		out.HybridIntensity = &iSession
 		out.HybridLoadAU = &loadAU
-	} else if !validHRReserve && validACCSec > 0 {
-		// Preserve objective motion intensity even when resting_hr / max_hr is absent,
-		// without imputing a synthetic heart-rate reserve.
-		validACCMin := validACCSec / 60.0
-		mOnly := round4(math.Sqrt(motionOnlySqMin / validACCMin))
-		out.MotionIntensity = &mOnly
 	}
 
 	if len(accEnmoValues) >= 60 {

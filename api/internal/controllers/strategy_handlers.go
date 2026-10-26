@@ -254,9 +254,7 @@ func extractRecentWorkoutMovements(sessionScoreJSON, normalizedWorkoutJSON strin
 		if trimmed == "" {
 			return
 		}
-		norm := movement.NormalizeKey(trimmed)
-		if norm == "" || strings.EqualFold(norm, "unknown") || strings.EqualFold(norm, "walking") ||
-			strings.EqualFold(norm, "rest") || strings.EqualFold(norm, "setup") {
+		if fatigue.IsNonLoadMovement(movement.NormalizeKey(trimmed)) {
 			return
 		}
 		display := trimmed
@@ -357,39 +355,26 @@ func buildDeterministicFallbackAdvice(
 		pacing = "신체 컨디션이 매우 우수하므로 적극적인 페이스로 목표 기록 경신에 도전해보세요."
 	}
 
-	if scoreVal < 60 && len(recentWorkouts) > 0 {
-		hasHighEffort := false
-		hasLowEffort := false
-		hasAnyEffort := false
-		hasHighHybrid := false
-		for _, w := range recentWorkouts {
-			if w.Effort != nil && *w.Effort >= 1 && *w.Effort <= 10 {
-				hasAnyEffort = true
-				if *w.Effort >= 8 {
-					hasHighEffort = true
-				} else if *w.Effort <= 5 {
-					hasLowEffort = true
-				}
-			}
-			if w.HybridSensor != nil && w.HybridSensor.HybridIntensity >= 80 {
-				hasHighHybrid = true
-			}
+	// rpeScore is 8 or 9 below fatigue 60. The same classification drives the
+	// effort reflection reason, so the adjustment and its explanation cite the
+	// same workout.
+	if scoreVal < 60 {
+		signal := fatigue.ClassifyRecentEffort(recentWorkouts)
+		anchor := ""
+		if signal.Anchor != nil {
+			anchor = fatigue.FormatRecentWorkoutAnchor(*signal.Anchor, signal.AnchorIndex)
 		}
-
-		if hasHighEffort {
-			if rpeScore > 6 {
-				rpeScore--
-			}
+		switch signal.Kind {
+		case fatigue.RecentEffortHigh:
+			rpeScore--
 			rpeLabel = fmt.Sprintf("RPE %d (조절된 페이스)", rpeScore)
-			pacing = "최근 WOD에서 높은 체감 강도가 기록되었으므로 초반 오버페이스를 줄이고 세트를 계획적으로 나누어 진행하세요."
-		} else if hasLowEffort {
-			pacing = "직전 WOD를 비교적 여유 있게 소화했으므로 초반 1~2라운드에서 몸 상태를 확인한 뒤 점진적으로 템포를 올려보세요."
-		} else if !hasAnyEffort && hasHighHybrid {
-			if rpeScore > 6 {
-				rpeScore--
-			}
+			pacing = fmt.Sprintf("%s에서 높은 체감 강도가 기록되었으므로 초반 오버페이스를 줄이고 세트를 계획적으로 나누어 진행하세요.", anchor)
+		case fatigue.RecentEffortLow:
+			pacing = fmt.Sprintf("%s에서 비교적 여유 있는 체감 강도가 기록되었으므로 초반 1~2라운드에서 몸 상태를 확인한 뒤 점진적으로 템포를 올려보세요.", anchor)
+		case fatigue.RecentEffortHighSensor:
+			rpeScore--
 			rpeLabel = fmt.Sprintf("RPE %d (조절된 페이스)", rpeScore)
-			pacing = "최근 WOD에서 높은 센서 하이브리드 활동강도가 측정되었으므로 초반 호흡 여유를 확보하며 일정한 페이스를 유지하세요."
+			pacing = fmt.Sprintf("%s에서 높은 센서 하이브리드 활동강도가 측정되었으므로 초반 호흡 여유를 확보하며 일정한 페이스를 유지하세요.", anchor)
 		}
 	}
 

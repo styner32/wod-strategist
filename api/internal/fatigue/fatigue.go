@@ -334,6 +334,17 @@ func ComputeLegacySessionMuscleLoadsWithSignals(
 // ComputeSessionMuscleLoads computes 0-100 muscle loads for a session using
 // movements from sessionScore. Deterministic calculation without sensor bonus (v2).
 // Returns (loads, true) if valid movements exist, or (nil, false) if no valid movements exist.
+// IsNonLoadMovement reports whether a normalized movement key names no trained
+// movement (empty, unknown, walking, rest, setup). Such entries add no muscle
+// load and are not listed as recent workout movements.
+func IsNonLoadMovement(norm string) bool {
+	switch strings.ToLower(norm) {
+	case "", "unknown", "walking", "rest", "setup":
+		return true
+	}
+	return false
+}
+
 func ComputeSessionMuscleLoads(sessionScoreJSON string) (map[string]float64, bool) {
 	var evidence struct {
 		Version   int             `json:"evaluation_version"`
@@ -358,12 +369,10 @@ func ComputeSessionMuscleLoads(sessionScoreJSON string) (map[string]float64, boo
 		return nil, false
 	}
 
-	// Filter movements: reject empty, unknown, walking, rest, setup
 	validMovements := make(map[string]bool)
 	for rawMov := range score.Movements {
 		norm := movement.NormalizeKey(rawMov)
-		if norm == "" || strings.EqualFold(norm, "unknown") || strings.EqualFold(norm, "walking") ||
-			strings.EqualFold(norm, "rest") || strings.EqualFold(norm, "setup") {
+		if IsNonLoadMovement(norm) {
 			continue
 		}
 		// Must be known in catalog

@@ -38,6 +38,24 @@ export interface HeartRateSummary {
   cardio_after?: number;
   cardio_delta?: number;
 }
+/**
+ * Hybrid `quality_flags` that explain a missing or qualified score, in display
+ * order. Keys match the backend (`api/internal/sensor/hybrid_metrics.go`) and
+ * the `heartRate.*` locale strings.
+ */
+export const HYBRID_FLAG_KEYS = [
+  "missing_resting_hr",
+  "missing_max_hr",
+  "invalid_hr_reserve_range",
+  "peak_hr_exceeded_max",
+  "sensor_data_unreadable",
+  "no_valid_hybrid_windows",
+  "low_hybrid_coverage",
+] as const;
+export function hybridFlagsToShow(flags?: string[] | null): string[] {
+  const present = new Set(flags ?? []);
+  return HYBRID_FLAG_KEYS.filter((key) => present.has(key));
+}
 export const HEART_RATE_ZONE_COLORS = ["#6699aa", "#3aaf74", "#d7ac32", "#e57e3a", "#cc5265"];
 export function hrNumber(value?: number | null, suffix = "") {
   return value === undefined || value === null || !Number.isFinite(value) ? "—" : `${Math.round(value)}${suffix}`;

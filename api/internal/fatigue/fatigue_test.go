@@ -1,6 +1,7 @@
 package fatigue_test
 
 import (
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -454,4 +455,96 @@ var _ = Describe("Fatigue Calculation & Readiness", func() {
 			Expect(prompt).To(ContainSubstring("effort_reflection_reason"))
 		})
 	})
+})
+
+var _ = Describe("Recent WOD effort reflection", func() {
+	moderate := 35
+	readiness := fatigue.ProfileReadinessState{
+		EvidenceStatus:      "complete",
+		OverallFatigueScore: &moderate,
+		OverallState:        "moderate",
+		OverallStateKO:      "보통",
+		AsOf:                time.Now(),
+	}
+	effort := func(v int) *int { return &v }
+	sensor := func(score float64) *fatigue.HybridSensorBrief {
+		return &fatigue.HybridSensorBrief{HybridIntensity: score, DataCoverage: 0.9}
+	}
+
+	DescribeTable("quotes the Effort of the workout that selected the branch",
+		func(efforts []int, wantKind, wantText string, wantIndex int, absent string) {
+			recent := make([]fatigue.RecentWorkoutSummary, len(efforts))
+			for i, e := range efforts {
+				recent[i] = fatigue.RecentWorkoutSummary{SessionID: fmt.Sprintf("WOD-%d", i), Effort: effort(e)}
+			}
+			signal := fatigue.ClassifyRecentEffort(recent)
+			Expect(signal.Kind).To(Equal(wantKind))
+			Expect(signal.AnchorIndex).To(Equal(wantIndex))
+			reason := fatigue.BuildDeterministicEffortReflectionReason(recent, readiness)
+			Expect(reason).To(ContainSubstring(wantText))
+			Expect(reason).NotTo(ContainSubstring(absent))
+		},
+		Entry("an older high Effort, not the latest Effort 4", []int{4, 9}, fatigue.RecentEffortHigh, "2회 전 WOD에서 높은 체감 강도(Effort 9/10)", 1, "Effort 4/10"),
+		Entry("an older low Effort, not the latest Effort 7", []int{7, 5}, fatigue.RecentEffortLow, "2회 전 WOD에서 비교적 여유 있는 체감 강도(Effort 5/10)", 1, "Effort 7/10"),
+		Entry("only moderate Efforts cite the latest", []int{6, 7}, fatigue.RecentEffortRated, "직전 WOD의 체감 강도(Effort 6/10)", 0, "Effort 7/10"),
+	)
+
+	It("anchors sensor-only feedback on the high-intensity session the fallback reacts to", func() {
+		recent := []fatigue.RecentWorkoutSummary{
+			{SessionID: "latest", HybridSensor: sensor(55)},
+			{SessionID: "older", HybridSensor: sensor(85)},
+		}
+		signal := fatigue.ClassifyRecentEffort(recent)
+		Expect(signal.Kind).To(Equal(fatigue.RecentEffortHighSensor))
+		Expect(signal.Anchor.SessionID).To(Equal("older"))
+		reason := fatigue.BuildDeterministicEffortReflectionReason(recent, readiness)
+		Expect(reason).To(ContainSubstring("85/100"))
+		Expect(reason).NotTo(ContainSubstring("55/100"))
+	})
+
+	It("attaches only particles that do not depend on the anchor's final syllable", func() {
+		dur := 495
+		reason := fatigue.BuildDeterministicEffortReflectionReason([]fatigue.RecentWorkoutSummary{{
+			SessionID: "low", Movements: []string{"Thruster", "Pull-up"}, DurationSeconds: &dur, Effort: effort(5),
+		}}, readiness)
+		Expect(reason).To(HavePrefix("최근 Thruster·Pull-up WOD(8분 15초)에서 비교적 여유 있는"))
+		Expect(reason).NotTo(ContainSubstring(")을"))
+		Expect(reason).NotTo(ContainSubstring("WOD을"))
+	})
+
+	DescribeTable("replaces a model-written reason that cites values absent from the data",
+		func(modelReason string, keep bool) {
+			dur := 495
+			resp := fatigue.PreWODAdviceResponse{
+				TargetRPE:              &fatigue.TargetRPEInfo{Score: 7, Label: "RPE 7", PacingStrategy: "일정한 페이스 유지"},
+				EffortReflectionReason: modelReason,
+			}
+			fatigue.FinalizePreWODAdvice(&resp, readiness, fatigue.RecentWorkoutSummary{
+				SessionID: "sensor-only", DurationSeconds: &dur, HybridSensor: sensor(82),
+			})
+			Expect(resp.EffortReflection).NotTo(BeNil())
+			if keep {
+				Expect(resp.EffortReflection.Reason).To(Equal(modelReason))
+			} else {
+				Expect(resp.EffortReflection.Reason).To(Equal(fatigue.BuildDeterministicEffortReflectionReason(resp.EffortReflection.RecentWorkouts, readiness)))
+			}
+		},
+		Entry("an Effort no workout recorded", "Effort 8/10으로 힘들게 마쳤으므로 템포를 낮췄습니다.", false),
+		Entry("a sensor score that was not measured", "센서 활동강도 95/100이 측정되어 페이스를 낮췄습니다.", false),
+		Entry("a duration that was not recorded", "12분 30초 동안 높은 강도를 유지해 페이스를 낮췄습니다.", false),
+		Entry("only recorded values", "직전 WOD(8분 15초)의 센서 활동강도 82/100을 반영해 초반 페이스 여유를 두었습니다.", true),
+	)
+
+	DescribeTable("keeps the RPE label consistent with the clamped score",
+		func(score int, label string, wantScore int, wantLabel string) {
+			resp := fatigue.PreWODAdviceResponse{TargetRPE: &fatigue.TargetRPEInfo{Score: score, Label: label}}
+			fatigue.FinalizePreWODAdvice(&resp, readiness)
+			Expect(resp.TargetRPE.Score).To(Equal(wantScore))
+			Expect(resp.TargetRPE.Label).To(Equal(wantLabel))
+		},
+		Entry("above the scale", 12, "RPE 12 (최대)", 10, "RPE 10 (최대)"),
+		Entry("below the scale", 0, "RPE 0", 1, "RPE 1"),
+		Entry("a range containing the score", 6, "RPE 6~7 (회복 및 기술 중심)", 6, "RPE 6~7 (회복 및 기술 중심)"),
+		Entry("an empty label", 7, "", 7, "RPE 7"),
+	)
 })

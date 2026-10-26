@@ -1,18 +1,11 @@
 import { memo } from "react";
 import type { HeartRateSummary } from "../../../../shared/heartRateSummary";
-import { HEART_RATE_ZONE_COLORS, hrDecimal, hrNumber, hrPercent } from "../../../../shared/heartRateSummary";
+import { HEART_RATE_ZONE_COLORS, hrDecimal, hrNumber, hrPercent, hybridFlagsToShow } from "../../../../shared/heartRateSummary";
 import ko from "../../../../features/i18n/locales/ko.json";
 
 const labels: Record<string, string> = ko.heartRate;
 const label = (key: string) => labels[key] ?? labels.unavailable;
 const seconds = (n?: number) => hrNumber(n, ` ${labels.seconds}`);
-const HYBRID_FLAG_KEYS = new Set([
-  "missing_resting_hr",
-  "missing_max_hr",
-  "peak_hr_exceeded_max",
-  "missing_acc",
-  "low_hybrid_coverage",
-]);
 
 export const HeartRateBadge = memo(function HeartRateBadge({ summary }: { summary?: HeartRateSummary }) {
   return (
@@ -87,8 +80,7 @@ export const HeartRateSummaryPanel = memo(function HeartRateSummaryPanel({ summa
                   </div>
                 </div>
               </div>
-              {(summary.hybrid.quality_flags ?? [])
-                .filter((flag) => HYBRID_FLAG_KEYS.has(flag))
+              {hybridFlagsToShow(summary.hybrid.quality_flags)
                 .map((flag) => (
                   <p key={flag} className="text-xs text-amber-400">
                     {label(flag)}

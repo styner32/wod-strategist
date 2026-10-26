@@ -630,7 +630,9 @@
     "missing_resting_hr": "Enter resting HR in Profile to compute heart & hybrid intensity.",
     "missing_max_hr": "Enter birth year in Profile to set maximum HR reference.",
     "peak_hr_exceeded_max": "Peak HR exceeded reference max HR (raw BPM preserved, HR intensity clipped at 100).",
-    "missing_acc": "Accelerometer data unavailable for hybrid calculation.",
+    "invalid_hr_reserve_range": "Max HR minus resting HR is under 15 bpm, so heart & hybrid intensity are not computed. Check resting HR and birth year in Profile.",
+    "sensor_data_unreadable": "Some sensor data could not be read, so the affected intensity values are unavailable.",
+    "no_valid_hybrid_windows": "No second had valid heart rate and motion data at the same time, so hybrid intensity could not be computed.",
     "low_hybrid_coverage": "Valid simultaneous HR + motion coverage was below 50%."
   },
   "sensorTimeline": {

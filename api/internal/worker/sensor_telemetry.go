@@ -387,17 +387,14 @@ func (w *Worker) maybePromoteProfileENMOCalibration(ctx context.Context, profile
 			continue
 		}
 		hy := sum.Metrics.Hybrid
-		if hy.ValidACCSeconds < 120 || hy.ENMOP95G == nil {
+		// The parser sets both percentiles together (>= 60 valid ACC seconds).
+		if hy.ValidACCSeconds < 120 || hy.ENMOP05G == nil || hy.ENMOP95G == nil {
 			continue
 		}
-		p05 := sensor.DefaultBootstrapENMORestG
-		if hy.ENMOP05G != nil && !math.IsNaN(*hy.ENMOP05G) && !math.IsInf(*hy.ENMOP05G, 0) {
-			p05 = *hy.ENMOP05G
-		}
-		if math.IsNaN(*hy.ENMOP95G) || math.IsInf(*hy.ENMOP95G, 0) {
+		if math.IsNaN(*hy.ENMOP05G) || math.IsInf(*hy.ENMOP05G, 0) || math.IsNaN(*hy.ENMOP95G) || math.IsInf(*hy.ENMOP95G, 0) {
 			continue
 		}
-		p05List = append(p05List, p05)
+		p05List = append(p05List, *hy.ENMOP05G)
 		p95List = append(p95List, *hy.ENMOP95G)
 		if len(p95List) >= 5 {
 			break

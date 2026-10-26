@@ -2,16 +2,8 @@ import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { t, useLocale } from "@/features/i18n";
 import {
-  HEART_RATE_ZONE_COLORS, hrDecimal, hrNumber, hrPercent, type HeartRateSummary,
+  HEART_RATE_ZONE_COLORS, hrDecimal, hrNumber, hrPercent, hybridFlagsToShow, type HeartRateSummary,
 } from "@/shared/heartRateSummary";
-
-const HYBRID_FLAG_KEYS = new Set([
-  "missing_resting_hr",
-  "missing_max_hr",
-  "peak_hr_exceeded_max",
-  "missing_acc",
-  "low_hybrid_coverage",
-]);
 
 export function HeartRateSummaryCard({ summary }: { summary?: HeartRateSummary }) {
   useLocale();
@@ -88,8 +80,7 @@ export function HeartRateSummaryCard({ summary }: { summary?: HeartRateSummary }
                   ? label("calibrationPersonal")
                   : label("calibrationBootstrap")}
               </Text>
-              {(summary.hybrid.quality_flags ?? [])
-                .filter((flag) => HYBRID_FLAG_KEYS.has(flag))
+              {hybridFlagsToShow(summary.hybrid.quality_flags)
                 .map((flag) => (
                   <Text key={flag} style={styles.warning}>{label(flag)}</Text>
                 ))}

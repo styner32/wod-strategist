@@ -270,7 +270,124 @@ func (tb *timelineAccumulator) HandleAcc(acce AccEvent) {
 	}
 }
 
+// pauseIndex answers bucket/pause overlap queries in O(log n) over merged,
+// sorted pause intervals instead of scanning every pause per bucket.
+type pauseIndex struct{ starts, ends []float64 }
+
+func newPauseIndex(pauses []PauseInterval) pauseIndex {
+	sorted := make([]PauseInterval, 0, len(pauses))
+	for _, p := range pauses {
+		if p.EndOffsetMs > p.StartOffsetMs {
+			sorted = append(sorted, p)
+		}
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].StartOffsetMs < sorted[j].StartOffsetMs })
+	var idx pauseIndex
+	for _, p := range sorted {
+		if n := len(idx.ends); n > 0 && p.StartOffsetMs <= idx.ends[n-1] {
+			idx.ends[n-1] = math.Max(idx.ends[n-1], p.EndOffsetMs)
+			continue
+		}
+		idx.starts = append(idx.starts, p.StartOffsetMs)
+		idx.ends = append(idx.ends, p.EndOffsetMs)
+	}
+	return idx
+}
+
+// overlaps reports whether [startMs, endMs) has a positive-length overlap
+// with any pause.
+func (pi pauseIndex) overlaps(startMs, endMs int64) bool {
+	s, e := float64(startMs), float64(endMs)
+	if e <= s {
+		return false
+	}
+	i := sort.Search(len(pi.ends), func(i int) bool { return pi.ends[i] > s })
+	return i < len(pi.starts) && pi.starts[i] < e
+}
+
+// accBucketQuality is the ACC validity gate shared by the timeline graph and
+// hybrid metrics: an error-free bucket with known Hz, at least two samples and
+// 80% of the expected count, and no internal or edge gap above three sample
+// periods. It returns the timeline status and reason.
+func accBucketQuality(b *accBucketAccumulator, startMs, endMs int64) (SampleStatus, string) {
+	switch {
+	case b != nil && b.hasError:
+		return StatusInvalid, b.errorReason
+	case b == nil || b.sampleCount == 0:
+		return StatusMissing, "no_samples"
+	case b.hz <= 0:
+		return StatusInvalid, "unknown_hz"
+	}
+	bucketDurMs := float64(endMs - startMs)
+	nominalDt := 1000.0 / b.hz
+	expectedSamples := (bucketDurMs / 1000.0) * b.hz
+	minRequiredSamples := math.Max(2, math.Ceil(0.80*expectedSamples))
+	maxAllowedGap := 3.0 * nominalDt
+	startEdgeGap := b.firstSampleT - float64(startMs)
+	endEdgeGap := float64(endMs) - b.lastSampleT
+	switch {
+	case float64(b.sampleCount) < minRequiredSamples:
+		return StatusInsufficient, "insufficient_samples"
+	case b.maxGapMs > maxAllowedGap:
+		return StatusInsufficient, "gap_too_large"
+	case startEdgeGap > maxAllowedGap:
+		return StatusInsufficient, "gap_at_start"
+	case endEdgeGap < 0 || endEdgeGap > maxAllowedGap:
+		return StatusInsufficient, "gap_at_end"
+	}
+	return StatusValid, ""
+}
+
+// hrSecond is accepted HR time and BPM-weighted time within one 1-second bucket.
+type hrSecond struct{ validMs, weightedBPM float64 }
+
+// valid applies the shared HR rule: accepted intervals cover 80% of the bucket.
+func (hr hrSecond) valid(bucketDurMs float64) bool {
+	return bucketDurMs > 0 && hr.validMs >= 0.80*bucketDurMs
+}
+
+// hrBucketsFromEvents integrates accepted (valid/low) HR intervals into
+// 1-second buckets once, for both the timeline graph and hybrid metrics.
+func hrBucketsFromEvents(hrEvents []hrObservation, pauses []PauseInterval, durationMs float64) (map[int64]hrSecond, error) {
+	totalDurationInt := int64(math.Round(durationMs))
+	buckets := make(map[int64]hrSecond)
+	_, _, intervals := extractHREvaluationsV2(hrEvents, pauses, durationMs)
+	for _, iv := range intervals {
+		if iv.Reason != "valid" && iv.Reason != "low" {
+			continue
+		}
+		start, stop := math.Max(0, iv.StartMs), math.Min(float64(totalDurationInt), iv.EndMs)
+		if !validTimelineTime(start) || !validTimelineTime(stop) {
+			return nil, errors.New("invalid_timeline_timestamp")
+		}
+		for cursor := start; cursor < stop; {
+			idx := int64(math.Floor(cursor / 1000))
+			end := math.Min(float64((idx+1)*1000), stop)
+			if _, exists := buckets[idx]; !exists && len(buckets) >= MaxTimelineBuckets {
+				return nil, errors.New("timeline_bucket_limit_exceeded")
+			}
+			hr := buckets[idx]
+			hr.validMs += end - cursor
+			hr.weightedBPM += float64(iv.BPM) * (end - cursor)
+			buckets[idx] = hr
+			cursor = end
+		}
+	}
+	return buckets, nil
+}
+
 func (tb *timelineAccumulator) Build(source TimelineSource, durationMs float64, pauses []PauseInterval, hrEvents []hrObservation) (*SensorTimelineData, error) {
+	if tb.err != nil {
+		return nil, tb.err
+	}
+	hrBuckets, err := hrBucketsFromEvents(hrEvents, pauses, durationMs)
+	if err != nil {
+		return nil, err
+	}
+	return tb.buildFromHRBuckets(source, durationMs, pauses, hrBuckets)
+}
+
+func (tb *timelineAccumulator) buildFromHRBuckets(source TimelineSource, durationMs float64, pauses []PauseInterval, hrBuckets map[int64]hrSecond) (*SensorTimelineData, error) {
 	if tb.err != nil {
 		return nil, tb.err
 	}
@@ -299,31 +416,13 @@ func (tb *timelineAccumulator) Build(source TimelineSource, durationMs float64, 
 			indices[idx] = struct{}{}
 		}
 	}
-	type hrBucket struct{ validMs, weightedBPM float64 }
-	hrBuckets := make(map[int64]hrBucket)
-	_, _, intervals := extractHREvaluationsV2(hrEvents, pauses, durationMs)
-	for _, iv := range intervals {
-		if iv.Reason != "valid" && iv.Reason != "low" {
-			continue
+	for idx := range hrBuckets {
+		if _, exists := indices[idx]; !exists && len(indices) >= MaxTimelineBuckets {
+			return nil, errors.New("timeline_bucket_limit_exceeded")
 		}
-		start, stop := math.Max(0, iv.StartMs), math.Min(float64(totalDurationInt), iv.EndMs)
-		if !validTimelineTime(start) || !validTimelineTime(stop) {
-			return nil, errors.New("invalid_timeline_timestamp")
-		}
-		for cursor := start; cursor < stop; {
-			idx := int64(math.Floor(cursor / 1000))
-			end := math.Min(float64((idx+1)*1000), stop)
-			if _, exists := indices[idx]; !exists && len(indices) >= MaxTimelineBuckets {
-				return nil, errors.New("timeline_bucket_limit_exceeded")
-			}
-			indices[idx] = struct{}{}
-			hr := hrBuckets[idx]
-			hr.validMs += end - cursor
-			hr.weightedBPM += float64(iv.BPM) * (end - cursor)
-			hrBuckets[idx] = hr
-			cursor = end
-		}
+		indices[idx] = struct{}{}
 	}
+	paused := newPauseIndex(pauses)
 	ordered := make([]int64, 0, len(indices))
 	for idx := range indices {
 		ordered = append(ordered, idx)
@@ -368,65 +467,33 @@ func (tb *timelineAccumulator) Build(source TimelineSource, durationMs float64, 
 			return nil, err
 		}
 		bucketDurMs := float64(endMs - startMs)
-		// 1. Check if bucket overlaps any pause interval
-		isPaused := false
-		for _, p := range pauses {
-			overlapStart := math.Max(float64(startMs), p.StartOffsetMs)
-			overlapEnd := math.Min(float64(endMs), p.EndOffsetMs)
-			if overlapEnd > overlapStart {
-				isPaused = true
-				break
-			}
-		}
 
 		var hrVal TimelineValue
 		var accVal TimelineValue
 
-		if isPaused {
+		if paused.overlaps(startMs, endMs) {
 			hrVal = TimelineValue{Status: StatusPaused}
 			accVal = TimelineValue{Status: StatusPaused}
 		} else {
 			// ACC evaluation
-			b, hasBucket := tb.buckets[idx]
-			if hasBucket && b.hasError {
-				accVal = TimelineValue{Status: StatusInvalid, Reason: b.errorReason}
-			} else if !hasBucket || b.sampleCount == 0 {
-				accVal = TimelineValue{Status: StatusMissing, Reason: "no_samples"}
-			} else if b.hz <= 0 {
-				accVal = TimelineValue{Status: StatusInvalid, Reason: "unknown_hz"}
+			b := tb.buckets[idx]
+			if status, reason := accBucketQuality(b, startMs, endMs); status != StatusValid {
+				accVal = TimelineValue{Status: status, Reason: reason}
 			} else {
-				nominalDt := 1000.0 / b.hz
-				expectedSamples := (bucketDurMs / 1000.0) * b.hz
-				minRequiredSamples := math.Max(2, math.Ceil(0.80*expectedSamples))
-				maxAllowedGap := 3.0 * nominalDt
-
-				startEdgeGap := b.firstSampleT - float64(startMs)
-				endEdgeGap := float64(endMs) - b.lastSampleT
-
-				if float64(b.sampleCount) < minRequiredSamples {
-					accVal = TimelineValue{Status: StatusInsufficient, Reason: "insufficient_samples"}
-				} else if b.maxGapMs > maxAllowedGap {
-					accVal = TimelineValue{Status: StatusInsufficient, Reason: "gap_too_large"}
-				} else if startEdgeGap > maxAllowedGap {
-					accVal = TimelineValue{Status: StatusInsufficient, Reason: "gap_at_start"}
-				} else if endEdgeGap < 0 || endEdgeGap > maxAllowedGap {
-					accVal = TimelineValue{Status: StatusInsufficient, Reason: "gap_at_end"}
-				} else {
-					popVariance := b.m2 / float64(b.sampleCount)
-					if popVariance < 0 {
-						popVariance = 0
-					}
-					popStdDev := math.Sqrt(popVariance)
-					rounded := math.Round(popStdDev*10000) / 10000
-					accVal = TimelineValue{Value: &rounded, Status: StatusValid}
+				popVariance := b.m2 / float64(b.sampleCount)
+				if popVariance < 0 {
+					popVariance = 0
 				}
+				popStdDev := math.Sqrt(popVariance)
+				rounded := math.Round(popStdDev*10000) / 10000
+				accVal = TimelineValue{Value: &rounded, Status: StatusValid}
 			}
 
 			// HR overlaps were integrated once into the same sparse bucket map.
 			hr := hrBuckets[idx]
 			validOverlapMs, weightedBPMSum := hr.validMs, hr.weightedBPM
 
-			if validOverlapMs >= 0.80*bucketDurMs {
+			if hr.valid(bucketDurMs) {
 				meanBPM := weightedBPMSum / validOverlapMs
 				rounded := math.Round(meanBPM*10) / 10
 				hrVal = TimelineValue{Value: &rounded, Status: StatusValid}

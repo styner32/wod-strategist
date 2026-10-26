@@ -79,4 +79,30 @@ describe('Heart rate summary independent of video', () => {
   expect(view.getByText(ko.heartRate.missing_resting_hr)).toBeTruthy();
   expect(view.getByText(ko.heartRate.calibrationBootstrap)).toBeTruthy();
  });
+ it('explains every flag the backend emits for a missing hybrid score', () => {
+  const view = render(
+   <HeartRateSummaryCard
+    summary={{
+     ...summary,
+     calculation_version: 3,
+     hybrid: {
+      heart_intensity: null,
+      motion_intensity: null,
+      hybrid_intensity: null,
+      hybrid_load_au: null,
+      valid_hybrid_seconds: 0,
+      data_coverage: 0,
+      quality_flags: ['invalid_hr_reserve_range', 'sensor_data_unreadable', 'invalid_timeline_timestamp', 'no_valid_hybrid_windows'],
+      calibration_version: 'bootstrap_chest_v1',
+      algorithm_version: 'hybrid-0.75-0.25-gamma2',
+     },
+    }}
+   />,
+  );
+  fireEvent.press(view.getByLabelText(ko.heartRate.details));
+  expect(view.getByText(ko.heartRate.invalid_hr_reserve_range)).toBeTruthy();
+  expect(view.getByText(ko.heartRate.sensor_data_unreadable)).toBeTruthy();
+  expect(view.getByText(ko.heartRate.no_valid_hybrid_windows)).toBeTruthy();
+  expect(view.queryByText('invalid_timeline_timestamp')).toBeNull();
+ });
 });

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -272,6 +273,87 @@ var _ = Describe("CalculationVersion 3 Hybrid Activity Intensity (HRR + ENMO)", 
 		Expect(*h.ENMOP95G).To(BeNumerically("~", 0.16, 0.001))
 		Expect(h.CalibrationVersion).To(Equal(sensor.BootstrapCalibrationVersion))
 		Expect(h.QualityFlags).To(ContainElements("missing_resting_hr", "bootstrap_motion_calibration"))
+	})
+
+	It("keeps motion_intensity independent of resting HR when HR contact drops in the hardest seconds", func() {
+		contactTrue := true
+		contactFalse := false
+		build := func() *bytes.Buffer {
+			return buildHybridNDJSON(
+				testProfileID,
+				testSessionID,
+				120,
+				func(sec int) (int, *bool) {
+					if sec < 40 {
+						return 170, &contactFalse
+					}
+					return 120, &contactTrue
+				},
+				func(sec int, _ int) []float64 {
+					if sec < 40 {
+						return []float64{0, 0, 1.31}
+					}
+					return []float64{0, 0, 1.06}
+				},
+			)
+		}
+
+		maxHR := 180
+		restHR := 60
+		enmoRest := 0.01
+		enmoRef := 0.31
+		opts := sensor.ParseOptions{
+			CalculationVersion: 3,
+			ExpectedProfileID:  testProfileID,
+			ExpectedSessionID:  testSessionID,
+			EstimatedMaxHR:     &maxHR,
+			ENMORestG:          &enmoRest,
+			ENMORefG:           &enmoRef,
+			CalibrationVersion: sensor.PersonalCalibrationVersion,
+		}
+		withoutRest, err := sensor.ParseAndProcess(build(), opts)
+		Expect(err).NotTo(HaveOccurred())
+		opts.RestingHR = &restHR
+		withRest, err := sensor.ParseAndProcess(build(), opts)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(withoutRest.Metrics.Hybrid.HybridIntensity).To(BeNil())
+		Expect(withRest.Metrics.Hybrid.HybridIntensity).NotTo(BeNil())
+		Expect(withRest.Metrics.Hybrid.MotionIntensity).NotTo(BeNil())
+		Expect(*withRest.Metrics.Hybrid.MotionIntensity).To(Equal(*withoutRest.Metrics.Hybrid.MotionIntensity))
+		// RMS over all 120 valid ACC seconds, including the 40 hard seconds without HR.
+		Expect(*withRest.Metrics.Hybrid.MotionIntensity).To(BeNumerically(">", 0.5))
+	})
+
+	It("reports unreadable sensor data instead of missing windows when the ACC replay fails", func() {
+		contactTrue := true
+		ndjson := buildHybridNDJSON(
+			testProfileID,
+			testSessionID,
+			65,
+			func(_ int) (int, *bool) { return 150, &contactTrue },
+			func(_ int, _ int) []float64 { return []float64{0, 0, 1.25} },
+		)
+		lines := strings.Split(strings.TrimRight(ndjson.String(), "\n"), "\n")
+		// A timestamp beyond the graph's exact JavaScript range fails the replay.
+		corrupt := `{"k":"acc","t":100000000000000000,"stream_id":1,"dt":40,"v":[[0,0,1.25]]}`
+		lines = append(lines[:len(lines)-1], corrupt, lines[len(lines)-1])
+
+		maxHR := 180
+		restHR := 60
+		summary, err := sensor.ParseAndProcess(strings.NewReader(strings.Join(lines, "\n")+"\n"), sensor.ParseOptions{
+			CalculationVersion: 3,
+			ExpectedProfileID:  testProfileID,
+			ExpectedSessionID:  testSessionID,
+			EstimatedMaxHR:     &maxHR,
+			RestingHR:          &restHR,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		h := summary.Metrics.Hybrid
+		Expect(h).NotTo(BeNil())
+		Expect(h.HybridIntensity).To(BeNil())
+		Expect(h.QualityFlags).To(ContainElements("sensor_data_unreadable", "invalid_timeline_timestamp"))
+		Expect(h.QualityFlags).NotTo(ContainElement("no_valid_hybrid_windows"))
 	})
 
 	It("clips H_k to 1.0, preserves raw PeakBPM, and flags peak_hr_exceeded_max when HR exceeds frozen MaxHR", func() {
