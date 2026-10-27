@@ -80,16 +80,20 @@ func sanitizeTrackingLabel(s string) string {
 	return s
 }
 
-// trackingOutputPrompt asks the chunk observer to report where the target is.
+// trackingOutputPrompt asks the chunk observer to report who and where the target is in one unified target_person block.
 const trackingOutputPrompt = `
 
-## 대상 인물 위치 기록 (추적 연속성)
-운동 여부와 관계없이 대상 인물이 보이면 target_person 블록을 반드시 출력하고 아래 필드를 추가하세요.
-- boxes: 클립 처음·가운데·끝 근처에서 대상 인물이 보이는 시점마다 최대 3개. t는 클립 시작 기준 초, box_2d는 대상 인물 전신을 감싸는 [ymin, xmin, ymax, xmax] 0~1000 정규화 좌표입니다.
+## 대상 인물 식별 및 위치 기록 (Target Person / 추적 연속성)
+운동 여부([EXERCISE: ...] 또는 [NO_EXERCISE])와 관계없이 영상에 대상 인물이 보이면 아래 형식의 target_person JSON 블록을 **반드시 1개** 출력하세요.
+` + "```target_person\n" + `{"matched_cues":[],"ambiguous":false,"confidence":0.9,"boxes":[{"t":0.5,"box_2d":[120,400,980,620]},{"t":5.0,"box_2d":[120,410,980,630]},{"t":9.0,"box_2d":[130,415,980,635]}],"frame_region":"center","station":"rower"}` + "\n```\n" + `
+- matched_cues: 제공된 외형 특징 중 이 영상에서 실제로 눈으로 확인한 것만 나열하세요(별도 외형 특징이 없거나 확인된 항목이 없으면 []).
+- ambiguous: 대상 인물로 볼 수 있는 후보가 여러 명이거나 대상을 확신할 수 없으면 true.
+- confidence: 대상 인물이 한 명으로 명확히 특정되는 확신도(0.0~1.0). 별도 외형 특징이 없더라도 첨부된 TARGET 기준 프레임의 인물과 일치하거나 화면 전면/중앙에서 주요 활동을 하는 대상 인물이 1명으로 명확하면 0.85~0.95로 기록하세요. 대상을 특정할 수 없을 때만 0.5 이하로 두세요.
+- boxes: 클립 처음·가운데·끝 근처에서 대상 인물이 보이는 시점마다 최대 3개(최소 1개 이상). t는 이 클립 시작 기준 초(예: 0.5, 5.0, 9.0), box_2d는 대상 인물 전신을 감싸는 [ymin, xmin, ymax, xmax] 0~1000 정규화 좌표입니다.
 - frame_region: 대상 인물의 화면 위치 left, center, right 중 하나.
-- station: 대상 인물이 사용 중인 기구나 위치(예: rower, barbell, box, pull-up bar, floor). 모르면 빈 문자열.
-대상 인물을 확신할 수 없으면 ambiguous를 true로 두고 boxes는 빈 배열로 두세요. 다른 사람에게 박스를 그리지 마세요.
-` + "```target_person\n" + `{"matched_cues":[],"ambiguous":false,"confidence":0.9,"boxes":[{"t":0.5,"box_2d":[120,400,980,620]}],"frame_region":"center","station":"rower"}` + "\n```\n"
+- station: 대상 인물이 사용 중인 기구나 위치(예: rower, barbell, dumbbell, box, pull-up bar, floor). 모르면 빈 문자열.
+- 대상 인물이 화면에 없거나 확신할 수 없으면 ambiguous를 true, confidence를 0.5 이하, boxes를 []로 두세요. 다른 사람에게 박스를 그리지 마세요.
+`
 
 // trackingHandoff is the whitelisted Tracking channel. It has no field that
 // can carry form, ROM, tempo, counts, coaching text, fatigue or scores.

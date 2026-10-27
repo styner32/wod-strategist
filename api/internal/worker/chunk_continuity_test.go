@@ -118,4 +118,23 @@ var _ = Describe("Pass 1 chunk continuity", func() {
 		Expect(segments).To(HaveLen(2))
 		Expect(skipped).To(BeEmpty(), "unclassified media is not claimed as rest")
 	})
+
+	It("classifies Pass-1 not_visible chunks as unclassified instead of Unknown exercise so multi-chunk frame exits stay unanalyzed", func() {
+		notVisible := func(i int) db.ChunkAnalysisResult {
+			return chunkAt(i, "", `{"movement":"","activity_state":"unknown","rep_count":0}`,
+				`{"version":1,"duration_secs":10,"target_state":"not_visible","activity_state":"unknown","events":[],"unassessed":[{"start_secs":0,"end_secs":10,"reason":"target_not_visible"}]}`)
+		}
+		class, _ := classifyChunkActivity(notVisible(0), WorkoutTypeWOD)
+		Expect(class).To(Equal(chunkUnclassified))
+
+		bridged, skipped := build(rowing(0), notVisible(1), rowing(2))
+		Expect(bridged).To(HaveLen(1), "an isolated 1-chunk occlusion between continuous active chunks is bridged")
+		Expect(skipped).To(BeEmpty())
+
+		segments, skipped := build(rowing(0), notVisible(1), notVisible(2), notVisible(3), rowing(4))
+		Expect(segments).To(HaveLen(2), "2+ contiguous not_visible chunks break the segment instead of becoming Unknown exercise")
+		Expect(segments[0].End).To(Equal("18:30.37"))
+		Expect(segments[1].Start).To(Equal("19:00.37"))
+		Expect(skipped).To(BeEmpty(), "not_visible chunks remain unanalyzed rather than claimed as Rest")
+	})
 })

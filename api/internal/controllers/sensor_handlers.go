@@ -44,6 +44,7 @@ type CalculationInputsSnapshot struct {
 	MaxHRSource        *string  `json:"max_hr_source"`
 	HasHRZones         bool     `json:"has_hr_zones"`
 	RestingHR          *int     `json:"resting_hr,omitempty"`
+	RestingHRSource    string   `json:"resting_hr_source,omitempty"`
 	ENMORestG          *float64 `json:"enmo_rest_g,omitempty"`
 	ENMORefG           *float64 `json:"enmo_ref_g,omitempty"`
 	CalibrationVersion string   `json:"calibration_version,omitempty"`
@@ -289,9 +290,16 @@ func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
 		}
 
 		if req.CalculationVersion == 3 {
+			var profileRestHR *int
 			if profile.RestingHRBPM != nil && *profile.RestingHRBPM >= 30 && *profile.RestingHRBPM <= 120 {
 				restHR := *profile.RestingHRBPM
-				calcInputs.RestingHR = &restHR
+				profileRestHR = &restHR
+			}
+			if resolvedRestHR, resolvedRestSrc, ok := sensor.ResolveRestingHR(sensor.ParseOptions{
+				RestingHR: profileRestHR,
+			}); ok {
+				calcInputs.RestingHR = &resolvedRestHR
+				calcInputs.RestingHRSource = resolvedRestSrc
 			}
 			var calibVer string
 			if profile.SensorCalibrationVersion != nil {

@@ -16,6 +16,8 @@ const gapReasons: Record<string, string> = {
   analysis_incomplete: "Analysis is incomplete",
   incomplete_cycle: "Only part of a repetition is visible",
   occlusion: "View obstructed",
+  target_not_visible: "Target athlete out of camera view",
+  target_not_visible_sensor_active: "Target athlete out of camera view (sensor movement detected)",
   unsupported_movement_or_unit: "Movement could not be counted",
   unassessable_target_or_activity: "The athlete or movement is unclear",
 };

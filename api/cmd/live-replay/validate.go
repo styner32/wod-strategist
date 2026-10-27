@@ -252,7 +252,7 @@ func validateSensorResult(m FixtureManifest, raw []byte, summary sensor.SensorSu
 	result, err := sensor.ParseAndProcessWithTimeline(bytes.NewReader(raw), sensor.ParseOptions{
 		CalculationVersion: 3, ExpectedProfileID: targetProfileID, ExpectedSessionID: meta.SessionID,
 		ExpectedSHA256: digest(raw), ExpectedSizeBytes: int64(len(raw)), Age: inputs.Age, EstimatedMaxHR: inputs.MaxHR,
-		RestingHR: inputs.RestingHR, ENMORestG: inputs.ENMORestG, ENMORefG: inputs.ENMORefG, CalibrationVersion: inputs.CalibrationVersion,
+		RestingHR: inputs.RestingHR, RestingHRSource: inputs.RestingHRSource, ENMORestG: inputs.ENMORestG, ENMORefG: inputs.ENMORefG, CalibrationVersion: inputs.CalibrationVersion,
 	}, tl.Source)
 	if err != nil {
 		return fmt.Errorf("replayed sensor parser validation: %w", err)

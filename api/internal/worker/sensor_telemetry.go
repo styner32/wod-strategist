@@ -39,6 +39,7 @@ type SensorProcessingRecord struct {
 		MaxHRSource        *string  `json:"max_hr_source,omitempty"`
 		HasHRZones         bool     `json:"has_hr_zones"`
 		RestingHR          *int     `json:"resting_hr,omitempty"`
+		RestingHRSource    string   `json:"resting_hr_source,omitempty"`
 		ENMORestG          *float64 `json:"enmo_rest_g,omitempty"`
 		ENMORefG           *float64 `json:"enmo_ref_g,omitempty"`
 		CalibrationVersion string   `json:"calibration_version,omitempty"`
@@ -218,6 +219,7 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 		Age:                processing.CalculationInputs.Age,
 		EstimatedMaxHR:     processing.CalculationInputs.MaxHR,
 		RestingHR:          processing.CalculationInputs.RestingHR,
+		RestingHRSource:    processing.CalculationInputs.RestingHRSource,
 		ENMORestG:          processing.CalculationInputs.ENMORestG,
 		ENMORefG:           processing.CalculationInputs.ENMORefG,
 		CalibrationVersion: processing.CalculationInputs.CalibrationVersion,

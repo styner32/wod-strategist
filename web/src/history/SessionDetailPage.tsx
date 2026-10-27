@@ -1071,7 +1071,11 @@ export function SessionDetailPage() {
                     onError={handleVideoError}
                     className="w-full max-h-[36svh] bg-black object-contain sm:max-h-[50svh] lg:max-h-[calc(100dvh-20rem)]"
                   />
-                  <TrackingBoxOverlay videoRef={videoRef} chunks={chunks} />
+                  <TrackingBoxOverlay
+                    videoRef={videoRef}
+                    chunks={chunks}
+                    loading={isMetadataLoading}
+                  />
                 </div>
                 {videoPlaybackError && (
                   <div

@@ -87,11 +87,14 @@ type EndEvent struct {
 }
 
 const (
-	HybridAlgorithmVersion      = "hybrid-0.75-0.25-gamma2"
-	DefaultBootstrapENMORestG   = 0.01
-	DefaultBootstrapENMORefG    = 0.30
-	BootstrapCalibrationVersion = "bootstrap_chest_v1"
-	PersonalCalibrationVersion  = "personal_chest_v1"
+	HybridAlgorithmVersion       = "hybrid-0.75-0.25-gamma2"
+	DefaultBootstrapRestingHRBPM = 60
+	RestingHRSourceProfile       = "profile"
+	RestingHRSourceDefault       = "default_60bpm"
+	DefaultBootstrapENMORestG    = 0.01
+	DefaultBootstrapENMORefG     = 0.30
+	BootstrapCalibrationVersion  = "bootstrap_chest_v1"
+	PersonalCalibrationVersion   = "personal_chest_v1"
 )
 
 type ParseOptions struct {
@@ -103,6 +106,7 @@ type ParseOptions struct {
 	Age                *int
 	EstimatedMaxHR     *int
 	RestingHR          *int
+	RestingHRSource    string
 	ENMORestG          *float64
 	ENMORefG           *float64
 	CalibrationVersion string
@@ -185,6 +189,7 @@ type CalculationInputs struct {
 	MaxHRSource        *string  `json:"max_hr_source,omitempty"`
 	HasHRZones         bool     `json:"has_hr_zones"`
 	RestingHR          *int     `json:"resting_hr,omitempty"`
+	RestingHRSource    string   `json:"resting_hr_source,omitempty"`
 	ENMORestG          *float64 `json:"enmo_rest_g,omitempty"`
 	ENMORefG           *float64 `json:"enmo_ref_g,omitempty"`
 	CalibrationVersion string   `json:"calibration_version,omitempty"`

@@ -26,15 +26,20 @@
 ## Evidence and clocks
 
 - Base chunk inference sees no recent-chunk assessment history (form, counts,
-  coaching, fatigue). Since 2026-10-26 it may receive the Tracking channel only
-  (`ENABLE_TRACKING_CONTINUITY`; explicit `true`/`false`, unset = on outside
-  production): `trackingInputs` attaches up to two marked reference JPEGs (the
+  coaching, fatigue). Since 2026-10-26 it receives the Tracking channel by
+  default (`ENABLE_TRACKING_CONTINUITY`; defaults to `true` when unset, set
+  `false` to disable): `trackingInputs` supplies the single unified
+  `target_person` instruction (`trackingOutputPrompt`, omitting legacy
+  `TargetPersonPrompt` so duplicate blocks are never requested), attaches up to
+  two marked reference JPEGs (the
   latest within 60 s of the chunk start, plus the session's first) and a
   whitelisted `trackingHandoff` (matched cues, frame region, station, previous
   activity state, non-authoritative movement hint). It never waits for a late
   previous chunk. The chunk reports `target_person.boxes` (≤3, `{t, box_2d}` in
   normalized [ymin,xmin,ymax,xmax] 0..1000), `frame_region`, `station` inside
-  the existing `target_cues` text column (no migration). When
+  the existing `target_cues` text column (no migration), even on `[NO_EXERCISE]`
+  chunks when the target person is visible, and does not force `confidence: 0.5`
+  when explicit appearance cues are absent. When
   `target_confidence ≥ 0.7` and not ambiguous, `saveTrackingReference` renders
   the last box onto that frame (ffmpeg + `image/draw`) to
   `videos/{pid}/{sid}/tracking/{chunkID}.jpg` and records `reference_image`;
@@ -121,7 +126,12 @@ after the user's acceptance of final assessment; see [workout-progress.md](worko
     - **`WOD` / `ACCESSORY`:** Never skips a rest chunk immediately following an active chunk (`noPrecedingActive` guard preserves cross-boundary spillover reps finishing in `(MediaStartSecs, MediaEndSecs]`). Vetoes skip if `motion_score >= 0.045` or optional H10 has `max >= 0.12g` or `mean >= 0.08g`. Confirms skip on `isRestRunInterior` (`rest -> rest -> rest`), optional H10 stillness (`coverage >= 0.50` and `max < 0.08g`), or `motion_score < 0.012`.
     - **Boundary ownership:** Compute all rest-skip candidates before reusing completed reviews. On `WOD` / `ACCESSORY`, also review the immediate adjacent successor of each original non-skippable candidate, even if Pass 1 called that successor rest. This preserves repetitions completing across the boundary after a motion/H10 veto. Use the original candidate decisions so protection does not cascade through the remaining rest run; apply the same plan on retries.
     - Skipped chunks are recorded immediately as `ReviewedChunk{State: "completed", Observations: activity.ConfirmedRest(dur)}`. If all chunks are already completed or rest-skipped (`len(batches) == 0`), `HandleActivityReviewTask` saves `completed` (or `partial` if unassessed gaps exist) and exits before downloading `merged.mp4`.
-  - **Batch-3 grouping (`buildActivityReviewBatches`):** Remaining uncompleted chunks are grouped into contiguous (`activity.Adjacent`) batches of up to `3` chunks (`<= 35.0s` core duration) with up to 1 adjacent chunk leading/trailing context (`<= 15.0s` per side, ~50s max window / 6–7 Frame-Grid sheets at `4 FPS`, `120s` per-call timeout). Each batch response is decoded once over `[WinStart, WinEnd]` and distributed per chunk via `activity.Own(doc, *row.MediaStartSecs, *row.MediaEndSecs)` (which sets each chunk's `DurationSecs = end - start`).
+  - **Batch-3 grouping (`buildActivityReviewBatches`):** Remaining uncompleted chunks are grouped into contiguous (`activity.Adjacent`) batches of up to `3` chunks (`<= 35.0s` core duration) with up to 1 adjacent chunk leading/trailing context (`<= 15.0s` per side, ~50s max window / 6–7 Frame-Grid sheets at `4 FPS`, `180s` per-call timeout via `activityReviewWindowTimeout`). Each batch response is decoded once over `[WinStart, WinEnd]` and distributed per chunk via `activity.Own(doc, *row.MediaStartSecs, *row.MediaEndSecs)` (which sets each chunk's `DurationSecs = end - start`).
+  - **Out-of-frame (`not_visible`) handling & tracking references (2026-10-27):**
+    - `activity.Decode` preserves `TargetState: "not_visible"` (`Reason: "target_not_visible"`) and `"ambiguous"` (`Reason: "unassessable_target_or_activity"`) instead of overwriting them with `"unknown"`, so Pass-2 continuity (`classifyChunkActivity`) classifies Pass-1 `not_visible` chunks as `chunkUnclassified` rather than `chunkActive ("Unknown")`.
+    - Before downloading `merged.mp4`, `HandleActivityReviewTask` skips interior chunks of contiguous Pass-1 `not_visible -> not_visible -> not_visible` runs (`isPass1ExplicitNotVisible` + `isNotVisibleRunInterior`), keeping departure and return boundary chunks adjacent to non-`not_visible` chunks reviewable so boundary-completing reps are preserved. Skipped interior chunks record `activity.ConfirmedNotVisible(*row.MediaStartSecs, *row.MediaEndSecs, sensorActive)` (`Reason: "target_not_visible_sensor_active"` when optional Polar H10 `acc_magnitude_std_g` has `max >= 0.12g` or `mean >= 0.08g`, otherwise `"target_not_visible"`), avoiding blind video calls when the athlete is out of camera view.
+    - When `TrackingContinuityEnabled` is true, `HandleActivityReviewTask` attaches stored green-box `TARGET` reference JPEGs (`loadTrackingReferences` + `cachedPass2TrackingInputs`, memoizing GCS object reads across batches) to both `AnalyzeVideoIntervalWithFrameGrids` (`gridOpts.ReferenceImages`) and the `AnalyzeSegmentWithModelAndImages` fallback (`WithThinkingLevel(..., "MEDIUM")`).
+    - When appearance cues are configured, `formatTargetPersonContext` and `agenticHighlightPrompt` forbid falling back to center bystanders when zero visible people match persistent cues, requiring immediate fast-exit (`not_visible` / `[NO_EXERCISE]` / `target_status: "absent"`).
   - **Catalog coverage (`Box Step-up` / `Box Step-over`):** Canonical `Box Step-up`, `Box Step-over`, `DB Box Step-up`, `DB Box Step-over`, `Weighted Box Step-up`, `Weighted Box Step-over`, `Sandbag Box Step-up`, `Sandbag Box Step-over` (plus English/Korean aliases) are registered in `internal/movement/catalog.go` and `internal/fatigue/fatigue.go` so `activity.Decode` counts them as `reps` instead of `unsupported_movement_or_unit`.
 - Store review schema version, media generation, and a source fingerprint of
   canonical chunk identity/status/times/observations. Canonicalize JSON before

@@ -85,9 +85,16 @@ var _ = Describe("Movement evidence and accumulation", func() {
 
 		doc, err = Decode([]byte(`{"version":1,"target_state":"ambiguous","activity_state":"exercise","events":[{"movement":"Clean & Jerk","unit":"reps","start_secs":1.0,"end_secs":3.0,"complete":true,"evidence":"c&j"}],"unassessed":[]}`), 0, 10)
 		Expect(err).NotTo(HaveOccurred())
+		Expect(doc.TargetState).To(Equal("ambiguous"))
 		Expect(doc.Unassessed).NotTo(BeEmpty())
 		Expect(doc.Unassessed[0].Reason).To(Equal("unassessable_target_or_activity"))
 		Expect(doc.Unassessed[0].Movement).To(Equal("Clean & Jerk"))
+
+		notVisible, err := Decode([]byte(`{"version":1,"target_state":"not_visible","activity_state":"unknown","events":[],"unassessed":[]}`), 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(notVisible.TargetState).To(Equal("not_visible"))
+		Expect(notVisible.Unassessed).To(HaveLen(1))
+		Expect(notVisible.Unassessed[0].Reason).To(Equal("target_not_visible"))
 
 		rowUnclear := source(4, 0, 10)
 		rowUnclear.ExerciseType = "Push Jerk"
@@ -95,6 +102,39 @@ var _ = Describe("Movement evidence and accumulation", func() {
 		summaryWithEx := Build([]db.ChunkAnalysisResult{rowUnclear}, nil)
 		Expect(summaryWithEx.Unassessed).NotTo(BeEmpty())
 		Expect(summaryWithEx.Unassessed[0].Movement).To(Equal("Push Jerk"))
+	})
+	It("builds media-bounded out-of-frame observations via ConfirmedNotVisible", func() {
+		row0 := source(1, 0, 10)
+		rowA := source(2, 10, 20)
+		rowA.ExerciseType = ""
+		rowA.MovementObservations = []byte(`{"version":1,"duration_secs":10,"target_state":"not_visible","activity_state":"unknown","events":[],"unassessed":[]}`)
+		rowB := source(3, 20, 30)
+		rowB.ExerciseType = ""
+		rowB.MovementObservations = []byte(`{"version":1,"duration_secs":10,"target_state":"not_visible","activity_state":"unknown","events":[],"unassessed":[]}`)
+		rows := []db.ChunkAnalysisResult{row0, rowA, rowB}
+
+		doc0, err := Decode(observationJSON(cycle(2, 5)), 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		stored := Build(rows, nil)
+		stored.ReviewState = "partial"
+		stored.Reviews = []ReviewedChunk{
+			{ChunkID: row0.ID, State: "completed", Observations: doc0},
+			{ChunkID: rowA.ID, State: "completed", Observations: ConfirmedNotVisible(10, 20, false)},
+			{ChunkID: rowB.ID, State: "completed", Observations: ConfirmedNotVisible(20, 30, true)},
+		}
+		built := Build(rows, &stored)
+		Expect(built.Movements).To(HaveLen(1))
+		Expect(built.Movements[0].Count).To(Equal(1))
+		Expect(built.Unassessed).To(HaveLen(2))
+		Expect(built.Unassessed[0].Clock).To(Equal("media"))
+		Expect(*built.Unassessed[0].Start).To(Equal(10.0))
+		Expect(*built.Unassessed[0].End).To(Equal(20.0))
+		Expect(built.Unassessed[0].Reason).To(Equal("target_not_visible"))
+		Expect(built.Unassessed[1].Clock).To(Equal("media"))
+		Expect(*built.Unassessed[1].Start).To(Equal(20.0))
+		Expect(*built.Unassessed[1].End).To(Equal(30.0))
+		Expect(built.Unassessed[1].Reason).To(Equal("target_not_visible_sensor_active"))
+		Expect(ConfirmedNotVisible(20, 10, false).DurationSecs).To(Equal(0.0))
 	})
 	It("accepts canonical aliases and plurals for recognized movements", func() {
 		rowing := Observation{Movement: "Rowing", Unit: "seconds", Start: 1, End: 9, Complete: true, Evidence: "rowing on machine"}

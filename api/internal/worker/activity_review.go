@@ -133,6 +133,7 @@ const (
 	activityReviewMaxBatchChunks     = 3
 	activityReviewMaxBatchCoreSecs   = 35.0
 	activityReviewMaxContextPadSecs  = 15.0
+	activityReviewWindowTimeout      = 180 * time.Second
 	activityReviewMotionVetoScore    = 0.045
 	activityReviewMotionConfirmScore = 0.012
 	activityReviewAccVetoMaxG        = 0.12
@@ -362,6 +363,100 @@ func isRestRunInterior(rows []db.ChunkAnalysisResult, idx int) bool {
 	return leftRest && rightRest
 }
 
+func isPass1ExplicitNotVisible(rows []db.ChunkAnalysisResult, idx int) bool {
+	if !rowClockValid(rows, idx) {
+		return false
+	}
+	row := rows[idx]
+	if row.Status != "COMPLETED" || !isExplicitRestExerciseType(row.ExerciseType) {
+		return false
+	}
+	if row.TargetConfidence >= trackingMinConfidence {
+		return false
+	}
+	if tp, ok := parseStoredTargetPerson(row.TargetCues); ok && ((!tp.Ambiguous && len(tp.Boxes) > 0) || tp.ReferenceImage != "") {
+		return false
+	}
+	if rawSig := strings.TrimSpace(row.ObservedSignals); rawSig != "" && rawSig != "{}" {
+		var sig struct {
+			Movement      string `json:"movement"`
+			ActivityState string `json:"activity_state"`
+			RepCount      int    `json:"rep_count"`
+		}
+		if json.Unmarshal([]byte(rawSig), &sig) != nil {
+			return false
+		}
+		if strings.EqualFold(strings.TrimSpace(sig.ActivityState), "exercise") || sig.RepCount > 0 || !isExplicitRestExerciseType(sig.Movement) {
+			return false
+		}
+	}
+	if len(row.MovementObservations) == 0 {
+		return false
+	}
+	var local activity.Observations
+	_ = json.Unmarshal(row.MovementObservations, &local)
+	dur := local.DurationSecs
+	if !activity.ValidInterval(0, dur) {
+		dur = *row.EndSecs - *row.StartSecs
+	}
+	doc, err := activity.Decode(row.MovementObservations, 0, dur)
+	if err != nil {
+		return false
+	}
+	return doc.TargetState == "not_visible" && len(doc.Events) == 0
+}
+
+// isNotVisibleRunInterior returns true for interior chunks of a contiguous Pass-1
+// not_visible run (not_visible -> not_visible -> not_visible). Transition boundary
+// chunks adjacent to non-not_visible chunks return false so departure/return boundary
+// repetitions are still reviewed on merged media.
+func isNotVisibleRunInterior(rows []db.ChunkAnalysisResult, idx int) bool {
+	if len(rows) < 2 || !isPass1ExplicitNotVisible(rows, idx) {
+		return false
+	}
+	leftNotVisible := idx == 0 || (activity.Adjacent(rows[idx-1], rows[idx]) && isPass1ExplicitNotVisible(rows, idx-1))
+	rightNotVisible := idx == len(rows)-1 || (activity.Adjacent(rows[idx], rows[idx+1]) && isPass1ExplicitNotVisible(rows, idx+1))
+	return leftNotVisible && rightNotVisible
+}
+
+func (w *Worker) cachedPass2TrackingInputs(ctx context.Context, refs []trackingReferenceRef, cache map[string][]byte, start, end float64) (string, [][]byte) {
+	if len(refs) == 0 {
+		return "", nil
+	}
+	load := func(object string) []byte {
+		if object == "" {
+			return nil
+		}
+		if img, seen := cache[object]; seen {
+			return img
+		}
+		img := w.downloadTrackingReference(ctx, object)
+		cache[object] = img
+		return img
+	}
+	near := ""
+	for _, ref := range refs {
+		if ref.End > start && ref.Start < end {
+			near = ref.Object
+			break
+		}
+	}
+	anchor := refs[0].Object
+	var images [][]byte
+	if img := load(near); img != nil {
+		images = append(images, img)
+	}
+	if anchor != near {
+		if img := load(anchor); img != nil {
+			images = append(images, img)
+		}
+	}
+	if len(images) == 0 {
+		return "", nil
+	}
+	return pass2TrackingPrompt, images
+}
+
 // shouldSkipActivityReviewRestChunk decides whether a Pass-1 rest chunk is sufficiently
 // confirmed to skip independent Pass-2 media review without risking rep loss.
 // Note: MoveNet workout_confidence is intentionally excluded; Polar H10 sensor_timeline
@@ -545,10 +640,23 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 	}
 	completedIDs := make(map[uint]bool, len(rows))
 	skippedRestChunks := 0
+	skippedNotVisibleChunks := 0
 	for i, row := range rows {
 		if saved, ok := previous[row.ID]; ok && saved.State == "completed" {
 			replaceReview(saved)
 			completedIDs[row.ID] = true
+			continue
+		}
+		if isNotVisibleRunInterior(rows, i) {
+			acc := chunkAccStats(timeline, *row.StartSecs, *row.EndSecs)
+			sensorActive := acc.hasValid && (acc.maxG >= activityReviewAccVetoMaxG || acc.meanG >= activityReviewAccVetoMeanG)
+			replaceReview(activity.ReviewedChunk{
+				ChunkID:      row.ID,
+				State:        "completed",
+				Observations: activity.ConfirmedNotVisible(*row.MediaStartSecs, *row.MediaEndSecs, sensorActive),
+			})
+			completedIDs[row.ID] = true
+			skippedNotVisibleChunks++
 			continue
 		}
 		skipRest := restSkipCandidates[i]
@@ -579,6 +687,7 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 		zap.String("session_id", p.SessionID),
 		zap.Int("total_chunks", len(rows)),
 		zap.Int("skipped_rest_chunks", skippedRestChunks),
+		zap.Int("skipped_not_visible_chunks", skippedNotVisibleChunks),
 		zap.Int("batch_count", len(batches)),
 		zap.Bool("has_sensor_timeline", timeline != nil),
 	)
@@ -652,7 +761,9 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 
 	failed := false
 	target := w.buildTargetPersonContext(p.ProfileID, p.SessionID)
-	if skippedRestChunks > 0 {
+	trackingRefs := w.loadTrackingReferences(ctx, p.SessionID, p.ProfileID)
+	trackingCache := make(map[string][]byte, len(trackingRefs))
+	if skippedRestChunks > 0 || skippedNotVisibleChunks > 0 {
 		if err = w.saveActivityReview(ctx, p, &summary); err != nil {
 			return err
 		}
@@ -664,23 +775,29 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 	var wg sync.WaitGroup
 
 	for _, b := range batches {
+		var trackingPrompt string
+		var trackingImages [][]byte
+		if b.Valid && b.WinEnd <= duration+0.001 {
+			trackingPrompt, trackingImages = w.cachedPass2TrackingInputs(ctx, trackingRefs, trackingCache, b.WinStart, b.WinEnd)
+		}
 		wg.Add(1)
-		go func(batch activityReviewBatch) {
+		go func(batch activityReviewBatch, batchTrackingPrompt string, batchTrackingImages [][]byte) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			chunkReviews := make([]activity.ReviewedChunk, 0, len(batch.Indices))
 			if batch.Valid && batch.WinEnd <= duration+0.001 {
-				prompt := movementObservationPrompt + target + fmt.Sprintf(
+				prompt := movementObservationPrompt + target + batchTrackingPrompt + fmt.Sprintf(
 					"\n검토 영상의 절대 media 초를 사용하세요. 문맥 구간 %.6f~%.6f초. 현재 집계 소유 구간은 (%.6f, %.6f]초입니다. 문맥에서 사이클 시작과 끝을 확인하고 기록하되, 이전 합계나 목표 횟수로 추측하지 마세요. 구간 중 일부에서만 대상이나 동작이 확인되고 다른 하위 구간만 가림·이탈·판독불가인 경우, 확인된 구간이 있으면 target_state는 identified로 유지하고 판독불가 하위 구간만 unassessed 배열에 기록하세요. 전체 구간 내내 대상을 식별할 수 없을 때만 unknown입니다.",
 					batch.WinStart, batch.WinEnd, batch.CoreStart, batch.CoreEnd,
 				)
 				started := time.Now()
-				callCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+				callCtx, cancel := context.WithTimeout(ctx, activityReviewWindowTimeout)
 				segStart := time.Duration(batch.WinStart * float64(time.Second))
 				segEnd := time.Duration(batch.WinEnd * float64(time.Second))
 				gridOpts := activityReviewFrameGridOptions()
+				gridOpts.ReferenceImages = batchTrackingImages
 				var (
 					raw     string
 					sheets  []FrameGridSheet
@@ -706,9 +823,16 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 					if upErr != nil {
 						callErr = upErr
 					} else {
-						raw, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModel(
-							callCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38,
-						)
+						segCtx := gemini.WithThinkingLevel(callCtx, "MEDIUM")
+						if len(batchTrackingImages) > 0 {
+							raw, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModelAndImages(
+								segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38, batchTrackingImages,
+							)
+						} else {
+							raw, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModel(
+								segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38,
+							)
+						}
 					}
 				}
 				cancel()
@@ -762,7 +886,7 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 					saveErr = err
 				}
 			}
-		}(b)
+		}(b, trackingPrompt, trackingImages)
 	}
 	wg.Wait()
 	if saveErr != nil {

@@ -635,8 +635,11 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 		HasHRZones:         hasHRZones,
 	}
 	if opts.CalculationVersion == 3 {
+		if restHR, restSrc, ok := ResolveRestingHR(opts); ok {
+			calcInputs.RestingHR = &restHR
+			calcInputs.RestingHRSource = restSrc
+		}
 		enmoRest, enmoRef, calibVer := ResolveENMOCalibration(opts)
-		calcInputs.RestingHR = opts.RestingHR
 		calcInputs.ENMORestG = &enmoRest
 		calcInputs.ENMORefG = &enmoRef
 		calcInputs.CalibrationVersion = calibVer

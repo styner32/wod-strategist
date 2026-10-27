@@ -47,6 +47,7 @@ export const HYBRID_FLAG_KEYS = [
   "missing_resting_hr",
   "missing_max_hr",
   "invalid_hr_reserve_range",
+  "estimated_resting_hr",
   "peak_hr_exceeded_max",
   "sensor_data_unreadable",
   "no_valid_hybrid_windows",

@@ -41,6 +41,42 @@ var _ = Describe("Tracking channel", func() {
 		Expect(tp.ReferenceImage).To(BeEmpty())
 		legacy, _ := parseTargetPerson("```target_person\n" + `{"matched_cues":["red shirt"],"ambiguous":false,"confidence":0.9}` + "\n```")
 		Expect(legacy).To(Equal(`{"matched_cues":["red shirt"],"ambiguous":false,"confidence":0.9}`), "the stored shape is unchanged without tracking fields")
+
+		// Boxes-only block without matched_cues key (e.g. [NO_EXERCISE] rest chunk).
+		noCuesInput := "[NO_EXERCISE]\n```target_person\n" + `{"boxes":[{"t":2.5,"box_2d":[110,300,940,610]}],"confidence":0.88,"ambiguous":false,"frame_region":"center","station":"floor"}` + "\n```"
+		noCuesJSON, noCuesConf := parseTargetPerson(noCuesInput)
+		Expect(noCuesConf).To(Equal(0.88))
+		tpNoCues, ok := parseStoredTargetPerson(noCuesJSON)
+		Expect(ok).To(BeTrue())
+		Expect(tpNoCues.MatchedCues).To(BeEmpty())
+		Expect(tpNoCues.Boxes).To(HaveLen(1))
+		Expect(stripTargetPerson(stripExerciseTag(noCuesInput))).To(BeEmpty())
+
+		// Duplicate target_person blocks merge boxes instead of dropping the second block.
+		dupInput := "좋은 자세입니다.\n```target_person\n" + `{"matched_cues":["black shirt"],"ambiguous":false,"confidence":0.9}` + "\n```\n```target_person\n" + `{"matched_cues":[],"ambiguous":false,"confidence":0.92,"boxes":[{"t":0.5,"box_2d":[120,400,980,620]}],"frame_region":"center","station":"barbell"}` + "\n```"
+		dupJSON, dupConf := parseTargetPerson(dupInput)
+		Expect(dupConf).To(Equal(0.92))
+		tpDup, ok := parseStoredTargetPerson(dupJSON)
+		Expect(ok).To(BeTrue())
+		Expect(tpDup.MatchedCues).To(Equal([]string{"black shirt"}))
+		Expect(tpDup.Boxes).To(HaveLen(1))
+		Expect(tpDup.Station).To(Equal("barbell"))
+		Expect(stripTargetPerson(dupInput)).To(Equal("좋은 자세입니다."))
+	})
+
+	It("emits a single unified target_person instruction without forcing confidence 0.5 when appearance cues are absent", func() {
+		w := &Worker{TrackingContinuityEnabled: true}
+		base := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD})
+		trackingPrompt, _ := w.trackingInputs(context.Background(), 1, "WOD-20261026-01ABC", WorkoutTypeWOD, "gs://b/videos/1/WOD-20261026-01ABC/c.mp4", 0)
+		fullPrompt := base + trackingPrompt
+		Expect(fullPrompt).To(ContainSubstring(`"boxes"`))
+		Expect(fullPrompt).NotTo(ContainSubstring("confidence는 0.5로 두세요"))
+		Expect(bytes.Count([]byte(fullPrompt), []byte("```target_person"))).To(Equal(1))
+
+		wDisabled := &Worker{TrackingContinuityEnabled: false}
+		disabledPrompt := wDisabled.buildChunkAnalysisPrompt(VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD})
+		Expect(bytes.Count([]byte(disabledPrompt), []byte("```target_person"))).To(Equal(1))
+		Expect(disabledPrompt).NotTo(ContainSubstring("confidence는 0.5로 두세요"))
 	})
 
 	It("hands forward only tracking fields, never assessment output", func() {

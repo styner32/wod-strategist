@@ -1,6 +1,7 @@
 import {
   buildTrackingTimeline,
   containedVideoRect,
+  describeTrackingOverlayState,
   overlayRect,
   readTrackingOverlayPreference,
   trackingBoxAt,
@@ -68,6 +69,54 @@ describe("tracking box overlay helpers", () => {
     expect(rect.top).toBe(75);
     expect(overlayRect([0, 500, 1000, 1000], rect)).toEqual({ left: 400, top: 75, width: 400, height: 450 });
     expect(containedVideoRect(800, 600, 0, 0)).toBeNull();
+  });
+
+  it("falls back to chunk.target_confidence when target_cues omits confidence", () => {
+    const timeline = buildTrackingTimeline([
+      chunk({
+        target_confidence: 0.9,
+        target_cues: JSON.stringify({
+          ambiguous: false,
+          boxes: [{ t: 2, box_2d: [100, 200, 900, 400] }],
+        }),
+      }),
+    ]);
+    expect(timeline).toHaveLength(1);
+  });
+
+  it("describes toggle and status notices for sessions without boxes and untracked timestamps", () => {
+    expect(describeTrackingOverlayState([], false, false, true)).toEqual({
+      available: false,
+      buttonLabel: "추적 박스 표시",
+      notice: null,
+    });
+    expect(describeTrackingOverlayState([], false, false)).toEqual({
+      available: false,
+      buttonLabel: "추적 박스 표시",
+      notice: null,
+    });
+    expect(describeTrackingOverlayState([], true, false)).toEqual({
+      available: false,
+      buttonLabel: "추적 박스 끄기",
+      notice: "저장된 추적 박스 없음",
+    });
+
+    const timeline = buildTrackingTimeline([chunk({})]);
+    expect(describeTrackingOverlayState(timeline, false, false)).toEqual({
+      available: true,
+      buttonLabel: "추적 박스 표시",
+      notice: null,
+    });
+    expect(describeTrackingOverlayState(timeline, true, false)).toEqual({
+      available: true,
+      buttonLabel: "추적 박스 끄기",
+      notice: "현재 구간 박스 없음",
+    });
+    expect(describeTrackingOverlayState(timeline, true, true)).toEqual({
+      available: true,
+      buttonLabel: "추적 박스 끄기",
+      notice: null,
+    });
   });
 
   it("persists the overlay toggle and defaults to off", () => {

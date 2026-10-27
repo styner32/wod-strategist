@@ -144,7 +144,8 @@ func classifyChunkActivity(chunk db.ChunkAnalysisResult, workoutType string) (ch
 		// A named movement or Unknown.
 		return chunkActive, label()
 	}
-	if strings.EqualFold(signals.ActivityState, "exercise") || strings.EqualFold(signals.ActivityState, "unknown") ||
+	if strings.EqualFold(signals.ActivityState, "exercise") ||
+		(strings.EqualFold(signals.ActivityState, "unknown") && !(evidence.hasDoc && evidence.targetState == "not_visible")) ||
 		evidence.activityState == "exercise" ||
 		(evidence.hasDoc && evidence.activityState == "unknown" && evidence.targetState != "not_visible" && evidence.targetState != "") {
 		return chunkActive, label()

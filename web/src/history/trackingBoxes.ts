@@ -37,7 +37,7 @@ function validBox(raw: number[] | undefined): NormalizedBox | null {
 }
 
 function readTargetPerson(chunk: ChunkAnalysisResult): StoredTargetPerson | null {
-  const raw = (chunk as { target_cues?: unknown }).target_cues;
+  const raw = chunk.target_cues;
   if (raw == null) return null;
   if (typeof raw === "object") return raw as StoredTargetPerson;
   if (typeof raw !== "string" || !raw.trim()) return null;
@@ -55,7 +55,8 @@ export function buildTrackingTimeline(chunks: ChunkAnalysisResult[] = []): Track
     const mediaEnd = chunk.media_end_secs;
     if (chunk.status !== "COMPLETED" || mediaStart == null || mediaEnd == null || !Number.isFinite(mediaStart) || !Number.isFinite(mediaEnd) || mediaEnd <= mediaStart) continue;
     const target = readTargetPerson(chunk);
-    if (!target || target.ambiguous || (target.confidence ?? 0) < TRACKING_MIN_CONFIDENCE || !Array.isArray(target.boxes)) continue;
+    const confidence = typeof target?.confidence === "number" ? target.confidence : (chunk.target_confidence ?? 0);
+    if (!target || target.ambiguous || confidence < TRACKING_MIN_CONFIDENCE || !Array.isArray(target.boxes)) continue;
     // Chunk-local seconds follow the chunk file; scale them onto the media span.
     const captureDuration =
       chunk.start_secs != null && chunk.end_secs != null && chunk.end_secs > chunk.start_secs ? chunk.end_secs - chunk.start_secs : mediaEnd - mediaStart;
@@ -110,6 +111,47 @@ export function overlayRect(box: NormalizedBox, rect: { left: number; top: numbe
     top: rect.top + (ymin / 1000) * rect.height,
     width: ((xmax - xmin) / 1000) * rect.width,
     height: ((ymax - ymin) / 1000) * rect.height,
+  };
+}
+
+export interface TrackingOverlayStatus {
+  available: boolean;
+  buttonLabel: string;
+  notice: string | null;
+}
+
+export function describeTrackingOverlayState(
+  spans: TrackingSpan[],
+  enabled: boolean,
+  hasActiveBox: boolean,
+  loading = false,
+): TrackingOverlayStatus {
+  const available = spans.length > 0;
+  if (loading && !available) {
+    return {
+      available: false,
+      buttonLabel: "추적 박스 표시",
+      notice: null,
+    };
+  }
+  if (!available) {
+    return {
+      available: false,
+      buttonLabel: enabled ? "추적 박스 끄기" : "추적 박스 표시",
+      notice: enabled ? "저장된 추적 박스 없음" : null,
+    };
+  }
+  if (!enabled) {
+    return {
+      available: true,
+      buttonLabel: "추적 박스 표시",
+      notice: null,
+    };
+  }
+  return {
+    available: true,
+    buttonLabel: "추적 박스 끄기",
+    notice: hasActiveBox ? null : "현재 구간 박스 없음",
   };
 }
 

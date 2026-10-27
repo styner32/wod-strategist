@@ -13,6 +13,24 @@ const (
 	hybridRollingSec   = 5
 )
 
+// ResolveRestingHR returns the frozen resting HR baseline (30..120 bpm) and its source.
+// When RestingHR is omitted (nil), it defaults to 60 bpm ("default_60bpm") so
+// CalculationVersion 3 Hybrid Activity Intensity works out-of-the-box without mandatory
+// profile setup; out-of-range explicit values return ok=false.
+func ResolveRestingHR(opts ParseOptions) (restHR int, source string, ok bool) {
+	if opts.RestingHR == nil {
+		return DefaultBootstrapRestingHRBPM, RestingHRSourceDefault, true
+	}
+	if *opts.RestingHR < 30 || *opts.RestingHR > 120 {
+		return 0, "", false
+	}
+	src := strings.TrimSpace(opts.RestingHRSource)
+	if src == "" {
+		src = RestingHRSourceProfile
+	}
+	return *opts.RestingHR, src, true
+}
+
 // ResolveENMOCalibration returns the frozen ENMO calibration inputs (A_rest, A_ref, version),
 // falling back to fixed Polar H10 chest-strap bootstrap constants instead of per-session max.
 func ResolveENMOCalibration(opts ParseOptions) (restG, refG float64, version string) {
@@ -130,16 +148,18 @@ func (tb *timelineAccumulator) calculateHybrid(
 	}
 
 	hasMaxHR := opts.EstimatedMaxHR != nil && *opts.EstimatedMaxHR > 0
-	hasRestHR := opts.RestingHR != nil && *opts.RestingHR >= 30 && *opts.RestingHR <= 120
+	restHR, restHRSrc, hasRestHR := ResolveRestingHR(opts)
 	validHRReserve := false
 	if !hasMaxHR {
 		addFlag("missing_max_hr")
 	}
 	if !hasRestHR {
 		addFlag("missing_resting_hr")
+	} else if restHRSrc == RestingHRSourceDefault {
+		addFlag("estimated_resting_hr")
 	}
 	if hasMaxHR && hasRestHR {
-		if *opts.EstimatedMaxHR-*opts.RestingHR >= 15 {
+		if *opts.EstimatedMaxHR-restHR >= 15 {
 			validHRReserve = true
 		} else {
 			addFlag("invalid_hr_reserve_range")
@@ -262,8 +282,8 @@ func (tb *timelineAccumulator) calculateHybrid(
 
 	var hrRestF, hrReserveDenom float64
 	if validHRReserve {
-		hrRestF = float64(*opts.RestingHR)
-		hrReserveDenom = float64(*opts.EstimatedMaxHR - *opts.RestingHR)
+		hrRestF = float64(restHR)
+		hrReserveDenom = float64(*opts.EstimatedMaxHR - restHR)
 	}
 	enmoDenom := enmoRef - enmoRest
 

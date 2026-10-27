@@ -871,7 +871,7 @@ func (c *Client) AnalyzeSegmentWithModelAndImages(ctx context.Context, fileURI, 
 	genConfig := &genai.GenerateContentConfig{
 		MediaResolution: genai.MediaResolution(genai.MediaResolutionMedium),
 	}
-	thinkingLevel := c.thinkingLevel
+	thinkingLevel := thinkingLevelFromContext(ctx, c.thinkingLevel)
 	if strings.TrimSpace(thinkingLevel) == "" {
 		thinkingLevel = "HIGH"
 	}
@@ -1216,7 +1216,7 @@ func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, request
 		model = c.model
 	}
 	fps := float64(5)
-	thinkingLevel := c.thinkingLevel
+	thinkingLevel := thinkingLevelFromContext(ctx, c.thinkingLevel)
 	if strings.TrimSpace(thinkingLevel) == "" {
 		thinkingLevel = "HIGH"
 	}
