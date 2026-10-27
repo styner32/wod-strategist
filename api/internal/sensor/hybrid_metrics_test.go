@@ -243,7 +243,7 @@ var _ = Describe("CalculationVersion 3 Hybrid Activity Intensity (HRR + ENMO)", 
 		Expect(h.QualityFlags).To(ContainElements("contact_loss_present", "acc_saturation_present"))
 	})
 
-	It("withholds HRR/hybrid score when resting_hr is missing while still computing motion_intensity and ENMO quantiles", func() {
+	It("applies 60 bpm default resting_hr with estimated_resting_hr flag when resting_hr is omitted", func() {
 		contactTrue := true
 		ndjson := buildHybridNDJSON(
 			testProfileID,
@@ -253,7 +253,7 @@ var _ = Describe("CalculationVersion 3 Hybrid Activity Intensity (HRR + ENMO)", 
 			func(_ int, _ int) []float64 { return []float64{0, 0, 1.16} }, // A_k = 0.16g -> bootstrap (0.16-0.01)/(0.30-0.01)
 		)
 
-		maxHR := 185
+		maxHR := 180 // rest=60 default, max=180, current=150 -> H_k = 0.75
 		summary, err := sensor.ParseAndProcess(ndjson, sensor.ParseOptions{
 			CalculationVersion: 3,
 			ExpectedProfileID:  testProfileID,
@@ -262,20 +262,67 @@ var _ = Describe("CalculationVersion 3 Hybrid Activity Intensity (HRR + ENMO)", 
 			RestingHR:          nil,
 		})
 		Expect(err).NotTo(HaveOccurred())
+		Expect(summary.CalculationInputs.RestingHR).To(HaveValue(Equal(60)))
+		Expect(summary.CalculationInputs.RestingHRSource).To(Equal(sensor.RestingHRSourceDefault))
+
 		h := summary.Metrics.Hybrid
 		Expect(h).NotTo(BeNil())
-		Expect(h.HeartIntensity).To(BeNil())
-		Expect(h.HybridIntensity).To(BeNil())
-		Expect(h.HybridLoadAU).To(BeNil())
-		Expect(h.MotionIntensity).NotTo(BeNil())
-		Expect(*h.MotionIntensity).To(BeNumerically("~", (0.16-0.01)/(0.30-0.01), 0.005))
-		Expect(h.ENMOP95G).NotTo(BeNil())
-		Expect(*h.ENMOP95G).To(BeNumerically("~", 0.16, 0.001))
+		expectedMotion := (0.16 - 0.01) / (0.30 - 0.01)
+		expectedHybrid := 100.0 * (0.75*0.75 + 0.25*expectedMotion)
+		Expect(h.HeartIntensity).To(HaveValue(BeNumerically("~", 0.75, 0.0001)))
+		Expect(h.MotionIntensity).To(HaveValue(BeNumerically("~", expectedMotion, 0.005)))
+		Expect(h.HybridIntensity).To(HaveValue(BeNumerically("~", expectedHybrid, 0.05)))
+		Expect(h.HybridLoadAU).NotTo(BeNil())
+		Expect(h.ENMOP95G).To(HaveValue(BeNumerically("~", 0.16, 0.001)))
 		Expect(h.CalibrationVersion).To(Equal(sensor.BootstrapCalibrationVersion))
-		Expect(h.QualityFlags).To(ContainElements("missing_resting_hr", "bootstrap_motion_calibration"))
+		Expect(h.QualityFlags).To(ContainElements("estimated_resting_hr", "bootstrap_motion_calibration"))
+		Expect(h.QualityFlags).NotTo(ContainElement("missing_resting_hr"))
 	})
 
-	It("keeps motion_intensity independent of resting HR when HR contact drops in the hardest seconds", func() {
+	It("withholds HRR/hybrid score when max_hr is missing or explicit resting_hr is out of range while still computing motion_intensity", func() {
+		contactTrue := true
+		build := func() *bytes.Buffer {
+			return buildHybridNDJSON(
+				testProfileID,
+				testSessionID,
+				70,
+				func(_ int) (int, *bool) { return 150, &contactTrue },
+				func(_ int, _ int) []float64 { return []float64{0, 0, 1.16} },
+			)
+		}
+
+		noMaxSummary, err := sensor.ParseAndProcess(build(), sensor.ParseOptions{
+			CalculationVersion: 3,
+			ExpectedProfileID:  testProfileID,
+			ExpectedSessionID:  testSessionID,
+			EstimatedMaxHR:     nil,
+			RestingHR:          nil,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(noMaxSummary.Metrics.Hybrid.HeartIntensity).To(BeNil())
+		Expect(noMaxSummary.Metrics.Hybrid.HybridIntensity).To(BeNil())
+		Expect(noMaxSummary.Metrics.Hybrid.HybridLoadAU).To(BeNil())
+		Expect(noMaxSummary.Metrics.Hybrid.MotionIntensity).To(HaveValue(BeNumerically("~", (0.16-0.01)/(0.30-0.01), 0.005)))
+		Expect(noMaxSummary.Metrics.Hybrid.QualityFlags).To(ContainElements("missing_max_hr", "estimated_resting_hr", "bootstrap_motion_calibration"))
+
+		maxHR := 185
+		invalidRest := 20
+		badRestSummary, err := sensor.ParseAndProcess(build(), sensor.ParseOptions{
+			CalculationVersion: 3,
+			ExpectedProfileID:  testProfileID,
+			ExpectedSessionID:  testSessionID,
+			EstimatedMaxHR:     &maxHR,
+			RestingHR:          &invalidRest,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(badRestSummary.CalculationInputs.RestingHR).To(BeNil())
+		Expect(badRestSummary.Metrics.Hybrid.HeartIntensity).To(BeNil())
+		Expect(badRestSummary.Metrics.Hybrid.HybridIntensity).To(BeNil())
+		Expect(badRestSummary.Metrics.Hybrid.MotionIntensity).To(HaveValue(BeNumerically("~", (0.16-0.01)/(0.30-0.01), 0.005)))
+		Expect(badRestSummary.Metrics.Hybrid.QualityFlags).To(ContainElements("missing_resting_hr", "bootstrap_motion_calibration"))
+	})
+
+	It("keeps motion_intensity independent of HR reserve availability and resting HR value when HR contact drops in the hardest seconds", func() {
 		contactTrue := true
 		contactFalse := false
 		build := func() *bytes.Buffer {
@@ -299,30 +346,38 @@ var _ = Describe("CalculationVersion 3 Hybrid Activity Intensity (HRR + ENMO)", 
 		}
 
 		maxHR := 180
-		restHR := 60
+		restHR50 := 50
 		enmoRest := 0.01
 		enmoRef := 0.31
 		opts := sensor.ParseOptions{
 			CalculationVersion: 3,
 			ExpectedProfileID:  testProfileID,
 			ExpectedSessionID:  testSessionID,
-			EstimatedMaxHR:     &maxHR,
 			ENMORestG:          &enmoRest,
 			ENMORefG:           &enmoRef,
 			CalibrationVersion: sensor.PersonalCalibrationVersion,
 		}
-		withoutRest, err := sensor.ParseAndProcess(build(), opts)
-		Expect(err).NotTo(HaveOccurred())
-		opts.RestingHR = &restHR
-		withRest, err := sensor.ParseAndProcess(build(), opts)
+		withoutMax, err := sensor.ParseAndProcess(build(), opts)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(withoutRest.Metrics.Hybrid.HybridIntensity).To(BeNil())
-		Expect(withRest.Metrics.Hybrid.HybridIntensity).NotTo(BeNil())
-		Expect(withRest.Metrics.Hybrid.MotionIntensity).NotTo(BeNil())
-		Expect(*withRest.Metrics.Hybrid.MotionIntensity).To(Equal(*withoutRest.Metrics.Hybrid.MotionIntensity))
+		opts.EstimatedMaxHR = &maxHR
+		defaultRest, err := sensor.ParseAndProcess(build(), opts)
+		Expect(err).NotTo(HaveOccurred())
+
+		opts.RestingHR = &restHR50
+		profileRest, err := sensor.ParseAndProcess(build(), opts)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(withoutMax.Metrics.Hybrid.HybridIntensity).To(BeNil())
+		Expect(defaultRest.Metrics.Hybrid.HybridIntensity).NotTo(BeNil())
+		Expect(defaultRest.Metrics.Hybrid.QualityFlags).To(ContainElement("estimated_resting_hr"))
+		Expect(profileRest.Metrics.Hybrid.HybridIntensity).NotTo(BeNil())
+		Expect(profileRest.Metrics.Hybrid.QualityFlags).NotTo(ContainElement("estimated_resting_hr"))
+		Expect(profileRest.Metrics.Hybrid.MotionIntensity).NotTo(BeNil())
+		Expect(*defaultRest.Metrics.Hybrid.MotionIntensity).To(Equal(*withoutMax.Metrics.Hybrid.MotionIntensity))
+		Expect(*profileRest.Metrics.Hybrid.MotionIntensity).To(Equal(*withoutMax.Metrics.Hybrid.MotionIntensity))
 		// RMS over all 120 valid ACC seconds, including the 40 hard seconds without HR.
-		Expect(*withRest.Metrics.Hybrid.MotionIntensity).To(BeNumerically(">", 0.5))
+		Expect(*profileRest.Metrics.Hybrid.MotionIntensity).To(BeNumerically(">", 0.5))
 	})
 
 	It("reports unreadable sensor data instead of missing windows when the ACC replay fails", func() {

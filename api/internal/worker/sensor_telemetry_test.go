@@ -235,7 +235,7 @@ var _ = Describe("SensorTelemetry", func() {
 			return sb.String()
 		}
 
-		var firstRowID uint
+		var firstRowID, thirdRowID uint
 		for idx := 1; idx <= 3; idx++ {
 			sid := fmt.Sprintf("WOD-20261025-01HYBRIDV3000%d", idx)
 			reqID := fmt.Sprintf("d0000000-0000-0000-0000-00000000000%d", idx)
@@ -243,6 +243,10 @@ var _ = Describe("SensorTelemetry", func() {
 			mockStorage.content = ndjson
 			sumHash := sha256.Sum256([]byte(ndjson))
 
+			restSrc := "profile"
+			if idx == 1 {
+				restSrc = "default_60bpm"
+			}
 			procData := map[string]any{
 				"schema_version":    1,
 				"request_id":        reqID,
@@ -258,6 +262,7 @@ var _ = Describe("SensorTelemetry", func() {
 					"max_hr_source":       "estimated_220_minus_age",
 					"has_hr_zones":        true,
 					"resting_hr":          60,
+					"resting_hr_source":   restSrc,
 					"enmo_rest_g":         0.01,
 					"enmo_ref_g":          0.31,
 					"calibration_version": "bootstrap_chest_v1",
@@ -276,6 +281,9 @@ var _ = Describe("SensorTelemetry", func() {
 			})
 			if idx == 1 {
 				firstRowID = row.ID
+			}
+			if idx == 3 {
+				thirdRowID = row.ID
 			}
 
 			task, err := worker.NewSensorTelemetryTask(row.ID, profile.ID, reqID, 1)
@@ -298,14 +306,24 @@ var _ = Describe("SensorTelemetry", func() {
 			}
 		}
 
-		// Past session 1 must retain its frozen bootstrap_chest_v1 summary
+		// Past session 1 must retain its frozen bootstrap_chest_v1 + default_60bpm summary
 		var firstRow db.AnalysisResult
 		Expect(dbConn.First(&firstRow, firstRowID).Error).NotTo(HaveOccurred())
 		var firstSum sensor.SensorSummaryResult
 		Expect(json.Unmarshal(firstRow.SensorSummary, &firstSum)).To(Succeed())
 		Expect(firstSum.CalculationVersion).To(Equal(3))
+		Expect(firstSum.CalculationInputs.RestingHRSource).To(Equal("default_60bpm"))
 		Expect(firstSum.Metrics.Hybrid).NotTo(BeNil())
 		Expect(firstSum.Metrics.Hybrid.CalibrationVersion).To(Equal("bootstrap_chest_v1"))
+		Expect(firstSum.Metrics.Hybrid.QualityFlags).To(ContainElement("estimated_resting_hr"))
 		Expect(firstSum.Metrics.Hybrid.HybridIntensity).To(HaveValue(BeNumerically("~", 76.25, 0.05)))
+
+		// Session 3 with explicit profile resting_hr must omit estimated_resting_hr
+		var thirdRow db.AnalysisResult
+		Expect(dbConn.First(&thirdRow, thirdRowID).Error).NotTo(HaveOccurred())
+		var thirdSum sensor.SensorSummaryResult
+		Expect(json.Unmarshal(thirdRow.SensorSummary, &thirdSum)).To(Succeed())
+		Expect(thirdSum.CalculationInputs.RestingHRSource).To(Equal("profile"))
+		Expect(thirdSum.Metrics.Hybrid.QualityFlags).NotTo(ContainElement("estimated_resting_hr"))
 	})
 })

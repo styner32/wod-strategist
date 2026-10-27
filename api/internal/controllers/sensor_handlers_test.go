@@ -108,7 +108,7 @@ var _ = Describe("Sensor Handlers", func() {
 			Expect(*row.WorkoutAtSource).To(Equal("session_ulid"))
 		})
 
-		It("freezes resting_hr and ENMO calibration inputs for calculation_version 3 without guessing missing resting_hr", func() {
+		It("freezes default 60 bpm resting_hr when profile resting_hr_bpm is unset while keeping DB column NULL, and uses profile resting_hr_bpm when set", func() {
 			bodyMissingRest, _ := json.Marshal(controllers.PrepareSensorUploadRequest{
 				ProfileID:          profile.ID,
 				RequestID:          reqUUID,
@@ -129,10 +129,15 @@ var _ = Describe("Sensor Handlers", func() {
 			var proc1 controllers.SensorProcessingData
 			Expect(json.Unmarshal(row1.SensorProcessing, &proc1)).To(Succeed())
 			Expect(proc1.CalculationInputs.CalculationVersion).To(Equal(3))
-			Expect(proc1.CalculationInputs.RestingHR).To(BeNil())
+			Expect(proc1.CalculationInputs.RestingHR).To(HaveValue(Equal(60)))
+			Expect(proc1.CalculationInputs.RestingHRSource).To(Equal("default_60bpm"))
 			Expect(proc1.CalculationInputs.ENMORestG).To(HaveValue(Equal(0.01)))
 			Expect(proc1.CalculationInputs.ENMORefG).To(HaveValue(Equal(0.30)))
 			Expect(proc1.CalculationInputs.CalibrationVersion).To(Equal("bootstrap_chest_v1"))
+
+			var reloadedProfile db.Profile
+			Expect(dbConn.First(&reloadedProfile, profile.ID).Error).NotTo(HaveOccurred())
+			Expect(reloadedProfile.RestingHRBPM).To(BeNil())
 
 			// Profile with personal calibration and resting_hr_bpm
 			birthYear := 1990
@@ -171,6 +176,7 @@ var _ = Describe("Sensor Handlers", func() {
 			Expect(json.Unmarshal(row2.SensorProcessing, &proc2)).To(Succeed())
 			Expect(proc2.CalculationInputs.CalculationVersion).To(Equal(3))
 			Expect(proc2.CalculationInputs.RestingHR).To(HaveValue(Equal(58)))
+			Expect(proc2.CalculationInputs.RestingHRSource).To(Equal("profile"))
 			Expect(proc2.CalculationInputs.ENMORestG).To(HaveValue(Equal(0.015)))
 			Expect(proc2.CalculationInputs.ENMORefG).To(HaveValue(Equal(0.34)))
 			Expect(proc2.CalculationInputs.CalibrationVersion).To(Equal("personal_chest_v1"))

@@ -63,6 +63,29 @@ describe('Heart rate summary independent of video', () => {
      ...summary,
      calculation_version: 3,
      hybrid: {
+      heart_intensity: 0.75,
+      motion_intensity: 0.80,
+      hybrid_intensity: 76.25,
+      hybrid_load_au: 12.8,
+      valid_hybrid_seconds: 1200,
+      data_coverage: 0.98,
+      quality_flags: ['estimated_resting_hr', 'bootstrap_motion_calibration'],
+      calibration_version: 'bootstrap_chest_v1',
+      algorithm_version: 'hybrid-0.75-0.25-gamma2',
+     },
+    }}
+   />,
+  );
+  expect(view.getAllByText(/76\/100/).length).toBeGreaterThanOrEqual(1);
+  expect(view.getByText(ko.heartRate.estimated_resting_hr)).toBeTruthy();
+  expect(view.getByText(ko.heartRate.calibrationBootstrap)).toBeTruthy();
+
+  view.rerender(
+   <HeartRateSummaryCard
+    summary={{
+     ...summary,
+     calculation_version: 3,
+     hybrid: {
       heart_intensity: null,
       motion_intensity: 0.80,
       hybrid_intensity: null,

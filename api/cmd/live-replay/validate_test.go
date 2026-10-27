@@ -189,6 +189,20 @@ var _ = Describe("Live replay sensor result validation", func() {
 		Expect(validateSensorResult(validationManifest(raw), raw, *summary, timeline, "request", "1")).To(Succeed())
 		timeline.Source.SourceGeneration = "stale-generation"
 		Expect(validateSensorResult(validationManifest(raw), raw, *summary, timeline, "request", "1")).To(MatchError(ContainSubstring("identity")))
+
+		// Also succeeds when profile resting_hr_bpm is unset (defaults to 60 bpm with estimated_resting_hr flag)
+		age, maxHR := 42, 178
+		src := sensor.TimelineSource{SensorVersion: "1", RequestID: "request", SourceGeneration: "42", HRCalculationVersion: 3}
+		defaultRestRes, err := sensor.ParseAndProcessWithTimeline(bytes.NewReader(raw), sensor.ParseOptions{
+			CalculationVersion: 3, ExpectedProfileID: 10, ExpectedSessionID: "WOD-20261026-VALIDATION",
+			ExpectedSHA256: digest(raw), ExpectedSizeBytes: int64(len(raw)), Age: &age, EstimatedMaxHR: &maxHR,
+		}, src)
+		Expect(err).NotTo(HaveOccurred())
+		defaultRestRes.Summary.Version = 1
+		defaultRestRes.Summary.RequestID = "request"
+		defaultRestRes.Summary.SourceGeneration = "42"
+		Expect(defaultRestRes.Summary.Metrics.Hybrid.QualityFlags).To(ContainElement("estimated_resting_hr"))
+		Expect(validateSensorResult(validationManifest(raw), raw, *defaultRestRes.Summary, defaultRestRes.Timeline, "request", "1")).To(Succeed())
 	})
 
 	It("detects missing measured samples and a changed ACC bucket despite successful processing", func() {
