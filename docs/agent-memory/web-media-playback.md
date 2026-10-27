@@ -58,6 +58,25 @@ paused, never-played video.
 - User-intent seeks (`onPlay`, buttons, timeline clicks) may seek unconditionally; they fire once per action.
 - `ChunkInspector` mounts for `chunks[0]` by default, so its `<video>` loads metadata whenever a session detail page opens. Treat its handlers as always active.
 - `SessionDetailPage` `onTimeUpdate` only stores `currentTime` in state (no seek); keep it that way.
+- `TrackingBoxOverlay` (toggle "추적 박스 표시/끄기", default off, `localStorage` key
+  `wod.trackingBoxOverlay`) only reads `currentTime` via
+  `requestVideoFrameCallback` (rAF fallback) plus read-only
+  `seeked`/`loadedmetadata`/`loadeddata`/`canplay`/`timeupdate`/resize
+  repaints; it never seeks or changes playback. Both the `TARGET` box and
+  controls render at `z-10` and hide when the docked mini-player is minimized
+  (`data-tracking-overlay`). When toggled on for a legacy session without stored
+  `boxes` (`저장된 추적 박스 없음`) or at an untracked timestamp (`현재 구간 박스 없음`),
+  it displays a status pill (`describeTrackingOverlayState`) rather than leaving
+  a silently unresponsive button. Pure rules live in
+  `web/src/history/trackingBoxes.ts` (`web/test/trackingBoxes.test.ts`): boxes
+  come from `target_cues.boxes` of COMPLETED chunks with confidence ≥ 0.7 and
+  verified `media_start_secs`/`media_end_secs`; chunk-local `t` is scaled by
+  media/capture duration; boxes interpolate linearly inside one chunk and hide
+  outside it; normalized 0..1000 coordinates map into the `object-contain`
+  letterboxed rect (`containedVideoRect`). At most three boxes per chunk, so the
+  box can lag fast movement; it is a tracking check, not a continuous tracker.
+  If a portrait chunk and the merged file disagree in rotation metadata the box
+  would be rotated; verify with ffprobe when that is suspected.
 
 ## Session review layout
 

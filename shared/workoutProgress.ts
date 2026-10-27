@@ -695,11 +695,37 @@ export function buildUnassessedIntervals(
     }))
     .filter(
       item =>
-        item.reason !== "not_analyzed" ||
-        Boolean(item.movement?.trim()) ||
-        item.end_secs - item.start_secs > MAX_SEGMENT_BOUNDARY_GAP_SECS + 1e-6 ||
-        active.some(r => r.interval_id === item.id),
+        active.some(r => r.interval_id === item.id) ||
+        (item.end_secs - item.start_secs >= MIN_TIMELINE_INTERVAL_SECS - 1e-6 &&
+          (item.reason !== "not_analyzed" ||
+            Boolean(item.movement?.trim()) ||
+            item.end_secs - item.start_secs > MAX_SEGMENT_BOUNDARY_GAP_SECS + 1e-6)),
     );
+}
+
+/**
+ * No workout interval is shorter than one second. Sub-second media fragments
+ * are segment-boundary artifacts (the server attaches new ones to the next
+ * observation); they are hidden from timelines unless a record references them.
+ */
+export const MIN_TIMELINE_INTERVAL_SECS = 1;
+
+export function timelineProgressIntervals(
+  progress?: WorkoutProgress | null,
+  records: PerformanceRecord[] = [],
+): WorkoutProgressInterval[] {
+  if (!progress) return [];
+  const active = activePerformanceRecords(records);
+  return progress.intervals.filter(
+    row =>
+      row.end_secs - row.start_secs >= MIN_TIMELINE_INTERVAL_SECS - 1e-6 ||
+      active.some(r => r.interval_id === row.id),
+  );
+}
+
+/** Media-clock gaps shorter than one second are not shown as their own entry. */
+export function isDisplayableProgressGap(gap: WorkoutProgressGap): boolean {
+  return gap.clock !== "media" || gap.end_secs - gap.start_secs >= MIN_TIMELINE_INTERVAL_SECS - 1e-6;
 }
 
 const WOD_MOVEMENT_PATTERNS: { pattern: RegExp; canonical: string }[] = [

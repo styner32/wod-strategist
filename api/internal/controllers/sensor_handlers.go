@@ -15,6 +15,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/sensor"
 	"github.com/wod-strategist/api/internal/timeline"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
@@ -37,11 +38,16 @@ type PrepareSensorUploadRequest struct {
 }
 
 type CalculationInputsSnapshot struct {
-	CalculationVersion int     `json:"calculation_version"`
-	Age                *int    `json:"age"`
-	MaxHR              *int    `json:"max_hr"`
-	MaxHRSource        *string `json:"max_hr_source"`
-	HasHRZones         bool    `json:"has_hr_zones"`
+	CalculationVersion int      `json:"calculation_version"`
+	Age                *int     `json:"age"`
+	MaxHR              *int     `json:"max_hr"`
+	MaxHRSource        *string  `json:"max_hr_source"`
+	HasHRZones         bool     `json:"has_hr_zones"`
+	RestingHR          *int     `json:"resting_hr,omitempty"`
+	RestingHRSource    string   `json:"resting_hr_source,omitempty"`
+	ENMORestG          *float64 `json:"enmo_rest_g,omitempty"`
+	ENMORefG           *float64 `json:"enmo_ref_g,omitempty"`
+	CalibrationVersion string   `json:"calibration_version,omitempty"`
 }
 
 type SensorProcessingData struct {
@@ -113,7 +119,7 @@ func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
 	if req.CalculationVersion == 0 {
 		req.CalculationVersion = 1
 	}
-	if req.CalculationVersion != 1 && req.CalculationVersion != 2 {
+	if req.CalculationVersion < 1 || req.CalculationVersion > 3 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported calculation_version"})
 		return
 	}
@@ -259,7 +265,9 @@ func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
 
 		// Freeze calculation inputs snapshot
 		var profile db.Profile
-		_ = tx.Select("birth_year").Where("id = ?", req.ProfileID).First(&profile).Error
+		_ = tx.Select("birth_year, resting_hr_bpm, sensor_enmo_rest_g, sensor_enmo_ref_g, sensor_calibration_version").
+			Where("id = ?", req.ProfileID).
+			First(&profile).Error
 
 		var calcInputs CalculationInputsSnapshot
 		calcInputs.CalculationVersion = req.CalculationVersion
@@ -279,6 +287,32 @@ func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
 				calcInputs.MaxHRSource = &src
 				calcInputs.HasHRZones = true
 			}
+		}
+
+		if req.CalculationVersion == 3 {
+			var profileRestHR *int
+			if profile.RestingHRBPM != nil && *profile.RestingHRBPM >= 30 && *profile.RestingHRBPM <= 120 {
+				restHR := *profile.RestingHRBPM
+				profileRestHR = &restHR
+			}
+			if resolvedRestHR, resolvedRestSrc, ok := sensor.ResolveRestingHR(sensor.ParseOptions{
+				RestingHR: profileRestHR,
+			}); ok {
+				calcInputs.RestingHR = &resolvedRestHR
+				calcInputs.RestingHRSource = resolvedRestSrc
+			}
+			var calibVer string
+			if profile.SensorCalibrationVersion != nil {
+				calibVer = *profile.SensorCalibrationVersion
+			}
+			enmoRest, enmoRef, resolvedVer := sensor.ResolveENMOCalibration(sensor.ParseOptions{
+				ENMORestG:          profile.SensorENMORestG,
+				ENMORefG:           profile.SensorENMORefG,
+				CalibrationVersion: calibVer,
+			})
+			calcInputs.ENMORestG = &enmoRest
+			calcInputs.ENMORefG = &enmoRef
+			calcInputs.CalibrationVersion = resolvedVer
 		}
 
 		newVersion = row.SensorVersion + 1

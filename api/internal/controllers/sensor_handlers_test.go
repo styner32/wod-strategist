@@ -108,6 +108,80 @@ var _ = Describe("Sensor Handlers", func() {
 			Expect(*row.WorkoutAtSource).To(Equal("session_ulid"))
 		})
 
+		It("freezes default 60 bpm resting_hr when profile resting_hr_bpm is unset while keeping DB column NULL, and uses profile resting_hr_bpm when set", func() {
+			bodyMissingRest, _ := json.Marshal(controllers.PrepareSensorUploadRequest{
+				ProfileID:          profile.ID,
+				RequestID:          reqUUID,
+				ExpectedVersion:    "0",
+				SizeBytes:          1024,
+				SHA256:             sha256Hash,
+				CalculationVersion: 3,
+			})
+			req1 := httptest.NewRequest("POST", fmt.Sprintf("/api/v1/sessions/%s/sensor-upload", validSessionID), bytes.NewReader(bodyMissingRest))
+			req1.Header.Set("Content-Type", "application/json")
+			authorizeRequest(req1, &user)
+			w1 := httptest.NewRecorder()
+			router.ServeHTTP(w1, req1)
+			Expect(w1.Code).To(Equal(http.StatusOK))
+
+			var row1 db.AnalysisResult
+			Expect(dbConn.Where("session_id = ?", validSessionID).First(&row1).Error).NotTo(HaveOccurred())
+			var proc1 controllers.SensorProcessingData
+			Expect(json.Unmarshal(row1.SensorProcessing, &proc1)).To(Succeed())
+			Expect(proc1.CalculationInputs.CalculationVersion).To(Equal(3))
+			Expect(proc1.CalculationInputs.RestingHR).To(HaveValue(Equal(60)))
+			Expect(proc1.CalculationInputs.RestingHRSource).To(Equal("default_60bpm"))
+			Expect(proc1.CalculationInputs.ENMORestG).To(HaveValue(Equal(0.01)))
+			Expect(proc1.CalculationInputs.ENMORefG).To(HaveValue(Equal(0.30)))
+			Expect(proc1.CalculationInputs.CalibrationVersion).To(Equal("bootstrap_chest_v1"))
+
+			var reloadedProfile db.Profile
+			Expect(dbConn.First(&reloadedProfile, profile.ID).Error).NotTo(HaveOccurred())
+			Expect(reloadedProfile.RestingHRBPM).To(BeNil())
+
+			// Profile with personal calibration and resting_hr_bpm
+			birthYear := 1990
+			restingHR := 58
+			restG := 0.015
+			refG := 0.34
+			calibVer := "personal_chest_v1"
+			calibratedProfile := testhelpers.CreateProfile(dbConn, &db.Profile{
+				UserID:                   user.ID,
+				BirthYear:                &birthYear,
+				RestingHRBPM:             &restingHR,
+				SensorENMORestG:          &restG,
+				SensorENMORefG:           &refG,
+				SensorCalibrationVersion: &calibVer,
+			})
+
+			sid2 := "WOD-20260408-01JQXYZ3K4M5N6P7Q8R9ABCDEF"
+			bodyCalibrated, _ := json.Marshal(controllers.PrepareSensorUploadRequest{
+				ProfileID:          calibratedProfile.ID,
+				RequestID:          "a0000000-0000-0000-0000-000000000099",
+				ExpectedVersion:    "0",
+				SizeBytes:          1024,
+				SHA256:             sha256Hash,
+				CalculationVersion: 3,
+			})
+			req2 := httptest.NewRequest("POST", fmt.Sprintf("/api/v1/sessions/%s/sensor-upload", sid2), bytes.NewReader(bodyCalibrated))
+			req2.Header.Set("Content-Type", "application/json")
+			authorizeRequest(req2, &user)
+			w2 := httptest.NewRecorder()
+			router.ServeHTTP(w2, req2)
+			Expect(w2.Code).To(Equal(http.StatusOK))
+
+			var row2 db.AnalysisResult
+			Expect(dbConn.Where("session_id = ?", sid2).First(&row2).Error).NotTo(HaveOccurred())
+			var proc2 controllers.SensorProcessingData
+			Expect(json.Unmarshal(row2.SensorProcessing, &proc2)).To(Succeed())
+			Expect(proc2.CalculationInputs.CalculationVersion).To(Equal(3))
+			Expect(proc2.CalculationInputs.RestingHR).To(HaveValue(Equal(58)))
+			Expect(proc2.CalculationInputs.RestingHRSource).To(Equal("profile"))
+			Expect(proc2.CalculationInputs.ENMORestG).To(HaveValue(Equal(0.015)))
+			Expect(proc2.CalculationInputs.ENMORefG).To(HaveValue(Equal(0.34)))
+			Expect(proc2.CalculationInputs.CalibrationVersion).To(Equal("personal_chest_v1"))
+		})
+
 		It("returns identical response on idempotent retry of identical request", func() {
 			body, _ := json.Marshal(controllers.PrepareSensorUploadRequest{
 				ProfileID:       profile.ID,
@@ -307,14 +381,14 @@ var _ = Describe("Sensor Handlers", func() {
 
 var _ = Describe("POST /api/v1/sessions/:session_id/sensor-upload calculation version", func() {
 	BeforeEach(func() { ensureTestDB(); testhelpers.CleanupDB(dbConn); testhelpers.CleanupQueue(inspector) })
-	It("pins version two per request and defaults legacy requests to version one", func() {
+	It("pins version two or three per request and defaults legacy requests to version one", func() {
 		storage, err := testhelpers.NewStorageClientWithSigning("test-bucket", testhelpers.NewMockTransport())
 		Expect(err).NotTo(HaveOccurred())
 		router := newTestRouterWithAuthService(controllers.Config{StorageClient: storage})
 		profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		var user db.User
 		Expect(dbConn.First(&user, profile.UserID).Error).To(Succeed())
-		for _, version := range []int{0, 2} {
+		for _, version := range []int{0, 2, 3} {
 			sid := fmt.Sprintf("WOD-20260908-01JQXYZ3K4M5N6P7Q8R9ABCDEF%d", version)
 			payload := controllers.PrepareSensorUploadRequest{ProfileID: profile.ID, RequestID: fmt.Sprintf("a0000000-0000-0000-0000-00000000000%d", version), ExpectedVersion: "0", SizeBytes: 1024, SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", CalculationVersion: version}
 			send := func() *httptest.ResponseRecorder {
@@ -339,9 +413,17 @@ var _ = Describe("POST /api/v1/sessions/:session_id/sensor-upload calculation ve
 			}
 			Expect(proc.CalculationInputs.CalculationVersion).To(Equal(expected))
 			Expect(send().Code).To(Equal(http.StatusOK))
-			payload.CalculationVersion = 3 - expected
+			mismatch := 1
+			if expected == 1 {
+				mismatch = 2
+			}
+			payload.CalculationVersion = mismatch
 			Expect(send().Code).To(Equal(http.StatusConflict))
-			payload.CalculationVersion = 3
+			if expected != 3 {
+				payload.CalculationVersion = 3
+				Expect(send().Code).To(Equal(http.StatusConflict))
+			}
+			payload.CalculationVersion = 4
 			Expect(send().Code).To(Equal(http.StatusBadRequest))
 		}
 	})

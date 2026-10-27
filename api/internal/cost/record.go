@@ -2,6 +2,7 @@ package cost
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
@@ -18,6 +19,7 @@ func RecordUsage(conn *gorm.DB, sessionID string, profileID, userID uint, taskTy
 	record := db.TokenUsage{SessionID: sessionID, ProfileID: profileID, TaskType: taskType, Model: usage.Model,
 		PromptTokens: int64(usage.PromptTokens), CandidateTokens: int64(usage.CandidateTokens), TotalTokens: int64(usage.TotalTokens)}
 	details := usage.Details
+	var thinkingTokens int64
 	if details != nil {
 		if details.Input != nil {
 			record.PromptTokens = *details.Input
@@ -27,6 +29,9 @@ func RecordUsage(conn *gorm.DB, sessionID string, profileID, userID uint, taskTy
 		}
 		if details.Total != nil {
 			record.TotalTokens = *details.Total
+		}
+		if details.Thinking != nil {
+			thinkingTokens = *details.Thinking
 		}
 	}
 	if details != nil {
@@ -44,5 +49,36 @@ func RecordUsage(conn *gorm.DB, sessionID string, profileID, userID uint, taskTy
 	if requestKey != "" {
 		record.RequestKey = &requestKey
 	}
-	return conn.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "request_key"}}, DoNothing: true}).Create(&record).Error
+	if err := conn.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "request_key"}}, DoNothing: true}).Create(&record).Error; err != nil {
+		return err
+	}
+	if summary := strings.TrimSpace(usage.ThoughtSummary); summary != "" {
+		thought := db.GeminiThoughtLog{
+			ProfileID:      profileID,
+			SessionID:      sessionID,
+			TaskType:       taskType,
+			Model:          usage.Model,
+			ThinkingTokens: thinkingTokens,
+			ThoughtSummary: summary,
+		}
+		if record.ID != 0 {
+			id := record.ID
+			thought.TokenUsageID = &id
+		} else if requestKey != "" {
+			var existing db.TokenUsage
+			if conn.Select("id").Where("request_key = ?", requestKey).First(&existing).Error == nil && existing.ID != 0 {
+				thought.TokenUsageID = &existing.ID
+			}
+		}
+		if userID != 0 {
+			u := userID
+			thought.UserID = &u
+		}
+		if requestKey != "" {
+			rk := requestKey
+			thought.RequestKey = &rk
+		}
+		_ = conn.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "request_key"}}, DoNothing: true}).Create(&thought).Error
+	}
+	return nil
 }

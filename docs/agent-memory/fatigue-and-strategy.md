@@ -57,10 +57,22 @@ $$\text{ResidualFatigue}(t) = \sum_{s \in \text{Sessions}} \text{Load}_s \times 
   ```
 - **Response**:
   - `muscle_readiness`: 6 muscle group items with scores and coaching notes
-  - `target_rpe`: Recommended RPE and pacing strategy
+  - `target_rpe`: Recommended RPE and pacing strategy (withheld as `null` unless `evidence_status == "complete"`)
+  - `effort_reflection`: Optional recent-WOD feedback summary (`applied`, `rated_count`, `sensor_count`, `total_recent`, `reason`, `recent_workouts`) — strictly `null`/omitted unless `evidence_status == "complete"` and at least 1 recent main WOD exists in `[asOf-28d, asOf]`
   - `scaling_advice`: List of specific movement scaling/substitutions
   - `mobility_warmup`: 1-2 targeted pre-WOD mobility movements
   - `overall_summary`: Head coach executive briefing
+
+### Recent 3 WOD Feedback & Hybrid Sensor Rules (`GetPreWODAdvice` / `FinalizePreWODAdvice`)
+- **Query scope**: Inside the same `REPEATABLE READ READ ONLY` transaction, queries up to 3 completed non-archived main WODs (`analysis_type = 'wod'`, `COALESCE(s.workout_type, 'wod') = 'wod'`, `workout_at_source IN ('session_ulid', 'legacy_local_time')`) in `[asOf-28d, asOf]`.
+- **No guessing or scale conflation**:
+  - `recent_workouts[i].effort` comes strictly from manual `sessions.effort` (`1..10`) when `workout_type == "wod" && wod_evaluation_version == 1`. Unrated workouts stay `nil` (never inferred from HR/sensor or mapped 1:1 to RIR).
+  - `recent_workouts[i].duration_seconds` comes strictly from `wodeval.DurationSeconds(score.WODStart)` (`evaluation_version == 1` and `ValidWindow`); unresolved windows stay `nil`.
+  - `recent_workouts[i].hybrid_sensor` comes only from verified fresh `CalculationVersion >= 3` `sensor_summary` rows with `hybrid_intensity != nil`, `data_coverage >= 0.50`, and `valid_hybrid_seconds >= 60`.
+- **Safety cap (`OverallFatigueScore >= 60`)**: `FinalizePreWODAdvice` forces `TargetRPE.Score <= 6` whenever `OverallFatigueScore >= 60` so low manual `Effort` or low `hybrid_intensity` (e.g., slow heavy barbell work where external weight is unmeasured) can never assert biological recovery or override high 6-muscle fatigue. RIR-mapping and recovery-guarantee claims in `effort_reflection_reason` fall back to `BuildDeterministicEffortReflectionReason`.
+- **One classification for adjustment and explanation**: `fatigue.ClassifyRecentEffort(recent)` picks the kind in precedence order `high_effort` (any Effort >= 8) > `low_effort` (any <= 5) > `rated_effort` (only 6–7) > `high_sensor` (no Effort; rounded hybrid >= 80) > `sensor`, and anchors on the most recent workout of that kind. `buildDeterministicFallbackAdvice` lowers RPE (8/9 → 7/8) for `high_effort` and `high_sensor`, and both its pacing text and `BuildDeterministicEffortReflectionReason` cite that anchor's values only (a sensor note is the anchor's own score). `FormatRecentWorkoutAnchor(w, index)` names it (`직전 WOD` for index 0, `N회 전 WOD` otherwise, or `최근 <movements> WOD`); text built on it attaches only `에서`/`의`, never final-syllable particles like `을/를`.
+- **Grounded model reasons**: a model-written `effort_reflection_reason` is kept only if every `Effort N`, `N/100` score and duration (`N분 N초`, `N분`, `N초`) it cites matches the recent workouts (Effort, rounded hybrid/heart/motion ×100, `formatDurationKO`) or readiness (overall/muscle fatigue). Otherwise the deterministic reason replaces it.
+- **RPE label**: after clamping to 1..10 and the fatigue cap, `syncRPELabel` rewrites an `RPE N` (or `N~M` range) in `target_rpe.label` that no longer contains the final score.
 
 ## 5. UI Integration
 

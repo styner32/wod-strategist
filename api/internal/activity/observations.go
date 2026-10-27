@@ -66,6 +66,41 @@ func UnknownWithMovement(start, end float64, reason, movement string) Observatio
 	}
 }
 
+func ConfirmedRest(duration float64) Observations {
+	if math.IsNaN(duration) || math.IsInf(duration, 0) || duration < 0 {
+		duration = 0
+	}
+	return Observations{
+		DurationSecs:  duration,
+		Version:       Version,
+		TargetState:   "identified",
+		ActivityState: "rest",
+		Events:        []Observation{},
+		Unassessed:    []Interval{},
+	}
+}
+
+func ConfirmedNotVisible(start, end float64, sensorActive bool) Observations {
+	dur := 0.0
+	unassessed := []Interval{}
+	reason := "target_not_visible"
+	if sensorActive {
+		reason = "target_not_visible_sensor_active"
+	}
+	if ValidInterval(start, end) {
+		dur = end - start
+		unassessed = []Interval{{Start: start, End: end, Reason: reason}}
+	}
+	return Observations{
+		DurationSecs:  dur,
+		Version:       Version,
+		TargetState:   "not_visible",
+		ActivityState: "unknown",
+		Events:        []Observation{},
+		Unassessed:    unassessed,
+	}
+}
+
 func observedMovements(events []Observation, unassessed []Interval) string {
 	seen := map[string]bool{}
 	var list []string
@@ -133,7 +168,15 @@ func Decode(raw []byte, start, end float64) (Observations, error) {
 	}
 	if doc.TargetState != "identified" || doc.ActivityState == "unknown" {
 		m := observedMovements(doc.Events, doc.Unassessed)
-		return UnknownWithMovement(start, end, "unassessable_target_or_activity", m), nil
+		reason := "unassessable_target_or_activity"
+		if doc.TargetState == "not_visible" {
+			reason = "target_not_visible"
+		}
+		out := UnknownWithMovement(start, end, reason, m)
+		if doc.TargetState == "not_visible" || doc.TargetState == "ambiguous" {
+			out.TargetState = doc.TargetState
+		}
+		return out, nil
 	}
 	if doc.ActivityState == "rest" && len(doc.Events) > 0 {
 		return Unknown(start, end, "conflicting_activity"), errors.New("events during rest")
@@ -221,6 +264,9 @@ func Decode(raw []byte, start, end float64) (Observations, error) {
 // Duration observations are clipped, so overlapping review context is never added.
 func Own(doc Observations, start, end float64) Observations {
 	result := doc
+	if ValidInterval(start, end) {
+		result.DurationSecs = end - start
+	}
 	result.Events = []Observation{}
 	result.Unassessed = []Interval{}
 	for _, event := range doc.Events {

@@ -248,6 +248,7 @@ func (w *Worker) buildWorkoutProgress(ctx context.Context, p VideoAnalysisPayloa
 	if err != nil {
 		return workoutprogress.Build(nil, []workoutprogress.Gap{{Start: 0, End: duration, Clock: "media", Reason: "video_source_unverified"}}, "unverified:"+enrichmentHash([]string{p.SessionID, p.FilePath}))
 	}
+	var hardBoundaries []float64
 	if w.DB != nil {
 		if strings.HasPrefix(videoPath, "https://") {
 			var prior db.AnalysisResult
@@ -261,6 +262,7 @@ func (w *Worker) buildWorkoutProgress(ctx context.Context, p VideoAnalysisPayloa
 		if w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", p.SessionID, p.ProfileID).Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error == nil {
 			intervals, gaps = mergeChunkFallbackObservations(intervals, gaps, chunks, p.WorkoutType)
 			intervals, gaps = mapProgressCaptureTimes(intervals, gaps, chunks)
+			hardBoundaries = captureDiscontinuityPoints(chunks)
 		}
 	}
 	intervals = append([]workoutprogress.Interval(nil), intervals...)
@@ -283,7 +285,32 @@ func (w *Worker) buildWorkoutProgress(ctx context.Context, p VideoAnalysisPayloa
 		}
 		gaps = append(gaps, missingProgressCoverage(intervals, gaps, coverageStart, duration)...)
 	}
+	// One person is followed continuously: sub-second boundary fragments join
+	// the next observation and touching same-movement windows become one interval.
+	intervals, gaps = workoutprogress.NormalizeContinuity(intervals, gaps, hardBoundaries)
 	return workoutprogress.Build(intervals, gaps, source)
+}
+
+// captureDiscontinuityPoints returns merged-media seconds where the capture
+// clock advanced more than the media clock between adjacent verified chunks
+// (a recording pause). Continuity normalization never joins across them.
+func captureDiscontinuityPoints(chunks []db.ChunkAnalysisResult) []float64 {
+	valid := make([]db.ChunkAnalysisResult, 0, len(chunks))
+	for _, chunk := range chunks {
+		if chunk.StartSecs != nil && chunk.EndSecs != nil && chunk.MediaStartSecs != nil && chunk.MediaEndSecs != nil &&
+			activity.ValidInterval(*chunk.StartSecs, *chunk.EndSecs) && activity.ValidInterval(*chunk.MediaStartSecs, *chunk.MediaEndSecs) {
+			valid = append(valid, chunk)
+		}
+	}
+	sort.Slice(valid, func(i, j int) bool { return *valid[i].MediaStartSecs < *valid[j].MediaStartSecs })
+	points := []float64{}
+	for i := 1; i < len(valid); i++ {
+		prev, next := valid[i-1], valid[i]
+		if *next.StartSecs-*prev.EndSecs > *next.MediaStartSecs-*prev.MediaEndSecs+0.01 {
+			points = append(points, *prev.MediaEndSecs)
+		}
+	}
+	return points
 }
 
 // mergeChunkFallbackObservations restores verified chunk-level repetition events

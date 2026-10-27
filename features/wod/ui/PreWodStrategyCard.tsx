@@ -1,5 +1,5 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { t } from "@/features/i18n";
+import { t, useLocale } from "@/features/i18n";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
@@ -30,10 +30,20 @@ function getReadinessColor(state: string): string {
   }
 }
 
+function formatWorkoutDuration(seconds?: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) {
+    return t("preWod.durationUnconfirmed");
+  }
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return `${mins}:${String(secs).padStart(2, "0")}`;
+}
+
 export function PreWodStrategyCard({
   advice,
   loading,
 }: PreWodStrategyCardProps) {
+  useLocale();
   const [musclesExpanded, setMusclesExpanded] = useState(false);
 
   if (loading) {
@@ -117,6 +127,72 @@ export function PreWodStrategyCard({
             <Text style={styles.pacingText}>
               {advice.target_rpe.pacing_strategy}
             </Text>
+          ) : null}
+          {advice.effort_reflection &&
+          ((advice.effort_reflection.recent_workouts?.length ?? 0) > 0 ||
+            !!advice.effort_reflection.reason) ? (
+            <View style={styles.reflectionBox}>
+              <Text style={styles.reflectionTitle}>
+                {t("preWod.recentFeedbackTitle")}
+              </Text>
+              {advice.effort_reflection.applied &&
+              advice.effort_reflection.reason ? (
+                <Text style={styles.reflectionReason}>
+                  {advice.effort_reflection.reason}
+                </Text>
+              ) : !advice.effort_reflection.applied ? (
+                <Text style={styles.reflectionHint}>
+                  {t("preWod.noEffortPrompt")}
+                </Text>
+              ) : null}
+              {(advice.effort_reflection.recent_workouts ?? []).length > 0 ? (
+                <View style={styles.recentWorkoutsList}>
+                  {(advice.effort_reflection.recent_workouts ?? []).map((w) => {
+                    const movText =
+                      w.movements && w.movements.length > 0
+                        ? w.movements.slice(0, 3).join(" · ")
+                        : t("preWod.movementsUnknown");
+                    return (
+                      <View key={w.session_id} style={styles.recentWorkoutChip}>
+                        <Text style={styles.recentWorkoutText}>
+                          {movText} · {formatWorkoutDuration(w.duration_seconds)}
+                        </Text>
+                        <View style={styles.recentBadgesRow}>
+                          <View
+                            style={[
+                              styles.effortPill,
+                              w.effort == null && styles.effortPillMuted,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.effortPillText,
+                                w.effort == null && styles.effortPillTextMuted,
+                              ]}
+                            >
+                              {w.effort != null
+                                ? t("preWod.effortBadge", { effort: w.effort })
+                                : t("preWod.effortUnrated")}
+                            </Text>
+                          </View>
+                          {w.hybrid_sensor != null ? (
+                            <View style={styles.sensorPill}>
+                              <Text style={styles.sensorPillText}>
+                                {t("preWod.hybridSensorBadge", {
+                                  score: Math.round(
+                                    w.hybrid_sensor.hybrid_intensity,
+                                  ),
+                                })}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
+            </View>
           ) : null}
         </View>
       ) : null}
@@ -379,6 +455,81 @@ const styles = StyleSheet.create({
     color: "#CBD5E1",
     fontSize: 13,
     lineHeight: 18,
+  },
+  reflectionBox: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#283546",
+    gap: 6,
+  },
+  reflectionTitle: {
+    color: "#00E5FF",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  reflectionReason: {
+    color: "#E2E8F0",
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  reflectionHint: {
+    color: "#94A3B8",
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  recentWorkoutsList: {
+    gap: 6,
+    marginTop: 2,
+  },
+  recentWorkoutChip: {
+    backgroundColor: "#121922",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: "#243040",
+    gap: 4,
+  },
+  recentWorkoutText: {
+    color: "#CBD5E1",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  recentBadgesRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  effortPill: {
+    backgroundColor: "rgba(255, 152, 0, 0.18)",
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  effortPillMuted: {
+    backgroundColor: "rgba(148, 163, 184, 0.14)",
+  },
+  effortPillText: {
+    color: "#FFB74D",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  effortPillTextMuted: {
+    color: "#94A3B8",
+    fontWeight: "600",
+  },
+  sensorPill: {
+    backgroundColor: "rgba(0, 229, 255, 0.15)",
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  sensorPillText: {
+    color: "#00E5FF",
+    fontSize: 11,
+    fontWeight: "700",
   },
   musclesSection: {
     marginBottom: 14,

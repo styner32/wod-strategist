@@ -1,5 +1,5 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { t } from "@/features/i18n";
+import { t, useLocale } from "@/features/i18n";
 import { fetchInjuries } from "@/features/wod/api";
 import {
   useProfileStore,
@@ -35,6 +35,7 @@ const FITNESS_LEVEL_OPTIONS: { label: string; value: FitnessLevel }[] = [
 ];
 
 export default function ProfileScreen() {
+  useLocale();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const store = useProfileStore();
 
@@ -65,6 +66,9 @@ export default function ProfileScreen() {
   );
   const [weightKg, setWeightKg] = useState(
     existingProfile?.weightKg?.toString() ?? ""
+  );
+  const [restingHrBpm, setRestingHrBpm] = useState(
+    existingProfile?.restingHrBpm?.toString() ?? ""
   );
   const [fitnessLevel, setFitnessLevel] = useState<FitnessLevel>(
     existingProfile?.fitnessLevel ?? "intermediate"
@@ -142,6 +146,8 @@ export default function ProfileScreen() {
     const d = birthDay ? parseInt(birthDay, 10) : 0;
     const h = heightCm ? parseInt(heightCm, 10) : 0;
     const w = weightKg ? parseFloat(weightKg) : 0;
+    const trimmedRhr = restingHrBpm.trim();
+    const rhr = trimmedRhr ? Number(trimmedRhr) : 0;
 
     // Only validate fields that have values (all are optional now)
     if (birthYear && (isNaN(y) || y < 1900 || y > new Date().getFullYear())) {
@@ -164,6 +170,10 @@ export default function ProfileScreen() {
       Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidWeight"));
       return;
     }
+    if (trimmedRhr && (!Number.isInteger(rhr) || rhr < 30 || rhr > 120)) {
+      Alert.alert(t("profileEdit.invalidInput"), t("profileEdit.invalidRestingHr"));
+      return;
+    }
 
     setSaving(true);
 
@@ -176,13 +186,19 @@ export default function ProfileScreen() {
         ...(gender ? { gender } : {}),
         ...(h ? { height_cm: h } : {}),
         ...(w ? { weight_kg: Math.round(w * 10) / 10 } : {}),
+        ...(rhr ? { resting_hr_bpm: rhr } : {}),
         fitness_level: fitnessLevel,
         injuries: selectedInjuries,
         ...(appearance.trim() ? { appearance: appearance.trim() } : {}),
       };
 
       if (isEditing) {
-        await store.updateProfile(existingProfile.id, payload);
+        await store.updateProfile(existingProfile.id, {
+          ...payload,
+          ...(!trimmedRhr && existingProfile.restingHrBpm != null
+            ? { clear_resting_hr: true }
+            : {}),
+        });
       } else {
         await store.createProfile(payload);
       }
@@ -331,9 +347,28 @@ export default function ProfileScreen() {
                 value={weightKg}
                 onChangeText={setWeightKg}
                 maxLength={5}
-                returnKeyType="done"
+                returnKeyType="next"
               />
               <Text style={styles.unit}>kg</Text>
+            </View>
+          </View>
+
+          {/* Resting Heart Rate */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{t("profileEdit.restingHr")}</Text>
+            <Text style={styles.hint}>{t("profileEdit.restingHrHint")}</Text>
+            <View style={styles.inputRow}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                keyboardType="number-pad"
+                placeholder="60"
+                placeholderTextColor="#555"
+                value={restingHrBpm}
+                onChangeText={setRestingHrBpm}
+                maxLength={3}
+                returnKeyType="done"
+              />
+              <Text style={styles.unit}>bpm</Text>
             </View>
           </View>
 

@@ -73,6 +73,7 @@ func main() {
 		ThinkingLevel:      cfg.GeminiThinkingLevel,
 		ThinkingLevelChunk: cfg.GeminiThinkingChunk,
 		ThinkingBudget:     cfg.GeminiThinkingBudget,
+		IncludeThoughts:    cfg.GeminiIncludeThoughts,
 	})
 	if err != nil {
 		logger.Log.Fatal("Failed to create gemini client", zap.Error(err))
@@ -87,6 +88,7 @@ func main() {
 	w.CaptureFeedbackEnabled = cfg.CaptureFeedbackEnabled
 	w.ContextualCoachingEnabled = cfg.ContextualCoachingEnabled
 	w.ActivityCountingEnabled = cfg.ActivityCountingEnabled
+	w.TrackingContinuityEnabled = cfg.TrackingContinuityEnabled
 	w.AgenticHighlightsEnabled = cfg.AgenticHighlightsEnabled
 	w.UseCache = cfg.UseCache
 	w.PipelineMode = worker.PipelineMode(cfg.PipelineMode)

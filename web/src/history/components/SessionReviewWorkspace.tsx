@@ -96,7 +96,9 @@ export function SessionReviewWorkspace({
           className={
             isDocked
               ? `fixed bottom-4 right-4 z-40 w-80 sm:w-96 max-w-[calc(100vw-2rem)] rounded-xl border border-border bg-bg-elevated/95 p-3 shadow-lg backdrop-blur-md space-y-2 ${
-                  isMinimized ? "[&_video]:hidden" : "[&_video]:max-h-44"
+                  isMinimized
+                    ? "[&_video]:hidden [&_[data-tracking-overlay]]:hidden"
+                    : "[&_video]:max-h-44"
                 }`
               : "min-w-0 space-y-3"
           }

@@ -28,4 +28,104 @@ describe('Heart rate summary independent of video', () => {
   fireEvent.press(view.getByLabelText(ko.heartRate.details));
   expect(view.queryByText('0 bpm')).toBeNull();expect(view.getAllByText('—')).toHaveLength(3);
  });
+ it('displays v3 hybrid activity intensity and missing resting HR guidance without fabricating scores', () => {
+  const view = render(
+   <HeartRateSummaryCard
+    summary={{
+     ...summary,
+     calculation_version: 3,
+     hybrid: {
+      heart_intensity: 0.75,
+      motion_intensity: 0.80,
+      hybrid_intensity: 76.25,
+      hybrid_load_au: 12.8,
+      valid_hybrid_seconds: 1200,
+      data_coverage: 0.98,
+      quality_flags: ['peak_hr_exceeded_max'],
+      calibration_version: 'personal_chest_v1',
+      algorithm_version: 'hybrid-0.75-0.25-gamma2',
+     },
+    }}
+   />,
+  );
+  expect(view.getByText(/76\/100/)).toBeTruthy();
+  fireEvent.press(view.getByLabelText(ko.heartRate.details));
+  expect(view.getByText('75/100')).toBeTruthy();
+  expect(view.getByText('80/100')).toBeTruthy();
+  expect(view.getByText('12.8 AU')).toBeTruthy();
+  expect(view.getByText('98%')).toBeTruthy();
+  expect(view.getByText(ko.heartRate.calibrationPersonal)).toBeTruthy();
+  expect(view.getByText(ko.heartRate.peak_hr_exceeded_max)).toBeTruthy();
+
+  view.rerender(
+   <HeartRateSummaryCard
+    summary={{
+     ...summary,
+     calculation_version: 3,
+     hybrid: {
+      heart_intensity: 0.75,
+      motion_intensity: 0.80,
+      hybrid_intensity: 76.25,
+      hybrid_load_au: 12.8,
+      valid_hybrid_seconds: 1200,
+      data_coverage: 0.98,
+      quality_flags: ['estimated_resting_hr', 'bootstrap_motion_calibration'],
+      calibration_version: 'bootstrap_chest_v1',
+      algorithm_version: 'hybrid-0.75-0.25-gamma2',
+     },
+    }}
+   />,
+  );
+  expect(view.getAllByText(/76\/100/).length).toBeGreaterThanOrEqual(1);
+  expect(view.getByText(ko.heartRate.estimated_resting_hr)).toBeTruthy();
+  expect(view.getByText(ko.heartRate.calibrationBootstrap)).toBeTruthy();
+
+  view.rerender(
+   <HeartRateSummaryCard
+    summary={{
+     ...summary,
+     calculation_version: 3,
+     hybrid: {
+      heart_intensity: null,
+      motion_intensity: 0.80,
+      hybrid_intensity: null,
+      hybrid_load_au: null,
+      valid_hybrid_seconds: 0,
+      data_coverage: 0,
+      quality_flags: ['missing_resting_hr', 'bootstrap_motion_calibration'],
+      calibration_version: 'bootstrap_chest_v1',
+      algorithm_version: 'hybrid-0.75-0.25-gamma2',
+     },
+    }}
+   />,
+  );
+  expect(view.getByText(ko.heartRate.missing_resting_hr)).toBeTruthy();
+  expect(view.getByText(ko.heartRate.calibrationBootstrap)).toBeTruthy();
+ });
+ it('explains every flag the backend emits for a missing hybrid score', () => {
+  const view = render(
+   <HeartRateSummaryCard
+    summary={{
+     ...summary,
+     calculation_version: 3,
+     hybrid: {
+      heart_intensity: null,
+      motion_intensity: null,
+      hybrid_intensity: null,
+      hybrid_load_au: null,
+      valid_hybrid_seconds: 0,
+      data_coverage: 0,
+      quality_flags: ['invalid_hr_reserve_range', 'sensor_data_unreadable', 'invalid_timeline_timestamp', 'no_valid_hybrid_windows'],
+      calibration_version: 'bootstrap_chest_v1',
+      algorithm_version: 'hybrid-0.75-0.25-gamma2',
+     },
+    }}
+   />,
+  );
+  fireEvent.press(view.getByLabelText(ko.heartRate.details));
+  expect(view.getByText(ko.heartRate.invalid_hr_reserve_range)).toBeTruthy();
+  expect(view.getByText(ko.heartRate.sensor_data_unreadable)).toBeTruthy();
+  expect(view.getByText(ko.heartRate.no_valid_hybrid_windows)).toBeTruthy();
+  expect(view.queryByText('invalid_timeline_timestamp')).toBeNull();
+ });
 });

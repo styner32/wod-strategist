@@ -51,6 +51,12 @@ variable "gemini_thinking_level" {
   default     = "HIGH"
 }
 
+variable "gemini_include_thoughts" {
+  description = "Request Gemini thought summaries and persist them to gemini_thought_logs (requires migration 000059)"
+  type        = bool
+  default     = true 
+}
+
 variable "jwt_secret" {
   description = "Secret key for signing JWT tokens"
   type        = string
@@ -112,6 +118,12 @@ variable "enable_contextual_coaching" {
 
 variable "enable_activity_counting" {
   description = "Enable provisional activity totals and post-recording video count review"
+  type        = bool
+  default     = true
+}
+
+variable "enable_tracking_continuity" {
+  description = "Enable chunk target bounding-box recording and marked reference-image tracking continuity"
   type        = bool
   default     = true
 }

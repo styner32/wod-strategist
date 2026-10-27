@@ -40,6 +40,16 @@ var _ = Describe("InitServer", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.AgenticHighlightsEnabled).To(BeTrue())
 	})
+	It("keeps GEMINI_INCLUDE_THOUGHTS disabled by default and enables an explicit true value", func() {
+		setEnv("GEMINI_INCLUDE_THOUGHTS", "")
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.GeminiIncludeThoughts).To(BeFalse())
+		setEnv("GEMINI_INCLUDE_THOUGHTS", "TrUe")
+		cfg, err = config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.GeminiIncludeThoughts).To(BeTrue())
+	})
 	It("returns config with the default port when PORT is unset", func() {
 		setEnv("PORT", "")
 
@@ -283,6 +293,22 @@ var _ = Describe("InitWorker", func() {
 			Expect(cfg.CaptureFeedbackEnabled).To(BeFalse())
 			Expect(cfg.ContextualCoachingEnabled).To(BeFalse())
 		})
+
+		It("enables tracking continuity by default and honours explicit values", func() {
+			setEnv("ENABLE_TRACKING_CONTINUITY", "")
+			setEnv("APP_ENV", "production")
+			cfg, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.TrackingContinuityEnabled).To(BeTrue())
+			setEnv("ENABLE_TRACKING_CONTINUITY", "false")
+			cfg, err = config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.TrackingContinuityEnabled).To(BeFalse())
+			setEnv("ENABLE_TRACKING_CONTINUITY", "TrUe")
+			cfg, err = config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.TrackingContinuityEnabled).To(BeTrue())
+		})
 	})
 
 	Context("GeminiModel and ThinkingConfig", func() {
@@ -291,6 +317,7 @@ var _ = Describe("InitWorker", func() {
 			setEnv("GEMINI_THINKING_LEVEL", "")
 			setEnv("GEMINI_THINKING_CHUNK", "")
 			setEnv("GEMINI_THINKING_BUDGET", "")
+			setEnv("GEMINI_INCLUDE_THOUGHTS", "")
 
 			cfg, err := config.InitWorker()
 			Expect(err).NotTo(HaveOccurred())
@@ -298,6 +325,12 @@ var _ = Describe("InitWorker", func() {
 			Expect(cfg.GeminiThinkingLevel).To(Equal("HIGH"))
 			Expect(cfg.GeminiThinkingChunk).To(Equal("LOW"))
 			Expect(cfg.GeminiThinkingBudget).To(BeNil())
+			Expect(cfg.GeminiIncludeThoughts).To(BeFalse())
+
+			setEnv("GEMINI_INCLUDE_THOUGHTS", "true")
+			cfgWithThoughts, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgWithThoughts.GeminiIncludeThoughts).To(BeTrue())
 		})
 
 		It("accepts custom model, thinking level, chunk thinking level, and thinking budget", func() {

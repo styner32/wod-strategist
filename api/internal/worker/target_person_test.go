@@ -7,10 +7,13 @@ import (
 
 var _ = Describe("Target Person Helpers", func() {
 	Describe("formatTargetPersonContext", func() {
-		It("formats appearance string into prompt context block", func() {
+		It("formats appearance string into prompt context block and forbids substituting center bystanders when absent", func() {
 			res := formatTargetPersonContext("검은 반팔, 회색 반바지, 빨간 나이키 신발")
 			Expect(res).To(ContainSubstring("검은 반팔, 회색 반바지, 빨간 나이키 신발"))
 			Expect(res).To(ContainSubstring("## 대상 인물 확정"))
+			Expect(res).To(ContainSubstring("지속적 외형 특징이 일치하는 인물이 화면에 한 명도 보이지 않으면"))
+			Expect(res).To(ContainSubstring("절대 대체하지 마세요"))
+			Expect(res).To(ContainSubstring("not_visible"))
 		})
 	})
 

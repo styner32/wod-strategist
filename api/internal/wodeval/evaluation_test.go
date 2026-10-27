@@ -34,6 +34,18 @@ var _ = Describe("WOD training load", func() {
 		Expect(SessionLoad(Workout{Effort: integer(8), Start: Start{Status: "unresolved"}})).To(BeNil())
 		Expect(SessionLoad(Workout{Effort: integer(11), Start: window(0, 1200)})).To(BeNil())
 	})
+	It("extracts confirmed WOD DurationSeconds preferring elapsed_seconds and returns nil when unresolved", func() {
+		Expect(DurationSeconds(Start{Status: "unresolved"})).To(BeNil())
+		w := window(120, 660)
+		Expect(DurationSeconds(w)).NotTo(BeNil())
+		Expect(*DurationSeconds(w)).To(Equal(540.0))
+		elapsed := 515.0
+		w.ElapsedSeconds = &elapsed
+		Expect(*DurationSeconds(w)).To(Equal(515.0))
+		zero := 0.0
+		w.ElapsedSeconds = &zero
+		Expect(DurationSeconds(w)).To(BeNil())
+	})
 	It("uses overlapping calendar windows including today and excludes future workouts", func() {
 		now := time.Date(2026, 10, 13, 12, 0, 0, 0, location)
 		entries := []Workout{{At: now, Effort: integer(8), Start: window(0, 1200)}, {At: now.AddDate(0, 0, -7), Effort: integer(8), Start: window(0, 1200)}, {At: now.AddDate(0, 0, -28), Effort: integer(8), Start: window(0, 1200)}, {At: now.Add(time.Hour), Effort: integer(8), Start: window(0, 1200)}}

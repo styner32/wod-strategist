@@ -41,6 +41,7 @@ type VideoModeResult struct {
 	UntypedToolResponses int              `json:"untyped_tool_responses"`
 	AgenticObserved      bool             `json:"agentic_observed"`
 	Text                 string           `json:"-"`
+	ThoughtSummary       string           `json:"-"`
 	Request              []byte           `json:"-"`
 	Response             []byte           `json:"-"`
 }
@@ -184,7 +185,9 @@ func parseComparisonResponse(r *VideoModeResult) {
 	candidate := raw.Candidates[0]
 	r.FinishReason = candidate.FinishReason
 	for _, p := range candidate.Content.Parts {
-		if !p.Thought {
+		if p.Thought {
+			r.ThoughtSummary += p.Text
+		} else {
 			r.Text += p.Text
 		}
 	}

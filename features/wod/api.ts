@@ -245,6 +245,8 @@ export interface ProfileResponse {
   gender: string;
   height_cm: number;
   weight_kg: number;
+  resting_hr_bpm?: number | null;
+  sensor_calibration_version?: string | null;
   fitness_level: string;
   injuries: string[];
   appearance?: string | AppearanceInput;
@@ -259,6 +261,7 @@ export interface CreateProfileRequest {
   gender?: string;
   height_cm?: number;
   weight_kg?: number;
+  resting_hr_bpm?: number;
   fitness_level?: string;
   injuries?: string[];
   appearance?: string | AppearanceInput;
@@ -272,6 +275,8 @@ export interface UpdateProfileRequest {
   gender?: string;
   height_cm?: number;
   weight_kg?: number;
+  resting_hr_bpm?: number;
+  clear_resting_hr?: boolean;
   fitness_level?: string;
   injuries?: string[];
   appearance?: string | AppearanceInput;
@@ -334,7 +339,7 @@ export async function getUploadUrl(
 }
 
 export interface PrepareSensorUploadRequest {
-  calculation_version?: 1 | 2;
+  calculation_version?: 1 | 2 | 3;
   profile_id: number;
   request_id: string;
   expected_version: string;
@@ -1195,6 +1200,33 @@ export interface EvidenceCounts {
   unresolved_time_sessions: number;
 }
 
+export interface HybridSensorBrief {
+  heart_intensity?: number | null;
+  motion_intensity?: number | null;
+  hybrid_intensity: number;
+  hybrid_load_au?: number | null;
+  data_coverage: number;
+  calibration_version?: string;
+}
+
+export interface RecentWorkoutSummary {
+  session_id: string;
+  workout_at: string;
+  movements: string[];
+  duration_seconds?: number | null;
+  effort?: number | null;
+  hybrid_sensor?: HybridSensorBrief | null;
+}
+
+export interface EffortReflectionInfo {
+  applied: boolean;
+  rated_count: number;
+  sensor_count: number;
+  total_recent: number;
+  reason?: string;
+  recent_workouts?: RecentWorkoutSummary[];
+}
+
 export interface PreWodAdviceResponse {
   profile_id: number;
   overall_fatigue_score?: number | null;
@@ -1202,6 +1234,7 @@ export interface PreWodAdviceResponse {
   overall_state_ko: string;
   muscle_readiness?: MuscleReadinessItem[];
   target_rpe?: TargetRPEInfo | null;
+  effort_reflection?: EffortReflectionInfo | null;
   scaling_advice: ScalingAdviceItem[];
   mobility_warmup: MobilityWarmupItem[];
   overall_summary: string;

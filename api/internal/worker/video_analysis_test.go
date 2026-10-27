@@ -999,7 +999,22 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			MediaEndSecs:    &mediaEnd0,
 		})
 		// Walking is classified non-exercise for WOD and recovery sessions alike.
-		restStart, restEnd := 45.0, 50.0
+		// Two consecutive non-exercise chunks are real rest; a single one between
+		// exercise chunks would be bridged into one continuous bout.
+		restStart, restMid, restEnd := 45.0, 47.5, 50.0
+		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID:       sessionID,
+			ProfileID:       profileID,
+			FilePath:        "gs://test-bucket/videos/" + sessionID + "/chunk_walk_0.mp4",
+			Status:          "COMPLETED",
+			ExerciseType:    "Walking",
+			Output:          "다음 기구로 걸어갑니다",
+			ObservedSignals: `{"movement":"Walking","activity_state":"walking","fatigue_visually_established":false}`,
+			StartSecs:       &restStart,
+			EndSecs:         &restMid,
+			MediaStartSecs:  &restStart,
+			MediaEndSecs:    &restMid,
+		})
 		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
 			SessionID:       sessionID,
 			ProfileID:       profileID,
@@ -1008,9 +1023,9 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			ExerciseType:    "Walking",
 			Output:          "다음 기구로 걸어갑니다",
 			ObservedSignals: `{"movement":"Walking","activity_state":"walking","fatigue_visually_established":false}`,
-			StartSecs:       &restStart,
+			StartSecs:       &restMid,
 			EndSecs:         &restEnd,
-			MediaStartSecs:  &restStart,
+			MediaStartSecs:  &restMid,
 			MediaEndSecs:    &restEnd,
 		})
 		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{

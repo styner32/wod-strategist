@@ -25,6 +25,7 @@ type TokenUsage struct {
 	TotalTokens     int32
 	Model           string
 	Details         *ComparisonUsage
+	ThoughtSummary  string `json:"-"`
 }
 
 const (
@@ -48,6 +49,7 @@ type Client struct {
 	thinkingLevel      string
 	thinkingLevelChunk string
 	thinkingBudget     *int32
+	includeThoughts    bool
 	pollInterval       time.Duration
 	sleep              func(time.Duration)
 }
@@ -69,6 +71,7 @@ type Options struct {
 	ThinkingLevel      string // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL" (default / full video analysis)
 	ThinkingLevelChunk string // e.g. "LOW", "MEDIUM" (for short chunk analysis)
 	ThinkingBudget     *int32 // Optional token budget for thinking
+	IncludeThoughts    bool   // Optional: request Gemini thought summaries in responses
 	PollInterval       time.Duration
 	Sleep              func(time.Duration)
 }
@@ -283,6 +286,7 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 		thinkingLevel:      thinkingLevel,
 		thinkingLevelChunk: thinkingLevelChunk,
 		thinkingBudget:     options.ThinkingBudget,
+		includeThoughts:    options.IncludeThoughts,
 		pollInterval:       pollInterval,
 		sleep:              sleep,
 	}, nil
@@ -308,10 +312,12 @@ func (c *Client) thinkingConfigForModelAndLevel(model string, level string) *gen
 	if argon && strings.TrimSpace(level) == "" {
 		level = "HIGH"
 	}
-	if level == "" && c.thinkingBudget == nil {
+	if level == "" && c.thinkingBudget == nil && !c.includeThoughts {
 		return nil
 	}
-	tc := &genai.ThinkingConfig{}
+	tc := &genai.ThinkingConfig{
+		IncludeThoughts: c.includeThoughts,
+	}
 	if c.thinkingBudget != nil && !argon {
 		tc.ThinkingBudget = c.thinkingBudget
 	}
@@ -326,6 +332,32 @@ func (c *Client) thinkingConfigForModelAndLevel(model string, level string) *gen
 		tc.ThinkingLevel = genai.ThinkingLevelMinimal
 	}
 	return tc
+}
+
+func extractCandidateText(resp *genai.GenerateContentResponse) string {
+	if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0] == nil || resp.Candidates[0].Content == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if part != nil && !part.Thought {
+			sb.WriteString(part.Text)
+		}
+	}
+	return sb.String()
+}
+
+func extractCandidateThoughts(resp *genai.GenerateContentResponse) string {
+	if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0] == nil || resp.Candidates[0].Content == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for _, part := range resp.Candidates[0].Content.Parts {
+		if part != nil && part.Thought {
+			sb.WriteString(part.Text)
+		}
+	}
+	return sb.String()
 }
 
 // mimeTypeFromExtension returns a MIME type based on the file extension.
@@ -390,8 +422,23 @@ func (c *Client) AnalyzeChunkVideo(ctx context.Context, filePath string, prompt 
 	return c.AnalyzeVideoWithThinking(ctx, filePath, prompt, model, level)
 }
 
+// AnalyzeChunkVideoWithImages is AnalyzeChunkVideo with reference images
+// (e.g. the tracked person marked in a previous frame) placed before the
+// video. The prompt must explain what each image is.
+func (c *Client) AnalyzeChunkVideoWithImages(ctx context.Context, filePath string, prompt string, model string, images [][]byte) (string, string, *TokenUsage, error) {
+	level := ""
+	if c != nil {
+		level = c.thinkingLevelChunk
+	}
+	return c.analyzeVideoWithParts(ctx, filePath, prompt, model, level, images)
+}
+
 // AnalyzeVideoWithThinking returns the analysis result, the name of the uploaded file on Gemini, and token usage using the specified model and thinking level.
 func (c *Client) AnalyzeVideoWithThinking(ctx context.Context, filePath string, prompt string, model string, thinkingLevel string) (string, string, *TokenUsage, error) {
+	return c.analyzeVideoWithParts(ctx, filePath, prompt, model, thinkingLevel, nil)
+}
+
+func (c *Client) analyzeVideoWithParts(ctx context.Context, filePath string, prompt string, model string, thinkingLevel string, images [][]byte) (string, string, *TokenUsage, error) {
 	// Upload file
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -435,12 +482,24 @@ func (c *Client) AnalyzeVideoWithThinking(ctx context.Context, filePath string, 
 			ThinkingConfig: tc,
 		}
 	}
+	parts := make([]*genai.Part, 0, len(images)+2)
+	for _, img := range images {
+		if len(img) == 0 {
+			continue
+		}
+		mime := DetectImageMIME(img)
+		if mime == "" {
+			mime = "image/jpeg"
+		}
+		parts = append(parts, &genai.Part{InlineData: &genai.Blob{MIMEType: mime, Data: img}})
+	}
+	parts = append(parts,
+		&genai.Part{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}},
+		&genai.Part{Text: prompt},
+	)
 	resp, usage, err := c.generateContent(ctx, model, []*genai.Content{{
-		Role: genai.RoleUser,
-		Parts: []*genai.Part{
-			{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}},
-			{Text: prompt},
-		},
+		Role:  genai.RoleUser,
+		Parts: parts,
 	}}, genConfig)
 	if err != nil {
 		return "", uploadResult.Name, usage, fmt.Errorf("failed to generate content: %w", err)
@@ -453,10 +512,7 @@ func (c *Client) AnalyzeVideoWithThinking(ctx context.Context, filePath string, 
 	c.logger.Info("Gemini response", zap.Any("response", resp))
 
 	// Extract text from response
-	var result string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		result += part.Text
-	}
+	result := extractCandidateText(resp)
 
 	return result, uploadResult.Name, usage, nil
 }
@@ -763,10 +819,7 @@ func (c *Client) IndexVideo(ctx context.Context, fileURI, mimeType, prompt strin
 		return "", usage, fmt.Errorf("no content from video indexing")
 	}
 
-	var result string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		result += part.Text
-	}
+	result := extractCandidateText(resp)
 
 	c.logger.Info("Video indexed", zap.Int("response_length", len(result)))
 	return result, usage, nil
@@ -781,6 +834,12 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 // AnalyzeSegmentWithModel performs deep biomechanical analysis on a specific time range
 // of the video using a specified model (e.g. ModelArgon4 or ModelPro31Preview).
 func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *TokenUsage, error) {
+	return c.AnalyzeSegmentWithModelAndImages(ctx, fileURI, mimeType, start, end, prompt, model, nil)
+}
+
+// AnalyzeSegmentWithModelAndImages is AnalyzeSegmentWithModel with reference
+// images (tracked-person markers) placed before the video segment.
+func (c *Client) AnalyzeSegmentWithModelAndImages(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string, images [][]byte) (string, *TokenUsage, error) {
 	if model == "" {
 		model = c.model
 	}
@@ -812,19 +871,28 @@ func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType 
 	genConfig := &genai.GenerateContentConfig{
 		MediaResolution: genai.MediaResolution(genai.MediaResolutionMedium),
 	}
-	thinkingLevel := c.thinkingLevel
+	thinkingLevel := thinkingLevelFromContext(ctx, c.thinkingLevel)
 	if strings.TrimSpace(thinkingLevel) == "" {
 		thinkingLevel = "HIGH"
 	}
 	if tc := c.thinkingConfigForModelAndLevel(model, thinkingLevel); tc != nil {
 		genConfig.ThinkingConfig = tc
 	}
+	segmentParts := make([]*genai.Part, 0, len(images)+2)
+	for _, img := range images {
+		if len(img) == 0 {
+			continue
+		}
+		imgMIME := DetectImageMIME(img)
+		if imgMIME == "" {
+			imgMIME = "image/jpeg"
+		}
+		segmentParts = append(segmentParts, &genai.Part{InlineData: &genai.Blob{MIMEType: imgMIME, Data: img}})
+	}
+	segmentParts = append(segmentParts, videoPart, genai.NewPartFromText(prompt))
 	resp, usage, err := c.generateContent(exactOffsetContext, model, []*genai.Content{{
-		Role: genai.RoleUser,
-		Parts: []*genai.Part{
-			videoPart,
-			genai.NewPartFromText(prompt),
-		},
+		Role:  genai.RoleUser,
+		Parts: segmentParts,
 	}}, genConfig)
 	if err != nil {
 		return "", usage, fmt.Errorf("failed to analyze segment: %w", err)
@@ -834,10 +902,7 @@ func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType 
 		return "", usage, fmt.Errorf("no content from segment analysis")
 	}
 
-	var result string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		result += part.Text
-	}
+	result := extractCandidateText(resp)
 
 	c.logger.Info("Segment analyzed",
 		zap.Duration("start", start),
@@ -914,12 +979,7 @@ func (c *Client) AnalyzeFrameGridsWithModel(ctx context.Context, images [][]byte
 		return "", usage, fmt.Errorf("no content from frame grid analysis")
 	}
 
-	var result string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if part != nil && !part.Thought {
-			result += part.Text
-		}
-	}
+	result := extractCandidateText(resp)
 
 	c.logger.Info("Frame grids analyzed",
 		zap.Int("image_count", len(images)),
@@ -954,10 +1014,7 @@ func (c *Client) QueryVideoFlash(ctx context.Context, fileURI, mimeType, prompt 
 		return "", usage, fmt.Errorf("no content from flash query")
 	}
 
-	var result string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		result += part.Text
-	}
+	result := extractCandidateText(resp)
 
 	c.logger.Info("Flash query completed", zap.Int("response_length", len(result)))
 	return result, usage, nil
@@ -1100,10 +1157,7 @@ func (c *Client) ParseImage(ctx context.Context, imageBytes []byte, mimeType str
 		return "", usage, fmt.Errorf("no content from image parsing")
 	}
 
-	var result string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		result += part.Text
-	}
+	result := extractCandidateText(resp)
 
 	c.logger.Info("Image parsed", zap.Int("response_length", len(result)))
 	return result, usage, nil
@@ -1129,12 +1183,7 @@ func (c *Client) ParseText(ctx context.Context, prompt string) (string, *TokenUs
 		return "", usage, fmt.Errorf("no content from text parsing")
 	}
 
-	var result string
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if part != nil && !part.Thought {
-			result += part.Text
-		}
-	}
+	result := extractCandidateText(resp)
 
 	c.logger.Info("Text parsed", zap.Int("response_length", len(result)))
 	return result, usage, nil
@@ -1167,7 +1216,7 @@ func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, request
 		model = c.model
 	}
 	fps := float64(5)
-	thinkingLevel := c.thinkingLevel
+	thinkingLevel := thinkingLevelFromContext(ctx, c.thinkingLevel)
 	if strings.TrimSpace(thinkingLevel) == "" {
 		thinkingLevel = "HIGH"
 	}
@@ -1283,6 +1332,7 @@ func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, request
 			continue
 		}
 		resp := item.Response
+		thoughts := extractCandidateThoughts(resp)
 		var usage *TokenUsage
 		if resp != nil && resp.UsageMetadata != nil {
 			input := int64(resp.UsageMetadata.PromptTokenCount)
@@ -1294,8 +1344,8 @@ func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, request
 				Total:  &total,
 			}
 			if resp.UsageMetadata.ThoughtsTokenCount > 0 {
-				thoughts := int64(resp.UsageMetadata.ThoughtsTokenCount)
-				details.Thinking = &thoughts
+				tCount := int64(resp.UsageMetadata.ThoughtsTokenCount)
+				details.Thinking = &tCount
 			}
 			if resp.UsageMetadata.CachedContentTokenCount > 0 {
 				cached := int64(resp.UsageMetadata.CachedContentTokenCount)
@@ -1305,7 +1355,9 @@ func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, request
 				toolUse := int64(resp.UsageMetadata.ToolUsePromptTokenCount)
 				details.ToolUse = &toolUse
 			}
-			usage = UsageFromComparison(details, model)
+			usage = UsageFromComparisonWithThoughts(details, model, thoughts)
+		} else if thoughts != "" {
+			usage = UsageFromComparisonWithThoughts(nil, model, thoughts)
 		}
 		if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0] == nil || resp.Candidates[0].Content == nil || len(resp.Candidates[0].Content.Parts) == 0 {
 			results[i] = BatchSegmentResult{Usage: usage, Err: errors.New("no content from batch segment analysis")}
@@ -1315,14 +1367,8 @@ func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, request
 			results[i] = BatchSegmentResult{Usage: usage, Err: errors.New("Argon output is incomplete: MAX_TOKENS")}
 			continue
 		}
-		var text strings.Builder
-		for _, part := range resp.Candidates[0].Content.Parts {
-			if part != nil && !part.Thought {
-				text.WriteString(part.Text)
-			}
-		}
 		results[i] = BatchSegmentResult{
-			Analysis: text.String(),
+			Analysis: extractCandidateText(resp),
 			Usage:    usage,
 		}
 	}

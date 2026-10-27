@@ -2,6 +2,9 @@ package fatigue
 
 import (
 	"fmt"
+	"math"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,22 +39,53 @@ type MuscleReadinessItem struct {
 	Note         string `json:"note"`
 }
 
-type PreWODAdviceResponse struct {
-	ProfileID           uint                  `json:"profile_id"`
-	OverallFatigueScore *int                  `json:"overall_fatigue_score,omitempty"`
-	OverallState        string                `json:"overall_state"`
-	OverallStateKO      string                `json:"overall_state_ko"`
-	MuscleReadiness     []MuscleReadinessItem `json:"muscle_readiness,omitempty"`
-	TargetRPE           *TargetRPEInfo        `json:"target_rpe"`
-	ScalingAdvice       []ScalingAdviceItem   `json:"scaling_advice"`
-	MobilityWarmup      []MobilityWarmupItem  `json:"mobility_warmup"`
-	OverallSummary      string                `json:"overall_summary"`
-	AdviceCode          string                `json:"advice_code,omitempty"`
-	EvidenceStatus      string                `json:"evidence_status"`
-	Evidence            EvidenceCounts        `json:"evidence"`
-	AsOf                time.Time             `json:"as_of"`
-	LastWorkoutAt       *time.Time            `json:"last_workout_at,omitempty"`
+type HybridSensorBrief struct {
+	HeartIntensity     *float64 `json:"heart_intensity,omitempty"`
+	MotionIntensity    *float64 `json:"motion_intensity,omitempty"`
+	HybridIntensity    float64  `json:"hybrid_intensity"`
+	HybridLoadAU       *float64 `json:"hybrid_load_au,omitempty"`
+	DataCoverage       float64  `json:"data_coverage"`
+	CalibrationVersion string   `json:"calibration_version,omitempty"`
 }
+
+type RecentWorkoutSummary struct {
+	SessionID       string             `json:"session_id"`
+	WorkoutAt       time.Time          `json:"workout_at"`
+	Movements       []string           `json:"movements"`
+	DurationSeconds *int               `json:"duration_seconds,omitempty"`
+	Effort          *int               `json:"effort,omitempty"`
+	HybridSensor    *HybridSensorBrief `json:"hybrid_sensor,omitempty"`
+}
+
+type EffortReflectionInfo struct {
+	Applied        bool                   `json:"applied"`
+	RatedCount     int                    `json:"rated_count"`
+	SensorCount    int                    `json:"sensor_count"`
+	TotalRecent    int                    `json:"total_recent"`
+	Reason         string                 `json:"reason,omitempty"`
+	RecentWorkouts []RecentWorkoutSummary `json:"recent_workouts,omitempty"`
+}
+
+type PreWODAdviceResponse struct {
+	ProfileID              uint                  `json:"profile_id"`
+	OverallFatigueScore    *int                  `json:"overall_fatigue_score,omitempty"`
+	OverallState           string                `json:"overall_state"`
+	OverallStateKO         string                `json:"overall_state_ko"`
+	MuscleReadiness        []MuscleReadinessItem `json:"muscle_readiness,omitempty"`
+	TargetRPE              *TargetRPEInfo        `json:"target_rpe"`
+	EffortReflection       *EffortReflectionInfo `json:"effort_reflection,omitempty"`
+	EffortReflectionReason string                `json:"effort_reflection_reason,omitempty"`
+	ScalingAdvice          []ScalingAdviceItem   `json:"scaling_advice"`
+	MobilityWarmup         []MobilityWarmupItem  `json:"mobility_warmup"`
+	OverallSummary         string                `json:"overall_summary"`
+	AdviceCode             string                `json:"advice_code,omitempty"`
+	EvidenceStatus         string                `json:"evidence_status"`
+	Evidence               EvidenceCounts        `json:"evidence"`
+	AsOf                   time.Time             `json:"as_of"`
+	LastWorkoutAt          *time.Time            `json:"last_workout_at,omitempty"`
+}
+
+const maxRecentWorkoutsInPrompt = 3
 
 // BuildPreWODAdvicePrompt constructs a Gemini prompt to generate structured pre-WOD strategy advice.
 func BuildPreWODAdvicePrompt(
@@ -60,6 +94,7 @@ func BuildPreWODAdvicePrompt(
 	wodDescription string,
 	plannedMovements []string,
 	injuries []string,
+	recentWorkouts ...RecentWorkoutSummary,
 ) string {
 	var sb strings.Builder
 
@@ -94,6 +129,40 @@ func BuildPreWODAdvicePrompt(
 		}
 	}
 
+	if len(recentWorkouts) > 0 {
+		limit := len(recentWorkouts)
+		if limit > maxRecentWorkoutsInPrompt {
+			limit = maxRecentWorkoutsInPrompt
+		}
+		sb.WriteString("\n## 최근 본 운동(WOD) 수행 및 강도 피드백 (최대 최근 3회)\n")
+		for i := 0; i < limit; i++ {
+			w := recentWorkouts[i]
+			movStr := "종목 미확인"
+			if len(w.Movements) > 0 {
+				movStr = strings.Join(w.Movements, ", ")
+			}
+			durStr := "시간 미확정"
+			if w.DurationSeconds != nil && *w.DurationSeconds > 0 {
+				durStr = formatDurationKO(*w.DurationSeconds)
+			}
+			effortStr := "자기보고 Effort 미입력 (추측 금지)"
+			if w.Effort != nil && *w.Effort >= 1 && *w.Effort <= 10 {
+				effortStr = fmt.Sprintf("자기보고 Effort %d/10", *w.Effort)
+			}
+			line := fmt.Sprintf("- 최근 #%d (%s): 종목 [%s] | 수행시간 %s | %s",
+				i+1,
+				w.WorkoutAt.UTC().Format("2006-01-02 15:04 UTC"),
+				movStr,
+				durStr,
+				effortStr,
+			)
+			if w.HybridSensor != nil {
+				line += " | " + formatHybridSensorBriefKO(*w.HybridSensor)
+			}
+			sb.WriteString(line + "\n")
+		}
+	}
+
 	sb.WriteString("\n## 오늘 계획된 WOD / 운동\n")
 	if strings.TrimSpace(wodDescription) != "" {
 		sb.WriteString(fmt.Sprintf("- WOD 설명: %s\n", wodDescription))
@@ -112,11 +181,17 @@ func BuildPreWODAdvicePrompt(
    - 신선(Fresh)한 부위를 활용할 수 있는 전략(예: 하체가 신선하면 상체 피로 시 하체 드라이브 활용)을 안내하세요.
 2. **타겟 RPE 및 페이스 전략**:
    - 1~10 척도의 목표 RPE를 설정하고, 라운드별/세트별 구체적인 페이스 운용 팁을 제공하세요.
-3. **스케일링 및 대체안**:
+3. **최근 3회 운동 강도 피드백 반영 및 척도 분리 주의사항**:
+   - 자기보고 Effort(1~10)가 있는 경우, 비슷한 수행시간이라도 여유 있게 마쳤는지(Effort <= 5) 매우 힘들게 마쳤는지(Effort >= 8)를 오늘 초반 페이스와 세트 분할 조언에 반영하세요.
+   - RIR(남은 반복수) 척도와 앱의 Effort(1~10)는 다른 척도이므로 값 자체를 1:1로 대응시키거나 변환해 언급하지 마세요.
+   - 센서 '하이브리드 활동강도(0~100)'는 심박 예비율(HRR)과 가속도 활동량(ENMO)을 결합한 별도 객관 활동 지표이며 Effort(1~10)나 Apple Effort를 대체하지 않습니다. 외부 중량 정보가 없으므로 느리고 무거운 근력 동작에서 점수가 낮게 나와도 이를 "쉬운 근력 운동"으로 해석하지 마세요.
+   - **회복 단정 및 누락값 추측 금지**: 낮은 자기보고 Effort나 낮은 센서 점수를 실제 회복 완료 상태로 단정하지 마세요(6대 근육 피로도가 60 이상이면 반드시 RPE 6 이하 보수적 페이스를 우선 적용). 미입력된 Effort, 미확정 시간, 미측정 센서 값을 절대 추측하지 마세요.
+   - 최근 3회 중 수동 Effort 또는 센서 보조지표가 1건 이상 있으면 JSON의 "effort_reflection_reason"에 어떤 최근 기록(종목·수행시간·강도)을 오늘 조언에 어떻게 반영했는지 한국어 1~2문장으로 설명하세요. 둘 다 없으면 빈 문자열("")로 출력하세요.
+4. **스케일링 및 대체안**:
    - 피로도가 높은 부위에 무리가 가는 동작은 구체적인 대체 동작 또는 중량 조절 가이드를 제안하세요. (예: HSPU -> Push-up, Snatch 중량 15% 감량 등)
-4. **프리-WOD 필수 모빌리티**:
+5. **프리-WOD 필수 모빌리티**:
    - 피로 부위 및 오늘 WOD에 필요한 최적의 워밍업/모빌리티 동작 1~2개를 구체적 소요 시간과 함께 추천하세요.
-5. **어조**:
+6. **어조**:
    - 크로스핏 코치답게 전문적이고 직관적이며 동기부여가 되는 한국어 톤을 유지하세요.
 
 ## 출력 형식
@@ -138,6 +213,7 @@ func BuildPreWODAdvicePrompt(
     "label": "RPE 7 (조절된 페이스)",
     "pacing_strategy": "초반 2라운드는 80% 템포로 호흡을 유지하고, 오버헤드 동작 시 무리한 연속 반복을 피하세요."
   },
+  "effort_reflection_reason": "직전 WOD에서 높은 체감 강도(Effort 9/10)가 기록되어 초반 오버페이스를 막기 위해 목표 RPE를 7로 낮추고 세트 분할을 권장했습니다.",
   "scaling_advice": [
     {
       "movement": "Handstand Push-up",
@@ -164,9 +240,16 @@ func BuildPreWODAdvicePrompt(
 func FinalizePreWODAdvice(
 	resp *PreWODAdviceResponse,
 	readiness ProfileReadinessState,
+	recentWorkouts ...RecentWorkoutSummary,
 ) {
 	if resp == nil {
 		return
+	}
+
+	rawReason := strings.TrimSpace(resp.EffortReflectionReason)
+	resp.EffortReflectionReason = ""
+	if rawReason == "" && resp.EffortReflection != nil {
+		rawReason = strings.TrimSpace(resp.EffortReflection.Reason)
 	}
 
 	// Always synchronize authoritative readiness state
@@ -181,6 +264,7 @@ func FinalizePreWODAdvice(
 	switch readiness.EvidenceStatus {
 	case "no_history", "insufficient":
 		resp.TargetRPE = nil
+		resp.EffortReflection = nil
 		resp.AdviceCode = "check_condition"
 		resp.OverallSummary = "최근 운동 근거만으로 강도를 판단할 수 없습니다. 실제 컨디션을 확인하세요"
 		resp.MuscleReadiness = nil
@@ -189,6 +273,7 @@ func FinalizePreWODAdvice(
 
 	case "partial":
 		resp.TargetRPE = nil
+		resp.EffortReflection = nil
 		resp.AdviceCode = "partial_history"
 		resp.OverallSummary = "일부 확인된 운동 이력 기반의 참고 안내입니다. 몸 상태에 맞춰 강도를 조절하세요"
 
@@ -215,10 +300,381 @@ func FinalizePreWODAdvice(
 		syncMuscleReadiness(resp, readiness)
 
 		if resp.TargetRPE != nil {
-			resp.TargetRPE.PacingStrategy = strings.ReplaceAll(resp.TargetRPE.PacingStrategy, "기록 경신을 보장", "참고 페이스로 조절")
-			resp.TargetRPE.PacingStrategy = strings.ReplaceAll(resp.TargetRPE.PacingStrategy, "최대 강도로 도전", "목표 페이스에 맞춰 조절")
+			if resp.TargetRPE.Score < 1 {
+				resp.TargetRPE.Score = 1
+			} else if resp.TargetRPE.Score > 10 {
+				resp.TargetRPE.Score = 10
+			}
+			// Low self-reported Effort or low sensor hybrid intensity must NEVER override high muscle fatigue (>= 60).
+			if readiness.OverallFatigueScore != nil && *readiness.OverallFatigueScore >= 60 && resp.TargetRPE.Score > 6 {
+				resp.TargetRPE.Score = 6
+				resp.TargetRPE.Label = "RPE 6 (피로 관리 및 기술 중심)"
+			}
+			syncRPELabel(resp.TargetRPE)
+			resp.TargetRPE.PacingStrategy = sanitizeCoachingText(resp.TargetRPE.PacingStrategy)
+		}
+		resp.OverallSummary = sanitizeCoachingText(resp.OverallSummary)
+
+		resp.EffortReflection = buildAuthoritativeEffortReflection(recentWorkouts, readiness, rawReason)
+	}
+}
+
+var rpeLabelPattern = regexp.MustCompile(`(?i)RPE\s*(\d+)(?:\s*[~\-–]\s*(\d+))?`)
+
+// syncRPELabel rewrites the RPE number in a label that no longer matches the
+// final (clamped or capped) score; a range that contains the score is kept.
+func syncRPELabel(info *TargetRPEInfo) {
+	loc := rpeLabelPattern.FindStringSubmatchIndex(info.Label)
+	if loc == nil {
+		if strings.TrimSpace(info.Label) == "" {
+			info.Label = fmt.Sprintf("RPE %d", info.Score)
+		}
+		return
+	}
+	lo, _ := strconv.Atoi(info.Label[loc[2]:loc[3]])
+	hi := lo
+	if loc[4] >= 0 {
+		hi, _ = strconv.Atoi(info.Label[loc[4]:loc[5]])
+	}
+	if lo <= info.Score && info.Score <= hi {
+		return
+	}
+	info.Label = info.Label[:loc[0]] + fmt.Sprintf("RPE %d", info.Score) + info.Label[loc[1]:]
+}
+
+func formatDurationKO(seconds int) string {
+	if seconds <= 0 {
+		return "시간 미확정"
+	}
+	mins := seconds / 60
+	secs := seconds % 60
+	if mins == 0 {
+		return fmt.Sprintf("%d초", secs)
+	}
+	if secs == 0 {
+		return fmt.Sprintf("%d분", mins)
+	}
+	return fmt.Sprintf("%d분 %d초", mins, secs)
+}
+
+func formatHybridSensorBriefKO(h HybridSensorBrief) string {
+	var details []string
+	if h.HeartIntensity != nil {
+		details = append(details, fmt.Sprintf("심박 %.0f", math.Round(*h.HeartIntensity*100)))
+	}
+	if h.MotionIntensity != nil {
+		details = append(details, fmt.Sprintf("움직임 %.0f", math.Round(*h.MotionIntensity*100)))
+	}
+	if h.HybridLoadAU != nil {
+		details = append(details, fmt.Sprintf("누적부하 %.1f AU", *h.HybridLoadAU))
+	}
+	details = append(details, fmt.Sprintf("커버리지 %.0f%%", math.Round(h.DataCoverage*100)))
+	return fmt.Sprintf("센서 보조지표: 하이브리드 활동강도 %.0f/100 (%s)", math.Round(h.HybridIntensity), strings.Join(details, " · "))
+}
+
+func sanitizeCoachingText(text string) string {
+	out := strings.ReplaceAll(text, "기록 경신을 보장", "참고 페이스로 조절")
+	out = strings.ReplaceAll(out, "최대 강도로 도전", "목표 페이스에 맞춰 조절")
+	out = strings.ReplaceAll(out, "완전히 회복되었", "컨디션을 점검하며 진행할 수 있")
+	out = strings.ReplaceAll(out, "완벽히 회복되었", "컨디션을 점검하며 진행할 수 있")
+	out = strings.ReplaceAll(out, "회복이 완료되었", "컨디션을 점검하며 진행할 수 있")
+	out = strings.ReplaceAll(out, "쉬운 근력 운동", "중량 확인이 필요한 근력 운동")
+	return out
+}
+
+func containsProhibitedReflectionClaim(reason string) bool {
+	if reason == "" {
+		return false
+	}
+	upper := strings.ToUpper(reason)
+	if strings.Contains(upper, "RIR") {
+		return true
+	}
+	prohibited := []string{
+		"완전히 회복",
+		"완벽히 회복",
+		"회복이 완료",
+		"회복을 보장",
+		"회복 상태가 보장",
+		"기록 경신을 보장",
+		"쉬운 근력 운동",
+	}
+	for _, phrase := range prohibited {
+		if strings.Contains(reason, phrase) {
+			return true
 		}
 	}
+	return false
+}
+
+func buildAuthoritativeEffortReflection(
+	recentWorkouts []RecentWorkoutSummary,
+	readiness ProfileReadinessState,
+	rawReason string,
+) *EffortReflectionInfo {
+	if len(recentWorkouts) == 0 {
+		return nil
+	}
+
+	limit := len(recentWorkouts)
+	if limit > maxRecentWorkoutsInPrompt {
+		limit = maxRecentWorkoutsInPrompt
+	}
+
+	cleaned := make([]RecentWorkoutSummary, 0, limit)
+	ratedCount := 0
+	sensorCount := 0
+
+	for i := 0; i < limit; i++ {
+		item := recentWorkouts[i]
+		movCopy := make([]string, len(item.Movements))
+		copy(movCopy, item.Movements)
+		item.Movements = movCopy
+
+		if item.DurationSeconds != nil {
+			if *item.DurationSeconds <= 0 {
+				item.DurationSeconds = nil
+			} else {
+				d := *item.DurationSeconds
+				item.DurationSeconds = &d
+			}
+		}
+
+		if item.Effort != nil {
+			if *item.Effort < 1 || *item.Effort > 10 {
+				item.Effort = nil
+			} else {
+				e := *item.Effort
+				item.Effort = &e
+				ratedCount++
+			}
+		}
+
+		if item.HybridSensor != nil {
+			hs := *item.HybridSensor
+			item.HybridSensor = &hs
+			sensorCount++
+		}
+
+		cleaned = append(cleaned, item)
+	}
+
+	applied := ratedCount > 0 || sensorCount > 0
+	reason := ""
+	if applied {
+		if rawReason != "" && !containsProhibitedReflectionClaim(rawReason) && reflectionReasonGrounded(rawReason, cleaned, readiness) {
+			reason = sanitizeCoachingText(rawReason)
+		} else {
+			reason = BuildDeterministicEffortReflectionReason(cleaned, readiness)
+		}
+	}
+
+	return &EffortReflectionInfo{
+		Applied:        applied,
+		RatedCount:     ratedCount,
+		SensorCount:    sensorCount,
+		TotalRecent:    len(cleaned),
+		Reason:         reason,
+		RecentWorkouts: cleaned,
+	}
+}
+
+var (
+	reflectionEffortPattern   = regexp.MustCompile(`(?i)effort\s*(\d+)`)
+	reflectionScorePattern    = regexp.MustCompile(`(\d+(?:\.\d+)?)\s*/\s*100`)
+	reflectionDurationPattern = regexp.MustCompile(`\d+\s*분(?:\s*\d+\s*초)?|\d+\s*초`)
+)
+
+// reflectionReasonGrounded reports whether every Effort, 0–100 score and
+// duration a model-written reason cites exists in the recent workouts or the
+// readiness the prompt showed. An ungrounded reason is replaced by the
+// deterministic one.
+func reflectionReasonGrounded(reason string, recent []RecentWorkoutSummary, readiness ProfileReadinessState) bool {
+	efforts := make(map[int]bool)
+	scores := make(map[int]bool)
+	durations := make(map[string]bool)
+	for _, w := range recent {
+		if w.Effort != nil {
+			efforts[*w.Effort] = true
+		}
+		if h := w.HybridSensor; h != nil {
+			scores[int(math.Round(h.HybridIntensity))] = true
+			if h.HeartIntensity != nil {
+				scores[int(math.Round(*h.HeartIntensity*100))] = true
+			}
+			if h.MotionIntensity != nil {
+				scores[int(math.Round(*h.MotionIntensity*100))] = true
+			}
+		}
+		if w.DurationSeconds != nil {
+			durations[strings.ReplaceAll(formatDurationKO(*w.DurationSeconds), " ", "")] = true
+		}
+	}
+	if readiness.OverallFatigueScore != nil {
+		scores[*readiness.OverallFatigueScore] = true
+	}
+	for _, m := range readiness.Muscles {
+		scores[m.FatigueScore] = true
+	}
+	for _, match := range reflectionEffortPattern.FindAllStringSubmatch(reason, -1) {
+		if n, err := strconv.Atoi(match[1]); err != nil || !efforts[n] {
+			return false
+		}
+	}
+	for _, match := range reflectionScorePattern.FindAllStringSubmatch(reason, -1) {
+		if v, err := strconv.ParseFloat(match[1], 64); err != nil || !scores[int(math.Round(v))] {
+			return false
+		}
+	}
+	for _, match := range reflectionDurationPattern.FindAllString(reason, -1) {
+		if !durations[strings.ReplaceAll(match, " ", "")] {
+			return false
+		}
+	}
+	return true
+}
+
+// Recent-WOD feedback that shapes pacing advice, in precedence order.
+const (
+	RecentEffortNone       = ""
+	RecentEffortHigh       = "high_effort"  // a recent Effort >= 8
+	RecentEffortLow        = "low_effort"   // a recent Effort <= 5 and none >= 8
+	RecentEffortRated      = "rated_effort" // only Effort 6–7
+	RecentEffortHighSensor = "high_sensor"  // no Effort; a hybrid intensity >= 80
+	RecentEffortSensor     = "sensor"       // no Effort; hybrid intensity < 80
+)
+
+// RecentEffortSignal is the recent-WOD feedback that drives pacing and the
+// workout that produced it, so an RPE adjustment and its explanation always
+// cite the same session.
+type RecentEffortSignal struct {
+	Kind string
+	// Anchor is the workout the explanation cites; AnchorIndex is its position
+	// in the recent list (0 = most recent).
+	Anchor          *RecentWorkoutSummary
+	AnchorIndex     int
+	RatedCount      int
+	SensorCount     int
+	HighEffortCount int
+	LowEffortCount  int
+}
+
+// ClassifyRecentEffort scans recent WODs (most recent first). The anchor is
+// the most recent workout of the winning kind.
+func ClassifyRecentEffort(recent []RecentWorkoutSummary) RecentEffortSignal {
+	signal := RecentEffortSignal{AnchorIndex: -1}
+	highIdx, lowIdx, ratedIdx, highSensorIdx, sensorIdx := -1, -1, -1, -1, -1
+	for i := range recent {
+		w := &recent[i]
+		if w.Effort != nil && *w.Effort >= 1 && *w.Effort <= 10 {
+			signal.RatedCount++
+			if ratedIdx < 0 {
+				ratedIdx = i
+			}
+			if *w.Effort >= 8 {
+				signal.HighEffortCount++
+				if highIdx < 0 {
+					highIdx = i
+				}
+			} else if *w.Effort <= 5 {
+				signal.LowEffortCount++
+				if lowIdx < 0 {
+					lowIdx = i
+				}
+			}
+		}
+		if w.HybridSensor != nil {
+			signal.SensorCount++
+			if sensorIdx < 0 {
+				sensorIdx = i
+			}
+			if highSensorIdx < 0 && math.Round(w.HybridSensor.HybridIntensity) >= 80 {
+				highSensorIdx = i
+			}
+		}
+	}
+	switch {
+	case highIdx >= 0:
+		signal.Kind, signal.AnchorIndex = RecentEffortHigh, highIdx
+	case lowIdx >= 0:
+		signal.Kind, signal.AnchorIndex = RecentEffortLow, lowIdx
+	case ratedIdx >= 0:
+		signal.Kind, signal.AnchorIndex = RecentEffortRated, ratedIdx
+	case highSensorIdx >= 0:
+		signal.Kind, signal.AnchorIndex = RecentEffortHighSensor, highSensorIdx
+	case sensorIdx >= 0:
+		signal.Kind, signal.AnchorIndex = RecentEffortSensor, sensorIdx
+	}
+	if signal.AnchorIndex >= 0 {
+		signal.Anchor = &recent[signal.AnchorIndex]
+	}
+	return signal
+}
+
+// BuildDeterministicEffortReflectionReason creates a non-speculative explanation of how recent WOD feedback shaped pacing advice.
+// Every value it quotes belongs to the workout ClassifyRecentEffort selected.
+func BuildDeterministicEffortReflectionReason(
+	recent []RecentWorkoutSummary,
+	readiness ProfileReadinessState,
+) string {
+	signal := ClassifyRecentEffort(recent)
+	if signal.Kind == RecentEffortNone {
+		return ""
+	}
+
+	highFatigue := readiness.OverallFatigueScore != nil && *readiness.OverallFatigueScore >= 60
+	if highFatigue {
+		if signal.Kind == RecentEffortLow {
+			return "최근 WOD의 자기보고 강도(Effort)는 비교적 낮았으나 6대 근육 누적 피로도가 높아 회복 완료로 단정하지 않고 보수적 페이스(RPE 6 이하)를 우선 적용했습니다."
+		}
+		if signal.RatedCount > 0 {
+			return fmt.Sprintf("최근 %d회 WOD의 강도 피드백과 높은 6대 근육 누적 피로도를 함께 반영해 무리한 반복을 피하도록 목표 강도(RPE 6 이하)를 보수적으로 제한했습니다.", signal.RatedCount)
+		}
+		return fmt.Sprintf("최근 %d회 WOD의 센서 하이브리드 활동강도와 높은 근육 누적 피로도를 함께 고려해 보수적 페이스(RPE 6 이하)로 제한했습니다.", signal.SensorCount)
+	}
+
+	anchor := *signal.Anchor
+	workoutLabel := FormatRecentWorkoutAnchor(anchor, signal.AnchorIndex)
+	// A sensor note cites only the anchor's own reading, never another session's.
+	sensorNote := ""
+	if anchor.HybridSensor != nil {
+		sensorNote = fmt.Sprintf(" (센서 하이브리드 활동강도 %.0f/100 보조 참고)", math.Round(anchor.HybridSensor.HybridIntensity))
+	}
+	switch signal.Kind {
+	case RecentEffortHigh:
+		return fmt.Sprintf("%s에서 높은 체감 강도(Effort %d/10)가 기록되어 초반 오버페이스를 줄이고 세트 분할과 호흡 관리에 집중하도록 페이스를 조정했습니다.", workoutLabel, *anchor.Effort) + sensorNote
+	case RecentEffortLow:
+		return fmt.Sprintf("%s에서 비교적 여유 있는 체감 강도(Effort %d/10)가 기록되었으나 실제 회복을 단정하지 않고 현재 근육 피로도 범위 안에서 안정적인 빌드업 페이스를 제안했습니다.", workoutLabel, *anchor.Effort) + sensorNote
+	case RecentEffortRated:
+		return fmt.Sprintf("%s의 체감 강도(Effort %d/10)와 수행 기록을 바탕으로 일정한 랩타임을 유지하는 표준 페이스를 제안했습니다.", workoutLabel, *anchor.Effort) + sensorNote
+	}
+
+	// Only verified v3 sensor summaries are present (manual Effort omitted).
+	score := math.Round(anchor.HybridSensor.HybridIntensity)
+	if signal.Kind == RecentEffortHighSensor {
+		return fmt.Sprintf("수동 Effort는 미입력이지만 %s의 센서 하이브리드 활동강도(%.0f/100)가 높게 측정되어 초반 페이스 여유를 두도록 조정했습니다.", workoutLabel, score)
+	}
+	return fmt.Sprintf("수동 Effort는 미입력이며 %s의 센서 하이브리드 활동강도(%.0f/100)를 보조 참고하되 고중량 저속 동작 한계를 고려해 근육 피로도 중심의 페이스를 제안했습니다.", workoutLabel, score)
+}
+
+// FormatRecentWorkoutAnchor names a recent WOD for Korean coaching text. Text
+// built on it attaches only 에서/의, which do not depend on the final syllable.
+func FormatRecentWorkoutAnchor(w RecentWorkoutSummary, index int) string {
+	movPart := "직전 WOD"
+	if index > 0 {
+		movPart = fmt.Sprintf("%d회 전 WOD", index+1)
+	}
+	if len(w.Movements) > 0 {
+		limit := len(w.Movements)
+		if limit > 2 {
+			limit = 2
+		}
+		movPart = fmt.Sprintf("최근 %s WOD", strings.Join(w.Movements[:limit], "·"))
+	}
+	if w.DurationSeconds != nil && *w.DurationSeconds > 0 {
+		return fmt.Sprintf("%s(%s)", movPart, formatDurationKO(*w.DurationSeconds))
+	}
+	return movPart
 }
 
 func syncMuscleReadiness(resp *PreWODAdviceResponse, readiness ProfileReadinessState) {

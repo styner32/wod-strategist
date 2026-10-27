@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strconv"
 	"time"
 
@@ -31,11 +33,16 @@ type SensorProcessingRecord struct {
 	RetryNotBefore   *time.Time `json:"retry_not_before,omitempty"`
 	LastErrorCode    *string    `json:"last_error_code,omitempty"`
 	CalculationInputs struct {
-		CalculationVersion int     `json:"calculation_version"`
-		Age                *int    `json:"age,omitempty"`
-		MaxHR              *int    `json:"max_hr,omitempty"`
-		MaxHRSource        *string `json:"max_hr_source,omitempty"`
-		HasHRZones         bool    `json:"has_hr_zones"`
+		CalculationVersion int      `json:"calculation_version"`
+		Age                *int     `json:"age,omitempty"`
+		MaxHR              *int     `json:"max_hr,omitempty"`
+		MaxHRSource        *string  `json:"max_hr_source,omitempty"`
+		HasHRZones         bool     `json:"has_hr_zones"`
+		RestingHR          *int     `json:"resting_hr,omitempty"`
+		RestingHRSource    string   `json:"resting_hr_source,omitempty"`
+		ENMORestG          *float64 `json:"enmo_rest_g,omitempty"`
+		ENMORefG           *float64 `json:"enmo_ref_g,omitempty"`
+		CalibrationVersion string   `json:"calibration_version,omitempty"`
 	} `json:"calculation_inputs"`
 }
 
@@ -211,6 +218,11 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 		ExpectedSizeBytes:  processing.SizeBytes,
 		Age:                processing.CalculationInputs.Age,
 		EstimatedMaxHR:     processing.CalculationInputs.MaxHR,
+		RestingHR:          processing.CalculationInputs.RestingHR,
+		RestingHRSource:    processing.CalculationInputs.RestingHRSource,
+		ENMORestG:          processing.CalculationInputs.ENMORestG,
+		ENMORefG:           processing.CalculationInputs.ENMORefG,
+		CalibrationVersion: processing.CalculationInputs.CalibrationVersion,
 	}
 
 	timelineSource := sensor.TimelineSource{
@@ -312,7 +324,111 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 		zap.Int64("version", row.SensorVersion),
 		zap.Float64("hr_bonus", summaryResult.HRBonus))
 
+	if summaryResult.CalculationVersion == 3 &&
+		summaryResult.Metrics.Hybrid != nil &&
+		summaryResult.Metrics.Hybrid.ValidACCSeconds >= 120 &&
+		summaryResult.Metrics.Hybrid.ENMOP95G != nil {
+		w.maybePromoteProfileENMOCalibration(execCtx, row.ProfileID)
+	}
+
 	return nil
+}
+
+func medianFloat64(vals []float64) float64 {
+	if len(vals) == 0 {
+		return 0
+	}
+	sorted := make([]float64, len(vals))
+	copy(sorted, vals)
+	sort.Float64s(sorted)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[mid]
+	}
+	return (sorted[mid-1] + sorted[mid]) / 2.0
+}
+
+// maybePromoteProfileENMOCalibration promotes a profile from bootstrap chest ENMO constants
+// to a fixed personal_chest_v1 calibration once at least 3 valid completed v3 sensor sessions
+// (>= 120s valid ACC) exist. Past sessions retain their frozen CalculationInputs snapshot.
+func (w *Worker) maybePromoteProfileENMOCalibration(ctx context.Context, profileID uint) {
+	if profileID == 0 || w.DB == nil {
+		return
+	}
+	var current db.Profile
+	if err := w.DB.WithContext(ctx).
+		Select("id, sensor_calibration_version").
+		Where("id = ? AND archived_at IS NULL", profileID).
+		First(&current).Error; err != nil {
+		return
+	}
+	if current.SensorCalibrationVersion != nil && *current.SensorCalibrationVersion != "" {
+		return
+	}
+
+	var rows []db.AnalysisResult
+	if err := w.DB.WithContext(ctx).
+		Select("id, sensor_version, sensor_summary").
+		Where("profile_id = ? AND sensor_state = ? AND archived_at IS NULL", profileID, db.SensorStateCompleted).
+		Order("id DESC").
+		Limit(25).
+		Find(&rows).Error; err != nil {
+		return
+	}
+
+	var p05List, p95List []float64
+	for _, r := range rows {
+		if len(r.SensorSummary) == 0 || string(r.SensorSummary) == "{}" {
+			continue
+		}
+		var sum sensor.SensorSummaryResult
+		if json.Unmarshal(r.SensorSummary, &sum) != nil {
+			continue
+		}
+		if sum.Version != r.SensorVersion || sum.CalculationVersion < 3 || !sum.Quality.IsComplete || sum.Metrics.Hybrid == nil {
+			continue
+		}
+		hy := sum.Metrics.Hybrid
+		// The parser sets both percentiles together (>= 60 valid ACC seconds).
+		if hy.ValidACCSeconds < 120 || hy.ENMOP05G == nil || hy.ENMOP95G == nil {
+			continue
+		}
+		if math.IsNaN(*hy.ENMOP05G) || math.IsInf(*hy.ENMOP05G, 0) || math.IsNaN(*hy.ENMOP95G) || math.IsInf(*hy.ENMOP95G, 0) {
+			continue
+		}
+		p05List = append(p05List, *hy.ENMOP05G)
+		p95List = append(p95List, *hy.ENMOP95G)
+		if len(p95List) >= 5 {
+			break
+		}
+	}
+
+	if len(p95List) < 3 {
+		return
+	}
+
+	restG := math.Round(math.Max(0.005, math.Min(0.05, medianFloat64(p05List)))*10000) / 10000
+	refG := math.Round(math.Max(math.Max(restG+0.08, 0.12), math.Min(1.50, medianFloat64(p95List)))*10000) / 10000
+
+	res := w.DB.WithContext(ctx).Exec(`
+		UPDATE profiles
+		SET sensor_enmo_rest_g = ?,
+		    sensor_enmo_ref_g = ?,
+		    sensor_calibration_version = ?,
+		    sensor_calibrated_at = NOW(),
+		    sensor_calibration_sessions = ?,
+		    updated_at = NOW()
+		WHERE id = ?
+		  AND archived_at IS NULL
+		  AND sensor_calibration_version IS NULL
+	`, restG, refG, sensor.PersonalCalibrationVersion, len(p95List), profileID)
+	if res.Error == nil && res.RowsAffected == 1 {
+		w.logger.Info("promoted profile sensor ENMO calibration to personal_chest_v1",
+			zap.Uint("profile_id", profileID),
+			zap.Float64("enmo_rest_g", restG),
+			zap.Float64("enmo_ref_g", refG),
+			zap.Int("sessions", len(p95List)))
+	}
 }
 
 func (w *Worker) recordSensorFailure(id, profileID uint, version int64, leaseToken string, proc SensorProcessingRecord, errCode string, retryable bool) {

@@ -86,6 +86,17 @@ type EndEvent struct {
 	} `json:"summary"`
 }
 
+const (
+	HybridAlgorithmVersion       = "hybrid-0.75-0.25-gamma2"
+	DefaultBootstrapRestingHRBPM = 60
+	RestingHRSourceProfile       = "profile"
+	RestingHRSourceDefault       = "default_60bpm"
+	DefaultBootstrapENMORestG    = 0.01
+	DefaultBootstrapENMORefG     = 0.30
+	BootstrapCalibrationVersion  = "bootstrap_chest_v1"
+	PersonalCalibrationVersion   = "personal_chest_v1"
+)
+
 type ParseOptions struct {
 	CalculationVersion int
 	ExpectedProfileID  uint
@@ -94,6 +105,11 @@ type ParseOptions struct {
 	ExpectedSizeBytes  int64
 	Age                *int
 	EstimatedMaxHR     *int
+	RestingHR          *int
+	RestingHRSource    string
+	ENMORestG          *float64
+	ENMORefG           *float64
+	CalibrationVersion string
 }
 
 type HeartRateZones struct {
@@ -142,19 +158,41 @@ type QualityReport struct {
 	Warnings   []string `json:"warnings,omitempty"`
 }
 
+type HybridMetrics struct {
+	HeartIntensity     *float64 `json:"heart_intensity"`
+	MotionIntensity    *float64 `json:"motion_intensity"`
+	HybridIntensity    *float64 `json:"hybrid_intensity"`
+	HybridLoadAU       *float64 `json:"hybrid_load_au"`
+	ValidHybridSeconds float64  `json:"valid_hybrid_seconds"`
+	ValidACCSeconds    float64  `json:"valid_acc_seconds"`
+	DataCoverage       float64  `json:"data_coverage"`
+	ENMOP05G           *float64 `json:"enmo_p05_g,omitempty"`
+	ENMOP95G           *float64 `json:"enmo_p95_g,omitempty"`
+	PeakExceededMaxHR  bool     `json:"peak_exceeded_max_hr,omitempty"`
+	QualityFlags       []string `json:"quality_flags"`
+	CalibrationVersion string   `json:"calibration_version"`
+	AlgorithmVersion   string   `json:"algorithm_version"`
+}
+
 type SensorMetrics struct {
-	DurationSeconds float64    `json:"duration_seconds"`
-	PauseSeconds    float64    `json:"pause_seconds"`
-	HR              HRMetrics  `json:"hr"`
-	ACC             ACCMetrics `json:"acc"`
+	DurationSeconds float64        `json:"duration_seconds"`
+	PauseSeconds    float64        `json:"pause_seconds"`
+	HR              HRMetrics      `json:"hr"`
+	ACC             ACCMetrics     `json:"acc"`
+	Hybrid          *HybridMetrics `json:"hybrid,omitempty"`
 }
 
 type CalculationInputs struct {
-	CalculationVersion int     `json:"calculation_version"`
-	Age                *int    `json:"age,omitempty"`
-	MaxHR              *int    `json:"max_hr,omitempty"`
-	MaxHRSource        *string `json:"max_hr_source,omitempty"`
-	HasHRZones         bool    `json:"has_hr_zones"`
+	CalculationVersion int      `json:"calculation_version"`
+	Age                *int     `json:"age,omitempty"`
+	MaxHR              *int     `json:"max_hr,omitempty"`
+	MaxHRSource        *string  `json:"max_hr_source,omitempty"`
+	HasHRZones         bool     `json:"has_hr_zones"`
+	RestingHR          *int     `json:"resting_hr,omitempty"`
+	RestingHRSource    string   `json:"resting_hr_source,omitempty"`
+	ENMORestG          *float64 `json:"enmo_rest_g,omitempty"`
+	ENMORefG           *float64 `json:"enmo_ref_g,omitempty"`
+	CalibrationVersion string   `json:"calibration_version,omitempty"`
 }
 
 type SensorSummaryResult struct {

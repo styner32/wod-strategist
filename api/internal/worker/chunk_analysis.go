@@ -40,12 +40,13 @@ const ChunkAnalysisPrompt = `
   (예: [EXERCISE: Hang Power Clean], [EXERCISE: Push Jerk], [EXERCISE: Deadlift], [EXERCISE: Power Snatch], [EXERCISE: Back Squat], [EXERCISE: Pull-up], [EXERCISE: Burpee])
   * 클린과 스내치는 포괄적인 [EXERCISE: Hang Clean] 또는 [EXERCISE: Snatch]를 쓰지 말고, [EXERCISE: Hang Power Clean], [EXERCISE: Hang Squat Clean], [EXERCISE: Power Clean], [EXERCISE: Squat Clean], [EXERCISE: Hang Power Snatch], [EXERCISE: Hang Squat Snatch] 등으로 구체적인 표준 종목명을 쓰세요.
   * 바벨/덤벨을 손에 쥐고 행(Hang) 위치에 들고 세트를 이어가는 구간은 운동 진행 중([EXERCISE: ...])입니다. 기구를 완전히 바닥에 내려놓았을 때만 [NO_EXERCISE]를 출력하세요.
+  * 로잉(Row), 바이크 에르그(Bike Erg), 에코 바이크(Echo Bike), 스키에르그(Skierg)에 앉거나 선 채로 핸들·핸들바·페달과 접촉해 팔·다리·상체 움직임이 이어지면 앉아 있어도 운동 진행 중([EXERCISE: ...])입니다. 속도가 느려진 것은 휴식이 아닙니다. 기구에서 손발을 떼고 내려왔을 때만 [NO_EXERCISE]를 출력하세요.
 - 대상 인물이 운동 중인 것은 분명하지만 정확한 종목 근거가 부족하면 → 첫 줄에 [EXERCISE: Unknown] 태그를 출력하세요.
-- 운동이 보이지 않으면 (기구를 내려놓은 휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그만 출력하세요.
+- 운동이 보이지 않으면 (기구를 내려놓은 휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그를 출력하세요.
 
 ## 코칭 피드백 규칙
 - 운동이 감지된 경우: [EXERCISE: ...] 태그 다음 줄에 **반드시 1~2문장**으로만 코칭 피드백을 답하세요.
-- 운동이 감지되지 않은 경우: [NO_EXERCISE] 태그만 출력하고 추가 피드백을 작성하지 마세요.
+- 운동이 감지되지 않은 경우: [NO_EXERCISE] 태그 뒤에 코칭 피드백 문장은 작성하지 마세요 (아래 요청된 JSON 블록만 각 규칙에 따라 출력하세요).
 - 아래 컨텍스트를 참고하되, 컨텍스트 자체를 반복하지 마세요.
 - 부상 사항이 있으면 → 해당 부위에 위험한 움직임이 보일 때만 안전 경고를 우선하세요.`
 
@@ -117,10 +118,9 @@ const (
 
 ` + "```target_person\n" + `{"matched_cues":["흰색 나이키","짧은 검은 머리"],"ambiguous":false,"confidence":0.9}` + "\n```\n" + `
 - matched_cues: 위 대상 인물 컨텍스트 항목 중 이 영상에서 **실제로 눈으로 확인한 것만** 나열하세요.
-  컨텍스트에 있다는 이유로 나열하지 마세요. 확인한 것이 없으면 빈 배열입니다.
+  컨텍스트에 있다는 이유로 나열하지 마세요. 별도 외형 컨텍스트가 없거나 확인한 항목이 없으면 빈 배열([])입니다.
 - ambiguous: 조건에 맞는 인물이 여러 명이거나 대상을 확신할 수 없으면 true.
-- confidence: 대상 인물 식별에 대한 확신도 0.0~1.0.
-- 대상 인물 컨텍스트가 제공되지 않았다면 matched_cues는 빈 배열, confidence는 0.5로 두세요.`
+- confidence: 대상 인물이 한 명으로 명확히 특정되는 확신도(0.0~1.0). 별도 외형 컨텍스트가 없더라도 전면/중앙에서 주요 운동을 수행하는 대상 인물이 1명으로 명확하면 0.85~0.95, 후보가 여러 명이거나 불확실하면 0.5 이하로 두세요.`
 )
 
 // observedSignalsBlockRegex matches ```observed_signals ... ``` blocks in Gemini output.
@@ -174,27 +174,84 @@ func stripObservedSignals(analysis string) string {
 	return strings.TrimSpace(observedSignalsBlockRegex.ReplaceAllString(analysis, ""))
 }
 
-var targetPersonBlockRegex = regexp.MustCompile(
-	"(?is)```(?:target_person|json)?\\s*\\n?(\\{[^`]*?\"matched_cues\"[^`]*?\\})\\s*\\n?```")
+var (
+	targetPersonExplicitBlockRegex = regexp.MustCompile("(?is)```target_person\\s*\\n?(\\{[^`]*\\})\\s*\\n?```")
+	targetPersonBlockRegex         = regexp.MustCompile("(?is)```(?:target_person|json)?\\s*\\n?(\\{[^`]*?(?:\"matched_cues\"|\"boxes\")[^`]*?\\})\\s*\\n?```")
+)
 
 type targetPersonOutput struct {
 	MatchedCues []string `json:"matched_cues"`
 	Ambiguous   bool     `json:"ambiguous"`
 	Confidence  float64  `json:"confidence"`
+	// Tracking channel (only when tracking continuity is enabled): where the
+	// person is, never how they move.
+	Boxes          []trackingBox `json:"boxes,omitempty"`
+	FrameRegion    string        `json:"frame_region,omitempty"`
+	Station        string        `json:"station,omitempty"`
+	ReferenceImage string        `json:"reference_image,omitempty"`
+}
+
+func extractTargetPersonJSONBlocks(analysis string) []string {
+	var rawBlocks []string
+	seen := map[string]struct{}{}
+	for _, re := range []*regexp.Regexp{targetPersonExplicitBlockRegex, targetPersonBlockRegex} {
+		for _, m := range re.FindAllStringSubmatch(analysis, -1) {
+			if len(m) < 2 {
+				continue
+			}
+			trimmed := strings.TrimSpace(m[1])
+			if _, ok := seen[trimmed]; ok || trimmed == "" {
+				continue
+			}
+			seen[trimmed] = struct{}{}
+			rawBlocks = append(rawBlocks, trimmed)
+		}
+	}
+	return rawBlocks
 }
 
 func parseTargetPerson(analysis string) (string, float64) {
-	matches := targetPersonBlockRegex.FindStringSubmatch(analysis)
-	if len(matches) < 2 {
+	rawBlocks := extractTargetPersonJSONBlocks(analysis)
+	if len(rawBlocks) == 0 {
 		return "{}", 0.5
 	}
 
-	var tp targetPersonOutput
-	if err := json.Unmarshal([]byte(matches[1]), &tp); err != nil {
+	var merged targetPersonOutput
+	parsedAny := false
+	for _, raw := range rawBlocks {
+		var candidate targetPersonOutput
+		if err := json.Unmarshal([]byte(raw), &candidate); err != nil {
+			continue
+		}
+		if !parsedAny {
+			merged = candidate
+			parsedAny = true
+			continue
+		}
+		if len(candidate.MatchedCues) > 0 {
+			merged.MatchedCues = candidate.MatchedCues
+		}
+		if candidate.Ambiguous {
+			merged.Ambiguous = true
+		}
+		if candidate.Confidence > 0 {
+			merged.Confidence = candidate.Confidence
+		}
+		if boxes := validTrackingBoxes(candidate.Boxes); len(boxes) > 0 {
+			merged.Boxes = boxes
+		}
+		if candidate.FrameRegion != "" {
+			merged.FrameRegion = candidate.FrameRegion
+		}
+		if candidate.Station != "" {
+			merged.Station = candidate.Station
+		}
+	}
+	if !parsedAny {
 		return "{}", 0.5
 	}
 
-	conf := tp.Confidence
+	conf := merged.Confidence
 	if conf < 0.0 {
 		conf = 0.0
 	}
@@ -202,12 +259,19 @@ func parseTargetPerson(analysis string) (string, float64) {
 		conf = 1.0
 	}
 
-	if tp.Ambiguous && conf > 0.5 {
+	if merged.Ambiguous && conf > 0.5 {
 		conf = 0.5
 	}
 
-	tp.Confidence = conf
-	cleanedJSON, err := json.Marshal(tp)
+	if merged.MatchedCues == nil {
+		merged.MatchedCues = []string{}
+	}
+	merged.Confidence = conf
+	merged.Boxes = validTrackingBoxes(merged.Boxes)
+	merged.FrameRegion = sanitizeTrackingLabel(merged.FrameRegion)
+	merged.Station = sanitizeTrackingLabel(merged.Station)
+	merged.ReferenceImage = "" // set only by the worker after it renders the image
+	cleanedJSON, err := json.Marshal(merged)
 	if err != nil {
 		return "{}", conf
 	}
@@ -215,7 +279,9 @@ func parseTargetPerson(analysis string) (string, float64) {
 }
 
 func stripTargetPerson(analysis string) string {
-	return strings.TrimSpace(targetPersonBlockRegex.ReplaceAllString(analysis, ""))
+	stripped := targetPersonExplicitBlockRegex.ReplaceAllString(analysis, "")
+	stripped = targetPersonBlockRegex.ReplaceAllString(stripped, "")
+	return strings.TrimSpace(stripped)
 }
 
 // levelPolicyForFitnessLevel returns the coaching policy prompt for the given fitness level.
@@ -344,8 +410,10 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}()
 
 	prompt := w.buildChunkAnalysisPrompt(p) + w.livePrompt(p.LiveAnalysisVersion)
+	trackingPrompt, trackingImages := w.trackingInputs(ctx, p.ProfileID, p.SessionID, p.WorkoutType, p.FilePath, p.StartSecs)
+	prompt += trackingPrompt
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38)
+	analysis, geminiFile, usage, err := w.analyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38, trackingImages)
 
 	// Wait for motion probe to finish
 	var motionScore *float64
@@ -418,6 +486,8 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	if err := w.persistChunkAnalysisResult(ctx, chunkResult); err != nil {
 		return fmt.Errorf("failed to save chunk analysis result: %w", err)
 	}
+	// Tracking channel for the next chunk; never fails this chunk.
+	w.saveTrackingReference(ctx, localFilePath, chunkResult)
 
 	if err := w.refreshLiveActivity(ctx, p, chunkResult); err != nil {
 		return err
@@ -521,8 +591,10 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	}()
 
 	prompt := w.buildChunkAnalysisWithSessionPrompt(p, &profile, &session) + w.livePrompt(p.LiveAnalysisVersion)
+	trackingPrompt, trackingImages := w.trackingInputs(ctx, p.ProfileID, p.SessionID, session.WorkoutType, p.FilePath, p.StartSecs)
+	prompt += trackingPrompt
 
-	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38)
+	analysis, geminiFile, usage, err := w.analyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38, trackingImages)
 
 	// Wait for motion probe to finish
 	var motionScoreWithSession *float64
@@ -595,6 +667,8 @@ func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	if err := w.persistChunkAnalysisResult(ctx, chunkResult); err != nil {
 		return fmt.Errorf("failed to save chunk analysis result: %w", err)
 	}
+	// Tracking channel for the next chunk; never fails this chunk.
+	w.saveTrackingReference(ctx, localFilePath, chunkResult)
 
 	if err := w.refreshLiveActivity(ctx, VideoAnalysisPayload{SessionID: p.SessionID, ProfileID: p.ProfileID, WorkoutType: session.WorkoutType, WODDescription: session.WODDescription, Movements: movementHintsFromDocument(session.MovementHints)}, chunkResult); err != nil {
 		return err
@@ -636,9 +710,11 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 
 	prompt += buildHeartRateContext(p.HeartRateBPM)
 
-	// Add observed signals & target person requirement
+	// Add observed signals & target person requirement (tracking continuity supplies its own unified target_person block).
 	prompt += ObservedSignalsPrompt
-	prompt += TargetPersonPrompt
+	if !w.TrackingContinuityEnabled {
+		prompt += TargetPersonPrompt
+	}
 	prompt += independentSegmentPolicy
 	prompt += ObservationOnlyOutputCheckPrompt
 
@@ -671,9 +747,11 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 
 	prompt += buildHeartRateContext(p.HeartRateBPM)
 
-	// Add observed signals & target person requirement
+	// Add observed signals & target person requirement (tracking continuity supplies its own unified target_person block).
 	prompt += ObservedSignalsPrompt
-	prompt += TargetPersonPrompt
+	if !w.TrackingContinuityEnabled {
+		prompt += TargetPersonPrompt
+	}
 	prompt += independentSegmentPolicy
 	prompt += ObservationOnlyOutputCheckPrompt
 

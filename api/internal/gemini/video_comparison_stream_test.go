@@ -162,4 +162,22 @@ var _ = Describe("Streaming video comparison", func() {
 	}, Entry("HTTP error is not retried", 503, `{"error":{"code":503,"message":"busy","status":"UNAVAILABLE"}}`, "failed"),
 		Entry("empty stream", 200, "", "failed"), Entry("bad event after tool call", 200, first+"data: broken\n\n", "failed"),
 		Entry("missing final STOP", 200, strings.Replace(last, `"STOP"`, `"MAX_TOKENS"`, 1), "incomplete"))
+
+	It("sends includeThoughts in streaming requests when enabled and captures ThoughtSummary without leaking into Text", func() {
+		c, err := NewComparisonClient(context.Background(), Options{
+			APIKey:          "test-key",
+			BaseURL:         base,
+			HTTPClient:      &http.Client{Transport: transport},
+			ThinkingLevel:   "HIGH",
+			IncludeThoughts: true,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		transport.New(base).Post(path).MatchBodyContains(`"includeThoughts":true`).Reply(200).Header("Content-Type", "text/event-stream").Body([]byte(first + last))
+		r := c.CompareVideoModeStream(context.Background(), base+"/files/f", "video/mp4", "prompt", genai.MediaProcessingAgentic, StreamComparisonOptions{})
+		Expect(r.Outcome).To(Equal("completed"))
+		Expect(r.Text).To(Equal("[]"))
+		Expect(r.ThoughtSummary).To(Equal("private thought"))
+		u := UsageFromComparisonWithThoughts(r.Usage, ModelFlash38, r.ThoughtSummary)
+		Expect(u.ThoughtSummary).To(Equal("private thought"))
+	})
 })

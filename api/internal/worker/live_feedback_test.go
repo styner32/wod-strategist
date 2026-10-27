@@ -1,9 +1,12 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,6 +20,7 @@ import (
 	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
+	"github.com/wod-strategist/api/internal/sensor"
 	"github.com/wod-strategist/api/internal/testhelpers"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -95,6 +99,159 @@ var _ = Describe("Live coaching evidence window", func() {
 		Expect(opts.FormatSecondsBadge).To(BeTrue())
 		Expect(opts.ThinkingLevel).To(Equal("MEDIUM"))
 		Expect(frameGridEligible(30*time.Second, opts)).To(BeTrue())
+		Expect(frameGridEligible(50*time.Second, opts)).To(BeTrue())
+	})
+	It("evaluates rest-skip confidence with spillover protection, optional Polar H10, MoveNet exclusion, and recovery-type rules", func() {
+		restObs, err := json.Marshal(activity.ConfirmedRest(10.0))
+		Expect(err).NotTo(HaveOccurred())
+		makeRest := func(id uint, start, end float64, motion *float64) db.ChunkAnalysisResult {
+			return db.ChunkAnalysisResult{
+				ID:                   id,
+				ProfileID:            1,
+				SessionID:            "s",
+				FilePath:             fmt.Sprintf("rest_%d.mp4", id),
+				Status:               "COMPLETED",
+				ExerciseType:         "",
+				ObservedSignals:      "{}",
+				StartSecs:            &start,
+				EndSecs:              &end,
+				MediaStartSecs:       &start,
+				MediaEndSecs:         &end,
+				MotionScore:          motion,
+				WorkoutConfidence:    0.99, // MoveNet must be ignored
+				MovementObservations: restObs,
+			}
+		}
+
+		// 1. Active -> Rest1 -> Rest2 -> Rest3 -> Active in WOD
+		rows := []db.ChunkAnalysisResult{
+			liveTestRow(1, 0, 10),
+			makeRest(2, 10, 20, nil),
+			makeRest(3, 20, 30, nil),
+			makeRest(4, 30, 40, nil),
+			liveTestRow(5, 40, 50),
+		}
+		Expect(shouldSkipActivityReviewRestChunk(rows, 1, "wod", nil)).To(BeFalse(), "post-active rest chunk must not skip to preserve cross-boundary spillover reps")
+		Expect(shouldSkipActivityReviewRestChunk(rows, 2, "wod", nil)).To(BeTrue(), "rest->rest->rest interior skips without H10 or motion_score")
+		Expect(shouldSkipActivityReviewRestChunk(rows, 3, "wod", nil)).To(BeFalse(), "pre-active boundary rest chunk requires stillness confirmation in WOD")
+
+		// Low motion_score confirms pre-active rest chunk (idx 3); high motion_score vetoes interior (idx 2).
+		lowMotion := 0.008
+		highMotion := 0.060
+		rows[3].MotionScore = &lowMotion
+		Expect(shouldSkipActivityReviewRestChunk(rows, 3, "wod", nil)).To(BeTrue())
+		rows[2].MotionScore = &highMotion
+		Expect(shouldSkipActivityReviewRestChunk(rows, 2, "wod", nil)).To(BeFalse())
+
+		// Optional Polar H10 sensor_timeline on capture_clock (including pause offset).
+		rows[2].MotionScore = nil
+		rows[3].MotionScore = nil
+		pausedCapStart, pausedCapEnd := 130.0, 140.0
+		rows[3].StartSecs = &pausedCapStart
+		rows[3].EndSecs = &pausedCapEnd
+		stillVal := 0.03
+		spikeVal := 0.16
+		points := []sensor.SensorTimelinePoint{}
+		for ms := int64(20000); ms < 30000; ms += 1000 {
+			v := spikeVal
+			points = append(points, sensor.SensorTimelinePoint{
+				StartMs:          ms,
+				EndMs:            ms + 1000,
+				AccMagnitudeStdG: sensor.TimelineValue{Value: &v, Status: sensor.StatusValid},
+			})
+		}
+		for ms := int64(130000); ms < 140000; ms += 1000 {
+			v := stillVal
+			points = append(points, sensor.SensorTimelinePoint{
+				StartMs:          ms,
+				EndMs:            ms + 1000,
+				AccMagnitudeStdG: sensor.TimelineValue{Value: &v, Status: sensor.StatusValid},
+			})
+		}
+		tl := &sensor.SensorTimelineData{Clock: "capture_clock", Points: points}
+		// Reset rows[3] capture clock to contiguous [30,40] first for interior check on idx=2, then test paused lookup on chunkAccStats.
+		Expect(chunkAccStats(tl, 130.0, 140.0).coverage).To(BeNumerically("~", 1.0, 1e-6))
+		Expect(chunkAccStats(tl, 130.0, 140.0).maxG).To(Equal(stillVal))
+		cStart, cEnd := 30.0, 40.0
+		rows[3].StartSecs, rows[3].EndSecs = &cStart, &cEnd
+		for ms := int64(30000); ms < 40000; ms += 1000 {
+			v := stillVal
+			tl.Points = append(tl.Points, sensor.SensorTimelinePoint{
+				StartMs:          ms,
+				EndMs:            ms + 1000,
+				AccMagnitudeStdG: sensor.TimelineValue{Value: &v, Status: sensor.StatusValid},
+			})
+		}
+		Expect(shouldSkipActivityReviewRestChunk(rows, 2, "wod", tl)).To(BeFalse(), "H10 spike >= 0.12g vetoes rest->rest->rest skip in WOD")
+		Expect(shouldSkipActivityReviewRestChunk(rows, 3, "wod", tl)).To(BeTrue(), "H10 stillness < 0.08g with >=50 percent coverage confirms pre-active rest skip")
+
+		// WARMUP / COOLDOWN ignores motion and H10 thresholds on rest->rest->rest, and does not skip non-interior rest.
+		rows[2].MotionScore = &highMotion
+		Expect(shouldSkipActivityReviewRestChunk(rows, 2, "warmup", tl)).To(BeTrue())
+		Expect(shouldSkipActivityReviewRestChunk(rows, 2, "cooldown", tl)).To(BeTrue())
+		Expect(shouldSkipActivityReviewRestChunk(rows, 3, "warmup", tl)).To(BeFalse())
+	})
+	It("groups up to 3 adjacent uncompleted chunks into Batch-3 windows and splits across pauses or completed chunks", func() {
+		rows := []db.ChunkAnalysisResult{
+			liveTestRow(1, 0, 10),
+			liveTestRow(2, 10, 20),
+			liveTestRow(3, 20, 30),
+			liveTestRow(4, 30, 40),
+			liveTestRow(5, 40, 50),
+		}
+		pausedStart, pausedEnd := 100.0, 110.0
+		rows[4].StartSecs = &pausedStart
+		rows[4].EndSecs = &pausedEnd
+
+		batches := buildActivityReviewBatches(rows, map[uint]bool{})
+		Expect(batches).To(HaveLen(3))
+		// Batch 0: chunks [0,1,2] -> core [0,30], trailing context from chunk 3 -> win [0,40]
+		Expect(batches[0].Indices).To(Equal([]int{0, 1, 2}))
+		Expect(batches[0].CoreStart).To(Equal(0.0))
+		Expect(batches[0].CoreEnd).To(Equal(30.0))
+		Expect(batches[0].WinStart).To(Equal(0.0))
+		Expect(batches[0].WinEnd).To(Equal(40.0))
+		// Batch 1: chunk [3] -> core [30,40], leading context from chunk 2 -> win [20,40] (no trailing context across pause!)
+		Expect(batches[1].Indices).To(Equal([]int{3}))
+		Expect(batches[1].CoreStart).To(Equal(30.0))
+		Expect(batches[1].CoreEnd).To(Equal(40.0))
+		Expect(batches[1].WinStart).To(Equal(20.0))
+		Expect(batches[1].WinEnd).To(Equal(40.0))
+		// Batch 2: chunk [4] after pause -> core [40,50], win [40,50]
+		Expect(batches[2].Indices).To(Equal([]int{4}))
+		Expect(batches[2].WinStart).To(Equal(40.0))
+		Expect(batches[2].WinEnd).To(Equal(50.0))
+	})
+	It("identifies interior Pass-1 not_visible chunks while keeping departure/return boundaries and confident tracking chunks reviewable", func() {
+		notVisibleObs := db.NullableJSONDocument(`{"version":1,"duration_secs":10,"target_state":"not_visible","activity_state":"unknown","events":[],"unassessed":[{"start_secs":0,"end_secs":10,"reason":"target_not_visible"}]}`)
+		makeNV := func(id uint, start, end float64) db.ChunkAnalysisResult {
+			return db.ChunkAnalysisResult{
+				ID: id, ProfileID: 1, SessionID: "s", FilePath: fmt.Sprintf("nv%d.mp4", id),
+				Status: "COMPLETED", ExerciseType: "", ObservedSignals: `{"movement":"","activity_state":"unknown","rep_count":0}`,
+				TargetConfidence: 0.3, TargetCues: `{"ambiguous":true,"confidence":0.3,"boxes":[]}`,
+				StartSecs: &start, EndSecs: &end, MediaStartSecs: &start, MediaEndSecs: &end,
+				MovementObservations: notVisibleObs,
+			}
+		}
+		rows := []db.ChunkAnalysisResult{
+			liveTestRow(1, 0, 10),
+			makeNV(2, 10, 20),
+			makeNV(3, 20, 30),
+			makeNV(4, 30, 40),
+			liveTestRow(5, 40, 50),
+		}
+		Expect(isNotVisibleRunInterior(rows, 0)).To(BeFalse())
+		Expect(isNotVisibleRunInterior(rows, 1)).To(BeFalse(), "departure boundary chunk adjacent to exercise must stay reviewable")
+		Expect(isNotVisibleRunInterior(rows, 2)).To(BeTrue(), "middle chunk of not_visible->not_visible->not_visible is skippable")
+		Expect(isNotVisibleRunInterior(rows, 3)).To(BeFalse(), "return boundary chunk adjacent to exercise must stay reviewable")
+		Expect(isNotVisibleRunInterior(rows, 4)).To(BeFalse())
+
+		// Confident tracking cues or exercise signals disqualify not_visible skipping.
+		rows[2].TargetConfidence = 0.85
+		Expect(isPass1ExplicitNotVisible(rows, 2)).To(BeFalse())
+		rows[2].TargetConfidence = 0.3
+		rows[2].TargetCues = `{"ambiguous":false,"confidence":0.5,"boxes":[{"t":1.0,"box_2d":[100,200,800,600]}]}`
+		Expect(isPass1ExplicitNotVisible(rows, 2)).To(BeFalse())
 	})
 })
 
@@ -300,8 +457,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
 		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+object, []byte("video"))
 		mockFile("20s")
-		// The same cross-boundary repetition is visible in both review windows.
-		mockGeneration("```movement_observations\n" + string(liveTestObservations(8, 12)) + "\n```")
+		// Adjacent chunks [0,10] and [10,20] merge into one Batch-3 review window; the cross-boundary rep is owned once by (10,20].
 		mockGeneration("```movement_observations\n" + string(liveTestObservations(8, 12)) + "\n```")
 		payload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, version, object, 1})
 		task := asynq.NewTask(TypeActivityReview, payload)
@@ -349,7 +505,6 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+object, videoBytes)
 		// No mockFile(...) — Files API upload must NOT be called when local MP4 probes validly.
 		mockGeneration("```movement_observations\n" + string(liveTestObservations(8, 12)) + "\n```")
-		mockGeneration("```movement_observations\n" + string(liveTestObservations(8, 12)) + "\n```")
 		payload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, version, object, 1})
 		task := asynq.NewTask(TypeActivityReview, payload)
 		Expect(w.HandleActivityReviewTask(context.Background(), task)).To(Succeed())
@@ -360,7 +515,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(summary.Movements).To(HaveLen(1))
 		Expect(summary.Movements[0].Count).To(Equal(1))
 		Expect(summary.ReviewState).To(Equal("completed"))
-		Expect(transport.Requests()).To(HaveLen(2), "only 2 generateContent calls; no Files API upload/get/delete")
+		Expect(transport.Requests()).To(HaveLen(1), "only 1 batched generateContent call; no Files API upload/get/delete")
 		Expect(transport.Verify()).To(Succeed())
 		Expect(storageTransport.Verify()).To(Succeed())
 		for _, request := range transport.Requests() {
@@ -455,5 +610,444 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(summary.Movements[0].Count).To(Equal(1))
 		Expect(summary.Unassessed).NotTo(BeEmpty())
 		Expect(transport.Verify()).To(Succeed())
+	})
+
+	It("completes rest->rest->rest sessions without downloading merged.mp4 or calling Gemini", func() {
+		restRaw, err := json.Marshal(activity.ConfirmedRest(10.0))
+		Expect(err).NotTo(HaveOccurred())
+		createRestRow := func(start, end float64) db.ChunkAnalysisResult {
+			return testhelpers.CreateChunkAnalysisResult(conn, &db.ChunkAnalysisResult{
+				ProfileID:            profile.ID,
+				SessionID:            session.SessionID,
+				FilePath:             fmt.Sprintf("gs://test-bucket/videos/%d/%s/rest_%g.mp4", profile.ID, session.SessionID, start),
+				Status:               "COMPLETED",
+				ExerciseType:         "",
+				ObservedSignals:      "{}",
+				StartSecs:            &start,
+				EndSecs:              &end,
+				MediaStartSecs:       &start,
+				MediaEndSecs:         &end,
+				MovementObservations: restRaw,
+			})
+		}
+		rows := []db.ChunkAnalysisResult{createRestRow(0, 10), createRestRow(10, 20), createRestRow(20, 30)}
+		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
+		payload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, activity.SourceVersion(rows), object, 1})
+		Expect(w.HandleActivityReviewTask(context.Background(), asynq.NewTask(TypeActivityReview, payload))).To(Succeed())
+
+		Expect(storageTransport.Requests()).To(BeEmpty(), "all-rest review must skip GCS merged.mp4 download")
+		Expect(transport.Requests()).To(BeEmpty(), "all-rest review must skip Gemini API calls")
+		Expect(conn.First(&session, session.ID).Error).To(Succeed())
+		var summary activity.Summary
+		Expect(json.Unmarshal(session.ActivitySummary, &summary)).To(Succeed())
+		Expect(summary.ReviewState).To(Equal("completed"))
+		Expect(summary.Movements).To(BeEmpty())
+		Expect(summary.Unassessed).To(BeEmpty())
+		Expect(summary.Reviews).To(HaveLen(3))
+	})
+
+	DescribeTable("preserves cross-boundary reps after rest-review vetoes while keeping recovery rest skippable", func(useMotion, useH10 bool) {
+		restRaw, err := json.Marshal(activity.ConfirmedRest(10.0))
+		Expect(err).NotTo(HaveOccurred())
+		highMotion := 0.08
+		createRestRow := func(sid string, start, end float64) db.ChunkAnalysisResult {
+			var motion *float64
+			if useMotion && start == 10 {
+				motion = &highMotion
+			}
+			return testhelpers.CreateChunkAnalysisResult(conn, &db.ChunkAnalysisResult{
+				ProfileID:            profile.ID,
+				SessionID:            sid,
+				FilePath:             fmt.Sprintf("gs://test-bucket/videos/%d/%s/rest_%g.mp4", profile.ID, sid, start),
+				Status:               "COMPLETED",
+				ExerciseType:         "",
+				ObservedSignals:      "{}",
+				StartSecs:            &start,
+				EndSecs:              &end,
+				MediaStartSecs:       &start,
+				MediaEndSecs:         &end,
+				MotionScore:          motion,
+				MovementObservations: restRaw,
+			})
+		}
+		spike := 0.18
+		still := 0.02
+		points := []sensor.SensorTimelinePoint{}
+		for ms := int64(0); ms < 50000; ms += 1000 {
+			val := still
+			if ms >= 10000 && ms < 20000 {
+				val = spike
+			}
+			v := val
+			points = append(points, sensor.SensorTimelinePoint{
+				StartMs:          ms,
+				EndMs:            ms + 1000,
+				AccMagnitudeStdG: sensor.TimelineValue{Value: &v, Status: sensor.StatusValid},
+			})
+		}
+		tlBytes, err := json.Marshal(sensor.SensorTimelineData{
+			SchemaVersion: 1,
+			Clock:         "capture_clock",
+			BucketMs:      1000,
+			DurationMs:    50000,
+			Points:        points,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		// Review [10,20] and its completion-owning successor [20,30]. Later rest
+		// chunks stay skippable, so protecting the boundary still uses one call.
+		if useH10 {
+			testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
+				SessionID:      session.SessionID,
+				ProfileID:      profile.ID,
+				Status:         "COMPLETED",
+				SensorState:    db.SensorStateCompleted,
+				SensorTimeline: db.JSONDocument(tlBytes),
+			})
+		}
+		wodRows := []db.ChunkAnalysisResult{
+			createRestRow(session.SessionID, 0, 10),
+			createRestRow(session.SessionID, 10, 20),
+			createRestRow(session.SessionID, 20, 30),
+			createRestRow(session.SessionID, 30, 40),
+			createRestRow(session.SessionID, 40, 50),
+		}
+		wodObject := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+wodObject, []byte("video"))
+		mockFile("50s")
+		recoveredObs, _ := json.Marshal(activity.Observations{
+			DurationSecs: 40, Version: 1, TargetState: "identified", ActivityState: "exercise",
+			Events: []activity.Observation{
+				{Movement: "Dumbbell Box Step-Over", Unit: "reps", Start: 12, End: 16, Complete: true, Evidence: "steps over box"},
+				{Movement: "Dumbbell Box Step-Over", Unit: "reps", Start: 18, End: 22, Complete: true, Evidence: "crosses rest-review boundary"},
+			},
+			Unassessed: []activity.Interval{},
+		})
+		mockGeneration("```movement_observations\n" + string(recoveredObs) + "\n```")
+		wodPayload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, activity.SourceVersion(wodRows), wodObject, 1})
+		Expect(w.HandleActivityReviewTask(context.Background(), asynq.NewTask(TypeActivityReview, wodPayload))).To(Succeed())
+		Expect(conn.First(&session, session.ID).Error).To(Succeed())
+		var wodSummary activity.Summary
+		Expect(json.Unmarshal(session.ActivitySummary, &wodSummary)).To(Succeed())
+		Expect(wodSummary.ReviewState).To(Equal("completed"))
+		Expect(wodSummary.Movements).To(HaveLen(1))
+		Expect(wodSummary.Movements[0].Movement).To(Equal("DB Box Step-over"))
+		Expect(wodSummary.Movements[0].Count).To(Equal(2))
+		Expect(wodSummary.Reviews).To(HaveLen(5))
+		for _, review := range wodSummary.Reviews {
+			switch review.ChunkID {
+			case wodRows[1].ID:
+				Expect(review.Observations.Events).To(HaveLen(1))
+				Expect(review.Observations.Events[0].End).To(Equal(16.0))
+			case wodRows[2].ID:
+				Expect(review.Observations.Events).To(HaveLen(1))
+				Expect(review.Observations.Events[0].End).To(Equal(22.0))
+			default:
+				Expect(review.Observations.ActivityState).To(Equal("rest"))
+			}
+		}
+		Expect(transport.Verify()).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+
+		// A retry must still review the protected successor when the vetoed chunk
+		// already has a completed review, without counting that saved chunk twice.
+		wodSummary.ReviewState = "partial"
+		for i := range wodSummary.Reviews {
+			if wodSummary.Reviews[i].ChunkID == wodRows[2].ID {
+				wodSummary.Reviews[i].State = "failed"
+				wodSummary.Reviews[i].Observations = activity.Unknown(20, 30, "review_failed")
+			}
+		}
+		partial, err := json.Marshal(wodSummary)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(conn.Model(&session).Update("activity_summary", db.JSONDocument(partial)).Error).To(Succeed())
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+wodObject, []byte("video"))
+		mockFile("50s")
+		mockGeneration("```movement_observations\n" + string(recoveredObs) + "\n```")
+		Expect(w.HandleActivityReviewTask(context.Background(), asynq.NewTask(TypeActivityReview, wodPayload))).To(Succeed())
+		Expect(conn.First(&session, session.ID).Error).To(Succeed())
+		Expect(json.Unmarshal(session.ActivitySummary, &wodSummary)).To(Succeed())
+		Expect(wodSummary.ReviewState).To(Equal("completed"))
+		Expect(wodSummary.Movements).To(HaveLen(1))
+		Expect(wodSummary.Movements[0].Count).To(Equal(2))
+		Expect(transport.Verify()).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+
+		// Recovery sessions keep their existing rest policy despite the same veto inputs.
+		warmupSID := "WARMUP-20260916-01JWARMUPRESTTEST0000000"
+		warmupSess := testhelpers.CreateSession(conn, &db.Session{SessionID: warmupSID, ProfileID: profile.ID, WorkoutType: "warmup"})
+		if useH10 {
+			testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
+				SessionID:      warmupSID,
+				ProfileID:      profile.ID,
+				Status:         "COMPLETED",
+				SensorState:    db.SensorStateCompleted,
+				SensorTimeline: db.JSONDocument(tlBytes),
+			})
+		}
+		warmupRows := []db.ChunkAnalysisResult{
+			createRestRow(warmupSID, 0, 10),
+			createRestRow(warmupSID, 10, 20),
+			createRestRow(warmupSID, 20, 30),
+		}
+		warmupObj := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, warmupSID)
+		warmupPayload, _ := json.Marshal(activityReviewPayload{warmupSID, profile.ID, activity.SourceVersion(warmupRows), warmupObj, 1})
+		prevTransportCount := len(transport.Requests())
+		prevStorageCount := len(storageTransport.Requests())
+		Expect(w.HandleActivityReviewTask(context.Background(), asynq.NewTask(TypeActivityReview, warmupPayload))).To(Succeed())
+		Expect(transport.Requests()).To(HaveLen(prevTransportCount))
+		Expect(storageTransport.Requests()).To(HaveLen(prevStorageCount))
+		Expect(conn.First(&warmupSess, warmupSess.ID).Error).To(Succeed())
+		var warmupSummary activity.Summary
+		Expect(json.Unmarshal(warmupSess.ActivitySummary, &warmupSummary)).To(Succeed())
+		Expect(warmupSummary.ReviewState).To(Equal("completed"))
+	},
+		Entry("motion veto without H10", true, false),
+		Entry("H10 veto without motion score", false, true),
+		Entry("combined motion and H10 vetoes", true, true),
+	)
+
+	It("batches 4 adjacent active chunks into 2 calls without double-counting context overlap and records thought logs when enabled", func() {
+		thoughtClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:          "test",
+			BaseURL:         base,
+			HTTPClient:      &http.Client{Transport: transport},
+			PollInterval:    time.Millisecond,
+			Sleep:           func(time.Duration) {},
+			IncludeThoughts: true,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		w.GeminiClient = thoughtClient
+
+		// Run in deterministic single-concurrency order so MockTransport matches batch [0,40] then [20,40].
+		rows := []db.ChunkAnalysisResult{
+			createRow(0, 10),
+			createRow(10, 20),
+			createRow(20, 30),
+			createRow(30, 40),
+		}
+		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+object, []byte("video"))
+		mockFile("40s")
+
+		batchObs, err := json.Marshal(activity.Observations{
+			DurationSecs: 20, Version: 1, TargetState: "identified", ActivityState: "exercise",
+			Events: []activity.Observation{
+				{Movement: "Air Squat", Unit: "reps", Start: 21, End: 24, Complete: true, Evidence: "rep in chunk 3"},
+				{Movement: "Air Squat", Unit: "reps", Start: 28, End: 32, Complete: true, Evidence: "cross-batch rep completing in chunk 4"},
+			},
+			Unassessed: []activity.Interval{},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		for i := 0; i < 2; i++ {
+			transport.New(base).
+				Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+				MatchBodyContains(`"includeThoughts":true`).
+				Reply(200).
+				JSON(map[string]any{
+					"usageMetadata": map[string]int{"promptTokenCount": 500, "candidatesTokenCount": 40, "thoughtsTokenCount": 120, "totalTokenCount": 660},
+					"candidates": []any{map[string]any{
+						"content": map[string]any{"parts": []any{
+							map[string]any{"thought": true, "text": "verifying batch boundary timestamps"},
+							map[string]any{"text": "```movement_observations\n" + string(batchObs) + "\n```"},
+						}},
+					}},
+				})
+		}
+
+		payload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, activity.SourceVersion(rows), object, 1})
+		Expect(w.HandleActivityReviewTask(context.Background(), asynq.NewTask(TypeActivityReview, payload))).To(Succeed())
+
+		Expect(conn.First(&session, session.ID).Error).To(Succeed())
+		var summary activity.Summary
+		Expect(json.Unmarshal(session.ActivitySummary, &summary)).To(Succeed())
+		Expect(summary.ReviewState).To(Equal("completed"))
+		Expect(summary.Movements).To(HaveLen(1))
+		Expect(summary.Movements[0].Count).To(Equal(2), "each rep in [21,24] and [28,32] must be owned once despite overlapping batch context [20,40]")
+		for _, rev := range summary.Reviews {
+			Expect(rev.State).To(Equal("completed"))
+			Expect(rev.Observations.DurationSecs).To(Equal(10.0))
+		}
+
+		var usages []db.TokenUsage
+		Expect(conn.Where("session_id = ? AND task_type = ?", session.SessionID, "activity:review").Find(&usages).Error).To(Succeed())
+		Expect(usages).To(HaveLen(2), "4 chunks must use 2 Batch-3 API calls instead of 4")
+		for _, u := range usages {
+			Expect(string(u.UsageMetadata)).NotTo(ContainSubstring("verifying batch boundary timestamps"))
+		}
+
+		var thoughts []db.GeminiThoughtLog
+		Expect(conn.Where("session_id = ? AND task_type = ?", session.SessionID, "activity:review").Find(&thoughts).Error).To(Succeed())
+		Expect(thoughts).To(HaveLen(2))
+		Expect(thoughts[0].ThoughtSummary).To(Equal("verifying batch boundary timestamps"))
+		Expect(thoughts[0].ThinkingTokens).To(Equal(int64(120)))
+		Expect(transport.Verify()).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+	})
+
+	It("skips interior not_visible->not_visible->not_visible chunks while reviewing departure/return boundaries and annotating Polar H10 activity", func() {
+		notVisibleRaw := db.NullableJSONDocument(`{"version":1,"duration_secs":10,"target_state":"not_visible","activity_state":"unknown","events":[],"unassessed":[{"start_secs":0,"end_secs":10,"reason":"target_not_visible"}]}`)
+		createNotVisibleRow := func(start, end float64) db.ChunkAnalysisResult {
+			return testhelpers.CreateChunkAnalysisResult(conn, &db.ChunkAnalysisResult{
+				ProfileID:            profile.ID,
+				SessionID:            session.SessionID,
+				FilePath:             fmt.Sprintf("gs://test-bucket/videos/%d/%s/nv_%g.mp4", profile.ID, session.SessionID, start),
+				Status:               "COMPLETED",
+				ExerciseType:         "",
+				ObservedSignals:      `{"movement":"","activity_state":"unknown","rep_count":0}`,
+				TargetConfidence:     0.3,
+				TargetCues:           `{"ambiguous":true,"confidence":0.3,"boxes":[]}`,
+				StartSecs:            &start,
+				EndSecs:              &end,
+				MediaStartSecs:       &start,
+				MediaEndSecs:         &end,
+				MovementObservations: notVisibleRaw,
+			})
+		}
+
+		// Polar H10 shows active acceleration (0.30g) during [20,30] while out of camera frame.
+		activeAcc := 0.30
+		stillAcc := 0.02
+		points := []sensor.SensorTimelinePoint{}
+		for ms := int64(0); ms < 50000; ms += 1000 {
+			val := stillAcc
+			if ms >= 20000 && ms < 30000 {
+				val = activeAcc
+			}
+			v := val
+			points = append(points, sensor.SensorTimelinePoint{
+				StartMs:          ms,
+				EndMs:            ms + 1000,
+				AccMagnitudeStdG: sensor.TimelineValue{Value: &v, Status: sensor.StatusValid},
+			})
+		}
+		tlBytes, err := json.Marshal(sensor.SensorTimelineData{
+			SchemaVersion: 1,
+			Clock:         "capture_clock",
+			BucketMs:      1000,
+			DurationMs:    50000,
+			Points:        points,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
+			SessionID:      session.SessionID,
+			ProfileID:      profile.ID,
+			Status:         "COMPLETED",
+			SensorState:    db.SensorStateCompleted,
+			SensorTimeline: db.JSONDocument(tlBytes),
+		})
+
+		rows := []db.ChunkAnalysisResult{
+			createRow(0, 10),
+			createNotVisibleRow(10, 20), // departure boundary -> reviewed
+			createNotVisibleRow(20, 30), // interior not_visible -> skipped with sensor_active
+			createNotVisibleRow(30, 40), // return boundary -> reviewed
+			createRow(40, 50),
+		}
+		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+object, []byte("video"))
+		mockFile("50s")
+
+		batch1Obs, _ := json.Marshal(activity.Observations{
+			DurationSecs: 30, Version: 1, TargetState: "identified", ActivityState: "exercise",
+			Events: []activity.Observation{
+				{Movement: "Air Squat", Unit: "reps", Start: 8, End: 12, Complete: true, Evidence: "completes rep right before leaving frame"},
+			},
+			Unassessed: []activity.Interval{{Start: 12, End: 30, Reason: "target_not_visible"}},
+		})
+		batch2Obs, _ := json.Marshal(activity.Observations{
+			DurationSecs: 30, Version: 1, TargetState: "identified", ActivityState: "exercise",
+			Events: []activity.Observation{
+				{Movement: "Air Squat", Unit: "reps", Start: 38, End: 42, Complete: true, Evidence: "re-enters frame and completes squat"},
+			},
+			Unassessed: []activity.Interval{{Start: 20, End: 38, Reason: "target_not_visible"}},
+		})
+		transport.New(base).
+			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			MatchBodyContains("문맥 구간 0.000000~30.000000초").
+			Reply(200).
+			JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "```movement_observations\n" + string(batch1Obs) + "\n```"}}}}}})
+		transport.New(base).
+			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			MatchBodyContains("문맥 구간 20.000000~50.000000초").
+			Reply(200).
+			JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "```movement_observations\n" + string(batch2Obs) + "\n```"}}}}}})
+
+		payload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, activity.SourceVersion(rows), object, 1})
+		Expect(w.HandleActivityReviewTask(context.Background(), asynq.NewTask(TypeActivityReview, payload))).To(Succeed())
+
+		Expect(conn.First(&session, session.ID).Error).To(Succeed())
+		var summary activity.Summary
+		Expect(json.Unmarshal(session.ActivitySummary, &summary)).To(Succeed())
+		Expect(summary.ReviewState).To(Equal("partial"))
+		Expect(summary.Movements).To(HaveLen(1))
+		Expect(summary.Movements[0].Count).To(Equal(2), "departure [8,12] and return [38,42] boundary reps are both preserved")
+
+		foundInteriorSensorActive := false
+		for _, gap := range summary.Unassessed {
+			if gap.ChunkID == rows[2].ID {
+				foundInteriorSensorActive = true
+				Expect(gap.Clock).To(Equal("media"))
+				Expect(*gap.Start).To(Equal(20.0))
+				Expect(*gap.End).To(Equal(30.0))
+				Expect(gap.Reason).To(Equal("target_not_visible_sensor_active"))
+			}
+		}
+		Expect(foundInteriorSensorActive).To(BeTrue(), "skipped interior not_visible chunk must report target_not_visible_sensor_active")
+		Expect(transport.Verify()).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+	})
+
+	It("attaches stored green-box TARGET tracking reference images and caches the session anchor across batches", func() {
+		w.TrackingContinuityEnabled = true
+		rows := []db.ChunkAnalysisResult{
+			createRow(0, 10),
+			createRow(10, 20),
+			createRow(20, 30),
+			createRow(30, 40),
+		}
+		refObj := trackingReferenceObject(profile.ID, session.SessionID, rows[0].ID)
+		Expect(conn.Model(&db.ChunkAnalysisResult{}).Where("id = ?", rows[0].ID).Update(
+			"target_cues",
+			fmt.Sprintf(`{"matched_cues":["black tee"],"ambiguous":false,"confidence":0.92,"reference_image":%q}`, refObj),
+		).Error).To(Succeed())
+		rows[0].TargetCues = fmt.Sprintf(`{"matched_cues":["black tee"],"ambiguous":false,"confidence":0.92,"reference_image":%q}`, refObj)
+
+		var jpegBuf bytes.Buffer
+		Expect(jpeg.Encode(&jpegBuf, image.NewRGBA(image.Rect(0, 0, 8, 8)), nil)).To(Succeed())
+		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+object, []byte("video"))
+		// Mock ONLY ONE download for refObj — Batch 0 and Batch 1 must reuse the cached anchor bytes.
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+refObj, jpegBuf.Bytes())
+		mockFile("40s")
+
+		batchObs, err := json.Marshal(activity.Observations{
+			DurationSecs: 20, Version: 1, TargetState: "identified", ActivityState: "exercise",
+			Events: []activity.Observation{
+				{Movement: "Air Squat", Unit: "reps", Start: 22, End: 25, Complete: true, Evidence: "squat"},
+			},
+			Unassessed: []activity.Interval{},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		for i := 0; i < 2; i++ {
+			transport.New(base).
+				Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+				MatchBodyContains(`"thinkingLevel":"MEDIUM"`).
+				MatchBodyContains(`"mimeType":"image/jpeg"`).
+				MatchBodyContains("초록 박스와 TARGET 라벨").
+				Reply(200).
+				JSON(map[string]any{
+					"candidates": []any{map[string]any{
+						"content": map[string]any{"parts": []any{
+							map[string]any{"text": "```movement_observations\n" + string(batchObs) + "\n```"},
+						}},
+					}},
+				})
+		}
+
+		payload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, activity.SourceVersion(rows), object, 1})
+		Expect(w.HandleActivityReviewTask(context.Background(), asynq.NewTask(TypeActivityReview, payload))).To(Succeed())
+		Expect(transport.Verify()).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
 	})
 })

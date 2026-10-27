@@ -3,8 +3,10 @@ package controllers
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,11 +14,28 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/fatigue"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/movement"
+	"github.com/wod-strategist/api/internal/sensor"
+	"github.com/wod-strategist/api/internal/wodeval"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
 var jsonBlockRegex = regexp.MustCompile(`(?s)\{.*\}`)
+
+type recentWODFeedbackRow struct {
+	SessionID            string
+	WorkoutAt            time.Time
+	SessionScore         string
+	NormalizedWorkout    string
+	SensorVersion        int64
+	SensorState          string
+	SensorProcessing     db.JSONDocument
+	SensorSummary        db.JSONDocument
+	WorkoutType          *string
+	WODEvaluationVersion *int
+	Effort               *int
+}
 
 // GetPreWODAdvice handles POST /api/v1/strategies/pre-wod-advice.
 //
@@ -59,8 +78,10 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 	// 2. Query in read-only repeatable read transaction
 	asOf := time.Now().UTC()
 	sevenDaysAgo := asOf.Add(-7 * 24 * time.Hour)
+	twentyEightDaysAgo := asOf.Add(-28 * 24 * time.Hour)
 
 	var pastResults []db.AnalysisResult
+	var recentWODRows []recentWODFeedbackRow
 	var unresolvedCount int64
 
 	txErr := ctl.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -75,11 +96,26 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 		}
 
 		// Fetch all sessions with reliable workout_at in [asOf-7d, asOf] without arbitrary limit
-		return tx.Where("profile_id = ? AND status = 'COMPLETED' AND archived_at IS NULL", req.ProfileID).
+		if err := tx.Where("profile_id = ? AND status = 'COMPLETED' AND archived_at IS NULL", req.ProfileID).
 			Where("workout_at >= ? AND workout_at <= ?", sevenDaysAgo, asOf).
 			Where("workout_at_source IN ('session_ulid', 'legacy_local_time')").
 			Order("workout_at DESC").
-			Find(&pastResults).Error
+			Find(&pastResults).Error; err != nil {
+			return err
+		}
+
+		// Fetch recent up to 3 completed non-archived main WOD sessions in [asOf-28d, asOf]
+		return tx.Table("analysis_results AS a").
+			Select("a.session_id, a.workout_at, a.session_score, a.normalized_workout, a.sensor_version, a.sensor_state, a.sensor_processing, a.sensor_summary, s.workout_type, s.wod_evaluation_version, s.effort").
+			Joins("LEFT JOIN sessions s ON s.session_id = a.session_id AND s.profile_id = a.profile_id").
+			Where("a.profile_id = ? AND a.status = 'COMPLETED' AND a.archived_at IS NULL", req.ProfileID).
+			Where("COALESCE(NULLIF(a.analysis_type, ''), ?) = ?", db.AnalysisTypeWOD, db.AnalysisTypeWOD).
+			Where("COALESCE(NULLIF(s.workout_type, ''), ?) = ?", "wod", "wod").
+			Where("a.workout_at >= ? AND a.workout_at <= ?", twentyEightDaysAgo, asOf).
+			Where("a.workout_at_source IN ('session_ulid', 'legacy_local_time')").
+			Order("a.workout_at DESC, a.id DESC").
+			Limit(3).
+			Scan(&recentWODRows).Error
 	})
 
 	if txErr != nil {
@@ -115,15 +151,16 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 		UnresolvedTimeSessions: int(unresolvedCount),
 	}
 
-	// 3. Compute deterministic readiness
+	// 3. Compute deterministic readiness and recent 3 WOD summaries
 	readiness := fatigue.ComputeCurrentReadiness(records, evidence, asOf)
+	recentWorkouts := buildRecentWorkoutSummaries(recentWODRows)
 
 	var resp PreWODAdviceResponse
 	resp.ProfileID = req.ProfileID
 
 	// 4. Gemini call: ONLY when evidence_status == "complete"
 	if readiness.EvidenceStatus == "complete" && ctl.textParser != nil {
-		prompt := fatigue.BuildPreWODAdvicePrompt(readiness, *profile, req.WODDescription, req.Movements, injuries)
+		prompt := fatigue.BuildPreWODAdvicePrompt(readiness, *profile, req.WODDescription, req.Movements, injuries, recentWorkouts...)
 		rawResp, usage, geminiErr := ctl.textParser.ParseText(ctx, prompt)
 		ctl.recordTokenUsage(c, req.ProfileID, "strategy:pre-wod", usage)
 		if geminiErr == nil && rawResp != "" {
@@ -137,13 +174,132 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 	}
 
 	if resp.TargetRPE == nil && readiness.EvidenceStatus == "complete" {
-		resp = buildDeterministicFallbackAdvice(req.ProfileID, readiness, *profile, req.WODDescription, req.Movements, injuries)
+		resp = buildDeterministicFallbackAdvice(req.ProfileID, readiness, *profile, req.WODDescription, req.Movements, injuries, recentWorkouts)
 	}
 
 	// 5. Always apply FinalizePreWODAdvice
-	fatigue.FinalizePreWODAdvice(&resp, readiness)
+	fatigue.FinalizePreWODAdvice(&resp, readiness, recentWorkouts...)
 
 	c.JSON(http.StatusOK, resp)
+}
+
+func buildRecentWorkoutSummaries(rows []recentWODFeedbackRow) []RecentWorkoutSummary {
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make([]RecentWorkoutSummary, 0, len(rows))
+	for _, r := range rows {
+		var durationSeconds *int
+		if score, ok := wodeval.Decode(r.SessionScore); ok {
+			if dur := wodeval.DurationSeconds(score.WODStart); dur != nil && *dur > 0 {
+				rounded := int(math.Round(*dur))
+				if rounded > 0 {
+					durationSeconds = &rounded
+				}
+			}
+		}
+
+		var manualEffort *int
+		if r.WorkoutType != nil && *r.WorkoutType == "wod" &&
+			r.WODEvaluationVersion != nil && *r.WODEvaluationVersion == wodeval.Version &&
+			r.Effort != nil && *r.Effort >= 1 && *r.Effort <= 10 {
+			e := *r.Effort
+			manualEffort = &e
+		}
+
+		var hybridBrief *HybridSensorBrief
+		candidate := db.AnalysisResult{
+			SensorVersion:    r.SensorVersion,
+			SensorState:      r.SensorState,
+			SensorProcessing: r.SensorProcessing,
+			SensorSummary:    r.SensorSummary,
+		}
+		if fresh := evaluateSensorSummaryFreshness(&candidate); fresh.Valid && fresh.CalculationVersion >= 3 {
+			var summary sensor.SensorSummaryResult
+			if json.Unmarshal(r.SensorSummary, &summary) == nil &&
+				summary.CalculationVersion >= 3 &&
+				summary.Metrics.Hybrid != nil &&
+				summary.Metrics.Hybrid.HybridIntensity != nil &&
+				summary.Metrics.Hybrid.DataCoverage >= 0.50 &&
+				summary.Metrics.Hybrid.ValidHybridSeconds >= 60 {
+				hy := summary.Metrics.Hybrid
+				hybridBrief = &HybridSensorBrief{
+					HeartIntensity:     hy.HeartIntensity,
+					MotionIntensity:    hy.MotionIntensity,
+					HybridIntensity:    *hy.HybridIntensity,
+					HybridLoadAU:       hy.HybridLoadAU,
+					DataCoverage:       hy.DataCoverage,
+					CalibrationVersion: hy.CalibrationVersion,
+				}
+			}
+		}
+
+		out = append(out, RecentWorkoutSummary{
+			SessionID:       r.SessionID,
+			WorkoutAt:       r.WorkoutAt.UTC(),
+			Movements:       extractRecentWorkoutMovements(r.SessionScore, r.NormalizedWorkout),
+			DurationSeconds: durationSeconds,
+			Effort:          manualEffort,
+			HybridSensor:    hybridBrief,
+		})
+	}
+	return out
+}
+
+func extractRecentWorkoutMovements(sessionScoreJSON, normalizedWorkoutJSON string) []string {
+	seen := make(map[string]struct{})
+	var list []string
+	addMovement := func(raw string) {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			return
+		}
+		if fatigue.IsNonLoadMovement(movement.NormalizeKey(trimmed)) {
+			return
+		}
+		display := trimmed
+		if canonical := movement.Canonical(trimmed); canonical != "" {
+			display = canonical
+		}
+		key := strings.ToLower(display)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		list = append(list, display)
+	}
+
+	if trimmed := strings.TrimSpace(sessionScoreJSON); trimmed != "" && trimmed != "{}" {
+		var parsed struct {
+			Movements map[string]any `json:"movements"`
+		}
+		if json.Unmarshal([]byte(trimmed), &parsed) == nil && len(parsed.Movements) > 0 {
+			keys := make([]string, 0, len(parsed.Movements))
+			for k := range parsed.Movements {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				addMovement(k)
+			}
+		}
+	}
+
+	if len(list) == 0 {
+		if trimmed := strings.TrimSpace(normalizedWorkoutJSON); trimmed != "" && trimmed != "[]" {
+			var normMovs []db.NormalizedMovement
+			if json.Unmarshal([]byte(trimmed), &normMovs) == nil {
+				for _, m := range normMovs {
+					addMovement(m.Movement)
+				}
+			}
+		}
+	}
+
+	if list == nil {
+		return []string{}
+	}
+	return list
 }
 
 func buildDeterministicFallbackAdvice(
@@ -153,6 +309,7 @@ func buildDeterministicFallbackAdvice(
 	wodDescription string,
 	movements []string,
 	injuries []string,
+	recentWorkouts []RecentWorkoutSummary,
 ) PreWODAdviceResponse {
 	items := make([]MuscleReadinessItem, 0, len(fatigue.AllMuscleGroups))
 	var fatiguedMuscles []string
@@ -196,6 +353,29 @@ func buildDeterministicFallbackAdvice(
 		rpeScore = 9
 		rpeLabel = "RPE 9 (최대 수행 도전)"
 		pacing = "신체 컨디션이 매우 우수하므로 적극적인 페이스로 목표 기록 경신에 도전해보세요."
+	}
+
+	// rpeScore is 8 or 9 below fatigue 60. The same classification drives the
+	// effort reflection reason, so the adjustment and its explanation cite the
+	// same workout.
+	if scoreVal < 60 {
+		signal := fatigue.ClassifyRecentEffort(recentWorkouts)
+		anchor := ""
+		if signal.Anchor != nil {
+			anchor = fatigue.FormatRecentWorkoutAnchor(*signal.Anchor, signal.AnchorIndex)
+		}
+		switch signal.Kind {
+		case fatigue.RecentEffortHigh:
+			rpeScore--
+			rpeLabel = fmt.Sprintf("RPE %d (조절된 페이스)", rpeScore)
+			pacing = fmt.Sprintf("%s에서 높은 체감 강도가 기록되었으므로 초반 오버페이스를 줄이고 세트를 계획적으로 나누어 진행하세요.", anchor)
+		case fatigue.RecentEffortLow:
+			pacing = fmt.Sprintf("%s에서 비교적 여유 있는 체감 강도가 기록되었으므로 초반 1~2라운드에서 몸 상태를 확인한 뒤 점진적으로 템포를 올려보세요.", anchor)
+		case fatigue.RecentEffortHighSensor:
+			rpeScore--
+			rpeLabel = fmt.Sprintf("RPE %d (조절된 페이스)", rpeScore)
+			pacing = fmt.Sprintf("%s에서 높은 센서 하이브리드 활동강도가 측정되었으므로 초반 호흡 여유를 확보하며 일정한 페이스를 유지하세요.", anchor)
+		}
 	}
 
 	var scalings []ScalingAdviceItem
@@ -258,9 +438,10 @@ func buildDeterministicFallbackAdvice(
 			Label:          rpeLabel,
 			PacingStrategy: pacing,
 		},
-		ScalingAdvice:  scalings,
-		MobilityWarmup: mobility,
-		OverallSummary: summary,
-		LastWorkoutAt:  readiness.LastWorkoutAt,
+		EffortReflectionReason: fatigue.BuildDeterministicEffortReflectionReason(recentWorkouts, readiness),
+		ScalingAdvice:          scalings,
+		MobilityWarmup:         mobility,
+		OverallSummary:         summary,
+		LastWorkoutAt:          readiness.LastWorkoutAt,
 	}
 }

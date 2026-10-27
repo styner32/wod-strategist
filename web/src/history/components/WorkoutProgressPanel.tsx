@@ -18,6 +18,7 @@ import {
   isLikelyBodyweightMovement,
   observedReps,
   performanceDraft,
+  timelineProgressIntervals,
   performanceSelectionCovered,
   progressTime,
   rememberedMovementDefaults,
@@ -604,7 +605,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
       | { kind: "interval"; start_secs: number; interval: WorkoutProgressInterval }
       | { kind: "unassessed"; start_secs: number; gap: (typeof unassessedIntervals)[number] }
     )[] = [
-      ...data.progress.intervals.map(interval => ({
+      ...timelineProgressIntervals(data.progress, activeRecords).map(interval => ({
         kind: "interval" as const,
         start_secs: interval.start_secs,
         interval,
@@ -616,7 +617,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
       })),
     ];
     return items.sort((a, b) => a.start_secs - b.start_secs);
-  }, [data?.progress, unassessedIntervals]);
+  }, [data?.progress, unassessedIntervals, activeRecords]);
   const movementSummaries = useMemo(
     () => summarizeWorkoutMovements(data?.progress, activeRecords),
     [data?.progress, activeRecords],

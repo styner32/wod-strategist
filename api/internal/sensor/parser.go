@@ -73,7 +73,7 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 	if opts.CalculationVersion == 0 {
 		opts.CalculationVersion = 1
 	}
-	if opts.CalculationVersion != 1 && opts.CalculationVersion != 2 {
+	if opts.CalculationVersion < 1 || opts.CalculationVersion > 3 {
 		return nil, fmt.Errorf("unsupported calculation version: %d", opts.CalculationVersion)
 	}
 	source.HRCalculationVersion = opts.CalculationVersion
@@ -128,7 +128,7 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 		timelineBuilder *TimelineBuilder
 	)
 
-	if includeTimeline && opts.CalculationVersion == 2 {
+	if opts.CalculationVersion == 3 || (includeTimeline && opts.CalculationVersion >= 2) {
 		timelineBuilder = NewTimelineBuilder()
 		defer timelineBuilder.Close()
 	}
@@ -266,7 +266,7 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 			if json.Unmarshal([]byte(line), &ready) == nil && ready.Device.Name != "Unknown" {
 				deviceName = ready.Device.Name
 			}
-			if opts.CalculationVersion == 2 {
+			if opts.CalculationVersion >= 2 {
 				if header.Time < 0 || (len(hrEvents) > 0 && header.Time < hrEvents[len(hrEvents)-1].Time) {
 					parseErrors = append(parseErrors, "HR lifecycle timestamp reversed or negative")
 				} else {
@@ -274,7 +274,7 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 				}
 			}
 		case "gap_start", "gap_end":
-			if opts.CalculationVersion == 2 {
+			if opts.CalculationVersion >= 2 {
 				if header.Time < 0 || (len(hrEvents) > 0 && header.Time < hrEvents[len(hrEvents)-1].Time) {
 					parseErrors = append(parseErrors, "HR lifecycle timestamp reversed or negative")
 				} else {
@@ -327,7 +327,7 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 			var hre HREvent
 			if err := json.Unmarshal([]byte(line), &hre); err != nil {
 				parseWarnings = append(parseWarnings, fmt.Sprintf("line %d: invalid hr event: %v", lineNum, err))
-				if opts.CalculationVersion != 2 {
+				if opts.CalculationVersion < 2 {
 					continue
 				}
 				// Keep a timed invalid observation so malformed samples cannot
@@ -335,7 +335,7 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 				hre = HREvent{Time: header.Time, BPM: 0}
 			}
 
-			if opts.CalculationVersion == 2 {
+			if opts.CalculationVersion >= 2 {
 				if hre.Time < 0 || (len(hrEvents) > 0 && hre.Time < hrEvents[len(hrEvents)-1].Time) {
 					parseErrors = append(parseErrors, "HR timestamp reversed or negative")
 				} else if len(hrEvents) > 0 && !hrEvents[len(hrEvents)-1].reset && hre.Time == hrEvents[len(hrEvents)-1].Time {
@@ -509,7 +509,7 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 	}
 
 	// Calculate capture and pause duration
-	if opts.CalculationVersion == 2 && seenEnd {
+	if opts.CalculationVersion >= 2 && seenEnd {
 		var clipped []PauseInterval
 		for _, p := range pauseIntervals {
 			p.StartOffsetMs = math.Max(0, p.StartOffsetMs)
@@ -627,16 +627,28 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 		maxHRSrc = &src
 	}
 
+	calcInputs := CalculationInputs{
+		CalculationVersion: opts.CalculationVersion,
+		Age:                opts.Age,
+		MaxHR:              opts.EstimatedMaxHR,
+		MaxHRSource:        maxHRSrc,
+		HasHRZones:         hasHRZones,
+	}
+	if opts.CalculationVersion == 3 {
+		if restHR, restSrc, ok := ResolveRestingHR(opts); ok {
+			calcInputs.RestingHR = &restHR
+			calcInputs.RestingHRSource = restSrc
+		}
+		enmoRest, enmoRef, calibVer := ResolveENMOCalibration(opts)
+		calcInputs.ENMORestG = &enmoRest
+		calcInputs.ENMORefG = &enmoRef
+		calcInputs.CalibrationVersion = calibVer
+	}
+
 	result := &SensorSummaryResult{
 		DeviceName:         deviceName,
 		CalculationVersion: opts.CalculationVersion,
-		CalculationInputs: CalculationInputs{
-			CalculationVersion: opts.CalculationVersion,
-			Age:                opts.Age,
-			MaxHR:              opts.EstimatedMaxHR,
-			MaxHRSource:        maxHRSrc,
-			HasHRZones:         hasHRZones,
-		},
+		CalculationInputs:  calcInputs,
 		Quality: QualityReport{
 			Status:     status,
 			IsComplete: isComplete,
@@ -671,7 +683,7 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 		CalculatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	if opts.CalculationVersion == 2 {
+	if opts.CalculationVersion >= 2 {
 		hr, bonus := calculateHRV2(hrEvents, pauseIntervals, captureDurationMs, isComplete, opts)
 		result.Metrics.HR = hr
 		result.HRBonus = bonus
@@ -684,6 +696,13 @@ func parseAndProcess(r io.Reader, opts ParseOptions, source TimelineSource, incl
 	if opts.CalculationVersion == 2 && seenEnd && isComplete && timelineBuilder != nil {
 		timeline = timelineBuilder.Build(source, captureDurationMs, pauseIntervals, hrEvents)
 		timelineError = timelineBuilder.Err()
+	} else if opts.CalculationVersion == 3 && seenEnd && isComplete && timelineBuilder != nil {
+		var hybrid *HybridMetrics
+		timeline, hybrid = timelineBuilder.BuildWithHybrid(source, captureDurationMs, pauseIntervals, hrEvents, result.Metrics.HR, opts, includeTimeline)
+		result.Metrics.Hybrid = hybrid
+		if includeTimeline {
+			timelineError = timelineBuilder.Err()
+		}
 	}
 
 	return &ProcessingResult{

@@ -65,6 +65,9 @@ type FrameGridOptions struct {
 	// ThinkingLevel optionally overrides the Gemini thinking level (e.g. "MEDIUM")
 	// for AnalyzeVideoIntervalWithFrameGrids.
 	ThinkingLevel string
+	// ReferenceImages are tracking reference frames (target marked) appended
+	// after the contact sheets. They identify the person, not their movement.
+	ReferenceImages [][]byte
 }
 
 // FrameGridSheet holds one generated contact-sheet image and its covered media interval.
@@ -442,6 +445,10 @@ func (w *Worker) AnalyzeVideoIntervalWithFrameGrids(
 	}
 	images := FrameGridImageBytes(sheets)
 	fullPrompt := prompt + buildFrameGridPromptContext(sheets, opts)
+	if len(opts.ReferenceImages) > 0 {
+		images = append(images, opts.ReferenceImages...)
+		fullPrompt += fmt.Sprintf("\n- 이어지는 마지막 %d장은 프레임 그리드가 아니라 대상 인물 추적 기준 이미지입니다(초록 박스, TARGET 표시).", len(opts.ReferenceImages))
+	}
 	callCtx := ctx
 	if strings.TrimSpace(opts.ThinkingLevel) != "" {
 		callCtx = gemini.WithThinkingLevel(ctx, opts.ThinkingLevel)

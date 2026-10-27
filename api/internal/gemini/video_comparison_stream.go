@@ -204,6 +204,7 @@ func (c *Client) CompareVideoModeStream(ctx context.Context, fileURI, mimeType, 
 			r.FinishReason = part.FinishReason
 		}
 		r.Text += part.Text
+		r.ThoughtSummary += part.ThoughtSummary
 		r.MediaToolCalls += part.MediaToolCalls
 		r.MediaToolResponses += part.MediaToolResponses
 		r.UntypedToolCalls += part.UntypedToolCalls

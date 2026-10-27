@@ -32,21 +32,53 @@ func (c *Client) generateContent(ctx context.Context, model string, contents []*
 		} else {
 			thinking := *bounded.ThinkingConfig
 			thinking.ThinkingBudget = nil
+			if c != nil && c.includeThoughts {
+				thinking.IncludeThoughts = true
+			}
 			bounded.ThinkingConfig = &thinking
 		}
 		config = &bounded
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, argonRequestTimeout)
 		defer cancel()
+	} else if c != nil && c.includeThoughts && supportsThinking(model) {
+		cfgCopy := genai.GenerateContentConfig{}
+		if config != nil {
+			cfgCopy = *config
+		}
+		if cfgCopy.ThinkingConfig == nil {
+			cfgCopy.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true}
+		} else if !cfgCopy.ThinkingConfig.IncludeThoughts {
+			thinking := *cfgCopy.ThinkingConfig
+			thinking.IncludeThoughts = true
+			cfgCopy.ThinkingConfig = &thinking
+		}
+		config = &cfgCopy
 	}
 	captured := &VideoModeResult{}
 	resp, err := c.client.Models.GenerateContent(context.WithValue(ctx, comparisonKey{}, captured), model, contents, config)
 	var envelope struct {
 		Usage             *ComparisonUsage `json:"usageMetadata"`
 		ContinuationToken string           `json:"continuationToken"`
+		Candidates        []struct {
+			Content struct {
+				Parts []struct {
+					Text    string `json:"text"`
+					Thought bool   `json:"thought"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
 	}
 	_ = json.Unmarshal(captured.Response, &envelope)
-	usage := UsageFromComparison(envelope.Usage, model)
+	var thoughts strings.Builder
+	if len(envelope.Candidates) > 0 {
+		for _, p := range envelope.Candidates[0].Content.Parts {
+			if p.Thought {
+				thoughts.WriteString(p.Text)
+			}
+		}
+	}
+	usage := UsageFromComparisonWithThoughts(envelope.Usage, model, thoughts.String())
 	if argon && err == nil {
 		if envelope.ContinuationToken != "" {
 			return nil, usage, fmt.Errorf("Argon output is incomplete: continuation is required")
@@ -65,7 +97,13 @@ func (c *Client) generateContent(ctx context.Context, model string, contents []*
 // UsageFromComparison preserves missing counters rather than inventing zeros.
 // Legacy int32 counters remain for existing reanalysis response contracts.
 func UsageFromComparison(details *ComparisonUsage, model string) *TokenUsage {
-	usage := &TokenUsage{Model: model, Details: details}
+	return UsageFromComparisonWithThoughts(details, model, "")
+}
+
+// UsageFromComparisonWithThoughts attaches an optional thought summary (`json:"-"`)
+// alongside token usage metadata without exposing thought text in JSON payloads.
+func UsageFromComparisonWithThoughts(details *ComparisonUsage, model, thoughtSummary string) *TokenUsage {
+	usage := &TokenUsage{Model: model, Details: details, ThoughtSummary: thoughtSummary}
 	if details != nil {
 		if details.Input != nil {
 			usage.PromptTokens = int32(*details.Input)

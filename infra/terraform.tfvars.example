@@ -19,10 +19,12 @@ enable_session_reanalysis = false
 enable_capture_feedback    = false
 enable_contextual_coaching = false
 enable_activity_counting   = false
+enable_tracking_continuity = true
 
-# Gemini thinking levels (LOW, MEDIUM, HIGH)
-gemini_thinking_chunk = "LOW"
-gemini_thinking_level = "HIGH"
+# Gemini thinking levels (LOW, MEDIUM, HIGH) and optional thought-summary logging
+gemini_thinking_chunk   = "LOW"
+gemini_thinking_level   = "HIGH"
+gemini_include_thoughts = false # Apply migration 000059 before setting true
 
 # Migrations 000052-000053 must be applied before deploying the API/worker,
 # whatever this flag is. It only gates additional paid highlight observations.

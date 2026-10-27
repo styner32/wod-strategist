@@ -86,7 +86,7 @@ func evaluateSensorSummaryFreshness(res *db.AnalysisResult) sensorSummaryFreshne
 		sum.RequestID != proc.RequestID ||
 		sum.SourceGeneration == "" ||
 		sum.SourceGeneration != proc.TargetGeneration ||
-		(sum.CalculationVersion != 1 && sum.CalculationVersion != 2) ||
+		sum.CalculationVersion < 1 || sum.CalculationVersion > 3 ||
 		(sum.CalculationVersion != proc.CalculationInputs.CalculationVersion && !(sum.CalculationVersion == 1 && proc.CalculationInputs.CalculationVersion == 0)) {
 		return sensorSummaryFreshness{}
 	}

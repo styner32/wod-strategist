@@ -25,7 +25,28 @@
 
 ## Evidence and clocks
 
-- Base chunk inference sees no recent-chunk history. New structured blocks are
+- Base chunk inference sees no recent-chunk assessment history (form, counts,
+  coaching, fatigue). Since 2026-10-26 it receives the Tracking channel by
+  default (`ENABLE_TRACKING_CONTINUITY`; defaults to `true` when unset, set
+  `false` to disable): `trackingInputs` supplies the single unified
+  `target_person` instruction (`trackingOutputPrompt`, omitting legacy
+  `TargetPersonPrompt` so duplicate blocks are never requested), attaches up to
+  two marked reference JPEGs (the
+  latest within 60 s of the chunk start, plus the session's first) and a
+  whitelisted `trackingHandoff` (matched cues, frame region, station, previous
+  activity state, non-authoritative movement hint). It never waits for a late
+  previous chunk. The chunk reports `target_person.boxes` (≤3, `{t, box_2d}` in
+  normalized [ymin,xmin,ymax,xmax] 0..1000), `frame_region`, `station` inside
+  the existing `target_cues` text column (no migration), even on `[NO_EXERCISE]`
+  chunks when the target person is visible, and does not force `confidence: 0.5`
+  when explicit appearance cues are absent. When
+  `target_confidence ≥ 0.7` and not ambiguous, `saveTrackingReference` renders
+  the last box onto that frame (ffmpeg + `image/draw`) to
+  `videos/{pid}/{sid}/tracking/{chunkID}.jpg` and records `reference_image`;
+  failures never fail the chunk. Pass 2 (production and reanalysis) attaches the
+  reference nearest the window plus the session anchor. The web player overlays
+  the same boxes (toggle, default off; see [web-media-playback.md](web-media-playback.md)).
+  New structured blocks are
   stripped before the legacy observed-signals regex is applied. Independent
   `output`, movement tags, and observed signals are never replaced by connected
   coaching or post-recording count review.
@@ -97,9 +118,21 @@ after the user's acceptance of final assessment; see [workout-progress.md](worko
   - `HandleActivityReviewTask` probes the downloaded merged video locally via `probeVideoDuration`. When local probing succeeds (`duration > 0`), it skips `GeminiClient.UploadVideo` (0s Files API upload/polling) and analyzes each 30s sliding window (`10s` owned chunk + up to `10s` leading/trailing adjacent context) via `AnalyzeVideoIntervalWithFrameGrids` using `activityReviewFrameGridOptions()` (`FPS=4.0`, `Cols=8`, `Rows=4` = 4 JPEG contact sheets per 30s window, `FormatSecondsBadge: true` burning decimal `%.2fs` media seconds onto each tile, `ThinkingLevel: "MEDIUM"` via `gemini.WithThinkingLevel`, `gemini-3.8-flash`).
   - Why: Concurrent `VideoMetadata` slicing on large uploaded Files API videos (`79 MB+`) triggered server-side HTTP 504 `DEADLINE_EXCEEDED` at ~89s on 57.6% (19/33) of windows in the 33-chunk (`327.96s`) Grace benchmark. Switching to 4-sheet Frame-Grid contact sheets reduced input tokens per 30s window by 52.2% (`11,770` -> `5,632` prompt tokens), cut per-window cost by 36% (`$0.078` -> `$0.050`/window), lowered median call latency from `88.78s` to `34.90s`, and achieved `33/33` (100%) single-pass completion with accurate rep detection.
   - Fallback: If `probeVideoDuration` returns `<= 0` (e.g., synthetic non-MP4 test stubs or missing `ffprobe`) or `GenerateFrameGrids` fails with `len(sheets) == 0`, `HandleActivityReviewTask` lazily uploads the video once via `ensureUploaded` (`UploadVideo` + `defer DeleteFile`) and falls back to `AnalyzeSegmentWithModel` (`VideoMetadata`).
-- **Future Cost Reduction Option (Option 2 — Multi-Chunk Frame-Grid Batching):**
-  - When additional `activity:review` cost or call-volume reduction is needed, group 2 adjacent canonical chunks per call (**Batch-2**: `20s` owned core + `10s` leading/trailing context = up to `40s` window, 5 contact sheets at `4 FPS` or 4 contact sheets at `3 FPS`), decode once over `[batchStart, batchEnd]`, and assign each chunk's repetitions in memory via `activity.Own(doc, *row.MediaStartSecs, *row.MediaEndSecs)`.
-  - Experimental trade-off (Grace 33-chunk benchmark): **Batch-4** (`40s` owned + `10s` context = `60s` window, 8 sheets, 9 calls total) reduced wall time to `112.7s` and normalized full-session cost by ~78% (`~$0.56` vs `$2.56` baseline / `$1.65` Option 1), but dense barbell intervals occasionally reached `60s–91s` (2/9 batches hit the 90s timeout) due to longer JSON event lists across 40s of owned reps. **Batch-2** (`40s` window / 4–5 sheets, ~17 calls) or `3 FPS` keeps every call within `25s–45s` while cutting cost and API calls by ~50–60%.
+- **Rest-Confidence Skipping & Batch-3 Frame-Grid Grouping (2026-10-26):**
+  - **Rest-confidence skipping (`shouldSkipActivityReviewRestChunk`):** Before downloading `merged.mp4` from GCS, `HandleActivityReviewTask` evaluates completed Pass-1 chunks that have valid non-overlapping clocks, non-exercise `ExerciseType`/`ObservedSignals`, and `MovementObservations` with `target_state == "identified"`, `activity_state == "rest"`, `events == []`, `unassessed == []`:
+    - **MoveNet excluded:** `chunk_analysis_results.workout_confidence` is never consulted.
+    - **Polar H10 strictly optional:** `loadSessionSensorTimeline` reads `analysis_results.sensor_timeline` (`capture_clock` `acc_magnitude_std_g` buckets overlapping `[StartSecs*1000, EndSecs*1000)`) only when `SensorState == COMPLETED` and valid; missing/failed sensor data imposes zero penalty and falls back to `rest -> rest -> rest` and `motion_score`.
+    - **`WARMUP` / `COOLDOWN` (`IsRecoveryWorkoutType`):** Ignores `motion_score` and H10 thresholds and skips immediately when Pass 1 forms a contiguous rest run (`isRestRunInterior`, i.e., `rest -> rest -> rest`). Non-interior rest chunks are still reviewed so slow mobility/holds are preserved.
+    - **`WOD` / `ACCESSORY`:** Never skips a rest chunk immediately following an active chunk (`noPrecedingActive` guard preserves cross-boundary spillover reps finishing in `(MediaStartSecs, MediaEndSecs]`). Vetoes skip if `motion_score >= 0.045` or optional H10 has `max >= 0.12g` or `mean >= 0.08g`. Confirms skip on `isRestRunInterior` (`rest -> rest -> rest`), optional H10 stillness (`coverage >= 0.50` and `max < 0.08g`), or `motion_score < 0.012`.
+    - **Boundary ownership:** Compute all rest-skip candidates before reusing completed reviews. On `WOD` / `ACCESSORY`, also review the immediate adjacent successor of each original non-skippable candidate, even if Pass 1 called that successor rest. This preserves repetitions completing across the boundary after a motion/H10 veto. Use the original candidate decisions so protection does not cascade through the remaining rest run; apply the same plan on retries.
+    - Skipped chunks are recorded immediately as `ReviewedChunk{State: "completed", Observations: activity.ConfirmedRest(dur)}`. If all chunks are already completed or rest-skipped (`len(batches) == 0`), `HandleActivityReviewTask` saves `completed` (or `partial` if unassessed gaps exist) and exits before downloading `merged.mp4`.
+  - **Batch-3 grouping (`buildActivityReviewBatches`):** Remaining uncompleted chunks are grouped into contiguous (`activity.Adjacent`) batches of up to `3` chunks (`<= 35.0s` core duration) with up to 1 adjacent chunk leading/trailing context (`<= 15.0s` per side, ~50s max window / 6–7 Frame-Grid sheets at `4 FPS`, `180s` per-call timeout via `activityReviewWindowTimeout`). Each batch response is decoded once over `[WinStart, WinEnd]` and distributed per chunk via `activity.Own(doc, *row.MediaStartSecs, *row.MediaEndSecs)` (which sets each chunk's `DurationSecs = end - start`).
+  - **Out-of-frame (`not_visible`) handling & tracking references (2026-10-27):**
+    - `activity.Decode` preserves `TargetState: "not_visible"` (`Reason: "target_not_visible"`) and `"ambiguous"` (`Reason: "unassessable_target_or_activity"`) instead of overwriting them with `"unknown"`, so Pass-2 continuity (`classifyChunkActivity`) classifies Pass-1 `not_visible` chunks as `chunkUnclassified` rather than `chunkActive ("Unknown")`.
+    - Before downloading `merged.mp4`, `HandleActivityReviewTask` skips interior chunks of contiguous Pass-1 `not_visible -> not_visible -> not_visible` runs (`isPass1ExplicitNotVisible` + `isNotVisibleRunInterior`), keeping departure and return boundary chunks adjacent to non-`not_visible` chunks reviewable so boundary-completing reps are preserved. Skipped interior chunks record `activity.ConfirmedNotVisible(*row.MediaStartSecs, *row.MediaEndSecs, sensorActive)` (`Reason: "target_not_visible_sensor_active"` when optional Polar H10 `acc_magnitude_std_g` has `max >= 0.12g` or `mean >= 0.08g`, otherwise `"target_not_visible"`), avoiding blind video calls when the athlete is out of camera view.
+    - When `TrackingContinuityEnabled` is true, `HandleActivityReviewTask` attaches stored green-box `TARGET` reference JPEGs (`loadTrackingReferences` + `cachedPass2TrackingInputs`, memoizing GCS object reads across batches) to both `AnalyzeVideoIntervalWithFrameGrids` (`gridOpts.ReferenceImages`) and the `AnalyzeSegmentWithModelAndImages` fallback (`WithThinkingLevel(..., "MEDIUM")`).
+    - When appearance cues are configured, `formatTargetPersonContext` and `agenticHighlightPrompt` forbid falling back to center bystanders when zero visible people match persistent cues, requiring immediate fast-exit (`not_visible` / `[NO_EXERCISE]` / `target_status: "absent"`).
+  - **Catalog coverage (`Box Step-up` / `Box Step-over`):** Canonical `Box Step-up`, `Box Step-over`, `DB Box Step-up`, `DB Box Step-over`, `Weighted Box Step-up`, `Weighted Box Step-over`, `Sandbag Box Step-up`, `Sandbag Box Step-over` (plus English/Korean aliases) are registered in `internal/movement/catalog.go` and `internal/fatigue/fatigue.go` so `activity.Decode` counts them as `reps` instead of `unsupported_movement_or_unit`.
 - Store review schema version, media generation, and a source fingerprint of
   canonical chunk identity/status/times/observations. Canonicalize JSON before
   hashing because PostgreSQL JSONB reorders keys. Coaching timestamps/text are

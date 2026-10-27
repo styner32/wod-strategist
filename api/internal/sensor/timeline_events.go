@@ -76,8 +76,7 @@ func (tb *TimelineBuilder) HandleAcc(event AccEvent) {
 	tb.appendEvent(event)
 }
 
-func (tb *TimelineBuilder) Build(source TimelineSource, durationMs float64, pauses []PauseInterval, hrEvents []hrObservation) *SensorTimelineData {
-	defer tb.Close()
+func (tb *TimelineBuilder) replayAccumulator(durationMs float64) *timelineAccumulator {
 	if tb.err != nil {
 		return nil
 	}
@@ -129,7 +128,44 @@ func (tb *TimelineBuilder) Build(source TimelineSource, durationMs float64, paus
 			return nil
 		}
 	}
+	return accumulator
+}
+
+func (tb *TimelineBuilder) Build(source TimelineSource, durationMs float64, pauses []PauseInterval, hrEvents []hrObservation) *SensorTimelineData {
+	defer tb.Close()
+	accumulator := tb.replayAccumulator(durationMs)
+	if accumulator == nil {
+		return nil
+	}
 	var timeline *SensorTimelineData
 	timeline, tb.err = accumulator.Build(source, durationMs, pauses, hrEvents)
 	return timeline
+}
+
+func (tb *TimelineBuilder) BuildWithHybrid(
+	source TimelineSource,
+	durationMs float64,
+	pauses []PauseInterval,
+	hrEvents []hrObservation,
+	hrSummary HRMetrics,
+	opts ParseOptions,
+	includeTimeline bool,
+) (*SensorTimelineData, *HybridMetrics) {
+	defer tb.Close()
+	accumulator := tb.replayAccumulator(durationMs)
+	if accumulator == nil {
+		return nil, accumulator.calculateHybrid(nil, durationMs, pauses, nil, hrSummary, opts, tb.err)
+	}
+	// One HR bucket pass serves both the graph and hybrid metrics.
+	hrBuckets, hrErr := hrBucketsFromEvents(hrEvents, pauses, durationMs)
+	var timeline *SensorTimelineData
+	if includeTimeline {
+		if hrErr != nil {
+			tb.err = hrErr
+		} else {
+			timeline, tb.err = accumulator.buildFromHRBuckets(source, durationMs, pauses, hrBuckets)
+		}
+	}
+	hybrid := accumulator.calculateHybrid(timeline, durationMs, pauses, hrBuckets, hrSummary, opts, hrErr)
+	return timeline, hybrid
 }

@@ -299,7 +299,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 
 	It("retries instead of publishing a partial candidate when any selected segment fails", func() {
 		_, run := seedChunkAndRun()
-		secondStart, secondEnd := 0.76, 0.95
+		secondStart, secondEnd := 0.81, 0.95 // separated from the first chunk: not one continuous bout
 		testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
 			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED",
 			ExerciseType: "Burpee", ObservedSignals: `{"movement":"Burpee","activity_state":"exercise"}`,
@@ -463,7 +463,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 
 	It("reuses unchanged segment outputs from a previous COMPLETED SessionReanalysisRun without re-calling Gemini for those segments", func() {
 		firstChunk, firstRun := seedChunkAndRun()
-		secondStart, secondEnd := 0.76, 0.95
+		secondStart, secondEnd := 0.81, 0.95 // separated from the first chunk: not one continuous bout
 		secondChunk := testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
 			SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED",
 			ExerciseType: "Burpee", ObservedSignals: `{"movement":"Burpee","activity_state":"exercise"}`,
@@ -481,7 +481,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 
 		burpeeOutput := "버피 동작이 확인됩니다.\n" +
 			"```highlights\n" + `[{"start":"0:00.8","end":"0:00.9","type":"key_moment","movement":"Burpee","reason":"burpee rep"}]` + "\n```\n" +
-			"```workout_observations\n" + `{"intervals":[{"start_secs":0.76,"end_secs":0.95,"activity":"exercise","movement":"Burpee","target_confirmed":true,"rep_events":[{"movement":"Burpee","unit":"reps","start_secs":0.8,"end_secs":0.9,"complete":true,"evidence":"burpee"}],"form_observations":[{"start_secs":0.8,"end_secs":0.9,"evidence":"steady burpee"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
+			"```workout_observations\n" + `{"intervals":[{"start_secs":0.81,"end_secs":0.95,"activity":"exercise","movement":"Burpee","target_confirmed":true,"rep_events":[{"movement":"Burpee","unit":"reps","start_secs":0.82,"end_secs":0.9,"complete":true,"evidence":"burpee"}],"form_observations":[{"start_secs":0.82,"end_secs":0.9,"evidence":"steady burpee"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
 		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
 			MatchBodyContains("Burpee").
@@ -512,8 +512,8 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(w.HandleSessionDebugReanalysisTask(context.Background(), firstTask)).To(Succeed())
 		Expect(geminiTransport.Verify()).To(Succeed())
 
-		// Second run: same firstChunk (0.0-0.75), plus a new correction on secondChunk (0.76-0.95 -> Box Jump).
-		// Only the second segment (0.76-0.95) should invoke Gemini ModelArgon4; the first segment (0.0-0.75) should be reused!
+		// Second run: same firstChunk (0.0-0.75), plus a new correction on secondChunk (0.81-0.95 -> Box Jump).
+		// Only the second segment (0.81-0.95) should invoke Gemini ModelArgon4; the first segment (0.0-0.75) should be reused!
 		_ = firstChunk
 		testhelpers.CreateAnalysisFeedback(database, &db.AnalysisFeedback{
 			ProfileID:             profile.ID,
@@ -541,7 +541,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		})
 		boxJumpOutput := "박스 점프가 확인됩니다.\n" +
 			"```highlights\n" + `[{"start":"0:00.8","end":"0:00.9","type":"key_moment","movement":"Box Jump","reason":"box jump rep"}]` + "\n```\n" +
-			"```workout_observations\n" + `{"intervals":[{"start_secs":0.76,"end_secs":0.95,"activity":"exercise","movement":"Box Jump","target_confirmed":true,"rep_events":[{"movement":"Box Jump","unit":"reps","start_secs":0.8,"end_secs":0.9,"complete":true,"evidence":"box jump"}],"form_observations":[{"start_secs":0.8,"end_secs":0.9,"evidence":"soft landing"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
+			"```workout_observations\n" + `{"intervals":[{"start_secs":0.81,"end_secs":0.95,"activity":"exercise","movement":"Box Jump","target_confirmed":true,"rep_events":[{"movement":"Box Jump","unit":"reps","start_secs":0.82,"end_secs":0.9,"complete":true,"evidence":"box jump"}],"form_observations":[{"start_secs":0.82,"end_secs":0.9,"evidence":"soft landing"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
 		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
 			MatchBodyContains("Box Jump").

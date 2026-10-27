@@ -990,5 +990,45 @@ var _ = Describe("Gemini client", func() {
 			body := string(transport.Requests()[0].Body)
 			Expect(body).To(ContainSubstring(`"thinkingLevel":"MEDIUM"`))
 		})
+
+		It("honors per-call WithThinkingLevel override on AnalyzeSegmentWithModelAndImages", func() {
+			transport := testhelpers.NewMockTransport()
+			transport.New(baseURL).
+				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				MatchHeader("X-Goog-Api-Key", apiKey).
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"parts": []map[string]any{
+								{"text": "segment ok"},
+							},
+						},
+					}},
+				})
+
+			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:        apiKey,
+				BaseURL:       baseURL,
+				Model:         ModelArgon4,
+				ThinkingLevel: "HIGH",
+				HTTPClient:    &http.Client{Transport: transport},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			ref := encodeJPEG(makeTestImage(32, 32))
+			ctx := WithThinkingLevel(context.Background(), "MEDIUM")
+			result, _, err := client.AnalyzeSegmentWithModelAndImages(
+				ctx, "https://example.test/files/vid1", "video/mp4", 10*time.Second, 20*time.Second, "prompt", ModelFlash38, [][]byte{ref},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("segment ok"))
+			Expect(transport.Verify()).To(Succeed())
+
+			body := string(transport.Requests()[0].Body)
+			Expect(body).To(ContainSubstring(`"thinkingLevel":"MEDIUM"`))
+			Expect(body).To(ContainSubstring(`"mimeType":"image/jpeg"`))
+			Expect(body).To(ContainSubstring(`"fileUri":"https://example.test/files/vid1"`))
+		})
 	})
 })

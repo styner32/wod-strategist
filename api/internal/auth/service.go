@@ -226,6 +226,7 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uint, password strin
 				&db.AnalysisResult{},
 				&db.ChunkAnalysisResult{},
 				&db.HighlightResult{},
+				&db.GeminiThoughtLog{},
 				&db.TokenUsage{},
 				&db.SessionAppearanceHint{},
 			} {
@@ -243,6 +244,10 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uint, password strin
 			if err := tx.Where("user_id = ?", userID).Delete(&db.Profile{}).Error; err != nil {
 				return fmt.Errorf("delete profiles: %w", err)
 			}
+		}
+
+		if err := tx.Where("user_id = ?", userID).Delete(&db.GeminiThoughtLog{}).Error; err != nil {
+			return fmt.Errorf("delete user thought logs: %w", err)
 		}
 
 		// 5. Soft-delete user: scrub password, bump token version

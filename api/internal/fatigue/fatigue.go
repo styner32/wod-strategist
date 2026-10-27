@@ -87,7 +87,11 @@ var movementLoadCatalog = map[string]MovementMuscleWeights{
 	"db thruster":      {ShouldersPush: 0.9, UpperPullGrip: 0.2, PosteriorChain: 0.5, QuadsSquat: 0.9, CoreMidline: 0.7, CardioMetabolic: 0.8},
 	"kb swing":         {ShouldersPush: 0.3, UpperPullGrip: 0.6, PosteriorChain: 0.9, QuadsSquat: 0.3, CoreMidline: 0.6, CardioMetabolic: 0.7},
 	"kettlebell swing": {ShouldersPush: 0.3, UpperPullGrip: 0.6, PosteriorChain: 0.9, QuadsSquat: 0.3, CoreMidline: 0.6, CardioMetabolic: 0.7},
-	"devil press":      {ShouldersPush: 0.8, UpperPullGrip: 0.5, PosteriorChain: 0.8, QuadsSquat: 0.5, CoreMidline: 0.7, CardioMetabolic: 0.9},
+	"devil press":          {ShouldersPush: 0.8, UpperPullGrip: 0.5, PosteriorChain: 0.8, QuadsSquat: 0.5, CoreMidline: 0.7, CardioMetabolic: 0.9},
+	"db box step up":       {ShouldersPush: 0.2, UpperPullGrip: 0.6, PosteriorChain: 0.6, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.7},
+	"db box step over":     {ShouldersPush: 0.2, UpperPullGrip: 0.6, PosteriorChain: 0.6, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.8},
+	"sandbag box step up":  {ShouldersPush: 0.3, UpperPullGrip: 0.5, PosteriorChain: 0.7, QuadsSquat: 0.9, CoreMidline: 0.7, CardioMetabolic: 0.7},
+	"sandbag box step over": {ShouldersPush: 0.3, UpperPullGrip: 0.5, PosteriorChain: 0.7, QuadsSquat: 0.9, CoreMidline: 0.7, CardioMetabolic: 0.8},
 
 	// Gymnastics
 	"pull up":           {ShouldersPush: 0.2, UpperPullGrip: 1.0, PosteriorChain: 0.2, QuadsSquat: 0.0, CoreMidline: 0.5, CardioMetabolic: 0.5},
@@ -113,8 +117,12 @@ var movementLoadCatalog = map[string]MovementMuscleWeights{
 	"sit up":        {ShouldersPush: 0.0, UpperPullGrip: 0.0, PosteriorChain: 0.1, QuadsSquat: 0.2, CoreMidline: 0.9, CardioMetabolic: 0.3},
 	"sit-up":        {ShouldersPush: 0.0, UpperPullGrip: 0.0, PosteriorChain: 0.1, QuadsSquat: 0.2, CoreMidline: 0.9, CardioMetabolic: 0.3},
 	"lunge":         {ShouldersPush: 0.0, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.9, CoreMidline: 0.5, CardioMetabolic: 0.5},
-	"box jump":      {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.6, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.8},
-	"box step-up":   {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.6},
+	"box jump":               {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.6, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.8},
+	"box step-up":            {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.6},
+	"box step up":            {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.6},
+	"box step over":          {ShouldersPush: 0.1, UpperPullGrip: 0.0, PosteriorChain: 0.5, QuadsSquat: 0.8, CoreMidline: 0.4, CardioMetabolic: 0.7},
+	"weighted box step up":   {ShouldersPush: 0.2, UpperPullGrip: 0.2, PosteriorChain: 0.6, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.7},
+	"weighted box step over": {ShouldersPush: 0.2, UpperPullGrip: 0.2, PosteriorChain: 0.6, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.8},
 	"wallball shot": {ShouldersPush: 0.8, UpperPullGrip: 0.1, PosteriorChain: 0.4, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.8},
 	"wall ball":     {ShouldersPush: 0.8, UpperPullGrip: 0.1, PosteriorChain: 0.4, QuadsSquat: 0.9, CoreMidline: 0.6, CardioMetabolic: 0.8},
 
@@ -334,6 +342,17 @@ func ComputeLegacySessionMuscleLoadsWithSignals(
 // ComputeSessionMuscleLoads computes 0-100 muscle loads for a session using
 // movements from sessionScore. Deterministic calculation without sensor bonus (v2).
 // Returns (loads, true) if valid movements exist, or (nil, false) if no valid movements exist.
+// IsNonLoadMovement reports whether a normalized movement key names no trained
+// movement (empty, unknown, walking, rest, setup). Such entries add no muscle
+// load and are not listed as recent workout movements.
+func IsNonLoadMovement(norm string) bool {
+	switch strings.ToLower(norm) {
+	case "", "unknown", "walking", "rest", "setup":
+		return true
+	}
+	return false
+}
+
 func ComputeSessionMuscleLoads(sessionScoreJSON string) (map[string]float64, bool) {
 	var evidence struct {
 		Version   int             `json:"evaluation_version"`
@@ -358,12 +377,10 @@ func ComputeSessionMuscleLoads(sessionScoreJSON string) (map[string]float64, boo
 		return nil, false
 	}
 
-	// Filter movements: reject empty, unknown, walking, rest, setup
 	validMovements := make(map[string]bool)
 	for rawMov := range score.Movements {
 		norm := movement.NormalizeKey(rawMov)
-		if norm == "" || strings.EqualFold(norm, "unknown") || strings.EqualFold(norm, "walking") ||
-			strings.EqualFold(norm, "rest") || strings.EqualFold(norm, "setup") {
+		if IsNonLoadMovement(norm) {
 			continue
 		}
 		// Must be known in catalog

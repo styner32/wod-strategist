@@ -157,6 +157,7 @@ type GeminiClient interface {
 	AnalyzeVideo(ctx context.Context, filePath, prompt string) (string, string, *gemini.TokenUsage, error)
 	AnalyzeVideoWithModel(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
 	AnalyzeChunkVideo(ctx context.Context, filePath, prompt, model string) (string, string, *gemini.TokenUsage, error)
+	AnalyzeChunkVideoWithImages(ctx context.Context, filePath, prompt, model string, images [][]byte) (string, string, *gemini.TokenUsage, error)
 	DeleteFile(ctx context.Context, name string) error
 	FileExists(ctx context.Context, name string) (bool, error)
 	FileVideoDuration(ctx context.Context, name string) (time.Duration, bool, error)
@@ -168,6 +169,7 @@ type GeminiClient interface {
 	IndexVideo(ctx context.Context, fileURI, mimeType, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegment(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt string) (string, *gemini.TokenUsage, error)
 	AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *gemini.TokenUsage, error)
+	AnalyzeSegmentWithModelAndImages(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string, images [][]byte) (string, *gemini.TokenUsage, error)
 	AnalyzeFrameGridsWithModel(ctx context.Context, images [][]byte, mimeType, prompt, model string) (string, *gemini.TokenUsage, error)
 
 	AnalyzeHighlightAgentic(ctx context.Context, fileURI, mimeType, prompt string) gemini.StreamComparisonResult
@@ -202,6 +204,9 @@ type Worker struct {
 	CaptureFeedbackEnabled    bool
 	ContextualCoachingEnabled bool
 	ActivityCountingEnabled   bool
+	// TrackingContinuityEnabled hands the tracked person (marked reference
+	// images, location, activity hint) to the next chunk. Tracking channel only.
+	TrackingContinuityEnabled bool
 
 	DB             *gorm.DB
 	StorageClient  StorageClient

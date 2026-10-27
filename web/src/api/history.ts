@@ -81,6 +81,9 @@ export interface ChunkAnalysisResult {
   media_start_secs?: number | null;
   media_end_secs?: number | null;
   heart_rate_bpm: number;
+  workout_confidence?: number | null;
+  target_confidence?: number | null;
+  target_cues?: string | Record<string, unknown> | null;
   motion_score?: number | null;
   structured_inference?: StructuredChunkInference | null;
   updated_at?: string;

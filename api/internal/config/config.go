@@ -21,6 +21,7 @@ var defaultDevAllowedOrigins = []string{
 
 type Common struct {
 	AgenticHighlightsEnabled bool
+	GeminiIncludeThoughts    bool // GEMINI_INCLUDE_THOUGHTS — optional; stores Gemini thought summaries in gemini_thought_logs
 	DatabaseURL              string
 	RedisURL                 string
 	GCSBucketName            string
@@ -46,6 +47,10 @@ type Worker struct {
 	CaptureFeedbackEnabled    bool
 	ContextualCoachingEnabled bool
 	ActivityCountingEnabled   bool
+	// TrackingContinuityEnabled — ENABLE_TRACKING_CONTINUITY. Chunk analysis
+	// receives the tracked person marked in previous frames (Tracking channel
+	// only). "true"/"false" override; unset defaults to on outside production.
+	TrackingContinuityEnabled bool
 	Common
 	GeminiAPIKey         string
 	GeminiModel          string // GEMINI_MODEL — default "gemini-4-argon" (deep video analysis)
@@ -69,6 +74,7 @@ func InitServer() (Server, error) {
 	cfg := Server{
 		Common: Common{
 			AgenticHighlightsEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_AGENTIC_HIGHLIGHTS")), "true"),
+			GeminiIncludeThoughts:    strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_INCLUDE_THOUGHTS")), "true"),
 			DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 			RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
 			GCSBucketName:            strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
@@ -162,8 +168,10 @@ func InitWorker() (Worker, error) {
 		CaptureFeedbackEnabled:    strings.EqualFold(os.Getenv("ENABLE_CAPTURE_FEEDBACK"), "true"),
 		ContextualCoachingEnabled: strings.EqualFold(os.Getenv("ENABLE_CONTEXTUAL_COACHING"), "true"),
 		ActivityCountingEnabled:   strings.EqualFold(os.Getenv("ENABLE_ACTIVITY_COUNTING"), "true"),
+		TrackingContinuityEnabled: trackingContinuityEnabled(os.Getenv("ENABLE_TRACKING_CONTINUITY")),
 		Common: Common{
 			AgenticHighlightsEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_AGENTIC_HIGHLIGHTS")), "true"),
+			GeminiIncludeThoughts:    strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_INCLUDE_THOUGHTS")), "true"),
 			DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 			RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
 			GCSBucketName:            strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
@@ -326,4 +334,11 @@ func parseListEnv(name string, fallback []string) []string {
 	}
 
 	return values
+}
+
+// trackingContinuityEnabled defaults to true and honours an explicit "false"
+// kill-switch so chunk analysis records target boxes and reference frames unless
+// disabled via environment configuration.
+func trackingContinuityEnabled(raw string) bool {
+	return !strings.EqualFold(strings.TrimSpace(raw), "false")
 }
