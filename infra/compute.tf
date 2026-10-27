@@ -74,6 +74,10 @@ resource "google_cloud_run_v2_service" "api" {
         value = var.gemini_model
       }
       env {
+        name  = "GEMINI_INCLUDE_THOUGHTS"
+        value = tostring(var.gemini_include_thoughts)
+      }
+      env {
         name  = "PIPELINE_MODE"
         value = var.pipeline_mode
       }
@@ -174,6 +178,10 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
         value = var.gemini_model
       }
       env {
+        name  = "GEMINI_INCLUDE_THOUGHTS"
+        value = tostring(var.gemini_include_thoughts)
+      }
+      env {
         name  = "GEMINI_THINKING_CHUNK"
         value = var.gemini_thinking_chunk
       }
@@ -196,6 +204,10 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       env {
         name  = "ENABLE_ACTIVITY_COUNTING"
         value = tostring(var.enable_activity_counting)
+      }
+      env {
+        name  = "ENABLE_TRACKING_CONTINUITY"
+        value = tostring(var.enable_tracking_continuity)
       }
       env {
         name  = "PIPELINE_MODE"

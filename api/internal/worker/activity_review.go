@@ -536,6 +536,13 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 	}
 
 	timeline := w.loadSessionSensorTimeline(ctx, p.ProfileID, p.SessionID)
+	// Freeze the original skip candidates before protecting completion-owning
+	// successors. Using the adjusted decisions would propagate review through
+	// the rest of a rest run, and using completedIDs would drop protection on retry.
+	restSkipCandidates := make([]bool, len(rows))
+	for i := range rows {
+		restSkipCandidates[i] = shouldSkipActivityReviewRestChunk(rows, i, session.WorkoutType, timeline)
+	}
 	completedIDs := make(map[uint]bool, len(rows))
 	skippedRestChunks := 0
 	for i, row := range rows {
@@ -544,7 +551,12 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 			completedIDs[row.ID] = true
 			continue
 		}
-		if shouldSkipActivityReviewRestChunk(rows, i, session.WorkoutType, timeline) {
+		skipRest := restSkipCandidates[i]
+		if !IsRecoveryWorkoutType(session.WorkoutType) && i > 0 &&
+			activity.Adjacent(rows[i-1], row) && !restSkipCandidates[i-1] {
+			skipRest = false
+		}
+		if skipRest {
 			dur := *row.MediaEndSecs - *row.MediaStartSecs
 			replaceReview(activity.ReviewedChunk{
 				ChunkID:      row.ID,

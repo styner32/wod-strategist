@@ -612,11 +612,15 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(summary.Reviews).To(HaveLen(3))
 	})
 
-	It("uses optional Polar H10 acceleration to veto missed exercise in WOD while ignoring thresholds in WARMUP", func() {
+	DescribeTable("preserves cross-boundary reps after rest-review vetoes while keeping recovery rest skippable", func(useMotion, useH10 bool) {
 		restRaw, err := json.Marshal(activity.ConfirmedRest(10.0))
 		Expect(err).NotTo(HaveOccurred())
 		highMotion := 0.08
 		createRestRow := func(sid string, start, end float64) db.ChunkAnalysisResult {
+			var motion *float64
+			if useMotion && start == 10 {
+				motion = &highMotion
+			}
 			return testhelpers.CreateChunkAnalysisResult(conn, &db.ChunkAnalysisResult{
 				ProfileID:            profile.ID,
 				SessionID:            sid,
@@ -628,14 +632,14 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 				EndSecs:              &end,
 				MediaStartSecs:       &start,
 				MediaEndSecs:         &end,
-				MotionScore:          &highMotion,
+				MotionScore:          motion,
 				MovementObservations: restRaw,
 			})
 		}
 		spike := 0.18
 		still := 0.02
 		points := []sensor.SensorTimelinePoint{}
-		for ms := int64(0); ms < 30000; ms += 1000 {
+		for ms := int64(0); ms < 50000; ms += 1000 {
 			val := still
 			if ms >= 10000 && ms < 20000 {
 				val = spike
@@ -651,34 +655,38 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 			SchemaVersion: 1,
 			Clock:         "capture_clock",
 			BucketMs:      1000,
-			DurationMs:    30000,
+			DurationMs:    50000,
 			Points:        points,
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		// 1. WOD session: middle chunk [10,20] is vetoed by H10/motion; [0,10] and [20,30] skip, leaving 1 review call.
-		testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
-			SessionID:      session.SessionID,
-			ProfileID:      profile.ID,
-			Status:         "COMPLETED",
-			SensorState:    db.SensorStateCompleted,
-			SensorTimeline: db.JSONDocument(tlBytes),
-		})
+		// Review [10,20] and its completion-owning successor [20,30]. Later rest
+		// chunks stay skippable, so protecting the boundary still uses one call.
+		if useH10 {
+			testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
+				SessionID:      session.SessionID,
+				ProfileID:      profile.ID,
+				Status:         "COMPLETED",
+				SensorState:    db.SensorStateCompleted,
+				SensorTimeline: db.JSONDocument(tlBytes),
+			})
+		}
 		wodRows := []db.ChunkAnalysisResult{
 			createRestRow(session.SessionID, 0, 10),
 			createRestRow(session.SessionID, 10, 20),
 			createRestRow(session.SessionID, 20, 30),
+			createRestRow(session.SessionID, 30, 40),
+			createRestRow(session.SessionID, 40, 50),
 		}
-		wodRows[0].MotionScore = nil
-		wodRows[2].MotionScore = nil
-		Expect(conn.Save(&wodRows[0]).Error).To(Succeed())
-		Expect(conn.Save(&wodRows[2]).Error).To(Succeed())
 		wodObject := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
 		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+wodObject, []byte("video"))
-		mockFile("30s")
+		mockFile("50s")
 		recoveredObs, _ := json.Marshal(activity.Observations{
-			DurationSecs: 30, Version: 1, TargetState: "identified", ActivityState: "exercise",
-			Events:     []activity.Observation{{Movement: "Dumbbell Box Step-Over", Unit: "reps", Start: 12, End: 16, Complete: true, Evidence: "steps over box"}},
+			DurationSecs: 40, Version: 1, TargetState: "identified", ActivityState: "exercise",
+			Events: []activity.Observation{
+				{Movement: "Dumbbell Box Step-Over", Unit: "reps", Start: 12, End: 16, Complete: true, Evidence: "steps over box"},
+				{Movement: "Dumbbell Box Step-Over", Unit: "reps", Start: 18, End: 22, Complete: true, Evidence: "crosses rest-review boundary"},
+			},
 			Unassessed: []activity.Interval{},
 		})
 		mockGeneration("```movement_observations\n" + string(recoveredObs) + "\n```")
@@ -690,20 +698,59 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(wodSummary.ReviewState).To(Equal("completed"))
 		Expect(wodSummary.Movements).To(HaveLen(1))
 		Expect(wodSummary.Movements[0].Movement).To(Equal("DB Box Step-over"))
-		Expect(wodSummary.Movements[0].Count).To(Equal(1))
+		Expect(wodSummary.Movements[0].Count).To(Equal(2))
+		Expect(wodSummary.Reviews).To(HaveLen(5))
+		for _, review := range wodSummary.Reviews {
+			switch review.ChunkID {
+			case wodRows[1].ID:
+				Expect(review.Observations.Events).To(HaveLen(1))
+				Expect(review.Observations.Events[0].End).To(Equal(16.0))
+			case wodRows[2].ID:
+				Expect(review.Observations.Events).To(HaveLen(1))
+				Expect(review.Observations.Events[0].End).To(Equal(22.0))
+			default:
+				Expect(review.Observations.ActivityState).To(Equal("rest"))
+			}
+		}
 		Expect(transport.Verify()).To(Succeed())
 		Expect(storageTransport.Verify()).To(Succeed())
 
-		// 2. WARMUP session with identical high motion + H10 spike on rest->rest->rest skips all 3 chunks directly.
+		// A retry must still review the protected successor when the vetoed chunk
+		// already has a completed review, without counting that saved chunk twice.
+		wodSummary.ReviewState = "partial"
+		for i := range wodSummary.Reviews {
+			if wodSummary.Reviews[i].ChunkID == wodRows[2].ID {
+				wodSummary.Reviews[i].State = "failed"
+				wodSummary.Reviews[i].Observations = activity.Unknown(20, 30, "review_failed")
+			}
+		}
+		partial, err := json.Marshal(wodSummary)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(conn.Model(&session).Update("activity_summary", db.JSONDocument(partial)).Error).To(Succeed())
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+wodObject, []byte("video"))
+		mockFile("50s")
+		mockGeneration("```movement_observations\n" + string(recoveredObs) + "\n```")
+		Expect(w.HandleActivityReviewTask(context.Background(), asynq.NewTask(TypeActivityReview, wodPayload))).To(Succeed())
+		Expect(conn.First(&session, session.ID).Error).To(Succeed())
+		Expect(json.Unmarshal(session.ActivitySummary, &wodSummary)).To(Succeed())
+		Expect(wodSummary.ReviewState).To(Equal("completed"))
+		Expect(wodSummary.Movements).To(HaveLen(1))
+		Expect(wodSummary.Movements[0].Count).To(Equal(2))
+		Expect(transport.Verify()).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+
+		// Recovery sessions keep their existing rest policy despite the same veto inputs.
 		warmupSID := "WARMUP-20260916-01JWARMUPRESTTEST0000000"
 		warmupSess := testhelpers.CreateSession(conn, &db.Session{SessionID: warmupSID, ProfileID: profile.ID, WorkoutType: "warmup"})
-		testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
-			SessionID:      warmupSID,
-			ProfileID:      profile.ID,
-			Status:         "COMPLETED",
-			SensorState:    db.SensorStateCompleted,
-			SensorTimeline: db.JSONDocument(tlBytes),
-		})
+		if useH10 {
+			testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{
+				SessionID:      warmupSID,
+				ProfileID:      profile.ID,
+				Status:         "COMPLETED",
+				SensorState:    db.SensorStateCompleted,
+				SensorTimeline: db.JSONDocument(tlBytes),
+			})
+		}
 		warmupRows := []db.ChunkAnalysisResult{
 			createRestRow(warmupSID, 0, 10),
 			createRestRow(warmupSID, 10, 20),
@@ -720,7 +767,11 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		var warmupSummary activity.Summary
 		Expect(json.Unmarshal(warmupSess.ActivitySummary, &warmupSummary)).To(Succeed())
 		Expect(warmupSummary.ReviewState).To(Equal("completed"))
-	})
+	},
+		Entry("motion veto without H10", true, false),
+		Entry("H10 veto without motion score", false, true),
+		Entry("combined motion and H10 vetoes", true, true),
+	)
 
 	It("batches 4 adjacent active chunks into 2 calls without double-counting context overlap and records thought logs when enabled", func() {
 		thoughtClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
