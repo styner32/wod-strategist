@@ -1,7 +1,7 @@
 import React from "react";
-import { fireEvent, render, waitFor, within } from "@testing-library/react-native";
+import { act, fireEvent, render, waitFor, within } from "@testing-library/react-native";
 import VisionTestPage from "../visionTestPage";
-import { StyleSheet } from "react-native";
+import { AppState, StyleSheet } from "react-native";
 import { OrientationLock } from "expo-screen-orientation";
 import type { ActivitySummary } from "../../../shared/activity";
 
@@ -10,6 +10,12 @@ const mockCameraMount = jest.fn();
 const mockCameraUnmount = jest.fn();
 const mockStopCamera = jest.fn();
 const mockOrientationLock = jest.fn().mockResolvedValue(undefined);
+const mockRouterBack = jest.fn();
+const mockRouterReplace = jest.fn();
+const mockRequestCameraPermission = jest.fn();
+const mockRequestMicPermission = jest.fn();
+const mockPoseEnabled = jest.fn();
+const mockFrameProcessor = { type: "readonly", frameProcessor: jest.fn() };
 const mockNative = {
   startRecording: (...args: unknown[]) => mockStartCamera(...args),
   stopRecording: () => mockStopCamera(),
@@ -26,10 +32,22 @@ let mockLiveFeedback: {
 
 let mockRouteParams: Record<string, string> = {};
 let mockMonitorData = { confidence: 0, motion: 0, isWorkingOut: false };
-let mockModelLoaded = false;
+let mockPoseStatus: "loading" | "loaded" | "error" = "loading";
+let mockHasInference = false;
+let mockPoseError: string | null = null;
+let mockCanGoBack = true;
+let mockCameraPermission = true;
+let mockMicPermission = true;
+let mockCameraAvailable = true;
+let mockFocused = true;
 
 jest.mock("expo-router", () => ({
-  router: { replace: jest.fn(), back: jest.fn(), push: jest.fn() },
+  router: {
+    replace: (...args: unknown[]) => mockRouterReplace(...args),
+    back: () => mockRouterBack(),
+    canGoBack: () => mockCanGoBack,
+    push: jest.fn(),
+  },
   useFocusEffect: (effect: () => void | (() => void)) => {
     const ReactActual = jest.requireActual<typeof import("react")>("react");
     ReactActual.useEffect(effect, [effect]);
@@ -43,10 +61,11 @@ jest.mock("expo-router", () => ({
   }),
 }));
 
-jest.mock("expo-router/react-navigation", () => ({ useIsFocused: () => true }));
+jest.mock("expo-router/react-navigation", () => ({ useIsFocused: () => mockFocused }));
 
 jest.mock("react-native-vision-camera", () => {
   const ReactActual = jest.requireActual<typeof import("react")>("react");
+  const { View } = jest.requireActual<typeof import("react-native")>("react-native");
   return {
     Camera: ReactActual.forwardRef((_props: any, ref: any) => {
       ReactActual.useImperativeHandle(ref, () => mockNative, []);
@@ -55,12 +74,12 @@ jest.mock("react-native-vision-camera", () => {
         _props.onInitialized();
         return () => mockCameraUnmount();
       }, []);
-      return null;
+      return ReactActual.createElement(View, _props);
     }),
-    useCameraDevice: () => ({ id: "rear", physicalDevices: [] }),
+    useCameraDevice: (position: string) => mockCameraAvailable ? { id: position, physicalDevices: [] } : undefined,
     useCameraFormat: () => ({ videoWidth: 1280, videoHeight: 720, videoStabilizationModes: [] }),
-    useCameraPermission: () => ({ hasPermission: true, requestPermission: jest.fn() }),
-    useMicrophonePermission: () => ({ hasPermission: true, requestPermission: jest.fn() }),
+    useCameraPermission: () => ({ hasPermission: mockCameraPermission, requestPermission: mockRequestCameraPermission }),
+    useMicrophonePermission: () => ({ hasPermission: mockMicPermission, requestPermission: mockRequestMicPermission }),
   };
 });
 
@@ -172,19 +191,25 @@ jest.mock("@/features/health/useBleHeartRate", () => ({
   }),
 }));
 jest.mock("@/features/ai-coach/frame-processors/usePoseDetection", () => ({
-  usePoseDetection: () => ({
-    frameProcessor: undefined,
-    poseResult: undefined,
-    isModelLoaded: mockModelLoaded,
-    monitorData: mockMonitorData,
-    getWorkoutConfidence: () => 0,
-    getLatestMotion: () => null,
-    getCaptureConfidence: () => 0,
-    resetCaptureObservations: () => {},
-  }),
+  usePoseDetection: (enabled: boolean) => {
+    mockPoseEnabled(enabled);
+    return {
+      frameProcessor: enabled ? mockFrameProcessor : undefined,
+      poseResult: { value: [] },
+      isModelLoaded: enabled && mockPoseStatus === "loaded",
+      status: enabled ? mockPoseStatus : "disabled",
+      hasInference: enabled && mockHasInference,
+      error: enabled ? mockPoseError : null,
+      monitorData: mockMonitorData,
+    };
+  },
 }));
 jest.mock("@/features/ai-coach/ui/EnergyMonitor", () => ({ EnergyMonitor: () => null }));
-jest.mock("@/features/ai-coach/ui/SkeletonOverlay", () => ({ SkeletonOverlay: () => null }));
+jest.mock("@/features/ai-coach/ui/SkeletonOverlay", () => {
+  const ReactActual = jest.requireActual<typeof import("react")>("react");
+  const { View } = jest.requireActual<typeof import("react-native")>("react-native");
+  return { SkeletonOverlay: () => ReactActual.createElement(View, { testID: "mock-skeleton" }) };
+});
 
 function summary(movements: ActivitySummary["movements"], available = true): ActivitySummary {
   return {
@@ -199,11 +224,25 @@ describe("VisionTestPage Feedback Overlay UI", () => {
     mockStartCamera.mockClear();
     mockCameraMount.mockClear();
     mockCameraUnmount.mockClear();
+    mockStopCamera.mockClear();
+    mockRouterBack.mockClear();
+    mockRouterReplace.mockClear();
+    mockPoseEnabled.mockClear();
+    mockRequestCameraPermission.mockReset().mockResolvedValue(false);
+    mockRequestMicPermission.mockReset().mockResolvedValue(false);
     mockOrientationLock.mockReset().mockResolvedValue(undefined);
     mockRouteParams = {};
     mockLiveFeedback = { coaching: "팔꿈치를 높게 유지하세요." };
     mockMonitorData = { confidence: 0, motion: 0, isWorkingOut: false };
-    mockModelLoaded = false;
+    mockPoseStatus = "loading";
+    mockHasInference = false;
+    mockPoseError = null;
+    mockCanGoBack = true;
+    mockCameraPermission = true;
+    mockMicPermission = true;
+    mockCameraAvailable = true;
+    mockFocused = true;
+    AppState.currentState = "active";
   });
   afterEach(() => jest.restoreAllMocks());
 
@@ -216,7 +255,7 @@ describe("VisionTestPage Feedback Overlay UI", () => {
 
     // By default, telemetry section is collapsed/hidden
     expect(view.queryByText("overlay.feedback.title")).toBeNull();
-    expect(view.queryByText("overlay.recording.aiVisionTitle")).toBeNull();
+    expect(view.queryByText("poseDebug.title")).toBeNull();
     expect(view.queryByText("overlay.recording.observedActivityTitle")).toBeNull();
 
     // Toggle button to expand telemetry is present
@@ -231,7 +270,7 @@ describe("VisionTestPage Feedback Overlay UI", () => {
     });
     expect(view.getByText("팔꿈치를 높게 유지하세요.")).toBeTruthy();
     expect(view.getByText("overlay.feedback.collapse")).toBeTruthy();
-    expect(view.getByText("overlay.recording.aiVisionTitle")).toBeTruthy();
+    expect(view.queryByText("poseDebug.title")).toBeNull();
     expect(view.getByText("overlay.recording.observedActivityTitle")).toBeTruthy();
 
     // Inside feedback card, collapsing feedback text works
@@ -246,7 +285,7 @@ describe("VisionTestPage Feedback Overlay UI", () => {
 
     // Telemetry is collapsed again
     await waitFor(() => {
-      expect(view.queryByText("overlay.recording.aiVisionTitle")).toBeNull();
+      expect(view.queryByText("poseDebug.title")).toBeNull();
     });
     expect(view.queryByText("overlay.feedback.title")).toBeNull();
 
@@ -325,11 +364,13 @@ describe("VisionTestPage Feedback Overlay UI", () => {
   });
 
   it.each([true, false])("renders only measured pose diagnostics (moving=%s)", async (moving) => {
-    mockModelLoaded = true;
+    mockRouteParams = { previewOnly: "true", autoRecord: "false" };
+    mockPoseStatus = "loaded";
+    mockHasInference = true;
     mockMonitorData = { confidence: 0.8, motion: 0.025, isWorkingOut: moving };
     const view = render(<VisionTestPage />);
-    await waitFor(() => expect(view.getByLabelText("overlay.recording.stop")).toBeTruthy());
-    fireEvent.press(view.getByLabelText("overlay.recording.expandTelemetry"));
+    expect(view.getByText("poseDebug.title")).toBeTruthy();
+    expect(view.getByText("poseDebug.status.loaded")).toBeTruthy();
     expect(view.getByText("overlay.recording.detectionConfidence:80")).toBeTruthy();
     expect(view.getByText("overlay.recording.motionMagnitude:0.025")).toBeTruthy();
     expect(view.getByText(`overlay.recording.${moving ? "motionDetected" : "motionNotDetected"}`)).toBeTruthy();
@@ -338,11 +379,130 @@ describe("VisionTestPage Feedback Overlay UI", () => {
   });
 
   it("shows model loading without fabricated pose measurements", async () => {
+    mockRouteParams = { previewOnly: "true", autoRecord: "false" };
     const view = render(<VisionTestPage />);
-    await waitFor(() => expect(view.getByLabelText("overlay.recording.stop")).toBeTruthy());
-    fireEvent.press(view.getByLabelText("overlay.recording.expandTelemetry"));
-    expect(view.getByText("overlay.recording.modelLoading")).toBeTruthy();
+    expect(view.getByText("poseDebug.status.loading")).toBeTruthy();
+    expect(view.getByText("poseDebug.noInference")).toBeTruthy();
     expect(view.queryByText(/overlay.recording.detectionConfidence|overlay.recording.motionMagnitude/)).toBeNull();
+    view.unmount();
+  });
+
+  it.each([
+    { status: "loaded" as const, expected: "waiting", error: null },
+    { status: "error" as const, expected: "error", error: "Native inference failed" },
+  ])("distinguishes preview $expected from measured zero", ({ status, expected, error }) => {
+    mockRouteParams = { previewOnly: "true", autoRecord: "false" };
+    mockPoseStatus = status;
+    mockPoseError = error;
+    const view = render(<VisionTestPage />);
+    expect(view.getByText(`poseDebug.status.${expected}`)).toBeTruthy();
+    expect(view.getByText("poseDebug.noInference")).toBeTruthy();
+    expect(view.queryByText(/overlay.recording.detectionConfidence|overlay.recording.motionMagnitude/)).toBeNull();
+    view.unmount();
+  });
+
+  it("shows a measured zero after inference instead of the waiting message", () => {
+    mockRouteParams = { previewOnly: "true", autoRecord: "false" };
+    mockPoseStatus = "loaded";
+    mockHasInference = true;
+    const view = render(<VisionTestPage />);
+    expect(view.getByText("poseDebug.status.loaded")).toBeTruthy();
+    expect(view.getByText("overlay.recording.detectionConfidence:0")).toBeTruthy();
+    expect(view.getByText("overlay.recording.motionMagnitude:0.000")).toBeTruthy();
+    expect(view.queryByText("poseDebug.noInference")).toBeNull();
+    view.unmount();
+  });
+
+  it.each(["true", "false"])("keeps MoveNet disabled on the recording route (autoRecord=%s)", async (autoRecord) => {
+    mockRouteParams = { autoRecord, showSkeleton: "true" };
+    const view = render(<VisionTestPage />);
+    await waitFor(() => expect(view.getByLabelText(autoRecord === "true" ? "overlay.recording.stop" : "Start Recording")).toBeTruthy());
+    expect(mockPoseEnabled.mock.calls.length).toBeGreaterThan(0);
+    expect(mockPoseEnabled.mock.calls.every(([enabled]) => enabled === false)).toBe(true);
+    expect(view.getByTestId("recording-camera").props.frameProcessor).toBeUndefined();
+    expect(view.queryByTestId("preview-skeleton-overlay")).toBeNull();
+    fireEvent.press(view.getByLabelText("overlay.recording.expandTelemetry"));
+    expect(view.queryByText("poseDebug.title")).toBeNull();
+    view.unmount();
+  });
+
+  it("previews without microphone permission or accidental auto-recording and supports flip and skeleton controls", () => {
+    mockRouteParams = { previewOnly: "true", autoRecord: "true", showSkeleton: "false" };
+    mockMicPermission = false;
+    mockPoseStatus = "loaded";
+    mockHasInference = true;
+    const view = render(<VisionTestPage />);
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(true);
+    expect(view.getByTestId("recording-camera").props.audio).toBe(false);
+    expect(view.getByTestId("recording-camera").props.frameProcessor).toBe(mockFrameProcessor);
+    expect(mockRequestMicPermission).not.toHaveBeenCalled();
+    expect(mockStartCamera).not.toHaveBeenCalled();
+    expect(view.queryByLabelText("Start Recording")).toBeNull();
+    expect(view.queryByLabelText("overlay.recording.stop")).toBeNull();
+    expect(view.getByText("poseDebug.title")).toBeTruthy();
+    expect(view.getByTestId("recording-camera").props.device.id).toBe("back");
+    fireEvent.press(view.getByLabelText("overlay.recording.flipCamera"));
+    expect(view.getByTestId("recording-camera").props.device.id).toBe("front");
+    const toggle = view.getByTestId("preview-skeleton-toggle");
+    expect(toggle.props.accessibilityLabel).toBe("setup.skeletonOverlay");
+    expect(toggle.props.value).toBe(false);
+    expect(view.queryByTestId("preview-skeleton-overlay")).toBeNull();
+    fireEvent(toggle, "valueChange", true);
+    expect(view.getByTestId("preview-skeleton-toggle").props.value).toBe(true);
+    expect(view.getByTestId("preview-skeleton-overlay")).toBeTruthy();
+    expect(mockStartCamera).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it.each(["permission", "device"])("keeps a back action available when preview has no camera %s", (missing) => {
+    mockRouteParams = { previewOnly: "true", autoRecord: "true" };
+    mockCameraPermission = missing !== "permission";
+    mockCameraAvailable = missing !== "device";
+    const view = render(<VisionTestPage />);
+    expect(view.getByText(`overlay.recording.${missing === "permission" ? "cameraPermissionRequired" : "noCamera"}`)).toBeTruthy();
+    expect(view.queryByTestId("recording-camera")).toBeNull();
+    expect(mockPoseEnabled.mock.calls.every(([enabled]) => enabled === false)).toBe(true);
+    fireEvent.press(view.getByLabelText("common.back"));
+    expect(mockRouterBack).toHaveBeenCalledTimes(1);
+    expect(mockRequestMicPermission).not.toHaveBeenCalled();
+    expect(mockStartCamera).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it.each([true, false])("stops preview inference before leaving (navigation history=%s)", (canGoBack) => {
+    mockRouteParams = { previewOnly: "true", autoRecord: "false" };
+    mockCanGoBack = canGoBack;
+    const view = render(<VisionTestPage />);
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(true);
+    fireEvent.press(view.getByLabelText("common.back"));
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(false);
+    expect(view.getByTestId("recording-camera").props.isActive).toBe(false);
+    if (canGoBack) expect(mockRouterBack).toHaveBeenCalledTimes(1);
+    else expect(mockRouterReplace).toHaveBeenCalledWith("/workout/setup");
+    expect(mockStartCamera).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("runs preview inference only while focused and active", () => {
+    mockRouteParams = { previewOnly: "true", autoRecord: "false" };
+    let onAppStateChange: ((state: import("react-native").AppStateStatus) => void) | undefined;
+    jest.spyOn(AppState, "addEventListener").mockImplementation((_type, listener) => {
+      onAppStateChange = listener;
+      return { remove: jest.fn() };
+    });
+    const view = render(<VisionTestPage />);
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(true);
+    mockFocused = false;
+    view.rerender(<VisionTestPage />);
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(false);
+    mockFocused = true;
+    view.rerender(<VisionTestPage />);
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(true);
+    act(() => onAppStateChange?.("inactive"));
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(false);
+    act(() => onAppStateChange?.("active"));
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(true);
+    expect(mockStartCamera).not.toHaveBeenCalled();
     view.unmount();
   });
 

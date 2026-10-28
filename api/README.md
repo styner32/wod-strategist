@@ -68,13 +68,11 @@ To update the Swagger schema specs after modifying structs or handler comments, 
 swag init -g cmd/server/main.go
 ```
 
-## Legacy upload replay scripts
-
-`make test-upload` and `make test-chunk-upload` invoke the root `scripts/test-*.js` scripts and load the root `.env`. They currently send `X-API-Key` without a JWT and cannot call the protected API.
-
-The chunk script also hardcodes its input path, session ID, workout type, chunk duration, and merge options. `VIDEO=...`, `CHUNK_SECS=...`, and the previously documented optional Make variables do not configure those constants. Treat this script as legacy until its authentication and arguments are updated.
+## Upload and live replay QA
 
 Use the [web app](../web/README.md) for authenticated saved-video upload and the mobile app for recording/chunk-finalization QA. Both use real configured GCS storage; no local storage emulator flow is provided.
+
+For a retained five-minute video/H10 replay through authenticated APIs, use [`cmd/live-replay`](cmd/live-replay) via `make test-live-prepare` and `make test-live`. Live analysis incurs model costs and retains the resulting profile 10 session. See the [live replay guide](../docs/agent-memory/live-replay.md) for fixture setup, credentials, and result checks.
 
 ## Tests and migrations
 

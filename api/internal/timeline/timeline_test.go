@@ -180,6 +180,48 @@ var _ = Describe("Session Timeline", func() {
 		Expect(media).To(BeNumerically("~", 15.0, 1e-6))
 	})
 
+	It("ignores redundant split_chunk_* rows when building timeline from paused mobile chunks", func() {
+		results := []db.ChunkAnalysisResult{
+			{
+				ID:             1,
+				ProfileID:      1,
+				SessionID:      "paused-session",
+				FilePath:       "gs://b/videos/1/paused-session/mobile_000.mp4",
+				Status:         "COMPLETED",
+				HeartRateBPM:   148,
+				StartSecs:      ptr(120.0),
+				EndSecs:        ptr(130.0),
+				MediaStartSecs: ptr(0.0),
+				MediaEndSecs:   ptr(10.0),
+			},
+			{
+				ID:             2,
+				ProfileID:      1,
+				SessionID:      "paused-session",
+				FilePath:       "gs://b/videos/1/paused-session/split_chunk_000.mp4",
+				Status:         "COMPLETED",
+				HeartRateBPM:   0,
+				StartSecs:      ptr(0.0),
+				EndSecs:        ptr(10.0),
+				MediaStartSecs: ptr(0.0),
+				MediaEndSecs:   ptr(10.0),
+			},
+		}
+
+		st := timeline.NewSessionTimelineFromAnalysisResults("paused-session", results)
+		Expect(st.IsValid()).To(BeTrue())
+
+		media, ok := st.CaptureToMedia(125.0)
+		Expect(ok).To(BeTrue())
+		Expect(media).To(BeNumerically("~", 5.0, 1e-6))
+
+		// Capture time 5.0s occurred during a pre-workout pause; because the
+		// redundant split_chunk_000 (StartSecs 0..10) was filtered out, 5.0s
+		// does not falsely map onto the merged video.
+		_, ok = st.CaptureToMedia(5.0)
+		Expect(ok).To(BeFalse())
+	})
+
 	It("ignores nil chunks and retains valid ones", func() {
 		chunks := []timeline.Chunk{
 			{

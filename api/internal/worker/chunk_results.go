@@ -43,7 +43,11 @@ func (w *Worker) persistChunkAnalysisResult(ctx context.Context, result *db.Chun
 			result.StartSecs = existing.StartSecs
 			result.EndSecs = existing.EndSecs
 		}
-		if err := tx.Model(&existing).Select("*").Omit("id", "created_at", "media_start_secs", "media_end_secs").Updates(result).Error; err != nil {
+		omitCols := []string{"id", "created_at"}
+		if !db.IsSplitChunkFilePath(result.FilePath) || result.MediaStartSecs == nil || result.MediaEndSecs == nil {
+			omitCols = append(omitCols, "media_start_secs", "media_end_secs")
+		}
+		if err := tx.Model(&existing).Select("*").Omit(omitCols...).Updates(result).Error; err != nil {
 			return fmt.Errorf("update chunk result: %w", err)
 		}
 		result.ID = existing.ID

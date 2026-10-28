@@ -120,7 +120,7 @@ func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []s
 	if err != nil {
 		return nil, err
 	}
-	return asynq.NewTask(TypeVideoAnalysis, data, asynq.Timeout(videoAnalysisTaskTimeout)), nil
+	return asynq.NewTask(TypeVideoAnalysis, data, asynq.Timeout(videoAnalysisTaskTimeout), asynq.Unique(videoAnalysisTaskTimeout)), nil
 }
 
 func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
@@ -672,31 +672,34 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	segments, skippedSegments := w.buildChunkSegments(p.SessionID, p.WorkoutType)
 
 	// Determine if we need to (re-)split the video.
-	// If existing chunks don't cover the full video duration (e.g. worker restarted
-	// mid-split), we re-run the split so the remaining segments get analyzed.
-	needsSplit := len(segments) == 0
-	if len(segments) > 0 {
-		videoDuration := probeVideoDuration(ctx, geminiInputPath)
+	// If existing chunks don't cover the full video duration on the merged media
+	// clock (e.g. worker restarted mid-split), we re-run the split so the
+	// remaining segments get analyzed. Verified non-exercise chunks (skippedSegments)
+	// also count as indexed chunk data so rest-only mobile sessions do not re-split.
+	hasIndexedChunks := len(segments) > 0 || len(skippedSegments) > 0
+	var videoDuration, maxEndSecs float64
+	if hasIndexedChunks {
+		videoDuration = probeVideoDuration(ctx, geminiInputPath)
 		if videoDuration > 0 {
-			maxEndSecs := w.queryMaxChunkEndSecs(p.SessionID)
-			gap := videoDuration - maxEndSecs
-			if gap > float64(splitChunkDurationSecs) {
-				needsSplit = true
-				w.logger.Warn("Pass 1: Existing chunks appear incomplete, will re-split",
-					zap.String("session_id", p.SessionID),
-					zap.Float64("max_chunk_end_secs", maxEndSecs),
-					zap.Float64("video_duration_secs", videoDuration),
-					zap.Float64("gap_secs", gap),
-					zap.Int("existing_segments", len(segments)))
-			}
+			maxEndSecs = w.queryMaxChunkEndSecs(p.SessionID)
 		}
+	}
+	needsSplit := shouldSplitVideoForPass1(segments, skippedSegments, videoDuration, maxEndSecs)
+	if needsSplit && hasIndexedChunks {
+		w.logger.Warn("Pass 1: Existing chunks appear incomplete, will re-split",
+			zap.String("session_id", p.SessionID),
+			zap.Float64("max_chunk_end_secs", maxEndSecs),
+			zap.Float64("video_duration_secs", videoDuration),
+			zap.Float64("gap_secs", videoDuration-maxEndSecs),
+			zap.Int("existing_segments", len(segments)),
+			zap.Int("skipped_segments", len(skippedSegments)))
 	}
 
 	if needsSplit {
 		// No chunks from recording or incomplete — try splitting the uploaded video into chunks
 		w.logger.Info("Pass 1: Splitting uploaded video into 10s chunks",
 			zap.String("session_id", p.SessionID),
-			zap.Bool("had_partial_chunks", len(segments) > 0))
+			zap.Bool("had_partial_chunks", hasIndexedChunks))
 
 		if splitErr := w.splitAndAnalyzeChunks(ctx, geminiInputPath, p); splitErr != nil {
 			// The existing index was already found incomplete; do not reuse it
@@ -1246,22 +1249,32 @@ func parseSegments(text string) []Segment {
 	return segments
 }
 
-// queryMaxChunkEndSecs returns the maximum end_secs value from chunk analysis
-// records for the given session. Returns 0 if no chunks exist or on error.
-// Used to detect incomplete splits (partial chunk coverage vs full video duration).
+func shouldSplitVideoForPass1(segments, skippedSegments []Segment, videoDuration, maxChunkEndSecs float64) bool {
+	if len(segments) == 0 && len(skippedSegments) == 0 {
+		return true
+	}
+	if videoDuration > 0 && videoDuration-maxChunkEndSecs > float64(splitChunkDurationSecs) {
+		return true
+	}
+	return false
+}
+
+// queryMaxChunkEndSecs returns the maximum verified media-clock end timestamp
+// from COMPLETED chunk analysis records for the given session. Capture-clock
+// end_secs from mobile chunks are never compared against merged.mp4 duration.
 func (w *Worker) queryMaxChunkEndSecs(sessionID string) float64 {
 	if w.DB == nil {
 		return 0
 	}
-	var maxEnd *float64
+	var chunks []db.ChunkAnalysisResult
 	err := w.DB.Model(&db.ChunkAnalysisResult{}).
-		Where("session_id = ?", sessionID).
-		Select("MAX(end_secs)").
-		Row().Scan(&maxEnd)
-	if err != nil || maxEnd == nil {
+		Select("file_path, status, start_secs, end_secs, media_start_secs, media_end_secs").
+		Where("session_id = ? AND status = ?", sessionID, "COMPLETED").
+		Find(&chunks).Error
+	if err != nil || len(chunks) == 0 {
 		return 0
 	}
-	return *maxEnd
+	return db.MaxCompletedChunkMediaEndSecs(chunks)
 }
 
 // buildSegmentsFromChunks queries completed chunk analysis records from the DB
@@ -1292,6 +1305,7 @@ func (w *Worker) buildChunkSegments(sessionID string, workoutType string) ([]Seg
 	if err != nil || len(chunks) == 0 {
 		return nil, nil
 	}
+	chunks = db.FilterRedundantSplitChunks(chunks)
 
 	timeline := make([]timelineChunk, 0, len(chunks))
 	for _, chunk := range chunks {

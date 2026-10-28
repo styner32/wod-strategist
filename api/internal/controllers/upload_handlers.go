@@ -1,11 +1,13 @@
 package controllers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
@@ -136,6 +138,15 @@ func (ctl *Controller) CompleteUpload(c *gin.Context) {
 
 	info, err := ctl.queueClient.Enqueue(task)
 	if err != nil {
+		if errors.Is(err, asynq.ErrDuplicateTask) {
+			logger.Log.Info("video analysis task already queued", zap.String("session_id", req.SessionID))
+			c.JSON(http.StatusAccepted, gin.H{
+				"message":    "Analysis already queued",
+				"task_id":    "",
+				"session_id": req.SessionID,
+			})
+			return
+		}
 		logger.Log.Error("failed to enqueue task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
 		return
@@ -226,6 +237,15 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 
 	info, err := ctl.queueClient.Enqueue(task)
 	if err != nil {
+		if errors.Is(err, asynq.ErrDuplicateTask) {
+			logger.Log.Info("merge task already queued", zap.String("session_id", req.SessionID))
+			c.JSON(http.StatusAccepted, gin.H{
+				"message":    "Merge already queued",
+				"task_id":    "",
+				"session_id": req.SessionID,
+			})
+			return
+		}
 		logger.Log.Error("failed to enqueue merge task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
 		return

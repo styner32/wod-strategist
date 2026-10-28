@@ -113,6 +113,7 @@ export function matchesRegisteredBleDevice(
 }
 
 export interface UseBleHeartRateOptions {
+  enabled?: boolean;
   sink?: BleSensorSink;
   recording?: boolean;
   paused?: boolean;
@@ -120,6 +121,10 @@ export interface UseBleHeartRateOptions {
 }
 
 export function useBleHeartRate(options?: UseBleHeartRateOptions) {
+  const enabled = options?.enabled ?? true;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+
   const [reading, setReading] = useState<HeartRateReading>({ bpm: null, reason: "missing", receivedAt: 0 });
   const quality = useRef(new HeartRateQuality());
   const latestReading = useRef(reading);
@@ -215,7 +220,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
     if (isMountedRef.current) {
       setRegisteredDevice(next);
     }
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current || !enabledRef.current) return;
 
     // If connected to a device that no longer matches the registered target, disconnect and switch
     if (next && deviceRef.current && !matchesRegisteredBleDevice(deviceRef.current, next)) {
@@ -239,6 +244,13 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   };
 
   useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     const listener = (next: RegisteredBleDevice | null) => {
       void applyRegisteredDeviceSelection(next);
     };
@@ -254,8 +266,19 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      lostDeviceRef.current = null;
+      clearReconnectTimer();
+      clearInactivityTimer();
+      stopScan();
+      void cleanupConnection("disabled");
+      setStatus("Init");
+      return;
+    }
+
     // 1. 블루투스 상태 감지 (PoweredOn 될 때까지 대기)
     const subscription = manager.onStateChange((state) => {
+      if (!enabledRef.current || !isMountedRef.current) return;
       console.log("🔹 BLE State:", state);
       bleStateRef.current = state;
 
@@ -272,18 +295,26 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
     }, true);
 
     return () => {
-      isMountedRef.current = false;
+      lostDeviceRef.current = null;
       clearReconnectTimer();
       clearInactivityTimer();
       stopScan();
       cleanupSubscriptions();
       if (deviceRef.current) {
-        sinkRef.current?.onDeviceLost("unmount");
-        deviceRef.current.cancelConnection();
+        const activeDevice = deviceRef.current;
+        deviceRef.current = null;
+        sinkRef.current?.onDeviceLost(isMountedRef.current ? "disabled" : "unmount");
+        void Promise.resolve(activeDevice.cancelConnection()).catch(() => {});
+      }
+      if (isMountedRef.current) {
+        setConnectedDevice(null);
+        setBatteryLevel(null);
+        resetQuality(true);
+        setStatus("Init");
       }
       subscription.remove();
     };
-  }, []);
+  }, [enabled]);
 
   const clearReconnectTimer = () => {
     if (reconnectTimerRef.current) {
@@ -346,7 +377,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   };
 
   const requestReconnect = (reason: string) => {
-    if (!isMountedRef.current) return;
+    if (!isMountedRef.current || !enabledRef.current) return;
     if (reconnectTimerRef.current) return;
 
     const attempt = reconnectAttemptsRef.current;
@@ -365,7 +396,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   };
 
   const reconnectNow = async (reason: string) => {
-    if (!isMountedRef.current || isReconnectingRef.current) return;
+    if (!isMountedRef.current || !enabledRef.current || isReconnectingRef.current) return;
     isReconnectingRef.current = true;
 
     try {
@@ -389,7 +420,13 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   };
 
   const startScan = async () => {
-    if (isScanningRef.current || isConnectingRef.current || deviceRef.current) {
+    if (
+      !isMountedRef.current ||
+      !enabledRef.current ||
+      isScanningRef.current ||
+      isConnectingRef.current ||
+      deviceRef.current
+    ) {
       return;
     }
 
@@ -418,6 +455,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
 
     if (
       !isMountedRef.current ||
+      !enabledRef.current ||
       (bleStateRef.current && bleStateRef.current !== State.PoweredOn)
     ) {
       isScanningRef.current = false;
@@ -428,6 +466,10 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
     setStatus("Scanning");
 
     manager.startDeviceScan(null, null, (error, device) => {
+      if (!enabledRef.current || !isMountedRef.current) {
+        stopScan();
+        return;
+      }
       if (error) {
         console.error("❌ Scan Error:", error);
         setStatus("Error");
@@ -452,7 +494,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
   };
 
   const connectToDevice = async (device: Device) => {
-    if (isConnectingRef.current) return;
+    if (!isMountedRef.current || !enabledRef.current || isConnectingRef.current) return;
     isConnectingRef.current = true;
     clearReconnectTimer();
     stopScan();
@@ -462,9 +504,17 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
       console.log(`🔗 Connecting to ${device.name}...`);
 
       const connected = await device.connect({ timeout: CONNECTION_TIMEOUT_MS });
+      if (!isMountedRef.current || !enabledRef.current) {
+        void Promise.resolve(connected.cancelConnection()).catch(() => {});
+        return;
+      }
       console.log("🔗 Connected. Discovering services...");
 
       await connected.discoverAllServicesAndCharacteristics();
+      if (!isMountedRef.current || !enabledRef.current) {
+        void Promise.resolve(connected.cancelConnection()).catch(() => {});
+        return;
+      }
       cleanupSubscriptions();
       deviceRef.current = connected;
       lostDeviceRef.current = null;
@@ -575,6 +625,7 @@ export function useBleHeartRate(options?: UseBleHeartRateOptions) {
     clearReconnectTimer();
     stopScan();
     await cleanupConnection("manual-rescan");
+    if (!enabledRef.current || !isMountedRef.current) return;
     await startScan();
   };
 

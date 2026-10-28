@@ -34,14 +34,13 @@ import { useHasPendingMerge, useMergeStatus } from "@/store/useMergeStatus";
 import { useProfileId } from "@/store/useProfileStore";
 import { useVideoQueue } from "@/store/useVideoQueue";
 import { useShallow } from "zustand/shallow";
+import { useHighlightResults } from "../useHighlightResults";
 import {
   archiveHistory,
   fetchHighlightDownloadURL,
-  fetchHighlightResults,
   fetchRelatedWods,
   fetchVideoDownloadURL,
   generateHardSub,
-  generateHighlight,
   mergeChunks,
   retryAnalysis,
 } from "../api";
@@ -147,9 +146,6 @@ const HIGHLIGHT_VARIANT_CONFIG: Record<
   "Key Moments": { emoji: "⭐", color: "#64D2FF" },
 };
 
-const HIGHLIGHT_POLL_INTERVAL_MS = 5_000;
-const HIGHLIGHT_POLL_TIMEOUT_MS = 5 * 60 * 1_000;
-
 function HistoryCard({
   item,
   onArchive,
@@ -221,9 +217,9 @@ function HistoryCard({
   // ---------------------
   // Highlight state
   // ---------------------
-  const [highlights, setHighlights] = useState<HighlightResult[]>([]);
-  const [highlightLoading, setHighlightLoading] = useState(false);
-  const [highlightPolling, setHighlightPolling] = useState(false);
+  const { highlights, highlightLoading, highlightPolling, handleCreateHighlights } = useHighlightResults(
+    item.session_id, item.profile_id ?? 0, isCompleted && item.analysis_type === "wod",
+  );
   const [highlightDownloading, setHighlightDownloading] = useState<
     number | null
   >(null);
@@ -232,19 +228,6 @@ function HistoryCard({
     url: string;
   } | null>(null);
   const [loadingPlayId, setLoadingPlayId] = useState<number | null>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollStartRef = useRef<number>(0);
-
-  // On mount, fetch existing highlight results (if any)
-  useEffect(() => {
-    if (isCompleted && item.analysis_type === "wod") {
-      fetchHighlightResults(item.session_id)
-        .then((results) =>
-          setHighlights(results.filter((r) => r.status === "COMPLETED")),
-        )
-        .catch(() => {});
-    }
-  }, [item.session_id, isCompleted, item.analysis_type]);
 
   // Related WODs lazy fetch on first expansion
   const [relatedWods, setRelatedWods] = useState<any[]>([]);
@@ -292,70 +275,6 @@ function HistoryCard({
       return [];
     }
   }, [item.stretch_recommendations]);
-
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-    };
-  }, []);
-
-  const startPolling = useCallback(() => {
-    setHighlightPolling(true);
-    pollStartRef.current = Date.now();
-
-    pollTimerRef.current = setInterval(async () => {
-      try {
-        const results = await fetchHighlightResults(item.session_id);
-        const completed = results.filter((r) => r.status === "COMPLETED");
-        const failed = results.filter((r) => r.status === "FAILED");
-
-        if (completed.length > 0) {
-          setHighlights(completed);
-        }
-
-        // Stop polling if all results are terminal or timeout
-        const allTerminal =
-          results.length > 0 &&
-          results.every(
-            (r) => r.status === "COMPLETED" || r.status === "FAILED",
-          );
-        const timedOut =
-          Date.now() - pollStartRef.current > HIGHLIGHT_POLL_TIMEOUT_MS;
-
-        if (allTerminal || timedOut) {
-          if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-          setHighlightPolling(false);
-          if (timedOut && completed.length === 0) {
-            Alert.alert(t("historyList.timeout"), t("historyList.timeoutDesc"));
-          }
-          if (failed.length > 0 && completed.length === 0) {
-            Alert.alert(
-              t("historyList.generationFailed"),
-              t("historyList.generationFailedDesc"),
-            );
-          }
-        }
-      } catch {
-        // Keep polling on transient errors
-      }
-    }, HIGHLIGHT_POLL_INTERVAL_MS);
-  }, [item.session_id]);
-
-  const handleCreateHighlights = async () => {
-    try {
-      setHighlightLoading(true);
-      await generateHighlight(item.session_id, item.profile_id ?? 0);
-      startPolling();
-    } catch (e: any) {
-      Alert.alert(
-        t("common.error"),
-        e?.message || t("historyList.generationFailedDesc"),
-      );
-    } finally {
-      setHighlightLoading(false);
-    }
-  };
 
   const handleHighlightDownload = async (hl: HighlightResult) => {
     try {

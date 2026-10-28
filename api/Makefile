@@ -19,7 +19,7 @@ GINKGO_FLAGS ?= -ginkgo.succinct -ginkgo.silence-skips
 
 GIT_SHA := $(shell git rev-parse --short HEAD)
 
-.PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-upload test-chunk-upload test-live-prepare test-live help test tf-apply
+.PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-live-prepare test-live help test tf-apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $1, $2}'
@@ -82,13 +82,6 @@ migrate-up-remote: ## Run up migrations remotely
 
 deploy-web: ## Deploy React web frontend to GCS and Cloudflare Worker proxy
 	../scripts/deploy-web.sh
-
-test-upload: ## Test video upload locally
-	node --env-file=../.env ../scripts/test-upload.js
-
-test-chunk-upload: ## Replay chunk upload from a saved video. Usage: make test-chunk-upload
-	node --env-file=../.env \
-		../scripts/test-chunk-upload.js
 
 test-live-prepare: ## Prepare pinned video/H10 fixture once (read-only DB/GCS)
 	@mkdir -p tmp/go-build tmp/go-tmp

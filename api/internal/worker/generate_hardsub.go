@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,12 +11,15 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/subtitle"
 	"go.uber.org/zap"
 )
+
+const generateHardSubUniqueTTL = 15 * time.Minute
 
 // defaultTTSVoice is the prebuilt voice used for TTS narration.
 // Change this to any of the 30 supported voices (e.g. "Aoede", "Charon", "Puck").
@@ -105,6 +109,7 @@ func (w *Worker) HandleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 			zap.String("session_id", p.SessionID),
 			zap.Error(err))
 	}
+	chunks = db.FilterRedundantSplitChunks(chunks)
 
 	// 3. Generate mixed SRT: final analysis (✅/⚠️) for analyzed segments,
 	//    chunk cues fill time gaps where no final analysis exists.
@@ -484,7 +489,13 @@ func (w *Worker) enqueueHardSub(sessionID string, profileID uint, enableTTS bool
 		return
 	}
 
-	if _, err := w.QueueClient.Enqueue(task); err != nil {
+	if _, err := w.QueueClient.Enqueue(task, asynq.Unique(generateHardSubUniqueTTL)); err != nil {
+		if errors.Is(err, asynq.ErrDuplicateTask) {
+			w.logger.Info("Hardsub generation already queued",
+				zap.String("session_id", sessionID),
+				zap.Uint("profile_id", profileID))
+			return
+		}
 		w.logger.Warn("Failed to enqueue hardsub task",
 			zap.String("session_id", sessionID),
 			zap.Error(err))

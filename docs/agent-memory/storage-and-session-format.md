@@ -58,7 +58,6 @@ Path construction:
 - `POST /upload-url` — required in JSON body (used to build the GCS path).
 - `GET /video-download/:session_id` — required as a query parameter.
 - `POST /chunk-complete` and `POST /merge-chunks` — required in JSON body.
-- Test script `scripts/test-chunk-upload.js` must include `profile_id` in the `/upload-url` POST body.
 
 ## Targeted playback resolution
 
@@ -96,8 +95,9 @@ Rules:
 - `media_start_secs` and `media_end_secs` are media-relative offsets. Server
   splits build a continuous source-relative timeline from cumulative probed
   output-chunk durations; do not calculate later starts as `index * 10`.
-- Mobile merge probes the actual ordered concat inputs and stores cumulative
-  media intervals only after the merge succeeds.
+- Mobile merge (`mergeDownloadedChunks` in `merge_chunks.go`) probes stream signatures (`video codec`, `pix_fmt`, coded `width × height`, `rotation`, and `audio codec / sample_rate / channels`) across downloaded chunks before concatenation:
+  - **Homogeneous chunks** use single-pass `runFFmpegConcat` (`-f concat` → 30fps H.264 / AAC).
+  - **Heterogeneous chunks** (e.g., mobile `analysis_compression_fallback` switching mid-workout from compressed `H.264 406x720 44.1kHz stereo` to raw iOS `HEVC 1280x720 rot=-90 48kHz mono`, or chunks missing audio) normalize each chunk first to uniform `H.264 yuv420p 30fps` (`-video_track_timescale 30000`, upright display aspect preserved via `scale+pad`, capped at `1280`px long edge) + `AAC 44100Hz stereo` (filling silent audio via `anullsrc` when needed), probe cumulative `media_start_secs`/`media_end_secs` on the normalized chunks, and concatenate via stream copy (`-c copy`), preventing dropped HEVC frames and audio-timebase duration inflation.
 - Legacy reconstruction must mirror the deterministic concat manifest order
   (`start_secs` ordering may choose order only) and probe retained chunk
   durations. Never copy capture-clock values onto `merged.mp4`.

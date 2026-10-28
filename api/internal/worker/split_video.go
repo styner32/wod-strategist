@@ -91,6 +91,7 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 	sem := make(chan struct{}, splitAnalysisConcurrency)
 	var errCount atomic.Int32
 	var skipCount atomic.Int32
+	existingChunks := w.loadCompletedSessionChunks(ctx, p.SessionID)
 
 	for i, chunkFile := range chunkFiles {
 		chunkPath := filepath.Join(tmpDir, chunkFile)
@@ -99,8 +100,9 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 		// and container edits. Use the matching original packet timestamps.
 		startSecs, endSecs := intervals[i].Start, intervals[i].End
 
-		// Skip chunks that were already analyzed in a previous (partial) run
-		if w.chunkAlreadyAnalyzed(p.SessionID, startSecs) {
+		// Skip intervals already covered on the merged media timeline (either by
+		// verified mobile chunks or by a previous partial split run).
+		if db.IntervalCoveredByChunks(startSecs, endSecs, existingChunks) {
 			skipCount.Add(1)
 			os.Remove(chunkPath)
 			continue
@@ -161,7 +163,7 @@ func (w *Worker) splitAndAnalyzeChunks(ctx context.Context, videoPath string, p 
 					zap.Error(analysisErr))
 				// Still record a FAILED entry so the chunk is tracked
 				// Security: Do not expose raw internal error strings to user-facing database fields (CWE-209).
-				w.saveChunkResult(p, gcsURI, start, end, "FAILED", "", "An internal error occurred during chunk analysis.", "{}", motionScore, "")
+				w.saveChunkResultWithContext(ctx, p, gcsURI, start, end, "FAILED", "", "An internal error occurred during chunk analysis.", "{}", motionScore, "")
 				errCount.Add(1)
 			}
 
@@ -317,7 +319,7 @@ func (w *Worker) analyzeChunkInline(ctx context.Context, localPath, gcsURI strin
 	cleanOutput := stripExerciseTag(analysis)
 	cleanOutput = stripObservedSignals(cleanOutput)
 
-	w.saveChunkResult(p, gcsURI, startSecs, endSecs, "COMPLETED", detectedExercise, cleanOutput, observedSignals, motionScore, "")
+	w.saveChunkResultWithContext(ctx, p, gcsURI, startSecs, endSecs, "COMPLETED", detectedExercise, cleanOutput, observedSignals, motionScore, "")
 
 	w.logger.Info("Split chunk analysis completed",
 		zap.String("session_id", p.SessionID),
@@ -328,8 +330,12 @@ func (w *Worker) analyzeChunkInline(ctx context.Context, localPath, gcsURI strin
 	return nil
 }
 
-// saveChunkResult persists a ChunkAnalysisResult to the database.
+// saveChunkResult persists a ChunkAnalysisResult to the database idempotently.
 func (w *Worker) saveChunkResult(p VideoAnalysisPayload, gcsURI string, startSecs, endSecs float64, status, exerciseType, output, observedSignals string, motionScore *float64, skipReason string) {
+	w.saveChunkResultWithContext(context.Background(), p, gcsURI, startSecs, endSecs, status, exerciseType, output, observedSignals, motionScore, skipReason)
+}
+
+func (w *Worker) saveChunkResultWithContext(ctx context.Context, p VideoAnalysisPayload, gcsURI string, startSecs, endSecs float64, status, exerciseType, output, observedSignals string, motionScore *float64, skipReason string) {
 	result := &db.ChunkAnalysisResult{
 		SessionID:         p.SessionID,
 		FilePath:          gcsURI,
@@ -347,21 +353,38 @@ func (w *Worker) saveChunkResult(p VideoAnalysisPayload, gcsURI string, startSec
 		SkipReason:        skipReason,
 	}
 	result.ProfileID = p.ProfileID
-	w.DB.Create(result)
+	if err := w.persistChunkAnalysisResult(ctx, result); err != nil && w.logger != nil {
+		w.logger.Error("Failed to persist split chunk analysis result",
+			zap.String("session_id", p.SessionID),
+			zap.String("file_path", gcsURI),
+			zap.Error(err))
+	}
 }
 
-// chunkAlreadyAnalyzed checks if a COMPLETED chunk record already exists
-// for the given session and start time. Used to skip re-analysis of chunks
-// that were successfully processed in a previous (partial) run.
-func (w *Worker) chunkAlreadyAnalyzed(sessionID string, startSecs float64) bool {
+func (w *Worker) loadCompletedSessionChunks(ctx context.Context, sessionID string) []db.ChunkAnalysisResult {
 	if w.DB == nil {
-		return false
+		return nil
 	}
-	var count int64
-	w.DB.Model(&db.ChunkAnalysisResult{}).
-		Where("session_id = ? AND start_secs = ? AND status = ?", sessionID, startSecs, "COMPLETED").
-		Count(&count)
-	return count > 0
+	var chunks []db.ChunkAnalysisResult
+	if err := w.DB.WithContext(ctx).
+		Select("id, profile_id, session_id, file_path, status, start_secs, end_secs, media_start_secs, media_end_secs").
+		Where("session_id = ? AND status = ?", sessionID, "COMPLETED").
+		Find(&chunks).Error; err != nil {
+		if w.logger != nil {
+			w.logger.Warn("Failed to query existing completed chunks before split",
+				zap.String("session_id", sessionID),
+				zap.Error(err))
+		}
+		return nil
+	}
+	return chunks
+}
+
+// chunkAlreadyAnalyzed checks if a COMPLETED chunk record already covers the
+// given merged-media interval.
+func (w *Worker) chunkAlreadyAnalyzed(sessionID string, startSecs float64) bool {
+	endSecs := startSecs + float64(splitChunkDurationSecs)
+	return db.IntervalCoveredByChunks(startSecs, endSecs, w.loadCompletedSessionChunks(context.Background(), sessionID))
 }
 
 // runFFmpegSplit uses FFmpeg's segment muxer to split a video into chunks

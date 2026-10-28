@@ -1,12 +1,14 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,8 +77,116 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 		_ = json.Unmarshal([]byte(*profile.Injuries), &injuries)
 	}
 
-	// 2. Query in read-only repeatable read transaction
+	// 2. Query in read-only repeatable read transaction & compute deterministic readiness
 	asOf := time.Now().UTC()
+	readiness, recentWorkouts, txErr := ctl.loadProfileReadinessAndRecentWorkouts(ctx, req.ProfileID, asOf)
+	if txErr != nil {
+		logger.Log.Error("failed to query past sessions for pre-wod advice", zap.Uint("profile_id", req.ProfileID), zap.Error(txErr))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to calculate muscle readiness"})
+		return
+	}
+
+	var resp PreWODAdviceResponse
+	resp.ProfileID = req.ProfileID
+
+	// 4. Gemini call: ONLY when evidence_status == "complete"
+	if readiness.EvidenceStatus == "complete" && ctl.textParser != nil {
+		prompt := fatigue.BuildPreWODAdvicePrompt(readiness, *profile, req.WODDescription, req.Movements, injuries, recentWorkouts...)
+		rawResp, usage, geminiErr := ctl.textParser.ParseText(ctx, prompt)
+		ctl.recordTokenUsage(c, req.ProfileID, "strategy:pre-wod", usage)
+		if geminiErr == nil && rawResp != "" {
+			match := jsonBlockRegex.FindString(rawResp)
+			if match != "" {
+				_ = json.Unmarshal([]byte(match), &resp)
+			}
+		} else if geminiErr != nil {
+			logger.Log.Warn("Gemini pre-wod advice text parsing failed, using deterministic fallback", zap.Error(geminiErr))
+		}
+	}
+
+	if resp.TargetRPE == nil && readiness.EvidenceStatus == "complete" {
+		resp = buildDeterministicFallbackAdvice(req.ProfileID, readiness, *profile, req.WODDescription, req.Movements, injuries, recentWorkouts)
+	}
+
+	// 5. Always apply FinalizePreWODAdvice
+	fatigue.FinalizePreWODAdvice(&resp, readiness, recentWorkouts...)
+
+	c.JSON(http.StatusOK, resp)
+}
+
+// GetProfileReadiness handles GET /api/v1/strategies/readiness.
+// Returns deterministic 6-muscle group readiness and recent WOD summaries without invoking Gemini.
+func (ctl *Controller) GetProfileReadiness(c *gin.Context) {
+	pid, err := strconv.ParseUint(c.Query("profile_id"), 10, 64)
+	if err != nil || pid == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return
+	}
+	profileID := uint(pid)
+
+	if !ctl.assertOwnsProfile(c, profileID) {
+		return
+	}
+
+	ctx := c.Request.Context()
+	var profile db.Profile
+	if err := ctl.db.WithContext(ctx).First(&profile, profileID).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile not found"})
+		return
+	}
+
+	asOf := time.Now().UTC()
+	readiness, recentWorkouts, txErr := ctl.loadProfileReadinessAndRecentWorkouts(ctx, profileID, asOf)
+	if txErr != nil {
+		logger.Log.Error("failed to query past sessions for readiness", zap.Uint("profile_id", profileID), zap.Error(txErr))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to calculate muscle readiness"})
+		return
+	}
+
+	var muscleItems []MuscleReadinessItem
+	if len(readiness.Muscles) > 0 {
+		muscleItems = make([]MuscleReadinessItem, 0, len(fatigue.AllMuscleGroups))
+		for _, g := range fatigue.AllMuscleGroups {
+			m, ok := readiness.Muscles[g]
+			if !ok {
+				continue
+			}
+			note := "정상 컨디션입니다."
+			if m.FatigueScore >= 50 {
+				note = "최근 운동으로 인해 피로가 누적되어 주의가 필요합니다."
+			} else if m.FatigueScore <= 25 {
+				note = "충분히 회복되어 최상의 수행 능력을 낼 수 있습니다."
+			}
+			muscleItems = append(muscleItems, MuscleReadinessItem{
+				Group:        g,
+				NameKO:       m.NameKO,
+				FatigueScore: m.FatigueScore,
+				State:        m.State,
+				StateKO:      m.StateKO,
+				Note:         note,
+			})
+		}
+	}
+
+	c.JSON(http.StatusOK, ProfileReadinessResponse{
+		ProfileID:           profileID,
+		OverallFatigueScore: readiness.OverallFatigueScore,
+		OverallState:        readiness.OverallState,
+		OverallStateKO:      readiness.OverallStateKO,
+		MuscleReadiness:     muscleItems,
+		RecentWorkouts:      recentWorkouts,
+		EvidenceStatus:      readiness.EvidenceStatus,
+		Evidence:            readiness.Evidence,
+		AsOf:                readiness.AsOf,
+		LastWorkoutAt:       readiness.LastWorkoutAt,
+	})
+}
+
+func (ctl *Controller) loadProfileReadinessAndRecentWorkouts(
+	ctx context.Context,
+	profileID uint,
+	asOf time.Time,
+) (fatigue.ProfileReadinessState, []RecentWorkoutSummary, error) {
 	sevenDaysAgo := asOf.Add(-7 * 24 * time.Hour)
 	twentyEightDaysAgo := asOf.Add(-28 * 24 * time.Hour)
 
@@ -89,14 +199,14 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 
 		// Count unresolved time sessions: completed, non-archived, but workout_at is NULL or not reliable or future
 		if err := tx.Model(&db.AnalysisResult{}).
-			Where("profile_id = ? AND status = 'COMPLETED' AND archived_at IS NULL", req.ProfileID).
+			Where("profile_id = ? AND status = 'COMPLETED' AND archived_at IS NULL", profileID).
 			Where("(workout_at IS NULL OR workout_at > ? OR workout_at_source IS NULL OR workout_at_source NOT IN ('session_ulid', 'legacy_local_time'))", asOf).
 			Count(&unresolvedCount).Error; err != nil {
 			return err
 		}
 
 		// Fetch all sessions with reliable workout_at in [asOf-7d, asOf] without arbitrary limit
-		if err := tx.Where("profile_id = ? AND status = 'COMPLETED' AND archived_at IS NULL", req.ProfileID).
+		if err := tx.Where("profile_id = ? AND status = 'COMPLETED' AND archived_at IS NULL", profileID).
 			Where("workout_at >= ? AND workout_at <= ?", sevenDaysAgo, asOf).
 			Where("workout_at_source IN ('session_ulid', 'legacy_local_time')").
 			Order("workout_at DESC").
@@ -108,7 +218,7 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 		return tx.Table("analysis_results AS a").
 			Select("a.session_id, a.workout_at, a.session_score, a.normalized_workout, a.sensor_version, a.sensor_state, a.sensor_processing, a.sensor_summary, s.workout_type, s.wod_evaluation_version, s.effort").
 			Joins("LEFT JOIN sessions s ON s.session_id = a.session_id AND s.profile_id = a.profile_id").
-			Where("a.profile_id = ? AND a.status = 'COMPLETED' AND a.archived_at IS NULL", req.ProfileID).
+			Where("a.profile_id = ? AND a.status = 'COMPLETED' AND a.archived_at IS NULL", profileID).
 			Where("COALESCE(NULLIF(a.analysis_type, ''), ?) = ?", db.AnalysisTypeWOD, db.AnalysisTypeWOD).
 			Where("COALESCE(NULLIF(s.workout_type, ''), ?) = ?", "wod", "wod").
 			Where("a.workout_at >= ? AND a.workout_at <= ?", twentyEightDaysAgo, asOf).
@@ -117,11 +227,8 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 			Limit(3).
 			Scan(&recentWODRows).Error
 	})
-
 	if txErr != nil {
-		logger.Log.Error("failed to query past sessions for pre-wod advice", zap.Uint("profile_id", req.ProfileID), zap.Error(txErr))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to calculate muscle readiness"})
-		return
+		return fatigue.ProfileReadinessState{}, nil, txErr
 	}
 
 	totalSessions := len(pastResults)
@@ -151,36 +258,9 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 		UnresolvedTimeSessions: int(unresolvedCount),
 	}
 
-	// 3. Compute deterministic readiness and recent 3 WOD summaries
 	readiness := fatigue.ComputeCurrentReadiness(records, evidence, asOf)
 	recentWorkouts := buildRecentWorkoutSummaries(recentWODRows)
-
-	var resp PreWODAdviceResponse
-	resp.ProfileID = req.ProfileID
-
-	// 4. Gemini call: ONLY when evidence_status == "complete"
-	if readiness.EvidenceStatus == "complete" && ctl.textParser != nil {
-		prompt := fatigue.BuildPreWODAdvicePrompt(readiness, *profile, req.WODDescription, req.Movements, injuries, recentWorkouts...)
-		rawResp, usage, geminiErr := ctl.textParser.ParseText(ctx, prompt)
-		ctl.recordTokenUsage(c, req.ProfileID, "strategy:pre-wod", usage)
-		if geminiErr == nil && rawResp != "" {
-			match := jsonBlockRegex.FindString(rawResp)
-			if match != "" {
-				_ = json.Unmarshal([]byte(match), &resp)
-			}
-		} else if geminiErr != nil {
-			logger.Log.Warn("Gemini pre-wod advice text parsing failed, using deterministic fallback", zap.Error(geminiErr))
-		}
-	}
-
-	if resp.TargetRPE == nil && readiness.EvidenceStatus == "complete" {
-		resp = buildDeterministicFallbackAdvice(req.ProfileID, readiness, *profile, req.WODDescription, req.Movements, injuries, recentWorkouts)
-	}
-
-	// 5. Always apply FinalizePreWODAdvice
-	fatigue.FinalizePreWODAdvice(&resp, readiness, recentWorkouts...)
-
-	c.JSON(http.StatusOK, resp)
+	return readiness, recentWorkouts, nil
 }
 
 func buildRecentWorkoutSummaries(rows []recentWODFeedbackRow) []RecentWorkoutSummary {

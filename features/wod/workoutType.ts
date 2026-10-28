@@ -46,7 +46,7 @@ export function buildWorkoutSessionId(
 }
 
 export const RECENT_WORKOUT_SETUP_KEY = "wod_recent_workout_setup_v1";
-export const RECENT_WORKOUT_TTL_MS = 60 * 60 * 1000; // 1 hour
+export const RECENT_WORKOUT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours (same-day pre-workout persistence)
 
 export interface RecentWorkoutSetup {
   savedAt: number;
@@ -116,4 +116,67 @@ export function parseRecentWorkoutSetup(
   } catch {
     return null;
   }
+}
+
+function escapeRegexLiteral(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Extracts known catalog movements mentioned in free-form WOD text.
+ * Matches longest movement names first (e.g. "Power Snatch" before "Snatch")
+ * and handles common plural/hyphen variations without false substring hits (e.g. "Row" in "narrow").
+ */
+export function extractCatalogMovementsFromText(
+  text: string,
+  groups: { movements: string[] }[],
+): string[] {
+  const trimmed = text.trim();
+  if (!trimmed || groups.length === 0) return [];
+
+  const uniqueMovements = Array.from(
+    new Set(
+      groups
+        .flatMap((g) => g.movements)
+        .map((m) => m.trim())
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => b.length - a.length);
+
+  let remaining = trimmed.toLowerCase();
+  const matched: { movement: string; index: number }[] = [];
+
+  for (const movement of uniqueMovements) {
+    const tokens = movement
+      .toLowerCase()
+      .split(/[\s-]+/)
+      .filter(Boolean)
+      .map(escapeRegexLiteral);
+    if (tokens.length === 0) continue;
+
+    const bodyPattern = tokens.join("[\\s-]*");
+    const regex = new RegExp(
+      `(^|[^a-z0-9])(${bodyPattern})(?:e?s)?(?=$|[^a-z0-9])`,
+      "gi",
+    );
+
+    let firstIdx = -1;
+    remaining = remaining.replace(
+      regex,
+      (fullMatch, prefix: string, coreMatch: string, offset: number) => {
+        if (firstIdx < 0) {
+          firstIdx = offset + prefix.length;
+        }
+        const maskLen = fullMatch.length - prefix.length;
+        return prefix + " ".repeat(Math.max(1, maskLen));
+      },
+    );
+
+    if (firstIdx >= 0) {
+      matched.push({ movement, index: firstIdx });
+    }
+  }
+
+  matched.sort((a, b) => a.index - b.index);
+  return matched.map((m) => m.movement);
 }

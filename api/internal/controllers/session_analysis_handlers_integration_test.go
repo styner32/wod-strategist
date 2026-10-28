@@ -236,6 +236,46 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 		Expect(response.Analysis).NotTo(BeNil())
 		Expect(response.Analysis.WODDescription).To(Equal("5 rounds of Pull-ups"))
 	})
+
+	It("excludes redundant split_chunk_* rows that overlap original mobile chunks", func() {
+		cap0, cap10 := 118.5, 128.5
+		med0, med10 := 0.0, 10.0
+		mobile := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID:      session.SessionID,
+			ProfileID:      profile.ID,
+			FilePath:       fmt.Sprintf("gs://test-bucket/videos/%d/%s/mobile_000.mp4", profile.ID, session.SessionID),
+			Status:         "COMPLETED",
+			ExerciseType:   "Burpee",
+			HeartRateBPM:   156,
+			StartSecs:      &cap0,
+			EndSecs:        &cap10,
+			MediaStartSecs: &med0,
+			MediaEndSecs:   &med10,
+		})
+		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID:      session.SessionID,
+			ProfileID:      profile.ID,
+			FilePath:       fmt.Sprintf("gs://test-bucket/videos/%d/%s/split_chunk_000.mp4", profile.ID, session.SessionID),
+			Status:         "COMPLETED",
+			ExerciseType:   "Burpee",
+			HeartRateBPM:   0,
+			StartSecs:      &med0,
+			EndSecs:        &med10,
+			MediaStartSecs: &med0,
+			MediaEndSecs:   &med10,
+		})
+
+		req := newAuthorizedJSONRequest(http.MethodGet, "/api/v1/sessions/"+session.SessionID+"/analysis", "", &user)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+		var response controllers.SessionAnalysisResponse
+		Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+		Expect(response.Chunks).To(HaveLen(1))
+		Expect(response.Chunks[0].ID).To(Equal(mobile.ID))
+		Expect(response.Chunks[0].HeartRateBPM).To(Equal(156))
+	})
 })
 
 var _ = Describe("POST /api/v1/merge-chunks", func() {
@@ -276,5 +316,30 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 		Expect(dbConn.First(&updated, session.ID).Error).NotTo(HaveOccurred())
 		Expect(string(updated.MovementHints)).To(MatchJSON(`["Power Snatch","Custom Carry"]`))
 		Expect(updated.WODDescription).To(Equal("For Time: 30 Power Snatches (135 lb)"))
+	})
+
+	It("deduplicates repeated merge-chunks requests and returns 202 Accepted", func() {
+		body := fmt.Sprintf(`{"session_id":"%s","profile_id":%d,"movements":["Pull-up"],"workout_type":"wod"}`, session.SessionID, profile.ID)
+
+		req1 := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", body, &user)
+		w1 := httptest.NewRecorder()
+		router.ServeHTTP(w1, req1)
+		Expect(w1.Code).To(Equal(http.StatusAccepted), w1.Body.String())
+
+		req2 := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", body, &user)
+		w2 := httptest.NewRecorder()
+		router.ServeHTTP(w2, req2)
+		Expect(w2.Code).To(Equal(http.StatusAccepted), w2.Body.String())
+		Expect(w2.Body.String()).To(ContainSubstring("Merge already queued"))
+
+		pending, err := inspector.ListPendingTasks("default")
+		Expect(err).NotTo(HaveOccurred())
+		mergeCount := 0
+		for _, t := range pending {
+			if t.Type == worker.TypeMergeChunks {
+				mergeCount++
+			}
+		}
+		Expect(mergeCount).To(Equal(1))
 	})
 })

@@ -135,4 +135,44 @@ describe('BLE accepted and raw HR paths', () => {
   });
   view.unmount();
  });
+
+ it('does not scan while disabled and cleanly releases BLE connection on focus handoff', async () => {
+  const strap: any = {
+   ...device,
+   id: 'handoff-h10',
+   name: 'Polar H10 Handoff',
+   connect: jest.fn(async () => strap),
+   cancelConnection: jest.fn(async () => {}),
+  };
+
+  const view = renderHook<ReturnType<typeof useBleHeartRate>, { enabled: boolean }>(
+   ({ enabled }) => useBleHeartRate({ enabled }),
+   { initialProps: { enabled: false } },
+  );
+
+  expect(view.result.current.status).toBe('Init');
+  expect(strap.connect).not.toHaveBeenCalled();
+
+  // Enable on screen focus -> connects when PoweredOn
+  view.rerender({ enabled: true });
+  await act(async () => {
+   mockState('PoweredOn');
+   mockScan(null, strap);
+  });
+  expect(strap.connect).toHaveBeenCalledTimes(1);
+  expect(view.result.current.connectedDevice).toEqual({
+   id: 'handoff-h10',
+   name: 'Polar H10 Handoff',
+  });
+
+  // Disable on screen blur -> disconnects cleanly so recording screen can take over
+  await act(async () => {
+   view.rerender({ enabled: false });
+  });
+  expect(strap.cancelConnection).toHaveBeenCalledTimes(1);
+  expect(view.result.current.connectedDevice).toBeNull();
+  expect(view.result.current.status).toBe('Init');
+
+  view.unmount();
+ });
 });

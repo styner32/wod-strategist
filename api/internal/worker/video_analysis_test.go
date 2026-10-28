@@ -1647,3 +1647,26 @@ var _ = Describe("parseTriagedSegments", func() {
 		Expect(result).To(HaveLen(2))
 	})
 })
+
+var _ = Describe("shouldSplitVideoForPass1", func() {
+	DescribeTable("decides Pass 1 splitting using media-clock coverage and non-exercise chunks",
+		func(segments, skipped []Segment, videoDuration, maxMediaEndSecs float64, want bool) {
+			Expect(shouldSplitVideoForPass1(segments, skipped, videoDuration, maxMediaEndSecs)).To(Equal(want))
+		},
+		Entry("uploaded video with no chunks splits",
+			nil, nil, 120.0, 0.0, true,
+		),
+		Entry("mobile session with full media_end_secs coverage does not split despite Pause",
+			[]Segment{{Start: "0:00", End: "43:59", Type: "Exercise"}}, nil, 2639.3, 2639.3, false,
+		),
+		Entry("rest-only mobile session with verified skippedSegments does not re-split",
+			nil, []Segment{{Start: "0:00", End: "0:30", Type: "Rest"}}, 30.0, 30.0, false,
+		),
+		Entry("session missing >10s of trailing media coverage triggers split",
+			[]Segment{{Start: "0:00", End: "0:20", Type: "Exercise"}}, nil, 45.0, 20.0, true,
+		),
+		Entry("tiny muxer duration rounding (<10s) does not trigger split",
+			[]Segment{{Start: "0:00", End: "43:59", Type: "Exercise"}}, nil, 2639.8, 2639.3, false,
+		),
+	)
+})

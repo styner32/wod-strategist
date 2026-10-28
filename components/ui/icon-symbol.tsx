@@ -43,6 +43,14 @@ const MAPPING = {
   'chevron.up': 'expand-less',
   'sparkles': 'auto-awesome',
   'flag.fill': 'flag',
+  'heart.fill': 'favorite',
+  'bolt.fill': 'bolt',
+  'play.circle.fill': 'play-circle-filled',
+  'bookmark.fill': 'bookmark',
+  'checkmark.circle.fill': 'check-circle',
+  'dot.radiowaves.left.and.right': 'bluetooth',
+  'battery.100': 'battery-full',
+  'battery.25': 'battery-alert',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**

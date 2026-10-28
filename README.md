@@ -36,7 +36,7 @@ React Native workout recording, Go video analysis, and a separate React web revi
      -F "file=@./tmp/wod_1.MP4"
    ```
 
-Note: `scripts/test-upload.js` / `scripts/test-chunk-upload.js` still send a legacy `X-API-Key` and do not obtain a JWT, so they cannot call protected routes against the current API until they are updated or retired. Use the web app for authenticated upload, analysis review, highlights, and playback; use the mobile app to exercise recording and stop/merge behavior. The local API examples use `PORT=8088`; the server default without that override is `8080`.
+Use the [web app](web/README.md) for authenticated upload, analysis review, highlights, and playback; use the mobile app to exercise recording and stop/merge behavior. For retained video/H10 replay through the live APIs, see the [live replay guide](docs/agent-memory/live-replay.md). The local API examples use `PORT=8088`; the server default without that override is `8080`.
 
 ## Cloud SQL (Dev)
 

@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -18,7 +22,7 @@ import (
 
 var _ = Describe("NewMergeChunksTask", func() {
 
-	It("creates a task with the correct payload fields", func() {
+	It("creates a task with the correct payload fields and minute-truncated MergeRequestedAt", func() {
 		task, err := NewMergeChunksTask(
 			"session-1",
 			"gs://bucket/videos/session-1",
@@ -40,6 +44,133 @@ var _ = Describe("NewMergeChunksTask", func() {
 		Expect(payload.Movements).To(Equal([]string{"Deadlift", "Pull-up"}))
 		Expect(payload.Injuries).To(Equal([]string{"Knee"}))
 		Expect(payload.ProfileID).To(Equal(uint(42)))
+		Expect(payload.MergeRequestedAt.Second()).To(Equal(0))
+		Expect(payload.MergeRequestedAt.Nanosecond()).To(Equal(0))
+	})
+})
+
+var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
+	DescribeTable("detects stream compatibility for FFmpeg concat",
+		func(profiles []chunkStreamProfile, wantNorm bool, wantW, wantH int, wantAudio bool) {
+			gotNorm, gotW, gotH, gotAudio := chunksNeedNormalization(profiles)
+			Expect(gotNorm).To(Equal(wantNorm))
+			Expect(gotW).To(Equal(wantW))
+			Expect(gotH).To(Equal(wantH))
+			Expect(gotAudio).To(Equal(wantAudio))
+		},
+		Entry("homogeneous compressed mobile chunks skip normalization",
+			[]chunkStreamProfile{
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, DisplayWidth: 406, DisplayHeight: 720, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, DisplayWidth: 406, DisplayHeight: 720, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
+			},
+			false, 0, 0, true,
+		),
+		Entry("mixed H.264 406x720 44.1kHz stereo + rotated HEVC 1280x720 48kHz mono normalizes to 720x1280",
+			[]chunkStreamProfile{
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, Rotation: 0, DisplayWidth: 406, DisplayHeight: 720, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
+				{VideoCodec: "hevc", PixFmt: "yuv420p", Width: 1280, Height: 720, Rotation: 270, DisplayWidth: 720, DisplayHeight: 1280, HasAudio: true, AudioCodec: "aac", SampleRate: 48000, Channels: 1},
+			},
+			true, 720, 1280, true,
+		),
+		Entry("missing audio on one chunk triggers normalization with silent audio fill",
+			[]chunkStreamProfile{
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, DisplayWidth: 406, DisplayHeight: 720, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, DisplayWidth: 406, DisplayHeight: 720, HasAudio: false},
+			},
+			true, 406, 720, true,
+		),
+		Entry("4K raw fallback caps normalized long edge to 1280 with even dimensions",
+			[]chunkStreamProfile{
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, DisplayWidth: 406, DisplayHeight: 720, HasAudio: false},
+				{VideoCodec: "hevc", PixFmt: "yuv420p", Width: 2160, Height: 3840, DisplayWidth: 2160, DisplayHeight: 3840, HasAudio: false},
+			},
+			true, 720, 1280, false,
+		),
+	)
+
+	It("merges mixed H.264/44.1kHz-stereo and rotated HEVC/48kHz-mono chunks without dropping frames or inflating duration", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not installed, skipping")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		tmpDir, err := os.MkdirTemp("", "merge-heterogeneous-test")
+		Expect(err).NotTo(HaveOccurred())
+		defer os.RemoveAll(tmpDir)
+
+		chunk0 := filepath.Join(tmpDir, "chunk_000.mp4")
+		out0, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+			"-f", "lavfi", "-i", "testsrc2=size=406x720:rate=30",
+			"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
+			"-t", "2",
+			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+			"-c:a", "aac", "-ar", "44100", "-ac", "2",
+			"-y", chunk0,
+		).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(out0))
+
+		secondCodec := "mpeg4"
+		if encOut, encErr := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-encoders").Output(); encErr == nil && strings.Contains(string(encOut), "libx265") {
+			secondCodec = "libx265"
+		}
+
+		rawChunk1 := filepath.Join(tmpDir, "raw_chunk_001.mp4")
+		out1, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+			"-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30",
+			"-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000",
+			"-t", "2",
+			"-c:v", secondCodec, "-pix_fmt", "yuv420p",
+			"-c:a", "aac", "-ar", "48000", "-ac", "1",
+			"-y", rawChunk1,
+		).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(out1))
+
+		chunk1 := filepath.Join(tmpDir, "chunk_001.mp4")
+		rotOut, rotErr := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+			"-display_rotation", "-90", "-i", rawChunk1,
+			"-c", "copy", "-y", chunk1,
+		).CombinedOutput()
+		if rotErr != nil {
+			// Fallback for older FFmpeg builds without -display_rotation
+			rotOut, rotErr = exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+				"-i", rawChunk1, "-c", "copy", "-metadata:s:v:0", "rotate=90", "-y", chunk1,
+			).CombinedOutput()
+			Expect(rotErr).NotTo(HaveOccurred(), string(rotOut))
+		}
+		_ = os.Remove(rawChunk1)
+
+		objects := []string{
+			"gs://b/videos/1/s/chunk_000.mp4",
+			"gs://b/videos/1/s/chunk_001.mp4",
+		}
+		localPaths := []string{chunk0, chunk1}
+		mergedPath := filepath.Join(tmpDir, "merged.mp4")
+
+		intervals, intervalErr, mergeErr := mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, objects, localPaths, mergedPath)
+		Expect(mergeErr).NotTo(HaveOccurred())
+		Expect(intervalErr).NotTo(HaveOccurred())
+		Expect(intervals).To(HaveLen(2))
+		Expect(intervals[0].Start).To(Equal(0.0))
+		Expect(intervals[0].End).To(BeNumerically("~", 2.0, 0.15))
+		Expect(intervals[1].Start).To(Equal(intervals[0].End))
+		Expect(intervals[1].End).To(BeNumerically("~", 4.0, 0.25))
+
+		mergedDuration := probeVideoDuration(ctx, mergedPath)
+		Expect(mergedDuration).To(BeNumerically("~", intervals[1].End, 0.2))
+
+		// Verify all video frames from BOTH chunks survived (~120 frames at 30fps across 4s).
+		frameOut, err := exec.CommandContext(ctx, "ffprobe", "-v", "error",
+			"-select_streams", "v:0", "-count_frames",
+			"-show_entries", "stream=nb_read_frames",
+			"-of", "default=noprint_wrappers=1:nokey=1",
+			mergedPath,
+		).Output()
+		Expect(err).NotTo(HaveOccurred())
+		frameCount, err := strconv.Atoi(strings.TrimSpace(string(frameOut)))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(frameCount).To(BeNumerically(">=", 115))
 	})
 })
 

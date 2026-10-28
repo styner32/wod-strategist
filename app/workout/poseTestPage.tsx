@@ -25,6 +25,7 @@ import { usePoseDetection, HEAVY_MODEL } from '../../features/ai-coach/frame-pro
 import { KeypointLabelOverlay, KEYPOINT_NAMES, KEYPOINT_COLORS, MIN_SCORE } from '../../features/ai-coach/ui/KeypointLabelOverlay';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
+import { t, useLocale } from '../../features/i18n';
 
 /**
  * Pose Detection Test Page
@@ -35,8 +36,10 @@ import { EnergyMonitor } from '../../features/ai-coach/ui/EnergyMonitor';
  * This is for experimentation — battery efficiency is not a concern here.
  */
 export default function PoseTestPage() {
+  useLocale();
   const isFocused = useIsFocused();
   const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+  const [isLeaving, setIsLeaving] = useState(false);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState) => {
@@ -45,9 +48,13 @@ export default function PoseTestPage() {
     return () => subscription.remove();
   }, []);
 
-  const isCameraActive = isFocused && appState === 'active';
+  const isCameraActive = !isLeaving && isFocused && appState === 'active';
+  const leavePage = () => {
+    setIsLeaving(true);
+    if (router.canGoBack()) router.back();
+    else router.replace('/workout/setup');
+  };
 
-  const device = useCameraDevice('back');
   const { hasPermission, requestPermission } = useCameraPermission();
   const { width, height } = useWindowDimensions();
 
@@ -68,9 +75,8 @@ export default function PoseTestPage() {
     if (!hasPermission) requestPermission();
   }, [hasPermission, requestPermission]);
 
-  // Use the heavy model (12MB float16 v4) at 15fps for best accuracy on the test page.
-  // Production recording uses the default model at 2fps for battery efficiency.
-  const { frameProcessor, monitorData, isModelLoaded } = usePoseDetection(true, {
+  // Load the diagnostic model only while this camera page is active.
+  const { frameProcessor, monitorData, isModelLoaded, status, error, hasInference } = usePoseDetection(isCameraActive && hasPermission && activeDevice != null, {
     modelSource: HEAVY_MODEL,
     fps: 15,
   });
@@ -79,6 +85,9 @@ export default function PoseTestPage() {
     return (
       <View style={styles.center}>
         <Text style={styles.permText}>Camera Permission Required</Text>
+        <TouchableOpacity onPress={leavePage} style={styles.detailsToggle}>
+          <Text style={styles.detailsToggleText}>{t('common.back')}</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={async () => {
             const result = await requestPermission();
@@ -105,6 +114,9 @@ export default function PoseTestPage() {
     return (
       <View style={styles.center}>
         <Text style={{ color: '#fff' }}>No Camera Available</Text>
+        <TouchableOpacity onPress={leavePage} style={styles.detailsToggle}>
+          <Text style={styles.detailsToggleText}>{t('common.back')}</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -120,7 +132,7 @@ export default function PoseTestPage() {
         fps={30}
         frameProcessor={frameProcessor}
         pixelFormat="yuv"
-        // Keep the same uncompressed 8-bit input required by MoveNet in recording.
+        // Both bundled MoveNet models require uncompressed 8-bit input.
         videoHdr={false}
         enableBufferCompression={false}
         video={true}
@@ -134,10 +146,10 @@ export default function PoseTestPage() {
 
       {/* Top bar */}
       <View style={styles.topBar}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backBtn} onPress={leavePage}>
           <IconSymbol name="chevron.left" size={28} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.topTitle}>POSE TEST</Text>
+        <Text style={styles.topTitle}>{t('poseDebug.title')}</Text>
         <TouchableOpacity
           style={styles.flipBtn}
           onPress={() => setCameraPosition(prev => prev === 'back' ? 'front' : 'back')}
@@ -149,8 +161,9 @@ export default function PoseTestPage() {
       {/* Status badge */}
       <View style={styles.statusBadge}>
         <View style={[styles.statusDot, { backgroundColor: isModelLoaded ? '#4ADE80' : '#F87171' }]} />
-        <Text style={styles.statusText}>
-          {isModelLoaded ? 'Model Loaded' : 'Loading Model...'}
+        <Text style={styles.statusText} numberOfLines={2}>
+          {t(`poseDebug.status.${status === 'loaded' && !hasInference ? 'waiting' : status}`)}
+          {error ? `: ${error}` : ''}
         </Text>
       </View>
 
@@ -165,14 +178,14 @@ export default function PoseTestPage() {
         <View style={styles.summaryRow}>
           <View style={styles.summaryItem}>
             <Text style={styles.summaryValue}>
-              {(monitorData.confidence * 100).toFixed(0)}%
+              {hasInference ? monitorData.confidence.toFixed(3) : '—'}
             </Text>
-            <Text style={styles.summaryLabel}>Confidence</Text>
+            <Text style={styles.summaryLabel}>{t('poseDebug.scoreLabel')}</Text>
           </View>
           <View style={styles.summaryDivider} />
           <View style={styles.summaryItem}>
             <Text style={styles.summaryValue}>
-              {monitorData.motion.toFixed(3)}
+              {hasInference ? monitorData.motion.toFixed(3) : '—'}
             </Text>
             <Text style={styles.summaryLabel}>Motion</Text>
           </View>
@@ -181,11 +194,13 @@ export default function PoseTestPage() {
             <Text style={[styles.summaryValue, {
               color: monitorData.isWorkingOut ? '#4ADE80' : '#F87171',
             }]}>
-              {monitorData.isWorkingOut ? 'ACTIVE' : 'IDLE'}
+              {hasInference ? (monitorData.isWorkingOut ? 'ACTIVE' : 'IDLE') : '—'}
             </Text>
             <Text style={styles.summaryLabel}>State</Text>
           </View>
         </View>
+
+        {!hasInference && <Text style={styles.debugValues}>{t('poseDebug.noInference')}</Text>}
 
         {/* Raw model output debug */}
         {monitorData.rawFirstValues && monitorData.rawFirstValues.length > 0 && (
@@ -329,6 +344,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: Platform.OS === 'ios' ? 110 : 90,
     alignSelf: 'center',
+    maxWidth: '90%',
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.6)',

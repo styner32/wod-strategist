@@ -899,9 +899,11 @@ export async function generateHighlight(
   sessionId: string,
   profileId: number,
   maxDuration: number = 60,
+  signal?: AbortSignal,
 ): Promise<GenerateHighlightResult> {
   return apiClient<GenerateHighlightResult>("/generate-highlight", {
     method: "POST",
+    signal,
     bodyPayload: {
       session_id: sessionId,
       profile_id: profileId,
@@ -915,8 +917,9 @@ export async function generateHighlight(
  */
 export async function fetchHighlightResults(
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<HighlightResult[]> {
-  return apiClient<HighlightResult[]>(`/highlight/${sessionId}`);
+  return apiClient<HighlightResult[]>(`/highlight/${sessionId}`, { signal });
 }
 
 /**
@@ -1249,6 +1252,30 @@ export interface PreWodAdviceRequest {
   profile_id: number;
   wod_description?: string;
   movements?: string[];
+}
+
+export interface ProfileReadinessResponse {
+  profile_id: number;
+  overall_fatigue_score?: number | null;
+  overall_state: string;
+  overall_state_ko: string;
+  muscle_readiness?: MuscleReadinessItem[];
+  recent_workouts?: RecentWorkoutSummary[];
+  evidence_status: "no_history" | "insufficient" | "partial" | "complete" | string;
+  evidence: EvidenceCounts;
+  as_of: string;
+  last_workout_at?: string | null;
+}
+
+export async function fetchProfileReadiness(
+  profileId: number,
+  signal?: AbortSignal,
+): Promise<ProfileReadinessResponse> {
+  const params = new URLSearchParams({ profile_id: String(profileId) });
+  return apiClient<ProfileReadinessResponse>(
+    `/strategies/readiness?${params.toString()}`,
+    { signal },
+  );
 }
 
 export async function fetchPreWodAdvice(

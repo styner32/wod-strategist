@@ -18,6 +18,7 @@ import {
 import { PreWodStrategyCard } from "@/features/wod/ui/PreWodStrategyCard";
 import { RelatedWodsCard } from "@/features/wod/ui/RelatedWodsCard";
 import {
+  extractCatalogMovementsFromText,
   parseRecentWorkoutSetup,
   RECENT_WORKOUT_SETUP_KEY,
   RECENT_WORKOUT_TTL_MS,
@@ -140,7 +141,7 @@ export default function WorkoutSetup() {
 
   // Wizard state
   const [currentStep, setCurrentStep] = useState<SetupStep>("input");
-  const [inputMethod, setInputMethod] = useState<InputMethod>("movements");
+  const [inputMethod, setInputMethod] = useState<InputMethod>("photo");
   const [wodDescription, setWodDescription] = useState("");
   const [rawText, setRawText] = useState("");
   const [scanning, setScanning] = useState(false);
@@ -220,31 +221,30 @@ export default function WorkoutSetup() {
 
   // Related WODs anchor derivation & fetch
   const anchorInfo = useMemo(() => {
+    let weightKg: number | undefined;
+    if (wodDescription) {
+      const weightRegex = /(\d+(?:\.\d+)?)\s*(kg|lb)/i;
+      const weightMatch = wodDescription.match(weightRegex);
+      if (weightMatch) {
+        const val = parseFloat(weightMatch[1]);
+        const unit = weightMatch[2].toLowerCase();
+        if (unit === "lb") {
+          weightKg = Math.round(val * 0.45359237 * 10) / 10;
+        } else {
+          weightKg = val;
+        }
+      }
+    }
     if (selectedMovements.length > 0) {
-      return { movement: selectedMovements[0], weightKg: undefined };
+      return { movement: selectedMovements[0], weightKg };
     }
     if (wodDescription) {
-      const catalogMovements = movementGroups.flatMap((g) => g.movements);
-      const descLower = wodDescription.toLowerCase();
-      const matches = catalogMovements.filter((m) =>
-        descLower.includes(m.toLowerCase()),
+      const detected = extractCatalogMovementsFromText(
+        wodDescription,
+        movementGroups,
       );
-      if (matches.length > 0) {
-        matches.sort((a, b) => b.length - a.length);
-        const chosen = matches[0];
-        let weightKg: number | undefined;
-        const weightRegex = /(\d+(?:\.\d+)?)\s*(kg|lb)/i;
-        const weightMatch = wodDescription.match(weightRegex);
-        if (weightMatch) {
-          const val = parseFloat(weightMatch[1]);
-          const unit = weightMatch[2].toLowerCase();
-          if (unit === "lb") {
-            weightKg = Math.round(val * 0.45359237 * 10) / 10;
-          } else {
-            weightKg = val;
-          }
-        }
-        return { movement: chosen, weightKg };
+      if (detected.length > 0) {
+        return { movement: detected[0], weightKg };
       }
     }
     return null;
@@ -449,6 +449,68 @@ export default function WorkoutSetup() {
     setCurrentStep("confirm");
   };
 
+  const handleClearRecentWorkout = async () => {
+    setRecentWorkoutSetup(null);
+    try {
+      await AsyncStorage.removeItem(RECENT_WORKOUT_SETUP_KEY);
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  const mergeAutoDetectedMovements = (
+    desc: string,
+    currentSelected: string[],
+  ): string[] => {
+    if (!desc.trim() || movementGroups.length === 0) return currentSelected;
+    const detected = extractCatalogMovementsFromText(desc, movementGroups);
+    if (detected.length === 0) return currentSelected;
+    return Array.from(new Set([...currentSelected, ...detected]));
+  };
+
+  const handleSaveForLater = async () => {
+    const trimmedDesc = wodDescription.trim();
+    const mergedMovements = mergeAutoDetectedMovements(
+      trimmedDesc,
+      selectedMovements,
+    );
+    if (!trimmedDesc && !rawText.trim() && mergedMovements.length === 0) {
+      return;
+    }
+    if (mergedMovements.length !== selectedMovements.length) {
+      setSelectedMovements(mergedMovements);
+    }
+    await saveRecentWorkoutSetup({
+      savedAt: Date.now(),
+      workoutType,
+      wodDescription: trimmedDesc,
+      rawText,
+      selectedMovements: mergedMovements,
+      customMovements,
+      sessionAppearance: sessionAppearance.trim(),
+    });
+    Alert.alert(t("setup.savedForLaterTitle"), t("setup.savedForLaterMessage"), [
+      {
+        text: t("common.ok"),
+        onPress: () => router.back(),
+      },
+      {
+        text: t("common.keep"),
+        style: "cancel",
+      },
+    ]);
+  };
+
+  const formatSavedRelativeTime = (savedAt: number): string => {
+    const elapsedMins = Math.max(1, Math.round((Date.now() - savedAt) / 60_000));
+    if (elapsedMins >= 60) {
+      return t("setup.reuseRecentHoursAgo", {
+        hours: Math.floor(elapsedMins / 60),
+      });
+    }
+    return t("setup.reuseRecentMinutesAgo", { minutes: elapsedMins });
+  };
+
   const handleScanWhiteboard = async (useCamera: boolean) => {
     const uri = await pickImage(useCamera);
     if (!uri) return;
@@ -485,7 +547,13 @@ export default function WorkoutSetup() {
     }
   };
 
-  const handleNext = () => setCurrentStep("confirm");
+  const handleNext = () => {
+    const merged = mergeAutoDetectedMovements(wodDescription, selectedMovements);
+    if (merged.length !== selectedMovements.length) {
+      setSelectedMovements(merged);
+    }
+    setCurrentStep("confirm");
+  };
 
   const [sessionAppearance, setSessionAppearance] = useState("");
   const [isStarting, setIsStarting] = useState(false);
@@ -604,6 +672,7 @@ export default function WorkoutSetup() {
         zoomMode: videoPrefs.zoomMode ? "true" : "false",
         aspectRatio: videoPrefs.aspectRatio,
         previewOnly: "true",
+        autoRecord: "false",
         onDeviceAi: videoPrefs.onDeviceAi ? "true" : "false",
         environmentObservation: videoPrefs.environmentObservation ? "true" : "false",
         environmentAnalysis: videoPrefs.environmentAnalysis ? "true" : "false",
@@ -669,78 +738,105 @@ export default function WorkoutSetup() {
               );
             })}
           </View>
-          <View style={styles.inputMethodTabs}>
-            {(["text", "photo", "movements"] as InputMethod[]).map((method) => {
-              const active = inputMethod === method;
-              const icons: Record<InputMethod, string> = {
-                text: "📝",
-                photo: "📷",
-                movements: "🏋️",
-              };
-              const tKey = `inputMethod${method.charAt(0).toUpperCase() + method.slice(1)}`;
-              return (
-                <TouchableOpacity
-                  key={method}
-                  style={[
-                    styles.inputMethodTab,
-                    active && styles.inputMethodTabActive,
-                  ]}
-                  onPress={() => setInputMethod(method)}
-                >
-                  <Text
+          {inputMethod !== "movements" ? (
+            <View style={styles.inputMethodTabs}>
+              {(["photo", "text"] as const).map((method) => {
+                const active = inputMethod === method;
+                const iconName =
+                  method === "photo" ? "camera.fill" : "sparkles";
+                const tKey = `inputMethod${method.charAt(0).toUpperCase() + method.slice(1)}`;
+                return (
+                  <TouchableOpacity
+                    key={method}
                     style={[
-                      styles.inputMethodTabText,
-                      active && styles.inputMethodTabTextActive,
+                      styles.inputMethodTab,
+                      active && styles.inputMethodTabActive,
                     ]}
+                    onPress={() => setInputMethod(method)}
                   >
-                    {icons[method]} {t(`setup.${tKey}`)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+                    <View style={styles.inputMethodTabInner}>
+                      <IconSymbol
+                        name={iconName}
+                        size={16}
+                        color={active ? "#00E5FF" : "#667"}
+                      />
+                      <Text
+                        style={[
+                          styles.inputMethodTabText,
+                          active && styles.inputMethodTabTextActive,
+                        ]}
+                      >
+                        {t(`setup.${tKey}`)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={styles.backToPrimaryBar}
+              onPress={() => setInputMethod("photo")}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.backToPrimaryText}>
+                {t("setup.backToWodInput")}
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {recentWorkoutSetup &&
             recentWorkoutSetup.profileId === activeProfile?.id &&
             Date.now() - recentWorkoutSetup.savedAt <= RECENT_WORKOUT_TTL_MS && (
-              <TouchableOpacity
-                testID="reuse-recent-workout-card"
-                style={styles.recentReuseCard}
-                onPress={() => handleApplyRecentWorkout(recentWorkoutSetup)}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel={t("setup.reuseRecentTitle")}
-              >
-                <View style={styles.recentReuseContent}>
-                  <Text style={styles.recentReuseTitle}>
-                    {t("setup.reuseRecentTitle")}
-                  </Text>
-                  <Text style={styles.recentReuseSummary} numberOfLines={2}>
-                    {[
-                      recentWorkoutSetup.wodDescription.trim() ||
-                        recentWorkoutSetup.rawText.trim(),
-                      recentWorkoutSetup.selectedMovements.join(", "),
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </Text>
-                  <Text style={styles.recentReuseMeta}>
-                    {t("setup.reuseRecentMeta", {
-                      minutes: Math.max(
-                        1,
-                        Math.round(
-                          (Date.now() - recentWorkoutSetup.savedAt) / 60_000,
+              <View style={styles.recentReuseCard}>
+                <TouchableOpacity
+                  testID="reuse-recent-workout-card"
+                  style={styles.recentReuseMainTouch}
+                  onPress={() => handleApplyRecentWorkout(recentWorkoutSetup)}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("setup.reuseRecentTitle")}
+                >
+                  <View style={styles.recentReuseContent}>
+                    <Text style={styles.recentReuseTitle}>
+                      {t("setup.reuseRecentTitle")}
+                    </Text>
+                    <Text style={styles.recentReuseSummary} numberOfLines={2}>
+                      {[
+                        recentWorkoutSetup.wodDescription.trim() ||
+                          recentWorkoutSetup.rawText.trim(),
+                        recentWorkoutSetup.selectedMovements.join(", "),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </Text>
+                    <Text style={styles.recentReuseMeta}>
+                      {t("setup.reuseRecentMeta", {
+                        time: formatSavedRelativeTime(
+                          recentWorkoutSetup.savedAt,
                         ),
-                      ),
-                    })}
-                  </Text>
-                </View>
-                <View style={styles.recentReuseBadge}>
-                  <Text style={styles.recentReuseBadgeText}>
-                    {t("setup.reuseRecentApply")}
-                  </Text>
-                </View>
-              </TouchableOpacity>
+                      })}
+                    </Text>
+                  </View>
+                  <View style={styles.recentReuseBadge}>
+                    <Text style={styles.recentReuseBadgeText}>
+                      {t("setup.reuseRecentApply")}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleClearRecentWorkout}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("setup.reuseRecentClear")}
+                >
+                  <IconSymbol
+                    name="xmark.circle.fill"
+                    size={18}
+                    color="#64748B"
+                  />
+                </TouchableOpacity>
+              </View>
             )}
 
           {inputMethod === "text" && (
@@ -750,6 +846,9 @@ export default function WorkoutSetup() {
             >
               <Text style={styles.sectionLabel}>
                 {t("setup.wodDescriptionLabel")}
+              </Text>
+              <Text style={styles.preInputHint}>
+                {t("setup.textPreInputHint")}
               </Text>
               <TextInput
                 style={styles.wodTextInput}
@@ -761,6 +860,46 @@ export default function WorkoutSetup() {
                 numberOfLines={5}
                 textAlignVertical="top"
               />
+              {wodDescription.trim().length > 0 && (
+                <TouchableOpacity
+                  testID="save-workout-for-later-text-btn"
+                  style={styles.saveLaterBtn}
+                  onPress={handleSaveForLater}
+                  activeOpacity={0.8}
+                >
+                  <IconSymbol
+                    name="bookmark.fill"
+                    size={16}
+                    color="#00E5FF"
+                  />
+                  <Text style={styles.saveLaterBtnText}>
+                    {t("setup.saveForLater")}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={styles.secondaryMovementsLink}
+                onPress={() => setInputMethod("movements")}
+                activeOpacity={0.75}
+              >
+                <IconSymbol
+                  name="dumbbell.fill"
+                  size={15}
+                  color="#64748B"
+                />
+                <Text style={styles.secondaryMovementsText}>
+                  {selectedMovements.length > 0
+                    ? t("setup.secondaryMovementsSelected", {
+                        count: selectedMovements.length,
+                      })
+                    : t("setup.secondaryMovementsBtn")}
+                </Text>
+                <IconSymbol
+                  name="chevron.right"
+                  size={15}
+                  color="#64748B"
+                />
+              </TouchableOpacity>
             </ScrollView>
           )}
 
@@ -778,23 +917,81 @@ export default function WorkoutSetup() {
                 </View>
               ) : (
                 <>
-                  <TouchableOpacity
-                    style={styles.photoBtn}
-                    onPress={() => handleScanWhiteboard(true)}
-                  >
-                    <IconSymbol name="camera.fill" size={28} color="#00E5FF" />
-                    <Text style={styles.photoBtnText}>
-                      {t("setup.takePhoto")}
+                  <View style={styles.photoHeroHeader}>
+                    <Text style={styles.photoHeroTitle}>
+                      {t("setup.photoPrimaryTitle")}
                     </Text>
+                    <Text style={styles.photoHeroSubtitle}>
+                      {t("setup.photoPrimarySubtitle")}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.photoBtn, styles.photoBtnPrimary]}
+                    onPress={() => handleScanWhiteboard(true)}
+                    activeOpacity={0.8}
+                  >
+                    <View style={styles.photoIconBadge}>
+                      <IconSymbol name="camera.fill" size={26} color="#00E5FF" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.photoBtnText}>
+                        {t("setup.takePhoto")}
+                      </Text>
+                      <Text style={styles.photoBtnSubtext}>
+                        {t("setup.takePhotoDesc")}
+                      </Text>
+                    </View>
+                    <IconSymbol
+                      name="chevron.right"
+                      size={18}
+                      color="#64748B"
+                    />
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.photoBtn}
                     onPress={() => handleScanWhiteboard(false)}
+                    activeOpacity={0.8}
                   >
-                    <IconSymbol name="photo.fill" size={28} color="#00E5FF" />
-                    <Text style={styles.photoBtnText}>
-                      {t("setup.chooseFromGallery")}
+                    <View style={styles.photoIconBadgeSecondary}>
+                      <IconSymbol name="photo.fill" size={24} color="#64D2FF" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.photoBtnText}>
+                        {t("setup.chooseFromGallery")}
+                      </Text>
+                      <Text style={styles.photoBtnSubtext}>
+                        {t("setup.chooseFromGalleryDesc")}
+                      </Text>
+                    </View>
+                    <IconSymbol
+                      name="chevron.right"
+                      size={18}
+                      color="#64748B"
+                    />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.secondaryMovementsLink}
+                    onPress={() => setInputMethod("movements")}
+                    activeOpacity={0.75}
+                  >
+                    <IconSymbol
+                      name="dumbbell.fill"
+                      size={15}
+                      color="#64748B"
+                    />
+                    <Text style={styles.secondaryMovementsText}>
+                      {selectedMovements.length > 0
+                        ? t("setup.secondaryMovementsSelected", {
+                            count: selectedMovements.length,
+                          })
+                        : t("setup.secondaryMovementsBtn")}
                     </Text>
+                    <IconSymbol
+                      name="chevron.right"
+                      size={15}
+                      color="#64748B"
+                    />
                   </TouchableOpacity>
                 </>
               )}
@@ -1325,14 +1522,34 @@ export default function WorkoutSetup() {
               onPress={handleStart}
               disabled={isStarting}
             >
+              <IconSymbol name="flame.fill" size={20} color="#000" />
               <Text style={styles.startText}>{t("setup.startWorkout")}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.previewBtn} onPress={handlePreview}>
-              <IconSymbol name="eye" size={18} color="#00E5FF" />
-              <Text style={styles.previewBtnText}>
-                {t("setup.previewCamera")}
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.confirmSecondaryActionsRow}>
+              {(wodDescription.trim().length > 0 ||
+                rawText.trim().length > 0 ||
+                selectedMovements.length > 0) && (
+                <TouchableOpacity
+                  testID="save-workout-for-later-confirm-btn"
+                  style={[styles.previewBtn, { flex: 1 }]}
+                  onPress={handleSaveForLater}
+                >
+                  <IconSymbol name="bookmark.fill" size={16} color="#00E5FF" />
+                  <Text style={styles.previewBtnText} numberOfLines={1}>
+                    {t("setup.saveForLater")}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.previewBtn, { flex: 1 }]}
+                onPress={handlePreview}
+              >
+                <IconSymbol name="camera.fill" size={16} color="#00E5FF" />
+                <Text style={styles.previewBtnText} numberOfLines={1}>
+                  {t("setup.previewCamera")}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </>
       )}
@@ -1677,14 +1894,18 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
+  confirmSecondaryActionsRow: {
+    flexDirection: "row" as const,
+    gap: 10,
+    marginTop: 12,
+  },
   previewBtn: {
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
     gap: 8,
-    marginTop: 12,
     paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingHorizontal: 14,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: "#00E5FF40",
@@ -1694,6 +1915,7 @@ const styles = StyleSheet.create({
     color: "#00E5FF",
     fontSize: 14,
     fontWeight: "700",
+    flexShrink: 1,
   },
   testPoseBtn: {
     flexDirection: "row",
@@ -1759,6 +1981,69 @@ const styles = StyleSheet.create({
   },
   inputMethodTabText: { color: "#666", fontSize: 13, fontWeight: "700" },
   inputMethodTabTextActive: { color: "#00E5FF" },
+  inputMethodTabInner: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 6,
+  },
+  backToPrimaryBar: {
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 2,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignSelf: "flex-start" as const,
+    borderRadius: 8,
+    backgroundColor: "#141A24",
+    borderWidth: 1,
+    borderColor: "#1E2630",
+  },
+  backToPrimaryText: {
+    color: "#00E5FF",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  preInputHint: {
+    color: "#8B9BB4",
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  saveLaterBtn: {
+    marginTop: 12,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    gap: 8,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(0, 229, 255, 0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(0, 229, 255, 0.35)",
+  },
+  saveLaterBtnText: {
+    color: "#00E5FF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  secondaryMovementsLink: {
+    marginTop: 18,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: "#111620",
+    borderWidth: 1,
+    borderColor: "#1A2230",
+  },
+  secondaryMovementsText: {
+    flex: 1,
+    color: "#94A3B8",
+    fontSize: 13,
+    fontWeight: "600",
+  },
 
   // Text input mode
   sectionLabel: {
@@ -1778,23 +2063,63 @@ const styles = StyleSheet.create({
     fontSize: 15,
     borderWidth: 1,
     borderColor: "#1E2630",
-    minHeight: 100,
+    minHeight: 110,
     textAlignVertical: "top" as const,
   },
 
   // Photo mode
+  photoHeroHeader: {
+    marginTop: 14,
+    marginBottom: 16,
+    gap: 4,
+  },
+  photoHeroTitle: {
+    color: "#F8FAFC",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  photoHeroSubtitle: {
+    color: "#8B9BB4",
+    fontSize: 13,
+    lineHeight: 19,
+  },
   photoBtn: {
     flexDirection: "row" as const,
     alignItems: "center" as const,
     gap: 14,
     backgroundColor: "#141A24",
     borderRadius: 14,
-    padding: 20,
+    padding: 18,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "#1E2630",
   },
-  photoBtnText: { color: "#C8D0DA", fontSize: 16, fontWeight: "600" },
+  photoBtnPrimary: {
+    borderColor: "rgba(0, 229, 255, 0.45)",
+    backgroundColor: "#0E1C28",
+  },
+  photoIconBadge: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "rgba(0, 229, 255, 0.14)",
+    justifyContent: "center" as const,
+    alignItems: "center" as const,
+  },
+  photoIconBadgeSecondary: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "#1A2433",
+    justifyContent: "center" as const,
+    alignItems: "center" as const,
+  },
+  photoBtnText: { color: "#F8FAFC", fontSize: 16, fontWeight: "700" },
+  photoBtnSubtext: {
+    color: "#8B9BB4",
+    fontSize: 12,
+    marginTop: 3,
+  },
   scanningContainer: {
     alignItems: "center" as const,
     paddingVertical: 60,
@@ -1854,16 +2179,23 @@ const styles = StyleSheet.create({
   recentReuseCard: {
     flexDirection: "row" as const,
     alignItems: "center" as const,
-    justifyContent: "space-between" as const,
     backgroundColor: "rgba(0, 229, 255, 0.08)",
     borderRadius: 12,
     borderWidth: 1,
     borderColor: "rgba(0, 229, 255, 0.35)",
     marginHorizontal: 16,
-    marginBottom: 12,
+    marginTop: 8,
+    marginBottom: 8,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    gap: 12,
+    gap: 10,
+  },
+  recentReuseMainTouch: {
+    flex: 1,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "space-between" as const,
+    gap: 10,
   },
   recentReuseContent: {
     flex: 1,

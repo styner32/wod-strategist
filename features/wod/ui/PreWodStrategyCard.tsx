@@ -364,22 +364,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: 8,
     marginBottom: 12,
   },
   headerLeft: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    flexShrink: 1,
   },
   title: {
     color: "#00E5FF",
     fontSize: 15,
     fontWeight: "700",
     letterSpacing: 0.3,
+    flexShrink: 1,
   },
   headerBadges: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
     gap: 6,
   },
   partialBadge: {

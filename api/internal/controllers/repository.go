@@ -139,7 +139,7 @@ func (r *GormAnalysisResultRepository) FindChunksBySessionID(ctx context.Context
 		return nil, err
 	}
 
-	return results, nil
+	return db.FilterRedundantSplitChunks(results), nil
 }
 
 func (r *GormAnalysisResultRepository) Archive(ctx context.Context, id uint) error {

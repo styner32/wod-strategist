@@ -67,7 +67,7 @@
 - CORS `allowMethods` includes `DELETE` and `PATCH`; `allowHeaders` is `Content-Type, Authorization` (no `X-API-Key`)
 - Workers do not check `deleted_at` — in-flight tasks continue after account deletion
 - Old mobile clients may still send an ignored `X-API-Key` header; that is harmless after server removal
-- Legacy CLI scripts (`scripts/test-upload.js` / `scripts/test-chunk-upload.js`) still send only an API key and will fail JWT middleware until they gain a real login flow or are retired (the browser QA page was removed in favor of the web app)
+- Saved-video QA uses the authenticated web app; live API replay uses `api/cmd/live-replay` with a JWT or user login. See [live replay](live-replay.md).
 
 ## Remaining hardening TODO
 - [ ] Replace in-memory login rate limiter with a distributed limiter

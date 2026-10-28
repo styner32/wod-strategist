@@ -419,3 +419,120 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 		Expect(resp.EffortReflection.Reason).To(ContainSubstring("회복 완료로 단정하지 않고"))
 	})
 })
+
+type countingTextParser struct {
+	calls int
+}
+
+func (c *countingTextParser) ParseText(ctx context.Context, prompt string) (string, *gemini.TokenUsage, error) {
+	c.calls++
+	return `{}`, &gemini.TokenUsage{TotalTokens: 50}, nil
+}
+
+var _ = Describe("GET /api/v1/strategies/readiness", func() {
+	var (
+		router  *gin.Engine
+		profile db.Profile
+		user    db.User
+	)
+
+	BeforeEach(func() {
+		ensureTestDB()
+		testhelpers.CleanupDB(dbConn)
+		testhelpers.CleanupQueue(inspector)
+
+		profile = testhelpers.CreateProfile(dbConn, &db.Profile{
+			FitnessLevel: "intermediate",
+		})
+		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())
+	})
+
+	It("returns 400 when profile_id query parameter is missing or invalid", func() {
+		router = newTestRouterWithAuthService(controllers.Config{})
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/strategies/readiness", nil)
+		req.Header.Set("Authorization", "Bearer "+generateValidToken(user))
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusBadRequest))
+	})
+
+	It("returns 403 when user does not own the profile", func() {
+		router = newTestRouterWithAuthService(controllers.Config{})
+		otherUser := testhelpers.CreateUser(dbConn, &db.User{Username: "readiness-other-user"})
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/strategies/readiness?profile_id=%d", profile.ID), nil)
+		req.Header.Set("Authorization", "Bearer "+generateValidToken(otherUser))
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusForbidden))
+	})
+
+	It("returns no_history state when profile has no completed workouts", func() {
+		router = newTestRouterWithAuthService(controllers.Config{})
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/strategies/readiness?profile_id=%d", profile.ID), nil)
+		req.Header.Set("Authorization", "Bearer "+generateValidToken(user))
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusOK))
+
+		var resp controllers.ProfileReadinessResponse
+		Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
+		Expect(resp.ProfileID).To(Equal(profile.ID))
+		Expect(resp.EvidenceStatus).To(Equal("no_history"))
+		Expect(resp.OverallFatigueScore).To(BeNil())
+		Expect(resp.MuscleReadiness).To(BeEmpty())
+	})
+
+	It("returns 6-muscle readiness and recent workouts without calling Gemini", func() {
+		parser := &countingTextParser{}
+		router = newTestRouterWithAuthService(controllers.Config{
+			TextParser: parser,
+		})
+
+		now := time.Now().UTC()
+		workoutTime := now.Add(-6 * time.Hour)
+		source := "session_ulid"
+		sid := "WOD-20261027-01READINESSSESS001"
+		effort := 8
+
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:            sid,
+			ProfileID:            profile.ID,
+			WorkoutType:          "wod",
+			WODEvaluationVersion: wodeval.Version,
+			Effort:               &effort,
+		})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID:       sid,
+			ProfileID:       profile.ID,
+			Status:          "COMPLETED",
+			AnalysisType:    db.AnalysisTypeWOD,
+			SessionScore:    `{"intensity":85,"movements":{"Thruster":{"reps":45},"Pull-up":{"reps":45}},"wod_start":{"seconds":10,"end_seconds":430,"status":"confirmed"}}`,
+			WorkoutAt:       &workoutTime,
+			WorkoutAtSource: &source,
+			CreatedAt:       workoutTime,
+		})
+
+		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/strategies/readiness?profile_id=%d", profile.ID), nil)
+		req.Header.Set("Authorization", "Bearer "+generateValidToken(user))
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(parser.calls).To(Equal(0))
+
+		var resp controllers.ProfileReadinessResponse
+		Expect(json.Unmarshal(w.Body.Bytes(), &resp)).To(Succeed())
+		Expect(resp.ProfileID).To(Equal(profile.ID))
+		Expect(resp.EvidenceStatus).To(Equal("complete"))
+		Expect(resp.OverallFatigueScore).NotTo(BeNil())
+		Expect(*resp.OverallFatigueScore).To(BeNumerically(">", 0))
+		Expect(resp.MuscleReadiness).To(HaveLen(len(fatigue.AllMuscleGroups)))
+		Expect(resp.LastWorkoutAt).NotTo(BeNil())
+		Expect(resp.RecentWorkouts).To(HaveLen(1))
+		Expect(resp.RecentWorkouts[0].SessionID).To(Equal(sid))
+		Expect(resp.RecentWorkouts[0].Effort).To(HaveValue(Equal(8)))
+	})
+})

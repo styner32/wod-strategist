@@ -14,7 +14,6 @@ const mockReleases: jest.Mock[] = [];
 const mockStartCamera = jest.fn();
 const mockStopCamera = jest.fn();
 const mockReplace = jest.fn();
-const mockConfidence = jest.fn();
 const mockProcessChunk = jest.fn();
 const mockCompress = jest.fn();
 const mockCancelCompression = jest.fn();
@@ -101,9 +100,8 @@ jest.mock("@/features/health/useBleHeartRate", () => ({ useBleHeartRate: () => (
 }) }));
 jest.mock("@/features/ai-coach/frame-processors/usePoseDetection", () => ({ usePoseDetection: () => ({
   frameProcessor: undefined, poseResult: undefined, isModelLoaded: false,
+  status: "disabled", hasInference: false, error: null,
   monitorData: { confidence: 0, motion: 0, isWorkingOut: false },
-  getWorkoutConfidence: () => 0, getLatestMotion: () => null,
-  getCaptureConfidence: (...args: unknown[]) => mockConfidence(...args), resetCaptureObservations: () => {},
 }) }));
 jest.mock("@/features/ai-coach/ui/EnergyMonitor", () => ({ EnergyMonitor: () => null }));
 jest.mock("@/features/ai-coach/ui/SkeletonOverlay", () => ({ SkeletonOverlay: () => null }));
@@ -143,7 +141,6 @@ beforeEach(() => {
   mockAdd.mockResolvedValue(undefined);
   mockStopped.mockResolvedValue(undefined);
   mockSave.mockResolvedValue({ status: "saved" });
-  mockConfidence.mockReturnValue(0);
   mockProcessChunk.mockResolvedValue(undefined);
   mockCompress.mockImplementation(async (path: string) => path);
   mockMergeChunks.mockResolvedValue(undefined);
@@ -420,14 +417,15 @@ it("triggers gallery save and server merge when the only segment is emitted duri
   view.unmount();
 });
 
-it.each(["network", "confidence"])("keeps complete originals saveable and releases readers after an analysis %s failure", async (failure) => {
-  if (failure === "network") mockProcessChunk.mockRejectedValue(new Error("offline"));
-  else mockConfidence.mockImplementationOnce(() => { throw new Error("confidence unavailable"); });
+it("keeps complete originals saveable and releases readers after an analysis network failure", async () => {
+  mockProcessChunk.mockRejectedValue(new Error("offline"));
   const view = render(<VisionTestPage />);
   await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
   const callbacks = mockStartCamera.mock.calls[0][0];
   await act(async () => { callbacks.onRecordingSegment({ status: "ready", path: "file:///documents/run-1/analysis/part.mp4",
     captureStartTimeMs: Date.now() - 1000, captureEndTimeMs: Date.now() }); });
+  await waitFor(() => expect(mockProcessChunk).toHaveBeenCalled());
+  expect(mockProcessChunk.mock.calls[0][2]).not.toHaveProperty("workoutConfidence");
   fireEvent.press(view.getByText("square.fill"));
   await act(async () => { callbacks.onRecordingSourceFinalized(source()); });
   await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));

@@ -35,14 +35,20 @@ media offsets; remaining manifest/coverage work must preserve this separation fo
 
 ### Original chunk failure recovery (2026-09-11)
 
-- Both original chunk handlers persist terminal results through
-  `persistChunkAnalysisResult`. A PostgreSQL transaction advisory lock keyed by
-  `(profile_id, session_id, file_path)` serializes insert/update, including an
-  absent row. A late success updates a failure while retaining its ID and verified
-  media offsets; terminal failure cannot overwrite success. No schema change is
-  required. Existing duplicate rows remain for feedback references, but merge
-  includes each GCS URI once. Other writers must use the same helper for original
-  chunks; this does not make server-split/full-analysis writes idempotent.
+- Both original chunk handlers and server-split chunk writers (`saveChunkResult`)
+  persist terminal results through `persistChunkAnalysisResult`. A PostgreSQL
+  transaction advisory lock keyed by `(profile_id, session_id, file_path)`
+  serializes insert/update, including an absent row. A late success updates a
+  failure while retaining its ID (and verified media offsets for original mobile
+  chunks); terminal failure cannot overwrite success. No schema change is
+  required. Existing duplicate rows remain for feedback references, while merge
+  includes each GCS URI once and read/subtitle/Pass-1 paths filter redundant
+  `split_chunk_*` rows via `db.FilterRedundantSplitChunks`.
+- `NewMergeChunksTask` truncates `merge_requested_at` to whole minutes and uses
+  `asynq.Unique(15 * time.Minute)`; `NewVideoAnalysisTask` uses
+  `asynq.Unique(videoAnalysisTaskTimeout)` (`1h`); `enqueueHardSub` uses
+  `asynq.Unique(15 * time.Minute)`. HTTP/worker enqueue callers treat
+  `asynq.ErrDuplicateTask` as an idempotent `202 Accepted` / no-op.
 - Final status write failures return a retryable error, including after the
   analysis retry budget is exhausted. `SkipRetry` follows a successful failure
   write, not a failed DB write.
@@ -362,12 +368,11 @@ Chunks are processed in parallel with bounded concurrency.
 ### Timeout risk
 - There is no measured supported video-length limit recorded here. A previous estimate of ~27 minutes incorrectly treated concurrency 10 as serial processing.
 - Illustrative split-only arithmetic: `ceil(chunk_count / 10) × per_chunk_seconds`; this excludes splitting, upload/poll variance, rate limits, and sequential deep calls. It cannot establish an end-to-end timeout guarantee.
-- The current completeness heuristic compares `MAX(end_secs)` with probed duration. It can miss earlier gaps and still uses legacy offsets; replacing it with successful media-interval union coverage remains REL-07.
+- Pass 1 completeness check (`shouldSplitVideoForPass1` + `queryMaxChunkEndSecs`) compares `db.MaxCompletedChunkMediaEndSecs` (verified `media_end_secs` on `COMPLETED` chunks, with legacy `end_secs` fallback only for `split_chunk_*` rows — never capture-clock mobile `end_secs`) against probed `videoDuration`, and treats verified non-exercise chunks (`len(skippedSegments) > 0`) as indexed chunk coverage so rest-only or `Pause`-shifted mobile sessions do not falsely trigger `splitAndAnalyzeChunks`.
 
-### Idempotent skip
-- `chunkAlreadyAnalyzed(sessionID, startSecs)` checks for existing `COMPLETED` records.
-- On retry after a partial run, already-analyzed chunks are skipped, so only the remaining chunks are processed.
-- This skips some repeated work after retries, but floating-point start equality and non-idempotent writes do not guarantee full resumability; REL-06/REL-07 remain open.
+### Idempotent skip & read-path filtering
+- `splitAndAnalyzeChunks` preloads completed session chunks (`loadCompletedSessionChunks`) and skips any split interval `[startSecs, endSecs)` where `db.IntervalCoveredByChunks` finds ≥50% union coverage on the merged media clock (covering both `Pause`-shifted mobile chunks via `media_start_secs`/`media_end_secs` and prior partial `split_chunk_*` runs).
+- `db.FilterRedundantSplitChunks` deduplicates per-file rows (`COMPLETED` first, then lowest ID) and omits `split_chunk_*` rows (`heart_rate_bpm = 0`) that overlap `COMPLETED` original mobile chunks (or exceed a fully mapped original concat timeline), while retaining uploaded-video-only `split_chunk_*` sessions and genuine gap-filling `split_chunk_*` rows where an original mobile chunk `FAILED`. Applied across `FindChunksBySessionID`, `GetSessionAnalysis`, `GetSensorTimeline`, `HandleGenerateHardSubTask`, `buildChunkSegments`, and `NewSessionTimelineFromAnalysisResults`.
 
 ## Gemini Model & Thinking Configuration
 - Worker and bare-client deep video analysis default: `gemini-4-argon` (2026-10-14). General session segments, chunk/session reanalysis, injury follow-ups, and legacy whole-video analysis inherit it.

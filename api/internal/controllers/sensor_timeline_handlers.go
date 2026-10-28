@@ -64,6 +64,7 @@ func (ctl *Controller) GetSensorTimeline(c *gin.Context) {
 		Where("session_id = ?", sessionID).
 		Order("start_secs ASC, id ASC").
 		Find(&chunks).Error
+	chunks = db.FilterRedundantSplitChunks(chunks)
 
 	segments := make([]VideoMappingSegmentDTO, 0, len(chunks))
 	for _, ch := range chunks {
