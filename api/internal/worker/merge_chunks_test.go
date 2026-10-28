@@ -172,6 +172,104 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(frameCount).To(BeNumerically(">=", 115))
 	})
+
+	DescribeTable("parses leading black trim seconds from blackdetect output",
+		func(ffmpegOut string, want float64) {
+			Expect(parseLeadingBlackTrimSecs(ffmpegOut)).To(BeNumerically("~", want, 0.0005))
+		},
+		Entry("1-frame 30fps black flash at chunk start",
+			"[blackdetect @ 0x1] black_start:0 black_end:0.0333333 black_duration:0.0333333",
+			0.032333,
+		),
+		Entry("2-frame 30fps black flash at chunk start",
+			"[blackdetect @ 0x1] black_start:0 black_end:0.0666667 black_duration:0.0666667",
+			0.065667,
+		),
+		Entry("genuinely dark scene spanning probe window is never trimmed",
+			"[blackdetect @ 0x1] black_start:0 black_end:0.35 black_duration:0.35",
+			0.0,
+		),
+		Entry("mid-chunk dark flash after bright start is never trimmed",
+			"[blackdetect @ 0x1] black_start:0.10 black_end:0.133333 black_duration:0.033333",
+			0.0,
+		),
+		Entry("no blackdetect lines",
+			"frame=   11 fps=0.0 q=-0.0 Lsize=N/A time=00:00:00.35",
+			0.0,
+		),
+	)
+
+	It("strips a synthetic 1-frame leading black flash at a chunk seam while leaving genuinely dark chunks intact", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not installed, skipping")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		tmpDir, err := os.MkdirTemp("", "merge-black-trim-test")
+		Expect(err).NotTo(HaveOccurred())
+		defer os.RemoveAll(tmpDir)
+
+		chunk0 := filepath.Join(tmpDir, "chunk_000.mp4")
+		out0, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+			"-f", "lavfi", "-i", "color=c=white:size=406x720:rate=30:d=2.0",
+			"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:d=2.0",
+			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+			"-c:a", "aac", "-ar", "44100", "-ac", "2",
+			"-y", chunk0,
+		).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(out0))
+
+		// Chunk 1 reproduces the 10.033333s mobile segment boundary artifact:
+		// 1 digital black frame (1/30s = 0.033333s) followed by 2.0s bright video.
+		chunk1 := filepath.Join(tmpDir, "chunk_001.mp4")
+		out1, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+			"-f", "lavfi", "-i", "color=c=black:size=406x720:rate=30:d=0.033333",
+			"-f", "lavfi", "-i", "color=c=white:size=406x720:rate=30:d=2.0",
+			"-f", "lavfi", "-i", "sine=frequency=660:sample_rate=44100:d=2.033333",
+			"-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+			"-map", "[v]", "-map", "2:a",
+			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+			"-c:a", "aac", "-ar", "44100", "-ac", "2",
+			"-y", chunk1,
+		).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(out1))
+		Expect(probeLeadingBlackTrimSecs(ctx, chunk1)).To(BeNumerically("~", 0.0323, 0.005))
+
+		// Verify a genuinely dark 2.0s chunk is NOT scheduled for trimming.
+		darkChunk := filepath.Join(tmpDir, "dark_only.mp4")
+		outDark, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+			"-f", "lavfi", "-i", "color=c=black:size=406x720:rate=30:d=2.0",
+			"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+			"-y", darkChunk,
+		).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(outDark))
+		Expect(probeLeadingBlackTrimSecs(ctx, darkChunk)).To(Equal(0.0))
+
+		mergedPath := filepath.Join(tmpDir, "merged.mp4")
+		intervals, intervalErr, mergeErr := mergeDownloadedChunks(
+			ctx,
+			zap.NewNop(),
+			tmpDir,
+			[]string{"gs://b/videos/1/s/chunk_000.mp4", "gs://b/videos/1/s/chunk_001.mp4"},
+			[]string{chunk0, chunk1},
+			mergedPath,
+		)
+		Expect(mergeErr).NotTo(HaveOccurred())
+		Expect(intervalErr).NotTo(HaveOccurred())
+		Expect(intervals).To(HaveLen(2))
+		Expect(intervals[1].End - intervals[1].Start).To(BeNumerically("~", 2.0, 0.05))
+
+		// Entire merged video must have zero black flashes across the seam.
+		bdOut, err := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "info",
+			"-i", mergedPath,
+			"-vf", "blackdetect=d=0.015:pix_th=0.05:pic_th=0.98",
+			"-an", "-f", "null", "-",
+		).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(bdOut))
+		Expect(string(bdOut)).NotTo(ContainSubstring("black_start:"))
+	})
 })
 
 var _ = Describe("listOriginalChunks", func() {

@@ -49,6 +49,7 @@ type chunkMovementEvidence struct {
 	targetState    string
 	hasDoc         bool
 	anyEvents      bool
+	hasUnassessed  bool
 	completeCycles map[string]int
 	topMovement    string
 }
@@ -85,11 +86,19 @@ func readChunkMovementEvidence(chunk db.ChunkAnalysisResult) chunkMovementEviden
 		}
 	}
 	for _, gap := range doc.Unassessed {
-		if gap.Reason == "incomplete_cycle" {
+		reason := strings.ToLower(strings.TrimSpace(gap.Reason))
+		if reason != "target_not_visible" {
+			out.hasUnassessed = true
+		}
+		if reason == "incomplete_cycle" {
 			out.anyEvents = true
-			if out.topMovement == "" && strings.TrimSpace(gap.Movement) != "" && !isNonExerciseMovement(gap.Movement) {
-				out.topMovement = strings.TrimSpace(gap.Movement)
+		}
+		if out.topMovement == "" && strings.TrimSpace(gap.Movement) != "" && !isNonExerciseMovement(gap.Movement) {
+			name := activity.CanonicalMovement(gap.Movement)
+			if name == "" {
+				name = strings.TrimSpace(gap.Movement)
 			}
+			out.topMovement = name
 		}
 	}
 	return out
@@ -137,7 +146,7 @@ func classifyChunkActivity(chunk db.ChunkAnalysisResult, workoutType string) (ch
 	}
 	if isExplicitNonExerciseActivity(signals.ActivityState) ||
 		(movement != "" && isNonExerciseMovement(movement) && !strings.EqualFold(movement, "unknown")) ||
-		(evidence.hasDoc && evidence.targetState == "identified" && evidence.activityState == "rest") {
+		(evidence.hasDoc && evidence.targetState == "identified" && evidence.activityState == "rest" && !evidence.hasUnassessed) {
 		return chunkExplicitRest, ""
 	}
 	if movement != "" {
@@ -147,6 +156,7 @@ func classifyChunkActivity(chunk db.ChunkAnalysisResult, workoutType string) (ch
 	if strings.EqualFold(signals.ActivityState, "exercise") ||
 		(strings.EqualFold(signals.ActivityState, "unknown") && !(evidence.hasDoc && evidence.targetState == "not_visible")) ||
 		evidence.activityState == "exercise" ||
+		(evidence.hasDoc && evidence.targetState == "identified" && evidence.hasUnassessed) ||
 		(evidence.hasDoc && evidence.activityState == "unknown" && evidence.targetState != "not_visible" && evidence.targetState != "") {
 		return chunkActive, label()
 	}

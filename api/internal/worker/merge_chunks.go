@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,7 +22,15 @@ import (
 	"gorm.io/gorm"
 )
 
-const mergeChunksUniqueTTL = 15 * time.Minute
+const (
+	mergeChunksUniqueTTL        = 15 * time.Minute
+	leadingBlackProbeWindowSecs = 0.35
+	minLeadingBlackTrimSecs     = 0.015
+	maxLeadingBlackTrimSecs     = 0.20
+	minChunkDurationForTrimSecs = 1.0
+)
+
+var blackDetectLineRegex = regexp.MustCompile(`black_start:([0-9.]+)\s+black_end:([0-9.]+)`)
 
 type concatMediaInterval struct {
 	FilePath string
@@ -310,26 +319,63 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 // and writes the merged MP4 to mergedPath.
 func mergeDownloadedChunks(ctx context.Context, log *zap.Logger, tmpDir string, objects, localChunkPaths []string, mergedPath string) ([]concatMediaInterval, error, error) {
 	normalizedForConcat := false
-	if len(localChunkPaths) > 1 {
+	if len(localChunkPaths) > 0 {
 		profiles, probeErr := probeAllChunkStreamProfiles(ctx, localChunkPaths)
 		if probeErr != nil {
 			log.Warn("Could not probe chunk stream profiles; falling back to single-pass concat",
 				zap.Error(probeErr))
-		} else if needsNorm, targetW, targetH, includeAudio := chunksNeedNormalization(profiles); needsNorm {
-			log.Info("Normalizing heterogeneous chunks before concat",
-				zap.Int("chunk_count", len(localChunkPaths)),
-				zap.Int("target_width", targetW),
-				zap.Int("target_height", targetH),
-				zap.Bool("include_audio", includeAudio))
+		} else {
+			trimStarts := make([]float64, len(localChunkPaths))
+			anyTrim := false
 			for i, srcPath := range localChunkPaths {
-				normPath := filepath.Join(tmpDir, fmt.Sprintf("norm_chunk_%03d.mp4", i))
-				if err := normalizeChunkForConcat(ctx, log, srcPath, normPath, profiles[i], targetW, targetH, includeAudio); err != nil {
-					return nil, nil, fmt.Errorf("normalize chunk %d: %w", i, err)
+				if trimSecs := probeLeadingBlackTrimSecs(ctx, srcPath); trimSecs > 0 {
+					trimStarts[i] = trimSecs
+					anyTrim = true
+					log.Info("Detected leading black frame on chunk; scheduling trim before concat",
+						zap.Int("chunk_index", i),
+						zap.Float64("trim_start_secs", trimSecs))
 				}
-				_ = os.Remove(srcPath)
-				localChunkPaths[i] = normPath
 			}
-			normalizedForConcat = true
+
+			needsNorm, targetW, targetH, includeAudio := chunksNeedNormalization(profiles)
+			if !needsNorm && anyTrim && !canTrimInPlaceForConcat(profiles) {
+				needsNorm = true
+				targetW = evenDimension(max(profiles[0].DisplayWidth, 2))
+				targetH = evenDimension(max(profiles[0].DisplayHeight, 2))
+			}
+
+			if needsNorm {
+				log.Info("Normalizing chunks before concat",
+					zap.Int("chunk_count", len(localChunkPaths)),
+					zap.Int("target_width", targetW),
+					zap.Int("target_height", targetH),
+					zap.Bool("include_audio", includeAudio),
+					zap.Bool("has_leading_black_trim", anyTrim))
+				for i, srcPath := range localChunkPaths {
+					normPath := filepath.Join(tmpDir, fmt.Sprintf("norm_chunk_%03d.mp4", i))
+					if err := normalizeChunkForConcat(ctx, log, srcPath, normPath, profiles[i], targetW, targetH, includeAudio, trimStarts[i]); err != nil {
+						return nil, nil, fmt.Errorf("normalize chunk %d: %w", i, err)
+					}
+					_ = os.Remove(srcPath)
+					localChunkPaths[i] = normPath
+				}
+				normalizedForConcat = true
+			} else if anyTrim {
+				for i, srcPath := range localChunkPaths {
+					if trimStarts[i] <= 0 {
+						continue
+					}
+					trimPath := filepath.Join(tmpDir, fmt.Sprintf("trim_chunk_%03d.mp4", i))
+					if err := trimChunkLeadingBlack(ctx, log, srcPath, trimPath, profiles[i], trimStarts[i]); err != nil {
+						log.Warn("Leading black frame trim failed; keeping original chunk",
+							zap.Int("chunk_index", i),
+							zap.Error(err))
+						continue
+					}
+					_ = os.Remove(srcPath)
+					localChunkPaths[i] = trimPath
+				}
+			}
 		}
 	}
 
@@ -540,11 +586,99 @@ func evenDimension(v int) int {
 	return (v + 1) &^ 1
 }
 
-func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, outputPath string, profile chunkStreamProfile, targetW, targetH int, includeAudio bool) error {
+func parseLeadingBlackTrimSecs(ffmpegOutput string) float64 {
+	m := blackDetectLineRegex.FindStringSubmatch(ffmpegOutput)
+	if len(m) != 3 {
+		return 0
+	}
+	blackStart, errStart := strconv.ParseFloat(m[1], 64)
+	blackEnd, errEnd := strconv.ParseFloat(m[2], 64)
+	if errStart != nil || errEnd != nil {
+		return 0
+	}
+	if blackStart > 0.005 || blackEnd < minLeadingBlackTrimSecs || blackEnd > maxLeadingBlackTrimSecs {
+		return 0
+	}
+	return math.Max(0.01, blackEnd-0.001)
+}
+
+func probeLeadingBlackTrimSecs(ctx context.Context, inputPath string) float64 {
+	if probeVideoDuration(ctx, inputPath) < minChunkDurationForTrimSecs {
+		return 0
+	}
+	output, err := exec.CommandContext(ctx, "ffmpeg",
+		"-nostdin",
+		"-v", "info",
+		"-t", fmt.Sprintf("%.3f", leadingBlackProbeWindowSecs),
+		"-i", inputPath,
+		"-vf", "blackdetect=d=0.015:pix_th=0.05:pic_th=0.98",
+		"-an",
+		"-f", "null",
+		"-",
+	).CombinedOutput()
+	if err != nil {
+		return 0
+	}
+	return parseLeadingBlackTrimSecs(string(output))
+}
+
+func canTrimInPlaceForConcat(profiles []chunkStreamProfile) bool {
+	for _, p := range profiles {
+		if p.VideoCodec != "h264" || p.PixFmt != "yuv420p" || p.Rotation != 0 || p.Width%2 != 0 || p.Height%2 != 0 {
+			return false
+		}
+		if p.HasAudio && (p.AudioCodec != "aac" || p.SampleRate <= 0 || p.Channels <= 0) {
+			return false
+		}
+	}
+	return true
+}
+
+func trimChunkLeadingBlack(ctx context.Context, log *zap.Logger, inputPath, outputPath string, profile chunkStreamProfile, trimStartSecs float64) error {
+	vf := fmt.Sprintf("trim=start=%.6f,setpts=PTS-STARTPTS,fps=30,format=yuv420p", trimStartSecs)
+	args := []string{
+		"-i", inputPath,
+		"-map", "0:v:0",
+	}
+	if profile.HasAudio {
+		args = append(args,
+			"-map", "0:a:0",
+			"-vf", vf,
+			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+			"-af", fmt.Sprintf("atrim=start=%.6f,asetpts=PTS-STARTPTS", trimStartSecs),
+			"-c:a", "aac", "-ar", strconv.Itoa(profile.SampleRate), "-ac", strconv.Itoa(profile.Channels), "-b:a", "128k",
+		)
+	} else {
+		args = append(args,
+			"-vf", vf,
+			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+			"-an",
+		)
+	}
+	args = append(args, "-movflags", "+faststart", "-y", outputPath)
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Error("FFmpeg leading black trim failed",
+			zap.String("input_path", inputPath),
+			zap.Error(err),
+			zap.String("output", string(output)))
+		return fmt.Errorf("ffmpeg trim leading black: %s: %w", string(output), err)
+	}
+	return nil
+}
+
+func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, outputPath string, profile chunkStreamProfile, targetW, targetH int, includeAudio bool, trimStartSecs float64) error {
 	vf := fmt.Sprintf(
 		"fps=30,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p",
 		targetW, targetH, targetW, targetH,
 	)
+	af := "aresample=async=1:first_pts=0"
+	if trimStartSecs > 0 {
+		vf = fmt.Sprintf("trim=start=%.6f,setpts=PTS-STARTPTS,%s", trimStartSecs, vf)
+		af = fmt.Sprintf("atrim=start=%.6f,asetpts=PTS-STARTPTS,%s", trimStartSecs, af)
+	}
 
 	var args []string
 	switch {
@@ -568,7 +702,7 @@ func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, ou
 			"-vf", vf,
 			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
 			"-video_track_timescale", "30000",
-			"-af", "aresample=async=1:first_pts=0",
+			"-af", af,
 			"-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
 			"-movflags", "+faststart",
 			"-y",

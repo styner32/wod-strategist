@@ -105,6 +105,45 @@ var _ = Describe("Tracking channel", func() {
 		Expect(uncertain.MatchedCues).To(BeEmpty(), "an uncertain target is not handed forward")
 		Expect(uncertain.Station).To(BeEmpty())
 		Expect(trackingInputPrompt(trackingHandoff{}, false, false)).To(BeEmpty())
+
+		restPrev := db.ChunkAnalysisResult{
+			Status:               "COMPLETED",
+			ExerciseType:         "",
+			ObservedSignals:      `{}`,
+			MovementObservations: db.NullableJSONDocument(`{"version":1,"target_state":"identified","activity_state":"rest","events":[],"unassessed":[]}`),
+			TargetConfidence:     0.95,
+			TargetCues:           `{"matched_cues":["black shirt","red shoes"],"ambiguous":false,"confidence":0.95,"frame_region":"center","station":"barbell"}`,
+		}
+		restHandoff := buildTrackingHandoff(restPrev, WorkoutTypeWOD)
+		Expect(restHandoff.MatchedCues).To(Equal([]string{"black shirt", "red shoes"}))
+		Expect(restHandoff.Station).To(Equal("barbell"))
+		Expect(restHandoff.ActivityState).To(BeEmpty(), "prior rest state must not prime the next chunk to classify exercise as rest")
+	})
+
+	It("selects an in-cycle or mid-chunk usable box and rejects tiny edge slivers", func() {
+		// Rejects tiny edge bystander leg crop like [480,0,580,60] (area 6000 < 8000).
+		_, ok := selectTrackingReferenceBox([]trackingBox{
+			{T: 9.0, Box: []float64{480, 0, 580, 60}},
+		}, nil)
+		Expect(ok).To(BeFalse())
+
+		// Avoids t=9.0 post-rep drop boundary when an active mid-chunk box exists.
+		box, ok := selectTrackingReferenceBox([]trackingBox{
+			{T: 1.0, Box: []float64{173, 560, 461, 742}},
+			{T: 5.5, Box: []float64{263, 563, 442, 706}},
+			{T: 9.0, Box: []float64{172, 574, 452, 725}},
+		}, []byte(`{"version":1,"events":[{"movement":"Deadlift","unit":"reps","start_secs":6.5,"end_secs":9.0,"complete":true}]}`))
+		Expect(ok).To(BeTrue())
+		Expect(box.T).To(Equal(5.5))
+
+		// Prefers box strictly inside an active repetition before the final 0.3s drop.
+		inRepBox, ok := selectTrackingReferenceBox([]trackingBox{
+			{T: 1.0, Box: []float64{284, 81, 446, 321}},
+			{T: 5.0, Box: []float64{144, 13, 442, 171}},
+			{T: 8.0, Box: []float64{141, 10, 442, 171}},
+		}, []byte(`{"version":1,"events":[{"movement":"Handstand Push-up","unit":"reps","start_secs":7.6,"end_secs":9.2,"complete":true}]}`))
+		Expect(ok).To(BeTrue())
+		Expect(inRepBox.T).To(Equal(8.0))
 	})
 
 	It("marks the target box in pixel space regardless of resolution", func() {
@@ -168,6 +207,52 @@ var _ = Describe("Tracking channel", func() {
 			Expect(prompt).To(ContainSubstring(`"station":"rower"`))
 			Expect(prompt).NotTo(ContainSubstring("keep your back straight"))
 			Expect(prompt).NotTo(ContainSubstring("rounded back"))
+		})
+
+		It("prefers the latest active chunk reference over a subsequent [NO_EXERCISE] rest chunk within the fallback window", func() {
+			dbConn, err := testhelpers.InitDB()
+			Expect(err).NotTo(HaveOccurred())
+			testhelpers.CleanupDB(dbConn)
+			storageTransport = testhelpers.NewMockTransport()
+			storageClient, err := testhelpers.NewStorageClient("test-bucket", storageTransport)
+			Expect(err).NotTo(HaveOccurred())
+			w = &Worker{DB: dbConn, StorageClient: storageClient, BucketName: "test-bucket", logger: zap.NewNop(), TrackingContinuityEnabled: true}
+			profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
+			sessionID := "WOD-20261028-01M602PXNAAZFKKNKXNSN2D61S"
+
+			s0, e0 := 410.0, 420.0
+			activeChunk := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+				SessionID: sessionID, ProfileID: profile.ID, Status: "COMPLETED", ExerciseType: "Handstand Push-up",
+				FilePath:         fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_41.mp4", profile.ID, sessionID),
+				ObservedSignals:  `{"movement":"Handstand Push-up","activity_state":"exercise"}`,
+				TargetConfidence: 0.95, StartSecs: &s0, EndSecs: &e0,
+			})
+			activeObj := trackingReferenceObject(profile.ID, sessionID, activeChunk.ID)
+			Expect(dbConn.Model(&db.ChunkAnalysisResult{}).Where("id = ?", activeChunk.ID).Update("target_cues",
+				fmt.Sprintf(`{"matched_cues":["black shirt"],"ambiguous":false,"confidence":0.95,"station":"floor","reference_image":%q}`, activeObj)).Error).To(Succeed())
+
+			s1, e1 := 420.0, 430.0
+			falseRestChunk := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+				SessionID: sessionID, ProfileID: profile.ID, Status: "COMPLETED", ExerciseType: "",
+				FilePath:             fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_42.mp4", profile.ID, sessionID),
+				ObservedSignals:      `{}`,
+				MovementObservations: db.NullableJSONDocument(`{"version":1,"target_state":"identified","activity_state":"rest","events":[],"unassessed":[]}`),
+				TargetConfidence:     0.85, StartSecs: &s1, EndSecs: &e1,
+			})
+			restObj := trackingReferenceObject(profile.ID, sessionID, falseRestChunk.ID)
+			Expect(dbConn.Model(&db.ChunkAnalysisResult{}).Where("id = ?", falseRestChunk.ID).Update("target_cues",
+				fmt.Sprintf(`{"matched_cues":["shorts"],"ambiguous":false,"confidence":0.85,"station":"floor","reference_image":%q}`, restObj)).Error).To(Succeed())
+
+			var activeJPEG bytes.Buffer
+			Expect(jpeg.Encode(&activeJPEG, image.NewRGBA(image.Rect(0, 0, 8, 8)), nil)).To(Succeed())
+			// Only activeObj should be fetched from GCS; restObj must never be downloaded.
+			testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+activeObj, activeJPEG.Bytes())
+
+			prompt, images := w.trackingInputs(context.Background(), profile.ID, sessionID, WorkoutTypeWOD,
+				fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_43.mp4", profile.ID, sessionID), 430.0)
+			Expect(storageTransport.Verify()).To(Succeed())
+			Expect(images).To(HaveLen(1))
+			Expect(prompt).NotTo(ContainSubstring(`"activity_state":"rest"`))
 		})
 	})
 })

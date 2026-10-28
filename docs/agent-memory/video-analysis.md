@@ -84,13 +84,21 @@ person (`chunk_continuity.go`, shared by `buildChunkSegments` and
 `buildSessionDebugSegments`; since 2026-10-26):
 
 - `classifyChunkActivity` combines tag, `observed_signals` and
-  `movement_observations`. Visible cycles (complete or `incomplete_cycle`) are
-  exercise even under a rest label. Explicit rest is walking/rest/setup signals,
-  a non-exercise movement, or `movement_observations` `target_state: identified`
-  + `activity_state: rest` (`[NO_EXERCISE]` chunks store `observed_signals: {}`,
-  so this is the only rest evidence they carry). An unlabelled chunk with
-  exercise/unknown activity is observed as `Unknown`. A chunk with no evidence
-  at all is unclassified (neither exercise nor rest).
+  `movement_observations`. Visible cycles (complete or `incomplete_cycle`) and
+  any non-`target_not_visible` `unassessed` intervals are exercise (`chunkActive`,
+  using canonical/raw `gap.Movement` or `Unknown`) even under a `[NO_EXERCISE]`
+  or rest label. Explicit rest (`chunkExplicitRest`) requires walking/rest/setup
+  signals, a non-exercise movement, or `movement_observations`
+  `target_state: identified` + `activity_state: rest` with empty `events` and no
+  non-`target_not_visible` `unassessed` entries (`[NO_EXERCISE]` chunks store
+  `observed_signals: {}`, matching `isPass1ExplicitRest` in `activity_review.go`).
+  `ChunkAnalysisPrompt` and `movementObservationPrompt` also explicitly instruct
+  rear/low-angle barbell movements (Deadlift/Clean/Snatch where the torso occludes
+  the bar shaft) and wall-inverted Handstand Push-up / Wall Walk cycles to be
+  counted from torso-hip-plate or heel-elbow vertical displacement rather than
+  treated as rest/static holds. An unlabelled chunk with exercise/unknown
+  activity is observed as `Unknown`. A chunk with no evidence at all is
+  unclassified (neither exercise nor rest).
 - Hysteresis (`smoothChunkSequence`): state and label change only when the new
   state lasts two chunks. A **single** non-active chunk between two continuous
   active chunks is bridged; two or more consecutive rest chunks are real rest.

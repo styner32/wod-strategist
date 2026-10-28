@@ -423,8 +423,8 @@ func (c *Client) AnalyzeChunkVideo(ctx context.Context, filePath string, prompt 
 }
 
 // AnalyzeChunkVideoWithImages is AnalyzeChunkVideo with reference images
-// (e.g. the tracked person marked in a previous frame) placed before the
-// video. The prompt must explain what each image is.
+// (e.g. the tracked person marked in a previous frame) placed after the
+// video so temporal video tokens lead attention. The prompt must explain what each image is.
 func (c *Client) AnalyzeChunkVideoWithImages(ctx context.Context, filePath string, prompt string, model string, images [][]byte) (string, string, *TokenUsage, error) {
 	level := ""
 	if c != nil {
@@ -483,6 +483,7 @@ func (c *Client) analyzeVideoWithParts(ctx context.Context, filePath string, pro
 		}
 	}
 	parts := make([]*genai.Part, 0, len(images)+2)
+	parts = append(parts, &genai.Part{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}})
 	for _, img := range images {
 		if len(img) == 0 {
 			continue
@@ -493,10 +494,7 @@ func (c *Client) analyzeVideoWithParts(ctx context.Context, filePath string, pro
 		}
 		parts = append(parts, &genai.Part{InlineData: &genai.Blob{MIMEType: mime, Data: img}})
 	}
-	parts = append(parts,
-		&genai.Part{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}},
-		&genai.Part{Text: prompt},
-	)
+	parts = append(parts, &genai.Part{Text: prompt})
 	resp, usage, err := c.generateContent(ctx, model, []*genai.Content{{
 		Role:  genai.RoleUser,
 		Parts: parts,
@@ -838,7 +836,8 @@ func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType 
 }
 
 // AnalyzeSegmentWithModelAndImages is AnalyzeSegmentWithModel with reference
-// images (tracked-person markers) placed before the video segment.
+// images (tracked-person markers) placed after the video segment so temporal
+// video tokens lead attention.
 func (c *Client) AnalyzeSegmentWithModelAndImages(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string, images [][]byte) (string, *TokenUsage, error) {
 	if model == "" {
 		model = c.model
@@ -879,6 +878,7 @@ func (c *Client) AnalyzeSegmentWithModelAndImages(ctx context.Context, fileURI, 
 		genConfig.ThinkingConfig = tc
 	}
 	segmentParts := make([]*genai.Part, 0, len(images)+2)
+	segmentParts = append(segmentParts, videoPart)
 	for _, img := range images {
 		if len(img) == 0 {
 			continue
@@ -889,7 +889,7 @@ func (c *Client) AnalyzeSegmentWithModelAndImages(ctx context.Context, fileURI, 
 		}
 		segmentParts = append(segmentParts, &genai.Part{InlineData: &genai.Blob{MIMEType: imgMIME, Data: img}})
 	}
-	segmentParts = append(segmentParts, videoPart, genai.NewPartFromText(prompt))
+	segmentParts = append(segmentParts, genai.NewPartFromText(prompt))
 	resp, usage, err := c.generateContent(exactOffsetContext, model, []*genai.Content{{
 		Role:  genai.RoleUser,
 		Parts: segmentParts,
