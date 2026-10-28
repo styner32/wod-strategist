@@ -23,6 +23,7 @@ const STAGE_LABELS: Record<string, string> = {
   verify_highlights: "하이라이트 검증",
   session_reanalysis: "전체 재분석",
   chunk_reanalysis: "청크 재분석",
+  recognition_review: "영상 인식 오류 진단",
 };
 
 interface SessionCostCardProps {

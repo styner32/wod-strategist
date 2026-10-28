@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { historyApi } from "../../api/history";
+import { RecognitionReviewPanel } from "./RecognitionReviewPanel";
 import ko from "../../../../features/i18n/locales/ko.json";
 import {
   activePerformanceRecords,
@@ -514,8 +515,8 @@ function PerformanceEditor({
   );
 }
 
-export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, sourceUpdatedAt, wodDescription }: {
-  sessionId: string; profileId: number; isOriginal: boolean; seek: (seconds: number) => void; sourceUpdatedAt?: string; wodDescription?: string;
+export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, sourceUpdatedAt, wodDescription, currentTime, duration }: {
+  sessionId: string; profileId: number; isOriginal: boolean; seek: (seconds: number) => void; sourceUpdatedAt?: string; wodDescription?: string; currentTime?: number; duration?: number;
 }) {
   const client = useQueryClient();
   const scope = `${profileId}:${sessionId}`;
@@ -567,6 +568,9 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
       }
       client.setQueryData(queryKey, result); setSelected(undefined); setNotice(words.saved); setMovement(confirmedMovement);
       await client.invalidateQueries({ queryKey: ["performance-benchmarks", profileId] });
+      await client.invalidateQueries({ queryKey: ["recognition-evaluation", sessionId, profileId] });
+      await client.invalidateQueries({ queryKey: ["recognition-reviews", sessionId, profileId] });
+      await client.invalidateQueries({ queryKey: ["recognition-review", sessionId, profileId] });
     } catch (e) {
       if (currentScope.current !== requestScope) return;
       if ((e as { status?: number })?.status === 409) {
@@ -1144,6 +1148,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
         {(benchmarks.data?.best ?? []).map(r => <p key={r.id} className="text-sm">{words.best}: {text("recordSummary", { count: r.reps, load: loadText(r), duration: (r.elapsed_seconds ?? (r.end_secs - r.start_secs)).toFixed(1) })} · {text("rate", { value: r.reps_per_minute.toFixed(1) })} · {text(r.measurement)} · {text(r.technique)} · {r.workout_prescription || words.unknown}</p>)}
         <p className="text-xs text-text-secondary">{words.scope}</p>
       </div>}
+      <RecognitionReviewPanel sessionId={sessionId} profileId={profileId} sourceUpdatedAt={sourceUpdatedAt} currentTime={currentTime} duration={duration} isOriginal={isOriginal} seek={seek} />
     </section>
   );
 }

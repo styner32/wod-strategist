@@ -109,6 +109,20 @@ var _ = Describe("Live replay fixture validation", func() {
 		_, err := validateFixture(dir, m)
 		Expect(err).NotTo(HaveOccurred())
 	})
+
+	It("validates all prepared local benchmark fixtures when present", func() {
+		root := filepath.Join("..", "..", defaultFixturesRoot)
+		entries, err := discoverFixtures(root)
+		Expect(err).NotTo(HaveOccurred())
+		if len(entries) == 0 {
+			Skip("no local benchmark fixtures are prepared")
+		}
+		for _, entry := range entries {
+			raw, err := validateFixture(entry.Dir, entry.Manifest)
+			Expect(err).NotTo(HaveOccurred(), "fixture %s (%s)", entry.Name, entry.Dir)
+			Expect(validatePreparedTelemetry(raw, entry.Manifest.SourceProfileID, entry.Manifest.SourceSessionID)).To(Succeed(), "fixture %s (%s)", entry.Name, entry.Dir)
+		}
+	})
 })
 
 var _ = Describe("Live replay chunk result validation", func() {

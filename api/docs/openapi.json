@@ -1301,6 +1301,265 @@
                     }
                 }
             }
+        },
+        "/sessions/{session_id}/recognition-evaluation": {
+            "get": {
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Compare confirmed performance with original video recognition",
+                "parameters": [
+                    {
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/recognitionreview.Evaluation"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{session_id}/recognition-reviews": {
+            "get": {
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "List recognition diagnoses",
+                "parameters": [
+                    {
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.ListRecognitionReviewsResponse"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Manually diagnose selected video recognition errors",
+                "parameters": [
+                    {
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/controllers.CreateRecognitionReviewRequest"
+                            }
+                        }
+                    },
+                    "description": "Confirmed records and review range",
+                    "required": true
+                },
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.CreateRecognitionReviewResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{session_id}/recognition-reviews/{run_id}": {
+            "get": {
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get a recognition diagnosis",
+                "parameters": [
+                    {
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Diagnosis ID",
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/controllers.RecognitionReviewRunResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "servers": [
@@ -2526,6 +2785,299 @@
                     },
                     "rest_start_secs": {
                         "type": "number"
+                    }
+                }
+            },
+            "recognitionreview.Evaluation": {
+                "type": "object",
+                "properties": {
+                    "fingerprint": {
+                        "type": "string"
+                    },
+                    "records": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/recognitionreview.RecordEvaluation"
+                        }
+                    },
+                    "source_version": {
+                        "type": "string"
+                    },
+                    "summary": {
+                        "$ref": "#/components/schemas/recognitionreview.Summary"
+                    }
+                }
+            },
+            "recognitionreview.RecordEvaluation": {
+                "type": "object",
+                "properties": {
+                    "evidence_complete": {
+                        "type": "boolean"
+                    },
+                    "gaps": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/workoutprogress.Gap"
+                        }
+                    },
+                    "movement_match": {
+                        "type": "boolean",
+                        "nullable": true
+                    },
+                    "observed_complete_reps": {
+                        "type": "integer",
+                        "nullable": true
+                    },
+                    "predicted_movements": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/recognitionreview.MovementCount"
+                        }
+                    },
+                    "record": {
+                        "$ref": "#/components/schemas/workoutprogress.Record"
+                    },
+                    "reps_delta": {
+                        "type": "integer",
+                        "nullable": true
+                    },
+                    "source_refs": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "status": {
+                        "type": "string"
+                    }
+                }
+            },
+            "recognitionreview.MovementCount": {
+                "type": "object",
+                "properties": {
+                    "movement": {
+                        "type": "string"
+                    },
+                    "reps": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "recognitionreview.Summary": {
+                "type": "object",
+                "properties": {
+                    "insufficient_evidence": {
+                        "type": "integer"
+                    },
+                    "matched": {
+                        "type": "integer"
+                    },
+                    "mismatch": {
+                        "type": "integer"
+                    },
+                    "total": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "controllers.ListRecognitionReviewsResponse": {
+                "type": "object",
+                "properties": {
+                    "active_run_id": {
+                        "type": "integer"
+                    },
+                    "runs": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/controllers.RecognitionReviewRunResponse"
+                        }
+                    }
+                }
+            },
+            "controllers.RecognitionReviewRunResponse": {
+                "type": "object",
+                "properties": {
+                    "batches": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/controllers.RecognitionReviewBatchResponse"
+                        }
+                    },
+                    "created_at": {
+                        "type": "string"
+                    },
+                    "duration_ms": {
+                        "type": "integer"
+                    },
+                    "end_secs": {
+                        "type": "number"
+                    },
+                    "error": {
+                        "type": "string"
+                    },
+                    "evaluation": {
+                        "$ref": "#/components/schemas/recognitionreview.Evaluation"
+                    },
+                    "evaluation_fingerprint": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "integer"
+                    },
+                    "input_tokens": {
+                        "type": "integer"
+                    },
+                    "model": {
+                        "type": "string"
+                    },
+                    "outdated": {
+                        "type": "boolean"
+                    },
+                    "output_tokens": {
+                        "type": "integer"
+                    },
+                    "prompt_version": {
+                        "type": "string"
+                    },
+                    "record_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    },
+                    "schema_version": {
+                        "type": "string"
+                    },
+                    "source_version": {
+                        "type": "string"
+                    },
+                    "start_secs": {
+                        "type": "number"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "total_tokens": {
+                        "type": "integer"
+                    },
+                    "updated_at": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.RecognitionReviewBatchResponse": {
+                "type": "object",
+                "properties": {
+                    "core_end_secs": {
+                        "type": "number"
+                    },
+                    "core_start_secs": {
+                        "type": "number"
+                    },
+                    "end_secs": {
+                        "type": "number"
+                    },
+                    "error": {
+                        "type": "string"
+                    },
+                    "findings": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/recognitionreview.Finding"
+                        }
+                    },
+                    "id": {
+                        "type": "integer"
+                    },
+                    "input_tokens": {
+                        "type": "integer"
+                    },
+                    "output_tokens": {
+                        "type": "integer"
+                    },
+                    "record_id": {
+                        "type": "integer"
+                    },
+                    "start_secs": {
+                        "type": "number"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "total_tokens": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "recognitionreview.Finding": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string"
+                    },
+                    "difference": {
+                        "type": "string"
+                    },
+                    "end_secs": {
+                        "type": "number"
+                    },
+                    "evidence_level": {
+                        "type": "string"
+                    },
+                    "limitations": {
+                        "type": "string"
+                    },
+                    "original_evidence": {
+                        "type": "string"
+                    },
+                    "possible_reason": {
+                        "type": "string"
+                    },
+                    "stage": {
+                        "type": "string"
+                    },
+                    "start_secs": {
+                        "type": "number"
+                    },
+                    "visual_evidence": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.CreateRecognitionReviewRequest": {
+                "type": "object",
+                "properties": {
+                    "client_request_id": {
+                        "type": "string"
+                    },
+                    "end_secs": {
+                        "type": "number"
+                    },
+                    "evaluation_fingerprint": {
+                        "type": "string"
+                    },
+                    "record_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    },
+                    "source_version": {
+                        "type": "string"
+                    },
+                    "start_secs": {
+                        "type": "number"
+                    }
+                }
+            },
+            "controllers.CreateRecognitionReviewResponse": {
+                "type": "object",
+                "properties": {
+                    "run_id": {
+                        "type": "integer"
+                    },
+                    "status": {
+                        "type": "string"
                     }
                 }
             }

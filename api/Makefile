@@ -1,5 +1,5 @@
 ENV_FILE ?= .env
-ifeq (,$(filter test-live test-live-prepare,$(MAKECMDGOALS)))
+ifeq (,$(filter test-live test-live-prepare test-live-list live-test live-test-prepare live-test-list,$(MAKECMDGOALS)))
 ifneq (,$(wildcard $(ENV_FILE)))
   include $(ENV_FILE)
   export
@@ -19,7 +19,7 @@ GINKGO_FLAGS ?= -ginkgo.succinct -ginkgo.silence-skips
 
 GIT_SHA := $(shell git rev-parse --short HEAD)
 
-.PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-live-prepare test-live help test tf-apply
+.PHONY: run run-worker migrate-create migrate-up migrate-down get-ip update-image-api update-image-worker update-image-migrate deploy-api deploy-worker migrate-up-remote test-live-prepare test-live test-live-list live-test-prepare live-test live-test-list help test tf-apply
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $1, $2}'
@@ -83,13 +83,26 @@ migrate-up-remote: ## Run up migrations remotely
 deploy-web: ## Deploy React web frontend to GCS and Cloudflare Worker proxy
 	../scripts/deploy-web.sh
 
-test-live-prepare: ## Prepare pinned video/H10 fixture once (read-only DB/GCS)
-	@mkdir -p tmp/go-build tmp/go-tmp
-	GOCACHE=$(CURDIR)/tmp/go-build GOTMPDIR=$(CURDIR)/tmp/go-tmp go run ./cmd/live-replay prepare $(ARGS)
+LIVE_PREPARE_FLAGS = $(if $(WOD),--wod="$(WOD)") $(if $(FIXTURE),--fixture="$(FIXTURE)") $(if $(SESSION),--source-session="$(SESSION)") $(if $(PROFILE),--source-profile="$(PROFILE)") $(if $(START),--start="$(START)") $(if $(END),--end="$(END)") $(ARGS)
+LIVE_RUN_FLAGS = $(if $(WOD),--wod="$(WOD)") $(if $(FIXTURE),--fixture="$(FIXTURE)") $(ARGS)
 
-test-live: ## Manually replay 5 minutes against live profile 10 (paid analysis; retained results)
+test-live-prepare: ## Prepare benchmark video/H10 fixture (SESSION=WOD-... START=4:50 [WOD=name] [END=auto])
 	@mkdir -p tmp/go-build tmp/go-tmp
-	GOCACHE=$(CURDIR)/tmp/go-build GOTMPDIR=$(CURDIR)/tmp/go-tmp go run ./cmd/live-replay run $(ARGS)
+	GOCACHE=$(CURDIR)/tmp/go-build GOTMPDIR=$(CURDIR)/tmp/go-tmp go run ./cmd/live-replay prepare $(LIVE_PREPARE_FLAGS)
+
+test-live: ## Replay benchmark fixture against live profile 10 (prompts or WOD=<name>; paid analysis)
+	@mkdir -p tmp/go-build tmp/go-tmp
+	GOCACHE=$(CURDIR)/tmp/go-build GOTMPDIR=$(CURDIR)/tmp/go-tmp go run ./cmd/live-replay run $(LIVE_RUN_FLAGS)
+
+test-live-list: ## List prepared benchmark fixtures
+	@mkdir -p tmp/go-build tmp/go-tmp
+	@GOCACHE=$(CURDIR)/tmp/go-build GOTMPDIR=$(CURDIR)/tmp/go-tmp go run ./cmd/live-replay list $(ARGS)
+
+live-test-prepare: test-live-prepare ## Alias for test-live-prepare
+
+live-test: test-live ## Alias for test-live
+
+live-test-list: test-live-list ## Alias for test-live-list
 
 test: ## Run the tests
 	@mkdir -p tmp/go-build tmp/go-tmp

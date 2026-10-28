@@ -32,6 +32,7 @@ type Server struct {
 	Common
 	JWTSigningSecret         string
 	GeminiAPIKey             string // GEMINI_API_KEY — optional; enables /parse-workout-image endpoint
+	GeminiModel              string // GEMINI_MODEL — model snapshotted by manual recognition diagnoses
 	Port                     string
 	DevAllowedOrigins        []string
 	WebOrigin                string // WEB_ORIGIN — production web app origin (e.g. https://app.wod-strategist.com)
@@ -82,6 +83,7 @@ func InitServer() (Server, error) {
 		},
 		JWTSigningSecret:         strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
 		GeminiAPIKey:             strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		GeminiModel:              strings.TrimSpace(os.Getenv("GEMINI_MODEL")),
 		Port:                     strings.TrimSpace(os.Getenv("PORT")),
 		DevAllowedOrigins:        parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
 		WebOrigin:                strings.TrimSpace(os.Getenv("WEB_ORIGIN")),
@@ -96,6 +98,9 @@ func InitServer() (Server, error) {
 	}
 	if cfg.Port == "" {
 		cfg.Port = defaultPort
+	}
+	if cfg.GeminiModel == "" {
+		cfg.GeminiModel = gemini.ModelArgon4
 	}
 
 	if err := validateRequired(

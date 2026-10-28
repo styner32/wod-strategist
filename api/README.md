@@ -72,7 +72,7 @@ swag init -g cmd/server/main.go
 
 Use the [web app](../web/README.md) for authenticated saved-video upload and the mobile app for recording/chunk-finalization QA. Both use real configured GCS storage; no local storage emulator flow is provided.
 
-For a retained five-minute video/H10 replay through authenticated APIs, use [`cmd/live-replay`](cmd/live-replay) via `make test-live-prepare` and `make test-live`. Live analysis incurs model costs and retains the resulting profile 10 session. See the [live replay guide](../docs/agent-memory/live-replay.md) for fixture setup, credentials, and result checks.
+For retained benchmark video/H10 replays through authenticated APIs, use [`cmd/live-replay`](cmd/live-replay) via `make live-test-prepare`, `make live-test-list`, and `make live-test` (`WOD=<name>` or interactive selection) from the repository root. Live analysis incurs model costs and retains the resulting profile 10 session. See the [live replay guide](../docs/agent-memory/live-replay.md) for fixture setup, credentials, and result checks.
 
 ## Tests and migrations
 

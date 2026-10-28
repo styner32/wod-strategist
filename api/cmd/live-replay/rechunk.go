@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wod-strategist/api/internal/storage"
@@ -17,6 +18,9 @@ import (
 // Reuse immutable source provenance and the already cropped sensor data. The
 // old video chunks are deliberately not consumed: they are what is being fixed.
 func prepareFromFixture(ctx context.Context, opts PrepareOptions) error {
+	if strings.TrimSpace(opts.OutputDir) == "" {
+		return fmt.Errorf("rechunk requires --wod or --fixture for the destination directory")
+	}
 	if err := fixtureDestinationAvailable(opts.OutputDir); err != nil {
 		return err
 	}
@@ -65,6 +69,9 @@ func prepareFromFixture(ctx context.Context, opts PrepareOptions) error {
 	chunks, err := prepareVideoChunks(ctx, sourcePath, stage, opts, m.Mapping, m.CaptureStartMs, raw, fps)
 	if err != nil {
 		return err
+	}
+	if opts.Name != "" {
+		m.Name = opts.Name
 	}
 	m.Chunks, m.ChunkSeconds, m.PreparedAt = chunks, opts.ChunkSeconds, time.Now().UTC()
 	// Keep the measured sensor file byte-for-byte identical, including its hash.

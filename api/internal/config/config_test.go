@@ -30,6 +30,18 @@ var _ = Describe("InitServer", func() {
 		setEnv("JWT_SIGNING_SECRET", "test-jwt-siging-secret")
 	})
 
+	It("snapshots the deep-analysis model for manual recognition diagnoses", func() {
+		setEnv("GEMINI_MODEL", "")
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.GeminiModel).To(Equal(gemini.ModelArgon4))
+
+		setEnv("GEMINI_MODEL", "  gemini-3.8-flash  ")
+		cfg, err = config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.GeminiModel).To(Equal(gemini.ModelFlash38))
+	})
+
 	It("keeps Agentic highlights disabled by default and enables only an explicit true value", func() {
 		setEnv("ENABLE_AGENTIC_HIGHLIGHTS", "")
 		cfg, err := config.InitServer()

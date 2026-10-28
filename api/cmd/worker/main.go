@@ -106,6 +106,7 @@ func main() {
 	mux.HandleFunc(worker.TypeGenerateHardSub, w.HandleGenerateHardSubTask)
 	mux.HandleFunc(worker.TypeChunkDebugReanalysis, w.HandleChunkDebugReanalysisTask)
 	mux.HandleFunc(worker.TypeSessionDebugReanalysis, w.HandleSessionDebugReanalysisTask)
+	mux.HandleFunc(worker.TypeRecognitionReview, w.HandleRecognitionReviewTask)
 
 	sensorMux := asynq.NewServeMux()
 	sensorMux.HandleFunc(worker.TypeSensorTelemetry, w.HandleSensorTelemetryTask)

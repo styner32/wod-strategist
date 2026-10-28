@@ -98,6 +98,7 @@ func main() {
 		GitCommit:               GitCommit,
 		EnableChunkReanalysis:   cfg.ChunkReanalysisEnabled,
 		EnableSessionReanalysis: cfg.SessionReanalysisEnabled,
+		RecognitionReviewModel:  cfg.GeminiModel,
 		EnableAgenticHighlights: cfg.AgenticHighlightsEnabled,
 
 		SessionReanalysisDailyQuota: cfg.SessionReanalysisDailyQuota,

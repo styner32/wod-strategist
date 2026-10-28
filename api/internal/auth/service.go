@@ -223,6 +223,7 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uint, password strin
 				&db.AnalysisFeedback{},
 				&db.ChunkReanalysisRun{},
 				&db.SessionReanalysisRun{},
+				&db.RecognitionReviewRun{},
 				&db.AnalysisResult{},
 				&db.ChunkAnalysisResult{},
 				&db.HighlightResult{},

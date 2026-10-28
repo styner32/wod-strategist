@@ -41,4 +41,19 @@ var _ = Describe("Live replay regeneration", func() {
 		chunks = []ReplayChunk{{MediaEndSecs: 10}, {MediaStartSecs: 10, MediaEndSecs: 20}, {MediaStartSecs: 20, MediaEndSecs: 25}}
 		Expect(validateChunkCadence(chunks, 10, 25, 30)).To(Succeed())
 	})
+
+	It("accepts the default Diane interval cadence with a 4.7-second final chunk", func() {
+		Expect(defaultSourceSession).To(Equal("WOD-20261028-01M602PXNAAZFKKNKXNSN2D61S"))
+		Expect(defaultMediaStartSecs).To(Equal(290.0))
+		Expect(defaultMediaEndSecs).To(Equal(714.7))
+		Expect(defaultChunkSeconds).To(Equal(10.0))
+
+		duration := defaultMediaEndSecs - defaultMediaStartSecs
+		chunks := make([]ReplayChunk, 0, 43)
+		for i := range 42 {
+			chunks = append(chunks, ReplayChunk{MediaStartSecs: float64(i * 10), MediaEndSecs: float64((i + 1) * 10)})
+		}
+		chunks = append(chunks, ReplayChunk{MediaStartSecs: 420, MediaEndSecs: duration})
+		Expect(validateChunkCadence(chunks, defaultChunkSeconds, duration, 30)).To(Succeed())
+	})
 })

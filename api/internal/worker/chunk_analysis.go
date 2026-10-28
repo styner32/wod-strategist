@@ -39,11 +39,11 @@ const ChunkAnalysisPrompt = `
 - 운동이 보이면 → 첫 줄에 반드시 [EXERCISE: 영어 운동 이름] 태그를 출력하세요.
   (예: [EXERCISE: Hang Power Clean], [EXERCISE: Push Jerk], [EXERCISE: Deadlift], [EXERCISE: Power Snatch], [EXERCISE: Back Squat], [EXERCISE: Pull-up], [EXERCISE: Burpee])
   * 클린과 스내치는 포괄적인 [EXERCISE: Hang Clean] 또는 [EXERCISE: Snatch]를 쓰지 말고, [EXERCISE: Hang Power Clean], [EXERCISE: Hang Squat Clean], [EXERCISE: Power Clean], [EXERCISE: Squat Clean], [EXERCISE: Hang Power Snatch], [EXERCISE: Hang Squat Snatch] 등으로 구체적인 표준 종목명을 쓰세요.
-  * 바벨/덤벨을 손에 쥐고 행(Hang) 위치에 들고 세트를 이어가는 구간은 운동 진행 중([EXERCISE: ...])입니다. 기구를 완전히 바닥에 내려놓았을 때만 [NO_EXERCISE]를 출력하세요.
+  * 바벨/덤벨을 손으로 쥐고 세트를 이어가는 구간은 기구의 바닥 접촉 여부와 관계없이 운동 진행 중([EXERCISE: ...])입니다. 행(Hang) 위치에서의 유지뿐 아니라 바닥에 둔 기구의 그립을 유지한 채 반복 사이에 잠시 멈추는 구간도 포함하세요. 단순한 장비 세팅·정리나 휴식은 구분하세요. 손이 가려졌다는 이유로 기구를 놓았다고 추정하지 마세요.
   * 로잉(Row), 바이크 에르그(Bike Erg), 에코 바이크(Echo Bike), 스키에르그(Skierg)에 앉거나 선 채로 핸들·핸들바·페달과 접촉해 팔·다리·상체 움직임이 이어지면 앉아 있어도 운동 진행 중([EXERCISE: ...])입니다. 속도가 느려진 것은 휴식이 아닙니다. 기구에서 손발을 떼고 내려왔을 때만 [NO_EXERCISE]를 출력하세요.
   * 후방 촬영으로 대상 인물의 몸통이 바벨 봉을 가리더라도 양쪽 원판이 바닥에서 들리거나 고관절·어깨의 반복적인 굽힘·폄(Deadlift, Clean 등)이 이어지면 운동 진행 중([EXERCISE: ...])입니다. 벽 물구나무(Handstand Push-up)나 바닥 동작(Burpee, Push-up)도 머리·발끝의 상하 이동이 보이면 [NO_EXERCISE]로 단정하지 마세요.
 - 대상 인물이 운동 중인 것은 분명하지만 정확한 종목 근거가 부족하면 → 첫 줄에 [EXERCISE: Unknown] 태그를 출력하세요.
-- 운동이 보이지 않으면 (기구를 내려놓은 휴식, 걷기, 장비 세팅, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그를 출력하세요.
+- 운동이 보이지 않으면 (기구를 놓고 쉬는 구간, 운동과 무관한 걷기, 장비 세팅·정리, 촬영 범위 밖 등) → 첫 줄에 [NO_EXERCISE] 태그를 출력하세요.
 
 ## 코칭 피드백 규칙
 - 운동이 감지된 경우: [EXERCISE: ...] 태그 다음 줄에 **반드시 1~2문장**으로만 코칭 피드백을 답하세요.

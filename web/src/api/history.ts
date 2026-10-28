@@ -1,7 +1,88 @@
 import type { WODTraining, WODTrainingLoad } from "../../../shared/wodTraining";
 import type { HeartRateSummary } from "../../../shared/heartRateSummary";
 import { api } from "./client";
-import type { ConfirmPerformanceRecordsRequest, PerformanceBenchmarksResponse, WorkoutProgressResponse } from "../../../shared/workoutProgress";
+import type { ConfirmPerformanceRecordsRequest, PerformanceBenchmarksResponse, PerformanceRecord, WorkoutProgressResponse } from "../../../shared/workoutProgress";
+
+export interface RecognitionRecordEvaluation {
+  record: PerformanceRecord;
+  predicted_movements: { movement: string; reps: number }[];
+  observed_complete_reps: number | null;
+  movement_match: boolean | null;
+  reps_delta: number | null;
+  evidence_complete: boolean;
+  status: "matched" | "mismatch" | "insufficient_evidence";
+  gaps: { start_secs: number; end_secs: number; reason: string; clock?: string }[];
+  source_refs: string[];
+}
+
+export interface RecognitionEvaluation {
+  source_version: string;
+  fingerprint: string;
+  records: RecognitionRecordEvaluation[];
+  summary: { total: number; matched: number; mismatch: number; insufficient_evidence: number };
+}
+
+export type RecognitionReviewStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED";
+
+export interface RecognitionReviewFinding {
+  start_secs: number;
+  end_secs: number;
+  category: string;
+  stage: string;
+  difference: string;
+  original_evidence: string;
+  visual_evidence: string;
+  possible_reason: string;
+  limitations: string;
+  evidence_level: "stored_fact" | "video_supported_hypothesis" | "undetermined";
+}
+
+export interface RecognitionReviewBatch {
+  id: number;
+  record_id: number;
+  start_secs: number;
+  end_secs: number;
+  core_start_secs: number;
+  core_end_secs: number;
+  status: string;
+  findings: RecognitionReviewFinding[];
+  error?: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+}
+
+export interface RecognitionReviewRun {
+  id: number;
+  status: RecognitionReviewStatus;
+  source_version: string;
+  evaluation_fingerprint: string;
+  record_ids: number[];
+  start_secs: number;
+  end_secs: number;
+  model: string;
+  prompt_version: string;
+  schema_version: string;
+  batches: RecognitionReviewBatch[];
+  outdated: boolean;
+  evaluation?: RecognitionEvaluation;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  duration_ms?: number;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateRecognitionReviewRequest {
+  record_ids: number[];
+  start_secs: number;
+  end_secs: number;
+  source_version: string;
+  evaluation_fingerprint: string;
+  client_request_id: string;
+}
 
 export interface StretchRecommendation {
   stretch: string;
@@ -335,6 +416,10 @@ export interface VideoDownloadResponse {
 export type VideoKind = "merged" | "hardsubbed" | "encoded";
 
 export const historyApi = {
+  getRecognitionEvaluation: (sessionId: string) => api.get<RecognitionEvaluation>(`/sessions/${encodeURIComponent(sessionId)}/recognition-evaluation`),
+  createRecognitionReview: (sessionId: string, body: CreateRecognitionReviewRequest) => api.post<{ run_id: number; status: RecognitionReviewStatus }>(`/sessions/${encodeURIComponent(sessionId)}/recognition-reviews`, body),
+  listRecognitionReviews: (sessionId: string) => api.get<{ runs: RecognitionReviewRun[]; active_run_id?: number | null }>(`/sessions/${encodeURIComponent(sessionId)}/recognition-reviews`),
+  getRecognitionReview: (sessionId: string, runId: number) => api.get<RecognitionReviewRun>(`/sessions/${encodeURIComponent(sessionId)}/recognition-reviews/${runId}`),
   getWorkoutProgress: (sessionId: string) => api.get<WorkoutProgressResponse>(`/sessions/${encodeURIComponent(sessionId)}/workout-progress`),
   confirmPerformanceRecords: (sessionId: string, body: ConfirmPerformanceRecordsRequest) => api.put<WorkoutProgressResponse>(`/sessions/${encodeURIComponent(sessionId)}/performance-records`, body),
   getPerformanceBenchmarks: (profileId: number, movement: string) => api.get<PerformanceBenchmarksResponse>(`/performance-benchmarks?${new URLSearchParams({ profile_id: String(profileId), movement })}`),

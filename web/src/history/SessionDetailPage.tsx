@@ -1312,7 +1312,7 @@ export function SessionDetailPage() {
           </div>
           </> },
           { id: "performance", label: "수행 이력·벤치마크", content: <>
-          {analysis?.status === "COMPLETED" && profileId && sessionId && <WorkoutProgressPanel key={`progress:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} sourceUpdatedAt={analysis.updated_at} wodDescription={wodDescription} isOriginal={effectiveVideoKind === "merged"} seek={handleAnalysisSeek} />}
+          {analysis?.status === "COMPLETED" && profileId && sessionId && <WorkoutProgressPanel key={`progress:${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} sourceUpdatedAt={analysis.updated_at} wodDescription={wodDescription} isOriginal={effectiveVideoKind === "merged"} currentTime={currentTime} duration={duration} seek={handleAnalysisSeek} />}
           </> },
           { id: "timeline", label: "시계열", content: <>
           {analysis && (

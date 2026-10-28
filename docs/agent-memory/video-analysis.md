@@ -79,6 +79,13 @@ Preferred source of truth is verified `media_start_secs` and
 used as merged-video offsets. Rows without verified media offsets are skipped,
 which causes model-based indexing to remain the safe fallback.
 
+Barbell/dumbbell set detection uses grip and visible set continuity, not floor
+contact: a pause between reps with the equipment gripped on the floor is still
+exercise. Equipment setup/cleanup is distinct; occluded hands do not prove
+release or rest. A pause alone adds no repetition event. Keep
+`ChunkAnalysisPrompt`, `MovementEvidenceRulesPrompt`, `movementObservationPrompt`,
+and the fallback indexing prompt in `buildIndexPrompt` aligned on this rule.
+
 For standard WODs, Pass 1 reads chunks as one continuous sequence of the same
 person (`chunk_continuity.go`, shared by `buildChunkSegments` and
 `buildSessionDebugSegments`; since 2026-10-26):

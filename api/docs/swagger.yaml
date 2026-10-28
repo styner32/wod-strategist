@@ -186,6 +186,30 @@ definitions:
       task_id:
         type: string
     type: object
+  controllers.CreateRecognitionReviewRequest:
+    properties:
+      client_request_id:
+        type: string
+      end_secs:
+        type: number
+      evaluation_fingerprint:
+        type: string
+      record_ids:
+        items:
+          type: integer
+        type: array
+      source_version:
+        type: string
+      start_secs:
+        type: number
+    type: object
+  controllers.CreateRecognitionReviewResponse:
+    properties:
+      run_id:
+        type: integer
+      status:
+        type: string
+    type: object
   controllers.CreateUploadURLRequest:
     properties:
       filename:
@@ -280,6 +304,15 @@ definitions:
         type: integer
       session_id:
         type: string
+    type: object
+  controllers.ListRecognitionReviewsResponse:
+    properties:
+      active_run_id:
+        type: integer
+      runs:
+        items:
+          $ref: '#/definitions/controllers.RecognitionReviewRunResponse'
+        type: array
     type: object
   controllers.MergeChunksRequest:
     properties:
@@ -394,6 +427,82 @@ definitions:
       signed_url:
         type: string
       variant:
+        type: string
+    type: object
+  controllers.RecognitionReviewBatchResponse:
+    properties:
+      core_end_secs:
+        type: number
+      core_start_secs:
+        type: number
+      end_secs:
+        type: number
+      error:
+        type: string
+      findings:
+        items:
+          $ref: '#/definitions/recognitionreview.Finding'
+        type: array
+      id:
+        type: integer
+      input_tokens:
+        type: integer
+      output_tokens:
+        type: integer
+      record_id:
+        type: integer
+      start_secs:
+        type: number
+      status:
+        type: string
+      total_tokens:
+        type: integer
+    type: object
+  controllers.RecognitionReviewRunResponse:
+    properties:
+      batches:
+        items:
+          $ref: '#/definitions/controllers.RecognitionReviewBatchResponse'
+        type: array
+      created_at:
+        type: string
+      duration_ms:
+        type: integer
+      end_secs:
+        type: number
+      error:
+        type: string
+      evaluation:
+        $ref: '#/definitions/recognitionreview.Evaluation'
+      evaluation_fingerprint:
+        type: string
+      id:
+        type: integer
+      input_tokens:
+        type: integer
+      model:
+        type: string
+      outdated:
+        type: boolean
+      output_tokens:
+        type: integer
+      prompt_version:
+        type: string
+      record_ids:
+        items:
+          type: integer
+        type: array
+      schema_version:
+        type: string
+      source_version:
+        type: string
+      start_secs:
+        type: number
+      status:
+        type: string
+      total_tokens:
+        type: integer
+      updated_at:
         type: string
     type: object
   controllers.RelatedWODItem:
@@ -630,6 +739,90 @@ definitions:
         type: number
       weight_raw:
         type: string
+  recognitionreview.Evaluation:
+    properties:
+      fingerprint:
+        type: string
+      records:
+        items:
+          $ref: '#/definitions/recognitionreview.RecordEvaluation'
+        type: array
+      source_version:
+        type: string
+      summary:
+        $ref: '#/definitions/recognitionreview.Summary'
+    type: object
+  recognitionreview.Finding:
+    properties:
+      category:
+        type: string
+      difference:
+        type: string
+      end_secs:
+        type: number
+      evidence_level:
+        type: string
+      limitations:
+        type: string
+      original_evidence:
+        type: string
+      possible_reason:
+        type: string
+      stage:
+        type: string
+      start_secs:
+        type: number
+      visual_evidence:
+        type: string
+    type: object
+  recognitionreview.MovementCount:
+    properties:
+      movement:
+        type: string
+      reps:
+        type: integer
+    type: object
+  recognitionreview.RecordEvaluation:
+    properties:
+      evidence_complete:
+        type: boolean
+      gaps:
+        items:
+          $ref: '#/definitions/workoutprogress.Gap'
+        type: array
+      movement_match:
+        type: boolean
+        x-nullable: true
+      observed_complete_reps:
+        type: integer
+        x-nullable: true
+      predicted_movements:
+        items:
+          $ref: '#/definitions/recognitionreview.MovementCount'
+        type: array
+      record:
+        $ref: '#/definitions/workoutprogress.Record'
+      reps_delta:
+        type: integer
+        x-nullable: true
+      source_refs:
+        items:
+          type: string
+        type: array
+      status:
+        type: string
+    type: object
+  recognitionreview.Summary:
+    properties:
+      insufficient_evidence:
+        type: integer
+      matched:
+        type: integer
+      mismatch:
+        type: integer
+      total:
+        type: integer
+    type: object
   workoutprogress.Comparison:
     properties:
       baseline_record_id:
@@ -1341,6 +1534,144 @@ paths:
               type: string
             type: object
       summary: Confirm workout performance records
+      tags:
+      - analysis
+  /sessions/{session_id}/recognition-evaluation:
+    get:
+      parameters:
+      - description: Owned session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/recognitionreview.Evaluation'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Compare confirmed performance with original video recognition
+      tags:
+      - analysis
+  /sessions/{session_id}/recognition-reviews:
+    get:
+      parameters:
+      - description: Owned session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.ListRecognitionReviewsResponse'
+      summary: List recognition diagnoses
+      tags:
+      - analysis
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Owned session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Confirmed records and review range
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.CreateRecognitionReviewRequest'
+      produces:
+      - application/json
+      responses:
+        "202":
+          description: Accepted
+          schema:
+            $ref: '#/definitions/controllers.CreateRecognitionReviewResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Manually diagnose selected video recognition errors
+      tags:
+      - analysis
+  /sessions/{session_id}/recognition-reviews/{run_id}:
+    get:
+      parameters:
+      - description: Owned session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Diagnosis ID
+        in: path
+        name: run_id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.RecognitionReviewRunResponse'
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a recognition diagnosis
       tags:
       - analysis
   /sessions/{session_id}/workout-progress:

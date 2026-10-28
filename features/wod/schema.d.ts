@@ -1492,6 +1492,252 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{session_id}/recognition-evaluation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare confirmed performance with original video recognition */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["recognitionreview.Evaluation"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{session_id}/recognition-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List recognition diagnoses */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ListRecognitionReviewsResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Manually diagnose selected video recognition errors */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Confirmed records and review range */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.CreateRecognitionReviewRequest"];
+                };
+            };
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.CreateRecognitionReviewResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{session_id}/recognition-reviews/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a recognition diagnosis */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                    /** @description Diagnosis ID */
+                    run_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.RecognitionReviewRunResponse"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1904,6 +2150,97 @@ export interface components {
             rest_elapsed_seconds?: number;
             rest_end_secs?: number;
             rest_start_secs?: number;
+        };
+        "recognitionreview.Evaluation": {
+            fingerprint?: string;
+            records?: components["schemas"]["recognitionreview.RecordEvaluation"][];
+            source_version?: string;
+            summary?: components["schemas"]["recognitionreview.Summary"];
+        };
+        "recognitionreview.RecordEvaluation": {
+            evidence_complete?: boolean;
+            gaps?: components["schemas"]["workoutprogress.Gap"][];
+            movement_match?: boolean | null;
+            observed_complete_reps?: number | null;
+            predicted_movements?: components["schemas"]["recognitionreview.MovementCount"][];
+            record?: components["schemas"]["workoutprogress.Record"];
+            reps_delta?: number | null;
+            source_refs?: string[];
+            status?: string;
+        };
+        "recognitionreview.MovementCount": {
+            movement?: string;
+            reps?: number;
+        };
+        "recognitionreview.Summary": {
+            insufficient_evidence?: number;
+            matched?: number;
+            mismatch?: number;
+            total?: number;
+        };
+        "controllers.ListRecognitionReviewsResponse": {
+            active_run_id?: number;
+            runs?: components["schemas"]["controllers.RecognitionReviewRunResponse"][];
+        };
+        "controllers.RecognitionReviewRunResponse": {
+            batches?: components["schemas"]["controllers.RecognitionReviewBatchResponse"][];
+            created_at?: string;
+            duration_ms?: number;
+            end_secs?: number;
+            error?: string;
+            evaluation?: components["schemas"]["recognitionreview.Evaluation"];
+            evaluation_fingerprint?: string;
+            id?: number;
+            input_tokens?: number;
+            model?: string;
+            outdated?: boolean;
+            output_tokens?: number;
+            prompt_version?: string;
+            record_ids?: number[];
+            schema_version?: string;
+            source_version?: string;
+            start_secs?: number;
+            status?: string;
+            total_tokens?: number;
+            updated_at?: string;
+        };
+        "controllers.RecognitionReviewBatchResponse": {
+            core_end_secs?: number;
+            core_start_secs?: number;
+            end_secs?: number;
+            error?: string;
+            findings?: components["schemas"]["recognitionreview.Finding"][];
+            id?: number;
+            input_tokens?: number;
+            output_tokens?: number;
+            record_id?: number;
+            start_secs?: number;
+            status?: string;
+            total_tokens?: number;
+        };
+        "recognitionreview.Finding": {
+            category?: string;
+            difference?: string;
+            end_secs?: number;
+            evidence_level?: string;
+            limitations?: string;
+            original_evidence?: string;
+            possible_reason?: string;
+            stage?: string;
+            start_secs?: number;
+            visual_evidence?: string;
+        };
+        "controllers.CreateRecognitionReviewRequest": {
+            client_request_id?: string;
+            end_secs?: number;
+            evaluation_fingerprint?: string;
+            record_ids?: number[];
+            source_version?: string;
+            start_secs?: number;
+        };
+        "controllers.CreateRecognitionReviewResponse": {
+            run_id?: number;
+            status?: string;
         };
     };
     responses: never;

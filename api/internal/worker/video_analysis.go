@@ -473,7 +473,7 @@ They are suggestions, not confirmation and not a closed list. Omit any hint not 
 5. Static stretch holds and slow mobility movements ARE active exercise segments — label with the pose or stretch name (e.g., "Pigeon Pose", "Cossack Squat Hold", "Mobility"). Do NOT discard slow stretching or static holds as rest.`
 	} else {
 		prompt += `
-5. Active exercise sets include barbell/dumbbell cycling where the target person holds the bar at the hang position between reps. Only omit walking, rest, setup, and intervals where equipment is released on the floor.
+5. Active barbell/dumbbell sets include intervals where the target person maintains their grip between reps, whether holding the equipment at the hang position or pausing with it resting on the floor. Floor contact or a brief grip release alone does not establish rest. Distinguish ongoing sets from non-exercise walking, clear rest, and equipment setup/cleanup; touching equipment for setup/cleanup alone is not exercise. If hands are occluded, do not assume the equipment was released; use visible body position and equipment motion, and preserve uncertainty when exercise cannot be confirmed.
 6. Use specific standard CrossFit exercise names: 'Hang Power Clean', 'Hang Squat Clean', 'Power Clean', 'Squat Clean', 'Hang Power Snatch', 'Hang Squat Snatch', 'Power Snatch', 'Squat Snatch', 'Push Jerk', 'Split Jerk', 'Push Press', 'Strict Press', 'Deadlift'. Avoid ambiguous names like 'Clean', 'Hang Clean', 'Snatch', or 'Hang Snatch'. If exercise is visible but exact movement is unclear, use type "Unknown"; do not force a hint.`
 	}
 
