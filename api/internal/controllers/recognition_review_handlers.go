@@ -164,6 +164,9 @@ func (ctl *Controller) CreateRecognitionReview(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !ctl.requireSessionProcessing(c, sid, pid, false) {
+		return
+	}
 	req, err := decodeRecognitionRequest(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

@@ -60,7 +60,7 @@ func (m *SensorRecoveryManager) expireOverdueUploads(ctx context.Context) {
 	var rows []db.AnalysisResult
 
 	err := m.db.WithContext(ctx).
-		Where("sensor_state = ? AND sensor_next_attempt_at IS NOT NULL AND sensor_next_attempt_at <= ? AND archived_at IS NULL",
+		Where("sensor_state = ? AND sensor_next_attempt_at IS NOT NULL AND sensor_next_attempt_at <= ? AND archived_at IS NULL AND automatic_processing_cancelled_at IS NULL",
 			db.SensorStateUploading, now).
 		Limit(100).
 		Find(&rows).Error
@@ -73,7 +73,7 @@ func (m *SensorRecoveryManager) expireOverdueUploads(ctx context.Context) {
 		tx := m.db.WithContext(ctx).Begin()
 		var locked db.AnalysisResult
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("id = ? AND sensor_state = ?", r.ID, db.SensorStateUploading).
+			Where("id = ? AND sensor_state = ? AND archived_at IS NULL AND automatic_processing_cancelled_at IS NULL", r.ID, db.SensorStateUploading).
 			First(&locked).Error; err != nil {
 			tx.Rollback()
 			continue
@@ -97,7 +97,7 @@ func (m *SensorRecoveryManager) requeueOverdueTasks(ctx context.Context) {
 	// Respect retry_not_before: if retry_not_before exists, it must be <= now.
 	err := m.db.WithContext(ctx).Raw(`
 		SELECT id FROM analysis_results
-		WHERE archived_at IS NULL
+		WHERE archived_at IS NULL AND automatic_processing_cancelled_at IS NULL
 		  AND (
 		    (sensor_state = 'PENDING'
 		     AND sensor_next_attempt_at IS NOT NULL
@@ -130,7 +130,7 @@ func (m *SensorRecoveryManager) recoverSingleTask(ctx context.Context, id uint) 
 
 	var row db.AnalysisResult
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-		Where("id = ? AND archived_at IS NULL", id).
+		Where("id = ? AND archived_at IS NULL AND automatic_processing_cancelled_at IS NULL", id).
 		First(&row).Error; err != nil {
 		return // locked by another worker or not found
 	}
@@ -174,7 +174,10 @@ func (m *SensorRecoveryManager) recoverSingleTask(ctx context.Context, id uint) 
 		return
 	}
 
-	if _, err := m.queueClient.Enqueue(task, asynq.Queue(SensorQueueName), asynq.MaxRetry(0)); err != nil {
+	if err := db.WithSessionAutomaticWork(ctx, m.db, row.ProfileID, row.SessionID, func(tx *gorm.DB) error {
+		_, err := m.queueClient.Enqueue(task, asynq.Queue(SensorQueueName), asynq.MaxRetry(0))
+		return err
+	}); err != nil {
 		m.logger.Warn("failed to enqueue sensor task during recovery (will be retried on next scan)", zap.Error(err))
 		return
 	}

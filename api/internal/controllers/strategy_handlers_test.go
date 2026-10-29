@@ -270,6 +270,7 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 				"request_id":"req-1",
 				"source_generation":"77",
 				"calculation_version":3,
+				"calculation_inputs":{"calibration_version":"bootstrap_chest_v1","enmo_rest_g":0.01,"enmo_ref_g":0.30},
 				"quality":{"valid_hr":true,"is_complete":true},
 				"metrics":{
 					"hr":{"weighted_mean_bpm":158,"coverage":0.95,"valid_seconds":470},
@@ -281,7 +282,7 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 						"valid_hybrid_seconds":470,
 						"valid_acc_seconds":470,
 						"data_coverage":0.95,
-						"calibration_version":"personal_chest_v1",
+						"calibration_version":"bootstrap_chest_v1",
 						"algorithm_version":"hybrid-0.75-0.25-gamma2"
 					}
 				}

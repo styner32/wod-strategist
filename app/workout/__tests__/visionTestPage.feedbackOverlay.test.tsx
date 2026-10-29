@@ -2,14 +2,17 @@ import React from "react";
 import { act, fireEvent, render, waitFor, within } from "@testing-library/react-native";
 import VisionTestPage from "../visionTestPage";
 import { AppState, StyleSheet } from "react-native";
+import { SafeAreaInsetsContext } from "react-native-safe-area-context";
 import { OrientationLock } from "expo-screen-orientation";
 import type { ActivitySummary } from "../../../shared/activity";
 
+jest.mock("@/features/wod/recentWorkoutSetup", () => ({ saveRecordingSetup: jest.fn(async () => {}), validateRecordingSetup: jest.fn(async () => {}) }));
 const mockStartCamera = jest.fn();
 const mockCameraMount = jest.fn();
 const mockCameraUnmount = jest.fn();
 const mockStopCamera = jest.fn();
 const mockOrientationLock = jest.fn().mockResolvedValue(undefined);
+const mockNavGoBack = jest.fn();
 const mockRouterBack = jest.fn();
 const mockRouterReplace = jest.fn();
 const mockRequestCameraPermission = jest.fn();
@@ -35,6 +38,7 @@ let mockMonitorData = { confidence: 0, motion: 0, isWorkingOut: false };
 let mockPoseStatus: "loading" | "loaded" | "error" = "loading";
 let mockHasInference = false;
 let mockPoseError: string | null = null;
+let mockNavCanGoBack = false;
 let mockCanGoBack = true;
 let mockCameraPermission = true;
 let mockMicPermission = true;
@@ -48,6 +52,10 @@ jest.mock("expo-router", () => ({
     canGoBack: () => mockCanGoBack,
     push: jest.fn(),
   },
+  useNavigation: () => ({
+    canGoBack: () => mockNavCanGoBack,
+    goBack: () => mockNavGoBack(),
+  }),
   useFocusEffect: (effect: () => void | (() => void)) => {
     const ReactActual = jest.requireActual<typeof import("react")>("react");
     ReactActual.useEffect(effect, [effect]);
@@ -123,7 +131,7 @@ jest.mock("@/features/wod/workoutType", () => ({
 const mockRef = { ownerUserId: 7, profileId: 3, sessionId: "WOD-20260929-TEST" };
 
 jest.mock("@/features/video/originalVideoStore", () => ({
-  prepareOriginalSession: jest.fn().mockResolvedValue(mockRef),
+  prepareOriginalSession: jest.fn(async () => mockRef),
   beginOriginalChunk: jest.fn().mockImplementation(async (_ref: unknown, order: number) => `file:///documents/run-${order}/`),
   addOriginalChunk: jest.fn().mockResolvedValue({}),
   markOriginalRecordingStopped: jest.fn().mockResolvedValue({}),
@@ -225,6 +233,7 @@ describe("VisionTestPage Feedback Overlay UI", () => {
     mockCameraMount.mockClear();
     mockCameraUnmount.mockClear();
     mockStopCamera.mockClear();
+    mockNavGoBack.mockClear();
     mockRouterBack.mockClear();
     mockRouterReplace.mockClear();
     mockPoseEnabled.mockClear();
@@ -237,6 +246,7 @@ describe("VisionTestPage Feedback Overlay UI", () => {
     mockPoseStatus = "loading";
     mockHasInference = false;
     mockPoseError = null;
+    mockNavCanGoBack = false;
     mockCanGoBack = true;
     mockCameraPermission = true;
     mockMicPermission = true;
@@ -480,6 +490,41 @@ describe("VisionTestPage Feedback Overlay UI", () => {
     if (canGoBack) expect(mockRouterBack).toHaveBeenCalledTimes(1);
     else expect(mockRouterReplace).toHaveBeenCalledWith("/workout/setup");
     expect(mockStartCamera).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("dispatches screen-scoped navigation.goBack() in preview mode when stack history exists", () => {
+    mockRouteParams = { previewOnly: "true", autoRecord: "false" };
+    mockNavCanGoBack = true;
+    const view = render(<VisionTestPage />);
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(true);
+
+    fireEvent.press(view.getByTestId("vision-back-button"));
+
+    expect(mockPoseEnabled).toHaveBeenLastCalledWith(false);
+    expect(view.getByTestId("recording-camera").props.isActive).toBe(false);
+    expect(mockNavGoBack).toHaveBeenCalledTimes(1);
+    expect(mockRouterBack).not.toHaveBeenCalled();
+    expect(mockRouterReplace).not.toHaveBeenCalled();
+    expect(mockStartCamera).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("preserves parent safe-area insets inside fullScreenModal preview so the back button clears the status bar", () => {
+    mockRouteParams = { previewOnly: "true", autoRecord: "false" };
+    mockNavCanGoBack = true;
+    const view = render(
+      <SafeAreaInsetsContext.Provider value={{ top: 59, bottom: 34, left: 0, right: 0 }}>
+        <VisionTestPage />
+      </SafeAreaInsetsContext.Provider>,
+    );
+
+    const rootStyle = StyleSheet.flatten(view.getByTestId("vision-recording-root").props.style);
+    expect(rootStyle.paddingTop).toBe(67);
+    expect(rootStyle.paddingBottom).toBe(42);
+
+    fireEvent.press(view.getByTestId("vision-back-button"));
+    expect(mockNavGoBack).toHaveBeenCalledTimes(1);
     view.unmount();
   });
 

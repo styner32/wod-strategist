@@ -6,6 +6,8 @@ import VisionTestPage from "../visionTestPage";
 
 const mockRef = { ownerUserId: 7, profileId: 3, sessionId: "WOD-20260929-LIFECYCLE" };
 const mockPrepare = jest.fn();
+const mockValidateRecordingSetup = jest.fn(async (..._args: unknown[]) => {});
+const mockSaveRecordingSetup = jest.fn(async (..._args: unknown[]) => {});
 const mockBegin = jest.fn();
 const mockAdd = jest.fn();
 const mockStopped = jest.fn();
@@ -34,7 +36,7 @@ const mockFormat = { videoWidth: 1280, videoHeight: 720, videoStabilizationModes
 jest.mock("expo-router", () => ({
   router: { replace: (...args: unknown[]) => mockReplace(...args), back: jest.fn(), push: jest.fn() },
   useFocusEffect: () => {},
-  useLocalSearchParams: () => ({ autoRecord: "true", continuousRecording: String(mockContinuousRecording), showSkeleton: "false", skipCompression: String(mockSkipCompression) }),
+  useLocalSearchParams: () => ({ recordingSetup: "launch-snapshot", autoRecord: "true", continuousRecording: String(mockContinuousRecording), showSkeleton: "false", skipCompression: String(mockSkipCompression) }),
 }));
 jest.mock("expo-router/react-navigation", () => ({ useIsFocused: () => true }));
 jest.mock("react-native-vision-camera", () => {
@@ -63,6 +65,7 @@ jest.mock("@/features/auth/useAuthStore", () => ({ useAuthStore: { getState: () 
 }) } }));
 jest.mock("@/store/useProfileStore", () => ({ useProfileStore: (selector: (value: unknown) => unknown) => selector({ activeProfileId: 3 }) }));
 jest.mock("@/store/useMergeStatus", () => ({ useMergeStatus: { getState: () => ({ addPending: mockAddPending, removePending: jest.fn() }) } }));
+jest.mock("@/features/wod/recentWorkoutSetup", () => ({ saveRecordingSetup: (...args: unknown[]) => mockSaveRecordingSetup(...args), validateRecordingSetup: (...args: unknown[]) => mockValidateRecordingSetup(...args) }));
 jest.mock("@/features/wod/workoutType", () => ({
   buildWorkoutSessionId: () => mockRef.sessionId, parseWorkoutType: () => "WOD", formatWorkoutTypeLabel: () => "WOD",
 }));
@@ -242,6 +245,7 @@ it("does not resume another camera run until the paused source has finalized", a
   fireEvent.press(view.getByText("square.fill"));
   await act(async () => { second.onRecordingSourceFinalized(source(2)); await second.onRecordingFinished(source(2)); });
   await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+  expect(mockSaveRecordingSetup).toHaveBeenCalledTimes(1);
   view.unmount();
 });
 
@@ -283,6 +287,7 @@ it("retains the default-mode original and drains readers when native detach fina
   expect(mockStartCamera).toHaveBeenCalledTimes(1);
   expect(mockEnvironment.stop).toHaveBeenCalledTimes(1);
   expect(mockSave).not.toHaveBeenCalled();
+  expect(mockSaveRecordingSetup).toHaveBeenCalledTimes(1);
 });
 
 it("keeps the resumed writer active when a source-accepted older run reports a late preparation error", async () => {
@@ -595,6 +600,7 @@ it.each(["callback", "throw"])("allows a new session after native startup %s fai
       complete: false, reason: "[capture/create-recorder-error] Audio settings unavailable",
     });
     expect(mockSave).not.toHaveBeenCalled();
+    expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
     expect(mockAddPending).not.toHaveBeenCalled();
     expect(mockSetRecording).toHaveBeenLastCalledWith(false);
     expect(alert.mock.calls.map(call => call[0])).toEqual(["originalVideo.captureFailedTitle"]);
@@ -671,5 +677,82 @@ it("displays retry notice when chunk upload triggers onRetry callback", async ()
   await waitFor(() => {
     expect(view.queryByTestId("upload-status-banner")).toBeNull();
   });
+  view.unmount();
+});
+
+it("binds recent setup once after the first original is accepted without delaying finalization", async () => {
+  const prepared = deferred<typeof mockRef>();
+  const registered = deferred<void>();
+  const setupSaved = deferred<void>();
+  mockPrepare.mockReturnValueOnce(prepared.promise);
+  mockAdd.mockReturnValueOnce(registered.promise);
+  mockSaveRecordingSetup.mockReturnValueOnce(setupSaved.promise);
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockPrepare).toHaveBeenCalled());
+  expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
+  await act(async () => { prepared.resolve(mockRef); });
+  await waitFor(() => expect(mockStartCamera).toHaveBeenCalled());
+  expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
+  const callbacks = mockStartCamera.mock.calls[0][0];
+  await act(async () => { callbacks.onRecordingSourceFinalized(source()); });
+  expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
+  fireEvent.press(view.getByText("square.fill"));
+  await act(async () => {
+    registered.resolve();
+    await callbacks.onRecordingFinished(source());
+    callbacks.onRecordingSourceFinalized(source());
+  });
+  expect(mockSaveRecordingSetup).toHaveBeenCalledWith("launch-snapshot", { ownerUserId: 7, profileId: 3 }, mockRef.sessionId);
+  expect(mockSaveRecordingSetup).toHaveBeenCalledTimes(1);
+  expect(mockAdd).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+  await act(async () => { setupSaved.resolve(); });
+  view.unmount();
+});
+
+it("preserves inherited setup provenance when registering the first original fails", async () => {
+  mockAdd.mockRejectedValueOnce(new Error("Original manifest write failed"));
+  const alert = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+  try {
+    const view = render(<VisionTestPage />);
+    await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+    const callbacks = mockStartCamera.mock.calls[0][0];
+    await act(async () => { await callbacks.onRecordingFinished(source()); });
+    await waitFor(() => expect(mockStopped).toHaveBeenCalledWith(mockRef, expect.objectContaining({ complete: false })));
+    expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
+    view.unmount();
+  } finally { alert.mockRestore(); }
+});
+
+it("rechecks inherited setup at actual start and never creates a new capture after its source was archived", async () => {
+  mockValidateRecordingSetup.mockRejectedValueOnce(new Error("archived_source"));
+  const view = render(<VisionTestPage />);
+  await waitFor(() => expect(mockValidateRecordingSetup).toHaveBeenCalledWith("launch-snapshot", { ownerUserId: 7, profileId: 3 }));
+  expect(mockPrepare).toHaveBeenCalledTimes(1);
+  expect(mockStopped).toHaveBeenCalledWith(mockRef, {complete:false,reason:"recording_source_unavailable"});
+  expect(mockStartCamera).not.toHaveBeenCalled();
+  expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
+  view.unmount();
+});
+
+it("retires prepared originals when their inherited source is archived during asynchronous preparation", async () => {
+  const prepared=deferred<typeof mockRef>();
+  mockPrepare.mockReturnValueOnce(prepared.promise);
+  const view=render(<VisionTestPage />);
+  await waitFor(()=>expect(mockPrepare).toHaveBeenCalledTimes(1));
+  mockValidateRecordingSetup.mockRejectedValueOnce(new Error("archived_source"));
+  await act(async()=>{prepared.resolve(mockRef);});
+  await waitFor(()=>expect(mockStopped).toHaveBeenCalledWith(mockRef,{complete:false,reason:"recording_source_unavailable"}));
+  expect(mockStartCamera).not.toHaveBeenCalled(); expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
+  view.unmount();
+});
+it("checks again after first source-directory preparation before starting the native camera", async () => {
+  const directory=deferred<string>();
+  mockBegin.mockReturnValueOnce(directory.promise);
+  const view=render(<VisionTestPage />);
+  await waitFor(()=>expect(mockBegin).toHaveBeenCalledTimes(1));
+  mockValidateRecordingSetup.mockRejectedValueOnce(new Error("archived_source"));
+  await act(async()=>{directory.resolve("file:///documents/run-1/");});
+  expect(mockStartCamera).not.toHaveBeenCalled(); expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
   view.unmount();
 });

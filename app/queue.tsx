@@ -1,5 +1,6 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { t } from "@/features/i18n";
+import { Fonts, TacticalTheme } from "@/constants/theme";
+import { t, useLocale } from "@/features/i18n";
 import { useOrphanedVideos } from "@/store/useOrphanedVideos";
 import {
   useVideoQueue,
@@ -7,6 +8,7 @@ import {
   type VideoStatus,
 } from "@/store/useVideoQueue";
 import { router } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useState } from "react";
 import {
   Alert,
@@ -18,15 +20,43 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+const T = TacticalTheme.light;
+const monoFont = Fonts?.mono ?? "monospace";
+
 const STATUS_CONFIG: Record<
   VideoStatus,
-  { labelKey: string; color: string; bgColor: string }
+  { labelKey: string; color: string; bgColor: string; borderColor: string }
 > = {
-  RECORDED: { labelKey: "queue.statusRecorded", color: "#A0A0A0", bgColor: "#2A2A2A" },
-  ENCODING: { labelKey: "queue.statusEncoding", color: "#FFD60A", bgColor: "#3D3200" },
-  ENCODED: { labelKey: "queue.statusReady", color: "#30D158", bgColor: "#0A3D1A" },
-  UPLOADING: { labelKey: "queue.statusUploading", color: "#64D2FF", bgColor: "#002B3D" },
-  UPLOADED: { labelKey: "queue.statusUploaded", color: "#30D158", bgColor: "#0A3D1A" },
+  RECORDED: {
+    labelKey: "queue.statusRecorded",
+    color: T.inkSecondary,
+    bgColor: T.surfaceContainer,
+    borderColor: T.borderStrong,
+  },
+  ENCODING: {
+    labelKey: "queue.statusEncoding",
+    color: T.statusWarning,
+    bgColor: T.statusWarningBg,
+    borderColor: T.statusWarningBorder,
+  },
+  ENCODED: {
+    labelKey: "queue.statusReady",
+    color: T.statusFresh,
+    bgColor: T.statusFreshBg,
+    borderColor: T.statusFreshBorder,
+  },
+  UPLOADING: {
+    labelKey: "queue.statusUploading",
+    color: T.electricBlue,
+    bgColor: T.electricBlueBg,
+    borderColor: T.electricBlueBorder,
+  },
+  UPLOADED: {
+    labelKey: "queue.statusUploaded",
+    color: T.statusFresh,
+    bgColor: T.statusFreshBg,
+    borderColor: T.statusFreshBorder,
+  },
 };
 
 function formatTime(ts: number): string {
@@ -35,7 +65,14 @@ function formatTime(ts: number): string {
 }
 
 function VideoItemRow({ item }: { item: VideoItem }) {
-  const { startEncoding, startUpload, cancelUpload, remove, dismiss, saveToGallery } = useVideoQueue();
+  const {
+    startEncoding,
+    startUpload,
+    cancelUpload,
+    remove,
+    dismiss,
+    saveToGallery,
+  } = useVideoQueue();
   const config = STATUS_CONFIG[item.status];
 
   return (
@@ -47,7 +84,12 @@ function VideoItemRow({ item }: { item: VideoItem }) {
           </Text>
           <Text style={styles.itemTime}>{formatTime(item.createdAt)}</Text>
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: config.bgColor }]}>
+        <View
+          style={[
+            styles.statusBadge,
+            { backgroundColor: config.bgColor, borderColor: config.borderColor },
+          ]}
+        >
           <Text style={[styles.statusText, { color: config.color }]}>
             {t(config.labelKey)}
           </Text>
@@ -69,7 +111,7 @@ function VideoItemRow({ item }: { item: VideoItem }) {
         </View>
       )}
 
-      {/* Error message (shown inline, clears on next action) */}
+      {/* Error message */}
       {item.error && (
         <Text style={styles.errorText} numberOfLines={2}>
           {item.error}
@@ -95,7 +137,7 @@ function VideoItemRow({ item }: { item: VideoItem }) {
               style={styles.actionBtnDestructive}
               onPress={() => remove(item.id)}
             >
-              <IconSymbol name="trash" size={16} color="#FF453A" />
+              <IconSymbol name="trash" size={16} color={T.statusExhausted} />
             </TouchableOpacity>
           </>
         )}
@@ -106,22 +148,31 @@ function VideoItemRow({ item }: { item: VideoItem }) {
               style={styles.actionBtnPrimary}
               onPress={() => startUpload(item.id)}
             >
-              <IconSymbol name="arrow.up.circle.fill" size={16} color="#000" />
+              <IconSymbol
+                name="arrow.up.circle.fill"
+                size={16}
+                color={T.voltInk}
+              />
               <Text style={styles.actionBtnPrimaryText}>
-                {t("queue.upload")}{item.compressedSize ? ` (${formatBytes(item.compressedSize)})` : ""}
+                {t("queue.upload")}
+                {item.compressedSize
+                  ? ` (${formatBytes(item.compressedSize)})`
+                  : ""}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnSecondary}
               onPress={() => startEncoding(item.id)}
             >
-              <Text style={styles.actionBtnSecondaryText}>{t("queue.reEncode")}</Text>
+              <Text style={styles.actionBtnSecondaryText}>
+                {t("queue.reEncode")}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnDestructive}
               onPress={() => remove(item.id)}
             >
-              <IconSymbol name="trash" size={16} color="#FF453A" />
+              <IconSymbol name="trash" size={16} color={T.statusExhausted} />
             </TouchableOpacity>
           </>
         )}
@@ -131,8 +182,14 @@ function VideoItemRow({ item }: { item: VideoItem }) {
             style={styles.actionBtnDestructive}
             onPress={() => cancelUpload(item.id)}
           >
-            <IconSymbol name="xmark.circle.fill" size={16} color="#FF453A" />
-            <Text style={styles.actionBtnDestructiveText}>{t("queue.cancelUpload")}</Text>
+            <IconSymbol
+              name="xmark.circle.fill"
+              size={16}
+              color={T.statusExhausted}
+            />
+            <Text style={styles.actionBtnDestructiveText}>
+              {t("queue.cancelUpload")}
+            </Text>
           </TouchableOpacity>
         )}
 
@@ -142,19 +199,25 @@ function VideoItemRow({ item }: { item: VideoItem }) {
               style={styles.actionBtnSecondary}
               onPress={() => startUpload(item.id)}
             >
-              <Text style={styles.actionBtnSecondaryText}>{t("queue.reUpload")}</Text>
+              <Text style={styles.actionBtnSecondaryText}>
+                {t("queue.reUpload")}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnSecondary}
               onPress={() => startEncoding(item.id)}
             >
-              <Text style={styles.actionBtnSecondaryText}>{t("queue.reEncode")}</Text>
+              <Text style={styles.actionBtnSecondaryText}>
+                {t("queue.reEncode")}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionBtnPrimary}
               onPress={() => dismiss(item.id)}
             >
-              <Text style={styles.actionBtnPrimaryText}>{t("queue.dismiss")}</Text>
+              <Text style={styles.actionBtnPrimaryText}>
+                {t("queue.dismiss")}
+              </Text>
             </TouchableOpacity>
           </>
         )}
@@ -172,7 +235,9 @@ function VideoItemRow({ item }: { item: VideoItem }) {
               }
             }}
           >
-            <Text style={styles.actionBtnSecondaryText}>{t("queue.saveToGallery")}</Text>
+            <Text style={styles.actionBtnSecondaryText}>
+              {t("queue.saveToGallery")}
+            </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -187,6 +252,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function QueueScreen() {
+  useLocale();
   const items = useVideoQueue((s) => s.items);
   const { orphans, scanning, scan, deleteFile, saveToGallery, deleteAll } =
     useOrphanedVideos();
@@ -198,23 +264,32 @@ export default function QueueScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar style="dark" />
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <IconSymbol name="chevron.left" size={28} color="#fff" />
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backBtn}
+          accessibilityRole="button"
+        >
+          <IconSymbol name="chevron.left" size={22} color={T.ink} />
         </TouchableOpacity>
-        <Text style={styles.title}>{t("queue.title")}</Text>
-        <Text style={styles.badge}>{items.length}</Text>
+        <Text style={styles.title} numberOfLines={1}>
+          {t("queue.title")}
+        </Text>
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{items.length}</Text>
+        </View>
       </View>
 
-      <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
-        {/* Queue Items */}
+      <ScrollView
+        contentContainerStyle={styles.list}
+        showsVerticalScrollIndicator={false}
+      >
         {items.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyIcon}>📭</Text>
             <Text style={styles.emptyText}>{t("queue.emptyTitle")}</Text>
-            <Text style={styles.emptySubtext}>
-              {t("queue.emptyDesc")}
-            </Text>
+            <Text style={styles.emptySubtext}>{t("queue.emptyDesc")}</Text>
           </View>
         ) : (
           items.map((item) => <VideoItemRow key={item.id} item={item} />)
@@ -229,7 +304,14 @@ export default function QueueScreen() {
             {showOrphans ? "▼" : "▶"} {t("queue.orphanedFiles")}
           </Text>
           <Text style={styles.orphanCount}>
-            {scanning ? t("queue.scanning") : t(orphans.length === 1 ? "queue.fileCount" : "queue.filesCount", { count: orphans.length })}
+            {scanning
+              ? t("queue.scanning")
+              : t(
+                  orphans.length === 1
+                    ? "queue.fileCount"
+                    : "queue.filesCount",
+                  { count: orphans.length },
+                )}
           </Text>
         </TouchableOpacity>
 
@@ -237,7 +319,9 @@ export default function QueueScreen() {
           <>
             {orphans.length === 0 && !scanning ? (
               <View style={styles.orphanEmpty}>
-                <Text style={styles.orphanEmptyText}>{t("queue.noOrphans")}</Text>
+                <Text style={styles.orphanEmptyText}>
+                  {t("queue.noOrphans")}
+                </Text>
               </View>
             ) : (
               orphans.map((orphan) => (
@@ -256,13 +340,18 @@ export default function QueueScreen() {
                       onPress={async () => {
                         const ok = await saveToGallery(orphan.path);
                         if (ok) {
-                          Alert.alert(t("common.saved"), t("queue.savedGalleryDeleted"));
+                          Alert.alert(
+                            t("common.saved"),
+                            t("queue.savedGalleryDeleted"),
+                          );
                         } else {
                           Alert.alert(t("queue.failed"), t("queue.failedGallery"));
                         }
                       }}
                     >
-                      <Text style={styles.actionBtnSecondaryText}>{t("queue.gallery")}</Text>
+                      <Text style={styles.actionBtnSecondaryText}>
+                        {t("queue.gallery")}
+                      </Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.actionBtnDestructive}
@@ -277,11 +366,15 @@ export default function QueueScreen() {
                               style: "destructive",
                               onPress: () => deleteFile(orphan.path),
                             },
-                          ]
+                          ],
                         );
                       }}
                     >
-                      <IconSymbol name="trash" size={14} color="#FF453A" />
+                      <IconSymbol
+                        name="trash"
+                        size={14}
+                        color={T.statusExhausted}
+                      />
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -302,11 +395,13 @@ export default function QueueScreen() {
                         style: "destructive",
                         onPress: deleteAll,
                       },
-                    ]
+                    ],
                   );
                 }}
               >
-                <Text style={styles.deleteAllText}>{t("queue.deleteAllOrphans")}</Text>
+                <Text style={styles.deleteAllText}>
+                  {t("queue.deleteAllOrphans")}
+                </Text>
               </TouchableOpacity>
             )}
 
@@ -327,136 +422,178 @@ export default function QueueScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#000" },
+  container: { flex: 1, backgroundColor: T.canvas },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: "#222",
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    gap: 12,
   },
-  backBtn: { marginRight: 15 },
-  title: { fontSize: 20, fontWeight: "bold", color: "#fff", flex: 1 },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: -0.5,
+    color: T.ink,
+    flex: 1,
+    flexShrink: 1,
+  },
   badge: {
-    backgroundColor: "#333",
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "bold",
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 12,
-    overflow: "hidden",
+    borderRadius: 999,
   },
-  list: { padding: 16, gap: 12 },
+  badgeText: {
+    color: T.electricBlue,
+    fontSize: 13,
+    fontWeight: "800",
+    fontFamily: monoFont,
+  },
+  list: { paddingHorizontal: 18, paddingTop: 4, paddingBottom: 40, gap: 12 },
   itemCard: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: T.surface,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#333",
+    borderColor: T.border,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   itemHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 10,
+    gap: 8,
   },
   itemMeta: { flex: 1 },
   itemType: {
-    color: "#fff",
+    color: T.ink,
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: "900",
+    flexShrink: 1,
   },
   itemTime: {
-    color: "#666",
+    color: T.inkMuted,
     fontSize: 12,
+    fontWeight: "600",
     marginTop: 2,
   },
   statusBadge: {
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
+    borderWidth: 1,
   },
   statusText: {
-    fontSize: 12,
-    fontWeight: "700",
+    fontSize: 11,
+    fontWeight: "800",
     textTransform: "uppercase",
+    letterSpacing: 0.4,
   },
   progressBarBg: {
-    height: 4,
-    backgroundColor: "#333",
-    borderRadius: 2,
+    height: 6,
+    backgroundColor: T.surfaceContainer,
+    borderRadius: 3,
     overflow: "hidden",
     marginBottom: 8,
   },
   progressBarFill: {
     height: "100%",
-    borderRadius: 2,
+    borderRadius: 3,
   },
   errorText: {
-    color: "#FF453A",
+    color: T.statusExhausted,
     fontSize: 12,
+    fontWeight: "600",
     marginBottom: 8,
   },
   sessionId: {
-    color: "#555",
+    color: T.inkMuted,
     fontSize: 11,
-    fontFamily: "monospace",
+    fontFamily: monoFont,
     marginBottom: 12,
   },
   actions: {
     flexDirection: "row",
-    gap: 10,
+    gap: 8,
     flexWrap: "wrap",
   },
   actionBtnPrimary: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#fff",
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
     paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingVertical: 9,
+    borderRadius: 10,
   },
   actionBtnPrimaryText: {
-    color: "#000",
-    fontSize: 14,
-    fontWeight: "bold",
+    color: T.voltInk,
+    fontSize: 13,
+    fontWeight: "800",
   },
   actionBtnSecondary: {
     paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: T.surfaceMuted,
     borderWidth: 1,
-    borderColor: "#444",
+    borderColor: T.borderStrong,
   },
   actionBtnSecondaryText: {
-    color: "#888",
-    fontSize: 14,
+    color: T.inkSecondary,
+    fontSize: 13,
+    fontWeight: "700",
   },
   actionBtnDestructive: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: T.statusExhaustedBg,
     borderWidth: 1,
-    borderColor: "#3D0A08",
+    borderColor: T.statusExhaustedBorder,
   },
   actionBtnDestructiveText: {
-    color: "#FF453A",
-    fontSize: 14,
+    color: T.statusExhausted,
+    fontSize: 13,
+    fontWeight: "700",
   },
   emptyState: {
     justifyContent: "center",
     alignItems: "center",
     gap: 8,
-    paddingVertical: 40,
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+    backgroundColor: T.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: T.border,
   },
-  emptyIcon: { fontSize: 48 },
-  emptyText: { color: "#fff", fontSize: 18, fontWeight: "bold" },
-  emptySubtext: { color: "#666", fontSize: 14 },
+  emptyIcon: { fontSize: 44 },
+  emptyText: { color: T.ink, fontSize: 18, fontWeight: "800" },
+  emptySubtext: { color: T.inkMuted, fontSize: 14 },
 
   // Orphaned files section
   orphanHeader: {
@@ -465,49 +602,54 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: 14,
     paddingHorizontal: 4,
-    marginTop: 20,
+    marginTop: 12,
     borderTopWidth: 1,
-    borderTopColor: "#222",
+    borderTopColor: T.borderStrong,
+    gap: 8,
   },
   orphanTitle: {
-    color: "#aaa",
+    color: T.ink,
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "800",
+    flexShrink: 1,
   },
   orphanCount: {
-    color: "#666",
+    color: T.inkMuted,
     fontSize: 12,
+    fontWeight: "700",
   },
   orphanEmpty: {
     alignItems: "center",
     paddingVertical: 16,
   },
   orphanEmptyText: {
-    color: "#555",
+    color: T.inkMuted,
     fontSize: 13,
+    fontWeight: "600",
   },
   orphanCard: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "#1A1A1A",
-    borderRadius: 12,
+    backgroundColor: T.surface,
+    borderRadius: 14,
     padding: 12,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: "#2A2A2A",
+    borderColor: T.border,
   },
   orphanInfo: {
     flex: 1,
     marginRight: 10,
   },
   orphanName: {
-    color: "#ccc",
+    color: T.ink,
     fontSize: 12,
-    fontFamily: "monospace",
+    fontWeight: "600",
+    fontFamily: monoFont,
   },
   orphanSize: {
-    color: "#666",
+    color: T.inkMuted,
     fontSize: 11,
     marginTop: 2,
   },
@@ -517,24 +659,26 @@ const styles = StyleSheet.create({
   },
   deleteAllBtn: {
     alignItems: "center",
-    paddingVertical: 10,
+    paddingVertical: 12,
     marginTop: 4,
-    borderRadius: 8,
+    borderRadius: 12,
+    backgroundColor: T.statusExhaustedBg,
     borderWidth: 1,
-    borderColor: "#3D0A08",
+    borderColor: T.statusExhaustedBorder,
   },
   deleteAllText: {
-    color: "#FF453A",
+    color: T.statusExhausted,
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "800",
   },
   rescanBtn: {
     alignItems: "center",
-    paddingVertical: 10,
+    paddingVertical: 12,
     marginTop: 4,
   },
   rescanText: {
-    color: "#666",
+    color: T.electricBlue,
     fontSize: 13,
+    fontWeight: "700",
   },
 });

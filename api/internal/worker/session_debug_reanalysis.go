@@ -86,7 +86,7 @@ func NewSessionDebugReanalysisTask(runID uint) (*asynq.Task, error) {
 // HandleSessionDebugReanalysisTask creates a whole-workout debug candidate.
 // It never writes analysis_results or enqueues highlights, hardsubs, injury,
 // subtitle, or TTS work.
-func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asynq.Task) error {
+func (w *Worker) handleSessionDebugReanalysisTask(ctx context.Context, task *asynq.Task) error {
 	started := time.Now()
 	var payload SessionDebugReanalysisPayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil || payload.RunID == 0 {
@@ -115,7 +115,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	}
 
 	now := time.Now().UTC()
-	claim := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).
+	claim := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).
 		Where("id = ? AND status = ?", run.ID, db.SessionReanalysisStatusQueued).
 		Updates(map[string]any{"status": db.SessionReanalysisStatusRunning, "started_at": now, "safe_error": ""})
 	if claim.Error != nil {
@@ -255,7 +255,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		return raw
 	}
 	contextSnapshot := buildContextSnapshot(nil)
-	if err := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+	if err := w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", run.ID).Updates(map[string]any{
 		"source_context_snapshot": string(contextSnapshot), "prompt_version": sessionDebugPromptVersion,
 		"schema_version": sessionDebugSchemaVersion, "workout_type": target.WorkoutType,
 	}).Error; err != nil {
@@ -453,7 +453,7 @@ func (w *Worker) HandleSessionDebugReanalysisTask(ctx context.Context, task *asy
 			// Checkpoint completed segments even after the task deadline cancelled
 			// ctx, so a retry resumes instead of paying for every segment again.
 			persistCtx, cancel := sessionDebugPersistContext(ctx)
-			_ = w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+			_ = w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", run.ID).Updates(map[string]any{
 				"source_context_snapshot": string(buildContextSnapshot(completedSegments)),
 			}).Error
 			cancel()
@@ -1085,7 +1085,7 @@ func (w *Worker) prepareSessionDebugGeminiFile(ctx context.Context, run *db.Sess
 		}
 	}
 	expires := time.Now().UTC().Add(geminiFileCacheTTL)
-	_ = w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+	_ = w.DB.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", run.ID).Updates(map[string]any{
 		"gemini_file_uri": upload.FileURI, "gemini_file_name": upload.FileName,
 		"gemini_mime_type": upload.MIMEType, "gemini_file_expires_at": expires,
 	}).Error
@@ -1185,7 +1185,7 @@ func (w *Worker) failSessionDebugRun(ctx context.Context, runID uint, retryCount
 	if retryCount < sessionDebugMaxRetries {
 		persistCtx, cancel := sessionDebugPersistContext(ctx)
 		defer cancel()
-		_ = w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(map[string]any{
+		_ = w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", runID).Updates(map[string]any{
 			"status": db.SessionReanalysisStatusQueued, "safe_error": "", "duration_ms": time.Since(started).Milliseconds(),
 		}).Error
 		return cause
@@ -1207,7 +1207,7 @@ func (w *Worker) completeSessionDebugRun(ctx context.Context, runID uint, status
 	values["completed_at"] = now
 	persistCtx, cancel := sessionDebugPersistContext(ctx)
 	defer cancel()
-	if err := w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(values).Error; err != nil {
+	if err := w.DB.WithContext(persistCtx).Model(&db.SessionReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", runID).Updates(values).Error; err != nil {
 		return fmt.Errorf("persist terminal session re-analysis state: %w", err)
 	}
 	return nil
@@ -1215,7 +1215,7 @@ func (w *Worker) completeSessionDebugRun(ctx context.Context, runID uint, status
 
 func isSessionReanalysisTerminal(status string) bool {
 	switch status {
-	case db.SessionReanalysisStatusCompleted, db.SessionReanalysisStatusFailed,
+	case "CANCELLED", db.SessionReanalysisStatusCompleted, db.SessionReanalysisStatusFailed,
 		db.SessionReanalysisStatusVideoUnavailable, db.SessionReanalysisStatusContextUnavailable:
 		return true
 	default:

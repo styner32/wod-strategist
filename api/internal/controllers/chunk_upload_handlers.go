@@ -12,7 +12,6 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"net/http"
-	"strings"
 )
 
 // @Summary      Chunk Complete
@@ -77,22 +76,8 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 	if !ctl.assertOwnsProfile(c, req.ProfileID) {
 		return
 	}
-	if err := ctl.persistSessionMovementHints(c.Request.Context(), req.SessionID, req.ProfileID, req.Movements); err != nil {
-		logger.Log.Error("failed to persist movement hints", zap.String("session_id", req.SessionID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist movement hints"})
+	if !ctl.requireSessionProcessing(c, req.SessionID, req.ProfileID, true) {
 		return
-	}
-	if err := ctl.persistSessionWODDescription(c.Request.Context(), req.SessionID, req.ProfileID, req.WODDescription); err != nil {
-		logger.Log.Error("failed to persist wod description", zap.String("session_id", req.SessionID), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist wod description"})
-		return
-	}
-	if strings.TrimSpace(req.AppearanceHints) != "" {
-		if err := persistSessionAppearanceHints(c.Request.Context(), ctl.db, req.SessionID, req.ProfileID, &AppearanceInput{Appearance: req.AppearanceHints}); err != nil {
-			logger.Log.Error("failed to persist appearance hints", zap.String("session_id", req.SessionID), zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist appearance hints"})
-			return
-		}
 	}
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
@@ -145,8 +130,13 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		}
 		task = asynq.NewTask(task.Type(), encoded)
 	}
-	info, err := ctl.queueClient.Enqueue(task)
+	info, err := ctl.enqueueSessionAutomaticTaskWithMetadata(c, req.SessionID, req.ProfileID, task, &sessionUploadMetadata{
+		Movements: req.Movements, WODDescription: req.WODDescription, AppearanceHints: req.AppearanceHints,
+	})
 	if err != nil {
+		if writeSessionProcessingConflict(c, err) {
+			return
+		}
 		logger.Log.Error("failed to enqueue chunk task", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
 		return

@@ -114,6 +114,9 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !ctl.requireSessionProcessing(c, sessionID, target.ProfileID, false) {
+		return
+	}
 
 	req, err := decodeCreateChunkReanalysisRequest(c.Request.Body)
 	if err != nil {
@@ -194,6 +197,9 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&lockedProfile, target.ProfileID).Error; err != nil {
 			return err
 		}
+		if err := lockActiveSession(tx, sessionID, target.ProfileID); err != nil {
+			return err
+		}
 
 		var concurrent db.ChunkReanalysisRun
 		err := tx.Where("profile_id = ? AND client_request_id = ?", target.ProfileID, req.ClientRequestID).
@@ -240,6 +246,9 @@ func (ctl *Controller) CreateChunkReanalysis(c *gin.Context) {
 		return tx.Create(&run).Error
 	})
 	if createErr != nil {
+		if writeSessionProcessingConflict(c, createErr) {
+			return
+		}
 		switch {
 		case errors.Is(createErr, errChunkReanalysisSessionActive):
 			c.JSON(http.StatusConflict, gin.H{"error": "whole-workout re-analysis is active for this session"})
@@ -281,6 +290,9 @@ func (ctl *Controller) CreateBatchChunkReanalysis(c *gin.Context) {
 		return
 	}
 
+	if !ctl.assertOwnsSession(c, sessionID) || !ctl.requireSessionProcessing(c, sessionID, 0, false) {
+		return
+	}
 	req, err := decodeCreateBatchChunkReanalysisRequest(c.Request.Body)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -363,6 +375,9 @@ func (ctl *Controller) CreateBatchChunkReanalysis(c *gin.Context) {
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&lockedProfile, target.ProfileID).Error; err != nil {
 				return err
 			}
+			if err := lockActiveSession(tx, sessionID, target.ProfileID); err != nil {
+				return err
+			}
 
 			var concurrent db.ChunkReanalysisRun
 			err := tx.Where("profile_id = ? AND client_request_id = ?", target.ProfileID, perChunkKey).
@@ -409,6 +424,9 @@ func (ctl *Controller) CreateBatchChunkReanalysis(c *gin.Context) {
 			return tx.Create(&run).Error
 		})
 		if createErr != nil {
+			if writeSessionProcessingConflict(c, createErr) {
+				return
+			}
 			msg := "failed to create re-analysis"
 			switch {
 			case errors.Is(createErr, errChunkReanalysisSessionActive):
@@ -771,7 +789,7 @@ func (ctl *Controller) ensureChunkReanalysisTask(ctx context.Context, run *db.Ch
 
 func (ctl *Controller) markReanalysisEnqueueFailed(ctx context.Context, runID uint) {
 	now := time.Now().UTC()
-	_ = ctl.db.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", runID).Updates(map[string]any{
+	_ = ctl.db.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ? AND status = ?", runID, "QUEUED").Updates(map[string]any{
 		"status":       db.ChunkReanalysisStatusFailed,
 		"safe_error":   "The re-analysis task could not be queued.",
 		"completed_at": now,

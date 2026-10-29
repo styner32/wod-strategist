@@ -1,7 +1,10 @@
+import { TacticalTheme, getTacticalFatigueTone } from "@/constants/theme";
 import { t } from "@/features/i18n";
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { SessionFatigue } from "../history";
+
+const T = TacticalTheme.light;
 
 interface WorkoutFatigueCardProps {
   fatigue?: SessionFatigue | null;
@@ -49,12 +52,12 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
             style={[
               styles.overallBadge,
               {
-                backgroundColor: "rgba(142, 155, 174, 0.15)",
-                borderColor: "rgba(142, 155, 174, 0.3)",
+                backgroundColor: T.surfaceContainer,
+                borderColor: T.borderStrong,
               },
             ]}
           >
-            <Text style={[styles.overallBadgeText, { color: "#8E9BAE" }]}>
+            <Text style={[styles.overallBadgeText, { color: T.inkMuted }]}>
               {t("historyList.insufficientEvidence") || "분석 근거 부족"}
             </Text>
           </View>
@@ -75,7 +78,7 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
 
   const isAvailable = fatigue.status === "available";
   const overallScore = fatigue.overall_score ?? 0;
-  const overallColor = getFatigueColor(overallScore);
+  const overallTone = getTacticalFatigueTone(overallScore, "light");
   const stateLabel =
     fatigue.state_ko ||
     getFatigueStateText(fatigue.state, overallScore);
@@ -115,12 +118,12 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
           style={[
             styles.overallBadge,
             {
-              backgroundColor: overallColor + "20",
-              borderColor: overallColor + "60",
+              backgroundColor: overallTone.bg,
+              borderColor: overallTone.border,
             },
           ]}
         >
-          <Text style={[styles.overallBadgeText, { color: overallColor }]}>
+          <Text style={[styles.overallBadgeText, { color: overallTone.fg }]}>
             {stateLabel} ({overallScore}{scoreSuffix})
           </Text>
         </View>
@@ -133,14 +136,14 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
             100,
             Math.max(0, fatigue.muscles ? (fatigue.muscles[groupKey] ?? 0) : 0),
           );
-          const muscleColor = getFatigueColor(score);
+          const muscleTone = getTacticalFatigueTone(score, "light");
           const name = t(`muscleGroups.${groupKey}` as any);
 
           return (
             <View key={groupKey} style={styles.muscleRow}>
               <View style={styles.muscleLabelRow}>
                 <Text style={styles.muscleName}>{name}</Text>
-                <Text style={[styles.muscleScore, { color: muscleColor }]}>
+                <Text style={[styles.muscleScore, { color: muscleTone.fg }]}>
                   {score}{scoreSuffix}
                 </Text>
               </View>
@@ -150,7 +153,7 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
                     styles.barFill,
                     {
                       width: `${score}%`,
-                      backgroundColor: muscleColor,
+                      backgroundColor: muscleTone.bar,
                     },
                   ]}
                 />
@@ -192,18 +195,19 @@ export function WorkoutFatigueCard({ fatigue }: WorkoutFatigueCardProps) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#1C1C1E",
+    backgroundColor: T.surfaceMuted,
     borderRadius: 12,
     padding: 14,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: "#2C2C2E",
+    borderColor: T.border,
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 12,
+    gap: 8,
   },
   headerLeft: {
     flexDirection: "row",
@@ -215,9 +219,10 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   title: {
-    color: "#FFFFFF",
+    color: T.ink,
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "800",
+    flexShrink: 1,
   },
   overallBadge: {
     paddingHorizontal: 8,
@@ -227,7 +232,7 @@ const styles = StyleSheet.create({
   },
   overallBadgeText: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   musclesList: {
     gap: 10,
@@ -239,19 +244,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 8,
   },
   muscleName: {
-    color: "#C7C7CC",
+    color: T.inkSecondary,
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "600",
+    flexShrink: 1,
   },
   muscleScore: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   barTrack: {
     height: 6,
-    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    backgroundColor: T.surfaceContainer,
     borderRadius: 3,
     overflow: "hidden",
   },
@@ -263,10 +270,10 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingTop: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "rgba(255, 255, 255, 0.12)",
+    borderTopColor: T.border,
   },
   summaryText: {
-    color: "#8E8E93",
+    color: T.inkMuted,
     fontSize: 12,
     lineHeight: 16,
   },
@@ -274,26 +281,29 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingVertical: 6,
     paddingHorizontal: 10,
-    backgroundColor: "rgba(255, 69, 58, 0.1)",
-    borderRadius: 6,
+    backgroundColor: T.heartRoseBg,
+    borderWidth: 1,
+    borderColor: T.heartRoseBorder,
+    borderRadius: 8,
   },
   hrAdjustedText: {
-    color: "#FF453A",
+    color: T.heartRose,
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   guidanceBox: {
     marginTop: 10,
     paddingVertical: 8,
     paddingHorizontal: 10,
-    backgroundColor: "rgba(0, 229, 255, 0.08)",
-    borderRadius: 6,
+    backgroundColor: T.electricBlueBg,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: "rgba(0, 229, 255, 0.2)",
+    borderColor: T.electricBlueBorder,
   },
   guidanceText: {
-    color: "#00E5FF",
+    color: T.electricBlue,
     fontSize: 12,
+    fontWeight: "600",
     lineHeight: 16,
   },
 });

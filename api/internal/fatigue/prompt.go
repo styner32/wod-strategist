@@ -49,12 +49,13 @@ type HybridSensorBrief struct {
 }
 
 type RecentWorkoutSummary struct {
-	SessionID       string             `json:"session_id"`
-	WorkoutAt       time.Time          `json:"workout_at"`
-	Movements       []string           `json:"movements"`
-	DurationSeconds *int               `json:"duration_seconds,omitempty"`
-	Effort          *int               `json:"effort,omitempty"`
-	HybridSensor    *HybridSensorBrief `json:"hybrid_sensor,omitempty"`
+	HybridSensorExcludedReason string             `json:"hybrid_sensor_excluded_reason,omitempty"`
+	SessionID                  string             `json:"session_id"`
+	WorkoutAt                  time.Time          `json:"workout_at"`
+	Movements                  []string           `json:"movements"`
+	DurationSeconds            *int               `json:"duration_seconds,omitempty"`
+	Effort                     *int               `json:"effort,omitempty"`
+	HybridSensor               *HybridSensorBrief `json:"hybrid_sensor,omitempty"`
 }
 
 type EffortReflectionInfo struct {
@@ -67,6 +68,7 @@ type EffortReflectionInfo struct {
 }
 
 type PreWODAdviceResponse struct {
+	HistoryRevision        string                `json:"history_revision,omitempty"`
 	ProfileID              uint                  `json:"profile_id"`
 	OverallFatigueScore    *int                  `json:"overall_fatigue_score,omitempty"`
 	OverallState           string                `json:"overall_state"`

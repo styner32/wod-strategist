@@ -56,6 +56,9 @@ func (ctl *Controller) createEnrichment(c *gin.Context, agentic bool) {
 	if !ok {
 		return
 	}
+	if !ctl.requireSessionProcessing(c, sessionID, profileID, false) {
+		return
+	}
 	var owned db.AnalysisResult
 	if err := ctl.db.WithContext(c.Request.Context()).Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&owned).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "analysis not found"})

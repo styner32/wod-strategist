@@ -5,6 +5,7 @@ import 'react-native-worklets-core';
 import '@/features/i18n'; // Initialize i18n (side-effect: sets locale)
 
 import { VideoQueueOverlay } from "@/components/VideoQueueOverlay";
+import { TacticalTheme } from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
 import { useAuthStore } from "@/features/auth/useAuthStore";
 import { useProfileStore } from "@/store/useProfileStore";
@@ -57,9 +58,9 @@ export default function RootLayout() {
   if (!isReady) {
     return (
       <SafeAreaProvider>
-        <StatusBar style="light" />
+        <StatusBar style="dark" />
         <View style={styles.splash}>
-          <ActivityIndicator size="large" color="#007AFF" />
+          <ActivityIndicator size="large" color={TacticalTheme.light.electricBlue} />
         </View>
       </SafeAreaProvider>
     );
@@ -67,14 +68,15 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <Stack
         key={locale}
         screenOptions={{
-          headerStyle: { backgroundColor: "#000" },
-          headerTintColor: "#fff",
-          headerTitleStyle: { fontWeight: "bold" },
-          contentStyle: { backgroundColor: "#000" },
+          headerStyle: { backgroundColor: TacticalTheme.light.canvas },
+          headerTintColor: TacticalTheme.light.ink,
+          headerTitleStyle: { fontWeight: "800", color: TacticalTheme.light.ink },
+          headerShadowVisible: false,
+          contentStyle: { backgroundColor: TacticalTheme.light.canvas },
         }}
       >
         {/* Auth screens */}
@@ -84,15 +86,40 @@ export default function RootLayout() {
         {/* 1. Tab Navigator (Home, Train, History, Profile) */}
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
 
-        {/* Modals & sub-pages */}
-        <Stack.Screen name="profile" options={{ title: t("tabs.profile"), presentation: "modal" }} />
-        <Stack.Screen name="profiles" options={{ title: t("profiles.title"), presentation: "modal" }} />
-        <Stack.Screen name="workout/setup" options={{ title: t("setup.title"), presentation: "modal" }} />
+        {/* Sub-pages (consistent right-slide card push) & fullScreenModals */}
+        <Stack.Screen
+          name="profile-edit"
+          options={{
+            headerShown: false,
+            presentation: "card",
+            animation: "slide_from_right",
+            contentStyle: { backgroundColor: TacticalTheme.light.canvas },
+          }}
+        />
+        <Stack.Screen
+          name="profiles"
+          options={{
+            headerShown: false,
+            presentation: "card",
+            animation: "slide_from_right",
+            contentStyle: { backgroundColor: TacticalTheme.light.canvas },
+          }}
+        />
+        <Stack.Screen
+          name="workout/setup"
+          options={{
+            headerShown: false,
+            presentation: "card",
+            animation: "slide_from_right",
+            contentStyle: { backgroundColor: TacticalTheme.light.canvas },
+          }}
+        />
         <Stack.Screen
           name="workout/visionTestPage"
           options={{
             headerShown: false,
             presentation: "fullScreenModal",
+            contentStyle: { backgroundColor: "#000" },
           }}
         />
         <Stack.Screen
@@ -100,17 +127,44 @@ export default function RootLayout() {
           options={{
             headerShown: false,
             presentation: "fullScreenModal",
+            contentStyle: { backgroundColor: "#000" },
           }}
         />
-        <Stack.Screen name="upload/index" options={{ headerShown: false }} />
-        <Stack.Screen name="queue" options={{ headerShown: false }} />
+        <Stack.Screen
+          name="upload/index"
+          options={{
+            headerShown: false,
+            presentation: "card",
+            animation: "slide_from_right",
+            contentStyle: { backgroundColor: TacticalTheme.light.canvas },
+          }}
+        />
+        <Stack.Screen
+          name="queue"
+          options={{
+            headerShown: false,
+            presentation: "card",
+            animation: "slide_from_right",
+            contentStyle: { backgroundColor: TacticalTheme.light.canvas },
+          }}
+        />
         <Stack.Screen
           name="settings/deleteAccount"
-          options={{ title: t("auth.deleteAccount"), presentation: "modal" }}
+          options={{
+            headerShown: false,
+            presentation: "card",
+            animation: "slide_from_right",
+            contentStyle: { backgroundColor: TacticalTheme.light.canvas },
+          }}
         />
         <Stack.Screen
           name="stretch/[key]"
-          options={{ title: t("stretches.detailTitle") }}
+          options={{
+            title: t("stretches.detailTitle"),
+            presentation: "card",
+            animation: "slide_from_right",
+            contentStyle: { backgroundColor: TacticalTheme.light.canvas },
+          }}
         />
       </Stack>
 
@@ -126,7 +180,7 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   splash: {
     flex: 1,
-    backgroundColor: "#000",
+    backgroundColor: TacticalTheme.light.canvas,
     justifyContent: "center",
     alignItems: "center",
   },

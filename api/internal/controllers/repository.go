@@ -21,7 +21,11 @@ func NewGormAnalysisResultRepository(dbConn *gorm.DB) *GormAnalysisResultReposit
 }
 
 func (r *GormAnalysisResultRepository) populateMissingWODDescriptions(ctx context.Context, results []db.AnalysisResult) {
-	if r.db == nil || len(results) == 0 {
+	populateMissingWODDescriptions(ctx, r.db, results)
+}
+
+func populateMissingWODDescriptions(ctx context.Context, database *gorm.DB, results []db.AnalysisResult) {
+	if database == nil || len(results) == 0 {
 		return
 	}
 	missingSessionIDs := make([]string, 0, len(results))
@@ -44,7 +48,7 @@ func (r *GormAnalysisResultRepository) populateMissingWODDescriptions(ctx contex
 	}
 
 	var sessions []db.Session
-	if err := r.db.WithContext(ctx).
+	if err := database.WithContext(ctx).
 		Select("session_id", "profile_id", "wod_description").
 		Where("session_id IN ? AND wod_description <> ''", missingSessionIDs).
 		Find(&sessions).Error; err != nil {

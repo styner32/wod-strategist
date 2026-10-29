@@ -7,9 +7,10 @@ import { useLiveWorkoutFeedback } from "../../features/wod/useLiveWorkoutFeedbac
 import { useIsFocused } from "expo-router/react-navigation";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as MediaLibrary from "expo-media-library/legacy";
+import * as ExpoRouter from "expo-router";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -28,7 +29,11 @@ import {
 } from "react-native";
 import { Video } from "react-native-compressor";
 import { getInfoAsync } from "expo-file-system/legacy";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  initialWindowMetrics,
+  SafeAreaInsetsContext,
+  SafeAreaProvider,
+} from "react-native-safe-area-context";
 import {
   Camera,
   useCameraDevice,
@@ -55,6 +60,7 @@ import {
   formatWorkoutTypeLabel,
   parseWorkoutType,
 } from "@/features/wod/workoutType";
+import { saveRecordingSetup, validateRecordingSetup } from "@/features/wod/recentWorkoutSetup";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { EnergyMonitor } from "../../features/ai-coach/ui/EnergyMonitor";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
@@ -102,6 +108,7 @@ type FailedChunkRecoveryItem = {
 type OriginalCapture = {
   ref: OriginalSessionRef;
   startedAt: number;
+  setupSnapshot?: string;
   order: number;
   complete: boolean;
   failure?: string;
@@ -196,8 +203,33 @@ function formatElapsed(ms: number): string {
   return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
+const ZERO_SAFE_AREA_INSETS = { top: 0, right: 0, bottom: 0, left: 0 };
+const FALLBACK_SAFE_AREA_METRICS = {
+  frame: { x: 0, y: 0, width: 0, height: 0 },
+  insets: ZERO_SAFE_AREA_INSETS,
+};
+
 export default function VisionTestPage() {
+  const parentInsets = useContext(SafeAreaInsetsContext);
+  return (
+    <SafeAreaProvider
+      initialMetrics={
+        parentInsets
+          ? undefined
+          : (initialWindowMetrics ?? FALLBACK_SAFE_AREA_METRICS)
+      }
+    >
+      <VisionTestPageContent />
+    </SafeAreaProvider>
+  );
+}
+
+function VisionTestPageContent() {
   const locale = useLocale();
+  const navigation =
+    typeof ExpoRouter.useNavigation === "function"
+      ? ExpoRouter.useNavigation()
+      : null;
   const {
     resolution = "720p",
     movements = "",
@@ -221,6 +253,7 @@ export default function VisionTestPage() {
     aspectRatio: aspectRatioParam,
     wodDescription: wodDescriptionParam,
     appearanceHints: appearanceHintsParam,
+    recordingSetup,
   } = useLocalSearchParams<{
     resolution?: string;
     movements?: string;
@@ -243,6 +276,7 @@ export default function VisionTestPage() {
     aspectRatio?: string;
     wodDescription?: string;
     appearanceHints?: string;
+    recordingSetup?: string;
   }>();
 
   const landscapeMode = landscapeModeParam === "true";
@@ -316,6 +350,29 @@ export default function VisionTestPage() {
   } = useMicrophonePermission();
   const { width, height } = useWindowDimensions();
   const isLandscapeLayout = width > height;
+  const contextInsets = useContext(SafeAreaInsetsContext);
+  const rawInsets =
+    contextInsets ?? initialWindowMetrics?.insets ?? ZERO_SAFE_AREA_INSETS;
+  const portraitWindowTop = initialWindowMetrics?.insets?.top ?? 0;
+  const safeTopInset =
+    Platform.OS === "ios" &&
+    !isLandscapeLayout &&
+    rawInsets.top === 0 &&
+    portraitWindowTop > 0
+      ? portraitWindowTop
+      : rawInsets.top;
+  const safeContainerStyle = {
+    paddingTop: safeTopInset + 8,
+    paddingBottom: rawInsets.bottom + 8,
+    paddingLeft: rawInsets.left,
+    paddingRight: rawInsets.right,
+  };
+  const safeCenterStyle = {
+    paddingTop: safeTopInset + 24,
+    paddingBottom: rawInsets.bottom + 24,
+    paddingLeft: rawInsets.left + 24,
+    paddingRight: rawInsets.right + 24,
+  };
   // On Android, landscape mode keeps portrait but user mounts phone sideways.
   // Apply landscape styles based on the toggle, not screen dimensions.
   const applyLandscapeStyles =
@@ -545,6 +602,7 @@ export default function VisionTestPage() {
   }, []);
 
   const profileId = useProfileStore((s) => s.activeProfileId);
+  const activeRecordingProfile = useRef(profileId); activeRecordingProfile.current = profileId;
   const liveFeedback = useLiveWorkoutFeedback(isRecording, profileId ?? 0, sessionIdRef, recordingStartTime);
   const chunkFeedback = liveFeedback.coaching;
   const [isFeedbackCollapsed, setIsFeedbackCollapsed] = useState(false);
@@ -612,6 +670,7 @@ export default function VisionTestPage() {
   //   landscape, so content is captured wide. UI shows a mounting hint.
   useFocusEffect(
     useCallback(() => {
+      setIsLeaving(false);
       if (!IS_ANDROID) {
         void ScreenOrientation.lockAsync(
           landscapeMode
@@ -1072,6 +1131,11 @@ export default function VisionTestPage() {
         finishPreparation();
         return;
       }
+      if (order === 1) {
+        await validateRecordingSetup(capture.setupSnapshot, { ownerUserId: capture.ref.ownerUserId, profileId: capture.ref.profileId });
+        if (!mounted.current || originalCapture.current !== capture || activeRecordingProfile.current !== capture.ref.profileId
+          || useAuthStore.getState().userId !== capture.ref.ownerUserId) throw new Error("recording_scope_changed_before_capture");
+      }
       const startedAt = Date.now();
       isChunkRecordingActive.current = true;
       let sourceRegistration: Promise<void> | undefined;
@@ -1083,6 +1147,10 @@ export default function VisionTestPage() {
           try {
             await addOriginalChunk(capture.ref, { order, path: video.path, durationSecs: video.duration });
             sourceAccepted = true;
+            // startRecording returns before native startup succeeds. Rebind only
+            // after accepting real original media; storage must not delay its finalization.
+            if (order === 1) void saveRecordingSetup(capture.setupSnapshot, { ownerUserId: capture.ref.ownerUserId, profileId: capture.ref.profileId }, capture.ref.sessionId)
+              .catch(error => console.warn("Recent recording setup was not saved", error));
             if (video.segmented) {
               if (video.droppedVideoFrames || video.droppedAudioBuffers || video.tailDrainTimedOut) {
                 console.warn(
@@ -1204,15 +1272,27 @@ export default function VisionTestPage() {
       }
       await MediaLibrary.requestPermissionsAsync(true).catch(() => {});
       if (!mounted.current) return;
+      const recordingOwner = useAuthStore.getState().userId;
+      if (!recordingOwner) return;
       const sessionId = buildWorkoutSessionId(workoutType);
       const ref = await prepareOriginalSession({ profileId, sessionId, mode: continuousRecording ? "continuous" : "chunks" });
       if (!mounted.current) {
         await markOriginalRecordingStopped(ref, { complete: false, reason: "recording_screen_unmounted_before_capture" });
         return;
       }
+      try { await validateRecordingSetup(recordingSetup, { ownerUserId: recordingOwner, profileId }); }
+      catch {
+        await markOriginalRecordingStopped(ref, { complete: false, reason: "recording_source_unavailable" }).catch(() => {});
+        if (mounted.current) Alert.alert(t("common.error"), t("setup.archiveSourceUnavailable"));
+        return;
+      }
+      if (!mounted.current || activeRecordingProfile.current !== profileId || useAuthStore.getState().userId !== recordingOwner) {
+        await markOriginalRecordingStopped(ref, { complete: false, reason: "recording_scope_changed_before_capture" }).catch(() => {});
+        return;
+      }
       const startedAt = Date.now();
       preparationQueue.current = Promise.resolve();
-      originalCapture.current = { ref, startedAt, order: 0, complete: true, failedUploads: 0, pendingUploads: 0, completedUploads: 0, failedChunks: [], drains: [], release: holdOriginalFiles(ref) };
+      originalCapture.current = { ref, startedAt, setupSnapshot: recordingSetup, order: 0, complete: true, failedUploads: 0, pendingUploads: 0, completedUploads: 0, failedChunks: [], drains: [], release: holdOriginalFiles(ref) };
       heartRateWindow.current.clear();
       stoppingWorkout.current = false;
       resetQuality();
@@ -1558,16 +1638,30 @@ export default function VisionTestPage() {
       return;
     }
     setIsLeaving(true);
-    if (router.canGoBack()) router.back();
-    else router.replace("/workout/setup" as any);
+    if (
+      navigation &&
+      typeof navigation.canGoBack === "function" &&
+      navigation.canGoBack() &&
+      typeof navigation.goBack === "function"
+    ) {
+      navigation.goBack();
+      return;
+    }
+    if (typeof router.canGoBack === "function" && router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace("/workout/setup" as any);
   };
 
   if (!hasPermission || (!previewOnly && !hasMicPermission)) {
     return (
-      <SafeAreaView style={styles.center}>
+      <View testID="vision-permission-root" style={[styles.center, safeCenterStyle]}>
         <TouchableOpacity
+          testID="vision-back-button"
           onPress={handleBack}
           style={styles.permissionBackButton}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           accessibilityRole="button"
           accessibilityLabel={t("common.back")}
         >
@@ -1607,40 +1701,50 @@ export default function VisionTestPage() {
             {t(`overlay.recording.${previewOnly ? "grantCameraAccess" : "grantCameraMicAccess"}`)}
           </Text>
         </TouchableOpacity>
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (!device)
     return (
-      <SafeAreaView style={styles.center}>
+      <View testID="vision-no-camera-root" style={[styles.center, safeCenterStyle]}>
         <Text style={styles.permissionMessage}>{t("overlay.recording.noCamera")}</Text>
-        <TouchableOpacity onPress={handleBack} style={styles.permissionBackButton}
-          accessibilityRole="button" accessibilityLabel={t("common.back")}>
+        <TouchableOpacity
+          testID="vision-back-button"
+          onPress={handleBack}
+          style={styles.permissionBackButton}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel={t("common.back")}
+        >
           <IconSymbol name="chevron.left" size={24} color="#FFFFFF" />
           <Text style={styles.permissionButtonText}>{t("common.back")}</Text>
         </TouchableOpacity>
-      </SafeAreaView>
+      </View>
     );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View testID="vision-recording-root" style={[styles.container, safeContainerStyle]}>
       {/* Android: hint to mount phone sideways when landscape mode is on */}
       {IS_ANDROID && landscapeMode && !isRecording && (
-        <View style={styles.landscapeHint}>
+        <View pointerEvents="none" style={styles.landscapeHint}>
           <Text style={styles.landscapeHintText}>
             📱 Mount phone sideways for landscape view
           </Text>
         </View>
       )}
 
-      <View testID="recording-chrome" style={isLandscapeLayout && styles.chromeLandscape}>
+      <View
+        testID="recording-chrome"
+        style={[styles.recordingChrome, isLandscapeLayout && styles.chromeLandscape]}
+      >
         {/* Top Header: Back navigation & Mode badge */}
         <View style={[styles.topHeader, isLandscapeLayout && styles.topHeaderLandscape]}>
           <TouchableOpacity
+            testID="vision-back-button"
             style={styles.backButton}
             onPress={handleBack}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             accessibilityRole="button"
             accessibilityLabel={t("common.back")}
           >
@@ -2274,7 +2378,7 @@ export default function VisionTestPage() {
           </View>
         </View>
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -2283,6 +2387,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#05080C",
     paddingVertical: 8,
+  },
+  recordingChrome: {
+    zIndex: 20,
   },
   chromeLandscape: {
     flexDirection: "row",
@@ -2400,6 +2507,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 16,
     marginBottom: 8,
+    zIndex: 20,
   },
   topHeaderLandscape: {
     paddingHorizontal: 0,
@@ -2407,9 +2515,9 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   backButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: "rgba(255, 255, 255, 0.08)",
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.12)",

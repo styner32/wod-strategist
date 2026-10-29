@@ -15,6 +15,7 @@ type PreWODAdviceRequest struct {
 
 // ProfileReadinessResponse represents deterministic muscle readiness and recent WOD summaries for HomeView.
 type ProfileReadinessResponse struct {
+	HistoryRevision     string                 `json:"history_revision,omitempty"`
 	ProfileID           uint                   `json:"profile_id"`
 	OverallFatigueScore *int                   `json:"overall_fatigue_score,omitempty"`
 	OverallState        string                 `json:"overall_state"`

@@ -47,10 +47,10 @@ describe('analysis status pause and resume controls', () => {
     environmentManager.setIsServer(() => wasServer);
     jest.useRealTimers();
   });
-  async function mount() {
+  async function mount(readOnly = false) {
     await act(async () => {
       renderer = create(createElement(QueryClientProvider, { client }, createElement(AnalysisOverview, {
-        analysis, seek: () => {}, seekHighlight: () => {}, canSeek: false,
+        analysis, seek: () => {}, seekHighlight: () => {}, canSeek: false, readOnly,
       })));
     });
     await act(async () => { await jest.advanceTimersByTimeAsync(0); });
@@ -90,5 +90,16 @@ describe('analysis status pause and resume controls', () => {
     expect(mockStart).toHaveBeenCalledTimes(1);
     expect(text()).toContain('요약 생성 중');
     expect(text()).not.toContain('자동 상태 조회를 잠시 중단했습니다');
+  });
+
+  it('keeps archived enrichment read-only and does not poll interrupted work', async () => {
+    mockStatus = 'interrupted';
+    await mount(true);
+    const reads = mockRead.mock.calls.length;
+    await act(async () => { await jest.advanceTimersByTimeAsync(30000); });
+    expect(mockRead.mock.calls.length).toBe(reads);
+    const generate = renderer.root.findAllByType('button').find(node => node.props.children === '요약 생성');
+    expect((generate!.props as { disabled?: boolean }).disabled).toBe(true);
+    expect(mockStart).not.toHaveBeenCalled();
   });
 });

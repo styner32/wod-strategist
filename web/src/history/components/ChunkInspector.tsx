@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from '../historyPolling';
+import { historyStatusLabel } from '../historyArchive';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   historyApi,
@@ -140,6 +141,7 @@ function candidateCorrection(candidate: ChunkReanalysisCandidate): FeedbackCorre
 
 function statusClasses(status: string) {
   switch (status) {
+    case 'CANCELLED': return 'bg-bg-secondary text-text-muted border-border';
     case 'COMPLETED': return 'bg-success/10 text-success border-success/20';
     case 'FAILED':
     case 'VIDEO_UNAVAILABLE':
@@ -362,7 +364,7 @@ export function ChunkInspector({
             Chunk Inspector
           </h2>
           <p className="mt-1 font-mono text-xs text-text-muted">
-            Chunk {chunk.id} · {formatTime(start)}–{formatTime(end)} · {chunk.status}
+            Chunk {chunk.id} · {formatTime(start)}–{formatTime(end)} · {historyStatusLabel(chunk.status)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -533,7 +535,7 @@ export function ChunkInspector({
               movement={candidateMovement}
               activity={candidateActivity}
               fatigue={candidateFatigue}
-              output={candidate?.output ?? (selectedRun ? `Status: ${selectedRun.status}` : 'No re-analysis attempt yet.')}
+              output={candidate?.output ?? (selectedRun ? `Status: ${historyStatusLabel(selectedRun.status)}` : 'No re-analysis attempt yet.')}
             />
             {candidate && selectedRunId != null && (
               <button
@@ -588,7 +590,7 @@ export function ChunkInspector({
                       </td>
                       <td className="px-3 py-2">
                         <span className={`rounded border px-1.5 py-0.5 font-medium ${statusClasses(run.status)}`}>
-                          {run.status.replaceAll('_', ' ')}
+                          {historyStatusLabel(run.status).replaceAll('_', ' ')}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-text-secondary">{run.model ?? 'Current'}{run.prompt_version ? ` · ${run.prompt_version}` : ''}</td>

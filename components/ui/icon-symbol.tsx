@@ -28,6 +28,7 @@ const MAPPING = {
   'trash': 'delete',
   'flame.fill': 'whatshot',
   'person.fill': 'person',
+  'person.2.fill': 'group',
   'eye': 'visibility',
   'camera.rotate': 'flip-camera-ios',
   'magnifyingglass': 'search',
@@ -51,6 +52,11 @@ const MAPPING = {
   'dot.radiowaves.left.and.right': 'bluetooth',
   'battery.100': 'battery-full',
   'battery.25': 'battery-alert',
+  'arrow.right': 'arrow-forward',
+  'slider.horizontal.3': 'tune',
+  'checkmark.shield.fill': 'verified-user',
+  'viewfinder': 'center-focus-strong',
+  'waveform.path.ecg': 'monitor-heart',
 } satisfies Record<string, ComponentProps<typeof MaterialIcons>['name']>;
 
 /**

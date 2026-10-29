@@ -22,6 +22,7 @@ import (
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/inconsolata"
 	"golang.org/x/image/math/fixed"
+	"gorm.io/gorm"
 )
 
 // Two-channel contract. Observers may receive the Tracking channel — who the
@@ -412,7 +413,9 @@ func (w *Worker) saveTrackingReference(ctx context.Context, videoPath string, ch
 	if err != nil {
 		return
 	}
-	if err := w.DB.WithContext(ctx).Model(&db.ChunkAnalysisResult{}).Where("id = ?", chunk.ID).Update("target_cues", string(raw)).Error; err != nil {
+	if err := w.withSessionPublication(ctx, chunk.ProfileID, chunk.SessionID, func(tx *gorm.DB) error {
+		return tx.Model(&db.ChunkAnalysisResult{}).Where("id = ?", chunk.ID).Update("target_cues", string(raw)).Error
+	}); err != nil {
 		w.logger.Warn("tracking reference reference not recorded", zap.Uint("chunk_id", chunk.ID), zap.Error(err))
 		return
 	}

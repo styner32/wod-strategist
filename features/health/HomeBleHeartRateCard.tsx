@@ -1,4 +1,5 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { Fonts, TacticalTheme } from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useState } from "react";
@@ -16,6 +17,8 @@ import {
   type RegisteredBleDevice,
   useBleHeartRate,
 } from "./useBleHeartRate";
+
+const T = TacticalTheme.light;
 
 function isForegroundAppState(state: string | null | undefined): boolean {
   return state !== "background" && state !== "inactive";
@@ -176,7 +179,7 @@ export function HomeBleHeartRateCard() {
     status,
   ]);
 
-  // Unregistered & idle -> render a small, non-intrusive connect chip
+  // Unregistered & idle -> render a clean Tactical Bright connect chip
   if (!activeSensor && !manualScanActive) {
     return (
       <View style={styles.chipRow}>
@@ -187,12 +190,12 @@ export function HomeBleHeartRateCard() {
           activeOpacity={0.75}
           accessibilityRole="button"
         >
-          <IconSymbol name="heart.fill" size={14} color="#FF375F" />
+          <IconSymbol name="heart.fill" size={14} color={T.heartRose} />
           <Text style={styles.connectChipText}>{t("home.hrConnectChip")}</Text>
           <IconSymbol
             name="dot.radiowaves.left.and.right"
             size={14}
-            color="#64748B"
+            color={T.inkMuted}
           />
         </TouchableOpacity>
       </View>
@@ -219,46 +222,61 @@ export function HomeBleHeartRateCard() {
       accessibilityRole="button"
       accessibilityLabel={t("home.hrCardTitle")}
     >
-      <View
-        style={[
-          styles.iconBox,
-          isLive ? styles.iconBoxLive : styles.iconBoxIdle,
-        ]}
-      >
-        <IconSymbol
-          name="heart.fill"
-          size={20}
-          color={isLive ? "#FF375F" : "#94A3B8"}
-        />
-      </View>
-
-      <View style={styles.infoCol}>
-        <Text style={styles.deviceName} numberOfLines={1}>
-          {activeSensor?.name ?? t("home.hrCardTitle")}
-        </Text>
-        <View style={styles.statusRow}>
-          {status === "Scanning" || status === "Connecting" ? (
-            <ActivityIndicator
-              size="small"
-              color="#64D2FF"
-              style={styles.spinner}
-            />
-          ) : (
+      <View style={styles.leftRow}>
+        {status === "Scanning" || status === "Connecting" ? (
+          <ActivityIndicator
+            size="small"
+            color={T.electricBlue}
+            style={styles.spinner}
+          />
+        ) : (
+          <View
+            style={[
+              styles.statusDotOuter,
+              isLive ? styles.statusDotOuterLive : styles.statusDotOuterIdle,
+            ]}
+          >
             <View
               style={[
-                styles.statusDot,
-                { backgroundColor: isLive ? "#30D158" : "#FF9F0A" },
+                styles.statusDotCore,
+                {
+                  backgroundColor: isLive ? T.statusFresh : T.statusWarning,
+                },
               ]}
             />
-          )}
-          <Text style={styles.statusText} numberOfLines={1}>
-            {statusLabel}
+          </View>
+        )}
+
+        <View style={styles.infoCol}>
+          <Text style={styles.deviceName} numberOfLines={1}>
+            {activeSensor?.name ?? t("home.hrCardTitle")}
           </Text>
+          <View
+            style={[
+              styles.statusBadge,
+              isLive ? styles.statusBadgeLive : styles.statusBadgeIdle,
+            ]}
+          >
+            <Text
+              style={[
+                styles.statusText,
+                isLive ? styles.statusTextLive : styles.statusTextIdle,
+              ]}
+              numberOfLines={1}
+            >
+              {statusLabel}
+            </Text>
+          </View>
         </View>
       </View>
 
       <View style={styles.metricsCol}>
-        <View style={styles.bpmRow}>
+        <View style={styles.bpmPill}>
+          <IconSymbol
+            name="heart.fill"
+            size={14}
+            color={isLive ? T.heartRose : T.inkMuted}
+          />
           <Text style={[styles.bpmValue, !isLive && styles.bpmValueMuted]}>
             {bpm > 0 ? bpm : "--"}
           </Text>
@@ -268,8 +286,8 @@ export function HomeBleHeartRateCard() {
           <View style={styles.batteryRow}>
             <IconSymbol
               name={batteryLevel <= 20 ? "battery.25" : "battery.100"}
-              size={13}
-              color={batteryLevel <= 20 ? "#FF453A" : "#30D158"}
+              size={12}
+              color={batteryLevel <= 20 ? T.statusExhausted : T.statusFresh}
             />
             <Text
               style={[
@@ -295,106 +313,152 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#121720",
+    backgroundColor: T.surface,
     borderWidth: 1,
-    borderColor: "#1E2633",
-    borderRadius: 20,
+    borderColor: T.border,
+    borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 8,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
   },
   connectChipText: {
-    color: "#CBD5E1",
+    color: T.inkSecondary,
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "700",
+    flexShrink: 1,
   },
   card: {
-    backgroundColor: "#121720",
-    borderRadius: 16,
-    padding: 14,
+    backgroundColor: T.surface,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     borderWidth: 1,
-    borderColor: "#1E2633",
+    borderColor: T.border,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
   },
   cardLive: {
-    borderColor: "rgba(255, 55, 95, 0.4)",
+    borderColor: T.statusFreshBorder,
   },
-  iconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    justifyContent: "center",
+  leftRow: {
+    flex: 1,
+    flexDirection: "row",
     alignItems: "center",
-    marginRight: 12,
+    marginRight: 10,
   },
-  iconBoxLive: {
-    backgroundColor: "rgba(255, 55, 95, 0.16)",
+  spinner: {
+    marginRight: 10,
   },
-  iconBoxIdle: {
-    backgroundColor: "#1A2230",
+  statusDotOuter: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  statusDotOuterLive: {
+    backgroundColor: T.statusFreshBg,
+  },
+  statusDotOuterIdle: {
+    backgroundColor: T.statusWarningBg,
+  },
+  statusDotCore: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
   },
   infoCol: {
     flex: 1,
-    marginRight: 10,
+    gap: 3,
   },
   deviceName: {
-    color: "#F8FAFC",
-    fontSize: 14,
-    fontWeight: "700",
+    fontFamily: Fonts?.mono,
+    color: T.ink,
+    fontSize: 13,
+    fontWeight: "800",
+    flexShrink: 1,
   },
-  statusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 3,
-    gap: 5,
+  statusBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
   },
-  spinner: {
-    transform: [{ scale: 0.7 }],
+  statusBadgeLive: {
+    backgroundColor: T.statusFreshBg,
+    borderColor: T.statusFreshBorder,
   },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+  statusBadgeIdle: {
+    backgroundColor: T.surfaceMuted,
+    borderColor: T.border,
   },
   statusText: {
-    color: "#94A3B8",
-    fontSize: 12,
+    fontSize: 10,
+    fontWeight: "700",
     flexShrink: 1,
+  },
+  statusTextLive: {
+    color: T.statusFresh,
+  },
+  statusTextIdle: {
+    color: T.inkMuted,
   },
   metricsCol: {
     alignItems: "flex-end",
-  },
-  bpmRow: {
-    flexDirection: "row",
-    alignItems: "baseline",
     gap: 3,
   },
+  bpmPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: T.surfaceMuted,
+    borderWidth: 1,
+    borderColor: T.border,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
   bpmValue: {
-    color: "#FFFFFF",
-    fontSize: 20,
-    fontWeight: "800",
+    fontFamily: Fonts?.mono,
+    color: T.ink,
+    fontSize: 16,
+    fontWeight: "900",
     fontVariant: ["tabular-nums"],
   },
   bpmValueMuted: {
-    color: "#64748B",
+    color: T.inkMuted,
   },
   bpmUnit: {
-    color: "#94A3B8",
-    fontSize: 11,
-    fontWeight: "700",
+    fontFamily: Fonts?.mono,
+    color: T.inkMuted,
+    fontSize: 10,
+    fontWeight: "800",
   },
   batteryRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 3,
-    marginTop: 2,
   },
   batteryText: {
-    color: "#94A3B8",
-    fontSize: 11,
-    fontWeight: "600",
+    fontFamily: Fonts?.mono,
+    color: T.inkMuted,
+    fontSize: 10,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
   batteryTextLow: {
-    color: "#FF453A",
+    color: T.statusExhausted,
   },
 });

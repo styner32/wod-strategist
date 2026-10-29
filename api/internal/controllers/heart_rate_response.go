@@ -14,6 +14,10 @@ func populateHeartRateSummary(res *db.AnalysisResult) {
 	dto := &db.HeartRateSummaryDTO{Status: "none", ProcessingState: res.SensorState, QualityStatus: "unknown", ApplicationReason: "no_sensor"}
 	res.HeartRate = dto
 	switch res.SensorState {
+	case db.SensorStateCancelled:
+		dto.Status = "unavailable"
+		dto.ApplicationReason = "processing_cancelled"
+		return
 	case db.SensorStateUploading, db.SensorStatePending, db.SensorStateRunning:
 		dto.Status = "pending"
 		dto.ApplicationReason = "pending"

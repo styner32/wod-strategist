@@ -103,7 +103,7 @@ describe("PreWodStrategyCard", () => {
     expect(queryByText("어제 스내치로 인해 어깨 피로 누적")).toBeNull();
 
     // Toggle expand
-    fireEvent.press(getByText("▼ 상세보기"));
+    fireEvent.press(getByText("preWod.expandDetails"));
 
     // Detailed note is now visible
     expect(getByText("어제 스내치로 인해 어깨 피로 누적")).toBeTruthy();
@@ -231,4 +231,20 @@ describe("PreWodStrategyCard", () => {
     ).toBeTruthy();
     expect(getByText("preWod.effortUnrated")).toBeTruthy();
   });
+  it.each([
+    ["calibration_changed", "preWod.hybridSensorExcluded"],
+    ["calibration_provenance_unknown", "preWod.hybridSensorProvenanceUnknown"],
+  ] as const)("keeps Effort and time while neutrally explaining %s sensor exclusion", (reason, message) => {
+    const advice: PreWodAdviceResponse = { ...mockAdvice, effort_reflection: {
+      applied: true, rated_count: 1, sensor_count: 0, total_recent: 1,
+      recent_workouts: [{ session_id: "WOD-20261029-SOURCE", workout_at: "2026-10-29T01:00:00Z",
+        movements: ["Thruster"], duration_seconds: 120, effort: 8, hybrid_sensor_excluded_reason: reason }],
+    } };
+    const view = render(<PreWodStrategyCard advice={advice} />);
+    expect(view.getByText(message)).toBeTruthy();
+    expect(view.getByText('preWod.effortBadge:{"effort":8}')).toBeTruthy();
+    expect(view.getByText("Thruster · 2:00")).toBeTruthy();
+    expect(view.queryByText(/preWod.hybridSensorBadge/)).toBeNull();
+  });
+
 });

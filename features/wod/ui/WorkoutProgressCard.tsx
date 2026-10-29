@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { TacticalTheme } from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
+
+const T = TacticalTheme.light;
 import { confirmPerformanceRecords, getPerformanceBenchmarks, getWorkoutProgress } from "../api";
 import {
   confirmedPerformanceInput, findCoveringConfirmedRecord, isDisplayableProgressGap, observedReps, performanceDraft, performanceSelectionCovered, progressTime, rememberedMovementDefaults, timelineProgressIntervals,
@@ -168,7 +171,7 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
     <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded(v => !v)}><Text style={styles.title}>{label("title")} · {expanded ? "−" : "+"}</Text></Pressable>
     {expanded && <>
       <Text style={styles.text}>{label("boundary")}</Text>
-      {loading && <ActivityIndicator accessibilityLabel={label("loading")} />}
+      {loading && <ActivityIndicator accessibilityLabel={label("loading")} color={T.electricBlue} />}
       {!!error && <><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => setRevision(v => v + 1)} style={styles.button}><Text style={styles.text}>{label("refresh")}</Text></Pressable></>}
       {!!notice && <Text style={styles.text}>{notice}</Text>}
       {data && !data.progress && <Text style={styles.text}>{label("unavailable")}</Text>}
@@ -209,17 +212,75 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
   </View>;
 }
 const styles = StyleSheet.create({
-  card: { backgroundColor: "#1C1C1E", borderRadius: 12, padding: 12, marginVertical: 8, gap: 10 },
-  editor: { padding: 10, borderWidth: 1, borderColor: "#555", borderRadius: 8, gap: 8 },
-  confirmedEditor: { borderColor: "#2ea043", backgroundColor: "rgba(46, 160, 67, 0.12)" },
-  restRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: "#3a3a3c", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.03)", gap: 8 },
-  restText: { color: "#999", fontSize: 11 },
-  compactButton: { paddingVertical: 4, paddingHorizontal: 8, borderWidth: 1, borderColor: "#555", borderRadius: 6 },
+  card: {
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 12,
+    marginVertical: 8,
+    gap: 10,
+  },
+  editor: {
+    padding: 10,
+    borderWidth: 1,
+    borderColor: T.border,
+    borderRadius: 10,
+    backgroundColor: T.surface,
+    gap: 8,
+  },
+  confirmedEditor: {
+    borderColor: T.statusFreshBorder,
+    backgroundColor: T.statusFreshBg,
+  },
+  restRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: T.border,
+    borderRadius: 8,
+    backgroundColor: T.surface,
+    gap: 8,
+  },
+  restText: { color: T.inkMuted, fontSize: 11, flexShrink: 1 },
+  compactButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+    borderRadius: 6,
+    backgroundColor: T.surfaceMuted,
+  },
   headerRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 6 },
-  confirmedBadge: { color: "#4ade80", fontSize: 12, fontWeight: "600" },
-  gap: { gap: 8 }, title: { color: "#f4f4f4", fontWeight: "600", fontSize: 14 }, text: { color: "#ddd", fontSize: 12 },
-  row: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, field: { gap: 4, minWidth: 95 },
-  input: { padding: 10, borderWidth: 1, borderColor: "#777", borderRadius: 6, color: "#fff" },
-  button: { padding: 10, borderWidth: 1, borderColor: "#666", borderRadius: 8 }, selected: { backgroundColor: "#3868b0" },
-  error: { color: "#ffbe72" }, disabled: { opacity: 0.4 },
+  confirmedBadge: { color: T.statusFresh, fontSize: 12, fontWeight: "700" },
+  gap: { gap: 8 },
+  title: { color: T.ink, fontWeight: "800", fontSize: 14, flexShrink: 1 },
+  text: { color: T.inkSecondary, fontSize: 12, flexShrink: 1 },
+  row: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  field: { gap: 4, minWidth: 95 },
+  input: {
+    padding: 10,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+    borderRadius: 8,
+    color: T.ink,
+    backgroundColor: T.surfaceMuted,
+  },
+  button: {
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+    borderRadius: 8,
+    backgroundColor: T.surface,
+  },
+  selected: {
+    backgroundColor: T.electricBlueBg,
+    borderColor: T.electricBlue,
+  },
+  error: { color: T.statusWarning, fontWeight: "600", fontSize: 12 },
+  disabled: { opacity: 0.45 },
 });

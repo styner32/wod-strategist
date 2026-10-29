@@ -44,6 +44,7 @@ export function WODTrainingPanel({ sessionId, profileId, scoreJSON, currentTime,
       <button className={button} disabled={waiting || create.isPending} onClick={() => { apply.reset(); create.mutate(null); }}>자동 추정 복원</button>
     </div>
     {waiting && <p>시작 시점을 반영해 전체 WOD를 재평가하고 있습니다.</p>}
+    {run.data?.status === "CANCELLED" && <p role="status" className="text-text-secondary">중단됨 — 새 재평가를 직접 실행할 수 있습니다.</p>}
     {runId != null && <button className={button} disabled={apply.isPending} onClick={() => { localStorage.removeItem(key); setRunId(undefined); apply.reset(); }}>자동 적용 대기 취소</button>}
     {stopped && <button className={button} onClick={() => { resetHistoryPolling(client, ["session-reanalysis", sessionId]); void run.refetch(); }}>상태 확인 재개</button>}
     {apply.isError && runId != null && <button className={button} onClick={() => apply.mutate(runId)}>결과 적용 다시 시도</button>}

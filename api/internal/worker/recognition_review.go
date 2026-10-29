@@ -50,7 +50,7 @@ func NewRecognitionReviewTask(runID uint) (*asynq.Task, error) {
 
 // HandleRecognitionReviewTask diagnoses a preserved confirmation/observation
 // mismatch. Its only writes are diagnostic runs, usage, and stage metrics.
-func (w *Worker) HandleRecognitionReviewTask(ctx context.Context, task *asynq.Task) error {
+func (w *Worker) handleRecognitionReviewTask(ctx context.Context, task *asynq.Task) error {
 	var payload RecognitionReviewPayload
 	if task == nil || json.Unmarshal(task.Payload(), &payload) != nil || payload.RunID == 0 {
 		return fmt.Errorf("invalid recognition review payload: %w", asynq.SkipRetry)
@@ -101,7 +101,7 @@ func (w *Worker) handleRecognitionReview(ctx context.Context, runID uint) (retEr
 		updates["started_at"] = now
 		run.StartedAt = &now
 	}
-	if err := w.DB.WithContext(ctx).Model(&run).Updates(updates).Error; err != nil {
+	if err := w.DB.WithContext(ctx).Model(&run).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Updates(updates).Error; err != nil {
 		return err
 	}
 	run.Status = db.RecognitionReviewStatusRunning
@@ -117,7 +117,7 @@ func (w *Worker) handleRecognitionReview(ctx context.Context, runID uint) (retEr
 		if client, ok := w.GeminiClient.(interface{ Model() string }); ok && client.Model() != "" {
 			run.Model = client.Model()
 		}
-		if err := w.DB.WithContext(ctx).Model(&run).Update("model", run.Model).Error; err != nil {
+		if err := w.DB.WithContext(ctx).Model(&run).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Update("model", run.Model).Error; err != nil {
 			return err
 		}
 	}
@@ -190,7 +190,7 @@ func (w *Worker) handleRecognitionReview(ctx context.Context, runID uint) (retEr
 		hash := sha256.Sum256([]byte(prompt))
 		if run.PromptHash == "" {
 			run.PromptHash = hex.EncodeToString(hash[:])
-			if err := w.DB.WithContext(ctx).Model(&run).Update("prompt_hash", run.PromptHash).Error; err != nil {
+			if err := w.DB.WithContext(ctx).Model(&run).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Update("prompt_hash", run.PromptHash).Error; err != nil {
 				return err
 			}
 		}
@@ -384,7 +384,7 @@ func (w *Worker) persistRecognitionBatches(ctx context.Context, run *db.Recognit
 	}
 	input, output, total := aggregateRecognitionUsage(batches)
 	run.Batches, run.InputTokens, run.OutputTokens, run.TotalTokens = raw, input, output, total
-	return w.DB.WithContext(ctx).Model(run).Updates(map[string]any{"batches": db.JSONDocument(raw), "input_tokens": input, "output_tokens": output, "total_tokens": total, "updated_at": time.Now().UTC()}).Error
+	return w.DB.WithContext(ctx).Model(run).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Updates(map[string]any{"batches": db.JSONDocument(raw), "input_tokens": input, "output_tokens": output, "total_tokens": total, "updated_at": time.Now().UTC()}).Error
 }
 
 func aggregateRecognitionUsage(batches []recognitionreview.Batch) (input, output, total *int64) {
@@ -427,7 +427,7 @@ func (w *Worker) retryRecognitionReview(ctx context.Context, run *db.Recognition
 		if err := w.persistRecognitionBatches(ctx, run, batches); err != nil {
 			return err
 		}
-		if err := w.DB.WithContext(ctx).Model(run).Updates(map[string]any{"status": db.RecognitionReviewStatusQueued, "safe_error": message, "updated_at": time.Now().UTC()}).Error; err != nil {
+		if err := w.DB.WithContext(ctx).Model(run).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Updates(map[string]any{"status": db.RecognitionReviewStatusQueued, "safe_error": message, "updated_at": time.Now().UTC()}).Error; err != nil {
 			return err
 		}
 		return cause
@@ -453,7 +453,7 @@ func (w *Worker) finishRecognitionReview(ctx context.Context, run *db.Recognitio
 	if run.StartedAt != nil {
 		duration = now.Sub(*run.StartedAt).Milliseconds()
 	}
-	return w.DB.WithContext(ctx).Model(run).Updates(map[string]any{"status": status, "safe_error": message, "duration_ms": duration, "completed_at": now, "updated_at": now}).Error
+	return w.DB.WithContext(ctx).Model(run).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Updates(map[string]any{"status": status, "safe_error": message, "duration_ms": duration, "completed_at": now, "updated_at": now}).Error
 }
 
 type recognitionReviewInput struct {

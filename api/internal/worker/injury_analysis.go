@@ -12,6 +12,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 const InjuryAnalysisPrompt = `
@@ -64,7 +65,7 @@ func NewInjuryAnalysisTask(sessionID, filePath string, injuries []string, profil
 	return asynq.NewTask(TypeInjuryAnalysis, data), nil
 }
 
-func (w *Worker) HandleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleInjuryAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	var p InjuryAnalysisPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
@@ -240,7 +241,7 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 			updates["injury_output_alt"] = newInjuryOutputAlt
 		}
 		if len(updates) > 0 {
-			if err := w.DB.Model(&existing).Updates(updates).Error; err != nil {
+			if err := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error { return tx.Model(&existing).Updates(updates).Error }); err != nil {
 				return fmt.Errorf("failed to update existing injury result: %w", err)
 			}
 		}
@@ -253,7 +254,7 @@ func (w *Worker) handleInjuryAnalysisWithFile(ctx context.Context, p InjuryAnaly
 			InjuryOutputAlt: altOutput,
 		}
 		result.ProfileID = p.ProfileID
-		if err := w.DB.Create(result).Error; err != nil {
+		if err := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error { return tx.Create(result).Error }); err != nil {
 			return fmt.Errorf("failed to create standalone injury result: %w", err)
 		}
 	}
@@ -388,7 +389,9 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 			if existing.InjuryOutput != "" {
 				failureNote = existing.InjuryOutput + "\n\n---\n\n" + failureNote
 			}
-			w.DB.Model(&existing).Update("injury_output", failureNote)
+			if persistErr := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error { return tx.Model(&existing).Update("injury_output", failureNote).Error }); persistErr != nil {
+				return persistErr
+			}
 		} else {
 			failedResult := &db.AnalysisResult{
 				SessionID:    p.SessionID,
@@ -397,7 +400,9 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 				Output:       "An internal error occurred during injury analysis.",
 			}
 			failedResult.ProfileID = p.ProfileID
-			w.DB.Create(failedResult)
+			if persistErr := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error { return tx.Create(failedResult).Error }); persistErr != nil {
+				return persistErr
+			}
 		}
 		return err
 	}
@@ -414,7 +419,9 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 		if existing.InjuryOutput != "" {
 			newInjuryOutput = existing.InjuryOutput + "\n\n---\n\n" + analysis
 		}
-		w.DB.Model(&existing).Update("injury_output", newInjuryOutput)
+		if persistErr := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error { return tx.Model(&existing).Update("injury_output", newInjuryOutput).Error }); persistErr != nil {
+			return persistErr
+		}
 	} else {
 		result := &db.AnalysisResult{
 			SessionID:    p.SessionID,
@@ -423,7 +430,9 @@ func (w *Worker) handleInjuryAnalysisLegacy(ctx context.Context, p InjuryAnalysi
 			Output:       analysis,
 		}
 		result.ProfileID = p.ProfileID
-		w.DB.Create(result)
+		if persistErr := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error { return tx.Create(result).Error }); persistErr != nil {
+			return persistErr
+		}
 	}
 
 	w.logger.Info("Injury analysis completed",

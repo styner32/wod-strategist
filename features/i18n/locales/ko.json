@@ -120,9 +120,18 @@
     "hrStatusScanning": "대기 중 · 착용 시 자동 연결",
     "hrStatusError": "연결 확인 필요",
     "hrTapToManage": "탭하여 센서 전환 또는 관리",
-    "hrNoDevicesFound": "가슴/팔 심박계를 착용해 깨운 뒤 다시 확인해주세요."
+    "hrNoDevicesFound": "가슴/팔 심박계를 착용해 깨운 뒤 다시 확인해주세요.",
+    "brandEyebrow": "TACTICAL READY",
+    "launchAction": "세션 시작",
+    "fastEntry": "빠른 진입 →",
+    "quickScanBoard": "칠판 스캔",
+    "quickTextSaved": "텍스트 / 저장 WOD",
+    "readinessSubtitle": "최근 운동 부하 및 회복 경과 기반",
+    "readinessStrainLabel": "누적 피로도 지수",
+    "readinessCriticalNodes": "주요 부하 부위"
   },
   "train": {
+    "eyebrow": "트레이닝 허브",
     "heroTitle": "훈련 준비 되셨나요?",
     "heroSubtitle": "실시간 생체 추적 및 동작 분석으로 세션을 수행하세요.",
     "startSession": "세션 시작",
@@ -142,6 +151,7 @@
     "cooldown": "쿨다운"
   },
   "history": {
+    "eyebrow": "세션 아카이브",
     "title": "분석 기록",
     "subtitle": "최근 AI 코칭 세션.",
     "timeGap": "{{minutes}}분 후",
@@ -149,6 +159,10 @@
     "yesterday": "어제"
   },
   "profileTab": {
+    "eyebrow": "애슬리트 프로필",
+    "activeAthlete": "활성 선수",
+    "restingHrBadge": "안정시 %{bpm} bpm",
+    "cacheLimitLabel": "%{used} / 1.5 GB",
     "noProfile": "프로필 미선택",
     "account": "계정",
     "editProfile": "프로필 수정",
@@ -215,6 +229,8 @@
   },
   "profiles": {
     "title": "프로필",
+    "rosterCount": "등록 프로필 [%{count}]",
+    "switchBtn": "전환",
     "archiveProfile": "프로필 보관",
     "archiveConfirm": "\"%{name}\"을(를) 보관하시겠습니까?\n\n운동 기록은 유지됩니다.",
     "archive": "보관",
@@ -257,6 +273,8 @@
     "savedGalleryDeleted": "갤러리에 저장하고 임시 파일을 삭제했습니다."
   },
   "setup": {
+    "startFreshInputs": "새 운동 내용으로 초기화",
+    "archiveSourceUnavailable": "보관된 녹화 설정이거나 현재 상태를 확인할 수 없습니다. 연결을 확인한 뒤 다시 시도해주세요.",
     "title": "운동 설정",
     "plannedMovements": "계획된 동작",
     "selectMovements": "수행할 동작을 선택하세요:",
@@ -336,7 +354,21 @@
     "savedForLaterMessage": "운동 설정이 저장되었습니다. 운동 시작 시 한 번의 탭으로 바로 불러올 수 있습니다.",
     "secondaryMovementsBtn": "개별 동작 직접 선택하기 (선택사항)",
     "secondaryMovementsSelected": "직접 선택한 동작 (%{count}개)",
-    "backToWodInput": "← 사진 / 텍스트 입력으로 돌아가기"
+    "backToWodInput": "← 사진 / 텍스트 입력으로 돌아가기",
+    "protocolSetup": "세션 설정",
+    "protocolVerify": "운동 전 점검",
+    "autoOcrBadge": "자동 인식",
+    "recommendedBadge": "추천",
+    "optionalBadge": "선택사항",
+    "frequentMovementsLabel": "자주 쓰는 동작 빠른 선택",
+    "browseFullIndex": "전체 동작 검색 →",
+    "indexedMovementsCount": "총 %{count}개 동작 등록",
+    "sensorSyncLabel": "센서 연동",
+    "sensorReadyBadge": "등록됨",
+    "sensorOptionalBadge": "미등록",
+    "rigSetupTitle": "고정 촬영 구도 안내",
+    "rigSetupDistance": "약 3.5m 전신 촬영 거리 권장",
+    "rigSetupDesc": "스쿼트 하단부터 오버헤드 락아웃까지 전신이 나오도록 배치하고 강한 역광을 피해주세요."
   },
   "upload": {
     "title": "영상 업로드",
@@ -354,6 +386,7 @@
     "networkError": "네트워크 오류입니다. 연결을 확인하고 다시 시도해주세요."
   },
   "historyList": {
+    "statusCancelled": "중단됨",
     "statusComplete": "완료",
     "statusFailed": "실패",
     "statusPending": "대기 중",
@@ -419,7 +452,7 @@
     "waitingToEncode": "인코딩 대기 중...",
     "readyToUpload": "업로드 준비 완료",
     "archiveTitle": "기록 보관",
-    "archiveConfirm": "기록이 목록에서 숨겨집니다. 나중에 다시 찾을 수 있습니다.",
+    "archiveConfirm": "기록이 목록에서 숨겨지고 대기 중이거나 진행 중인 분석이 중단됩니다. 나중에 기록을 복원할 수 있습니다.",
     "archive": "보관",
     "archiveFailed": "보관에 실패했습니다. 다시 시도해주세요.",
     "mergePreparing": "병합 준비 중... 곧 세션이 표시됩니다.",
@@ -584,6 +617,7 @@
     "tapForDetail": "상세보기 →"
   },
   "stretches": {
+    "eyebrow": "모빌리티 프로토콜",
     "detailTitle": "스트레칭 상세",
     "empty": "추천된 스트레칭이 없습니다",
     "emptyDesc": "AI 분석에서 추천된 맞춤 스트레칭이 여기에 모입니다.",
@@ -597,6 +631,8 @@
     "video": "동작 영상"
   },
   "preWod": {
+    "hybridSensorExcluded": "보정 기준 변경 · 센서 참고값 제외",
+    "hybridSensorProvenanceUnknown": "보정 출처 미확인 · 센서 참고값 제외",
     "title": "오늘의 맞춤 WOD 전략 & 피로도",
     "analyzingFatigue": "신체 부위별 피로도 및 맞춤 전략 분석 중...",
     "pacingStrategy": "페이스 운용 전략",
@@ -613,7 +649,10 @@
     "durationUnconfirmed": "시간 미확정",
     "movementsUnknown": "종목 미확인",
     "hybridSensorBadge": "하이브리드 활동강도 %{score}/100",
-    "noEffortPrompt": "운동 완료 후 Effort(1–10)를 입력하면 다음 페이스 조언이 더 정교해집니다."
+    "noEffortPrompt": "운동 완료 후 Effort(1–10)를 입력하면 다음 페이스 조언이 더 정교해집니다.",
+    "expandDetails": "▼ 상세보기",
+    "collapseDetails": "▲ 접기",
+    "mobilityTarget": "타겟: %{area}"
   },
   "muscleGroups": {
     "shoulders_push": "어깨 / 상체 밀기",
@@ -733,6 +772,7 @@
     "chunkTime": "분석 구간 내 시점"
   },
   "environment": {
+    "archiveVerificationUnavailable": "보관 상태를 확인할 때까지 과거 관찰 집계를 보류합니다. 원본 관찰은 계속 확인할 수 있습니다.",
     "contextPreview": "매 분석에 전달 · 대상: %{appearance}\n예정 동작: %{movements}\nWOD: %{wod}",
     "targetMissing": "대상 외형 미입력 · 개인 행동의 대상 미확인",
     "targetProvided": "외형 컨텍스트 전달됨 · 대상 일치 여부는 검수 필요",
@@ -845,6 +885,7 @@
       "give_space": "공간 내주기"
     },
     "status": {
+      "source_unverified": "보관 상태를 확인할 수 없어 생성된 결과를 반영하지 않았습니다.",
       "off": "꺼짐",
       "waiting": "대기 중",
       "analyzing": "관찰 중",

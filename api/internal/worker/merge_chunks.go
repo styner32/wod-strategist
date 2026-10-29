@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -29,7 +30,6 @@ const (
 	maxLeadingBlackTrimSecs       = 0.20
 	minChunkDurationForTrimSecs   = 1.0
 	canonicalConcatVideoTimescale = 30000
-	minChunksForBulkTrimNormalize = 4
 )
 
 var blackDetectLineRegex = regexp.MustCompile(`black_start:([0-9.]+)\s+black_end:([0-9.]+)`)
@@ -54,6 +54,13 @@ type chunkStreamProfile struct {
 	AudioCodec     string
 	SampleRate     int
 	Channels       int
+	VideoIndex     int
+	AudioIndex     int
+	VideoCount     int
+	AudioCount     int
+	AudioTimeBase  string
+	ChannelLayout  string
+	StreamOrder    string
 }
 
 func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool, wodDescription string) (*asynq.Task, error) {
@@ -76,7 +83,7 @@ func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []str
 	return asynq.NewTask(TypeMergeChunks, data, asynq.Unique(mergeChunksUniqueTTL)), nil
 }
 
-func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleMergeChunksTask(ctx context.Context, t *asynq.Task) error {
 	var p VideoAnalysisPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
@@ -188,20 +195,13 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 		return fmt.Errorf("ffmpeg merge failed: %w", err)
 	}
 	if intervalErr != nil {
-		// Merging remains backward-compatible if ffprobe cannot verify one source
-		// chunk. In that case offsets stay NULL and debug re-analysis must use its
-		// exact retained-chunk fallback instead of capture-clock timestamps.
-		w.logger.Warn("Could not verify merged-media chunk intervals",
-			zap.String("session_id", p.SessionID),
-			zap.Error(intervalErr))
-	} else {
-		if err := w.persistConcatMediaIntervals(ctx, p.SessionID, p.ProfileID, mediaIntervals); err != nil {
-			// Do not break the established mobile merge flow for additive debug
-			// metadata. The rows remain NULL, so no unverified interval is usable.
-			w.logger.Warn("Could not persist merged-media chunk intervals",
-				zap.String("session_id", p.SessionID),
-				zap.Error(err))
-		}
+		return fmt.Errorf("could not verify merged-media chunk intervals: %w", intervalErr)
+	}
+	if err := w.persistConcatMediaIntervals(ctx, p.SessionID, p.ProfileID, mediaIntervals); err != nil {
+		// Persistence remains additive: only verified media reaches this point.
+		// Missing DB offsets stay unavailable rather than using capture time.
+		w.logger.Warn("Could not persist merged-media chunk intervals",
+			zap.String("session_id", p.SessionID), zap.Error(err))
 	}
 
 	// Free tmpfs: delete chunk files now that FFmpeg concat is done.
@@ -231,6 +231,47 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	}
 
 	w.logger.Info("Merged video uploaded", zap.String("gcs_uri", mergedGCSURI))
+
+	// 4.25. Hard duration guardrail: keep merged.mp4 playable in GCS, but skip
+	// expensive analysis re-encode, post-merge activity review, and full-session
+	// Gemini analysis when the merged video exceeds maxAnalysisVideoDuration.
+	mergedDurationSecs := probeVideoDuration(ctx, mergedPath)
+	if len(mediaIntervals) > 0 && mediaIntervals[len(mediaIntervals)-1].End > mergedDurationSecs {
+		mergedDurationSecs = mediaIntervals[len(mediaIntervals)-1].End
+	}
+	if mergedDurationSecs > maxAnalysisVideoDuration.Seconds() {
+		w.logger.Error("Merged video duration exceeds maximum analysis limit; skipping AI analysis and re-encode",
+			zap.String("session_id", p.SessionID),
+			zap.Float64("duration_secs", mergedDurationSecs),
+			zap.Float64("max_duration_secs", maxAnalysisVideoDuration.Seconds()),
+			zap.String("merged_gcs_uri", mergedGCSURI))
+
+		activityReviewErr := w.skipOverlongActivityReview(ctx, p, mergedGCSURI)
+
+		if w.DB != nil {
+			resolvedProfileID, profErr := w.resolveVideoAnalysisProfile(ctx, p.SessionID, p.ProfileID)
+			if profErr != nil {
+				return profErr
+			}
+			persistPayload := p
+			persistPayload.ProfileID = resolvedProfileID
+			failedResult := &db.AnalysisResult{
+				SessionID:       p.SessionID,
+				ProfileID:       resolvedProfileID,
+				Status:          "FAILED",
+				Output:          videoTooLongUserMessage,
+				AnalysisType:    db.AnalysisTypeWOD,
+				AvailableVideos: db.CommaStringArray{"merged"},
+			}
+			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			if dbErr := w.persistVideoAnalysisFailed(persistCtx, persistPayload, failedResult); dbErr != nil {
+				return fmt.Errorf("failed to persist FAILED analysis result for overlong merged video: %w", dbErr)
+			}
+		}
+
+		return activityReviewErr
+	}
 
 	// Counting is dispatched independently of the full analysis outcome.
 	activityReviewErr := w.enqueueActivityReview(ctx, p, mergedGCSURI)
@@ -316,134 +357,95 @@ func (w *Worker) HandleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	return activityReviewErr
 }
 
-// mergeDownloadedChunks probes downloaded chunks, normalizes them into uniform
-// H.264 / 30fps / 44.1kHz stereo AAC streams when codec, display dimensions,
-// rotation, or audio parameters differ (e.g. mobile compression fallback from
-// H.264 to raw HEVC), computes verified media intervals on the concat inputs,
-// and writes the merged MP4 to mergedPath.
+// mergeDownloadedChunks prepares every input once on its presented-video timeline.
+// Only verified canonical video is copied into the merge; audio is encoded once
+// more at the final boundary to reconcile per-file AAC priming safely.
 func mergeDownloadedChunks(ctx context.Context, log *zap.Logger, tmpDir string, objects, localChunkPaths []string, mergedPath string) ([]concatMediaInterval, error, error) {
-	normalizedForConcat := false
-	if len(localChunkPaths) > 0 {
-		profiles, probeErr := probeAllChunkStreamProfiles(ctx, localChunkPaths)
-		if probeErr != nil {
-			log.Warn("Could not probe chunk stream profiles; falling back to single-pass concat",
-				zap.Error(probeErr))
-		} else {
-			trimStarts := make([]float64, len(localChunkPaths))
-			trimCount := 0
-			for i, srcPath := range localChunkPaths {
-				if trimSecs := probeLeadingBlackTrimSecs(ctx, srcPath); trimSecs > 0 {
-					trimStarts[i] = trimSecs
-					trimCount++
-					log.Info("Detected leading black frame on chunk; scheduling trim before concat",
-						zap.Int("chunk_index", i),
-						zap.Float64("trim_start_secs", trimSecs))
-				}
-			}
-			anyTrim := trimCount > 0
-
-			needsNorm, targetW, targetH, includeAudio := chunksNeedNormalization(profiles)
-			if !needsNorm && anyTrim && (!canTrimInPlaceForConcat(profiles) || shouldNormalizeForLeadingBlackTrim(len(localChunkPaths), trimCount)) {
-				needsNorm = true
-				targetW, targetH = normalizedTargetDimensions(profiles)
-			}
-
-			if needsNorm {
-				log.Info("Normalizing chunks before concat",
-					zap.Int("chunk_count", len(localChunkPaths)),
-					zap.Int("target_width", targetW),
-					zap.Int("target_height", targetH),
-					zap.Bool("include_audio", includeAudio),
-					zap.Bool("has_leading_black_trim", anyTrim))
-				for i, srcPath := range localChunkPaths {
-					normPath := filepath.Join(tmpDir, fmt.Sprintf("norm_chunk_%03d.mp4", i))
-					if err := normalizeChunkForConcat(ctx, log, srcPath, normPath, profiles[i], targetW, targetH, includeAudio, trimStarts[i]); err != nil {
-						return nil, nil, fmt.Errorf("normalize chunk %d: %w", i, err)
-					}
-					_ = os.Remove(srcPath)
-					localChunkPaths[i] = normPath
-				}
-				normalizedForConcat = true
-			} else if anyTrim {
-				for i, srcPath := range localChunkPaths {
-					if trimStarts[i] <= 0 {
-						continue
-					}
-					trimPath := filepath.Join(tmpDir, fmt.Sprintf("trim_chunk_%03d.mp4", i))
-					if err := trimChunkLeadingBlack(ctx, log, srcPath, trimPath, profiles[i], trimStarts[i]); err != nil {
-						log.Warn("Leading black frame trim failed; keeping original chunk",
-							zap.Int("chunk_index", i),
-							zap.Error(err))
-						continue
-					}
-					_ = os.Remove(srcPath)
-					localChunkPaths[i] = trimPath
-				}
-			}
-		}
+	if len(objects) == 0 || len(objects) != len(localChunkPaths) {
+		return nil, nil, errors.New("concat source list is incomplete")
 	}
-
-	mediaIntervals, intervalErr := probeConcatMediaIntervals(ctx, objects, localChunkPaths)
-
+	profiles, err := probeAllChunkStreamProfiles(ctx, localChunkPaths)
+	if err != nil {
+		return nil, nil, fmt.Errorf("probe concat source profiles: %w", err)
+	}
+	targetW, targetH, includeAudio := concatPreparationSettings(profiles)
+	intervals := make([]concatMediaInterval, 0, len(objects))
+	signatures := make([]videoFrameSignature, 0, len(objects))
+	concatEntries := make([]string, 0, len(objects)*2)
+	cumulative := 0.0
+	for i, srcPath := range localChunkPaths {
+		timeline, err := probeVideoTimeline(ctx, srcPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("probe original chunk %d timeline: %w", i, err)
+		}
+		trimSecs, err := probeLeadingBlackTrimSecs(ctx, srcPath, profiles[i], timeline)
+		if err != nil {
+			return nil, nil, fmt.Errorf("probe leading black on chunk %d: %w", i, err)
+		}
+		if trimSecs > 0 {
+			log.Info("Removing leading black from chunk", zap.Int("chunk_index", i), zap.Float64("trim_start_secs", trimSecs))
+		}
+		normPath := filepath.Join(tmpDir, fmt.Sprintf("norm_chunk_%03d.mp4", i))
+		if err := normalizeChunkForConcat(ctx, log, srcPath, normPath, profiles[i], targetW, targetH, includeAudio, timeline, trimSecs); err != nil {
+			return nil, nil, fmt.Errorf("normalize chunk %d: %w", i, err)
+		}
+		preparedProfile, err := probeChunkStreamProfile(ctx, normPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("probe prepared chunk %d: %w", i, err)
+		}
+		if preparedProfile.VideoCodec != "h264" || preparedProfile.PixFmt != "yuv420p" ||
+			preparedProfile.VideoTimeBase != "1/30000" || preparedProfile.Width != targetW || preparedProfile.Height != targetH ||
+			preparedProfile.Rotation != 0 || preparedProfile.VideoIndex != 0 || preparedProfile.HasAudio != includeAudio ||
+			includeAudio && (preparedProfile.AudioIndex != 1 || preparedProfile.AudioCodec != "aac" || preparedProfile.AudioTimeBase != "1/44100" || preparedProfile.SampleRate != 44100 || preparedProfile.Channels != 2) {
+			return nil, nil, fmt.Errorf("prepared chunk %d does not match the canonical concat profile", i)
+		}
+		expectedDuration := timeline.Duration() - trimSecs
+		if err := verifyVideoDuration(ctx, normPath, expectedDuration, 1.0/30+timeline.Tick); err != nil {
+			return nil, nil, fmt.Errorf("verify original-to-prepared chunk %d: %w", i, err)
+		}
+		signature, err := readVideoFrameSignature(ctx, normPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("verify prepared chunk %d frames: %w", i, err)
+		}
+		duration := signature.End - signature.Start
+		if signature.FrameCount <= 0 || signature.Start < -1.0/canonicalConcatVideoTimescale || math.Abs(signature.Start) > 1.0/canonicalConcatVideoTimescale || duration <= 0 {
+			return nil, nil, fmt.Errorf("prepared chunk %d has invalid zero-based video timeline", i)
+		}
+		if err := verifyMediaEndpoints(ctx, normPath, duration, 2.0/30+1.0/canonicalConcatVideoTimescale); err != nil {
+			return nil, nil, fmt.Errorf("verify prepared chunk %d endpoints: %w", i, err)
+		}
+		signatures = append(signatures, signature)
+		intervals = append(intervals, concatMediaInterval{FilePath: objects[i], Start: cumulative, End: cumulative + duration})
+		cumulative += duration
+		concatEntries = append(concatEntries,
+			fmt.Sprintf("file '%s'", strings.ReplaceAll(normPath, "'", "'\\''")),
+			fmt.Sprintf("duration %.9f", duration))
+		_ = os.Remove(srcPath)
+		localChunkPaths[i] = normPath
+	}
 	concatListPath := filepath.Join(tmpDir, "concat_list.txt")
 	defer os.Remove(concatListPath)
-	concatEntries := make([]string, 0, len(localChunkPaths))
-	for _, lp := range localChunkPaths {
-		concatEntries = append(concatEntries, fmt.Sprintf("file '%s'", strings.ReplaceAll(lp, "'", "'\\''")))
-	}
 	if err := os.WriteFile(concatListPath, []byte(strings.Join(concatEntries, "\n")), 0o644); err != nil {
-		return nil, intervalErr, fmt.Errorf("failed to write concat list: %w", err)
+		return nil, nil, fmt.Errorf("write concat list: %w", err)
 	}
-
-	if normalizedForConcat {
-		copyErr := runFFmpegStreamCopyConcat(ctx, log, concatListPath, mergedPath)
-		if copyErr == nil && intervalErr == nil && len(mediaIntervals) > 0 {
-			copyErr = verifyMergedDurationMatchesIntervals(ctx, mergedPath, mediaIntervals)
-		}
-		if copyErr != nil {
-			log.Warn("Stream-copy concat of normalized chunks failed, retrying re-encode concat", zap.Error(copyErr))
-			if fallbackErr := runFFmpegConcat(ctx, log, concatListPath, mergedPath); fallbackErr != nil {
-				return nil, intervalErr, fallbackErr
-			}
-			if intervalErr == nil && len(mediaIntervals) > 0 {
-				if verifyErr := verifyMergedDurationMatchesIntervals(ctx, mergedPath, mediaIntervals); verifyErr != nil {
-					return nil, intervalErr, verifyErr
-				}
-			}
-		}
-		return mediaIntervals, intervalErr, nil
+	if err := runFFmpegStreamCopyConcat(ctx, log, concatListPath, mergedPath, cumulative, includeAudio); err != nil {
+		return nil, nil, err
 	}
-
-	if err := runFFmpegConcat(ctx, log, concatListPath, mergedPath); err != nil {
-		return nil, intervalErr, err
+	if err := verifyVideoFrameSequence(ctx, mergedPath, signatures); err != nil {
+		return nil, nil, fmt.Errorf("verify merged frame sequence: %w", err)
 	}
-	if intervalErr == nil && len(mediaIntervals) > 0 {
-		if verifyErr := verifyMergedDurationMatchesIntervals(ctx, mergedPath, mediaIntervals); verifyErr != nil {
-			return nil, intervalErr, verifyErr
-		}
+	if err := verifyMergedDurationMatchesIntervals(ctx, mergedPath, intervals); err != nil {
+		return nil, nil, err
 	}
-	return mediaIntervals, intervalErr, nil
-}
-
-func shouldNormalizeForLeadingBlackTrim(totalChunks, trimCount int) bool {
-	return totalChunks >= minChunksForBulkTrimNormalize && trimCount*2 >= totalChunks
+	return intervals, nil, nil
 }
 
 func verifyMergedDurationMatchesIntervals(ctx context.Context, mergedPath string, intervals []concatMediaInterval) error {
 	if len(intervals) == 0 {
-		return nil
+		return errors.New("no verified concat intervals")
 	}
-	expected := intervals[len(intervals)-1].End
-	if expected <= 0 {
-		return nil
-	}
-	actual := probeVideoDuration(ctx, mergedPath)
-	if actual <= 0 {
-		return fmt.Errorf("merged video has non-positive probed duration %.3fs (expected %.3fs)", actual, expected)
-	}
-	tolerance := max(1.5, expected*0.05)
-	if math.Abs(actual-expected) > tolerance {
-		return fmt.Errorf("merged video duration %.3fs diverges from cumulative chunk duration %.3fs (tolerance %.3fs)", actual, expected, tolerance)
+	if err := verifyMediaEndpoints(ctx, mergedPath, intervals[len(intervals)-1].End, 2.0/30+1.0/canonicalConcatVideoTimescale); err != nil {
+		return fmt.Errorf("merged video diverges from cumulative chunk duration: %w", err)
 	}
 	return nil
 }
@@ -461,44 +463,49 @@ func probeAllChunkStreamProfiles(ctx context.Context, localPaths []string) ([]ch
 }
 
 func probeChunkStreamProfile(ctx context.Context, filePath string) (chunkStreamProfile, error) {
-	output, err := exec.CommandContext(ctx, "ffprobe",
-		"-v", "error",
-		"-show_streams",
-		"-of", "json",
-		filePath,
-	).Output()
-	if err != nil {
-		return chunkStreamProfile{}, fmt.Errorf("ffprobe streams: %w", err)
-	}
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error", "-show_streams", "-of", "json", filePath)
 
 	var doc struct {
 		Streams []struct {
-			CodecType  string            `json:"codec_type"`
-			CodecName  string            `json:"codec_name"`
-			PixFmt     string            `json:"pix_fmt"`
-			Width      int               `json:"width"`
-			Height     int               `json:"height"`
-			TimeBase   string            `json:"time_base"`
-			SampleRate string            `json:"sample_rate"`
-			Channels   int               `json:"channels"`
-			Tags       map[string]string `json:"tags"`
-			SideData   []struct {
+			Index         int    `json:"index"`
+			CodecType     string `json:"codec_type"`
+			CodecName     string `json:"codec_name"`
+			PixFmt        string `json:"pix_fmt"`
+			Width         int    `json:"width"`
+			Height        int    `json:"height"`
+			TimeBase      string `json:"time_base"`
+			SampleRate    string `json:"sample_rate"`
+			Channels      int    `json:"channels"`
+			ChannelLayout string `json:"channel_layout"`
+			Disposition   struct {
+				AttachedPic int `json:"attached_pic"`
+			} `json:"disposition"`
+			Tags     map[string]string `json:"tags"`
+			SideData []struct {
 				Rotation float64 `json:"rotation"`
 			} `json:"side_data_list"`
 		} `json:"streams"`
 	}
-	if err := json.Unmarshal(output, &doc); err != nil {
-		return chunkStreamProfile{}, fmt.Errorf("decode ffprobe streams: %w", err)
+	if err := consumeMediaOutput(cmd, func(r io.Reader) error { return json.NewDecoder(r).Decode(&doc) }); err != nil {
+		return chunkStreamProfile{}, fmt.Errorf("probe chunk streams: %w", err)
 	}
 
-	var profile chunkStreamProfile
+	profile := chunkStreamProfile{VideoIndex: -1, AudioIndex: -1}
+	var streamOrder []string
 	foundVideo := false
 	for _, s := range doc.Streams {
 		switch s.CodecType {
 		case "video":
-			if foundVideo {
+			if s.Disposition.AttachedPic != 0 {
 				continue
 			}
+			profile.VideoCount++
+			if foundVideo {
+				return chunkStreamProfile{}, errors.New("multiple video streams are ambiguous")
+			}
+			streamOrder = append(streamOrder, "video")
+			profile.VideoIndex = s.Index
 			foundVideo = true
 			profile.VideoCodec = strings.ToLower(strings.TrimSpace(s.CodecName))
 			profile.PixFmt = strings.ToLower(strings.TrimSpace(s.PixFmt))
@@ -531,9 +538,14 @@ func probeChunkStreamProfile(ctx context.Context, filePath string) (chunkStreamP
 				profile.DisplayHeight = s.Height
 			}
 		case "audio":
+			profile.AudioCount++
 			if profile.HasAudio {
-				continue
+				return chunkStreamProfile{}, errors.New("multiple audio streams are ambiguous")
 			}
+			streamOrder = append(streamOrder, "audio")
+			profile.AudioIndex = s.Index
+			profile.AudioTimeBase = strings.TrimSpace(s.TimeBase)
+			profile.ChannelLayout = strings.ToLower(strings.TrimSpace(s.ChannelLayout))
 			profile.HasAudio = true
 			profile.AudioCodec = strings.ToLower(strings.TrimSpace(s.CodecName))
 			if sr, parseErr := strconv.Atoi(strings.TrimSpace(s.SampleRate)); parseErr == nil {
@@ -546,7 +558,25 @@ func probeChunkStreamProfile(ctx context.Context, filePath string) (chunkStreamP
 	if !foundVideo || profile.VideoCodec == "" || profile.Width <= 0 || profile.Height <= 0 {
 		return chunkStreamProfile{}, errors.New("no valid video stream found")
 	}
+	profile.StreamOrder = strings.Join(streamOrder, ",")
+	if !validStreamTimeBase(profile.VideoTimeBase) {
+		return chunkStreamProfile{}, errors.New("video stream has invalid time_base")
+	}
+	if profile.HasAudio && (profile.AudioCodec == "" || profile.SampleRate <= 0 || profile.Channels <= 0 || !validStreamTimeBase(profile.AudioTimeBase)) {
+		return chunkStreamProfile{}, errors.New("audio stream has invalid codec, sample rate, channels, or time_base")
+	}
 	return profile, nil
+}
+
+func validStreamTimeBase(timeBase string) bool {
+	parts := strings.Split(strings.TrimSpace(timeBase), "/")
+	if len(parts) != 2 {
+		return false
+	}
+	num, nerr := strconv.ParseInt(parts[0], 10, 64)
+	den, derr := strconv.ParseInt(parts[1], 10, 64)
+	tick, terr := mediaTimeBase(strings.TrimSpace(timeBase))
+	return nerr == nil && derr == nil && num > 0 && den > 0 && terr == nil && tick > 0 && !math.IsNaN(tick) && !math.IsInf(tick, 0)
 }
 
 func parseStreamTimescale(timeBase string) int {
@@ -562,10 +592,10 @@ func parseStreamTimescale(timeBase string) int {
 	return den
 }
 
-// chunksNeedNormalization checks whether all chunks share identical video/audio
-// stream parameters safe for FFmpeg's concat demuxer. When parameters differ, it
-// computes an even target upright display resolution (capped at 1280px long edge)
-// and whether the normalized output should carry a stereo 44.1kHz AAC audio track.
+// chunksNeedNormalization identifies heterogeneous inputs for the existing
+// resolution policy. Every input is prepared independently even when homogeneous.
+// Mixed inputs use an upright resolution capped at 1280px and all inputs share
+// a stereo 44.1kHz AAC track when any source contains audio.
 func chunksNeedNormalization(profiles []chunkStreamProfile) (bool, int, int, bool) {
 	if len(profiles) <= 1 {
 		includeAudio := len(profiles) == 1 && profiles[0].HasAudio
@@ -606,6 +636,18 @@ func chunksNeedNormalization(profiles []chunkStreamProfile) (bool, int, int, boo
 
 	targetW, targetH := normalizedTargetDimensions(profiles)
 	return true, targetW, targetH, includeAudio
+}
+
+// concatPreparationSettings preserves the pre-repair resolution policy. New
+// clock/order/layout checks affect mapping and verification, not video quality:
+// every input is already prepared independently before concat.
+func concatPreparationSettings(profiles []chunkStreamProfile) (int, int, bool) {
+	heterogeneous, width, height, includeAudio := chunksNeedNormalization(profiles)
+	if !heterogeneous && len(profiles) > 0 {
+		width = evenDimension(profiles[0].DisplayWidth)
+		height = evenDimension(profiles[0].DisplayHeight)
+	}
+	return width, height, includeAudio
 }
 
 func normalizedTargetDimensions(profiles []chunkStreamProfile) (int, int) {
@@ -670,200 +712,78 @@ func parseLeadingBlackTrimSecs(ffmpegOutput string) float64 {
 	return math.Max(0.01, blackEnd-0.001)
 }
 
-func probeLeadingBlackTrimSecs(ctx context.Context, inputPath string) float64 {
-	if probeVideoDuration(ctx, inputPath) < minChunkDurationForTrimSecs {
-		return 0
+func probeLeadingBlackTrimSecs(ctx context.Context, inputPath string, profile chunkStreamProfile, timeline videoTimeline) (float64, error) {
+	if timeline.Duration() < minChunkDurationForTrimSecs {
+		return 0, nil
 	}
 	output, err := exec.CommandContext(ctx, "ffmpeg",
-		"-nostdin",
-		"-v", "info",
-		"-t", fmt.Sprintf("%.3f", leadingBlackProbeWindowSecs),
+		"-nostdin", "-xerror", "-v", "info",
 		"-i", inputPath,
-		"-vf", "blackdetect=d=0.015:pix_th=0.05:pic_th=0.98",
-		"-an",
-		"-f", "null",
-		"-",
+		"-map", fmt.Sprintf("0:%d", profile.VideoIndex),
+		"-t", fmt.Sprintf("%.3f", leadingBlackProbeWindowSecs),
+		"-vf", "setpts=PTS-STARTPTS,blackdetect=d=0.015:pix_th=0.05:pic_th=0.98",
+		"-an", "-sn", "-dn", "-f", "null", "-",
 	).CombinedOutput()
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("ffmpeg leading black probe: %s: %w", string(output), err)
 	}
-	return parseLeadingBlackTrimSecs(string(output))
+	return parseLeadingBlackTrimSecs(string(output)), nil
 }
 
-func canTrimInPlaceForConcat(profiles []chunkStreamProfile) bool {
-	if len(profiles) == 0 || profiles[0].VideoTimescale <= 0 {
-		return false
+func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, outputPath string, profile chunkStreamProfile, targetW, targetH int, includeAudio bool, timeline videoTimeline, trimStartSecs float64) error {
+	anchor := timeline.Start + trimStartSecs
+	duration := timeline.End - anchor
+	if duration <= 0 || math.IsNaN(duration) || math.IsInf(duration, 0) {
+		return errors.New("normalization has no retained video interval")
 	}
-	baseTimescale := profiles[0].VideoTimescale
-	for _, p := range profiles {
-		if p.VideoCodec != "h264" || p.PixFmt != "yuv420p" || p.Rotation != 0 || p.Width%2 != 0 || p.Height%2 != 0 {
-			return false
+	vf := fmt.Sprintf("trim=start=%.9f:end=%.9f,setpts=PTS-%.9f/TB,fps=30:start_time=0,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p",
+		anchor, timeline.End, anchor, targetW, targetH, targetW, targetH)
+	args := []string{"-v", "error", "-nostdin", "-xerror", "-copyts", "-i", inputPath}
+	if includeAudio && !profile.HasAudio {
+		args = append(args, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100")
+	}
+	args = append(args, "-map", fmt.Sprintf("0:%d", profile.VideoIndex),
+		"-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+		"-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale),
+		"-metadata:s:v:0", "rotate=0")
+	if includeAudio {
+		af := fmt.Sprintf("atrim=start=%.9f:end=%.9f,asetpts=PTS-%.9f/TB,aresample=44100:async=1:first_pts=0,apad,atrim=duration=%.9f", anchor, timeline.End, anchor, duration)
+		if profile.HasAudio {
+			args = append(args, "-map", fmt.Sprintf("0:%d", profile.AudioIndex))
+		} else {
+			args = append(args, "-map", "1:a:0")
+			af = fmt.Sprintf("atrim=duration=%.9f,asetpts=PTS-STARTPTS", duration)
 		}
-		if p.VideoTimescale != baseTimescale {
-			return false
-		}
-		if p.HasAudio && (p.AudioCodec != "aac" || p.SampleRate <= 0 || p.Channels <= 0) {
-			return false
-		}
-	}
-	return true
-}
-
-func trimChunkLeadingBlack(ctx context.Context, log *zap.Logger, inputPath, outputPath string, profile chunkStreamProfile, trimStartSecs float64) error {
-	if profile.VideoTimescale <= 0 {
-		return errors.New("cannot trim chunk in place without positive video timescale")
-	}
-	timescale := strconv.Itoa(profile.VideoTimescale)
-	vf := fmt.Sprintf("trim=start=%.6f,setpts=PTS-STARTPTS,fps=30,format=yuv420p", trimStartSecs)
-	args := []string{
-		"-i", inputPath,
-		"-map", "0:v:0",
-	}
-	if profile.HasAudio {
-		args = append(args,
-			"-map", "0:a:0",
-			"-vf", vf,
-			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-			"-video_track_timescale", timescale,
-			"-af", fmt.Sprintf("atrim=start=%.6f,asetpts=PTS-STARTPTS", trimStartSecs),
-			"-c:a", "aac", "-ar", strconv.Itoa(profile.SampleRate), "-ac", strconv.Itoa(profile.Channels), "-b:a", "128k",
-		)
+		args = append(args, "-af", af, "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k")
 	} else {
-		args = append(args,
-			"-vf", vf,
-			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-			"-video_track_timescale", timescale,
-			"-an",
-		)
+		args = append(args, "-an")
 	}
-	args = append(args, "-movflags", "+faststart", "-y", outputPath)
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
+	args = append(args, "-sn", "-dn", "-map_metadata", "-1", "-movflags", "+faststart", "-y", outputPath)
+	err := consumeMediaOutput(exec.CommandContext(ctx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
 	if err != nil {
-		log.Error("FFmpeg leading black trim failed",
-			zap.String("input_path", inputPath),
-			zap.Error(err),
-			zap.String("output", string(output)))
-		return fmt.Errorf("ffmpeg trim leading black: %s: %w", string(output), err)
+		log.Error("FFmpeg chunk normalization failed", zap.String("input_path", inputPath), zap.Error(err))
+		return fmt.Errorf("ffmpeg normalize: %w", err)
 	}
 	return nil
 }
 
-func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, outputPath string, profile chunkStreamProfile, targetW, targetH int, includeAudio bool, trimStartSecs float64) error {
-	timescale := strconv.Itoa(canonicalConcatVideoTimescale)
-	vf := fmt.Sprintf(
-		"fps=30,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p",
-		targetW, targetH, targetW, targetH,
-	)
-	af := "aresample=async=1:first_pts=0"
-	if trimStartSecs > 0 {
-		vf = fmt.Sprintf("trim=start=%.6f,setpts=PTS-STARTPTS,%s", trimStartSecs, vf)
-		af = fmt.Sprintf("atrim=start=%.6f,asetpts=PTS-STARTPTS,%s", trimStartSecs, af)
+func runFFmpegStreamCopyConcat(ctx context.Context, log *zap.Logger, concatListPath, outputPath string, expectedDuration float64, includeAudio bool) error {
+	args := []string{"-v", "error", "-nostdin", "-xerror", "-copyts", "-f", "concat", "-safe", "0", "-i", concatListPath,
+		"-map", "0:v:0", "-c:v", "copy", "-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale)}
+	if includeAudio {
+		args = append(args, "-map", "0:a:0", "-af", fmt.Sprintf("aresample=44100:async=1:first_pts=0,apad,atrim=duration=%.9f", expectedDuration),
+			"-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k")
+	} else {
+		args = append(args, "-an")
 	}
-
-	var args []string
-	switch {
-	case !includeAudio:
-		args = []string{
-			"-i", inputPath,
-			"-map", "0:v:0",
-			"-vf", vf,
-			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-			"-video_track_timescale", timescale,
-			"-an",
-			"-movflags", "+faststart",
-			"-y",
-			outputPath,
-		}
-	case profile.HasAudio:
-		args = []string{
-			"-i", inputPath,
-			"-map", "0:v:0",
-			"-map", "0:a:0",
-			"-vf", vf,
-			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-			"-video_track_timescale", timescale,
-			"-af", af,
-			"-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
-			"-movflags", "+faststart",
-			"-y",
-			outputPath,
-		}
-	default:
-		args = []string{
-			"-f", "lavfi",
-			"-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-			"-i", inputPath,
-			"-map", "1:v:0",
-			"-map", "0:a:0",
-			"-vf", vf,
-			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-			"-video_track_timescale", timescale,
-			"-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
-			"-shortest",
-			"-movflags", "+faststart",
-			"-y",
-			outputPath,
-		}
-	}
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
+	args = append(args, "-sn", "-dn", "-movflags", "+faststart", "-y", outputPath)
+	log.Info("Running FFmpeg concat (copy video, reconcile AAC boundaries)", zap.Strings("args", args))
+	err := consumeMediaOutput(exec.CommandContext(ctx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
 	if err != nil {
-		log.Error("FFmpeg chunk normalization failed",
-			zap.String("input_path", inputPath),
-			zap.Error(err),
-			zap.String("output", string(output)))
-		return fmt.Errorf("ffmpeg normalize: %s: %w", string(output), err)
+		log.Error("FFmpeg concat failed", zap.Error(err))
+		return fmt.Errorf("ffmpeg concat: %w", err)
 	}
 	return nil
-}
-
-func runFFmpegStreamCopyConcat(ctx context.Context, log *zap.Logger, concatListPath, outputPath string) error {
-	args := []string{
-		"-f", "concat",
-		"-safe", "0",
-		"-i", concatListPath,
-		"-c", "copy",
-		"-movflags", "+faststart",
-		"-y",
-		outputPath,
-	}
-
-	log.Info("Running FFmpeg concat (stream copy on normalized chunks)", zap.Strings("args", args))
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Error("FFmpeg stream-copy concat failed", zap.Error(err), zap.String("output", string(output)))
-		return fmt.Errorf("ffmpeg copy concat: %s: %w", string(output), err)
-	}
-
-	log.Info("FFmpeg merge completed", zap.String("output_path", outputPath))
-	return nil
-}
-
-func probeConcatMediaIntervals(ctx context.Context, objects, localPaths []string) ([]concatMediaInterval, error) {
-	if len(objects) == 0 || len(objects) != len(localPaths) {
-		return nil, errors.New("concat source list is incomplete")
-	}
-
-	intervals := make([]concatMediaInterval, 0, len(objects))
-	cumulative := 0.0
-	for i, localPath := range localPaths {
-		duration := probeVideoDuration(ctx, localPath)
-		if duration <= 0 {
-			return nil, fmt.Errorf("could not probe duration for concat source %d", i)
-		}
-		intervals = append(intervals, concatMediaInterval{
-			FilePath: objects[i],
-			Start:    cumulative,
-			End:      cumulative + duration,
-		})
-		cumulative += duration
-	}
-	return intervals, nil
 }
 
 func (w *Worker) persistConcatMediaIntervals(ctx context.Context, sessionID string, profileID uint, intervals []concatMediaInterval) error {
@@ -874,7 +794,7 @@ func (w *Worker) persistConcatMediaIntervals(ctx context.Context, sessionID stri
 		return errors.New("no verified concat intervals")
 	}
 
-	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return w.withSessionPublication(ctx, profileID, sessionID, func(tx *gorm.DB) error {
 		for _, interval := range intervals {
 			result := tx.Model(&db.ChunkAnalysisResult{}).
 				Where("session_id = ? AND profile_id = ? AND file_path = ? AND file_path NOT LIKE ?",
@@ -894,38 +814,6 @@ func (w *Worker) persistConcatMediaIntervals(ctx context.Context, sessionID stri
 	})
 }
 
-// runFFmpegConcat concatenates video files listed in concatListPath into outputPath.
-// Re-encodes to 30 fps / AAC to normalise frame-rate and PTS timestamps across
-// chunks, preventing playback-speed artifacts that occur when source chunks are
-// recorded at variable or high frame rates (e.g. 60/120 fps slo-mo on iOS).
-func runFFmpegConcat(ctx context.Context, log *zap.Logger, concatListPath, outputPath string) error {
-	args := []string{
-		"-f", "concat",
-		"-safe", "0",
-		"-i", concatListPath,
-		// Normalise to 30 fps so variable-frame-rate chunks play at real speed.
-		"-vf", "fps=30",
-		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-		"-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale),
-		"-c:a", "aac", "-b:a", "128k",
-		"-movflags", "+faststart",
-		"-y",
-		outputPath,
-	}
-
-	log.Info("Running FFmpeg concat (re-encode to 30fps)", zap.Strings("args", args))
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Error("FFmpeg failed", zap.Error(err), zap.String("output", string(output)))
-		return fmt.Errorf("ffmpeg: %s: %w", string(output), err)
-	}
-
-	log.Info("FFmpeg merge completed", zap.String("output_path", outputPath))
-	return nil
-}
-
 // runFFmpegHardSub burns subtitles from an SRT file into a video using FFmpeg.
 //
 // WARNING: This runs a full decode→filter→re-encode pipeline.
@@ -933,6 +821,10 @@ func runFFmpegConcat(ctx context.Context, log *zap.Logger, concatListPath, outpu
 // Memory: ~200–400 MB for 720p.
 // Uses -preset ultrafast to reduce CPU time at cost of ~40% larger output.
 func runFFmpegHardSub(ctx context.Context, log *zap.Logger, inputPath, srtPath, outputPath string) error {
+	source, err := probeVideoTimeline(ctx, inputPath)
+	if err != nil {
+		return fmt.Errorf("probe hard-sub source: %w", err)
+	}
 	// Subtitle style: modern semi-transparent look
 	// - FontName=Arial: clean sans-serif
 	// - FontSize=12: compact, non-intrusive
@@ -949,7 +841,9 @@ func runFFmpegHardSub(ctx context.Context, log *zap.Logger, inputPath, srtPath, 
 		"BorderStyle=4,Outline=1,Shadow=0,MarginV=30,Alignment=2"
 
 	args := []string{
+		"-v", "error", "-nostdin", "-xerror",
 		"-i", inputPath,
+		"-map", "0:V:0", "-map", "0:a:0?",
 		"-vf", fmt.Sprintf("subtitles=%s:force_style='%s'", srtPath, forceStyle),
 		"-preset", "ultrafast",
 		"-c:a", "copy",
@@ -961,12 +855,15 @@ func runFFmpegHardSub(ctx context.Context, log *zap.Logger, inputPath, srtPath, 
 	log.Info("Running FFmpeg hard-sub", zap.Strings("args", args))
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
+	err = consumeMediaOutput(cmd, func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
 	if err != nil {
-		log.Error("FFmpeg hard-sub failed", zap.Error(err), zap.String("output", string(output)))
-		return fmt.Errorf("ffmpeg hardsub: %s: %w", string(output), err)
+		log.Error("FFmpeg hard-sub failed", zap.Error(err))
+		return fmt.Errorf("ffmpeg hardsub: %w", err)
 	}
 
+	if err := verifyVideoDuration(ctx, outputPath, source.Duration(), 0.1); err != nil {
+		return fmt.Errorf("verify hard-sub video: %w", err)
+	}
 	log.Info("FFmpeg hard-sub completed", zap.String("output_path", outputPath))
 	return nil
 }

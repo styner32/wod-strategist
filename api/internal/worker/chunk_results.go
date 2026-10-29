@@ -20,7 +20,7 @@ func (w *Worker) persistChunkAnalysisResult(ctx context.Context, result *db.Chun
 	if err != nil {
 		return err
 	}
-	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return w.withSessionPublication(ctx, result.ProfileID, result.SessionID, func(tx *gorm.DB) error {
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", string(key)).Error; err != nil {
 			return err
 		}

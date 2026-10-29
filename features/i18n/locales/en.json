@@ -120,9 +120,18 @@
     "hrStatusScanning": "Standby · Wear strap to connect",
     "hrStatusError": "Connection check needed",
     "hrTapToManage": "Tap to switch or manage sensor",
-    "hrNoDevicesFound": "Make sure your chest/arm strap is worn and awake."
+    "hrNoDevicesFound": "Make sure your chest/arm strap is worn and awake.",
+    "brandEyebrow": "TACTICAL READY",
+    "launchAction": "Launch Session",
+    "fastEntry": "FAST ENTRY →",
+    "quickScanBoard": "Scan Board",
+    "quickTextSaved": "Text / Saved WOD",
+    "readinessSubtitle": "Based on recent workout load & recovery",
+    "readinessStrainLabel": "Cumulative Fatigue Load",
+    "readinessCriticalNodes": "Focus Muscle Load"
   },
   "train": {
+    "eyebrow": "EXECUTION HUB",
     "heroTitle": "Ready to Train?",
     "heroSubtitle": "Execute your session with real-time biometric tracking and kinetic analysis.",
     "startSession": "Start Session",
@@ -142,6 +151,7 @@
     "cooldown": "Cooldown"
   },
   "history": {
+    "eyebrow": "SESSION ARCHIVE",
     "title": "Analysis History",
     "subtitle": "Recent AI coaching sessions.",
     "timeGap": "{{minutes}} min later",
@@ -149,6 +159,10 @@
     "yesterday": "Yesterday"
   },
   "profileTab": {
+    "eyebrow": "ATHLETE DOSSIER",
+    "activeAthlete": "Active Athlete",
+    "restingHrBadge": "Rest HR %{bpm} bpm",
+    "cacheLimitLabel": "%{used} / 1.5 GB",
     "noProfile": "No Profile Selected",
     "account": "Account",
     "editProfile": "Edit Profile",
@@ -215,6 +229,8 @@
   },
   "profiles": {
     "title": "Profiles",
+    "rosterCount": "ROSTER [%{count}]",
+    "switchBtn": "Switch",
     "archiveProfile": "Archive Profile",
     "archiveConfirm": "Are you sure you want to archive \"%{name}\"?\n\nWorkout history will be preserved.",
     "archive": "Archive",
@@ -257,6 +273,8 @@
     "savedGalleryDeleted": "Saved to gallery and deleted temp file."
   },
   "setup": {
+    "startFreshInputs": "Start with fresh inputs",
+    "archiveSourceUnavailable": "This saved recording is archived or its current status could not be verified. Check your connection and try again.",
     "title": "Workout Setup",
     "plannedMovements": "Planned Movements",
     "selectMovements": "Select what you will perform:",
@@ -336,7 +354,21 @@
     "savedForLaterMessage": "Today's workout has been saved. You can load it in one tap when you start training.",
     "secondaryMovementsBtn": "Select movements manually (optional)",
     "secondaryMovementsSelected": "Manual movements selected (%{count})",
-    "backToWodInput": "← Back to Photo / Text Input"
+    "backToWodInput": "← Back to Photo / Text Input",
+    "protocolSetup": "SETUP ENGINE",
+    "protocolVerify": "CALIBRATION PHASE",
+    "autoOcrBadge": "AUTO OCR",
+    "recommendedBadge": "RECOMMENDED",
+    "optionalBadge": "OPTIONAL",
+    "frequentMovementsLabel": "QUICK PICK MOVEMENTS",
+    "browseFullIndex": "Browse Full Index →",
+    "indexedMovementsCount": "%{count} movements indexed",
+    "sensorSyncLabel": "SENSOR SYNC",
+    "sensorReadyBadge": "REGISTERED",
+    "sensorOptionalBadge": "UNPAIRED",
+    "rigSetupTitle": "Stationary Camera Framing",
+    "rigSetupDistance": "3.5m Full-Body Distance Suggested",
+    "rigSetupDesc": "Keep full height visible from bottom of squat to overhead lockout. Avoid strong backlighting."
   },
   "upload": {
     "title": "Upload Video",
@@ -354,6 +386,7 @@
     "networkError": "Network error. Please check your connection and try again."
   },
   "historyList": {
+    "statusCancelled": "Stopped",
     "statusComplete": "Complete",
     "statusFailed": "Failed",
     "statusPending": "Pending",
@@ -419,7 +452,7 @@
     "waitingToEncode": "Waiting to encode...",
     "readyToUpload": "Ready to upload",
     "archiveTitle": "Archive Record",
-    "archiveConfirm": "This will hide the record from your history. You can still find it later.",
+    "archiveConfirm": "This record will be hidden and its pending or running analysis will stop. You can restore the record later.",
     "archive": "Archive",
     "archiveFailed": "Failed to archive. Please try again.",
     "mergePreparing": "Preparing merge... Your session will appear shortly.",
@@ -584,6 +617,7 @@
     "tapForDetail": "Tap for details →"
   },
   "stretches": {
+    "eyebrow": "MOBILITY PROTOCOL",
     "detailTitle": "Stretch Details",
     "empty": "No recommended stretches yet",
     "emptyDesc": "Stretches recommended by AI analysis will be collected here.",
@@ -597,6 +631,8 @@
     "video": "Movement Video"
   },
   "preWod": {
+    "hybridSensorExcluded": "Calibration changed · sensor reference excluded",
+    "hybridSensorProvenanceUnknown": "Calibration source unverified · sensor reference excluded",
     "title": "Today's Custom WOD Strategy & Fatigue",
     "analyzingFatigue": "Analyzing muscle group fatigue & strategy...",
     "pacingStrategy": "Pacing Strategy",
@@ -613,7 +649,10 @@
     "durationUnconfirmed": "Duration unconfirmed",
     "movementsUnknown": "Movements unrecorded",
     "hybridSensorBadge": "Hybrid Activity %{score}/100",
-    "noEffortPrompt": "Rate Effort (1–10) after each WOD to refine future pacing advice."
+    "noEffortPrompt": "Rate Effort (1–10) after each WOD to refine future pacing advice.",
+    "expandDetails": "▼ Details",
+    "collapseDetails": "▲ Collapse",
+    "mobilityTarget": "Target: %{area}"
   },
   "muscleGroups": {
     "shoulders_push": "Shoulders & Push",
@@ -733,6 +772,7 @@
     "chunkTime": "Time within source clip"
   },
   "environment": {
+    "archiveVerificationUnavailable": "Past observations are excluded until their archive status can be verified. Original observations remain available.",
     "contextPreview": "Sent with each request · target: %{appearance}\nPlanned movements: %{movements}\nWOD: %{wod}",
     "targetMissing": "Appearance missing · personal target unconfirmed",
     "targetProvided": "Appearance context supplied · target match needs review",
@@ -845,6 +885,7 @@
       "give_space": "Giving space"
     },
     "status": {
+      "source_unverified": "Source status could not be verified; the generated result was discarded.",
       "off": "Off",
       "waiting": "Waiting",
       "analyzing": "Observing",

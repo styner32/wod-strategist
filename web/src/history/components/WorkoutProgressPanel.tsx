@@ -77,13 +77,18 @@ function PerformanceEditor({
   saving: boolean;
   progress: WorkoutProgress;
   onReviewVideo?: (start: number, end: number) => void;
-  onSave: (draft: PerformanceDraft) => void;
+  onSave: (draft: PerformanceDraft, advance?: boolean) => void;
   close: () => void;
 }) {
   const defaultFallbackLoad = interval.load == null && wodLoads.length === 1 ? wodLoads[0] : null;
   const [draft, setDraft] = useState(() =>
     initialDraft ?? performanceDraft(interval, record, defaultFallbackLoad, movementDefaults),
   );
+  const editorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    editorRef.current?.focus({ preventScroll: true });
+    editorRef.current?.scrollIntoView({ block: "nearest" });
+  }, []);
   const contiguousSpan = useMemo(() => getContiguousExerciseSpan(interval, progress), [interval, progress]);
   const updateDraft = (updater: (prev: PerformanceDraft) => PerformanceDraft) =>
     setDraft(d => {
@@ -191,8 +196,33 @@ function PerformanceEditor({
     draft.end.trim() !== "" &&
     performanceSelectionCovered(effectiveForCoverage, start, end, draft.measurement, progress);
   return (
-    <div className="mt-3 space-y-3.5 rounded-xl border border-border bg-bg-secondary/40 p-4">
+    <div
+      ref={editorRef}
+      data-testid="performance-editor"
+      tabIndex={-1}
+      aria-label="수행 기록 확인 및 수정"
+      className="mt-3 space-y-3.5 rounded-xl border border-border bg-bg-secondary/40 p-4 focus:outline-none focus:ring-2 focus:ring-accent"
+      onKeyDown={event => {
+        if (
+          event.key !== "Enter" || event.defaultPrevented || event.repeat ||
+          event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+          event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229
+        ) return;
+        const target = event.target as HTMLElement;
+        if (target.isContentEditable || target.closest("button, select, a, textarea")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (saving) return;
+        const reviewedDraft = { ...draft, reviewed: true };
+        setDraft(reviewedDraft);
+        onDraftChange?.(reviewedDraft);
+        if (confirmedPerformanceInput(interval, reviewedDraft, progress) != null) {
+          onSave(reviewedDraft, true);
+        }
+      }}
+    >
       <p className="text-xs leading-relaxed text-text-secondary">{words.reviewHelp}</p>
+      <p className="text-xs text-accent">값이 맞으면 Enter로 확인·저장하고 다음 미확정 운동 구간으로 이동합니다.</p>
 
       <div className="space-y-2">
         <label className={labelClass}>
@@ -525,6 +555,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
   const [selected, setSelected] = useState<string>();
   const [movement, setMovement] = useState("");
   const [saving, setSaving] = useState(false);
+  const saveInFlight = useRef(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const draftsRef = useRef<Record<string, PerformanceDraft>>({});
@@ -534,12 +565,13 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
   const data = progressQuery.data;
   const currentSource = useRef(data?.progress?.source_version); currentSource.current = data?.progress?.source_version;
   const benchmarks = useQuery({ queryKey: ["performance-benchmarks", profileId, movement], queryFn: () => historyApi.getPerformanceBenchmarks(profileId, movement), enabled: !!movement, retry: false });
-  useEffect(() => { draftsRef.current = {}; movementDefaultsRef.current = {}; setSelected(undefined); setMovement(""); setSaving(false); setError(""); setNotice(""); }, [requestScope]);
+  useEffect(() => { draftsRef.current = {}; movementDefaultsRef.current = {}; saveInFlight.current = false; setSelected(undefined); setMovement(""); setSaving(false); setError(""); setNotice(""); }, [requestScope]);
   useEffect(() => { draftsRef.current = {}; setSelected(undefined); setMovement(""); }, [data?.progress?.source_version]);
-  const save = async (interval: WorkoutProgressInterval, draft: PerformanceDraft) => {
+  const save = async (interval: WorkoutProgressInterval, draft: PerformanceDraft, advance = false) => {
     const record = confirmedPerformanceInput(interval, draft, data?.progress ?? undefined);
-    if (!record || !data?.progress || saving) return;
+    if (!record || !data?.progress || saving || saveInFlight.current) return;
     const submittedSource = data.progress.source_version;
+    saveInFlight.current = true;
     setSaving(true); setError(""); setNotice("");
     try {
       const result = await historyApi.confirmPerformanceRecords(sessionId, { source_version: data.progress.source_version, records: [record] });
@@ -566,11 +598,27 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
           technique: draft.technique,
         };
       }
-      client.setQueryData(queryKey, result); setSelected(undefined); setNotice(words.saved); setMovement(confirmedMovement);
-      await client.invalidateQueries({ queryKey: ["performance-benchmarks", profileId] });
-      await client.invalidateQueries({ queryKey: ["recognition-evaluation", sessionId, profileId] });
-      await client.invalidateQueries({ queryKey: ["recognition-reviews", sessionId, profileId] });
-      await client.invalidateQueries({ queryKey: ["recognition-review", sessionId, profileId] });
+      const resultRecords = activePerformanceRecords(result.records);
+      const nextInterval = advance && result.progress?.source_version === submittedSource
+        ? timelineProgressIntervals(result.progress, resultRecords)
+          .filter(row =>
+            row.activity === "exercise" &&
+            row.id !== interval.id && row.id !== record.interval_id &&
+            row.start_secs >= record.end_secs - 1e-6 &&
+            !findCoveringConfirmedRecord(row, resultRecords),
+          )
+          .sort((a, b) => a.start_secs - b.start_secs)[0]
+        : undefined;
+      client.setQueryData(queryKey, result);
+      setSelected(nextInterval?.id);
+      setNotice(advance && !nextInterval
+        ? `${words.saved} 다음 미확정 운동 구간이 없습니다.`
+        : words.saved);
+      setMovement(nextInterval?.movement?.trim() || confirmedMovement);
+      void client.invalidateQueries({ queryKey: ["performance-benchmarks", profileId] });
+      void client.invalidateQueries({ queryKey: ["recognition-evaluation", sessionId, profileId] });
+      void client.invalidateQueries({ queryKey: ["recognition-reviews", sessionId, profileId] });
+      void client.invalidateQueries({ queryKey: ["recognition-review", sessionId, profileId] });
     } catch (e) {
       if (currentScope.current !== requestScope) return;
       if ((e as { status?: number })?.status === 409) {
@@ -588,7 +636,12 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
             : "";
         setError(`${words.failed}${detail}`);
       }
-    } finally { if (currentScope.current === requestScope) setSaving(false); }
+    } finally {
+      if (currentScope.current === requestScope) {
+        saveInFlight.current = false;
+        setSaving(false);
+      }
+    }
   };
 
   const activeRecords = useMemo(
@@ -898,7 +951,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
                     }
                   }}
                   saving={saving}
-                  onSave={draft => void save(syntheticInterval, draft)}
+                  onSave={(draft, advance) => void save(syntheticInterval, draft, advance)}
                   close={() => setSelected(undefined)}
                   onReviewVideo={isOriginal ? seek : undefined}
                 />
@@ -1119,7 +1172,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
                   }
                 }}
                 saving={saving}
-                onSave={draft => void save(interval, draft)}
+                onSave={(draft, advance) => void save(interval, draft, advance)}
                 close={() => setSelected(undefined)}
                 onReviewVideo={isOriginal ? seek : undefined}
               />

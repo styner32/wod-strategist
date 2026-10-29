@@ -1,4 +1,6 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import { TacticalCard, TacticalPressable } from "@/components/ui/TacticalBento";
+import { Fonts, TacticalTheme } from "@/constants/theme";
 import { useAuthStore } from "@/features/auth/useAuthStore";
 import {
   type CacheItem,
@@ -10,8 +12,9 @@ import {
   listItemsByRelPath,
   runStorageScanAndShare,
 } from "@/features/debug/storageScanner";
-import { t } from "@/features/i18n";
+import { t, useLocale } from "@/features/i18n";
 import {
+  DEFAULT_MAX_CACHE_BYTES,
   clearAllVideoCache,
   getVideoCacheStats,
   type VideoCacheStats,
@@ -21,12 +24,12 @@ import {
   useProfileId,
   useProfileStore,
 } from "@/store/useProfileStore";
-import { Link, router, useFocusEffect } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -35,9 +38,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+const T = TacticalTheme.light;
+const monoFont = Fonts?.mono ?? "monospace";
+
 export default function ProfileTab() {
+  useLocale();
   const activeProfile = useActiveProfile();
   const profileId = useProfileId();
+  const profiles = useProfileStore((s) => s.profiles);
   const clearActiveProfile = useProfileStore((s) => s.clearActiveProfile);
   const [videoCacheStats, setVideoCacheStats] =
     useState<VideoCacheStats | null>(null);
@@ -111,7 +119,6 @@ export default function ProfileTab() {
       setShowDir((prev) => ({ ...prev, [dirName]: false }));
       return;
     }
-    // Discover container dirs on first expand if not loaded
     if (containerDirs.length === 0) {
       const dirs = await getContainerDirs();
       setContainerDirs(dirs);
@@ -229,6 +236,7 @@ export default function ProfileTab() {
       ],
     );
   };
+
   const summaryLine = activeProfile
     ? [
         activeProfile.gender === "male"
@@ -245,6 +253,18 @@ export default function ProfileTab() {
         .filter(Boolean)
         .join("  ·  ") || null
     : null;
+
+  const monogram = activeProfile?.name
+    ? activeProfile.name.slice(0, 2).toUpperCase()
+    : "?";
+
+  const usedCacheBytes = videoCacheStats?.totalSizeBytes ?? 0;
+  const cacheRatio = Math.min(
+    1,
+    Math.max(0, usedCacheBytes / DEFAULT_MAX_CACHE_BYTES),
+  );
+  const cachePercent = Math.round(cacheRatio * 100);
+  const usedCacheFormatted = videoCacheStats?.formattedSize ?? "0 B";
 
   const handleLogout = () => {
     Alert.alert(t("profileTab.signOut"), t("profileTab.signOutConfirm"), [
@@ -274,7 +294,7 @@ export default function ProfileTab() {
           onPress={() => handleToggleItems(dirName)}
           disabled={isLoading}
         >
-          <View style={[styles.menuIconBox, { backgroundColor: "#1A1A2A" }]}>
+          <View style={[styles.menuIconBox, { backgroundColor: T.electricBlueBg }]}>
             <Text style={{ fontSize: 18 }}>📂</Text>
           </View>
           <Text style={styles.menuItemText}>
@@ -284,7 +304,7 @@ export default function ProfileTab() {
                 ? `Hide ${dirName}`
                 : `Manage ${dirName}`}
           </Text>
-          {isLoading && <ActivityIndicator color="#8B8BFF" size="small" />}
+          {isLoading && <ActivityIndicator color={T.electricBlue} size="small" />}
           {!isLoading && (
             <Text style={styles.chevron}>{isShown ? "▼" : "›"}</Text>
           )}
@@ -295,7 +315,7 @@ export default function ProfileTab() {
             {items.length === 0 ? (
               <Text
                 style={{
-                  color: "#555",
+                  color: T.inkMuted,
                   fontSize: 13,
                   padding: 12,
                   textAlign: "center",
@@ -307,7 +327,7 @@ export default function ProfileTab() {
               <>
                 <Text
                   style={{
-                    color: "#888",
+                    color: T.inkMuted,
                     fontSize: 11,
                     marginBottom: 8,
                     marginLeft: 4,
@@ -323,7 +343,9 @@ export default function ProfileTab() {
                       style={{
                         flexDirection: "row",
                         alignItems: "center",
-                        backgroundColor: "#111",
+                        backgroundColor: T.surface,
+                        borderWidth: 1,
+                        borderColor: T.border,
                         borderRadius: 10,
                         padding: 12,
                         marginBottom: 4,
@@ -336,16 +358,16 @@ export default function ProfileTab() {
                       <View style={{ flex: 1, marginRight: 8 }}>
                         <Text
                           style={{
-                            color: "#ddd",
+                            color: T.ink,
                             fontSize: 13,
-                            fontWeight: "500",
+                            fontWeight: "600",
                           }}
                           numberOfLines={1}
                         >
                           {item.name}
                         </Text>
                         <Text
-                          style={{ color: "#666", fontSize: 11, marginTop: 2 }}
+                          style={{ color: T.inkMuted, fontSize: 11, marginTop: 2 }}
                         >
                           {formatSize(item.sizeBytes)}
                         </Text>
@@ -354,18 +376,20 @@ export default function ProfileTab() {
                         onPress={() => handleDeleteSingleItem(item, dirName)}
                         disabled={isBusy}
                         style={{
-                          backgroundColor: "#2A0E0E",
+                          backgroundColor: T.statusExhaustedBg,
+                          borderWidth: 1,
+                          borderColor: T.statusExhaustedBorder,
                           paddingHorizontal: 10,
                           paddingVertical: 6,
                           borderRadius: 8,
                         }}
                       >
                         {deletingItem === itemKey ? (
-                          <ActivityIndicator color="#FF453A" size="small" />
+                          <ActivityIndicator color={T.statusExhausted} size="small" />
                         ) : (
                           <Text
                             style={{
-                              color: "#FF453A",
+                              color: T.statusExhausted,
                               fontSize: 13,
                               fontWeight: "600",
                             }}
@@ -378,7 +402,6 @@ export default function ProfileTab() {
                   );
                 })}
 
-                {/* Copy All → Documents (only for non-Documents dirs) */}
                 {dirName !== "Documents" && (
                   <TouchableOpacity
                     style={{
@@ -386,8 +409,8 @@ export default function ProfileTab() {
                       padding: 14,
                       borderRadius: 10,
                       borderWidth: 1,
-                      borderColor: "#1A3A1A",
-                      backgroundColor: "#0A1A0A",
+                      borderColor: T.statusFreshBorder,
+                      backgroundColor: T.statusFreshBg,
                       alignItems: "center",
                       opacity: copying === dirName ? 0.5 : 1,
                     }}
@@ -432,12 +455,12 @@ export default function ProfileTab() {
                           gap: 8,
                         }}
                       >
-                        <ActivityIndicator color="#53E16F" size="small" />
+                        <ActivityIndicator color={T.statusFresh} size="small" />
                         <Text
                           style={{
-                            color: "#53E16F",
+                            color: T.statusFresh,
                             fontSize: 14,
-                            fontWeight: "600",
+                            fontWeight: "700",
                           }}
                           numberOfLines={1}
                         >
@@ -447,9 +470,9 @@ export default function ProfileTab() {
                     ) : (
                       <Text
                         style={{
-                          color: "#53E16F",
+                          color: T.statusFresh,
                           fontSize: 14,
-                          fontWeight: "600",
+                          fontWeight: "700",
                         }}
                       >
                         📦 Copy All → Documents ({items.length} items)
@@ -464,8 +487,8 @@ export default function ProfileTab() {
                     padding: 14,
                     borderRadius: 10,
                     borderWidth: 1,
-                    borderColor: "#3A1515",
-                    backgroundColor: "#1A0A0A",
+                    borderColor: T.statusExhaustedBorder,
+                    backgroundColor: T.statusExhaustedBg,
                     alignItems: "center",
                     opacity: isThisDirDeleting ? 0.5 : 1,
                   }}
@@ -480,12 +503,12 @@ export default function ProfileTab() {
                         gap: 8,
                       }}
                     >
-                      <ActivityIndicator color="#FF453A" size="small" />
+                      <ActivityIndicator color={T.statusExhausted} size="small" />
                       <Text
                         style={{
-                          color: "#FF453A",
+                          color: T.statusExhausted,
                           fontSize: 14,
-                          fontWeight: "600",
+                          fontWeight: "700",
                         }}
                       >
                         Deleting… {deleteProgress}
@@ -494,9 +517,9 @@ export default function ProfileTab() {
                   ) : (
                     <Text
                       style={{
-                        color: "#FF453A",
+                        color: T.statusExhausted,
                         fontSize: 14,
-                        fontWeight: "600",
+                        fontWeight: "700",
                       }}
                     >
                       Delete All ({items.length} items)
@@ -512,25 +535,90 @@ export default function ProfileTab() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+      <StatusBar style="dark" />
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Avatar & Name */}
-        <View style={styles.avatarSection}>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.avatarText}>
-              {activeProfile?.name ? activeProfile.name[0].toUpperCase() : "?"}
-            </Text>
+        {/* Tactical Top Bar */}
+        <View style={styles.topBar}>
+          <View style={styles.eyebrowRow}>
+            <View style={styles.eyebrowDot} />
+            <Text style={styles.eyebrowText}>{t("profileTab.eyebrow")}</Text>
           </View>
-          <Text style={styles.profileName}>
-            {activeProfile?.name || t("profileTab.noProfile")}
-          </Text>
-          {summaryLine && (
-            <Text style={styles.profileSummary}>{summaryLine}</Text>
-          )}
-          {activeProfile && activeProfile.injuries.length > 0 && (
+          <View style={styles.titleRow}>
+            <Text style={styles.title} numberOfLines={1}>
+              {t("tabs.profile")}
+            </Text>
+            <View style={styles.voltDot} />
+          </View>
+        </View>
+
+        {/* Hero Athlete Bento Card */}
+        <TacticalCard style={styles.heroCard}>
+          <View style={styles.heroTopRow}>
+            <View style={styles.activeAthletePill}>
+              <View style={styles.activeAthleteDot} />
+              <Text style={styles.activeAthleteText}>
+                {t("profileTab.activeAthlete")}
+              </Text>
+            </View>
+            {profileId ? (
+              <View style={styles.idBadge}>
+                <Text style={styles.idBadgeText}>ID #{profileId}</Text>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.identityRow}>
+            <View style={styles.avatarWrap}>
+              <View
+                style={[
+                  styles.avatarCircle,
+                  !activeProfile && styles.avatarCircleEmpty,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.avatarText,
+                    !activeProfile && styles.avatarTextEmpty,
+                  ]}
+                >
+                  {monogram}
+                </Text>
+              </View>
+              {activeProfile ? <View style={styles.avatarVoltBadge} /> : null}
+            </View>
+
+            <View style={styles.identityTextCol}>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {activeProfile?.name || t("profileTab.noProfile")}
+              </Text>
+              {summaryLine ? (
+                <Text style={styles.profileSummary}>{summaryLine}</Text>
+              ) : null}
+            </View>
+          </View>
+
+          {activeProfile ? (
+            <View style={styles.metricsRow}>
+              <View style={styles.fitnessVoltBadge}>
+                <Text style={styles.fitnessVoltText}>
+                  {t(`profileEdit.${activeProfile.fitnessLevel ?? "intermediate"}`)}
+                </Text>
+              </View>
+              {activeProfile.restingHrBpm != null ? (
+                <View style={styles.restingHrBadge}>
+                  <Text style={styles.restingHrText}>
+                    ♥ {t("profileTab.restingHrBadge", { bpm: activeProfile.restingHrBpm })}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {activeProfile && activeProfile.injuries.length > 0 ? (
             <View style={styles.injuryRow}>
               {activeProfile.injuries.map((injury) => (
                 <View key={injury} style={styles.injuryPill}>
@@ -538,55 +626,69 @@ export default function ProfileTab() {
                 </View>
               ))}
             </View>
-          )}
-          {profileId && (
-            <View style={styles.idBadge}>
-              <Text style={styles.idBadgeText}>ID #{profileId}</Text>
-            </View>
-          )}
-        </View>
+          ) : null}
+        </TacticalCard>
 
-        {/* Actions */}
+        {/* Account Actions */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t("profileTab.account")}</Text>
 
           {activeProfile ? (
-            <Link href={`/profile?id=${profileId}` as any} asChild>
-              <Pressable style={styles.menuItem}>
-                <View style={styles.menuIconBox}>
-                  <IconSymbol name="person.fill" size={18} color="#00E5FF" />
-                </View>
-                <Text style={styles.menuItemText}>
-                  {t("profileTab.editProfile")}
-                </Text>
-                <Text style={styles.chevron}>›</Text>
-              </Pressable>
-            </Link>
-          ) : (
-            <Link href="/profile" asChild>
-              <Pressable style={styles.menuItem}>
-                <View style={styles.menuIconBox}>
-                  <IconSymbol name="person.fill" size={18} color="#53E16F" />
-                </View>
-                <Text style={styles.menuItemText}>
-                  {t("profileTab.createProfile")}
-                </Text>
-                <Text style={styles.chevron}>›</Text>
-              </Pressable>
-            </Link>
-          )}
-
-          <Link href={"/profiles" as any} asChild>
-            <Pressable style={styles.menuItem}>
-              <View style={styles.menuIconBox}>
-                <IconSymbol name="person.fill" size={18} color="#FFD60A" />
+            <TacticalPressable
+              testID="profile-edit-btn"
+              haptic
+              style={styles.menuItem}
+              onPress={() =>
+                router.push({
+                  pathname: "/profile-edit",
+                  params: { id: String(profileId) },
+                } as any)
+              }
+            >
+              <View style={[styles.menuIconBox, { backgroundColor: T.electricBlueBg }]}>
+                <IconSymbol name="person.fill" size={18} color={T.electricBlue} />
               </View>
               <Text style={styles.menuItemText}>
-                {t("profileTab.switchProfile")}
+                {t("profileTab.editProfile")}
               </Text>
               <Text style={styles.chevron}>›</Text>
-            </Pressable>
-          </Link>
+            </TacticalPressable>
+          ) : (
+            <TacticalPressable
+              testID="profile-create-btn"
+              haptic
+              style={styles.menuItem}
+              onPress={() => router.push("/profile-edit" as any)}
+            >
+              <View style={[styles.menuIconBox, { backgroundColor: T.statusFreshBg }]}>
+                <IconSymbol name="person.fill" size={18} color={T.statusFresh} />
+              </View>
+              <Text style={styles.menuItemText}>
+                {t("profileTab.createProfile")}
+              </Text>
+              <Text style={styles.chevron}>›</Text>
+            </TacticalPressable>
+          )}
+
+          <TacticalPressable
+            testID="profile-switch-btn"
+            haptic
+            style={styles.menuItem}
+            onPress={() => router.push("/profiles" as any)}
+          >
+            <View style={[styles.menuIconBox, { backgroundColor: T.volt }]}>
+              <IconSymbol name="person.2.fill" size={18} color={T.voltInk} />
+            </View>
+            <Text style={styles.menuItemText}>
+              {t("profileTab.switchProfile")}
+            </Text>
+            {profiles.length > 0 ? (
+              <View style={styles.rosterCountBadge}>
+                <Text style={styles.rosterCountText}>{profiles.length}</Text>
+              </View>
+            ) : null}
+            <Text style={styles.chevron}>›</Text>
+          </TacticalPressable>
         </View>
 
         {/* Video Cache Management */}
@@ -594,11 +696,9 @@ export default function ProfileTab() {
           <Text style={styles.sectionTitle}>
             {t("profileTab.videoCacheTitle")}
           </Text>
-          <View style={styles.cacheCard}>
+          <TacticalCard style={styles.cacheCard}>
             <View style={styles.cacheHeader}>
-              <View
-                style={[styles.menuIconBox, { backgroundColor: "#152636" }]}
-              >
+              <View style={[styles.menuIconBox, { backgroundColor: T.electricBlueBg }]}>
                 <Text style={{ fontSize: 18 }}>🎬</Text>
               </View>
               <View style={{ flex: 1 }}>
@@ -616,6 +716,29 @@ export default function ProfileTab() {
               </View>
             </View>
 
+            {/* Real Cache Limit Gauge */}
+            <View style={styles.cacheGaugeBox}>
+              <View style={styles.cacheGaugeLabelRow}>
+                <Text style={styles.cacheGaugeLabel}>
+                  {t("profileTab.cacheLimitLabel", { used: usedCacheFormatted })}
+                </Text>
+                <Text style={styles.cacheGaugePct}>{cachePercent}%</Text>
+              </View>
+              <View style={styles.cacheGaugeTrack}>
+                <View
+                  testID="video-cache-progress-fill"
+                  style={[
+                    styles.cacheGaugeFill,
+                    {
+                      width: `${cachePercent}%`,
+                      backgroundColor:
+                        cacheRatio > 0.85 ? T.statusWarning : T.electricBlue,
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+
             <Text style={styles.cachePolicyText}>
               💡 {t("profileTab.videoCacheAutoPolicy")}
             </Text>
@@ -630,7 +753,7 @@ export default function ProfileTab() {
                 disabled={clearingVideoCache}
               >
                 {clearingVideoCache ? (
-                  <ActivityIndicator size="small" color="#FF453A" />
+                  <ActivityIndicator size="small" color={T.statusExhausted} />
                 ) : (
                   <Text style={styles.clearCacheBtnText}>
                     🗑️ {t("profileTab.videoCacheClear")}
@@ -638,7 +761,7 @@ export default function ProfileTab() {
                 )}
               </TouchableOpacity>
             )}
-          </View>
+          </TacticalCard>
         </View>
 
         {/* Debug: Storage Scanner */}
@@ -650,13 +773,13 @@ export default function ProfileTab() {
             onPress={handleScanStorage}
             disabled={scanning || extracting}
           >
-            <View style={[styles.menuIconBox, { backgroundColor: "#1A2A1A" }]}>
+            <View style={[styles.menuIconBox, { backgroundColor: T.statusFreshBg }]}>
               <Text style={{ fontSize: 18 }}>🔍</Text>
             </View>
             <Text style={styles.menuItemText}>
               {scanning ? "Scanning…" : "Scan Storage"}
             </Text>
-            {scanning && <ActivityIndicator color="#53E16F" size="small" />}
+            {scanning && <ActivityIndicator color={T.statusFresh} size="small" />}
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -664,7 +787,7 @@ export default function ProfileTab() {
             onPress={handleExtractCache}
             disabled={scanning || extracting}
           >
-            <View style={[styles.menuIconBox, { backgroundColor: "#2A1A0E" }]}>
+            <View style={[styles.menuIconBox, { backgroundColor: T.statusWarningBg }]}>
               <Text style={{ fontSize: 18 }}>📦</Text>
             </View>
             <View style={{ flex: 1 }}>
@@ -673,14 +796,14 @@ export default function ProfileTab() {
               </Text>
               {extracting && extractProgress ? (
                 <Text
-                  style={{ color: "#888", fontSize: 11, marginTop: 4 }}
+                  style={{ color: T.inkMuted, fontSize: 11, marginTop: 4 }}
                   numberOfLines={1}
                 >
                   {extractProgress}
                 </Text>
               ) : null}
             </View>
-            {extracting && <ActivityIndicator color="#FF6B35" size="small" />}
+            {extracting && <ActivityIndicator color={T.statusWarning} size="small" />}
           </TouchableOpacity>
 
           {/* Default directories */}
@@ -697,7 +820,7 @@ export default function ProfileTab() {
               }}
             >
               <View
-                style={[styles.menuIconBox, { backgroundColor: "#2A2A1A" }]}
+                style={[styles.menuIconBox, { backgroundColor: T.surfaceMuted }]}
               >
                 <Text style={{ fontSize: 18 }}>🔎</Text>
               </View>
@@ -716,7 +839,7 @@ export default function ProfileTab() {
 
           <Text
             style={{
-              color: "#555",
+              color: T.inkMuted,
               fontSize: 11,
               marginTop: 8,
               lineHeight: 16,
@@ -728,17 +851,18 @@ export default function ProfileTab() {
           </Text>
         </View>
 
-        {/* Account Actions */}
+        {/* Session & Account Deletion Actions */}
         <View style={styles.section}>
           <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
             <Text style={styles.logoutText}>{t("profileTab.signOut")}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.logoutBtn, { marginTop: 8 }]}
+            testID="delete-account-btn"
+            style={styles.deleteAccountBtn}
             onPress={() => router.push("/settings/deleteAccount" as any)}
           >
-            <Text style={[styles.logoutText, { color: "#888" }]}>
+            <Text style={styles.deleteAccountText}>
               {t("auth.deleteAccount")}
             </Text>
           </TouchableOpacity>
@@ -749,161 +873,376 @@ export default function ProfileTab() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#000" },
-  scrollContent: { padding: 20, paddingBottom: 40 },
+  container: { flex: 1, backgroundColor: T.canvas },
+  scrollContent: { paddingHorizontal: 18, paddingTop: 10, paddingBottom: 112 },
 
-  avatarSection: {
-    alignItems: "center",
-    paddingTop: 20,
-    paddingBottom: 32,
-  },
-  avatarCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: "#002B3D",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  avatarText: {
-    color: "#00E5FF",
-    fontSize: 32,
-    fontWeight: "800",
-  },
-  profileName: {
-    color: "#fff",
-    fontSize: 24,
-    fontWeight: "800",
-    marginBottom: 6,
-  },
-  profileSummary: {
-    color: "#888",
-    fontSize: 14,
-    marginBottom: 10,
-  },
-  idBadge: {
-    backgroundColor: "#1A1A1A",
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-  idBadgeText: {
-    color: "#555",
-    fontSize: 12,
-    fontWeight: "600",
-    fontFamily: "monospace",
-  },
-
-  section: { marginBottom: 28 },
-  sectionTitle: {
-    color: "#888",
-    fontSize: 12,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 1.2,
+  topBar: {
     marginBottom: 14,
+    gap: 2,
   },
-
-  menuItem: {
-    backgroundColor: "#1A1A1A",
-    padding: 16,
-    borderRadius: 14,
+  eyebrowRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 8,
+    gap: 6,
+    marginBottom: 2,
   },
-  menuIconBox: {
-    width: 36,
-    height: 36,
-    backgroundColor: "#252525",
-    borderRadius: 10,
+  eyebrowDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: T.electricBlue,
+  },
+  eyebrowText: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+    color: T.electricBlue,
+    textTransform: "uppercase",
+    flexShrink: 1,
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: "900",
+    letterSpacing: -0.6,
+    color: T.ink,
+    flexShrink: 1,
+  },
+  voltDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
+  },
+
+  heroCard: {
+    marginBottom: 24,
+    gap: 14,
+  },
+  heroTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  activeAthletePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  activeAthleteDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: T.electricBlue,
+  },
+  activeAthleteText: {
+    color: T.electricBlue,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.7,
+    textTransform: "uppercase",
+  },
+  idBadge: {
+    backgroundColor: T.surfaceMuted,
+    borderWidth: 1,
+    borderColor: T.border,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  idBadgeText: {
+    color: T.inkMuted,
+    fontSize: 11,
+    fontWeight: "700",
+    fontFamily: monoFont,
+  },
+
+  identityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+  },
+  avatarWrap: {
+    position: "relative",
+  },
+  avatarCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: T.electricBlue,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 14,
   },
-  menuItemText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
+  avatarCircleEmpty: {
+    backgroundColor: T.surfaceContainer,
+  },
+  avatarText: {
+    color: "#FFFFFF",
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
+  avatarTextEmpty: {
+    color: T.inkMuted,
+  },
+  avatarVoltBadge: {
+    position: "absolute",
+    right: -1,
+    bottom: -1,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: T.volt,
+    borderWidth: 2,
+    borderColor: T.surface,
+  },
+  identityTextCol: {
     flex: 1,
+    gap: 4,
   },
-  chevron: { color: "#444", fontSize: 22, fontWeight: "300" },
+  profileName: {
+    color: T.ink,
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: -0.4,
+    flexShrink: 1,
+  },
+  profileSummary: {
+    color: T.inkMuted,
+    fontSize: 13,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+
+  metricsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  fitnessVoltBadge: {
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  fitnessVoltText: {
+    color: T.voltInk,
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+  },
+  restingHrBadge: {
+    backgroundColor: T.heartRoseBg,
+    borderWidth: 1,
+    borderColor: T.heartRoseBorder,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  restingHrText: {
+    color: T.heartRose,
+    fontSize: 11,
+    fontWeight: "800",
+  },
 
   injuryRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
-    marginTop: 10,
-    marginBottom: 10,
-    justifyContent: "center",
   },
   injuryPill: {
-    backgroundColor: "#2A1A0E",
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 14,
+    backgroundColor: T.statusFatiguedBg,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#FF6B35",
+    borderColor: T.statusFatiguedBorder,
   },
   injuryPillText: {
-    color: "#FF6B35",
+    color: T.statusFatigued,
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "700",
   },
 
+  section: { marginBottom: 24 },
+  sectionTitle: {
+    color: T.inkMuted,
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 1.1,
+    marginBottom: 10,
+    marginLeft: 2,
+  },
+
+  menuItem: {
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 14,
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  menuIconBox: {
+    width: 38,
+    height: 38,
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  menuItemText: {
+    color: T.ink,
+    fontSize: 15,
+    fontWeight: "700",
+    flex: 1,
+    flexShrink: 1,
+  },
+  rosterCountBadge: {
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    marginRight: 8,
+  },
+  rosterCountText: {
+    color: T.electricBlue,
+    fontSize: 12,
+    fontWeight: "800",
+    fontFamily: monoFont,
+  },
+  chevron: { color: T.inkMuted, fontSize: 22, fontWeight: "600" },
+
   cacheCard: {
-    backgroundColor: "#1A1A1A",
     padding: 16,
-    borderRadius: 14,
   },
   cacheHeader: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 12,
   },
   cacheStatusText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
+    color: T.ink,
+    fontSize: 15,
+    fontWeight: "800",
+    flexShrink: 1,
   },
   cacheDescText: {
-    color: "#888",
+    color: T.inkMuted,
     fontSize: 12,
     marginTop: 2,
     lineHeight: 16,
   },
+  cacheGaugeBox: {
+    backgroundColor: T.surfaceMuted,
+    borderWidth: 1,
+    borderColor: T.border,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    gap: 6,
+  },
+  cacheGaugeLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  cacheGaugeLabel: {
+    color: T.inkSecondary,
+    fontSize: 12,
+    fontWeight: "700",
+    fontFamily: monoFont,
+    flexShrink: 1,
+  },
+  cacheGaugePct: {
+    color: T.electricBlue,
+    fontSize: 12,
+    fontWeight: "800",
+    fontFamily: monoFont,
+  },
+  cacheGaugeTrack: {
+    height: 8,
+    backgroundColor: T.surfaceContainer,
+    borderRadius: 4,
+    overflow: "hidden",
+  },
+  cacheGaugeFill: {
+    height: "100%",
+    borderRadius: 4,
+  },
   cachePolicyText: {
-    color: "#666",
+    color: T.inkMuted,
     fontSize: 11,
-    lineHeight: 15,
-    marginTop: 4,
+    lineHeight: 16,
     marginBottom: 12,
   },
   clearCacheBtn: {
-    backgroundColor: "#2A1010",
+    backgroundColor: T.statusExhaustedBg,
     borderWidth: 1,
-    borderColor: "#4A1818",
+    borderColor: T.statusExhaustedBorder,
     paddingVertical: 12,
-    borderRadius: 10,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
   },
   clearCacheBtnText: {
-    color: "#FF453A",
+    color: T.statusExhausted,
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "800",
   },
 
   logoutBtn: {
-    backgroundColor: "#1A1A1A",
-    padding: 16,
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.statusExhaustedBorder,
+    padding: 15,
     borderRadius: 14,
     alignItems: "center",
   },
   logoutText: {
-    color: "#FF453A",
-    fontSize: 16,
-    fontWeight: "600",
+    color: T.statusExhausted,
+    fontSize: 15,
+    fontWeight: "800",
+  },
+  deleteAccountBtn: {
+    backgroundColor: T.surfaceMuted,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 14,
+    borderRadius: 14,
+    alignItems: "center",
+    marginTop: 10,
+  },
+  deleteAccountText: {
+    color: T.inkMuted,
+    fontSize: 14,
+    fontWeight: "700",
   },
 });

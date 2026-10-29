@@ -1219,6 +1219,7 @@ export interface RecentWorkoutSummary {
   duration_seconds?: number | null;
   effort?: number | null;
   hybrid_sensor?: HybridSensorBrief | null;
+  hybrid_sensor_excluded_reason?: "calibration_changed" | "calibration_provenance_unknown";
 }
 
 export interface EffortReflectionInfo {
@@ -1232,6 +1233,7 @@ export interface EffortReflectionInfo {
 
 export interface PreWodAdviceResponse {
   profile_id: number;
+  history_revision?: string;
   overall_fatigue_score?: number | null;
   overall_state: string;
   overall_state_ko: string;
@@ -1256,6 +1258,7 @@ export interface PreWodAdviceRequest {
 
 export interface ProfileReadinessResponse {
   profile_id: number;
+  history_revision?: string;
   overall_fatigue_score?: number | null;
   overall_state: string;
   overall_state_ko: string;

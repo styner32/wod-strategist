@@ -43,7 +43,7 @@ func (w *Worker) activityRows(ctx context.Context, profileID uint, sessionID str
 // Save under the session lock, compare the original source snapshot, then rebuild
 // totals. A late job cannot replace a summary for different source observations.
 func (w *Worker) saveActivityReview(ctx context.Context, p activityReviewPayload, summary *activity.Summary) error {
-	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error {
 		var session db.Session
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("profile_id = ? AND session_id = ?", p.ProfileID, p.SessionID).First(&session).Error; err != nil {
 			return err
@@ -127,6 +127,65 @@ func (w *Worker) enqueueActivityReview(ctx context.Context, p VideoAnalysisPaylo
 		_ = w.saveActivityReview(ctx, payload, &summary)
 	}
 	return err
+}
+
+func (w *Worker) skipOverlongActivityReview(ctx context.Context, p VideoAnalysisPayload, uri string) error {
+	if !w.ActivityCountingEnabled {
+		return nil
+	}
+	rows, err := w.activityRows(ctx, p.ProfileID, p.SessionID)
+	if err != nil {
+		return err
+	}
+	summary := activity.Build(rows, nil)
+	if !summary.Available {
+		return nil
+	}
+	object := fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID)
+	if uri != "gs://"+w.BucketName+"/"+object {
+		return errors.New("unexpected activity media source")
+	}
+	attrs, err := w.StorageClient.ObjectAttrs(ctx, object)
+	if err != nil {
+		return err
+	}
+	payload := activityReviewPayload{p.SessionID, p.ProfileID, summary.SourceVersion, object, attrs.Generation}
+	if payload.Generation <= 0 {
+		return errors.New("activity media generation unavailable")
+	}
+	var session db.Session
+	if err = w.DB.WithContext(ctx).Where("profile_id = ? AND session_id = ?", p.ProfileID, p.SessionID).First(&session).Error; err != nil {
+		return err
+	}
+	var previous activity.Summary
+	_ = json.Unmarshal(session.ActivitySummary, &previous)
+	if previous.SourceVersion == summary.SourceVersion && previous.MediaGeneration == strconv.FormatInt(payload.Generation, 10) {
+		if previous.ReviewState == "completed" || previous.ReviewState == "partial" || previous.ReviewState == "disabled" {
+			return nil
+		}
+		summary = activity.Build(rows, &previous)
+	}
+	completed := map[uint]activity.ReviewedChunk{}
+	for _, r := range summary.Reviews {
+		if r.State == "completed" {
+			completed[r.ChunkID] = r
+		}
+	}
+	canonical := activity.CanonicalChunks(rows)
+	reviews := make([]activity.ReviewedChunk, 0, len(canonical))
+	for _, row := range canonical {
+		if saved, ok := completed[row.ID]; ok {
+			reviews = append(reviews, saved)
+			continue
+		}
+		reviews = append(reviews, activity.ReviewedChunk{
+			ChunkID: row.ID,
+			State:   "failed",
+		})
+	}
+	summary.Reviews = reviews
+	summary.ReviewState = "partial"
+	return w.saveActivityReview(ctx, payload, &summary)
 }
 
 const (
@@ -564,7 +623,7 @@ func buildActivityReviewBatches(rows []db.ChunkAnalysisResult, completedIDs map[
 	return batches
 }
 
-func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (taskErr error) {
+func (w *Worker) handleActivityReviewTask(ctx context.Context, t *asynq.Task) (taskErr error) {
 
 	var p activityReviewPayload
 	if json.Unmarshal(t.Payload(), &p) != nil || p.ProfileID == 0 || validateSessionID(p.SessionID) != nil || p.Generation <= 0 || p.Object != fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID) {
@@ -757,6 +816,22 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 	}
 	if duration <= 0 {
 		return errors.New("activity review media duration unavailable")
+	}
+	if duration > maxAnalysisVideoDuration.Seconds() {
+		w.logger.Warn("Activity review skipped: video duration exceeds maximum analysis limit",
+			zap.String("session_id", p.SessionID),
+			zap.Float64("duration_secs", duration),
+			zap.Float64("max_duration_secs", maxAnalysisVideoDuration.Seconds()))
+		for _, b := range batches {
+			for _, idx := range b.Indices {
+				replaceReview(activity.ReviewedChunk{
+					ChunkID: rows[idx].ID,
+					State:   "failed",
+				})
+			}
+		}
+		summary.ReviewState = "partial"
+		return w.saveActivityReview(ctx, p, &summary)
 	}
 
 	failed := false

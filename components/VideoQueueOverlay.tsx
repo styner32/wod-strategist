@@ -1,5 +1,6 @@
 import { useIsProcessing, useQueueCount, useVideoQueue } from "@/store/useVideoQueue";
 import { t } from "@/features/i18n";
+import * as ExpoRouter from "expo-router";
 import { router } from "expo-router";
 import React from "react";
 import {
@@ -19,8 +20,18 @@ export function VideoQueueOverlay() {
   const count = useQueueCount();
   const isProcessing = useIsProcessing();
   const items = useVideoQueue((s) => s.items);
+  const pathname =
+    typeof ExpoRouter.usePathname === "function"
+      ? ExpoRouter.usePathname()
+      : "";
 
-  if (count === 0) return null;
+  if (
+    count === 0 ||
+    pathname.startsWith("/workout") ||
+    pathname === "/queue"
+  ) {
+    return null;
+  }
 
   // Get the first active item for status text
   const activeItem = items.find(
@@ -77,20 +88,20 @@ export function VideoQueueOverlay() {
 const styles = StyleSheet.create({
   pill: {
     position: "absolute",
-    bottom: 100,
+    bottom: 98,
     alignSelf: "center",
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(26, 26, 26, 0.95)",
+    backgroundColor: "rgba(11, 14, 20, 0.94)",
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 24,
     borderWidth: 1,
     gap: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
     elevation: 10,
     zIndex: 999,
   },
@@ -100,20 +111,22 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   pillText: {
-    color: "#fff",
+    color: "#F8FAFC",
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
     maxWidth: 200,
+    flexShrink: 1,
   },
   countBadge: {
-    backgroundColor: "#333",
+    backgroundColor: "#1E293B",
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10,
   },
   countText: {
-    color: "#fff",
+    color: "#D4FF00",
     fontSize: 12,
-    fontWeight: "bold",
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
   },
 });

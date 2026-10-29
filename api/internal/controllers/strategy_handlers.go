@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 	"github.com/wod-strategist/api/internal/wodeval"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var jsonBlockRegex = regexp.MustCompile(`(?s)\{.*\}`)
@@ -79,7 +81,7 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 
 	// 2. Query in read-only repeatable read transaction & compute deterministic readiness
 	asOf := time.Now().UTC()
-	readiness, recentWorkouts, txErr := ctl.loadProfileReadinessAndRecentWorkouts(ctx, req.ProfileID, asOf)
+	readiness, recentWorkouts, historyRevision, txErr := ctl.loadProfileReadinessAndRecentWorkouts(ctx, req.ProfileID, asOf)
 	if txErr != nil {
 		logger.Log.Error("failed to query past sessions for pre-wod advice", zap.Uint("profile_id", req.ProfileID), zap.Error(txErr))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to calculate muscle readiness"})
@@ -89,6 +91,18 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 	var resp PreWODAdviceResponse
 	resp.ProfileID = req.ProfileID
 
+	var beforeCall db.Profile
+	if err := ctl.db.WithContext(ctx).Select("workout_history_revision").First(&beforeCall, req.ProfileID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "unable to verify workout history"})
+		return
+	}
+	if beforeCall.WorkoutHistoryRevision != historyRevision {
+		readiness, recentWorkouts, historyRevision, txErr = ctl.loadProfileReadinessAndRecentWorkouts(ctx, req.ProfileID, time.Now().UTC())
+		if txErr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "unable to refresh workout history"})
+			return
+		}
+	}
 	// 4. Gemini call: ONLY when evidence_status == "complete"
 	if readiness.EvidenceStatus == "complete" && ctl.textParser != nil {
 		prompt := fatigue.BuildPreWODAdvicePrompt(readiness, *profile, req.WODDescription, req.Movements, injuries, recentWorkouts...)
@@ -108,10 +122,26 @@ func (ctl *Controller) GetPreWODAdvice(c *gin.Context) {
 		resp = buildDeterministicFallbackAdvice(req.ProfileID, readiness, *profile, req.WODDescription, req.Movements, injuries, recentWorkouts)
 	}
 
-	// 5. Always apply FinalizePreWODAdvice
-	fatigue.FinalizePreWODAdvice(&resp, readiness, recentWorkouts...)
-
-	c.JSON(http.StatusOK, resp)
+	err = ctl.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var current db.Profile
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&current, req.ProfileID).Error; err != nil {
+			return err
+		}
+		if current.WorkoutHistoryRevision != historyRevision {
+			readiness, recentWorkouts, historyRevision, txErr = ctl.loadProfileReadinessAndRecentWorkouts(ctx, req.ProfileID, time.Now().UTC())
+			if txErr != nil {
+				return txErr
+			}
+			resp = buildDeterministicFallbackAdvice(req.ProfileID, readiness, current, req.WODDescription, req.Movements, injuries, recentWorkouts)
+		}
+		fatigue.FinalizePreWODAdvice(&resp, readiness, recentWorkouts...)
+		resp.HistoryRevision = strconv.FormatInt(historyRevision, 10)
+		c.JSON(http.StatusOK, resp)
+		return nil
+	})
+	if err != nil && !c.Writer.Written() && !errors.Is(err, context.Canceled) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "unable to verify workout history"})
+	}
 }
 
 // GetProfileReadiness handles GET /api/v1/strategies/readiness.
@@ -136,7 +166,7 @@ func (ctl *Controller) GetProfileReadiness(c *gin.Context) {
 	}
 
 	asOf := time.Now().UTC()
-	readiness, recentWorkouts, txErr := ctl.loadProfileReadinessAndRecentWorkouts(ctx, profileID, asOf)
+	readiness, recentWorkouts, historyRevision, txErr := ctl.loadProfileReadinessAndRecentWorkouts(ctx, profileID, asOf)
 	if txErr != nil {
 		logger.Log.Error("failed to query past sessions for readiness", zap.Uint("profile_id", profileID), zap.Error(txErr))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to calculate muscle readiness"})
@@ -170,6 +200,7 @@ func (ctl *Controller) GetProfileReadiness(c *gin.Context) {
 
 	c.JSON(http.StatusOK, ProfileReadinessResponse{
 		ProfileID:           profileID,
+		HistoryRevision:     strconv.FormatInt(historyRevision, 10),
 		OverallFatigueScore: readiness.OverallFatigueScore,
 		OverallState:        readiness.OverallState,
 		OverallStateKO:      readiness.OverallStateKO,
@@ -186,16 +217,22 @@ func (ctl *Controller) loadProfileReadinessAndRecentWorkouts(
 	ctx context.Context,
 	profileID uint,
 	asOf time.Time,
-) (fatigue.ProfileReadinessState, []RecentWorkoutSummary, error) {
+) (fatigue.ProfileReadinessState, []RecentWorkoutSummary, int64, error) {
 	sevenDaysAgo := asOf.Add(-7 * 24 * time.Hour)
 	twentyEightDaysAgo := asOf.Add(-28 * 24 * time.Hour)
 
 	var pastResults []db.AnalysisResult
 	var recentWODRows []recentWODFeedbackRow
 	var unresolvedCount int64
+	var calibrationProfile db.Profile
 
 	txErr := ctl.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		_ = tx.Exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").Error
+		if err := tx.Exec("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY").Error; err != nil {
+			return err
+		}
+		if err := tx.First(&calibrationProfile, profileID).Error; err != nil {
+			return err
+		}
 
 		// Count unresolved time sessions: completed, non-archived, but workout_at is NULL or not reliable or future
 		if err := tx.Model(&db.AnalysisResult{}).
@@ -228,7 +265,7 @@ func (ctl *Controller) loadProfileReadinessAndRecentWorkouts(
 			Scan(&recentWODRows).Error
 	})
 	if txErr != nil {
-		return fatigue.ProfileReadinessState{}, nil, txErr
+		return fatigue.ProfileReadinessState{}, nil, 0, txErr
 	}
 
 	totalSessions := len(pastResults)
@@ -259,11 +296,11 @@ func (ctl *Controller) loadProfileReadinessAndRecentWorkouts(
 	}
 
 	readiness := fatigue.ComputeCurrentReadiness(records, evidence, asOf)
-	recentWorkouts := buildRecentWorkoutSummaries(recentWODRows)
-	return readiness, recentWorkouts, nil
+	recentWorkouts := buildRecentWorkoutSummaries(recentWODRows, calibrationProfile)
+	return readiness, recentWorkouts, calibrationProfile.WorkoutHistoryRevision, nil
 }
 
-func buildRecentWorkoutSummaries(rows []recentWODFeedbackRow) []RecentWorkoutSummary {
+func buildRecentWorkoutSummaries(rows []recentWODFeedbackRow, profiles ...db.Profile) []RecentWorkoutSummary {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -288,6 +325,7 @@ func buildRecentWorkoutSummaries(rows []recentWODFeedbackRow) []RecentWorkoutSum
 		}
 
 		var hybridBrief *HybridSensorBrief
+		excludedReason := ""
 		candidate := db.AnalysisResult{
 			SensorVersion:    r.SensorVersion,
 			SensorState:      r.SensorState,
@@ -303,24 +341,30 @@ func buildRecentWorkoutSummaries(rows []recentWODFeedbackRow) []RecentWorkoutSum
 				summary.Metrics.Hybrid.DataCoverage >= 0.50 &&
 				summary.Metrics.Hybrid.ValidHybridSeconds >= 60 {
 				hy := summary.Metrics.Hybrid
-				hybridBrief = &HybridSensorBrief{
-					HeartIntensity:     hy.HeartIntensity,
-					MotionIntensity:    hy.MotionIntensity,
-					HybridIntensity:    *hy.HybridIntensity,
-					HybridLoadAU:       hy.HybridLoadAU,
-					DataCoverage:       hy.DataCoverage,
-					CalibrationVersion: hy.CalibrationVersion,
+				if len(profiles) > 0 {
+					excludedReason = db.SensorCalibrationExclusionReason(summary, profiles[0])
+				}
+				if excludedReason == "" {
+					hybridBrief = &HybridSensorBrief{
+						HeartIntensity:     hy.HeartIntensity,
+						MotionIntensity:    hy.MotionIntensity,
+						HybridIntensity:    *hy.HybridIntensity,
+						HybridLoadAU:       hy.HybridLoadAU,
+						DataCoverage:       hy.DataCoverage,
+						CalibrationVersion: hy.CalibrationVersion,
+					}
 				}
 			}
 		}
 
 		out = append(out, RecentWorkoutSummary{
-			SessionID:       r.SessionID,
-			WorkoutAt:       r.WorkoutAt.UTC(),
-			Movements:       extractRecentWorkoutMovements(r.SessionScore, r.NormalizedWorkout),
-			DurationSeconds: durationSeconds,
-			Effort:          manualEffort,
-			HybridSensor:    hybridBrief,
+			SessionID:                  r.SessionID,
+			WorkoutAt:                  r.WorkoutAt.UTC(),
+			Movements:                  extractRecentWorkoutMovements(r.SessionScore, r.NormalizedWorkout),
+			DurationSeconds:            durationSeconds,
+			Effort:                     manualEffort,
+			HybridSensor:               hybridBrief,
+			HybridSensorExcludedReason: excludedReason,
 		})
 	}
 	return out

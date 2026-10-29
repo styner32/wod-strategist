@@ -209,6 +209,18 @@ describe("HistoryList highlight request lifecycle", () => {
     expect(alertSpy).not.toHaveBeenCalled();
   });
 
+  it("treats a cancelled generation as terminal without waiting for the deadline", async () => {
+    const view = await showHistory();
+    mockFetchHighlightResults.mockResolvedValue([highlight("CANCELLED")]);
+    await createHighlights(view);
+    await advance(POLL_MS);
+    expect(view.getByText("historyList.createHighlights")).toBeTruthy();
+    const count = mockFetchHighlightResults.mock.calls.length;
+    await advance(DEADLINE_MS);
+    expect(mockFetchHighlightResults).toHaveBeenCalledTimes(count);
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
   it("stops repeated query errors at the five-minute deadline", async () => {
     const view = await showHistory();
     mockFetchHighlightResults.mockRejectedValue(new Error("offline"));

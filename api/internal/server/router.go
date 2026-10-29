@@ -74,6 +74,7 @@ func SetupRouter(appEnv string, allowedOrigins []string,
 	protected.POST("/chunk-complete", ctl.ChunkComplete)
 	protected.GET("/chunk-analysis/:session_id", ctl.GetChunkAnalysis)
 	protected.GET("/sessions/:session_id/activity-summary", ctl.GetActivitySummary)
+	protected.POST("/sessions/archive-states", ctl.GetSessionArchiveStates)
 	protected.DELETE("/sessions/:session_id/environment", ctl.DeleteEnvironment)
 	protected.GET("/sessions/:session_id/on-device-ai", ctl.ListOnDeviceAI)
 	protected.GET("/sessions/:session_id/on-device-ai/asset", ctl.GetOnDeviceAIAsset)

@@ -337,7 +337,7 @@ func NewChunkAnalysisWithSessionTask(sessionID, filePath string, profileID uint,
 	return asynq.NewTask(TypeChunkAnalysisWithSession, data), nil
 }
 
-func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleChunkAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	var p VideoAnalysisPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
@@ -503,7 +503,7 @@ func (w *Worker) HandleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	return nil
 }
 
-func (w *Worker) HandleChunkAnalysisWithSessionTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asynq.Task) error {
 	var p VideoAnalysisWithSessionPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)

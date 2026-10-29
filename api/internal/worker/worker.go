@@ -208,15 +208,16 @@ type Worker struct {
 	// images, location, activity hint) to the next chunk. Tracking channel only.
 	TrackingContinuityEnabled bool
 
-	DB             *gorm.DB
-	StorageClient  StorageClient
-	BucketName     string
-	GeminiClient   GeminiClient
-	QueueClient    QueueClient
-	QueueInspector *asynq.Inspector
-	UseCache       bool // enable context caching for long video analysis
-	PipelineMode   PipelineMode
-	logger         *zap.Logger
+	DB                     *gorm.DB
+	StorageClient          StorageClient
+	BucketName             string
+	GeminiClient           GeminiClient
+	QueueClient            QueueClient
+	QueueInspector         *asynq.Inspector
+	UseCache               bool // enable context caching for long video analysis
+	PipelineMode           PipelineMode
+	logger                 *zap.Logger
+	stretchHistoryRevision *int64
 }
 
 func NewWorker(db *gorm.DB, storageClient StorageClient, bucketName string, geminiClient GeminiClient, queueClient QueueClient, log *zap.Logger) *Worker {
@@ -240,7 +241,7 @@ func (w *Worker) saveTokenUsage(sessionID string, profileID uint, taskType strin
 }
 
 func (w *Worker) saveTokenUsageForRequest(sessionID string, profileID uint, taskType, requestKey string, usage *gemini.TokenUsage) {
-	if err := cost.RecordUsage(w.DB, sessionID, profileID, 0, taskType, requestKey, usage); err != nil {
+	if err := cost.RecordUsage(w.accountingDB(), sessionID, profileID, 0, taskType, requestKey, usage); err != nil {
 		w.logger.Error("Failed to save token usage", zap.String("session_id", sessionID), zap.String("task_type", taskType), zap.Error(err))
 	}
 }
@@ -519,7 +520,18 @@ func (w *Worker) recordStageMetrics(sessionID string, profileID uint,
 		UploadBytes:  uploadBytes,
 		DurationMs:   elapsed.Milliseconds(),
 	}
-	if err := w.DB.Create(rec).Error; err != nil {
+	if err := w.accountingDB().Create(rec).Error; err != nil {
 		w.logger.Error("Failed to save stage metrics", zap.Error(err))
 	}
+}
+
+func (w *Worker) accountingDB() *gorm.DB {
+	if w.DB == nil {
+		return nil
+	}
+	ctx := w.DB.Statement.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return w.DB.WithContext(context.WithoutCancel(ctx))
 }

@@ -137,6 +137,9 @@ func (ctl *Controller) GetSensorTimeline(c *gin.Context) {
 	}
 
 	switch row.SensorState {
+	case db.SensorStateCancelled:
+		c.JSON(http.StatusOK, SensorTimelineResponse{Status: "unavailable", Reason: "processing_cancelled", Timeline: nil, VideoMapping: videoMapping})
+		return
 	case db.SensorStateUploading, db.SensorStatePending, db.SensorStateRunning:
 		c.JSON(http.StatusOK, SensorTimelineResponse{
 			Status:       "pending",

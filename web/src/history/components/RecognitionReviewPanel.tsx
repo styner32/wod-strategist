@@ -8,7 +8,7 @@ import { recognitionReviewSelection } from "../recognitionReview";
 
 const button = "rounded-lg border border-border bg-bg-secondary px-3 py-2 text-xs font-medium text-text-primary hover:bg-bg-tertiary disabled:opacity-40";
 const field = "rounded-lg border border-border bg-bg-base px-3 py-2 text-sm text-text-primary";
-const labels: Record<RecognitionReviewStatus, string> = { QUEUED: "대기 중", RUNNING: "진단 중", COMPLETED: "진단 완료", PARTIAL: "일부 구간 진단 완료", FAILED: "진단 실패" };
+const labels: Record<RecognitionReviewStatus, string> = { QUEUED: "대기 중", RUNNING: "진단 중", COMPLETED: "진단 완료", PARTIAL: "일부 구간 진단 완료", FAILED: "진단 실패", CANCELLED: "중단됨" };
 const evidenceLabels: Record<RecognitionReviewFinding["evidence_level"], string> = { stored_fact: "저장 기록으로 확인", video_supported_hypothesis: "영상 근거에 따른 추정", undetermined: "확인 불가" };
 const stageLabels: Record<string, string> = { chunk_observation: "짧은 구간 관찰", segment_selection: "분석 구간 선택", deep_observation: "심층 관찰", aggregation: "결과 집계", unknown: "확인 불가" };
 const terminal = (status?: RecognitionReviewStatus) => status != null && status !== "QUEUED" && status !== "RUNNING";
@@ -204,11 +204,11 @@ function RecognitionReviewContent({ sessionId, profileId, sourceUpdatedAt, curre
         {outdated && <p role="alert" className="rounded-lg border border-warning/40 p-3 text-sm text-warning">변경 전 기록을 기준으로 작성한 보고서입니다. 현재 분석 또는 확정값과 다를 수 있습니다.</p>}
         {selectedRun.status === "PARTIAL" && <p className="text-sm text-warning">일부 영상 구간의 진단이 실패했습니다. 아래 성공한 구간의 결과만 확인할 수 있습니다.</p>}
         <p className="text-xs text-text-secondary">모델 {selectedRun.model || "확인 불가"} · 입력 토큰 {tokens(selectedRun.input_tokens)} · 출력 토큰 {tokens(selectedRun.output_tokens)} · 총 토큰 {tokens(selectedRun.total_tokens)}{selectedRun.duration_ms != null && selectedRun.duration_ms > 0 ? ` · 소요 ${seconds(selectedRun.duration_ms / 1000)}` : ""}</p>
-        {selectedRun.error && <p role="alert" className="text-sm text-error">{selectedRun.error}</p>}
+        {selectedRun.error && <p role={selectedRun.status === "CANCELLED" ? "status" : "alert"} className={`text-sm ${selectedRun.status === "CANCELLED" ? "text-text-secondary" : "text-error"}`}>{selectedRun.error}</p>}
         {selectedRun.batches.map(batch => <div key={batch.id} className="space-y-2 rounded-lg border border-border p-3">
           {(() => { const saved = selectedRun.evaluation?.records.find(row => row.record.id === batch.record_id)?.record; return saved ? <p className="text-xs font-medium text-text-secondary">확정 기록 전체: {saved.movement} {saved.reps}회 ({formatStartTimestamp(saved.start_secs)}–{formatStartTimestamp(saved.end_secs)})</p> : null; })()}
           <p className="text-xs text-text-secondary">검토 구간: {formatStartTimestamp(batch.core_start_secs)}–{formatStartTimestamp(batch.core_end_secs)}</p>
-          {batch.error && <p role="alert" className="text-sm text-error">이 구간을 진단하지 못했습니다. {batch.error}</p>}
+          {batch.status === "CANCELLED" ? <p role="status" className="text-sm text-text-secondary">중단됨</p> : batch.error && <p role="alert" className="text-sm text-error">이 구간을 진단하지 못했습니다. {batch.error}</p>}
           {batch.status === "COMPLETED" && !(batch.findings ?? []).length && <p className="text-sm text-text-secondary">이 구간에서 설명할 수 있는 추가 오류 근거를 찾지 못했습니다.</p>}
           {(batch.findings ?? []).map((finding, index) => <article key={index} className="space-y-2 rounded-lg bg-bg-base p-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs font-semibold text-accent">{evidenceLabels[finding.evidence_level] ?? "확인 불가"}</span><button className={button} disabled={!isOriginal} title={isOriginal ? undefined : "원본 영상에서 시간대를 확인할 수 있습니다."} onClick={() => seek(finding.start_secs)}>{formatStartTimestamp(finding.start_secs)}–{formatStartTimestamp(finding.end_secs)} 영상 근거</button></div>

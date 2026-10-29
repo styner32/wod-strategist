@@ -76,6 +76,22 @@ retain every participating source interval in their original-candidate snapshot.
 
 A confirmation may record 0 repetitions (attempted but no complete repetition: below standard, no-rep, failed or setup). It still requires a resolved actual load (`null` means no external load, never "unknown"). Zero-rep records are stored and shown but excluded from comparisons, best records, median cycle and rest comparisons and from benchmark reads (`reps > 0`). Migration `000057` relaxes the checks to `reps >= 0`/`reps_per_minute >= 0`; its down migration preserves zero-rep rows and restores the positive checks as `NOT VALID`.
 
+The web performance editor focuses itself when opened. Enter in the editor or
+an input explicitly reviews the current draft and saves it through the existing
+validation/API; a separate checkbox click is unnecessary. After a successful
+keyboard save, open and focus the next displayed, unconfirmed `exercise`
+interval at or after the saved window's end. Use response records and
+`findCoveringConfirmedRecord` to skip merged/covered confirmations; rest,
+unknown activity, unassessed gaps and hidden sub-second intervals are skipped.
+Missing values must still be entered; invalid drafts and failed saves retain
+the current editor. Ignore held Enter, modifiers and IME composition (including
+key code 229), and preserve native Enter on buttons/selects/links/textareas.
+Keep a synchronous in-flight save guard as React state alone cannot prevent two
+same-tick requests. Release it after the successful response/cache update;
+benchmark and diagnostic query refreshes run in the background so they cannot
+disable the next editor. Mouse saving retains the existing review-checkbox and close
+behavior. These UI actions never start recognition diagnostics automatically.
+
 Performance records preserve source, original candidate and user-confirmed values. `workout_prescription` uses `analysis_results.wod_description`, falling back to `sessions.wod_description` like reads do. `performed_at` and `performed_at_source` refer to the workout's resolved time, never the confirmation time. The server derives repetitions/minute from confirmed `elapsed_seconds` (including observed pauses), distinguishes actual 60-second windows from normalized rates, and derives median cycle seconds only when complete event evidence matches the confirmed window/count. Verified continuous capture timing takes precedence when media and capture durations differ; ambiguous partial mappings cannot produce a rate. Missing values are null. Preserve original weight/unit; comparison uses kg rounded to one decimal, with total/per-implement bases separate.
 
 Direct comparisons require the same canonical movement, load/basis, measurement, workout prescription and technique. Sets require equal repetitions and can compare different completion times; fixed windows require equal elapsed duration and can compare different repetition counts. Unknown prescriptions/techniques and different WODs are reference comparisons with conditions shown. Default baseline is the latest earlier directly comparable record. Heavier-load records at equal repetitions have an independent baseline and remain separate from pace improvement; never infer maximal strength or estimated 1RM from pace.

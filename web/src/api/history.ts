@@ -22,7 +22,7 @@ export interface RecognitionEvaluation {
   summary: { total: number; matched: number; mismatch: number; insufficient_evidence: number };
 }
 
-export type RecognitionReviewStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED";
+export type RecognitionReviewStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED";
 
 export interface RecognitionReviewFinding {
   start_secs: number;
@@ -139,6 +139,7 @@ export interface AnalysisResult {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  automatic_processing_cancelled_at?: string | null;
   wod_description?: string;
   workout_at?: string | null;
   workout_at_source?: string | null;
@@ -257,6 +258,7 @@ export type ReanalysisStatus =
   | "RUNNING"
   | "COMPLETED"
   | "FAILED"
+  | "CANCELLED"
   | "VIDEO_UNAVAILABLE"
   | "INTERVAL_UNAVAILABLE";
 
@@ -327,6 +329,7 @@ export type SessionReanalysisStatus =
   | "RUNNING"
   | "COMPLETED"
   | "FAILED"
+  | "CANCELLED"
   | "VIDEO_UNAVAILABLE"
   | "CONTEXT_UNAVAILABLE";
 
@@ -423,9 +426,12 @@ export const historyApi = {
   getWorkoutProgress: (sessionId: string) => api.get<WorkoutProgressResponse>(`/sessions/${encodeURIComponent(sessionId)}/workout-progress`),
   confirmPerformanceRecords: (sessionId: string, body: ConfirmPerformanceRecordsRequest) => api.put<WorkoutProgressResponse>(`/sessions/${encodeURIComponent(sessionId)}/performance-records`, body),
   getPerformanceBenchmarks: (profileId: number, movement: string) => api.get<PerformanceBenchmarksResponse>(`/performance-benchmarks?${new URLSearchParams({ profile_id: String(profileId), movement })}`),
-  list: (profileId: number, beforeId?: number, limit?: number) => {
+  archive: (id: number) => api.post<{ message: string }>(`/history/${id}/archive`),
+  unarchive: (id: number) => api.post<{ message: string }>(`/history/${id}/unarchive`),
+  list: (profileId: number, beforeId?: number, limit?: number, archived = false) => {
     const params = new URLSearchParams();
     params.append("profile_id", String(profileId));
+    if (archived) params.append("archived", "true");
     if (beforeId !== undefined) {
       params.append("before_id", String(beforeId));
     }

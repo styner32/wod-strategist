@@ -276,7 +276,9 @@ JSON만 반환: {"text":{"ko":"...","en":"..."},"current_chunk_id":현재ID,"sou
 	reply.Sources = sources
 	encoded, _ := json.Marshal(reply)
 	// Only update the optional coaching field; evidence and basic output are immutable here.
-	if err := w.DB.WithContext(ctx).Model(&db.ChunkAnalysisResult{}).Where("id = ? AND profile_id = ? AND session_id = ? AND output = ? AND contextual_coaching IS NULL", current.ID, current.ProfileID, current.SessionID, current.Output).Update("contextual_coaching", db.JSONDocument(encoded)).Error; err != nil {
+	if err := w.withSessionPublication(ctx, current.ProfileID, current.SessionID, func(tx *gorm.DB) error {
+		return tx.Model(&db.ChunkAnalysisResult{}).Where("id = ? AND profile_id = ? AND session_id = ? AND output = ? AND contextual_coaching IS NULL", current.ID, current.ProfileID, current.SessionID, current.Output).Update("contextual_coaching", db.JSONDocument(encoded)).Error
+	}); err != nil {
 		w.logger.Warn("optional coaching not saved", zap.Error(err))
 	}
 }
@@ -307,7 +309,7 @@ func (w *Worker) refreshLiveActivity(ctx context.Context, p VideoAnalysisPayload
 	}
 	session := db.Session{SessionID: result.SessionID, ProfileID: result.ProfileID, IdempotencyKey: "live:" + result.SessionID, Status: db.SessionStatusStarted, WorkoutType: p.WorkoutType, WODDescription: p.WODDescription, MovementHints: db.JSONDocument(hints)}
 	reviewNeeded := false
-	err := w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "session_id"}}, DoNothing: true}).Create(&session).Error; err != nil {
 			return err
 		}

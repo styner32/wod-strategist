@@ -86,7 +86,7 @@ export function useHighlightResults(sessionId: string, profileId: number, enable
         const completed = values.filter(r => r.status === "COMPLETED");
         hasCompleted = completed.length > 0;
         if (hasCompleted) setResults({ sessionId, profileId, values: completed });
-        if (values.length > 0 && values.every(r => r.status === "COMPLETED" || r.status === "FAILED")) {
+        if (values.length > 0 && values.every(r => r.status === "COMPLETED" || r.status === "FAILED" || r.status === "CANCELLED")) {
           finish();
           if (!hasCompleted && values.some(r => r.status === "FAILED")) {
             Alert.alert(t("historyList.generationFailed"), t("historyList.generationFailedDesc"));

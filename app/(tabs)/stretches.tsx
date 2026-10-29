@@ -11,53 +11,79 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { router, useFocusEffect } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 
-import { t } from "@/features/i18n";
+import { TacticalTheme } from "@/constants/theme";
+import { t, useLocale } from "@/features/i18n";
 import { useProfileId } from "@/store/useProfileStore";
-import { fetchRecommendedStretches, RecommendedStretch } from "@/features/stretch/api";
+import {
+  fetchRecommendedStretches,
+  RecommendedStretch,
+} from "@/features/stretch/api";
+
+const T = TacticalTheme.light;
 
 export default function StretchesScreen() {
+  useLocale();
   const profileId = useProfileId();
   const [stretches, setStretches] = useState<RecommendedStretch[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const loadData = useCallback(async (isPullToRefresh = false) => {
-    if (!profileId) {
-      setStretches([]);
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
+  const loadData = useCallback(
+    async (isPullToRefresh = false) => {
+      if (!profileId) {
+        setStretches([]);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
 
-    if (isPullToRefresh) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
-    setError(null);
+      if (isPullToRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+      setError(null);
 
-    try {
-      const data = await fetchRecommendedStretches(profileId);
-      setStretches(data);
-    } catch (e: any) {
-      setError(e?.message || t("stretches.loadFailed"));
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, [profileId]);
+      try {
+        const data = await fetchRecommendedStretches(profileId);
+        setStretches(data);
+      } catch (e: any) {
+        setError(e?.message || t("stretches.loadFailed"));
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [profileId],
+  );
 
   useFocusEffect(
     useCallback(() => {
       loadData(false);
-    }, [loadData])
+    }, [loadData]),
   );
 
   const onRefresh = useCallback(() => {
     loadData(true);
   }, [loadData]);
+
+  const renderHeader = () => (
+    <View style={styles.topBar}>
+      <View style={styles.eyebrowRow}>
+        <View style={styles.eyebrowDot} />
+        <Text style={styles.eyebrowText}>{t("stretches.eyebrow")}</Text>
+      </View>
+      <View style={styles.titleRow}>
+        <Text style={styles.title} numberOfLines={1}>
+          {t("tabs.stretches")}
+        </Text>
+        <View style={styles.voltDot} />
+      </View>
+    </View>
+  );
 
   const renderItem = ({ item }: { item: RecommendedStretch }) => {
     const mostRecentReason = item.sessions?.[0]?.reason || "";
@@ -66,7 +92,7 @@ export default function StretchesScreen() {
     return (
       <TouchableOpacity
         style={styles.card}
-        activeOpacity={0.7}
+        activeOpacity={0.75}
         onPress={() =>
           router.push({
             pathname: "/stretch/[key]" as any,
@@ -97,6 +123,7 @@ export default function StretchesScreen() {
             <Text style={styles.stretchName} numberOfLines={1}>
               {item.name}
             </Text>
+            <Text style={styles.chevron}>›</Text>
           </View>
 
           <View style={styles.badgeRow}>
@@ -124,29 +151,41 @@ export default function StretchesScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["left", "right", "bottom"]}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+      <StatusBar style="dark" />
       {loading && !refreshing ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#64D2FF" />
+        <View style={styles.listContent}>
+          {renderHeader()}
+          <View style={styles.centerContainer}>
+            <ActivityIndicator size="large" color={T.electricBlue} />
+          </View>
         </View>
       ) : error ? (
-        <View style={styles.centerContainer}>
-          <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={() => loadData(false)}>
-            <Text style={styles.retryButtonText}>{t("common.ok")}</Text>
-          </TouchableOpacity>
+        <View style={styles.listContent}>
+          {renderHeader()}
+          <View style={styles.centerContainer}>
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={() => loadData(false)}
+            >
+              <Text style={styles.retryButtonText}>{t("common.ok")}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       ) : (
         <FlatList
           data={stretches}
           keyExtractor={(item) => item.normalized_key}
           renderItem={renderItem}
+          ListHeaderComponent={renderHeader}
           contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#64D2FF"
+              tintColor={T.electricBlue}
             />
           }
           ListEmptyComponent={
@@ -165,33 +204,85 @@ export default function StretchesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#3A3A3C",
+    backgroundColor: T.canvas,
+  },
+  topBar: {
+    marginBottom: 8,
+    gap: 2,
+  },
+  eyebrowRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 2,
+  },
+  eyebrowDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: T.electricBlue,
+  },
+  eyebrowText: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.1,
+    color: T.electricBlue,
+    textTransform: "uppercase",
+    flexShrink: 1,
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: "900",
+    letterSpacing: -0.6,
+    color: T.ink,
+    flexShrink: 1,
+  },
+  voltDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
   },
   centerContainer: {
-    flex: 1,
+    paddingVertical: 64,
     justifyContent: "center",
     alignItems: "center",
-    padding: 24,
+    paddingHorizontal: 24,
   },
   listContent: {
-    padding: 16,
-    paddingBottom: 40,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 112,
     gap: 12,
   },
   card: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 14,
+    backgroundColor: T.surface,
+    borderRadius: 16,
     padding: 12,
     flexDirection: "row",
     gap: 12,
     borderWidth: 1,
-    borderColor: "#2C2C2E",
+    borderColor: T.border,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   thumbnailContainer: {
     width: 80,
     height: 80,
-    borderRadius: 10,
+    borderRadius: 12,
     overflow: "hidden",
+    borderWidth: 1,
+    borderColor: T.border,
   },
   thumbnail: {
     width: "100%",
@@ -200,7 +291,7 @@ const styles = StyleSheet.create({
   placeholderThumbnail: {
     width: "100%",
     height: "100%",
-    backgroundColor: "#2C2C2E",
+    backgroundColor: T.surfaceMuted,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -216,12 +307,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 6,
+    gap: 8,
   },
   stretchName: {
     fontSize: 16,
-    fontWeight: "700",
-    color: "#FFFFFF",
+    fontWeight: "800",
+    color: T.ink,
     flex: 1,
+    flexShrink: 1,
+  },
+  chevron: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: T.inkMuted,
   },
   badgeRow: {
     flexDirection: "row",
@@ -230,69 +328,81 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   targetBadge: {
-    backgroundColor: "rgba(255, 214, 10, 0.15)",
-    paddingHorizontal: 6,
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
+    paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 6,
   },
   targetBadgeText: {
-    color: "#FFD60A",
+    color: T.voltInk,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "800",
   },
   sessionBadge: {
-    backgroundColor: "rgba(100, 210, 255, 0.15)",
-    paddingHorizontal: 6,
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
+    paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 6,
   },
   sessionBadgeText: {
-    color: "#64D2FF",
+    color: T.electricBlue,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   reasonText: {
-    color: "#8E8E93",
+    color: T.inkSecondary,
     fontSize: 12,
-    lineHeight: 16,
+    lineHeight: 17,
   },
   emptyContainer: {
-    paddingVertical: 60,
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+    backgroundColor: T.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: T.border,
     alignItems: "center",
     justifyContent: "center",
-    gap: 10,
+    gap: 8,
+    marginTop: 8,
   },
   emptyIcon: {
-    fontSize: 48,
-    marginBottom: 8,
+    fontSize: 44,
+    marginBottom: 4,
   },
   emptyTitle: {
     fontSize: 17,
-    fontWeight: "700",
-    color: "#FFFFFF",
+    fontWeight: "800",
+    color: T.ink,
   },
   emptySubtitle: {
     fontSize: 13,
-    color: "#8E8E93",
+    color: T.inkMuted,
     textAlign: "center",
-    paddingHorizontal: 32,
-    lineHeight: 18,
+    lineHeight: 19,
   },
   errorText: {
-    color: "#FF453A",
+    color: T.statusExhausted,
+    fontWeight: "600",
     fontSize: 14,
     textAlign: "center",
     marginBottom: 16,
   },
   retryButton: {
-    backgroundColor: "#64D2FF",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+    borderRadius: 10,
   },
   retryButtonText: {
-    color: "#000",
-    fontWeight: "700",
+    color: T.voltInk,
+    fontWeight: "800",
     fontSize: 14,
   },
 });

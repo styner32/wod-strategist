@@ -10,12 +10,19 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import { useVideoPlayer, VideoView } from "expo-video";
 
-import { t } from "@/features/i18n";
+import { TacticalTheme } from "@/constants/theme";
+import { t, useLocale } from "@/features/i18n";
 import { useProfileId } from "@/store/useProfileStore";
-import { fetchRecommendedStretch, RecommendedStretch } from "@/features/stretch/api";
+import {
+  fetchRecommendedStretch,
+  RecommendedStretch,
+} from "@/features/stretch/api";
 import { formatSessionLabel } from "@/features/wod/sessionLabel";
+
+const T = TacticalTheme.light;
 
 function StretchVideoSection({ videoUrl }: { videoUrl: string }) {
   const player = useVideoPlayer(videoUrl, (p) => {
@@ -37,6 +44,7 @@ function StretchVideoSection({ videoUrl }: { videoUrl: string }) {
 }
 
 export default function StretchDetailScreen() {
+  useLocale();
   const router = useRouter();
   const { key, name } = useLocalSearchParams<{ key: string; name?: string }>();
   const profileId = useProfileId();
@@ -84,21 +92,28 @@ export default function StretchDetailScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["left", "right", "bottom"]}>
+      <StatusBar style="dark" />
       <Stack.Screen options={{ title: displayName }} />
 
       {loading ? (
         <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#64D2FF" />
+          <ActivityIndicator size="large" color={T.electricBlue} />
         </View>
       ) : error || !stretch ? (
         <View style={styles.centerContainer}>
           <Text style={styles.errorText}>{error || t("stretches.notFound")}</Text>
-          <TouchableOpacity style={styles.retryButton} onPress={() => router.back()}>
+          <TouchableOpacity
+            style={styles.retryButton}
+            onPress={() => router.back()}
+          >
             <Text style={styles.retryButtonText}>{t("common.back")}</Text>
           </TouchableOpacity>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
           {/* Hero image */}
           {stretch.image_url ? (
             <View style={styles.heroImageContainer}>
@@ -171,7 +186,7 @@ export default function StretchDetailScreen() {
                   <TouchableOpacity
                     key={`${sess.session_id}-${idx}`}
                     style={styles.sessionItem}
-                    activeOpacity={0.7}
+                    activeOpacity={0.75}
                     onPress={() =>
                       router.navigate({
                         pathname: "/(tabs)/history" as any,
@@ -201,7 +216,9 @@ export default function StretchDetailScreen() {
                     ) : null}
 
                     {sess.duration_hint ? (
-                      <Text style={styles.sessionHint}>⏱️ {sess.duration_hint}</Text>
+                      <Text style={styles.sessionHint}>
+                        ⏱️ {sess.duration_hint}
+                      </Text>
                     ) : null}
 
                     <View style={styles.sessionFooter}>
@@ -223,7 +240,7 @@ export default function StretchDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#3A3A3C",
+    backgroundColor: T.canvas,
   },
   centerContainer: {
     flex: 1,
@@ -232,32 +249,36 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   scrollContent: {
-    padding: 16,
+    paddingHorizontal: 18,
+    paddingTop: 12,
     paddingBottom: 40,
     gap: 14,
   },
   heroImageContainer: {
     width: "100%",
     height: 220,
-    borderRadius: 14,
+    borderRadius: 16,
     overflow: "hidden",
-    backgroundColor: "#1C1C1E",
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.border,
   },
   heroImage: {
     width: "100%",
     height: "100%",
   },
   headerCard: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 14,
+    backgroundColor: T.surface,
+    borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#2C2C2E",
+    borderColor: T.border,
   },
   stretchTitle: {
     fontSize: 22,
-    fontWeight: "700",
-    color: "#FFFFFF",
+    fontWeight: "900",
+    letterSpacing: -0.4,
+    color: T.ink,
     marginBottom: 8,
   },
   badgeRow: {
@@ -267,129 +288,143 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   targetBadge: {
-    backgroundColor: "rgba(255, 214, 10, 0.15)",
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
   targetBadgeText: {
-    color: "#FFD60A",
+    color: T.voltInk,
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "800",
   },
   sessionBadge: {
-    backgroundColor: "rgba(100, 210, 255, 0.15)",
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
   sessionBadgeText: {
-    color: "#64D2FF",
+    color: T.electricBlue,
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   descriptionText: {
-    color: "#E5E5EA",
+    color: T.inkSecondary,
     fontSize: 14,
-    lineHeight: 20,
+    lineHeight: 21,
     marginBottom: 8,
   },
   hintRow: {
     marginTop: 6,
   },
   hintText: {
-    color: "#8E8E93",
+    color: T.inkMuted,
     fontSize: 12,
+    fontWeight: "600",
   },
   cautionRow: {
     marginTop: 4,
   },
   cautionText: {
-    color: "#FF453A",
+    color: T.statusExhausted,
     fontSize: 12,
+    fontWeight: "600",
   },
   videoCard: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 14,
+    backgroundColor: T.surface,
+    borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#2C2C2E",
+    borderColor: T.border,
     gap: 10,
   },
   videoPlayer: {
     width: "100%",
     aspectRatio: 16 / 9,
-    borderRadius: 10,
+    borderRadius: 12,
     backgroundColor: "#000",
   },
   sessionsCard: {
-    backgroundColor: "#1C1C1E",
-    borderRadius: 14,
+    backgroundColor: T.surface,
+    borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#2C2C2E",
+    borderColor: T.border,
   },
   sectionTitle: {
     fontSize: 16,
-    fontWeight: "700",
-    color: "#FFFFFF",
+    fontWeight: "800",
+    color: T.ink,
     marginBottom: 12,
   },
   sessionList: {
     gap: 10,
   },
   sessionItem: {
-    backgroundColor: "#2C2C2E",
-    borderRadius: 10,
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 12,
     padding: 12,
     borderWidth: 1,
-    borderColor: "#3A3A3C",
+    borderColor: T.border,
   },
   sessionHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 6,
+    gap: 8,
   },
   sessionLabelContainer: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
     gap: 8,
+    flex: 1,
   },
   sessionLabelBadge: {
-    backgroundColor: "rgba(100, 210, 255, 0.15)",
-    paddingHorizontal: 6,
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
+    paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 6,
   },
   sessionLabelText: {
-    color: "#64D2FF",
+    color: T.electricBlue,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  sessionDateText: {
+    color: T.inkMuted,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  provisionalBadge: {
+    backgroundColor: T.statusWarningBg,
+    borderWidth: 1,
+    borderColor: T.statusWarningBorder,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  provisionalText: {
+    color: T.statusWarning,
     fontSize: 11,
     fontWeight: "700",
   },
-  sessionDateText: {
-    color: "#8E8E93",
-    fontSize: 12,
-  },
-  provisionalBadge: {
-    backgroundColor: "rgba(255, 159, 10, 0.2)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  provisionalText: {
-    color: "#FF9F0A",
-    fontSize: 11,
-    fontWeight: "600",
-  },
   sessionReason: {
-    color: "#E5E5EA",
+    color: T.inkSecondary,
     fontSize: 13,
     lineHeight: 18,
     marginBottom: 6,
   },
   sessionHint: {
-    color: "#8E8E93",
+    color: T.inkMuted,
     fontSize: 11,
     marginBottom: 6,
   },
@@ -400,25 +435,28 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   viewSessionLink: {
-    color: "#64D2FF",
+    color: T.electricBlue,
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "800",
   },
   errorText: {
-    color: "#FF453A",
+    color: T.statusExhausted,
+    fontWeight: "600",
     fontSize: 14,
     textAlign: "center",
     marginBottom: 16,
   },
   retryButton: {
-    backgroundColor: "#64D2FF",
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
     paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
+    paddingVertical: 11,
+    borderRadius: 10,
   },
   retryButtonText: {
-    color: "#000",
-    fontWeight: "700",
+    color: T.voltInk,
+    fontWeight: "800",
     fontSize: 14,
   },
 });

@@ -52,6 +52,10 @@ media offsets; remaining manifest/coverage work must preserve this separation fo
 - Final status write failures return a retryable error, including after the
   analysis retry budget is exhausted. `SkipRetry` follows a successful failure
   write, not a failed DB write.
+- **Hard analysis duration guardrail (`maxAnalysisVideoDuration = 90 * time.Minute` / `5400s`, `api/internal/worker/video_analysis.go`)**:
+  - `HandleMergeChunksTask` still merges chunks, persists `media_start_secs`/`media_end_secs`, and uploads `videos/{profileId}/{sessionId}/merged.mp4` for playback, then when merged duration exceeds `90m` skips `runFFmpegAnalysisEncode` (`analysis.mp4`), marks opted-in `activity_summary` `ReviewState = "partial"` via `skipOverlongActivityReview` without enqueueing `activity:review`, skips `NewVideoAnalysisTask`, and writes a terminal `FAILED` `AnalysisResult` (`AvailableVideos: {"merged"}`, `Output: videoTooLongUserMessage`).
+  - `HandleVideoAnalysisTask` (`handleVideoAnalysisTwoPass` and `handleVideoAnalysisLegacy`) ensures `merged.mp4` playback availability first, then rejects `probeVideoDuration > 5400s` before FFmpeg re-encode or Gemini upload (plus a post-`UploadVideo` fallback check on `upload.VideoDuration > 90m` that deletes the uploaded Gemini file before Pass 1/2), returning `asynq.SkipRetry` only after `persistVideoAnalysisFailed` succeeds.
+  - `HandleActivityReviewTask` enforces `duration > 5400s` as defense-in-depth (e.g., late chunks), marking unreviewed batches failed and persisting `ReviewState = "partial"` without Gemini calls or retries.
 - The production worker wires a real `QueueInspector` to Redis DB 5. Missing
   chunk results trigger inspection of the default queue's archived, pending,
   scheduled, retry, and active tasks. Live matching tasks keep merge waiting,

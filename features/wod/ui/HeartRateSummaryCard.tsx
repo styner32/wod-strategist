@@ -1,9 +1,12 @@
 import React, { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { TacticalTheme } from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
 import {
   HEART_RATE_ZONE_COLORS, hrDecimal, hrNumber, hrPercent, hybridFlagsToShow, type HeartRateSummary,
 } from "@/shared/heartRateSummary";
+
+const T = TacticalTheme.light;
 
 export function HeartRateSummaryCard({ summary }: { summary?: HeartRateSummary }) {
   useLocale();
@@ -144,13 +147,28 @@ export function HeartRateSummaryCard({ summary }: { summary?: HeartRateSummary }
 }
 
 const styles = StyleSheet.create({
-  card: { backgroundColor: "#1C1C1E", borderRadius: 12, padding: 12, marginVertical: 8 },
-  title: { color: "#f4f4f4", fontWeight: "600", fontSize: 13, marginBottom: 4 },
-  text: { color: "#ddd", fontSize: 12, marginVertical: 2 },
-  note: { color: "#9da8b6", fontSize: 11, marginVertical: 2, lineHeight: 15 },
-  warning: { color: "#ffbe72", fontSize: 12, marginVertical: 2 },
+  card: {
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 12,
+    marginVertical: 8,
+  },
+  title: { color: T.ink, fontWeight: "800", fontSize: 13, marginBottom: 4, flexShrink: 1 },
+  text: { color: T.inkSecondary, fontSize: 12, marginVertical: 2, flexShrink: 1 },
+  note: { color: T.inkMuted, fontSize: 11, marginVertical: 2, lineHeight: 15 },
+  warning: { color: T.statusWarning, fontWeight: "600", fontSize: 12, marginVertical: 2 },
   details: { marginTop: 8, gap: 4 },
-  hybridBox: { backgroundColor: "#252529", borderRadius: 8, padding: 10, marginBottom: 6, gap: 2 },
-  row: { flexDirection: "row", justifyContent: "space-between" },
-  bar: { flexDirection: "row", height: 12, borderRadius: 6, overflow: "hidden", backgroundColor: "#444" },
+  hybridBox: {
+    backgroundColor: T.surface,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 10,
+    marginBottom: 6,
+    gap: 2,
+  },
+  row: { flexDirection: "row", justifyContent: "space-between", gap: 8 },
+  bar: { flexDirection: "row", height: 12, borderRadius: 6, overflow: "hidden", backgroundColor: T.surfaceContainer },
 });

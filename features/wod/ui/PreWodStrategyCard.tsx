@@ -1,4 +1,13 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import {
+  animateTacticalLayout,
+  useReduceMotionEnabled,
+} from "@/constants/motion";
+import {
+  Fonts,
+  getTacticalFatigueTone,
+  TacticalTheme,
+} from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
 import React, { useState } from "react";
 import {
@@ -10,24 +19,11 @@ import {
 } from "react-native";
 import type { PreWodAdviceResponse } from "../api";
 
+const T = TacticalTheme.light;
+
 interface PreWodStrategyCardProps {
   advice: PreWodAdviceResponse | null;
   loading?: boolean;
-}
-
-function getReadinessColor(state: string): string {
-  switch (state) {
-    case "fresh":
-      return "#00E676"; // Green
-    case "moderate":
-      return "#00E5FF"; // Cyan
-    case "fatigued":
-      return "#FF9800"; // Orange
-    case "exhausted":
-      return "#FF5252"; // Red
-    default:
-      return "#00E5FF";
-  }
 }
 
 function formatWorkoutDuration(seconds?: number | null): string {
@@ -44,16 +40,16 @@ export function PreWodStrategyCard({
   loading,
 }: PreWodStrategyCardProps) {
   useLocale();
+  const reduceMotion = useReduceMotionEnabled();
   const [musclesExpanded, setMusclesExpanded] = useState(false);
 
   if (loading) {
     return (
       <View style={styles.card}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator color="#00E5FF" size="small" />
+          <ActivityIndicator color={T.electricBlue} size="small" />
           <Text style={styles.loadingText}>
-            {t("preWod.analyzingFatigue") ||
-              "신체 부위별 피로도 및 맞춤 전략 분석 중..."}
+            {t("preWod.analyzingFatigue")}
           </Text>
         </View>
       </View>
@@ -64,23 +60,26 @@ export function PreWodStrategyCard({
     return null;
   }
 
-  const overallColor = getReadinessColor(advice.overall_state);
+  const overallTone = getTacticalFatigueTone(advice.overall_state, "light");
+
+  const handleToggleMuscles = () => {
+    animateTacticalLayout(reduceMotion);
+    setMusclesExpanded((prev) => !prev);
+  };
 
   return (
     <View style={styles.card}>
       {/* Header */}
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
-          <IconSymbol name="flame.fill" size={18} color="#00E5FF" />
-          <Text style={styles.title}>
-            {t("preWod.title") || "오늘의 맞춤 WOD 전략 & 피로도"}
-          </Text>
+          <IconSymbol name="flame.fill" size={18} color={T.statusFatigued} />
+          <Text style={styles.title}>{t("preWod.title")}</Text>
         </View>
         <View style={styles.headerBadges}>
           {advice.evidence_status === "partial" && (
             <View style={styles.partialBadge}>
               <Text style={styles.partialBadgeText}>
-                {t("preWod.partialHistoryBadge") || "일부 기록만 반영됨"}
+                {t("preWod.partialHistoryBadge")}
               </Text>
             </View>
           )}
@@ -88,12 +87,12 @@ export function PreWodStrategyCard({
             style={[
               styles.overallBadge,
               {
-                borderColor: overallColor + "60",
-                backgroundColor: overallColor + "15",
+                borderColor: overallTone.border,
+                backgroundColor: overallTone.bg,
               },
             ]}
           >
-            <Text style={[styles.overallBadgeText, { color: overallColor }]}>
+            <Text style={[styles.overallBadgeText, { color: overallTone.fg }]}>
               {advice.overall_state_ko || advice.overall_state}
               {advice.overall_fatigue_score != null
                 ? ` (${advice.overall_fatigue_score}/100)`
@@ -105,7 +104,12 @@ export function PreWodStrategyCard({
 
       {/* Overall Summary Briefing */}
       {advice.overall_summary ? (
-        <View style={styles.summaryBox}>
+        <View
+          style={[
+            styles.summaryBox,
+            { borderLeftColor: overallTone.bar },
+          ]}
+        >
           <Text style={styles.summaryText}>{advice.overall_summary}</Text>
         </View>
       ) : null}
@@ -120,7 +124,7 @@ export function PreWodStrategyCard({
               </Text>
             </View>
             <Text style={styles.sectionLabel}>
-              {t("preWod.pacingStrategy") || "페이스 운용 전략"}
+              {t("preWod.pacingStrategy")}
             </Text>
           </View>
           {advice.target_rpe.pacing_strategy ? (
@@ -155,7 +159,8 @@ export function PreWodStrategyCard({
                     return (
                       <View key={w.session_id} style={styles.recentWorkoutChip}>
                         <Text style={styles.recentWorkoutText}>
-                          {movText} · {formatWorkoutDuration(w.duration_seconds)}
+                          {movText} ·{" "}
+                          {formatWorkoutDuration(w.duration_seconds)}
                         </Text>
                         <View style={styles.recentBadgesRow}>
                           <View
@@ -175,7 +180,13 @@ export function PreWodStrategyCard({
                                 : t("preWod.effortUnrated")}
                             </Text>
                           </View>
-                          {w.hybrid_sensor != null ? (
+                          {w.hybrid_sensor_excluded_reason ? (
+                            <View style={[styles.effortPill, styles.effortPillMuted]}>
+                              <Text style={[styles.effortPillText, styles.effortPillTextMuted]}>
+                                {t(w.hybrid_sensor_excluded_reason === "calibration_changed" ? "preWod.hybridSensorExcluded" : "preWod.hybridSensorProvenanceUnknown")}
+                              </Text>
+                            </View>
+                          ) : w.hybrid_sensor != null ? (
                             <View style={styles.sensorPill}>
                               <Text style={styles.sensorPillText}>
                                 {t("preWod.hybridSensorBadge", {
@@ -197,34 +208,56 @@ export function PreWodStrategyCard({
         </View>
       ) : null}
 
-      {/* 6-Muscle Group Readiness Bars */}
+      {/* 6-Muscle Group Telemetry Grid (2x3 in compact mode) */}
       {advice.muscle_readiness && advice.muscle_readiness.length > 0 ? (
         <View style={styles.musclesSection}>
           <TouchableOpacity
             style={styles.expandHeader}
-            onPress={() => setMusclesExpanded(!musclesExpanded)}
+            onPress={handleToggleMuscles}
             activeOpacity={0.7}
           >
             <Text style={styles.sectionLabel}>
-              {t("preWod.muscleReadiness") || "신체 6대 부위별 피로도 분석"}
+              {t("preWod.muscleReadiness")}
             </Text>
             <Text style={styles.expandChevron}>
-              {musclesExpanded ? "▲ 접기" : "▼ 상세보기"}
+              {musclesExpanded
+                ? t("preWod.collapseDetails")
+                : t("preWod.expandDetails")}
             </Text>
           </TouchableOpacity>
 
-          {/* Compact Bar Summary (when collapsed) */}
           {!musclesExpanded ? (
             <View style={styles.compactGrid}>
               {advice.muscle_readiness.map((m) => {
-                const color = getReadinessColor(m.state);
+                const tone = getTacticalFatigueTone(m.state, "light");
+                const isHighStrain =
+                  m.fatigue_score >= 75 ||
+                  m.state === "exhausted" ||
+                  m.state === "fatigued";
                 return (
-                  <View key={m.group} style={styles.compactItem}>
+                  <View
+                    key={m.group}
+                    style={[
+                      styles.compactItem,
+                      isHighStrain && {
+                        backgroundColor: tone.bg,
+                        borderColor: tone.border,
+                      },
+                    ]}
+                  >
                     <View style={styles.compactItemHeader}>
-                      <Text style={styles.compactName} numberOfLines={1}>
+                      <Text
+                        style={[
+                          styles.compactName,
+                          isHighStrain && { color: tone.fg },
+                        ]}
+                        numberOfLines={1}
+                      >
                         {m.name_ko}
                       </Text>
-                      <Text style={[styles.compactPercent, { color }]}>
+                      <Text
+                        style={[styles.compactPercent, { color: tone.fg }]}
+                      >
                         {m.fatigue_score}/100
                       </Text>
                     </View>
@@ -234,7 +267,7 @@ export function PreWodStrategyCard({
                           styles.progressBarFill,
                           {
                             width: `${Math.min(100, Math.max(5, m.fatigue_score))}%`,
-                            backgroundColor: color,
+                            backgroundColor: tone.bar,
                           },
                         ]}
                       />
@@ -244,10 +277,9 @@ export function PreWodStrategyCard({
               })}
             </View>
           ) : (
-            /* Detailed Cards (when expanded) */
             <View style={styles.detailedList}>
               {advice.muscle_readiness.map((m) => {
-                const color = getReadinessColor(m.state);
+                const tone = getTacticalFatigueTone(m.state, "light");
                 return (
                   <View key={m.group} style={styles.detailedItem}>
                     <View style={styles.detailedHeader}>
@@ -255,10 +287,15 @@ export function PreWodStrategyCard({
                       <View
                         style={[
                           styles.stateTag,
-                          { backgroundColor: color + "20" },
+                          {
+                            backgroundColor: tone.bg,
+                            borderColor: tone.border,
+                          },
                         ]}
                       >
-                        <Text style={[styles.stateTagText, { color }]}>
+                        <Text
+                          style={[styles.stateTagText, { color: tone.fg }]}
+                        >
                           {m.state_ko || m.state} ({m.fatigue_score}/100)
                         </Text>
                       </View>
@@ -269,7 +306,7 @@ export function PreWodStrategyCard({
                           styles.progressBarFill,
                           {
                             width: `${Math.min(100, Math.max(5, m.fatigue_score))}%`,
-                            backgroundColor: color,
+                            backgroundColor: tone.bar,
                           },
                         ]}
                       />
@@ -288,9 +325,7 @@ export function PreWodStrategyCard({
       {/* Scaling & Movement Modification Advice */}
       {advice.scaling_advice && advice.scaling_advice.length > 0 ? (
         <View style={styles.scalingSection}>
-          <Text style={styles.sectionLabel}>
-            {t("preWod.scalingAdvice") || "스케일링 및 동작 조절 권장"}
-          </Text>
+          <Text style={styles.sectionLabel}>{t("preWod.scalingAdvice")}</Text>
           {advice.scaling_advice.map((item, idx) => (
             <View key={idx} style={styles.scalingCard}>
               <View style={styles.scalingHeader}>
@@ -311,8 +346,7 @@ export function PreWodStrategyCard({
       {advice.mobility_warmup && advice.mobility_warmup.length > 0 ? (
         <View style={styles.mobilitySection}>
           <Text style={styles.sectionLabel}>
-            {t("preWod.recommendedMobility") ||
-              "프리-WOD 필수 모빌리티 / 워밍업"}
+            {t("preWod.recommendedMobility")}
           </Text>
           {advice.mobility_warmup.map((item, idx) => (
             <View key={idx} style={styles.mobilityCard}>
@@ -326,7 +360,7 @@ export function PreWodStrategyCard({
               </View>
               {item.target_area ? (
                 <Text style={styles.mobilityTarget}>
-                  타겟: {item.target_area}
+                  {t("preWod.mobilityTarget", { area: item.target_area })}
                 </Text>
               ) : null}
               {item.reason ? (
@@ -342,12 +376,17 @@ export function PreWodStrategyCard({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#141A22",
-    borderRadius: 14,
+    backgroundColor: T.surface,
+    borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#1E2630",
-    marginTop: 16,
+    borderColor: T.border,
+    marginTop: 14,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   loadingContainer: {
     flexDirection: "row",
@@ -357,8 +396,10 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   loadingText: {
-    color: "#8E9BAE",
+    color: T.inkMuted,
     fontSize: 13,
+    fontWeight: "600",
+    flexShrink: 1,
   },
   headerRow: {
     flexDirection: "row",
@@ -375,10 +416,11 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   title: {
-    color: "#00E5FF",
+    color: T.ink,
     fontSize: 15,
-    fontWeight: "700",
-    letterSpacing: 0.3,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+    textTransform: "uppercase",
     flexShrink: 1,
   },
   headerBadges: {
@@ -388,17 +430,18 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   partialBadge: {
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: "rgba(255, 152, 0, 0.4)",
-    backgroundColor: "rgba(255, 152, 0, 0.15)",
+    borderColor: T.statusWarningBorder,
+    backgroundColor: T.statusWarningBg,
   },
   partialBadgeText: {
-    color: "#FF9800",
+    fontFamily: Fonts?.mono,
+    color: T.statusWarning,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   overallBadge: {
     paddingHorizontal: 8,
@@ -407,30 +450,33 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   overallBadgeText: {
-    fontSize: 12,
-    fontWeight: "700",
+    fontFamily: Fonts?.mono,
+    fontSize: 11,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
   },
   summaryBox: {
-    backgroundColor: "#0D131A",
+    backgroundColor: T.surfaceMuted,
     borderRadius: 10,
     padding: 12,
+    borderWidth: 1,
+    borderColor: T.border,
     borderLeftWidth: 3,
-    borderLeftColor: "#00E5FF",
     marginBottom: 14,
   },
   summaryText: {
-    color: "#E2E8F0",
+    color: T.ink,
     fontSize: 13,
     lineHeight: 19,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   rpeSection: {
-    backgroundColor: "#1A222D",
-    borderRadius: 10,
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 12,
     padding: 12,
     marginBottom: 14,
     borderWidth: 1,
-    borderColor: "#243040",
+    borderColor: T.border,
   },
   rpeHeader: {
     flexDirection: "row",
@@ -439,25 +485,28 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   rpeBadge: {
-    backgroundColor: "#FF9800",
+    backgroundColor: T.surfaceInverse,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
   rpeBadgeText: {
-    color: "#000",
+    fontFamily: Fonts?.mono,
+    color: T.volt,
     fontSize: 11,
     fontWeight: "800",
   },
   sectionLabel: {
-    color: "#8E9BAE",
-    fontSize: 12,
-    fontWeight: "700",
+    fontFamily: Fonts?.mono,
+    color: T.inkMuted,
+    fontSize: 11,
+    fontWeight: "800",
     textTransform: "uppercase",
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
+    flexShrink: 1,
   },
   pacingText: {
-    color: "#CBD5E1",
+    color: T.inkSecondary,
     fontSize: 13,
     lineHeight: 18,
   },
@@ -465,22 +514,23 @@ const styles = StyleSheet.create({
     marginTop: 10,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: "#283546",
+    borderTopColor: T.border,
     gap: 6,
   },
   reflectionTitle: {
-    color: "#00E5FF",
+    fontFamily: Fonts?.mono,
+    color: T.electricBlue,
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "800",
     letterSpacing: 0.3,
   },
   reflectionReason: {
-    color: "#E2E8F0",
+    color: T.ink,
     fontSize: 12,
     lineHeight: 17,
   },
   reflectionHint: {
-    color: "#94A3B8",
+    color: T.inkMuted,
     fontSize: 11,
     lineHeight: 16,
   },
@@ -489,18 +539,18 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   recentWorkoutChip: {
-    backgroundColor: "#121922",
+    backgroundColor: T.surface,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderWidth: 1,
-    borderColor: "#243040",
+    borderColor: T.border,
     gap: 4,
   },
   recentWorkoutText: {
-    color: "#CBD5E1",
+    color: T.inkSecondary,
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   recentBadgesRow: {
     flexDirection: "row",
@@ -508,33 +558,40 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   effortPill: {
-    backgroundColor: "rgba(255, 152, 0, 0.18)",
+    backgroundColor: T.statusWarningBg,
+    borderWidth: 1,
+    borderColor: T.statusWarningBorder,
     borderRadius: 4,
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
   effortPillMuted: {
-    backgroundColor: "rgba(148, 163, 184, 0.14)",
+    backgroundColor: T.surfaceMuted,
+    borderColor: T.border,
   },
   effortPillText: {
-    color: "#FFB74D",
-    fontSize: 11,
-    fontWeight: "700",
+    fontFamily: Fonts?.mono,
+    color: T.statusWarning,
+    fontSize: 10,
+    fontWeight: "800",
   },
   effortPillTextMuted: {
-    color: "#94A3B8",
+    color: T.inkMuted,
     fontWeight: "600",
   },
   sensorPill: {
-    backgroundColor: "rgba(0, 229, 255, 0.15)",
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
     borderRadius: 4,
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
   sensorPillText: {
-    color: "#00E5FF",
-    fontSize: 11,
-    fontWeight: "700",
+    fontFamily: Fonts?.mono,
+    color: T.electricBlue,
+    fontSize: 10,
+    fontWeight: "800",
   },
   musclesSection: {
     marginBottom: 14,
@@ -544,11 +601,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 8,
+    gap: 8,
   },
   expandChevron: {
-    color: "#00E5FF",
+    fontFamily: Fonts?.mono,
+    color: T.electricBlue,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "800",
   },
   compactGrid: {
     flexDirection: "row",
@@ -557,67 +616,77 @@ const styles = StyleSheet.create({
   },
   compactItem: {
     width: "48%",
-    backgroundColor: "#1A222D",
-    padding: 8,
-    borderRadius: 8,
+    backgroundColor: T.surfaceMuted,
+    padding: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: T.border,
   },
   compactItemHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 4,
+    marginBottom: 6,
+    gap: 4,
   },
   compactName: {
-    color: "#CBD5E1",
-    fontSize: 11,
-    fontWeight: "600",
-    flex: 1,
-    marginRight: 4,
-  },
-  compactPercent: {
+    color: T.inkSecondary,
     fontSize: 11,
     fontWeight: "700",
+    flex: 1,
+  },
+  compactPercent: {
+    fontFamily: Fonts?.mono,
+    fontSize: 11,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
   },
   progressBarBg: {
-    height: 4,
-    backgroundColor: "#2D3748",
-    borderRadius: 2,
+    height: 6,
+    backgroundColor: T.surfaceContainer,
+    borderRadius: 3,
     overflow: "hidden",
   },
   progressBarFill: {
     height: "100%",
-    borderRadius: 2,
+    borderRadius: 3,
   },
   detailedList: {
     gap: 8,
   },
   detailedItem: {
-    backgroundColor: "#1A222D",
+    backgroundColor: T.surfaceMuted,
     padding: 10,
-    borderRadius: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: T.border,
   },
   detailedHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 6,
+    gap: 8,
   },
   detailedName: {
-    color: "#FFF",
+    color: T.ink,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
+    flexShrink: 1,
   },
   stateTag: {
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
+    borderWidth: 1,
   },
   stateTagText: {
+    fontFamily: Fonts?.mono,
     fontSize: 10,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   muscleNote: {
-    color: "#94A3B8",
+    color: T.inkSecondary,
     fontSize: 11,
     marginTop: 6,
     lineHeight: 15,
@@ -627,81 +696,92 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   scalingCard: {
-    backgroundColor: "#1A222D",
-    borderRadius: 8,
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 10,
     padding: 10,
+    borderWidth: 1,
+    borderColor: T.border,
     borderLeftWidth: 3,
-    borderLeftColor: "#FF9800",
+    borderLeftColor: T.statusFatigued,
   },
   scalingHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 4,
+    gap: 8,
   },
   scalingMovement: {
-    color: "#FFF",
+    color: T.ink,
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "800",
+    flexShrink: 1,
   },
   scalingBadge: {
-    backgroundColor: "#FF980025",
+    backgroundColor: T.statusFatiguedBg,
+    borderWidth: 1,
+    borderColor: T.statusFatiguedBorder,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
   },
   scalingBadgeText: {
-    color: "#FF9800",
+    color: T.statusFatigued,
     fontSize: 10,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   scalingDetail: {
-    color: "#CBD5E1",
+    color: T.inkSecondary,
     fontSize: 12,
-    lineHeight: 16,
+    lineHeight: 17,
   },
   mobilitySection: {
     gap: 8,
   },
   mobilityCard: {
-    backgroundColor: "#1A222D",
-    borderRadius: 8,
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 10,
     padding: 10,
+    borderWidth: 1,
+    borderColor: T.border,
     borderLeftWidth: 3,
-    borderLeftColor: "#00E676",
+    borderLeftColor: T.statusFresh,
   },
   mobilityHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 2,
+    gap: 6,
   },
   mobilityTitle: {
-    color: "#FFF",
+    color: T.ink,
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "800",
     flex: 1,
   },
   durationBadge: {
-    backgroundColor: "#00E67620",
+    backgroundColor: T.statusFreshBg,
+    borderWidth: 1,
+    borderColor: T.statusFreshBorder,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
-    marginLeft: 6,
   },
   durationText: {
-    color: "#00E676",
+    fontFamily: Fonts?.mono,
+    color: T.statusFresh,
     fontSize: 10,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   mobilityTarget: {
-    color: "#00E5FF",
+    color: T.electricBlue,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "700",
     marginTop: 2,
   },
   mobilityReason: {
-    color: "#94A3B8",
+    color: T.inkSecondary,
     fontSize: 12,
     lineHeight: 16,
     marginTop: 4,

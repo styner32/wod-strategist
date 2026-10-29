@@ -110,14 +110,27 @@ describe("Home Dashboard", () => {
     expect(StyleSheet.flatten(startCta.props.style)).toEqual(
       expect.objectContaining({
         flexDirection: "row",
-        backgroundColor: "#091E28",
-        borderColor: "#00E5FF",
+        backgroundColor: "#D4FF00",
+        borderColor: "#A3E635",
       }),
     );
     expect(getByText("home.startWorkout")).toBeTruthy();
+    expect(getByText("home.launchAction")).toBeTruthy();
 
     fireEvent.press(startCta);
     expect(mockRouterPush).toHaveBeenCalledWith("/workout/setup");
+
+    fireEvent.press(getByTestId("home-quick-scan-btn"));
+    expect(mockRouterPush).toHaveBeenCalledWith({
+      pathname: "/workout/setup",
+      params: { mode: "photo" },
+    });
+
+    fireEvent.press(getByTestId("home-quick-text-btn"));
+    expect(mockRouterPush).toHaveBeenCalledWith({
+      pathname: "/workout/setup",
+      params: { mode: "text" },
+    });
 
     // Removed dev/duplicate items must not appear
     expect(queryByText("home.subtitle")).toBeNull();

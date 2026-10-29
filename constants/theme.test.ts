@@ -1,4 +1,4 @@
-import { Colors } from "./theme";
+import { Colors, getTacticalFatigueTone, TacticalTheme } from "./theme";
 
 describe("Theme Colors", () => {
   it("should define a light color scheme", () => {
@@ -29,5 +29,33 @@ describe("Theme Colors", () => {
 
   it("should match the expected color snapshot", () => {
     expect(Colors).toMatchSnapshot();
+  });
+});
+
+describe("TacticalTheme & getTacticalFatigueTone", () => {
+  it("defines matching semantic keys across light and dark modes", () => {
+    const lightKeys = Object.keys(TacticalTheme.light).sort();
+    const darkKeys = Object.keys(TacticalTheme.dark).sort();
+    expect(lightKeys).toEqual(darkKeys);
+    expect(TacticalTheme.light.canvas).toBe("#F1F4F9");
+    expect(TacticalTheme.light.volt).toBe("#D4FF00");
+  });
+
+  it("maps fatigue scores and state strings to semantic tones", () => {
+    expect(getTacticalFatigueTone(15, "light").fg).toBe(
+      TacticalTheme.light.statusFresh,
+    );
+    expect(getTacticalFatigueTone(40, "light").fg).toBe(
+      TacticalTheme.light.statusModerate,
+    );
+    expect(getTacticalFatigueTone(68, "light").fg).toBe(
+      TacticalTheme.light.statusFatigued,
+    );
+    expect(getTacticalFatigueTone(90, "light").fg).toBe(
+      TacticalTheme.light.statusExhausted,
+    );
+    expect(getTacticalFatigueTone("exhausted", "dark").fg).toBe(
+      TacticalTheme.dark.statusExhausted,
+    );
   });
 });

@@ -1,4 +1,7 @@
 import { SessionReviewWorkspace } from "./components/SessionReviewWorkspace";
+import { ArchivedSessionContent } from "./components/ArchivedSessionContent";
+import { HistoryArchiveAction } from "./components/HistoryArchiveAction";
+import { historyLocation, historyStatusLabel } from "./historyArchive";
 import { WODTrainingPanel } from "./components/WODTrainingPanel";
 import { WorkoutProgressPanel } from "./components/WorkoutProgressPanel";
 import { AnalysisOverview } from "./components/AnalysisOverview";
@@ -223,6 +226,7 @@ export function SessionDetailPage() {
   );
 
   const analysis = sessionAnalysis?.analysis ?? analyses?.[0];
+  const isArchived = Boolean(analysis?.archived_at);
   const wodDescription =
     analysis?.wod_description?.trim() ||
     sessionAnalysis?.wod_description?.trim() ||
@@ -239,10 +243,10 @@ export function SessionDetailPage() {
   }, []);
   const analysisStatusUpper = analysis?.status?.toUpperCase() ?? "";
   const isAnalysisInProgress =
-    analysisStatusUpper === "PROCESSING" ||
+    !isArchived && (analysisStatusUpper === "PROCESSING" ||
     analysisStatusUpper === "PENDING" ||
     analysisStatusUpper === "MERGING" ||
-    analysisStatusUpper === "UPLOADED";
+    analysisStatusUpper === "UPLOADED");
 
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -365,6 +369,7 @@ export function SessionDetailPage() {
     enabled: !!sessionId && !!selectedChunk,
     retry: false,
     refetchInterval: (query) => {
+      if (isArchived) return false;
       const runs = normalizeRuns(
         query.state.data as ReanalysisListResponse | undefined,
       );
@@ -571,6 +576,7 @@ export function SessionDetailPage() {
           dataUpdateCount: number;
         };
       }) => {
+        if (isArchived) return false;
         const status = query.state.data?.status ?? run.status;
         return historyPollInterval(query, !isTerminalChunkReanalysisStatus(status) ? String(run.runId) : undefined);
       },
@@ -850,6 +856,7 @@ export function SessionDetailPage() {
       },
       enabled: !!sessionId && !!profileId,
       refetchInterval: (query) => {
+        if (isArchived) return false;
         const startedAt = sensorPollingBudget.current.startedAtMs || Date.now();
         const metadataFailed = sensorMetadataRefresh.current.sessionKey === `${sessionId}:${profileId}`
           && sensorMetadataRefresh.current.failed;
@@ -879,6 +886,7 @@ export function SessionDetailPage() {
     retry: false,
     staleTime: 10_000,
     refetchInterval: (query) => {
+      if (isArchived) return false;
       if (!query.state.data && sensorTimelineResponse?.status === "pending") {
         return 5000;
       }
@@ -1027,7 +1035,8 @@ export function SessionDetailPage() {
     <div className="max-w-7xl mx-auto">
       <div className="flex items-center gap-3 mb-6">
         <Link
-          to="/"
+          to={historyLocation(searchProfileId ?? analysis?.profile_id, searchParams.get("archived") === "true")}
+          aria-label="운동 기록으로 돌아가기"
           className="text-text-muted hover:text-text-primary transition-colors"
         >
           <svg
@@ -1045,7 +1054,11 @@ export function SessionDetailPage() {
           </svg>
         </Link>
         <h1 className="text-xl font-bold text-text-primary">Session Detail</h1>
+        {analysis && <div className="ml-auto"><HistoryArchiveAction result={analysis} /></div>}
       </div>
+
+      {isArchived && <p role="status" className="mb-5 rounded-xl border border-border bg-bg-secondary p-4 text-sm text-text-secondary">보관한 기록입니다. 피로도·훈련 부하·운동 비교에서 제외되며, 분석과 수정은 복원 후 사용할 수 있습니다. 영상과 저장된 결과, 스트레칭은 보존됩니다.</p>}
+      {!isArchived && analysis?.automatic_processing_cancelled_at && <p role="status" className="mb-5 rounded-xl border border-border bg-bg-secondary p-4 text-sm text-text-secondary">자동 분석이 중단된 기록입니다. 복원으로 분석이 자동 재개되지는 않습니다. 필요한 경우 새 재분석을 직접 실행할 수 있습니다.</p>}
 
       <SessionReviewWorkspace
         key={sessionId}
@@ -1174,7 +1187,7 @@ export function SessionDetailPage() {
             </div>
           )}
         </>}
-        panels={[
+        panels={isArchived && analysis ? [{ id: "archived", label: "보관 기록", content: <ArchivedSessionContent analysis={analysis} chunks={chunks} seek={handleAnalysisSeek} seekHighlight={handleHighlightSeek} canSeek={!!videoUrl?.download_url} /> }] : [
           { id: "summary", label: "영상 요약", content: <>
           {/* WOD Description summary card */}
           <div
@@ -1295,6 +1308,8 @@ export function SessionDetailPage() {
                     : ""}
                 </span>
               </div>
+            ) : analysis?.status?.toUpperCase() === "CANCELLED" ? (
+              <div className="whitespace-pre-wrap text-sm text-text-secondary"><p role="status">중단됨</p>{analysis.output}</div>
             ) : analysis?.output ? (
               <div className="bg-bg-secondary p-4 rounded-xl border border-border">
                 {analysis.status?.toLowerCase() === "failed" && (
@@ -1660,7 +1675,7 @@ export function SessionDetailPage() {
                 <div>
                   <p className="text-text-muted">Status</p>
                   <p className="text-text-primary mt-0.5 capitalize">
-                    {analysis.status}
+                    {historyStatusLabel(analysis.status)}
                   </p>
                 </div>
                 <div>
@@ -1810,7 +1825,7 @@ export function SessionDetailPage() {
         ]}
       />
 
-      {dialog && (
+      {dialog && !isArchived && (
         <FeedbackDialog
           targetType={dialog.targetType}
           chunkLabel={

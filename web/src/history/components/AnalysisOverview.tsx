@@ -106,6 +106,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
   seek,
   seekHighlight,
   canSeek,
+  readOnly = false,
 }: {
   analysis: AnalysisResult;
   /** Seeks to an exact timestamp (observations and evidence). */
@@ -113,6 +114,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
   /** Seeks to a highlight start, applying the legacy pre-roll. */
   seekHighlight: (startSeconds: number, version?: number) => void;
   canSeek: boolean;
+  readOnly?: boolean;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const id = useId();
@@ -131,6 +133,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
     placeholderData: keepPreviousData,
     retry: false,
     refetchInterval: (q) => {
+      if (readOnly) return false;
       const isPending =
         enrichmentPending(q.state.data?.analysis.status) ||
         enrichmentPending(q.state.data?.summary.status);
@@ -245,6 +248,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
         <button
           className={`${button} mt-3`}
           disabled={
+            readOnly ||
             mutation.isPending ||
             enrichmentPending(summary?.status) ||
             analysis.status.toLowerCase() !== "completed"
@@ -271,6 +275,7 @@ export const AnalysisOverview = memo(function AnalysisOverview({
             <button
               className={button}
               disabled={
+                readOnly ||
                 mutation.isPending ||
                 enrichmentPending(batch?.status) ||
                 !highlights.length

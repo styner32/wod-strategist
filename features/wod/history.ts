@@ -67,6 +67,8 @@ export type SessionFatigue =
 
 export interface AnalysisResult {
   heart_rate?: HeartRateSummary;
+  archived_at?: string | null;
+  automatic_processing_cancelled_at?: string | null;
   id: number;
   session_id: string;
   profile_id?: number;

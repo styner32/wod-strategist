@@ -58,6 +58,7 @@ type User struct {
 }
 
 type Profile struct {
+	WorkoutHistoryRevision    int64        `gorm:"->" json:"workout_history_revision"`
 	WODTrackingStartedAt      time.Time    `gorm:"->" json:"wod_tracking_started_at"`
 	SensorENMORestG           *float64     `gorm:"->;column:sensor_enmo_rest_g" json:"sensor_enmo_rest_g,omitempty"`
 	SensorENMORefG            *float64     `gorm:"->;column:sensor_enmo_ref_g" json:"sensor_enmo_ref_g,omitempty"`
@@ -95,10 +96,12 @@ const (
 	SensorStateCompleted = "COMPLETED"
 	SensorStateFailed    = "FAILED"
 	SensorStateExpired   = "EXPIRED"
+	SensorStateCancelled = "CANCELLED"
 )
 
 type AnalysisResult struct {
-	WorkoutProgress NullableJSONDocument `json:"workout_progress" swaggertype:"object"`
+	AutomaticProcessingCancelledAt *time.Time           `json:"automatic_processing_cancelled_at,omitempty"`
+	WorkoutProgress                NullableJSONDocument `json:"workout_progress" swaggertype:"object"`
 
 	AnalysisSummary          JSONDocument `json:"analysis_summary"`
 	AgenticHighlightAnalysis JSONDocument `json:"-"`

@@ -1,4 +1,14 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
+import {
+  animateTacticalLayout,
+  triggerLightHaptic,
+  useReduceMotionEnabled,
+} from "@/constants/motion";
+import {
+  Fonts,
+  getTacticalFatigueTone,
+  TacticalTheme,
+} from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
 import React, { useState } from "react";
 import {
@@ -9,11 +19,9 @@ import {
   View,
 } from "react-native";
 import type { ProfileReadinessResponse } from "../api";
-import {
-  getFatigueColor,
-  getFatigueStateText,
-  MUSCLE_GROUPS,
-} from "./WorkoutFatigueCard";
+import { getFatigueStateText, MUSCLE_GROUPS } from "./WorkoutFatigueCard";
+
+const T = TacticalTheme.light;
 
 interface HomeReadinessCardProps {
   readiness: ProfileReadinessResponse | null;
@@ -56,6 +64,7 @@ export function HomeReadinessCard({
   onPressHistory,
 }: HomeReadinessCardProps) {
   const locale = useLocale();
+  const reduceMotion = useReduceMotionEnabled();
   const [expanded, setExpanded] = useState(false);
 
   if (!hasProfile) {
@@ -63,7 +72,7 @@ export function HomeReadinessCard({
       <View style={styles.card} testID="home-readiness-no-profile">
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
-            <IconSymbol name="bolt.fill" size={18} color="#64D2FF" />
+            <IconSymbol name="bolt.fill" size={18} color={T.electricBlue} />
             <Text style={styles.title}>{t("home.readinessTitle")}</Text>
           </View>
         </View>
@@ -76,7 +85,7 @@ export function HomeReadinessCard({
     return (
       <View style={styles.card} testID="home-readiness-loading">
         <View style={styles.loadingRow}>
-          <ActivityIndicator color="#00E5FF" size="small" />
+          <ActivityIndicator color={T.electricBlue} size="small" />
           <Text style={styles.loadingText}>{t("home.readinessLoading")}</Text>
         </View>
       </View>
@@ -88,7 +97,7 @@ export function HomeReadinessCard({
       <View style={styles.card} testID="home-readiness-error">
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
-            <IconSymbol name="bolt.fill" size={18} color="#8E9BAE" />
+            <IconSymbol name="bolt.fill" size={18} color={T.inkMuted} />
             <Text style={styles.title}>{t("home.readinessTitle")}</Text>
           </View>
         </View>
@@ -102,7 +111,7 @@ export function HomeReadinessCard({
       <View style={styles.card} testID="home-readiness-no-history">
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
-            <IconSymbol name="bolt.fill" size={18} color="#64D2FF" />
+            <IconSymbol name="bolt.fill" size={18} color={T.electricBlue} />
             <Text style={styles.title}>{t("home.readinessTitle")}</Text>
           </View>
         </View>
@@ -116,7 +125,7 @@ export function HomeReadinessCard({
       <View style={styles.card} testID="home-readiness-insufficient">
         <View style={styles.headerRow}>
           <View style={styles.headerLeft}>
-            <IconSymbol name="bolt.fill" size={18} color="#8E9BAE" />
+            <IconSymbol name="bolt.fill" size={18} color={T.inkMuted} />
             <Text style={styles.title}>{t("home.readinessTitle")}</Text>
           </View>
           <View style={styles.mutedBadge}>
@@ -130,8 +139,11 @@ export function HomeReadinessCard({
     );
   }
 
-  const overallScore = readiness.overall_fatigue_score ?? 0;
-  const overallColor = getFatigueColor(overallScore);
+  const overallScore = Math.min(
+    100,
+    Math.max(0, readiness.overall_fatigue_score ?? 0),
+  );
+  const overallTone = getTacticalFatigueTone(overallScore, "light");
   const stateLabel =
     locale === "ko" && readiness.overall_state_ko
       ? readiness.overall_state_ko
@@ -173,38 +185,73 @@ export function HomeReadinessCard({
       ? latestWod.movements.slice(0, 3).join(" · ")
       : null;
 
+  const handleToggleExpand = () => {
+    triggerLightHaptic();
+    animateTacticalLayout(reduceMotion);
+    setExpanded((prev) => !prev);
+  };
+
   return (
     <TouchableOpacity
       testID="home-readiness-card"
       style={styles.card}
-      activeOpacity={0.85}
-      onPress={() => setExpanded((prev) => !prev)}
+      activeOpacity={0.88}
+      onPress={handleToggleExpand}
       accessibilityRole="button"
       accessibilityState={{ expanded }}
     >
       {/* Header */}
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
-          <IconSymbol name="bolt.fill" size={18} color={overallColor} />
-          <Text style={styles.title} numberOfLines={2}>
-            {t("home.readinessTitle")}
-          </Text>
+          <IconSymbol name="bolt.fill" size={18} color={overallTone.fg} />
+          <View style={styles.headerTitleCol}>
+            <Text style={styles.title} numberOfLines={2}>
+              {t("home.readinessTitle")}
+            </Text>
+            <Text style={styles.subtitle} numberOfLines={1}>
+              {t("home.readinessSubtitle")}
+            </Text>
+          </View>
         </View>
         <View
           style={[
             styles.overallBadge,
             {
-              backgroundColor: overallColor + "20",
-              borderColor: overallColor + "60",
+              backgroundColor: overallTone.bg,
+              borderColor: overallTone.border,
             },
           ]}
         >
-          <Text style={[styles.overallBadgeText, { color: overallColor }]}>
+          <Text style={[styles.overallBadgeText, { color: overallTone.fg }]}>
             {stateLabel} · {overallScore}/100
           </Text>
         </View>
       </View>
 
+      {/* Overall Cumulative Strain Bar Gauge */}
+      <View style={styles.strainGaugeSection}>
+        <View style={styles.strainGaugeLabelRow}>
+          <Text style={styles.strainGaugeLabel}>
+            {t("home.readinessStrainLabel")}
+          </Text>
+          <Text style={[styles.strainGaugeState, { color: overallTone.fg }]}>
+            {stateLabel}
+          </Text>
+        </View>
+        <View style={styles.strainGaugeTrack}>
+          <View
+            style={[
+              styles.strainGaugeFill,
+              {
+                width: `${Math.max(4, overallScore)}%`,
+                backgroundColor: overallTone.bar,
+              },
+            ]}
+          />
+        </View>
+      </View>
+
+      {/* Partial evidence notice on its own row */}
       {readiness.evidence_status === "partial" && (
         <View style={styles.partialRow}>
           <View style={styles.partialBadge}>
@@ -215,16 +262,42 @@ export function HomeReadinessCard({
         </View>
       )}
 
-      {/* Primary summary line */}
+      {/* Critical Fatigue Focus Cell */}
       <View
         style={[
           styles.highlightBox,
           {
             borderLeftColor:
-              watchMuscles.length > 0 ? overallColor : "#30D158",
+              watchMuscles.length > 0 ? overallTone.bar : T.statusFresh,
           },
         ]}
       >
+        <Text style={styles.highlightEyebrow}>
+          {t("home.readinessCriticalNodes")}
+        </Text>
+        {watchMuscles.length > 0 && (
+          <View style={styles.watchChipsRow}>
+            {watchMuscles.map((wm) => {
+              const wmTone = getTacticalFatigueTone(wm.score, "light");
+              return (
+                <View
+                  key={wm.group}
+                  style={[
+                    styles.watchChip,
+                    {
+                      backgroundColor: T.surface,
+                      borderColor: wmTone.border,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.watchChipText, { color: wmTone.fg }]}>
+                    {wm.name} ({wm.score}%)
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
         <Text style={styles.highlightText}>{watchSummary}</Text>
         {(lastWorkoutRelative || latestWodMovements) && (
           <View style={styles.metaRow}>
@@ -246,12 +319,14 @@ export function HomeReadinessCard({
       {expanded && (
         <View style={styles.expandedSection} testID="home-readiness-muscles">
           {orderedMuscles.map((m) => {
-            const barColor = getFatigueColor(m.score);
+            const barTone = getTacticalFatigueTone(m.score, "light");
             return (
               <View key={m.group} style={styles.muscleRow}>
                 <View style={styles.muscleLabelRow}>
-                  <Text style={styles.muscleName}>{m.name}</Text>
-                  <Text style={[styles.muscleScore, { color: barColor }]}>
+                  <Text style={styles.muscleName} numberOfLines={1}>
+                    {m.name}
+                  </Text>
+                  <Text style={[styles.muscleScore, { color: barTone.fg }]}>
                     {m.score}/100
                   </Text>
                 </View>
@@ -261,7 +336,7 @@ export function HomeReadinessCard({
                       styles.barFill,
                       {
                         width: `${Math.max(4, m.score)}%`,
-                        backgroundColor: barColor,
+                        backgroundColor: barTone.bar,
                       },
                     ]}
                   />
@@ -275,7 +350,7 @@ export function HomeReadinessCard({
               testID="home-readiness-history-link"
               style={styles.historyLinkBtn}
               onPress={onPressHistory}
-              activeOpacity={0.7}
+              activeOpacity={0.75}
             >
               <Text style={styles.historyLinkText}>
                 {t("home.readinessViewHistory")}
@@ -295,7 +370,7 @@ export function HomeReadinessCard({
         <IconSymbol
           name={expanded ? "chevron.up" : "chevron.down"}
           size={16}
-          color="#64748B"
+          color={T.inkMuted}
         />
       </View>
     </TouchableOpacity>
@@ -304,11 +379,16 @@ export function HomeReadinessCard({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#121720",
+    backgroundColor: T.surface,
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: "#1E2633",
+    borderColor: T.border,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   loadingRow: {
     flexDirection: "row",
@@ -317,46 +397,42 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   loadingText: {
-    color: "#8E9BAE",
+    color: T.inkMuted,
     fontSize: 13,
+    fontWeight: "600",
+    flexShrink: 1,
   },
   headerRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     flexWrap: "wrap",
     gap: 8,
   },
   headerLeft: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 8,
     flex: 1,
-    minWidth: 150,
+    minWidth: 160,
+  },
+  headerTitleCol: {
+    flex: 1,
   },
   title: {
-    color: "#F8FAFC",
+    color: T.ink,
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.2,
     flexShrink: 1,
   },
-  partialRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 8,
-  },
-  partialBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: "rgba(255, 159, 10, 0.4)",
-    backgroundColor: "rgba(255, 159, 10, 0.14)",
-  },
-  partialBadgeText: {
-    color: "#FF9F0A",
+  subtitle: {
+    color: T.inkMuted,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "500",
+    marginTop: 2,
+    flexShrink: 1,
   },
   overallBadge: {
     paddingHorizontal: 9,
@@ -366,54 +442,141 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   overallBadgeText: {
+    fontFamily: Fonts?.mono,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
   },
   mutedBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
-    backgroundColor: "rgba(142, 155, 174, 0.15)",
-    flexShrink: 0,
+    backgroundColor: T.surfaceMuted,
+    borderWidth: 1,
+    borderColor: T.border,
   },
   mutedBadgeText: {
-    color: "#8E9BAE",
+    color: T.inkMuted,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   emptyText: {
-    color: "#8E9BAE",
+    color: T.inkSecondary,
     fontSize: 13,
     lineHeight: 19,
     marginTop: 10,
   },
-  highlightBox: {
+  strainGaugeSection: {
     marginTop: 12,
-    backgroundColor: "#0B0F16",
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderLeftWidth: 3,
     gap: 6,
   },
+  strainGaugeLabelRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+  },
+  strainGaugeLabel: {
+    fontFamily: Fonts?.mono,
+    color: T.inkMuted,
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    flexShrink: 1,
+  },
+  strainGaugeState: {
+    fontFamily: Fonts?.mono,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  strainGaugeTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: T.surfaceContainer,
+    overflow: "hidden",
+  },
+  strainGaugeFill: {
+    height: "100%",
+    borderRadius: 4,
+  },
+  partialRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 10,
+  },
+  partialBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: T.statusWarningBorder,
+    backgroundColor: T.statusWarningBg,
+  },
+  partialBadgeText: {
+    fontFamily: Fonts?.mono,
+    color: T.statusWarning,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  highlightBox: {
+    marginTop: 12,
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: T.border,
+    borderLeftWidth: 3,
+  },
+  highlightEyebrow: {
+    fontFamily: Fonts?.mono,
+    color: T.inkMuted,
+    fontSize: 10,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  watchChipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginBottom: 6,
+  },
+  watchChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  watchChipText: {
+    fontFamily: Fonts?.mono,
+    fontSize: 11,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
+  },
   highlightText: {
-    color: "#E2E8F0",
+    color: T.ink,
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
     lineHeight: 18,
   },
   metaRow: {
+    marginTop: 6,
     gap: 2,
   },
   metaText: {
-    color: "#94A3B8",
+    color: T.inkSecondary,
     fontSize: 12,
+    lineHeight: 16,
   },
   expandedSection: {
-    marginTop: 14,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: "#243042",
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.border,
     gap: 10,
   },
   muscleRow: {
@@ -423,20 +586,26 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 8,
   },
   muscleName: {
-    color: "#CBD5E1",
-    fontSize: 12,
-    fontWeight: "500",
+    fontFamily: Fonts?.mono,
+    color: T.inkSecondary,
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    flexShrink: 1,
   },
   muscleScore: {
-    fontSize: 12,
-    fontWeight: "700",
+    fontFamily: Fonts?.mono,
+    fontSize: 11,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
   },
   barTrack: {
     height: 6,
-    backgroundColor: "rgba(255, 255, 255, 0.08)",
     borderRadius: 3,
+    backgroundColor: T.surfaceContainer,
     overflow: "hidden",
   },
   barFill: {
@@ -445,23 +614,34 @@ const styles = StyleSheet.create({
   },
   historyLinkBtn: {
     marginTop: 4,
-    paddingVertical: 6,
-    alignSelf: "flex-end",
+    paddingVertical: 9,
+    alignItems: "center",
+    borderRadius: 10,
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
   },
   historyLinkText: {
-    color: "#00E5FF",
+    color: T.electricBlue,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   footerRow: {
-    marginTop: 10,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: T.border,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
   footerHint: {
-    color: "#64748B",
+    fontFamily: Fonts?.mono,
+    color: T.inkMuted,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    flexShrink: 1,
   },
 });

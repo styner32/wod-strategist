@@ -2,7 +2,10 @@ package worker
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +19,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/testhelpers"
 )
@@ -58,7 +62,7 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 			Expect(gotH).To(Equal(wantH))
 			Expect(gotAudio).To(Equal(wantAudio))
 		},
-		Entry("homogeneous compressed mobile chunks skip normalization",
+		Entry("homogeneous compressed mobile chunks retain the original resolution policy",
 			[]chunkStreamProfile{
 				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, DisplayWidth: 406, DisplayHeight: 720, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
 				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, DisplayWidth: 406, DisplayHeight: 720, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
@@ -95,6 +99,31 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 		),
 	)
 
+	DescribeTable("preserves 4K dimensions when only newly audited stream details differ",
+		func(difference string) {
+			base := chunkStreamProfile{VideoCodec: "h264", PixFmt: "yuv420p", Width: 3840, Height: 2160, DisplayWidth: 3840, DisplayHeight: 2160, VideoTimeBase: "1/30000", VideoTimescale: 30000, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2, AudioTimeBase: "1/44100", ChannelLayout: "stereo", VideoIndex: 0, AudioIndex: 1, VideoCount: 1, AudioCount: 1, StreamOrder: "video,audio"}
+			other := base
+			switch difference {
+			case "audio time base":
+				other.AudioTimeBase = "1/88200"
+			case "stream order":
+				other.VideoIndex, other.AudioIndex, other.StreamOrder = 1, 0, "audio,video"
+			case "channel layout":
+				other.ChannelLayout = "downmix"
+			}
+			profiles := []chunkStreamProfile{base, other}
+			heterogeneous, _, _, _ := chunksNeedNormalization(profiles)
+			Expect(heterogeneous).To(BeFalse())
+			width, height, includeAudio := concatPreparationSettings(profiles)
+			Expect(width).To(Equal(3840))
+			Expect(height).To(Equal(2160))
+			Expect(includeAudio).To(BeTrue())
+		},
+		Entry("audio time base", "audio time base"),
+		Entry("audio/video stream order and indexes", "stream order"),
+		Entry("audio channel layout", "channel layout"),
+	)
+
 	DescribeTable("parses MP4/MOV video stream timescale",
 		func(timeBase string, want int) {
 			Expect(parseStreamTimescale(timeBase)).To(Equal(want))
@@ -108,30 +137,13 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 		Entry("malformed time_base", "invalid", 0),
 	)
 
-	DescribeTable("checks in-place leading black trim eligibility",
-		func(profiles []chunkStreamProfile, want bool) {
-			Expect(canTrimInPlaceForConcat(profiles)).To(Equal(want))
-		},
-		Entry("matching positive video timescale on even H.264/AAC chunks allows in-place trim",
-			[]chunkStreamProfile{
-				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimeBase: "1/600", VideoTimescale: 600, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
-				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimeBase: "1/600", VideoTimescale: 600, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
-			},
-			true,
-		),
-		Entry("unknown zero video timescale forbids in-place trim",
-			[]chunkStreamProfile{
-				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimescale: 0, HasAudio: false},
-			},
-			false,
-		),
-		Entry("mismatched video timescales forbid in-place trim",
-			[]chunkStreamProfile{
-				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimescale: 600, HasAudio: false},
-				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimescale: 90000, HasAudio: false},
-			},
-			false,
-		),
+	DescribeTable("validates positive stream time bases",
+		func(value string, valid bool) { Expect(validStreamTimeBase(value)).To(Equal(valid)) },
+		Entry("ordinary audio", "1/44100", true),
+		Entry("non-unit positive numerator", "1001/30000", true),
+		Entry("unknown", "", false),
+		Entry("zero", "0/44100", false),
+		Entry("negative", "-1/44100", false),
 	)
 
 	It("merges mixed H.264/44.1kHz-stereo and rotated HEVC/48kHz-mono chunks without dropping frames or inflating duration", func() {
@@ -281,7 +293,13 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 			"-y", chunk1,
 		).CombinedOutput()
 		Expect(err).NotTo(HaveOccurred(), string(out1))
-		Expect(probeLeadingBlackTrimSecs(ctx, chunk1)).To(BeNumerically("~", 0.0323, 0.005))
+		profile1, err := probeChunkStreamProfile(ctx, chunk1)
+		Expect(err).NotTo(HaveOccurred())
+		timeline1, err := probeVideoTimeline(ctx, chunk1)
+		Expect(err).NotTo(HaveOccurred())
+		trim1, err := probeLeadingBlackTrimSecs(ctx, chunk1, profile1, timeline1)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(trim1).To(BeNumerically("~", 0.0323, 0.005))
 
 		// Verify a genuinely dark 2.0s chunk is NOT scheduled for trimming.
 		darkChunk := filepath.Join(tmpDir, "dark_only.mp4")
@@ -291,7 +309,13 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 			"-y", darkChunk,
 		).CombinedOutput()
 		Expect(err).NotTo(HaveOccurred(), string(outDark))
-		Expect(probeLeadingBlackTrimSecs(ctx, darkChunk)).To(Equal(0.0))
+		darkProfile, err := probeChunkStreamProfile(ctx, darkChunk)
+		Expect(err).NotTo(HaveOccurred())
+		darkTimeline, err := probeVideoTimeline(ctx, darkChunk)
+		Expect(err).NotTo(HaveOccurred())
+		darkTrim, err := probeLeadingBlackTrimSecs(ctx, darkChunk, darkProfile, darkTimeline)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(darkTrim).To(Equal(0.0))
 
 		mergedPath := filepath.Join(tmpDir, "merged.mp4")
 		intervals, intervalErr, mergeErr := mergeDownloadedChunks(
@@ -317,7 +341,7 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 		Expect(string(bdOut)).NotTo(ContainSubstring("black_start:"))
 	})
 
-	DescribeTable("preserves concat duration across native mobile timescales when only later chunks are trimmed in place",
+	DescribeTable("canonicalizes native mobile timescales before concat when only later chunks need black trimming",
 		func(sourceTimescale int) {
 			if !hasFfmpeg() {
 				Skip("ffmpeg not installed, skipping")
@@ -344,7 +368,7 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 			).CombinedOutput()
 			Expect(err).NotTo(HaveOccurred(), string(out0))
 
-			// Chunk 1: same native timescale with a leading black flash so only chunk 1 is trimmed in place.
+			// Chunk 1: the same native timescale with a leading black flash.
 			chunk1 := filepath.Join(tmpDir, "chunk_001.mp4")
 			out1, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
 				"-f", "lavfi", "-i", "color=c=black:size=406x720:rate=30:d=0.10",
@@ -378,10 +402,10 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 			Expect(intervals).To(HaveLen(2))
 			Expect(intervals[1].End).To(BeNumerically("~", 4.0, 0.15))
 
-			// Trimmed intermediate chunk must preserve the exact source timescale before concat.
+			// Both prepared chunks use the canonical timescale, including sparse trims.
 			profTrimmed, err := probeChunkStreamProfile(ctx, localPaths[1])
 			Expect(err).NotTo(HaveOccurred())
-			Expect(profTrimmed.VideoTimescale).To(Equal(sourceTimescale))
+			Expect(profTrimmed.VideoTimescale).To(Equal(canonicalConcatVideoTimescale))
 
 			// Merged video must match cumulative intervals (~4.0s, neither 25.6x inflated nor 0.17x collapsed)
 			// and carry the canonical 30000 video timescale.
@@ -475,6 +499,189 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 		).CombinedOutput()
 		Expect(err).NotTo(HaveOccurred(), string(bdOut))
 		Expect(string(bdOut)).NotTo(ContainSubstring("black_start:"))
+	})
+
+	It("bounds a single chunk by video duration despite a long audio tail", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		tmpDir := GinkgoT().TempDir()
+		source := createMergeAuditChunk(ctx, tmpDir, "tail.mp4", "2", "10", 0, false)
+		output := filepath.Join(tmpDir, "merged.mp4")
+		intervals, intervalErr, err := mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, []string{"tail"}, []string{source}, output)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(intervalErr).NotTo(HaveOccurred())
+		Expect(intervals).To(HaveLen(1))
+		Expect(intervals[0].End).To(BeNumerically("~", 2.0, 1.0/30))
+		Expect(verifyMediaEndpoints(ctx, output, 2, 2.0/30)).To(Succeed())
+	})
+
+	It("keeps delayed short audio in place and fills the remaining video with silence", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		tmpDir := GinkgoT().TempDir()
+		source := createMergeAuditChunk(ctx, tmpDir, "delayed.mp4", "2", "0.5", 0.25, false)
+		output := filepath.Join(tmpDir, "merged.mp4")
+		_, _, err := mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, []string{"delayed"}, []string{source}, output)
+		Expect(err).NotTo(HaveOccurred())
+		pcm, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-xerror", "-i", output, "-map", "0:a:0", "-ac", "1", "-ar", "44100", "-f", "f32le", "-").Output()
+		Expect(err).NotTo(HaveOccurred())
+		firstAudible := -1
+		for i := 0; i+4 <= len(pcm); i += 4 {
+			if math.Abs(float64(math.Float32frombits(binary.LittleEndian.Uint32(pcm[i:i+4])))) > 0.01 {
+				firstAudible = i / 4
+				break
+			}
+		}
+		Expect(firstAudible).To(BeNumerically(">", int(0.20*44100)))
+		Expect(firstAudible).To(BeNumerically("<", int(0.29*44100)))
+		Expect(verifyMediaEndpoints(ctx, output, 2, 2.0/30)).To(Succeed())
+	})
+
+	It("produces bounded silence when existing audio lies entirely outside the video", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		tmpDir := GinkgoT().TempDir()
+		source := createMergeAuditChunk(ctx, tmpDir, "outside.mp4", "2", "0.5", 3, false)
+		output := filepath.Join(tmpDir, "merged.mp4")
+		_, _, err := mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, []string{"outside"}, []string{source}, output)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(verifyMediaEndpoints(ctx, output, 2, 2.0/30)).To(Succeed())
+		pcm, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-xerror", "-i", output, "-map", "0:a:0", "-ac", "1", "-ar", "44100", "-f", "f32le", "-").Output()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(len(pcm)).To(BeNumerically(">=", 2*44100*4))
+		peak := 0.0
+		for i := 0; i+4 <= len(pcm); i += 4 {
+			peak = max(peak, math.Abs(float64(math.Float32frombits(binary.LittleEndian.Uint32(pcm[i:i+4])))))
+		}
+		Expect(peak).To(BeNumerically("<", 0.0001))
+	})
+
+	It("maps reversed video/audio stream order before concat without losing either chunk", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		tmpDir := GinkgoT().TempDir()
+		first := createMergeAuditChunk(ctx, tmpDir, "first.mp4", "2", "2", 0, false)
+		second := createMergeAuditChunk(ctx, tmpDir, "second.mp4", "2", "2", 0, true)
+		profile, err := probeChunkStreamProfile(ctx, second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(profile.StreamOrder).To(Equal("audio,video"))
+		Expect(profile.VideoIndex).To(Equal(1))
+		Expect(profile.AudioTimeBase).To(Equal("1/44100"))
+		output := filepath.Join(tmpDir, "merged.mp4")
+		intervals, intervalErr, err := mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, []string{"first", "second"}, []string{first, second}, output)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(intervalErr).NotTo(HaveOccurred())
+		Expect(intervals[1].End).To(BeNumerically("~", 4.0, 1.0/30))
+	})
+
+	It("normalizes different audio time bases even when AAC sample rates match", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		tmpDir := GinkgoT().TempDir()
+		first := createMergeAuditChunk(ctx, tmpDir, "first.mp4", "2", "2", 0, false)
+		second := createMergeAuditChunk(ctx, tmpDir, "second.mp4", "2", "2", 0, false)
+		doubleMergeTestAudioClock(second)
+		profile, err := probeChunkStreamProfile(ctx, second)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(profile.SampleRate).To(Equal(44100))
+		Expect(profile.AudioTimeBase).To(Equal("1/88200"))
+		output := filepath.Join(tmpDir, "merged.mp4")
+		intervals, _, err := mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, []string{"first", "second"}, []string{first, second}, output)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(intervals[1].End).To(BeNumerically("~", 4.0, 1.0/30))
+		Expect(verifyMediaEndpoints(ctx, output, 4, 2.0/30)).To(Succeed())
+	})
+
+	It("fills a missing audio track while preserving both video intervals", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		tmpDir := GinkgoT().TempDir()
+		first := createMergeAuditChunk(ctx, tmpDir, "silent.mp4", "1.1", "", 0, false)
+		second := createMergeAuditChunk(ctx, tmpDir, "audible.mp4", "1.1", "1.1", 0, false)
+		output := filepath.Join(tmpDir, "merged.mp4")
+		intervals, _, err := mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, []string{"silent", "audible"}, []string{first, second}, output)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(intervals[1].End).To(BeNumerically("~", 2.2, 1.0/30))
+		profile, err := probeChunkStreamProfile(ctx, output)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(profile.HasAudio).To(BeTrue())
+	})
+
+	DescribeTable("preserves the video span of 29.97fps, VFR, and B-frame sources",
+		func(rate, selection string) {
+			if !hasFfmpeg() {
+				Skip("ffmpeg unavailable")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			tmpDir := GinkgoT().TempDir()
+			source := filepath.Join(tmpDir, "source.mp4")
+			args := []string{"-v", "error", "-f", "lavfi", "-i", "testsrc2=size=96x64:rate=" + rate + ":duration=2"}
+			if selection != "" {
+				args = append(args, "-vf", selection, "-fps_mode", "vfr")
+			}
+			args = append(args, "-c:v", "libx264", "-preset", "medium", "-bf", "2", "-an", "-video_track_timescale", "30000", "-y", source)
+			out, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), string(out))
+			original, err := probeVideoTimeline(ctx, source)
+			Expect(err).NotTo(HaveOccurred())
+			output := filepath.Join(tmpDir, "merged.mp4")
+			_, _, err = mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, []string{"source"}, []string{source}, output)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(verifyVideoDuration(ctx, output, original.Duration(), 1.0/30+original.Tick)).To(Succeed())
+		},
+		Entry("29.97fps with B-frames", "30000/1001", ""),
+		Entry("variable frame durations with B-frames", "30", "select=not(eq(mod(n\\,5)\\,1))"),
+	)
+
+	It("stops before writing merged output when an input cannot be probed", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg unavailable")
+		}
+		tmpDir := GinkgoT().TempDir()
+		source := filepath.Join(tmpDir, "corrupt.mp4")
+		Expect(os.WriteFile(source, []byte("not an MP4"), 0600)).To(Succeed())
+		output := filepath.Join(tmpDir, "merged.mp4")
+		_, _, err := mergeDownloadedChunks(context.Background(), zap.NewNop(), tmpDir, []string{"corrupt"}, []string{source}, output)
+		Expect(err).To(HaveOccurred())
+		_, statErr := os.Stat(output)
+		Expect(os.IsNotExist(statErr)).To(BeTrue())
+		_, statErr = os.Stat(source)
+		Expect(statErr).NotTo(HaveOccurred())
+	})
+
+	It("rejects ambiguous multiple audio streams", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		tmpDir := GinkgoT().TempDir()
+		source := createMergeAuditChunk(ctx, tmpDir, "single.mp4", "1.1", "1.1", 0, false)
+		multiple := filepath.Join(tmpDir, "multiple.mp4")
+		out, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-i", source, "-map", "0:v:0", "-map", "0:a:0", "-map", "0:a:0", "-c", "copy", "-y", multiple).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(out))
+		_, err = probeChunkStreamProfile(ctx, multiple)
+		Expect(err).To(MatchError(ContainSubstring("multiple audio")))
+	})
+
+	It("reconciles AAC priming over 200 seams without changing any video frame", func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		tmpDir := GinkgoT().TempDir()
+		source := createMergeAuditChunk(ctx, tmpDir, "canonical.mp4", "1.1", "1.1", 0, false)
+		signature, err := readVideoFrameSignature(ctx, source)
+		Expect(err).NotTo(HaveOccurred())
+		duration := signature.End - signature.Start
+		var entries []string
+		var expected []videoFrameSignature
+		for i := 0; i < 200; i++ {
+			entries = append(entries, fmt.Sprintf("file '%s'", source), fmt.Sprintf("duration %.9f", duration))
+			expected = append(expected, signature)
+		}
+		manifest := filepath.Join(tmpDir, "list.txt")
+		Expect(os.WriteFile(manifest, []byte(strings.Join(entries, "\n")), 0600)).To(Succeed())
+		output := filepath.Join(tmpDir, "merged.mp4")
+		Expect(runFFmpegStreamCopyConcat(ctx, zap.NewNop(), manifest, output, duration*200, true)).To(Succeed())
+		Expect(verifyVideoFrameSequence(ctx, output, expected)).To(Succeed())
+		Expect(verifyMediaEndpoints(ctx, output, duration*200, 2.0/30+1.0/30000)).To(Succeed())
 	})
 
 	It("rejects merged output whose probed duration diverges from cumulative chunk intervals", func() {
@@ -753,6 +960,48 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			}
 		})
 
+		It("does not publish, enqueue, or delete originals when a downloaded chunk is corrupt", func() {
+			const sessionID = "sess-merge-corrupt-source"
+			const chunkObject = "videos/sess-merge-corrupt-source/chunk_001.mp4"
+			const chunkURI = "gs://test-bucket/videos/sess-merge-corrupt-source/chunk_001.mp4"
+			testhelpers.CreateSession(dbConn, &db.Session{SessionID: sessionID, ProfileID: profileID, WorkoutType: WorkoutTypeWOD})
+			start, end := 0.0, 1.0
+			original := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+				SessionID: sessionID, ProfileID: profileID, FilePath: chunkURI, Status: "COMPLETED", Output: "retained original analysis", StartSecs: &start, EndSecs: &end,
+			})
+			testhelpers.MockGCSListObjects(storageTransport, "test-bucket", "videos/"+sessionID+"/", []string{chunkObject, "videos/" + sessionID + "/merged.mp4"})
+			testhelpers.MockGCSDownloadWithBody(storageTransport, chunkURI, []byte("corrupt MP4 without moov or media tracks"))
+			task, err := NewMergeChunksTask(sessionID, "gs://test-bucket/videos/"+sessionID, WorkoutTypeWOD, nil, nil, profileID, true, "")
+			Expect(err).NotTo(HaveOccurred())
+			err = w.HandleMergeChunksTask(context.Background(), task)
+			Expect(err).To(MatchError(ContainSubstring("probe concat source profiles")))
+			Expect(storageTransport.Verify()).To(Succeed())
+			requests := storageTransport.Requests()
+			Expect(requests).To(HaveLen(2), "only the source list and source download may be requested")
+			for _, request := range requests {
+				Expect(request.Method).To(Equal("GET"), "no media upload, overwrite, or original deletion is allowed")
+			}
+			queues, err := inspector.Queues()
+			Expect(err).NotTo(HaveOccurred())
+			for _, name := range queues {
+				info, queueErr := inspector.GetQueueInfo(name)
+				Expect(queueErr).NotTo(HaveOccurred())
+				Expect(info.Pending).To(BeZero())
+				Expect(info.Scheduled).To(BeZero())
+				Expect(info.Retry).To(BeZero())
+			}
+			var retained db.ChunkAnalysisResult
+			Expect(dbConn.First(&retained, original.ID).Error).To(Succeed())
+			Expect(retained.FilePath).To(Equal(chunkURI))
+			Expect(retained.Status).To(Equal("COMPLETED"))
+			Expect(retained.Output).To(Equal("retained original analysis"))
+			Expect(retained.MediaStartSecs).To(BeNil())
+			Expect(retained.MediaEndSecs).To(BeNil())
+			var published int64
+			Expect(dbConn.Model(&db.AnalysisResult{}).Where("session_id = ? AND profile_id = ?", sessionID, profileID).Count(&published).Error).To(Succeed())
+			Expect(published).To(BeZero())
+		})
+
 		It("enqueues a video:analysis task after merging chunks", func() {
 			tmpFile := createTinyMP4(GinkgoT())
 			mp4Bytes, readErr := os.ReadFile(tmpFile)
@@ -834,6 +1083,132 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			var absent db.ChunkAnalysisResult
 			Expect(dbConn.First(&absent, missingChunk.ID).Error).To(Succeed())
 			Expect(absent.MediaStartSecs).To(BeNil(), "a DB row absent from the GCS concat manifest must not be mapped")
+		})
+
+		It("uploads merged.mp4 for playback but skips analysis re-encode, activity:review, and video:analysis when merged duration exceeds maxAnalysisVideoDuration", func() {
+			origMaxDuration := maxAnalysisVideoDuration
+			maxAnalysisVideoDuration = 1500 * time.Millisecond
+			DeferCleanup(func() {
+				maxAnalysisVideoDuration = origMaxDuration
+			})
+
+			w.ActivityCountingEnabled = true
+
+			tmpFile := createTinyMP4(GinkgoT()) // 1.0s MP4
+			mp4Bytes, readErr := os.ReadFile(tmpFile)
+			Expect(readErr).NotTo(HaveOccurred())
+
+			const sessionID = "WOD-20261029-01JMERGEOVERLONG000000000"
+			testhelpers.CreateSession(dbConn, &db.Session{
+				SessionID:   sessionID,
+				ProfileID:   profileID,
+				WorkoutType: WorkoutTypeWOD,
+			})
+
+			obsRaw, obsErr := json.Marshal(activity.Observations{
+				DurationSecs:  1.0,
+				Version:       activity.Version,
+				TargetState:   "identified",
+				ActivityState: "exercise",
+				Events: []activity.Observation{{
+					Movement: "Burpee",
+					Unit:     "reps",
+					Start:    0.1,
+					End:      0.8,
+					Complete: true,
+					Evidence: "visible complete burpee",
+				}},
+				Unassessed: []activity.Interval{},
+			})
+			Expect(obsErr).NotTo(HaveOccurred())
+			start0, end0 := 0.0, 1.0
+			start1, end1 := 1.0, 2.0
+			chunk1URI := fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_001.mp4", profileID, sessionID)
+			chunk2URI := fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_002.mp4", profileID, sessionID)
+			mergedObject := fmt.Sprintf("videos/%d/%s/merged.mp4", profileID, sessionID)
+
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID:            sessionID,
+				ProfileID:            profileID,
+				FilePath:             chunk1URI,
+				Status:               "COMPLETED",
+				ExerciseType:         "Burpee",
+				StartSecs:            &start0,
+				EndSecs:              &end0,
+				MovementObservations: obsRaw,
+			}).Error).NotTo(HaveOccurred())
+			Expect(dbConn.Create(&db.ChunkAnalysisResult{
+				SessionID:            sessionID,
+				ProfileID:            profileID,
+				FilePath:             chunk2URI,
+				Status:               "COMPLETED",
+				ExerciseType:         "Burpee",
+				StartSecs:            &start1,
+				EndSecs:              &end1,
+				MovementObservations: obsRaw,
+			}).Error).NotTo(HaveOccurred())
+
+			ffmpegTransport := testhelpers.NewMockTransport()
+			ffmpegStorageClient, sErr := testhelpers.NewStorageClient("test-bucket", ffmpegTransport)
+			Expect(sErr).NotTo(HaveOccurred())
+			w.StorageClient = ffmpegStorageClient
+
+			prefix := fmt.Sprintf("videos/%d/%s/", profileID, sessionID)
+			testhelpers.MockGCSListObjects(ffmpegTransport, "test-bucket", prefix, []string{
+				prefix + "chunk_001.mp4",
+				prefix + "chunk_002.mp4",
+			})
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, chunk1URI, mp4Bytes)
+			testhelpers.MockGCSDownloadWithBody(ffmpegTransport, chunk2URI, mp4Bytes)
+			testhelpers.MockGCSUpload(ffmpegTransport, "test-bucket", "merged")
+			ffmpegTransport.New(testhelpers.GCSBaseURL).
+				Get("/storage/v1/b/test-bucket/o/" + mergedObject).
+				Reply(200).
+				JSON(map[string]any{"name": mergedObject, "bucket": "test-bucket", "generation": "21"})
+
+			task, err := NewMergeChunksTask(
+				sessionID,
+				"gs://test-bucket/"+strings.TrimSuffix(prefix, "/"),
+				WorkoutTypeWOD,
+				[]string{"Burpee"},
+				nil,
+				profileID,
+				false,
+				"",
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(w.HandleMergeChunksTask(context.Background(), task)).To(Succeed())
+			Expect(ffmpegTransport.Verify()).To(Succeed())
+
+			// Neither video:analysis nor activity:review may be enqueued
+			pending, err := inspector.ListPendingTasks("default")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pending).To(BeEmpty())
+
+			// Media offsets are still persisted for playback timeline integrity
+			var chunks []db.ChunkAnalysisResult
+			Expect(dbConn.Where("session_id = ?", sessionID).Order("id").Find(&chunks).Error).To(Succeed())
+			Expect(chunks).To(HaveLen(2))
+			Expect(chunks[0].MediaEndSecs).NotTo(BeNil())
+			Expect(chunks[1].MediaEndSecs).NotTo(BeNil())
+			Expect(*chunks[1].MediaEndSecs).To(BeNumerically(">", 1.5))
+
+			// AnalysisResult is marked FAILED with user-facing 90m message and merged playback video
+			var result db.AnalysisResult
+			Expect(dbConn.Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&result).Error).To(Succeed())
+			Expect(result.Status).To(Equal("FAILED"))
+			Expect(result.Output).To(Equal(videoTooLongUserMessage))
+			Expect([]string(result.AvailableVideos)).To(Equal([]string{"merged"}))
+
+			// Activity summary transitions to partial without calling Gemini, retaining live chunk counts
+			var updatedSession db.Session
+			Expect(dbConn.Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&updatedSession).Error).To(Succeed())
+			var summary activity.Summary
+			Expect(json.Unmarshal(updatedSession.ActivitySummary, &summary)).To(Succeed())
+			Expect(summary.ReviewState).To(Equal("partial"))
+			Expect(summary.Movements).To(HaveLen(1))
+			Expect(summary.Movements[0].Count).To(Equal(2))
 		})
 
 		It("excludes split_chunk records from merge to prevent doubled content", func() {
@@ -996,3 +1371,98 @@ var _ = Describe("HandleMergeChunksTask", func() {
 		})
 	})
 })
+
+func createMergeAuditChunk(ctx context.Context, directory, name, videoDuration, audioDuration string, audioOffset float64, reverse bool) string {
+	if !hasFfmpeg() {
+		Skip("ffmpeg unavailable")
+	}
+	path := filepath.Join(directory, name)
+	args := []string{"-v", "error", "-nostdin", "-f", "lavfi", "-i", "testsrc2=size=96x64:rate=30:duration=" + videoDuration}
+	if audioDuration != "" {
+		args = append(args, "-itsoffset", fmt.Sprintf("%.9f", audioOffset), "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration="+audioDuration)
+		if reverse {
+			args = append(args, "-map", "1:a:0", "-map", "0:v:0")
+		} else {
+			args = append(args, "-map", "0:v:0", "-map", "1:a:0")
+		}
+		args = append(args, "-c:a", "aac", "-ar", "44100", "-ac", "2")
+	} else {
+		args = append(args, "-map", "0:v:0", "-an")
+	}
+	args = append(args, "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-video_track_timescale", "30000", "-y", path)
+	out, err := exec.CommandContext(ctx, "ffmpeg", args...).CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), string(out))
+	return path
+}
+
+// Keep AAC media identical and its physical duration unchanged while changing
+// only its MP4 time base, a property independent of codec sample_rate.
+func doubleMergeTestAudioClock(path string) {
+	data, err := os.ReadFile(path)
+	Expect(err).NotTo(HaveOccurred())
+	type atom struct {
+		start, end int
+		kind       string
+	}
+	children := func(start, end int) []atom {
+		var result []atom
+		for start+8 <= end {
+			size := int(binary.BigEndian.Uint32(data[start : start+4]))
+			Expect(size).To(BeNumerically(">=", 8))
+			Expect(start + size).To(BeNumerically("<=", end))
+			result = append(result, atom{start, start + size, string(data[start+4 : start+8])})
+			start += size
+		}
+		return result
+	}
+	child := func(parent atom, kind string) atom {
+		for _, a := range children(parent.start+8, parent.end) {
+			if a.kind == kind {
+				return a
+			}
+		}
+		Fail("missing MP4 atom " + kind)
+		return atom{}
+	}
+	moov := child(atom{-8, len(data), "root"}, "moov")
+	for _, track := range children(moov.start+8, moov.end) {
+		if track.kind != "trak" {
+			continue
+		}
+		mdia := child(track, "mdia")
+		hdlr := child(mdia, "hdlr")
+		if string(data[hdlr.start+16:hdlr.start+20]) != "soun" {
+			continue
+		}
+		var walk func(int, int)
+		walk = func(start, end int) {
+			for _, a := range children(start, end) {
+				double := func(pos int) { binary.BigEndian.PutUint32(data[pos:pos+4], binary.BigEndian.Uint32(data[pos:pos+4])*2) }
+				switch a.kind {
+				case "mdhd":
+					Expect(data[a.start+8]).To(Equal(byte(0)))
+					double(a.start + 20)
+					double(a.start + 24)
+				case "stts":
+					count := int(binary.BigEndian.Uint32(data[a.start+12 : a.start+16]))
+					for i := 0; i < count; i++ {
+						double(a.start + 20 + i*8)
+					}
+				case "elst":
+					Expect(data[a.start+8]).To(Equal(byte(0)))
+					count := int(binary.BigEndian.Uint32(data[a.start+12 : a.start+16]))
+					for i := 0; i < count; i++ {
+						pos := a.start + 20 + i*12
+						if int32(binary.BigEndian.Uint32(data[pos:pos+4])) >= 0 {
+							double(pos)
+						}
+					}
+				case "mdia", "minf", "stbl", "edts":
+					walk(a.start+8, a.end)
+				}
+			}
+		}
+		walk(track.start+8, track.end)
+	}
+	Expect(os.WriteFile(path, data, 0600)).To(Succeed())
+}
