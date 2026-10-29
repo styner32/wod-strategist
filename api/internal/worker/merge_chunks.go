@@ -23,11 +23,13 @@ import (
 )
 
 const (
-	mergeChunksUniqueTTL        = 15 * time.Minute
-	leadingBlackProbeWindowSecs = 0.35
-	minLeadingBlackTrimSecs     = 0.015
-	maxLeadingBlackTrimSecs     = 0.20
-	minChunkDurationForTrimSecs = 1.0
+	mergeChunksUniqueTTL          = 15 * time.Minute
+	leadingBlackProbeWindowSecs   = 0.35
+	minLeadingBlackTrimSecs       = 0.015
+	maxLeadingBlackTrimSecs       = 0.20
+	minChunkDurationForTrimSecs   = 1.0
+	canonicalConcatVideoTimescale = 30000
+	minChunksForBulkTrimNormalize = 4
 )
 
 var blackDetectLineRegex = regexp.MustCompile(`black_start:([0-9.]+)\s+black_end:([0-9.]+)`)
@@ -39,17 +41,19 @@ type concatMediaInterval struct {
 }
 
 type chunkStreamProfile struct {
-	VideoCodec    string
-	PixFmt        string
-	Width         int
-	Height        int
-	Rotation      int
-	DisplayWidth  int
-	DisplayHeight int
-	HasAudio      bool
-	AudioCodec    string
-	SampleRate    int
-	Channels      int
+	VideoCodec     string
+	PixFmt         string
+	Width          int
+	Height         int
+	Rotation       int
+	DisplayWidth   int
+	DisplayHeight  int
+	VideoTimeBase  string
+	VideoTimescale int
+	HasAudio       bool
+	AudioCodec     string
+	SampleRate     int
+	Channels       int
 }
 
 func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []string, injuries []string, profileID uint, enableTTS bool, wodDescription string) (*asynq.Task, error) {
@@ -326,22 +330,22 @@ func mergeDownloadedChunks(ctx context.Context, log *zap.Logger, tmpDir string, 
 				zap.Error(probeErr))
 		} else {
 			trimStarts := make([]float64, len(localChunkPaths))
-			anyTrim := false
+			trimCount := 0
 			for i, srcPath := range localChunkPaths {
 				if trimSecs := probeLeadingBlackTrimSecs(ctx, srcPath); trimSecs > 0 {
 					trimStarts[i] = trimSecs
-					anyTrim = true
+					trimCount++
 					log.Info("Detected leading black frame on chunk; scheduling trim before concat",
 						zap.Int("chunk_index", i),
 						zap.Float64("trim_start_secs", trimSecs))
 				}
 			}
+			anyTrim := trimCount > 0
 
 			needsNorm, targetW, targetH, includeAudio := chunksNeedNormalization(profiles)
-			if !needsNorm && anyTrim && !canTrimInPlaceForConcat(profiles) {
+			if !needsNorm && anyTrim && (!canTrimInPlaceForConcat(profiles) || shouldNormalizeForLeadingBlackTrim(len(localChunkPaths), trimCount)) {
 				needsNorm = true
-				targetW = evenDimension(max(profiles[0].DisplayWidth, 2))
-				targetH = evenDimension(max(profiles[0].DisplayHeight, 2))
+				targetW, targetH = normalizedTargetDimensions(profiles)
 			}
 
 			if needsNorm {
@@ -392,10 +396,19 @@ func mergeDownloadedChunks(ctx context.Context, log *zap.Logger, tmpDir string, 
 	}
 
 	if normalizedForConcat {
-		if err := runFFmpegStreamCopyConcat(ctx, log, concatListPath, mergedPath); err != nil {
-			log.Warn("Stream-copy concat of normalized chunks failed, retrying re-encode concat", zap.Error(err))
+		copyErr := runFFmpegStreamCopyConcat(ctx, log, concatListPath, mergedPath)
+		if copyErr == nil && intervalErr == nil && len(mediaIntervals) > 0 {
+			copyErr = verifyMergedDurationMatchesIntervals(ctx, mergedPath, mediaIntervals)
+		}
+		if copyErr != nil {
+			log.Warn("Stream-copy concat of normalized chunks failed, retrying re-encode concat", zap.Error(copyErr))
 			if fallbackErr := runFFmpegConcat(ctx, log, concatListPath, mergedPath); fallbackErr != nil {
 				return nil, intervalErr, fallbackErr
+			}
+			if intervalErr == nil && len(mediaIntervals) > 0 {
+				if verifyErr := verifyMergedDurationMatchesIntervals(ctx, mergedPath, mediaIntervals); verifyErr != nil {
+					return nil, intervalErr, verifyErr
+				}
 			}
 		}
 		return mediaIntervals, intervalErr, nil
@@ -404,7 +417,35 @@ func mergeDownloadedChunks(ctx context.Context, log *zap.Logger, tmpDir string, 
 	if err := runFFmpegConcat(ctx, log, concatListPath, mergedPath); err != nil {
 		return nil, intervalErr, err
 	}
+	if intervalErr == nil && len(mediaIntervals) > 0 {
+		if verifyErr := verifyMergedDurationMatchesIntervals(ctx, mergedPath, mediaIntervals); verifyErr != nil {
+			return nil, intervalErr, verifyErr
+		}
+	}
 	return mediaIntervals, intervalErr, nil
+}
+
+func shouldNormalizeForLeadingBlackTrim(totalChunks, trimCount int) bool {
+	return totalChunks >= minChunksForBulkTrimNormalize && trimCount*2 >= totalChunks
+}
+
+func verifyMergedDurationMatchesIntervals(ctx context.Context, mergedPath string, intervals []concatMediaInterval) error {
+	if len(intervals) == 0 {
+		return nil
+	}
+	expected := intervals[len(intervals)-1].End
+	if expected <= 0 {
+		return nil
+	}
+	actual := probeVideoDuration(ctx, mergedPath)
+	if actual <= 0 {
+		return fmt.Errorf("merged video has non-positive probed duration %.3fs (expected %.3fs)", actual, expected)
+	}
+	tolerance := max(1.5, expected*0.05)
+	if math.Abs(actual-expected) > tolerance {
+		return fmt.Errorf("merged video duration %.3fs diverges from cumulative chunk duration %.3fs (tolerance %.3fs)", actual, expected, tolerance)
+	}
+	return nil
 }
 
 func probeAllChunkStreamProfiles(ctx context.Context, localPaths []string) ([]chunkStreamProfile, error) {
@@ -437,6 +478,7 @@ func probeChunkStreamProfile(ctx context.Context, filePath string) (chunkStreamP
 			PixFmt     string            `json:"pix_fmt"`
 			Width      int               `json:"width"`
 			Height     int               `json:"height"`
+			TimeBase   string            `json:"time_base"`
 			SampleRate string            `json:"sample_rate"`
 			Channels   int               `json:"channels"`
 			Tags       map[string]string `json:"tags"`
@@ -462,6 +504,8 @@ func probeChunkStreamProfile(ctx context.Context, filePath string) (chunkStreamP
 			profile.PixFmt = strings.ToLower(strings.TrimSpace(s.PixFmt))
 			profile.Width = s.Width
 			profile.Height = s.Height
+			profile.VideoTimeBase = strings.ToLower(strings.TrimSpace(s.TimeBase))
+			profile.VideoTimescale = parseStreamTimescale(s.TimeBase)
 
 			rotDeg := 0.0
 			for _, sd := range s.SideData {
@@ -505,6 +549,19 @@ func probeChunkStreamProfile(ctx context.Context, filePath string) (chunkStreamP
 	return profile, nil
 }
 
+func parseStreamTimescale(timeBase string) int {
+	parts := strings.Split(strings.TrimSpace(timeBase), "/")
+	if len(parts) != 2 {
+		return 0
+	}
+	num, errNum := strconv.Atoi(strings.TrimSpace(parts[0]))
+	den, errDen := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errNum != nil || errDen != nil || num != 1 || den <= 0 {
+		return 0
+	}
+	return den
+}
+
 // chunksNeedNormalization checks whether all chunks share identical video/audio
 // stream parameters safe for FFmpeg's concat demuxer. When parameters differ, it
 // computes an even target upright display resolution (capped at 1280px long edge)
@@ -532,6 +589,8 @@ func chunksNeedNormalization(profiles []chunkStreamProfile) (bool, int, int, boo
 			p.Width != base.Width ||
 			p.Height != base.Height ||
 			p.Rotation != base.Rotation ||
+			p.VideoTimeBase != base.VideoTimeBase ||
+			p.VideoTimescale != base.VideoTimescale ||
 			p.HasAudio != base.HasAudio {
 			homogeneous = false
 			continue
@@ -545,6 +604,15 @@ func chunksNeedNormalization(profiles []chunkStreamProfile) (bool, int, int, boo
 		return false, 0, 0, includeAudio
 	}
 
+	targetW, targetH := normalizedTargetDimensions(profiles)
+	return true, targetW, targetH, includeAudio
+}
+
+func normalizedTargetDimensions(profiles []chunkStreamProfile) (int, int) {
+	if len(profiles) == 0 {
+		return 720, 1280
+	}
+	base := profiles[0]
 	primaryPortrait := base.DisplayHeight >= base.DisplayWidth
 	maxW, maxH := 0, 0
 	for _, p := range profiles {
@@ -576,7 +644,7 @@ func chunksNeedNormalization(profiles []chunkStreamProfile) (bool, int, int, boo
 		maxH = int(math.Round(float64(maxH) * scale))
 	}
 
-	return true, evenDimension(maxW), evenDimension(maxH), includeAudio
+	return evenDimension(maxW), evenDimension(maxH)
 }
 
 func evenDimension(v int) int {
@@ -623,8 +691,15 @@ func probeLeadingBlackTrimSecs(ctx context.Context, inputPath string) float64 {
 }
 
 func canTrimInPlaceForConcat(profiles []chunkStreamProfile) bool {
+	if len(profiles) == 0 || profiles[0].VideoTimescale <= 0 {
+		return false
+	}
+	baseTimescale := profiles[0].VideoTimescale
 	for _, p := range profiles {
 		if p.VideoCodec != "h264" || p.PixFmt != "yuv420p" || p.Rotation != 0 || p.Width%2 != 0 || p.Height%2 != 0 {
+			return false
+		}
+		if p.VideoTimescale != baseTimescale {
 			return false
 		}
 		if p.HasAudio && (p.AudioCodec != "aac" || p.SampleRate <= 0 || p.Channels <= 0) {
@@ -635,6 +710,10 @@ func canTrimInPlaceForConcat(profiles []chunkStreamProfile) bool {
 }
 
 func trimChunkLeadingBlack(ctx context.Context, log *zap.Logger, inputPath, outputPath string, profile chunkStreamProfile, trimStartSecs float64) error {
+	if profile.VideoTimescale <= 0 {
+		return errors.New("cannot trim chunk in place without positive video timescale")
+	}
+	timescale := strconv.Itoa(profile.VideoTimescale)
 	vf := fmt.Sprintf("trim=start=%.6f,setpts=PTS-STARTPTS,fps=30,format=yuv420p", trimStartSecs)
 	args := []string{
 		"-i", inputPath,
@@ -645,6 +724,7 @@ func trimChunkLeadingBlack(ctx context.Context, log *zap.Logger, inputPath, outp
 			"-map", "0:a:0",
 			"-vf", vf,
 			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+			"-video_track_timescale", timescale,
 			"-af", fmt.Sprintf("atrim=start=%.6f,asetpts=PTS-STARTPTS", trimStartSecs),
 			"-c:a", "aac", "-ar", strconv.Itoa(profile.SampleRate), "-ac", strconv.Itoa(profile.Channels), "-b:a", "128k",
 		)
@@ -652,6 +732,7 @@ func trimChunkLeadingBlack(ctx context.Context, log *zap.Logger, inputPath, outp
 		args = append(args,
 			"-vf", vf,
 			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+			"-video_track_timescale", timescale,
 			"-an",
 		)
 	}
@@ -670,6 +751,7 @@ func trimChunkLeadingBlack(ctx context.Context, log *zap.Logger, inputPath, outp
 }
 
 func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, outputPath string, profile chunkStreamProfile, targetW, targetH int, includeAudio bool, trimStartSecs float64) error {
+	timescale := strconv.Itoa(canonicalConcatVideoTimescale)
 	vf := fmt.Sprintf(
 		"fps=30,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p",
 		targetW, targetH, targetW, targetH,
@@ -688,7 +770,7 @@ func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, ou
 			"-map", "0:v:0",
 			"-vf", vf,
 			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-			"-video_track_timescale", "30000",
+			"-video_track_timescale", timescale,
 			"-an",
 			"-movflags", "+faststart",
 			"-y",
@@ -701,7 +783,7 @@ func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, ou
 			"-map", "0:a:0",
 			"-vf", vf,
 			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-			"-video_track_timescale", "30000",
+			"-video_track_timescale", timescale,
 			"-af", af,
 			"-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
 			"-movflags", "+faststart",
@@ -717,7 +799,7 @@ func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, ou
 			"-map", "0:a:0",
 			"-vf", vf,
 			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-			"-video_track_timescale", "30000",
+			"-video_track_timescale", timescale,
 			"-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k",
 			"-shortest",
 			"-movflags", "+faststart",
@@ -824,6 +906,7 @@ func runFFmpegConcat(ctx context.Context, log *zap.Logger, concatListPath, outpu
 		// Normalise to 30 fps so variable-frame-rate chunks play at real speed.
 		"-vf", "fps=30",
 		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+		"-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale),
 		"-c:a", "aac", "-b:a", "128k",
 		"-movflags", "+faststart",
 		"-y",

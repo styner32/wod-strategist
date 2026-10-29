@@ -86,6 +86,52 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 			},
 			true, 720, 1280, false,
 		),
+		Entry("mismatched video timescales on otherwise identical H.264 chunks trigger normalization",
+			[]chunkStreamProfile{
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, DisplayWidth: 406, DisplayHeight: 720, VideoTimeBase: "1/600", VideoTimescale: 600, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, DisplayWidth: 406, DisplayHeight: 720, VideoTimeBase: "1/15360", VideoTimescale: 15360, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
+			},
+			true, 406, 720, true,
+		),
+	)
+
+	DescribeTable("parses MP4/MOV video stream timescale",
+		func(timeBase string, want int) {
+			Expect(parseStreamTimescale(timeBase)).To(Equal(want))
+		},
+		Entry("iOS Core Media 600 timescale", "1/600", 600),
+		Entry("Android MediaCodec 90000 timescale", "1/90000", 90000),
+		Entry("FFmpeg default 30fps libx264 15360 timescale", "1/15360", 15360),
+		Entry("canonical normalized 30000 timescale", "1/30000", 30000),
+		Entry("non-unit numerator requires normalization", "1001/30000", 0),
+		Entry("empty time_base", "", 0),
+		Entry("malformed time_base", "invalid", 0),
+	)
+
+	DescribeTable("checks in-place leading black trim eligibility",
+		func(profiles []chunkStreamProfile, want bool) {
+			Expect(canTrimInPlaceForConcat(profiles)).To(Equal(want))
+		},
+		Entry("matching positive video timescale on even H.264/AAC chunks allows in-place trim",
+			[]chunkStreamProfile{
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimeBase: "1/600", VideoTimescale: 600, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimeBase: "1/600", VideoTimescale: 600, HasAudio: true, AudioCodec: "aac", SampleRate: 44100, Channels: 2},
+			},
+			true,
+		),
+		Entry("unknown zero video timescale forbids in-place trim",
+			[]chunkStreamProfile{
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimescale: 0, HasAudio: false},
+			},
+			false,
+		),
+		Entry("mismatched video timescales forbid in-place trim",
+			[]chunkStreamProfile{
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimescale: 600, HasAudio: false},
+				{VideoCodec: "h264", PixFmt: "yuv420p", Width: 406, Height: 720, VideoTimescale: 90000, HasAudio: false},
+			},
+			false,
+		),
 	)
 
 	It("merges mixed H.264/44.1kHz-stereo and rotated HEVC/48kHz-mono chunks without dropping frames or inflating duration", func() {
@@ -269,6 +315,184 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 		).CombinedOutput()
 		Expect(err).NotTo(HaveOccurred(), string(bdOut))
 		Expect(string(bdOut)).NotTo(ContainSubstring("black_start:"))
+	})
+
+	DescribeTable("preserves concat duration across native mobile timescales when only later chunks are trimmed in place",
+		func(sourceTimescale int) {
+			if !hasFfmpeg() {
+				Skip("ffmpeg not installed, skipping")
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			tmpDir, err := os.MkdirTemp("", "merge-timescale-trim-test")
+			Expect(err).NotTo(HaveOccurred())
+			defer os.RemoveAll(tmpDir)
+
+			timescaleArg := strconv.Itoa(sourceTimescale)
+
+			// Chunk 0: untrimmed native timescale (600 on iOS Core Media, 90000 on Android MediaCodec).
+			chunk0 := filepath.Join(tmpDir, "chunk_000.mp4")
+			out0, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+				"-f", "lavfi", "-i", "color=c=white:size=406x720:rate=30:d=2.0",
+				"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:d=2.0",
+				"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+				"-video_track_timescale", timescaleArg,
+				"-c:a", "aac", "-ar", "44100", "-ac", "2",
+				"-y", chunk0,
+			).CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), string(out0))
+
+			// Chunk 1: same native timescale with a leading black flash so only chunk 1 is trimmed in place.
+			chunk1 := filepath.Join(tmpDir, "chunk_001.mp4")
+			out1, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+				"-f", "lavfi", "-i", "color=c=black:size=406x720:rate=30:d=0.10",
+				"-f", "lavfi", "-i", "color=c=white:size=406x720:rate=30:d=2.0",
+				"-f", "lavfi", "-i", "sine=frequency=660:sample_rate=44100:d=2.10",
+				"-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+				"-map", "[v]", "-map", "2:a",
+				"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+				"-video_track_timescale", timescaleArg,
+				"-c:a", "aac", "-ar", "44100", "-ac", "2",
+				"-y", chunk1,
+			).CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), string(out1))
+
+			prof0, err := probeChunkStreamProfile(ctx, chunk0)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(prof0.VideoTimescale).To(Equal(sourceTimescale))
+
+			mergedPath := filepath.Join(tmpDir, "merged.mp4")
+			localPaths := []string{chunk0, chunk1}
+			intervals, intervalErr, mergeErr := mergeDownloadedChunks(
+				ctx,
+				zap.NewNop(),
+				tmpDir,
+				[]string{"gs://b/videos/1/s/chunk_000.mp4", "gs://b/videos/1/s/chunk_001.mp4"},
+				localPaths,
+				mergedPath,
+			)
+			Expect(mergeErr).NotTo(HaveOccurred())
+			Expect(intervalErr).NotTo(HaveOccurred())
+			Expect(intervals).To(HaveLen(2))
+			Expect(intervals[1].End).To(BeNumerically("~", 4.0, 0.15))
+
+			// Trimmed intermediate chunk must preserve the exact source timescale before concat.
+			profTrimmed, err := probeChunkStreamProfile(ctx, localPaths[1])
+			Expect(err).NotTo(HaveOccurred())
+			Expect(profTrimmed.VideoTimescale).To(Equal(sourceTimescale))
+
+			// Merged video must match cumulative intervals (~4.0s, neither 25.6x inflated nor 0.17x collapsed)
+			// and carry the canonical 30000 video timescale.
+			mergedDur := probeVideoDuration(ctx, mergedPath)
+			Expect(mergedDur).To(BeNumerically("~", intervals[1].End, 0.15))
+
+			mergedProf, err := probeChunkStreamProfile(ctx, mergedPath)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mergedProf.VideoTimescale).To(Equal(canonicalConcatVideoTimescale))
+
+			frameOut, err := exec.CommandContext(ctx, "ffprobe", "-v", "error",
+				"-select_streams", "v:0", "-count_frames",
+				"-show_entries", "stream=nb_read_frames",
+				"-of", "default=noprint_wrappers=1:nokey=1",
+				mergedPath,
+			).Output()
+			Expect(err).NotTo(HaveOccurred())
+			frameCount, err := strconv.Atoi(strings.TrimSpace(string(frameOut)))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(frameCount).To(BeNumerically(">=", 115))
+			Expect(frameCount).To(BeNumerically("<=", 130))
+		},
+		Entry("iOS Core Media 600 timescale (prevents 25.6x duration inflation)", 600),
+		Entry("Android MediaCodec 90000 timescale (prevents 0.17x fast-forward collapse)", 90000),
+	)
+
+	It("normalizes once and stream-copies when the majority of iOS 600-timescale chunks have leading black frames", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not installed, skipping")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		tmpDir, err := os.MkdirTemp("", "merge-bulk-trim-test")
+		Expect(err).NotTo(HaveOccurred())
+		defer os.RemoveAll(tmpDir)
+
+		objects := make([]string, 4)
+		localPaths := make([]string, 4)
+		for i := 0; i < 4; i++ {
+			chunkPath := filepath.Join(tmpDir, "chunk_"+strconv.Itoa(i)+".mp4")
+			objects[i] = "gs://b/videos/1/s/chunk_" + strconv.Itoa(i) + ".mp4"
+			localPaths[i] = chunkPath
+			if i == 0 {
+				out, cmdErr := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+					"-f", "lavfi", "-i", "color=c=white:size=406x720:rate=30:d=1.5",
+					"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:d=1.5",
+					"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+					"-video_track_timescale", "600",
+					"-c:a", "aac", "-ar", "44100", "-ac", "2",
+					"-y", chunkPath,
+				).CombinedOutput()
+				Expect(cmdErr).NotTo(HaveOccurred(), string(out))
+			} else {
+				out, cmdErr := exec.CommandContext(ctx, "ffmpeg", "-v", "error",
+					"-f", "lavfi", "-i", "color=c=black:size=406x720:rate=30:d=0.10",
+					"-f", "lavfi", "-i", "color=c=white:size=406x720:rate=30:d=1.5",
+					"-f", "lavfi", "-i", "sine=frequency=660:sample_rate=44100:d=1.60",
+					"-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+					"-map", "[v]", "-map", "2:a",
+					"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+					"-video_track_timescale", "600",
+					"-c:a", "aac", "-ar", "44100", "-ac", "2",
+					"-y", chunkPath,
+				).CombinedOutput()
+				Expect(cmdErr).NotTo(HaveOccurred(), string(out))
+			}
+		}
+
+		mergedPath := filepath.Join(tmpDir, "merged.mp4")
+		intervals, intervalErr, mergeErr := mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, objects, localPaths, mergedPath)
+		Expect(mergeErr).NotTo(HaveOccurred())
+		Expect(intervalErr).NotTo(HaveOccurred())
+		Expect(intervals).To(HaveLen(4))
+		Expect(intervals[3].End).To(BeNumerically("~", 6.0, 0.2))
+
+		// Verify bulk trim routed through normalization (norm_chunk_*) and canonical 30000 timescale.
+		Expect(filepath.Base(localPaths[0])).To(HavePrefix("norm_chunk_"))
+		mergedDur := probeVideoDuration(ctx, mergedPath)
+		Expect(mergedDur).To(BeNumerically("~", intervals[3].End, 0.2))
+
+		mergedProf, err := probeChunkStreamProfile(ctx, mergedPath)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(mergedProf.VideoTimescale).To(Equal(canonicalConcatVideoTimescale))
+
+		bdOut, err := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-v", "info",
+			"-i", mergedPath,
+			"-vf", "blackdetect=d=0.015:pix_th=0.05:pic_th=0.98",
+			"-an", "-f", "null", "-",
+		).CombinedOutput()
+		Expect(err).NotTo(HaveOccurred(), string(bdOut))
+		Expect(string(bdOut)).NotTo(ContainSubstring("black_start:"))
+	})
+
+	It("rejects merged output whose probed duration diverges from cumulative chunk intervals", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not installed, skipping")
+		}
+
+		tmpFile := createTinyMP4(GinkgoT())
+		ctx := context.Background()
+
+		Expect(verifyMergedDurationMatchesIntervals(ctx, tmpFile, []concatMediaInterval{
+			{FilePath: "gs://b/videos/1/s/chunk_000.mp4", Start: 0, End: 1.0},
+		})).To(Succeed())
+
+		err := verifyMergedDurationMatchesIntervals(ctx, tmpFile, []concatMediaInterval{
+			{FilePath: "gs://b/videos/1/s/chunk_000.mp4", Start: 0, End: 10.0},
+		})
+		Expect(err).To(MatchError(ContainSubstring("diverges from cumulative chunk duration")))
 	})
 })
 
