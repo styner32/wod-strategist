@@ -48,6 +48,7 @@ type Client struct {
 	model              string
 	thinkingLevel      string
 	thinkingLevelChunk string
+	chunkFPS           float64
 	thinkingBudget     *int32
 	includeThoughts    bool
 	pollInterval       time.Duration
@@ -68,9 +69,10 @@ type Options struct {
 	APIVersion         string
 	HTTPClient         *http.Client
 	Model              string // e.g. "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.8-flash"
-	ThinkingLevel      string // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL" (default / full video analysis)
-	ThinkingLevelChunk string // e.g. "LOW", "MEDIUM" (for short chunk analysis)
-	ThinkingBudget     *int32 // Optional token budget for thinking
+	ThinkingLevel      string  // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL" (default / full video analysis)
+	ThinkingLevelChunk string  // e.g. "LOW", "MEDIUM" (for short chunk analysis)
+	ChunkFPS           float64 // Optional explicit FPS for AnalyzeChunkVideo*; 0 uses Gemini default
+	ThinkingBudget     *int32  // Optional token budget for thinking
 	IncludeThoughts    bool   // Optional: request Gemini thought summaries in responses
 	PollInterval       time.Duration
 	Sleep              func(time.Duration)
@@ -285,6 +287,7 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 		model:              model,
 		thinkingLevel:      thinkingLevel,
 		thinkingLevelChunk: thinkingLevelChunk,
+		chunkFPS:           options.ChunkFPS,
 		thinkingBudget:     options.ThinkingBudget,
 		includeThoughts:    options.IncludeThoughts,
 		pollInterval:       pollInterval,
@@ -416,10 +419,12 @@ func (c *Client) AnalyzeVideoWithModel(ctx context.Context, filePath string, pro
 // AnalyzeChunkVideo analyzes a short video chunk using the configured chunk thinking level (c.thinkingLevelChunk).
 func (c *Client) AnalyzeChunkVideo(ctx context.Context, filePath string, prompt string, model string) (string, string, *TokenUsage, error) {
 	level := ""
+	fps := 0.0
 	if c != nil {
 		level = c.thinkingLevelChunk
+		fps = c.chunkFPS
 	}
-	return c.AnalyzeVideoWithThinking(ctx, filePath, prompt, model, level)
+	return c.analyzeVideoWithParts(ctx, filePath, prompt, model, level, nil, fps)
 }
 
 // AnalyzeChunkVideoWithImages is AnalyzeChunkVideo with reference images
@@ -427,18 +432,20 @@ func (c *Client) AnalyzeChunkVideo(ctx context.Context, filePath string, prompt 
 // video so temporal video tokens lead attention. The prompt must explain what each image is.
 func (c *Client) AnalyzeChunkVideoWithImages(ctx context.Context, filePath string, prompt string, model string, images [][]byte) (string, string, *TokenUsage, error) {
 	level := ""
+	fps := 0.0
 	if c != nil {
 		level = c.thinkingLevelChunk
+		fps = c.chunkFPS
 	}
-	return c.analyzeVideoWithParts(ctx, filePath, prompt, model, level, images)
+	return c.analyzeVideoWithParts(ctx, filePath, prompt, model, level, images, fps)
 }
 
 // AnalyzeVideoWithThinking returns the analysis result, the name of the uploaded file on Gemini, and token usage using the specified model and thinking level.
 func (c *Client) AnalyzeVideoWithThinking(ctx context.Context, filePath string, prompt string, model string, thinkingLevel string) (string, string, *TokenUsage, error) {
-	return c.analyzeVideoWithParts(ctx, filePath, prompt, model, thinkingLevel, nil)
+	return c.analyzeVideoWithParts(ctx, filePath, prompt, model, thinkingLevel, nil, 0)
 }
 
-func (c *Client) analyzeVideoWithParts(ctx context.Context, filePath string, prompt string, model string, thinkingLevel string, images [][]byte) (string, string, *TokenUsage, error) {
+func (c *Client) analyzeVideoWithParts(ctx context.Context, filePath string, prompt string, model string, thinkingLevel string, images [][]byte, fps float64) (string, string, *TokenUsage, error) {
 	// Upload file
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -483,7 +490,12 @@ func (c *Client) analyzeVideoWithParts(ctx context.Context, filePath string, pro
 		}
 	}
 	parts := make([]*genai.Part, 0, len(images)+2)
-	parts = append(parts, &genai.Part{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}})
+	videoPart := &genai.Part{FileData: &genai.FileData{FileURI: uploadResult.URI, MIMEType: mimeType}}
+	if fps > 0 {
+		chunkFPS := fps
+		videoPart.VideoMetadata = &genai.VideoMetadata{FPS: &chunkFPS}
+	}
+	parts = append(parts, videoPart)
 	for _, img := range images {
 		if len(img) == 0 {
 			continue

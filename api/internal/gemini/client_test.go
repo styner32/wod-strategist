@@ -372,6 +372,70 @@ var _ = Describe("Gemini client", func() {
 			Expect(promptIdx).To(BeNumerically(">", imgIdx), "prompt text must follow reference image")
 		})
 
+		It("attaches configured ChunkFPS only to chunk video calls and omits it from AnalyzeVideoWithModel", func() {
+			chunkClient, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:       apiKey,
+				BaseURL:      baseURL,
+				HTTPClient:   &http.Client{Transport: transport},
+				PollInterval: time.Millisecond,
+				Sleep:        func(time.Duration) {},
+				ChunkFPS:     2.0,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			mockUploadAndGenerate := func(fileName string, text string) {
+				transport.New(baseURL).
+					Post("/upload/v1beta/files").
+					Reply(http.StatusOK).
+					Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+					JSON(map[string]any{})
+				transport.New(baseURL).
+					Post("/upload-session").
+					Reply(http.StatusOK).
+					Header("X-Goog-Upload-Status", "final").
+					JSON(map[string]any{
+						"file": map[string]any{
+							"name":     "files/" + fileName,
+							"uri":      "https://example.test/files/" + fileName,
+							"mimeType": mimeType,
+						},
+					})
+				transport.New(baseURL).
+					Get("/v1beta/files/" + fileName).
+					Reply(http.StatusOK).
+					JSON(map[string]any{
+						"name":  "files/" + fileName,
+						"state": "ACTIVE",
+					})
+				transport.New(baseURL).
+					Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+					Reply(http.StatusOK).
+					JSON(map[string]any{
+						"candidates": []map[string]any{{
+							"content": map[string]any{
+								"parts": []map[string]any{{"text": text}},
+							},
+						}},
+					})
+			}
+
+			mockUploadAndGenerate("fps-chunk", "[EXERCISE: Box Step-up]")
+			_, _, _, err = chunkClient.AnalyzeChunkVideo(context.Background(), videoPath, "chunk prompt", ModelFlash38)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(transport.Requests()[3].Body)).To(ContainSubstring(`"videoMetadata":{"fps":2}`))
+
+			mockUploadAndGenerate("fps-chunk-img", "[EXERCISE: Power Snatch]")
+			ref := encodeJPEG(makeTestImage(16, 16))
+			_, _, _, err = chunkClient.AnalyzeChunkVideoWithImages(context.Background(), videoPath, "chunk img prompt", ModelFlash38, [][]byte{ref})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(transport.Requests()[7].Body)).To(ContainSubstring(`"videoMetadata":{"fps":2}`))
+
+			mockUploadAndGenerate("full-video", "full video response")
+			_, _, _, err = chunkClient.AnalyzeVideoWithModel(context.Background(), videoPath, "full prompt", ModelFlash38)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(transport.Requests()[11].Body)).NotTo(ContainSubstring("videoMetadata"))
+		})
+
 		It("returns an error when the local file does not exist", func() {
 			result, geminiFile, _, err := client.AnalyzeVideo(context.Background(), filepath.Join(GinkgoT().TempDir(), "missing.mp4"), "prompt")
 			Expect(err).To(HaveOccurred())

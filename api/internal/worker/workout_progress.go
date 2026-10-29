@@ -26,7 +26,7 @@ const workoutObservationPrompt = `
 ## Independent current-window workout observations
 Observe ONLY the target person in the exact current segment media bounds. Prior observations, scores, history and accumulated fatigue are not inputs. Do not produce a session score, fatigue/recovery estimate, strength conclusion or intensity interpretation here.
 Append a fenced workout_observations JSON block. All timestamps are absolute FULL VIDEO media seconds, inside the current segment. Preserve complete visible repetition cycles with start/completion times and direct visual evidence; never substitute estimated counts/cadence, workout targets or missing evidence. Incomplete cycles go to unassessed with reason incomplete_cycle. A long segment must retain separately timed early and late/set-level direct form, ROM and pace observations when visible; do not compress them into one judgment. Do not invent an early/late change when none is visible.
-Each exercise interval requires target_confirmed true and visible apparatus/body trajectory evidence. Use exercise|rest|unknown; only visibly observed rest may be rest. Camera/identity ambiguity and omitted time are unknown/unassessed, never rest or zero. User workout/load hints are plans, not performed evidence. Describe spinal/pelvic position only as visible and movement-specific; video cannot establish abdominal pressure, muscle activation or diagnosis.
+Each exercise interval requires target_confirmed true and visible apparatus/body trajectory evidence. Use exercise|rest|unknown; only visibly observed rest may be rest. Cover the full current segment continuously from start to end without leaving uncovered time between intervals or unassessed spans: emit activity "rest" with target_confirmed true for visible standing, breathing or walking transitions between stations, and use unassessed only when target identity or visibility prevents classification. Camera/identity ambiguity and omitted time are unknown/unassessed, never rest or zero. User workout/load hints are plans, not performed evidence. Describe spinal/pelvic position only as visible and movement-specific; video cannot establish abdominal pressure, muscle activation or diagnosis.
 Every evidence string must describe visible positions, trajectories, completed cycles or timed pauses. Do not attribute a change to fatigue, reduced strength/force/power, weak muscles, compensation, pain, recovery or breathing intent, including hedged explanations. A slower cycle or wider stance is an observation, not proof of its cause.
 Schema:
 ` + "```workout_observations\n" + `{"intervals":[{"start_secs":0.0,"end_secs":5.0,"activity":"exercise","movement":"Power Clean","target_confirmed":true,"rep_events":[{"movement":"Power Clean","unit":"reps","start_secs":1.0,"end_secs":2.0,"complete":true,"evidence":"visible full lift and catch"}],"form_observations":[{"start_secs":1.0,"end_secs":2.0,"evidence":"direct visible form"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[{"clock":"media","start_secs":5.0,"end_secs":6.0,"reason":"not_visible"}]}` + "\n```\n" + `Use empty arrays when no valid observation exists. The schema example is not evidence and its timestamps must not be copied.`
@@ -159,6 +159,14 @@ func normalizeObservationSliceBounds(items []workoutprogress.Observation, segSta
 	return out
 }
 
+func sameCanonicalMovement(a, b string) bool {
+	ca, cb := activity.CanonicalMovement(a), activity.CanonicalMovement(b)
+	if ca != "" && cb != "" {
+		return strings.EqualFold(ca, cb)
+	}
+	return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
+}
+
 func isCompositeMovementUpgrade(base, candidate string) bool {
 	b := strings.ToLower(strings.TrimSpace(activity.CanonicalMovement(base)))
 	c := strings.ToLower(strings.TrimSpace(activity.CanonicalMovement(candidate)))
@@ -248,6 +256,7 @@ func (w *Worker) buildWorkoutProgress(ctx context.Context, p VideoAnalysisPayloa
 	if err != nil {
 		return workoutprogress.Build(nil, []workoutprogress.Gap{{Start: 0, End: duration, Clock: "media", Reason: "video_source_unverified"}}, "unverified:"+enrichmentHash([]string{p.SessionID, p.FilePath}))
 	}
+	gaps = subtractSkippedNonExerciseByIntervals(intervals, gaps)
 	var hardBoundaries []float64
 	if w.DB != nil {
 		if strings.HasPrefix(videoPath, "https://") {
@@ -311,6 +320,42 @@ func captureDiscontinuityPoints(chunks []db.ChunkAnalysisResult) []float64 {
 		}
 	}
 	return points
+}
+
+func (w *Worker) sessionCaptureDiscontinuities(ctx context.Context, sessionID string, profileID uint) []float64 {
+	if w == nil || w.DB == nil || strings.TrimSpace(sessionID) == "" || profileID == 0 {
+		return nil
+	}
+	var chunks []db.ChunkAnalysisResult
+	if w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error != nil {
+		return nil
+	}
+	return captureDiscontinuityPoints(chunks)
+}
+
+// subtractSkippedNonExerciseByIntervals trims only skipped_non_exercise gaps by
+// verified exercise intervals (e.g. repetitions completing across a rest-chunk
+// spillover), leaving all other gap reasons and unobserved rest intact.
+func subtractSkippedNonExerciseByIntervals(intervals []workoutprogress.Interval, gaps []workoutprogress.Gap) []workoutprogress.Gap {
+	if len(intervals) == 0 || len(gaps) == 0 {
+		return gaps
+	}
+	out := append([]workoutprogress.Gap(nil), gaps...)
+	for _, in := range intervals {
+		if in.Activity != "exercise" || !activity.ValidInterval(in.Start, in.End) {
+			continue
+		}
+		next := make([]workoutprogress.Gap, 0, len(out)+1)
+		for _, g := range out {
+			if g.Clock != "media" || g.Reason != skippedNonExerciseReason {
+				next = append(next, g)
+				continue
+			}
+			next = append(next, subtractMediaSpanFromGaps([]workoutprogress.Gap{g}, in.Start, in.End)...)
+		}
+		out = next
+	}
+	return out
 }
 
 // mergeChunkFallbackObservations restores verified chunk-level repetition events
@@ -416,10 +461,20 @@ func mergeChunkFallbackObservations(intervals []workoutprogress.Interval, gaps [
 			if in.Activity == "rest" {
 				continue
 			}
-			if in.Activity == "unknown" || strings.TrimSpace(in.Movement) == "" {
+			if in.Activity == "unknown" || strings.TrimSpace(in.Movement) == "" || strings.EqualFold(in.Movement, "Unknown") {
 				in.Activity = "exercise"
 				in.Movement = missing[0].Movement
 			} else {
+				compatible := make([]activity.Observation, 0, len(missing))
+				for _, ev := range missing {
+					if sameCanonicalMovement(in.Movement, ev.Movement) || isCompositeMovementUpgrade(in.Movement, ev.Movement) {
+						compatible = append(compatible, ev)
+					}
+				}
+				if len(compatible) == 0 {
+					continue
+				}
+				missing = compatible
 				in.Movement = resolveIntervalMovementFromEvents(in.Movement, missing)
 			}
 			in.RepEvents = append([]activity.Observation(nil), in.RepEvents...)

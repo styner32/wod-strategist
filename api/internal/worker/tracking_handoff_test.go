@@ -8,12 +8,14 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/testhelpers"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 var _ = Describe("Tracking channel", func() {
@@ -144,6 +146,15 @@ var _ = Describe("Tracking channel", func() {
 		}, []byte(`{"version":1,"events":[{"movement":"Handstand Push-up","unit":"reps","start_secs":7.6,"end_secs":9.2,"complete":true}]}`))
 		Expect(ok).To(BeTrue())
 		Expect(inRepBox.T).To(Equal(8.0))
+
+		// Prefers box inside an incomplete_cycle unassessed span over a mid-chunk rest/partner-occluded frame when events is empty.
+		incompleteBox, ok := selectTrackingReferenceBox([]trackingBox{
+			{T: 1.5, Box: []float64{210, 310, 620, 560}},
+			{T: 5.0, Box: []float64{180, 200, 880, 640}},
+			{T: 9.0, Box: []float64{220, 100, 610, 340}},
+		}, []byte(`{"version":1,"events":[],"unassessed":[{"start_secs":0.0,"end_secs":2.2,"reason":"incomplete_cycle","movement":"Power Snatch"}]}`))
+		Expect(ok).To(BeTrue())
+		Expect(incompleteBox.T).To(Equal(1.5))
 	})
 
 	It("marks the target box in pixel space regardless of resolution", func() {
@@ -169,14 +180,22 @@ var _ = Describe("Tracking channel", func() {
 
 	Context("with stored chunks", func() {
 		var (
+			dbOnce           sync.Once
+			dbConn           *gorm.DB
 			w                *Worker
 			storageTransport *testhelpers.MockTransport
 		)
 
-		It("sends the latest continuous reference image and the previous chunk's tracking summary", func() {
-			dbConn, err := testhelpers.InitDB()
-			Expect(err).NotTo(HaveOccurred())
+		BeforeEach(func() {
+			dbOnce.Do(func() {
+				var err error
+				dbConn, err = testhelpers.InitDB()
+				Expect(err).NotTo(HaveOccurred())
+			})
 			testhelpers.CleanupDB(dbConn)
+		})
+
+		It("sends the latest continuous reference image and the previous chunk's tracking summary", func() {
 			storageTransport = testhelpers.NewMockTransport()
 			storageClient, err := testhelpers.NewStorageClient("test-bucket", storageTransport)
 			Expect(err).NotTo(HaveOccurred())
@@ -210,9 +229,6 @@ var _ = Describe("Tracking channel", func() {
 		})
 
 		It("prefers the latest active chunk reference over a subsequent [NO_EXERCISE] rest chunk within the fallback window", func() {
-			dbConn, err := testhelpers.InitDB()
-			Expect(err).NotTo(HaveOccurred())
-			testhelpers.CleanupDB(dbConn)
 			storageTransport = testhelpers.NewMockTransport()
 			storageClient, err := testhelpers.NewStorageClient("test-bucket", storageTransport)
 			Expect(err).NotTo(HaveOccurred())

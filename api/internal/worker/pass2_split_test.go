@@ -71,4 +71,79 @@ var _ = Describe("Pass 2 continuous windows", func() {
 		_, ok = decodeWODEvidenceList("```wod_evidence\n"+`{"target_confirmed":false,"movement":"Row","start_secs":0,"end_secs":30}`+"\n```", seg)
 		Expect(ok).To(BeFalse())
 	})
+
+	It("extends outer bout clips up to 5s into continuous skipped_non_exercise rest, owns boundary-completing reps, and clips spillover rest", func() {
+		segments := []Segment{{Start: "7:53.40", End: "7:55.41", Type: "Power Snatch"}}
+		gaps := []workoutprogress.Gap{{Start: 475.41, End: 495.25, Clock: "media", Reason: skippedNonExerciseReason}}
+		windows := splitPass2WindowsWithRestContext(segments, gaps, nil, 0)
+		Expect(windows).To(HaveLen(1))
+		Expect(windows[0].Split).To(BeFalse())
+		Expect(windows[0].CoreStart).To(BeNumerically("~", 473.40, 1e-6))
+		Expect(windows[0].CoreEnd).To(BeNumerically("~", 475.41, 1e-6))
+		Expect(windows[0].TrailRestSecs).To(BeNumerically("~", 5.0, 1e-6))
+		Expect(windows[0].Seg.End).To(Equal("8:00.41"))
+		Expect(windows[0].core().End).To(Equal("7:55.41"))
+
+		boundaryRep := activity.Observation{
+			Movement: "Power Snatch",
+			Unit:     "reps",
+			Start:    474.90,
+			End:      477.60,
+			Complete: true,
+			Evidence: "pulls barbell from floor into overhead lockout behind box",
+		}
+		observedIntervals := []workoutprogress.Interval{
+			{
+				ID:        "seg-4-ex",
+				Start:     473.40,
+				End:       477.60,
+				Activity:  "exercise",
+				Movement:  "Power Snatch",
+				RepEvents: []activity.Observation{boundaryRep},
+			},
+			{
+				ID:       "seg-4-rest",
+				Start:    477.60,
+				End:      480.41,
+				Activity: "rest",
+			},
+		}
+		observedGaps := []workoutprogress.Gap{
+			{Start: 478.00, End: 480.41, Clock: "media", Reason: "not_visible"},
+		}
+		ownedIntervals, ownedGaps := ownWindowObservations(observedIntervals, observedGaps, windows[0])
+		Expect(ownedIntervals).To(HaveLen(1))
+		Expect(ownedIntervals[0].Activity).To(Equal("exercise"))
+		Expect(ownedIntervals[0].Start).To(BeNumerically("~", 473.40, 1e-6))
+		Expect(ownedIntervals[0].End).To(BeNumerically("~", 477.60, 1e-6))
+		Expect(ownedIntervals[0].RepEvents).To(HaveLen(1))
+		Expect(ownedIntervals[0].RepEvents[0]).To(Equal(boundaryRep))
+		Expect(ownedGaps).To(BeEmpty(), "spillover rest/unassessed outside [CoreStart, CoreEnd] must not leak")
+	})
+
+	It("bisects a short skipped_non_exercise gap between bouts and blocks spillover across recording pauses or wodStart", func() {
+		segments := []Segment{
+			{Start: "0:10", End: "0:45", Type: "Snatch"},
+			{Start: "0:51", End: "1:20", Type: "Pull-up"},
+		}
+		gaps := []workoutprogress.Gap{
+			{Start: 0, End: 10, Clock: "media", Reason: skippedNonExerciseReason},
+			{Start: 45, End: 51, Clock: "media", Reason: skippedNonExerciseReason},
+		}
+
+		// Midpoint bisection (48.0s) for a 6s shared skipped gap + wodStart clamp at 8.0s.
+		windows := splitPass2WindowsWithRestContext(segments, gaps, nil, 8.0)
+		Expect(windows).To(HaveLen(2))
+		Expect(windows[0].Seg.Start).To(Equal("0:08"))
+		Expect(windows[0].LeadRestSecs).To(BeNumerically("~", 2.0, 1e-6))
+		Expect(windows[0].Seg.End).To(Equal("0:48"))
+		Expect(windows[0].TrailRestSecs).To(BeNumerically("~", 3.0, 1e-6))
+		Expect(windows[1].Seg.Start).To(Equal("0:48"))
+		Expect(windows[1].LeadRestSecs).To(BeNumerically("~", 3.0, 1e-6))
+
+		// Recording pause at 45.0s blocks trailing spillover on the first bout.
+		paused := splitPass2WindowsWithRestContext(segments, gaps, []float64{45.0}, 0)
+		Expect(paused[0].Seg.End).To(Equal("0:45"))
+		Expect(paused[0].TrailRestSecs).To(Equal(0.0))
+	})
 })

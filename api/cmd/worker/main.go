@@ -72,6 +72,7 @@ func main() {
 		Model:              cfg.GeminiModel,
 		ThinkingLevel:      cfg.GeminiThinkingLevel,
 		ThinkingLevelChunk: cfg.GeminiThinkingChunk,
+		ChunkFPS:           cfg.GeminiChunkFPS,
 		ThinkingBudget:     cfg.GeminiThinkingBudget,
 		IncludeThoughts:    cfg.GeminiIncludeThoughts,
 	})

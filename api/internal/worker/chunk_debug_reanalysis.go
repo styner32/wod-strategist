@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -883,7 +884,7 @@ func debugMediaIntervalValid(start, end *float64) bool {
 }
 
 func secondsDuration(seconds float64) time.Duration {
-	return time.Duration(seconds * float64(time.Second))
+	return time.Duration(math.Round(seconds * float64(time.Second)))
 }
 
 func nullablePositiveDurationSeconds(duration time.Duration) any {

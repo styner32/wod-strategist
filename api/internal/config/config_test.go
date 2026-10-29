@@ -387,5 +387,34 @@ var _ = Describe("InitWorker", func() {
 			Expect(cfgDyn.GeminiThinkingBudget).NotTo(BeNil())
 			Expect(*cfgDyn.GeminiThinkingBudget).To(Equal(int32(-1)))
 		})
+
+		It("defaults GEMINI_CHUNK_FPS to 2.0 and accepts explicit 0 and fractional values within [1, 24]", func() {
+			setEnv("GEMINI_CHUNK_FPS", "")
+			cfgDefault, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgDefault.GeminiChunkFPS).To(Equal(2.0))
+
+			setEnv("GEMINI_CHUNK_FPS", "0")
+			cfgZero, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgZero.GeminiChunkFPS).To(Equal(0.0))
+
+			setEnv("GEMINI_CHUNK_FPS", " 3.5 ")
+			cfgCustom, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgCustom.GeminiChunkFPS).To(Equal(3.5))
+		})
+
+		DescribeTable("rejects invalid GEMINI_CHUNK_FPS values at startup",
+			func(value string) {
+				setEnv("GEMINI_CHUNK_FPS", value)
+				_, err := config.InitWorker()
+				Expect(err).To(MatchError(ContainSubstring("GEMINI_CHUNK_FPS must be 0 or between 1 and 24")))
+			},
+			Entry("negative", "-1"),
+			Entry("below 1", "0.5"),
+			Entry("above 24", "25"),
+			Entry("non-numeric", "bad"),
+		)
 	})
 })

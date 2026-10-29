@@ -361,12 +361,23 @@ func selectTrackingReferenceBox(boxes []trackingBox, rawObservations []byte) (tr
 	}
 	if len(rawObservations) > 0 {
 		var doc activity.Observations
-		if json.Unmarshal(rawObservations, &doc) == nil && len(doc.Events) > 0 {
+		if json.Unmarshal(rawObservations, &doc) == nil {
 			for i := len(usable) - 1; i >= 0; i-- {
 				t := usable[i].T
 				for _, ev := range doc.Events {
 					activeEnd := math.Max(ev.Start, ev.End-0.3)
 					if t >= ev.Start && t <= activeEnd {
+						return usable[i], true
+					}
+				}
+			}
+			// Partner-swap or boundary-split chunks often record the target's lift
+			// as incomplete_cycle with empty events; prefer a box inside that span
+			// before falling back to the mid-chunk frame.
+			for i := len(usable) - 1; i >= 0; i-- {
+				t := usable[i].T
+				for _, u := range doc.Unassessed {
+					if u.Reason == "incomplete_cycle" && t >= u.Start && t <= u.End {
 						return usable[i], true
 					}
 				}

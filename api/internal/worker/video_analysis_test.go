@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -445,6 +446,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	)
 
 	var (
+		dbOnce           sync.Once
 		dbConn           *gorm.DB
 		storageTransport *testhelpers.MockTransport
 		queueClient      *asynq.Client
@@ -532,9 +534,11 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	}
 
 	BeforeEach(func() {
-		var err error
-		dbConn, err = testhelpers.InitDB()
-		Expect(err).NotTo(HaveOccurred())
+		dbOnce.Do(func() {
+			var err error
+			dbConn, err = testhelpers.InitDB()
+			Expect(err).NotTo(HaveOccurred())
+		})
 		testhelpers.CleanupDB(dbConn)
 
 		storageTransport = testhelpers.NewMockTransport()
@@ -920,6 +924,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 	var (
 		geminiBaseURL    = "https://generativelanguage.googleapis.com"
 		geminiAPIKey     = "test-api-key"
+		dbOnce           sync.Once
 		dbConn           *gorm.DB
 		storageTransport *testhelpers.MockTransport
 		queueClient      *asynq.Client
@@ -992,11 +997,11 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("Locate the earliest actual WOD exercise onset").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"seconds":0,"target_confirmed":true,"preceding_activity":"rest_setup","evidence":"target begins the first visible exercise at video time zero"}`}}}}}})
 		}
 
-		// Segment 1 (Snatch) analysis
+		// Segment 1 (Snatch) analysis — 45..50s walking gap is bisected at 47.5s for rest-boundary spillover context.
 		transport.New(geminiBaseURL).
 			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
-			MatchBodyContains(`"startOffset":"0s"`).MatchBodyContains(`"endOffset":"45s"`).
+			MatchBodyContains(`"startOffset":"0s"`).MatchBodyContains(`"endOffset":"47.500s"`).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
 				"candidates": []map[string]any{{
@@ -1006,11 +1011,11 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 				}},
 			})
 
-		// Segment 2 (Pull-up) analysis
+		// Segment 2 (Pull-up) analysis — leading rest-boundary spillover starts at 47.5s.
 		transport.New(geminiBaseURL).
 			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
-			MatchBodyContains(`"startOffset":"50s"`).MatchBodyContains(`"endOffset":"90s"`).
+			MatchBodyContains(`"startOffset":"47.500s"`).MatchBodyContains(`"endOffset":"90s"`).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
 				"candidates": []map[string]any{{
@@ -1092,9 +1097,11 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 	}
 
 	BeforeEach(func() {
-		var err error
-		dbConn, err = testhelpers.InitDB()
-		Expect(err).NotTo(HaveOccurred())
+		dbOnce.Do(func() {
+			var err error
+			dbConn, err = testhelpers.InitDB()
+			Expect(err).NotTo(HaveOccurred())
+		})
 		testhelpers.CleanupDB(dbConn)
 
 		queueClient = testhelpers.NewQueueClient()

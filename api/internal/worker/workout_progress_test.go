@@ -120,6 +120,105 @@ var _ = Describe("Independent workout progress helpers", func() {
 		Expect(recoveredIntervals[1].RepEvents[0].Start).To(Equal(255.5))
 		Expect(recoveredIntervals[1].RepEvents[0].End).To(Equal(258.0))
 	})
+	It("protects concrete Pass 2 movement labels from conflicting Pass 1 chunk fallbacks while allowing composite upgrades", func() {
+		ptr := func(n float64) *float64 { return &n }
+		conflictingChunk := db.ChunkAnalysisResult{
+			ID:                   36383,
+			SessionID:            "WOD-20261029-TEST",
+			ProfileID:            1,
+			Status:               "COMPLETED",
+			FilePath:             "gs://bucket/chunk83.mp4",
+			ExerciseType:         "Power Snatch",
+			StartSecs:            ptr(1070.0),
+			EndSecs:              ptr(1080.0),
+			MediaStartSecs:       ptr(1070.0),
+			MediaEndSecs:         ptr(1080.0),
+			MovementObservations: db.NullableJSONDocument(`{"version":1,"duration_secs":10,"target_state":"identified","activity_state":"exercise","events":[{"movement":"Power Snatch","unit":"reps","start_secs":6.0,"end_secs":8.5,"complete":true,"evidence":"pulls overhead"}],"unassessed":[]}`),
+		}
+		pass2Clean := []workoutprogress.Interval{
+			{
+				ID:              "seg-clean",
+				Start:           1069.71,
+				End:             1080.0,
+				Activity:        "exercise",
+				Movement:        "Power Clean",
+				ObservationRefs: []string{"seg-clean"},
+				RepEvents: []activity.Observation{
+					{Movement: "Power Clean", Unit: "reps", Start: 1071.6, End: 1073.8, Complete: true, Evidence: "front rack catch"},
+				},
+			},
+		}
+		keptIntervals, _ := mergeChunkFallbackObservations(pass2Clean, nil, []db.ChunkAnalysisResult{conflictingChunk}, WorkoutTypeWOD)
+		Expect(keptIntervals).To(HaveLen(1))
+		Expect(keptIntervals[0].Movement).To(Equal("Power Clean"))
+		Expect(keptIntervals[0].RepEvents).To(HaveLen(1), "conflicting Pass 1 movement must not inject extra reps or overwrite Pass 2 label")
+
+		compositeChunk := conflictingChunk
+		compositeChunk.MovementObservations = db.NullableJSONDocument(`{"version":1,"duration_secs":10,"target_state":"identified","activity_state":"exercise","events":[{"movement":"Clean & Jerk","unit":"reps","start_secs":6.0,"end_secs":8.8,"complete":true,"evidence":"clean catch then overhead jerk"}],"unassessed":[]}`)
+		upgradedIntervals, _ := mergeChunkFallbackObservations(pass2Clean, nil, []db.ChunkAnalysisResult{compositeChunk}, WorkoutTypeWOD)
+		Expect(upgradedIntervals).To(HaveLen(1))
+		Expect(upgradedIntervals[0].Movement).To(Equal("Clean & Jerk"))
+		Expect(upgradedIntervals[0].RepEvents).To(HaveLen(2))
+	})
+	It("rounds fractional segment timestamps without IEEE-754 invalid_unassessed_bounds truncation", func() {
+		fractionalSeg := Segment{Start: "7:53.40", End: "7:55.41", Type: "Power Snatch"}
+		raw := `{"intervals":[],"unassessed":[{"clock":"media","start_secs":473.4,"end_secs":475.41,"reason":"incomplete_cycle","movement":"Power Snatch"}]}`
+		items, gaps := parseWorkoutObservations(wrap(raw), fractionalSeg, 4)
+		Expect(items).To(BeEmpty())
+		Expect(gaps).To(ConsistOf(
+			workoutprogress.Gap{Start: 473.4, End: 475.41, Clock: "media", Reason: "incomplete_cycle", Movement: "Power Snatch"},
+		))
+	})
+	It("subtracts spillover exercise intervals from skipped_non_exercise gaps so boundary reps survive and coverage stays complete", func() {
+		video := filepath.Join(GinkgoT().TempDir(), "spillover.mp4")
+		Expect(os.WriteFile(video, []byte("media"), 0o600)).To(Succeed())
+		w := &Worker{}
+		first := workoutprogress.Interval{
+			ID:              "seg-4",
+			Start:           470.0,
+			End:             477.60,
+			Activity:        "exercise",
+			Movement:        "Power Snatch",
+			ObservationRefs: []string{"seg-4"},
+			RepEvents: []activity.Observation{
+				{Movement: "Power Snatch", Unit: "reps", Start: 474.90, End: 477.60, Complete: true, Evidence: "completes snatch across chunk boundary"},
+			},
+		}
+		second := workoutprogress.Interval{
+			ID:              "seg-5",
+			Start:           495.25,
+			End:             505.0,
+			Activity:        "exercise",
+			Movement:        "Box Jump Over",
+			ObservationRefs: []string{"seg-5"},
+			RepEvents: []activity.Observation{
+				{Movement: "Box Jump Over", Unit: "reps", Start: 496.0, End: 498.5, Complete: true, Evidence: "two-foot jump over box"},
+			},
+		}
+		gaps := []workoutprogress.Gap{
+			{Start: 475.41, End: 495.25, Clock: "media", Reason: skippedNonExerciseReason},
+		}
+		progress := w.buildWorkoutProgress(
+			context.Background(),
+			VideoAnalysisPayload{SessionID: "s-spill", ProfileID: 1, WorkoutType: WorkoutTypeWOD},
+			video,
+			[]workoutprogress.Interval{first, second},
+			gaps,
+			505.0,
+			"",
+		)
+		Expect(progress.Intervals).To(HaveLen(2))
+		Expect(progress.Intervals[0].End).To(Equal(477.60))
+		Expect(progress.Intervals[0].RepEvents).To(HaveLen(1))
+		Expect(progress.Unassessed).To(ContainElement(workoutprogress.Gap{
+			Start:  477.60,
+			End:    495.25,
+			Clock:  "media",
+			Reason: skippedNonExerciseReason,
+		}))
+		from, to := progressAssessedSpan(progress)
+		Expect(progressCoverageComplete(progress, from, to)).To(BeTrue())
+	})
 	It("assesses coverage only inside the attempted span", func() {
 		in := interval()
 		edges := workoutprogress.Build([]workoutprogress.Interval{in}, []workoutprogress.Gap{{Start: 0, End: 10, Clock: "media", Reason: "not_analyzed"}, {Start: 30, End: 40, Clock: "media", Reason: "not_analyzed"}, {Start: 50, End: 60, Clock: "capture", Reason: "recording_gap"}, {Start: 12, End: 14, Clock: "media", Reason: "incomplete_cycle"}}, "source")

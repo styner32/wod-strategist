@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -113,6 +114,89 @@ var _ = Describe("recognition review helpers", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(findings[0].EvidenceLevel).To(Equal("undetermined"))
 	})
+	It("preserves stored_fact for compound verbatim JSON citations and downgrades fabricated fragments", func() {
+		gap := workoutprogress.Gap{Start: 475.41, End: 495.25, Clock: "media", Reason: "skipped_non_exercise"}
+		chunk := recognitionreview.ChunkEvidence{
+			ID:             36323,
+			Status:         "COMPLETED",
+			MediaStartSecs: ptr(475.41),
+			MediaEndSecs:   ptr(485.31),
+			Output:         "[NO_EXERCISE]",
+		}
+		input := recognitionReviewInput{
+			Gaps:   []workoutprogress.Gap{gap},
+			Chunks: []recognitionreview.ChunkEvidence{chunk},
+		}
+		gapRaw, _ := json.Marshal(gap)
+		chunkRaw, _ := json.Marshal(chunk)
+
+		compound := recognitionTestFinding(0, 1)
+		compound.EvidenceLevel = "stored_fact"
+		compound.OriginalEvidence = fmt.Sprintf("original_gaps: %s, chunk 36323: %s", string(gapRaw), string(chunkRaw))
+		raw, _ := json.Marshal(map[string]any{"findings": []recognitionreview.Finding{compound}})
+		findings, err := parseRecognitionFindings(string(raw), recognitionreview.Batch{CoreEndSecs: 1}, 1, input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(findings[0].EvidenceLevel).To(Equal("stored_fact"))
+
+		altered := compound
+		altered.OriginalEvidence = strings.ReplaceAll(compound.OriginalEvidence, "skipped_non_exercise", "invented_reason")
+		raw, _ = json.Marshal(map[string]any{"findings": []recognitionreview.Finding{altered}})
+		findings, err = parseRecognitionFindings(string(raw), recognitionreview.Batch{CoreEndSecs: 1}, 1, input)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(findings[0].EvidenceLevel).To(Equal("undetermined"))
+	})
+	It("retains the session anchor and prefers active chunk references in recognitionTrackingInputs", func() {
+		storageTransport := testhelpers.NewMockTransport()
+		storageClient, err := testhelpers.NewStorageClient("test-bucket", storageTransport)
+		Expect(err).NotTo(HaveOccurred())
+		w := &Worker{
+			StorageClient:             storageClient,
+			BucketName:                "test-bucket",
+			TrackingContinuityEnabled: true,
+			logger:                    zap.NewNop(),
+		}
+		anchorObj := "videos/1/WOD-TEST/tracking/100.jpg"
+		restObj := "videos/1/WOD-TEST/tracking/101.jpg"
+		activeNearObj := "videos/1/WOD-TEST/tracking/102.jpg"
+		snap := recognitionreview.Snapshot{
+			Chunks: []recognitionreview.ChunkEvidence{
+				{
+					ID:             100,
+					Status:         "COMPLETED",
+					ExerciseType:   "Power Snatch",
+					MediaStartSecs: ptr(0.0),
+					MediaEndSecs:   ptr(10.0),
+					TargetCues:     fmt.Sprintf(`{"matched_cues":["black shirt"],"ambiguous":false,"confidence":0.95,"reference_image":%q}`, anchorObj),
+				},
+				{
+					ID:                   101,
+					Status:               "COMPLETED",
+					ExerciseType:         "",
+					Output:               "[NO_EXERCISE]",
+					MediaStartSecs:       ptr(470.0),
+					MediaEndSecs:         ptr(480.0),
+					MovementObservations: []byte(`{"version":1,"target_state":"identified","activity_state":"rest","events":[],"unassessed":[]}`),
+					TargetCues:           fmt.Sprintf(`{"matched_cues":["white shirt"],"ambiguous":false,"confidence":0.85,"reference_image":%q}`, restObj),
+				},
+				{
+					ID:             102,
+					Status:         "COMPLETED",
+					ExerciseType:   "Power Snatch",
+					MediaStartSecs: ptr(480.0),
+					MediaEndSecs:   ptr(490.0),
+					TargetCues:     fmt.Sprintf(`{"matched_cues":["black shirt"],"ambiguous":false,"confidence":0.95,"reference_image":%q}`, activeNearObj),
+				},
+			},
+		}
+		// Only activeNearObj (overlapping batch 473..485) and anchorObj (first active chunk) should be fetched; restObj must be skipped.
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+activeNearObj, []byte("near-active-jpeg"))
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+anchorObj, []byte("anchor-active-jpeg"))
+
+		prompt, images := w.recognitionTrackingInputs(context.Background(), snap, recognitionreview.Batch{StartSecs: 473.0, EndSecs: 485.0})
+		Expect(storageTransport.Verify()).To(Succeed())
+		Expect(prompt).To(ContainSubstring("대상 인물 추적 기준"))
+		Expect(images).To(Equal([][]byte{[]byte("near-active-jpeg"), []byte("anchor-active-jpeg")}))
+	})
 	It("keeps missing token fields unknown across attempts and batches", func() {
 		batch := recognitionreview.Batch{Attempts: 1}
 		addRecognitionUsage(&batch, nil)
@@ -184,8 +268,10 @@ var _ = Describe("HandleRecognitionReviewTask", func() {
 		Expect(storageTransport.Verify()).To(Succeed())
 		Expect(geminiTransport.Verify()).To(Succeed())
 		pending, err := inspector.ListPendingTasks("default")
-		Expect(err).NotTo(HaveOccurred())
-		Expect(pending).To(BeEmpty())
+		if !errors.Is(err, asynq.ErrQueueNotFound) {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pending).To(BeEmpty())
+		}
 		Expect(inspector.Close()).To(Succeed())
 		Expect(queue.Close()).To(Succeed())
 	})

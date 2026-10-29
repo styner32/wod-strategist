@@ -880,7 +880,11 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 
 	// Continuous bouts are observed whole; only bouts longer than
 	// maxPass2WindowSecs are split, with overlap, and stitched back later.
-	windows := splitPass2Windows(segments)
+	minClipStart := 0.0
+	if wodStart.Status == "confirmed" && wodStart.Seconds != nil {
+		minClipStart = *wodStart.Seconds
+	}
+	windows := splitPass2WindowsWithRestContext(segments, progressGaps, w.sessionCaptureDiscontinuities(ctx, p.SessionID, p.ProfileID), minClipStart)
 	trackingRefs := w.loadTrackingReferences(ctx, p.SessionID, p.ProfileID)
 	segResults := make([]segmentAnalysisResult, len(windows))
 	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
@@ -993,7 +997,11 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			HardGapBoundary: !win.Split,
 		})...)
 
-		allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n", i+1, seg.Type, seg.Start, seg.End))
+		headerSeg := seg
+		if !win.Split {
+			headerSeg = win.core()
+		}
+		allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n", i+1, headerSeg.Type, headerSeg.Start, headerSeg.End))
 		allAnalysis.WriteString(segAnalysis)
 	}
 	sortWODEvidence(wodEvidence)

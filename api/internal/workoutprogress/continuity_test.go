@@ -44,6 +44,57 @@ var _ = Describe("Timeline continuity normalization", func() {
 		Expect(intervals[0].RepEvents).To(BeEmpty())
 	})
 
+	It("absorbs a split-boundary sub-second fragment into its preceding same-movement interval instead of a following different movement", func() {
+		bjoRep := activity.Observation{
+			Movement: "Box Jump Over",
+			Unit:     "reps",
+			Start:    1390.4,
+			End:      1392.6,
+			Complete: true,
+			Evidence: "jumps onto box with both feet and steps down on the far side",
+		}
+		bjoHead := Interval{
+			ID:              "w0-bjo",
+			Start:           1390.0,
+			End:             1391.745,
+			Activity:        "exercise",
+			Movement:        "Box Jump Over",
+			ObservationRefs: []string{"seg-0"},
+			RepEvents:       []activity.Observation{},
+		}
+		bjoTail := Interval{
+			ID:              "w1-bjo",
+			Start:           1391.745,
+			End:             1392.6,
+			Activity:        "exercise",
+			Movement:        "Box Jump Over",
+			ObservationRefs: []string{"seg-1"},
+			RepEvents:       []activity.Observation{bjoRep},
+		}
+		cleanNext := Interval{
+			ID:              "w1-clean",
+			Start:           1392.6,
+			End:             1400.0,
+			Activity:        "exercise",
+			Movement:        "Power Clean",
+			ObservationRefs: []string{"seg-1-clean"},
+			RepEvents:       []activity.Observation{cleanCycle(1394.0, 1397.0)},
+		}
+
+		intervals, _ := NormalizeContinuity([]Interval{bjoHead, bjoTail, cleanNext}, nil, nil)
+		Expect(intervals).To(HaveLen(2))
+		Expect(intervals[0].ID).To(Equal("w0-bjo"))
+		Expect(intervals[0].Movement).To(Equal("Box Jump Over"))
+		Expect(intervals[0].Start).To(Equal(1390.0))
+		Expect(intervals[0].End).To(Equal(1392.6))
+		Expect(intervals[0].RepEvents).To(HaveLen(1))
+		Expect(intervals[0].RepEvents[0]).To(Equal(bjoRep))
+		Expect(intervals[1].ID).To(Equal("w1-clean"))
+		Expect(intervals[1].Movement).To(Equal("Power Clean"))
+		Expect(intervals[1].Start).To(Equal(1392.6))
+		Expect(intervals[1].RepEvents).To(HaveLen(1))
+	})
+
 	It("stitches touching same-movement intervals and joins continuous timed events", func() {
 		a := row("a", 1100.37, 1130.37, rowSeconds(1100.37, 1130.37))
 		b := row("b", 1130.37, 1169.5, rowSeconds(1130.37, 1169.5))

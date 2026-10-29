@@ -107,9 +107,15 @@ person (`chunk_continuity.go`, shared by `buildChunkSegments` and
   rear/low-angle barbell movements (Deadlift/Clean/Snatch where the torso occludes
   the bar shaft) and wall-inverted Handstand Push-up / Wall Walk cycles to be
   counted from torso-hip-plate or heel-elbow vertical displacement rather than
-  treated as rest/static holds. An unlabelled chunk with exercise/unknown
-  activity is observed as `Unknown`. A chunk with no evidence at all is
-  unclassified (neither exercise nor rest).
+  treated as rest/static holds, enforce purely kinematic takeoff classification
+  between two-foot jump takeoff (`Box Jump` / `Box Jump Over`) and single-foot
+  step ascent (`Box Step-up` / `Box Step-over`) regardless of WOD prescription,
+  and record partial cycles cut off at clip start/end as `activity_state: exercise`
+  with `unassessed` (`reason: incomplete_cycle`) rather than `[NO_EXERCISE]`/rest.
+  `selectTrackingReferenceBox` prefers boxes inside `incomplete_cycle` spans when
+  `events` is empty before falling back to the mid-chunk frame. An unlabelled chunk
+  with exercise/unknown activity is observed as `Unknown`. A chunk with no evidence
+  at all is unclassified (neither exercise nor rest).
 - Hysteresis (`smoothChunkSequence`): state and label change only when the new
   state lasts two chunks. A **single** non-active chunk between two continuous
   active chunks is bridged; two or more consecutive rest chunks are real rest.
@@ -150,11 +156,21 @@ Fallback:
 Analyze each continuous bout with `VideoMetadata` offsets (frame grids in
 reanalysis). A bout up to `maxPass2WindowSecs = 150` is one call; a longer bout
 (e.g. an AMRAP without rest) is split into equal cores with
-`pass2OverlapSecs = 5` context on internal edges (`splitPass2Windows`).
-`ownWindowObservations` keeps a repetition in the core where it completes
-`(coreStart, coreEnd]`, clips timed events/observations/gaps to the core, and
-`workoutprogress.NormalizeContinuity` stitches the windows back into one
-interval. Internal edges use `HardGapBoundary: false` for highlights.
+`pass2OverlapSecs = 5` context on internal edges (`splitPass2Windows` /
+`splitPass2WindowsWithRestContext`). Outer bout edges touching continuous
+`skipped_non_exercise` media receive up to `pass2RestSpilloverSecs = 5.0`
+spillover context (bisected at the midpoint when `< 10.0` seconds separates
+adjacent bouts so spillover clips stay strictly disjoint, blocked across
+`captureDiscontinuityPoints`, and clamped to `minClipStart` when `wodStart` is
+confirmed), while core `Segment` bounds and non-split markdown headers
+(`win.core()`) stay unpadded. `ownWindowObservations` keeps internal-split
+repetitions in the core where they complete `(coreStart, coreEnd]`, allows outer
+rest-spillover `exercise` intervals to extend up to verified `complete: true`
+`reps` bounds while clipping spillover `rest`/`unassessed` to `[coreStart, coreEnd]`,
+and `workoutprogress.NormalizeContinuity` stitches split windows back into one
+interval. `secondsDuration` rounds fractional seconds (`math.Round`) so boundary
+timestamps like `7:55.41` never truncate into `invalid_unassessed_bounds`.
+Internal edges use `HardGapBoundary: false` for highlights.
 `wod_evidence` may be an array (one entry per movement span in a bout); a
 response without the block falls back to `wodEvidenceFromObservedIntervals` in
 both production and reanalysis.
@@ -399,6 +415,7 @@ Chunks are processed in parallel with bounded concurrency.
   - `GEMINI_MODEL`: Deep video model name (default `gemini-4-argon`). Set an explicit old model ID to roll back; existing Terraform variable overrides take precedence over defaults.
   - `GEMINI_THINKING_LEVEL`: Full video / deep segment analysis thinking level (default `HIGH`). Valid: `HIGH`, `MEDIUM`, `LOW`.
   - `GEMINI_THINKING_CHUNK`: Short video (~10s chunk) analysis thinking level (default `LOW`). Valid: `HIGH`, `MEDIUM`, `LOW`. Minimizes response latency and thinking token costs for real-time coaching feedback.
+  - `GEMINI_CHUNK_FPS`: Short chunk video sampling frame rate (default `2.0`; valid `0` or `[1, 24]`, validated at worker startup). When `> 0`, attaches `VideoMetadata.FPS` exclusively to `AnalyzeChunkVideo` and `AnalyzeChunkVideoWithImages` so ~2s cycles (`Box Step-up`, fast lifts) are sampled reliably; `0` omits `VideoMetadata.FPS`. Never attached to full-video `AnalyzeVideo` / `AnalyzeVideoWithModel` or frame-grid calls.
   - `GEMINI_THINKING_BUDGET`: Optional integer thinking budget in tokens; omitted from Argon requests even when set.
 - Stage-specific thinking levels:
   - Short video / chunk analysis: Uses `AnalyzeChunkVideo`, which resolves to `GEMINI_THINKING_CHUNK` (`LOW` by default). Note that `MINIMAL` is not supported on Gemini 3.8 / 3.7 Flash and will be rejected.

@@ -130,4 +130,35 @@ var _ = Describe("Observation-only prompt boundaries", func() {
 			Expect(prompt).To(ContainSubstring("운동은 보이지만 정확한 종목이 불명확하면 [EXERCISE: Unknown]"))
 		}
 	})
+
+	It("enforces visual takeoff distinction for Box Jump vs Box Step-up and boundary incomplete_cycle rules", func() {
+		wCounting := NewWorker(nil, nil, "", nil, nil, zap.NewNop())
+		wCounting.ActivityCountingEnabled = true
+
+		segPrompt := wCounting.buildSegmentAnalysisPrompt(
+			VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over", Movements: []string{"Box Jump Over"}},
+			Segment{Start: "14:10", End: "14:30", Type: "Box Jump Over"},
+			"", "", false,
+		)
+		checkBoundary(segPrompt)
+		Expect(segPrompt).To(ContainSubstring("Box Step-up / Box Step-over"))
+		Expect(segPrompt).To(ContainSubstring("두 발이 바닥에서 동시에 떨어져"))
+		Expect(segPrompt).To(ContainSubstring(`emit activity "rest" with target_confirmed true`))
+
+		livePrompts := []string{
+			wCounting.buildChunkAnalysisPrompt(VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over"}) + wCounting.livePrompt(1),
+			wCounting.buildChunkAnalysisWithSessionPrompt(VideoAnalysisWithSessionPayload{}, &db.Profile{}, &db.Session{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over"}) + wCounting.livePrompt(1),
+		}
+		for _, basePrompt := range []string{
+			wCounting.buildChunkAnalysisPrompt(VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over"}),
+			wCounting.buildChunkAnalysisWithSessionPrompt(VideoAnalysisWithSessionPayload{}, &db.Profile{}, &db.Session{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over"}),
+		} {
+			checkBoundary(basePrompt)
+			Expect(basePrompt).To(ContainSubstring("Box Step-up / Box Step-over"))
+		}
+		for _, lp := range livePrompts {
+			Expect(lp).To(ContainSubstring("Box Step-up"))
+			Expect(lp).To(ContainSubstring("reason: incomplete_cycle"))
+		}
+	})
 })

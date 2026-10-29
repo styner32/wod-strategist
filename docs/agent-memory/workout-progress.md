@@ -6,16 +6,26 @@
 2. `workout_progress` assembles observed intervals and complete repetition events chronologically. It contains evidence, not fatigue, recovery or intensity scores.
 3. Final assessment reads this evidence. It must never update observations or feed its output back into the timeline builder.
 
-Before `Build`, `buildWorkoutProgress` runs `workoutprogress.NormalizeContinuity`
-(after coverage gaps are added): `MinIntervalDurationSecs = 1.0`. A sub-second
-interval is attached to the following touching interval (≤1 s apart; the
-preceding one when it is last) — evidence moves only when activity/movement
-match. A sub-second media gap outside every interval is absorbed the same way
-(count-only markers stay inside the extended interval; gaps already inside an
-interval stay). Touching intervals with the same activity, canonical movement
-and load are stitched into one (first ID kept; touching `seconds` events join).
-Nothing is attached or stitched across a capture pause
-(`captureDiscontinuityPoints`) or discontinuous capture endpoints.
+Before `Build`, `buildWorkoutProgress` subtracts verified `exercise` intervals
+from overlapping `skipped_non_exercise` gaps (`subtractSkippedNonExerciseByIntervals`,
+preserving Pass 2 rest-spillover boundary reps while keeping remaining rest
+`skipped_non_exercise` and `progressCoverageComplete == true`), fills uncovered
+media, and runs `workoutprogress.NormalizeContinuity`:
+`MinIntervalDurationSecs = 1.0`. A sub-second interval prefers a touching
+(≤1 s apart) `sameMovement && sameLoad && captureContinuous` neighbor (following
+first, then preceding) before falling back to the following interval (or
+preceding when last) — evidence moves only when activity/movement match, so a
+split-boundary sub-second fragment merges back into its preceding same-movement
+interval rather than losing `rep_events` to a following different movement. A
+sub-second media gap outside every interval is absorbed the same way (count-only
+markers stay inside the extended interval; gaps already inside an interval stay).
+Touching intervals with the same activity, canonical movement and load are
+stitched into one (first ID kept; touching `seconds` events join). Nothing is
+attached or stitched across a capture pause (`captureDiscontinuityPoints`) or
+discontinuous capture endpoints. `mergeChunkFallbackObservations` requires
+`sameCanonicalMovement` or `isCompositeMovementUpgrade` before merging Pass 1
+chunk fallback events into a concrete Pass 2 exercise interval so 1–2 FPS chunk
+labels never overwrite 5 FPS Pass 2 movement classifications.
 `workoutprogress.Decode` still accepts stored sub-second entries; the web/mobile
 timelines hide them (`timelineProgressIntervals`, `isDisplayableProgressGap`,
 `buildUnassessedIntervals`) unless a record references them.

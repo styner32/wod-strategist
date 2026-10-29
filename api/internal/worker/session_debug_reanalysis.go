@@ -283,7 +283,11 @@ func (w *Worker) handleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		start    time.Duration
 		end      time.Duration
 	}
-	windows := splitPass2Windows(segments)
+	minClipStart := 0.0
+	if wodStart.Status == "confirmed" && wodStart.Seconds != nil {
+		minClipStart = *wodStart.Seconds
+	}
+	windows := splitPass2WindowsWithRestContext(segments, progressGaps, w.sessionCaptureDiscontinuities(ctx, run.SessionID, run.ProfileID), minClipStart)
 	trackingRefs := w.loadTrackingReferences(ctx, run.SessionID, run.ProfileID)
 	segOutcomes := make([]sessionDebugSegmentOutcome, len(windows))
 	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
@@ -444,7 +448,11 @@ func (w *Worker) handleSessionDebugReanalysisTask(ctx context.Context, task *asy
 		highlightCandidates = append(highlightCandidates, parseHighlightCandidates(res.analysis, highlightSource{
 			Index: i, Start: res.start.Seconds(), End: res.end.Seconds(), Movement: segment.Type, HasBounds: true, HardGapBoundary: !win.Split,
 		})...)
-		output.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n%s", i+1, segment.Type, segment.Start, segment.End, res.analysis))
+		headerSeg := segment
+		if !win.Split {
+			headerSeg = win.core()
+		}
+		output.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n%s", i+1, headerSeg.Type, headerSeg.Start, headerSeg.End, res.analysis))
 	}
 	sortWODEvidence(wodEvidence)
 

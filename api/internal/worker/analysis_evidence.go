@@ -34,6 +34,9 @@ const MovementEvidenceRulesPrompt = `
   · Split Jerk (딥-드라이브 후 앞뒤로 발을 벌리며 캐치)
   · Push Press (무릎 1회 딥-드라이브 반동으로 밀어 올리고 무릎을 다시 굽히지 않음)
   · Strict Press (무릎 딥이나 재굽힘 없이 머리 위로 밀어 올림)
+- 박스 위로 올라가거나 넘어가는 동작은 WOD 계획 종목이 Box Jump / Box Jump Over라도 실제 발의 이륙 방식에 따라 엄격히 구분하세요:
+  · Box Jump / Box Jump Over (두 발이 바닥에서 동시에 떨어져 점프로 박스 위에 착지. 반대편 바닥으로 내려가면 Box Jump Over)
+  · Box Step-up / Box Step-over (두 발 동시 점프 없이 한 발을 먼저 박스 위에 딛고 올라섬. 반대편 바닥으로 내려가면 Box Step-over)
 - 실제 운동 동작이나 세트 진행이 없는 휴식·장비 세팅·정리, 운동과 무관한 걷기는 운동 종목이 아닙니다.`
 
 const SpinalObservationRulesPrompt = `
