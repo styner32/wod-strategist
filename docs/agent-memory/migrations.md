@@ -32,3 +32,6 @@ The migration SQL is the **single source of truth** for schema constraints. Do n
 ## Migration vs. code order
 - The migration must be authored before or alongside the Go model change — running code against a pre-migration schema will fail at startup.
 - Before worker tests, run `make migrate-test-up` after adding a migration. Use `make migrate-test-redo` only to test rollback/reapply of the latest pair; it can roll back the previously applied migration if the new pair has not yet been applied.
+- Archive lifecycle code requires migration `000061` before API/worker use: missing `automatic_processing_cancelled_at` or `workout_history_revision` fails ingress/worker/source-state queries with SQLSTATE `42703`. The current `/health` endpoint does not verify schema compatibility.
+- Remote migration uses a separately built migration image. Confirm that image contains the required SQL and that the job completed; API/worker deployment alone does not run migrations.
+- Applying a missed migration does not reset queued task retry counts or revive terminal/archived work. Inspect retained source and task/result state before explicit recovery; preserve an owner's archive decision and never auto-requeue those records.

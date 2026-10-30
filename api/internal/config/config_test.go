@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/config"
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 )
 
@@ -135,6 +136,29 @@ var _ = Describe("InitServer", func() {
 		Entry("non-numeric", "20x"),
 		Entry("zero", "0"),
 		Entry("negative", "-3"),
+	)
+
+	It("defaults server DB_MAX_OPEN_CONNS to 12 and accepts an explicit positive integer", func() {
+		setEnv("DB_MAX_OPEN_CONNS", "")
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.DBMaxOpenConns).To(Equal(db.DefaultServerMaxOpenConns))
+
+		setEnv("DB_MAX_OPEN_CONNS", " 14 ")
+		cfg, err = config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.DBMaxOpenConns).To(Equal(14))
+	})
+
+	DescribeTable("rejects invalid server DB_MAX_OPEN_CONNS values at startup",
+		func(value string) {
+			setEnv("DB_MAX_OPEN_CONNS", value)
+			_, err := config.InitServer()
+			Expect(err).To(MatchError(ContainSubstring("DB_MAX_OPEN_CONNS must be a positive integer")))
+		},
+		Entry("non-numeric", "abc"),
+		Entry("zero", "0"),
+		Entry("negative", "-1"),
 	)
 
 	It("returns an error listing all missing required variables", func() {
@@ -415,6 +439,35 @@ var _ = Describe("InitWorker", func() {
 			Entry("below 1", "0.5"),
 			Entry("above 24", "25"),
 			Entry("non-numeric", "bad"),
+		)
+
+		It("defaults WORKER_CONCURRENCY to 5 and DB_MAX_OPEN_CONNS to 8 (20 total with server)", func() {
+			setEnv("WORKER_CONCURRENCY", "")
+			setEnv("DB_MAX_OPEN_CONNS", "")
+			cfg, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Concurrency).To(Equal(5))
+			Expect(cfg.DBMaxOpenConns).To(Equal(db.DefaultWorkerMaxOpenConns))
+
+			setEnv("WORKER_CONCURRENCY", " 4 ")
+			setEnv("DB_MAX_OPEN_CONNS", " 6 ")
+			cfgCustom, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgCustom.Concurrency).To(Equal(4))
+			Expect(cfgCustom.DBMaxOpenConns).To(Equal(6))
+		})
+
+		DescribeTable("rejects invalid worker concurrency or DB pool values at startup",
+			func(envName, value string) {
+				setEnv(envName, value)
+				_, err := config.InitWorker()
+				Expect(err).To(MatchError(ContainSubstring(envName + " must be a positive integer")))
+			},
+			Entry("zero concurrency", "WORKER_CONCURRENCY", "0"),
+			Entry("negative concurrency", "WORKER_CONCURRENCY", "-2"),
+			Entry("non-numeric concurrency", "WORKER_CONCURRENCY", "five"),
+			Entry("zero db pool", "DB_MAX_OPEN_CONNS", "0"),
+			Entry("negative db pool", "DB_MAX_OPEN_CONNS", "-4"),
 		)
 	})
 })

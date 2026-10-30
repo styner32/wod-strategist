@@ -253,7 +253,7 @@ function VisionTestPageContent() {
     aspectRatio: aspectRatioParam,
     wodDescription: wodDescriptionParam,
     appearanceHints: appearanceHintsParam,
-    recordingSetup,
+    recordingSetup: recordingSetupParam,
   } = useLocalSearchParams<{
     resolution?: string;
     movements?: string;
@@ -276,8 +276,9 @@ function VisionTestPageContent() {
     aspectRatio?: string;
     wodDescription?: string;
     appearanceHints?: string;
-    recordingSetup?: string;
+    recordingSetup?: string | string[];
   }>();
+  const recordingSetup = Array.isArray(recordingSetupParam) ? recordingSetupParam[0] : recordingSetupParam;
 
   const landscapeMode = landscapeModeParam === "true";
   const previewOnly = previewOnlyParam === "true";

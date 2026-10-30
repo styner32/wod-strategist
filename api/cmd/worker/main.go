@@ -31,9 +31,14 @@ func main() {
 	defer logger.Sync()
 
 	// Initialize Database
-	dbConn, err := db.Connect(cfg.DatabaseURL)
+	dbConn, err := db.ConnectWithPool(cfg.DatabaseURL, db.PoolConfig{
+		MaxOpenConns: cfg.DBMaxOpenConns,
+	})
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
+	}
+	if sqlDB, sqlErr := dbConn.DB(); sqlErr == nil {
+		defer sqlDB.Close()
 	}
 	// db.Migrate() // Migration can be done in API server or a separate job, but usually safe to run here too if idempotent
 
@@ -47,7 +52,7 @@ func main() {
 	srv := asynq.NewServer(
 		redisOpt,
 		asynq.Config{
-			Concurrency: 10,
+			Concurrency: cfg.Concurrency,
 		},
 	)
 
@@ -82,6 +87,7 @@ func main() {
 
 	// Create Asynq client for enqueueing tasks from workers (e.g. merge → analysis)
 	queueClient := asynq.NewClient(redisOpt)
+	defer queueClient.Close()
 
 	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient, logger.Log)
 	w.QueueInspector = asynq.NewInspector(redisOpt)
@@ -120,7 +126,10 @@ func main() {
 	go w.RunEnrichmentRecovery(recoveryCtx)
 
 	// Run blocks and handles signals
-	logger.Log.Info("Starting worker server")
+	logger.Log.Info("Starting worker server",
+		zap.Int("concurrency", cfg.Concurrency),
+		zap.Int("db_max_open_conns", cfg.DBMaxOpenConns),
+	)
 
 	// Create a channel to listen for signals
 	quit := make(chan os.Signal, 1)

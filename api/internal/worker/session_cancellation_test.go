@@ -1,12 +1,12 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,40 +20,49 @@ import (
 	"gorm.io/gorm"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
 var _ = Describe("Session cancellation context", func() {
-	It("cancels active work within one second and fences WithoutCancel follow-ups", func() {
+	It("checks session state synchronously without background polling and fences WithoutCancel follow-ups", func() {
 		var active atomic.Bool
+		var probes atomic.Int32
 		active.Store(true)
 		w := NewWorker(nil, nil, "", nil, nil, nil)
-		ctx, done, err := w.withSessionWorkContext(context.Background(), "sess-cancel", 1, true, func(context.Context) (bool, error) { return active.Load(), nil })
+		ctx, done, err := w.withSessionWorkContext(context.Background(), "sess-cancel", 1, true, func(context.Context) (bool, error) {
+			probes.Add(1)
+			return active.Load(), nil
+		})
 		Expect(err).NotTo(HaveOccurred())
 		defer done()
-		active.Store(false)
-		Eventually(ctx.Done(), time.Second).Should(BeClosed())
-		Expect(errors.Is(context.Cause(ctx), db.ErrSessionWorkCancelled)).To(BeTrue())
-		Expect(checkSessionWork(context.WithoutCancel(ctx))).To(MatchError(db.ErrSessionWorkCancelled))
-		Expect(sessionWorkResult(ctx, context.Canceled)).To(Succeed())
-	})
-	It("cancels an in-flight provider request and blocks a detached follow-up request", func() {
-		started := make(chan struct{})
-		cancelled := make(chan struct{})
-		release := make(chan struct{})
-		var calls atomic.Int32
-		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-			if calls.Add(1) == 1 {
-				close(started)
-			}
-			_, _ = io.Copy(io.Discard, request.Body)
-			select {
-			case <-request.Context().Done():
-				close(cancelled)
-			case <-release:
-			}
+		Expect(probes.Load()).To(Equal(int32(1)))
+		Consistently(probes.Load, 150*time.Millisecond, 25*time.Millisecond).Should(Equal(int32(1)))
 
-		}))
-		defer server.Close()
-		defer close(release)
-		client, err := gemini.NewClientWithOptions(context.Background(), nil, gemini.Options{APIKey: "test", BaseURL: server.URL, HTTPClient: server.Client()})
+		active.Store(false)
+		Expect(checkSessionWork(ctx)).To(MatchError(db.ErrSessionWorkCancelled))
+		Expect(checkSessionWork(context.WithoutCancel(ctx))).To(MatchError(db.ErrSessionWorkCancelled))
+		Expect(sessionWorkResult(ctx, db.ErrSessionWorkCancelled)).To(Succeed())
+	})
+
+	It("blocks subsequent provider and detached follow-up requests once session work is disallowed", func() {
+		var calls atomic.Int32
+		client, err := gemini.NewClientWithOptions(context.Background(), nil, gemini.Options{
+			APIKey:  "test",
+			BaseURL: "https://generativelanguage.googleapis.com",
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls.Add(1)
+				_, _ = io.Copy(io.Discard, request.Body)
+				body := `{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(bytes.NewBufferString(body)),
+				}, nil
+			})},
+		})
 		Expect(err).NotTo(HaveOccurred())
 		var active atomic.Bool
 		active.Store(true)
@@ -62,20 +71,21 @@ var _ = Describe("Session cancellation context", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer done()
 		scoped := w.scopedSessionWorker(ctx)
-		results := make(chan error, 1)
-		go func() {
-			_, _, callErr := scoped.GeminiClient.ParseText(ctx, "observe current recording")
-			results <- callErr
-		}()
-		Eventually(started, time.Second).Should(BeClosed())
+
+		out, _, err := scoped.GeminiClient.ParseText(ctx, "observe current recording")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(Equal("ok"))
+		Expect(calls.Load()).To(Equal(int32(1)))
+
 		active.Store(false)
-		Eventually(results, time.Second).Should(Receive(HaveOccurred()))
-		Eventually(cancelled, time.Second).Should(BeClosed())
+		_, _, err = scoped.GeminiClient.ParseText(ctx, "next step")
+		Expect(err).To(MatchError(db.ErrSessionWorkCancelled))
 		_, _, err = scoped.GeminiClient.ParseText(context.WithoutCancel(ctx), "late follow-up")
 		Expect(err).To(MatchError(db.ErrSessionWorkCancelled))
 		Expect(calls.Load()).To(Equal(int32(1)))
 	})
-	It("fails closed on a failed state refresh and keeps that failure retryable", func() {
+
+	It("fails closed on a failed state check and keeps that failure retryable", func() {
 		var fail atomic.Bool
 		outage := errors.New("state lookup unavailable")
 		w := NewWorker(nil, nil, "", nil, nil, nil)
@@ -88,8 +98,9 @@ var _ = Describe("Session cancellation context", func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer done()
 		fail.Store(true)
-		Eventually(ctx.Done(), time.Second).Should(BeClosed())
-		Expect(sessionWorkResult(ctx, context.Canceled)).To(MatchError(outage))
+		err = checkSessionWork(ctx)
+		Expect(err).To(MatchError(outage))
+		Expect(sessionWorkResult(ctx, err)).To(MatchError(outage))
 	})
 })
 
@@ -249,7 +260,7 @@ var _ = Describe("Archived session processing fence", Ordered, func() {
 		defer done()
 		stop()
 		restore()
-		Eventually(ctx.Done(), time.Second).Should(BeClosed())
+		done()
 		payload := VideoAnalysisPayload{SessionID: sid, ProfileID: profile.ID}
 		persistCtx := context.WithoutCancel(ctx)
 		Expect(w.persistVideoAnalysisFailed(persistCtx, payload, &db.AnalysisResult{SessionID: sid, ProfileID: profile.ID, Status: "FAILED", Output: "late failure"})).To(MatchError(db.ErrSessionWorkCancelled))
@@ -274,7 +285,7 @@ var _ = Describe("Archived session processing fence", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer done()
 		stop()
-		Eventually(ctx.Done(), time.Second).Should(BeClosed())
+		done()
 		scoped := w.scopedSessionWorker(ctx)
 		scoped.saveTokenUsage(sid, profile.ID, "chunk:analysis", &gemini.TokenUsage{Model: gemini.ModelFlash38, PromptTokens: 3, CandidateTokens: 2, TotalTokens: 5})
 		var count int64
@@ -294,7 +305,7 @@ var _ = Describe("Archived session processing fence", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		defer done()
 		Expect(conn.Model(&run).Update("status", "CANCELLED").Error).To(Succeed())
-		Eventually(ctx.Done(), time.Second).Should(BeClosed())
+		done()
 		Expect(w.completeSessionDebugRun(context.WithoutCancel(ctx), run.ID, "COMPLETED", time.Now(), map[string]any{"output": "late result"})).To(Succeed())
 		var stored db.SessionReanalysisRun
 		Expect(conn.First(&stored, run.ID).Error).To(Succeed())

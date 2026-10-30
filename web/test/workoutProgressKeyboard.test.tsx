@@ -123,6 +123,27 @@ it("advances past the entire saved merged span", async () => {
   await mounted.cleanup();
 });
 
+it("saves all short-rest merged intervals with Enter and advances beyond the complete window", async () => {
+  const mounted = await mount(response([
+    exercise("first", 0, 10),
+    { ...exercise("rest-1", 10, 15), activity: "rest", movement: null, rep_events: [] },
+    exercise("middle", 15, 25),
+    { ...exercise("rest-2", 25, 35), activity: "rest", movement: null, rep_events: [] },
+    exercise("last", 35, 45),
+    exercise("next", 60, 70),
+  ]));
+  await open(mounted.tree, "middle");
+  const merge = mounted.tree.root.findAllByType("button").find((node: any) => node.children.join("") === "연속된 구간 합치기");
+  expect(merge).toBeDefined();
+  await act(async () => merge.props.onClick());
+  await enter(mounted.tree);
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenLastCalledWith("keyboard", {
+    source_version: "keyboard-source", records: [expect.objectContaining({ interval_id: "middle", start_secs: 0, end_secs: 45, reps: 3, measurement: "window" })],
+  });
+  expect(input(mounted.tree, "시작(초)").props.value).toBe("60");
+  await mounted.cleanup();
+});
+
 it("keeps missing repetitions unknown and displays validation when Enter cannot confirm", async () => {
   const mounted = await mount(response([exercise("first", 0, 10, 0), exercise("next", 20, 30)]));
   await open(mounted.tree, "first");

@@ -497,8 +497,12 @@ function HistoryCard({
               await archiveHistory(item.id);
               onArchive?.(item.id);
               if (item.profile_id) notifyHistoryChanged(item.profile_id);
-            } catch {
-              Alert.alert(t("common.error"), t("historyList.archiveFailed"));
+            } catch (err: any) {
+              const message =
+                err?.status === 409
+                  ? t("historyList.archiveInProgress")
+                  : t("historyList.archiveFailed");
+              Alert.alert(t("common.error"), message);
             }
           },
         },

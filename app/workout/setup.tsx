@@ -34,7 +34,7 @@ import {
   type WorkoutType,
 } from "@/features/wod/workoutType";
 import { useActiveProfile } from "@/store/useProfileStore";
-import { clearRecentSetup, createSetupSnapshot, loadRecentSetup, saveSetupForLater, verifyRecentSetup, type RecentSetupSnapshot, type SetupScope } from "@/features/wod/recentWorkoutSetup";
+import { clearRecentSetup, createSetupSnapshot, loadRecentSetup, saveSetupForLater, serializeSetupSnapshot, verifyRecentSetup, type RecentSetupSnapshot, type SetupScope } from "@/features/wod/recentWorkoutSetup";
 import { subscribeHistoryChanges } from "@/features/wod/archiveStates";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
@@ -729,7 +729,7 @@ export default function WorkoutSetup() {
             ? "true"
             : "false",
         workoutType,
-        recordingSetup: JSON.stringify(recordingSetup),
+        recordingSetup: serializeSetupSnapshot(recordingSetup),
         movements: selectedMovements.join(", "),
         injuries: injuries.join(", "),
         wodDescription: wodDescription.trim(),

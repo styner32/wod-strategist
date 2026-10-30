@@ -70,22 +70,27 @@ func (m *SensorRecoveryManager) expireOverdueUploads(ctx context.Context) {
 	}
 
 	for _, r := range rows {
-		tx := m.db.WithContext(ctx).Begin()
-		var locked db.AnalysisResult
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("id = ? AND sensor_state = ? AND archived_at IS NULL AND automatic_processing_cancelled_at IS NULL", r.ID, db.SensorStateUploading).
-			First(&locked).Error; err != nil {
-			tx.Rollback()
-			continue
+		var updated bool
+		err := m.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var locked db.AnalysisResult
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+				Where("id = ? AND sensor_state = ? AND archived_at IS NULL AND automatic_processing_cancelled_at IS NULL", r.ID, db.SensorStateUploading).
+				First(&locked).Error; err != nil {
+				return nil
+			}
+			if err := tx.Model(&locked).Updates(map[string]any{
+				"sensor_state":           db.SensorStateExpired,
+				"sensor_next_attempt_at": nil,
+				"updated_at":             now,
+			}).Error; err != nil {
+				return err
+			}
+			updated = true
+			return nil
+		})
+		if err == nil && updated {
+			m.logger.Info("marked expired sensor upload", zap.Uint("id", r.ID), zap.String("session_id", r.SessionID))
 		}
-
-		_ = tx.Model(&locked).Updates(map[string]any{
-			"sensor_state":           db.SensorStateExpired,
-			"sensor_next_attempt_at": nil,
-			"updated_at":             now,
-		}).Error
-		_ = tx.Commit().Error
-		m.logger.Info("marked expired sensor upload", zap.Uint("id", r.ID), zap.String("session_id", r.SessionID))
 	}
 }
 

@@ -84,6 +84,18 @@ where one observed segment contains the rest. A 30-second set with
 five reps is instead labeled a normalized 10 reps/minute. Window confirmations
 retain every participating source interval in their original-candidate snapshot.
 
+The web merge suggestion traverses the entire same-movement run in both
+directions, including directly observed rests of at most
+`MAX_MERGE_REST_SECS = 10` seconds between adjacent exercise intervals. Count
+consecutive rest fragments and count-only gaps together; prefer verified capture
+elapsed time when available. A rest-bearing merge uses `measurement: window`,
+counts exercise intervals only, sums observed complete reps, and excludes
+unmatched leading/trailing rests. Validate the entire proposed window with
+`performanceSelectionCovered`; unknown activity, different movements/known
+loads, missing media and discontinuous or incomplete capture mappings stop it.
+When no valid rest-bearing run exists, retain the existing rest-free `set`
+merge and explicit target-movement selection for back-to-back movements.
+
 A confirmation may record 0 repetitions (attempted but no complete repetition: below standard, no-rep, failed or setup). It still requires a resolved actual load (`null` means no external load, never "unknown"). Zero-rep records are stored and shown but excluded from comparisons, best records, median cycle and rest comparisons and from benchmark reads (`reps > 0`). Migration `000057` relaxes the checks to `reps >= 0`/`reps_per_minute >= 0`; its down migration preserves zero-rep rows and restores the positive checks as `NOT VALID`.
 
 The web performance editor focuses itself when opened. Enter in the editor or

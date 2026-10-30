@@ -827,6 +827,7 @@ function coveredByCountOnlyGaps(
 }
 
 const MAX_SEGMENT_BOUNDARY_GAP_SECS = 5;
+export const MAX_MERGE_REST_SECS = 10;
 
 function canBridgeContiguousSetGap(
   unassessed: WorkoutProgress["unassessed"],
@@ -869,12 +870,14 @@ export interface ContiguousExerciseSpan {
   endSecs: number;
   intervalCount: number;
   observedReps: number | null;
+  /** Short observed rests require a window so their elapsed time is preserved. */
+  measurement?: PerformanceMeasurement;
   movementOptions?: ContiguousMovementOption[];
 }
 
 /**
  * Finds contiguous exercise intervals (including across 10s segment boundaries,
- * short boundary cuts, incomplete_cycle boundary gaps, or back-to-back setup/transition movements)
+ * short observed rests, boundary cuts, incomplete_cycle boundary gaps, or back-to-back setup/transition movements)
  * so users can merge a split set and choose the target movement when multiple movements are present.
  */
 export function getContiguousExerciseSpan(
@@ -900,12 +903,60 @@ export function getContiguousExerciseSpan(
       observedReps: baseReps,
     };
   }
+  const movement = interval.movement.trim();
+  const buildWindow = (firstDirection: -1 | 1) => {
+    const chain = [sorted[idx]];
+    let includesRest = false;
+    const extendWindow = (direction: -1 | 1) => {
+      let edgeIdx = idx;
+      while (true) {
+        let nextIdx = edgeIdx + direction;
+        let crossesRest = false;
+        while (sorted[nextIdx]?.activity === "rest") {
+          crossesRest = true;
+          nextIdx += direction;
+        }
+        const next = sorted[nextIdx];
+        if (next?.activity !== "exercise" || next.movement?.trim() !== movement) break;
+        const before = direction === -1 ? next : sorted[edgeIdx];
+        const after = direction === -1 ? sorted[edgeIdx] : next;
+        const pause = before.capture_end_secs != null && after.capture_start_secs != null
+          ? after.capture_start_secs - before.capture_end_secs
+          : after.start_secs - before.end_secs;
+        if (!Number.isFinite(pause) || pause < -1e-6 || pause > MAX_MERGE_REST_SECS + 1e-6) break;
+        const start = direction === -1 ? next.start_secs : chain[0].start_secs;
+        const end = direction === 1 ? next.end_secs : chain[chain.length - 1].end_secs;
+        if (!performanceSelectionCovered(interval, start, end, "window", progress)) break;
+        if (direction === -1) chain.unshift(next);
+        else chain.push(next);
+        includesRest ||= crossesRest;
+        edgeIdx = nextIdx;
+      }
+    };
+    extendWindow(firstDirection);
+    extendWindow(firstDirection === -1 ? 1 : -1);
+    return { chain, includesRest };
+  };
+  // An unknown load on the anchor can connect to either side of a load change.
+  // Try both orders so the shorter side does not hide a larger valid run.
+  const beforeFirst = buildWindow(-1), afterFirst = buildWindow(1);
+  const { chain: sameMovementChain, includesRest } = afterFirst.chain.length > beforeFirst.chain.length ? afterFirst : beforeFirst;
+  if (includesRest) {
+    const reps = sameMovementChain.map(observedReps).filter((value): value is number => value != null);
+    return {
+      startSecs: sameMovementChain[0].start_secs,
+      endSecs: sameMovementChain[sameMovementChain.length - 1].end_secs,
+      intervalCount: sameMovementChain.length,
+      observedReps: reps.length > 0 ? reps.reduce((sum, value) => sum + value, 0) : null,
+      measurement: "window",
+    };
+  }
   const beforeChain: WorkoutProgressInterval[] = [];
   let startSecs = sorted[idx].start_secs;
   for (let i = idx - 1; i >= 0; i--) {
     const prev = sorted[i];
     if (prev.activity === "rest") break;
-    if (prev.activity !== "exercise" || !prev.movement?.trim()) continue;
+    if (prev.activity !== "exercise" || !prev.movement?.trim()) break;
     if (!canBridgeContiguousSetGap(progress.unassessed, prev.end_secs, startSecs)) {
       break;
     }
@@ -920,7 +971,7 @@ export function getContiguousExerciseSpan(
   for (let i = idx + 1; i < sorted.length; i++) {
     const next = sorted[i];
     if (next.activity === "rest") break;
-    if (next.activity !== "exercise" || !next.movement?.trim()) continue;
+    if (next.activity !== "exercise" || !next.movement?.trim()) break;
     if (!canBridgeContiguousSetGap(progress.unassessed, endSecs, next.start_secs)) {
       break;
     }

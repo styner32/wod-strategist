@@ -13,10 +13,10 @@ it("requires explicit review and actual load, retaining original units without c
   const before = JSON.stringify(interval);
   const draft = performanceDraft(interval);
   expect(confirmedPerformanceInput(interval, draft)).toBeNull();
-  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "5" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "5" })).toEqual({ interval_id: "set-1", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
   // A zero-rep attempt keeps its actual load; null load would claim no external load.
-  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 0, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
-  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "none" })).toEqual({ interval_id: "set-1", start_secs: 10, end_secs: 70, reps: 0, load: null, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0" })).toEqual({ interval_id: "set-1", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: 0, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "none" })).toEqual({ interval_id: "set-1", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: 0, load: null, measurement: "set", technique: "singles" });
   expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "unresolved" })).toBeNull();
   expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "weighted", weight: "" })).toBeNull();
   expect(JSON.stringify(interval)).toBe(before);
@@ -102,6 +102,99 @@ describe("observed multi-interval performance windows", () => {
     expect(confirmedPerformanceInput(mappedAnchor, { ...draft, start: "12", end: "20" }, p)).toBeNull();
   });
 });
+
+describe("same-movement merging across short rests", () => {
+  const exercise = (id: string, start: number, end: number): WorkoutProgressInterval => ({
+    ...interval, id, start_secs: start, end_secs: end,
+    rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: start + 1, end_secs: start + 3, complete: true, evidence: "Complete cycle" }],
+  });
+  const rest = (id: string, start: number, end: number): WorkoutProgressInterval => ({
+    id, start_secs: start, end_secs: end, activity: "rest", movement: null, load: null, observation_refs: [],
+  });
+  const first = exercise("first", 0, 10);
+  const middle = exercise("middle", 15, 25);
+  const last = exercise("last", 35, 45);
+  const progress = {
+    version: 1 as const, clock: "media" as const, source_version: "short-rest",
+    intervals: [first, rest("pause-1", 10, 15), middle, rest("pause-2", 25, 35), last, rest("trailing", 45, 50)],
+    unassessed: [],
+  };
+
+  it.each([first, middle, last])("merges the entire run from $id and preserves rest in the confirmed elapsed window", anchor => {
+    const before = JSON.stringify(progress);
+    const span = getContiguousExerciseSpan(anchor, { ...progress, intervals: [...progress.intervals].reverse() });
+    expect(span).toEqual({ startSecs: 0, endSecs: 45, intervalCount: 3, observedReps: 3, measurement: "window" });
+    expect(confirmedPerformanceInput(anchor, {
+      ...performanceDraft(anchor), start: String(span.startSecs), end: String(span.endSecs),
+      reps: String(span.observedReps), measurement: span.measurement!, reviewed: true,
+    }, progress)).toMatchObject({ interval_id: anchor.id, start_secs: 0, end_secs: 45, reps: 3, measurement: "window" });
+    expect(JSON.stringify(progress)).toBe(before);
+  });
+
+  it("stops at a pause over ten seconds while still merging the shorter neighboring pause", () => {
+    const longer = { ...progress, intervals: [first, progress.intervals[1], middle, rest("long", 25, 35.01), exercise("after-long", 35.01, 45)] };
+    expect(getContiguousExerciseSpan(first, longer)).toMatchObject({ startSecs: 0, endSecs: 25, intervalCount: 2, measurement: "window" });
+    expect(getContiguousExerciseSpan(longer.intervals[4], longer)).toMatchObject({ startSecs: 35.01, endSecs: 45, intervalCount: 1 });
+  });
+
+  it("sums consecutive rest fragments rather than allowing ten seconds per rest row", () => {
+    const fragmented = { ...progress, intervals: [first, rest("rest-a", 10, 16), rest("rest-b", 16, 22), exercise("after", 22, 32)] };
+    expect(getContiguousExerciseSpan(first, fragmented)).toEqual({ startSecs: 0, endSecs: 10, intervalCount: 1, observedReps: 1 });
+  });
+
+  it("chooses the larger compatible run when an unknown anchor load lies between load changes", () => {
+    const unknown = { ...middle, load: null };
+    const heavier = { value: 155, unit: "lb" as const, basis: "total" as const };
+    const ambiguous = { ...progress, intervals: [
+      first, progress.intervals[1], unknown, rest("pause-2", 25, 30),
+      { ...exercise("heavy-1", 30, 40), load: heavier }, rest("pause-3", 40, 45),
+      { ...exercise("heavy-2", 45, 55), load: heavier },
+    ] };
+    expect(getContiguousExerciseSpan(unknown, ambiguous)).toEqual({ startSecs: 15, endSecs: 55, intervalCount: 3, observedReps: 3, measurement: "window" });
+  });
+
+  it.each([
+    ["unknown activity", { ...progress, intervals: [first, { ...progress.intervals[1], activity: "unknown" as const }, middle] }],
+    ["different movement", { ...progress, intervals: [first, progress.intervals[1], { ...middle, movement: "Front Squat" }] }],
+    ["changed load", { ...progress, intervals: [first, progress.intervals[1], { ...middle, load: { value: 155, unit: "lb" as const, basis: "total" as const } }] }],
+    ["changed load basis", { ...progress, intervals: [first, progress.intervals[1], { ...middle, load: { value: 135, unit: "lb" as const, basis: "per_implement" as const } }] }],
+    ["missing media", { ...progress, intervals: [first, rest("partial", 11, 15), middle] }],
+    ["unassessed media", { ...progress, unassessed: [{ start_secs: 12, end_secs: 13, clock: "media", reason: "not_analyzed" }] }],
+    ["unverified mapping", { ...progress, unassessed: [{ start_secs: 12, end_secs: 13, clock: "media", reason: "unverified_capture_mapping" }] }],
+    ["capture gap", { ...progress, unassessed: [{ start_secs: 12, end_secs: 13, clock: "capture", reason: "camera_gap" }] }],
+  ])("stops before %s", (_reason, invalid) => {
+    expect(getContiguousExerciseSpan(first, invalid)).toEqual({ startSecs: 0, endSecs: 10, intervalCount: 1, observedReps: 1 });
+  });
+
+  it("uses continuous capture elapsed time to judge rest length", () => {
+    const mapped = { ...progress, intervals: progress.intervals.slice(0, 3).map(row => ({ ...row, capture_start_secs: row.start_secs + 100, capture_end_secs: row.end_secs + 100 })) };
+    expect(getContiguousExerciseSpan(mapped.intervals[0], mapped)).toMatchObject({ endSecs: 25, intervalCount: 2, measurement: "window" });
+    const slowRest = { ...mapped, intervals: [mapped.intervals[0], { ...mapped.intervals[1], capture_end_secs: 122 }, { ...mapped.intervals[2], capture_start_secs: 122, capture_end_secs: 132 }] };
+    expect(getContiguousExerciseSpan(slowRest.intervals[0], slowRest)).toEqual({ startSecs: 0, endSecs: 10, intervalCount: 1, observedReps: 1 });
+    const partialMap = { ...mapped, intervals: [mapped.intervals[0], progress.intervals[1], mapped.intervals[2]] };
+    expect(getContiguousExerciseSpan(partialMap.intervals[0], partialMap).intervalCount).toBe(1);
+    const disconnected = { ...mapped, intervals: [mapped.intervals[0], { ...mapped.intervals[1], capture_start_secs: 111 }, mapped.intervals[2]] };
+    expect(getContiguousExerciseSpan(disconnected.intervals[0], disconnected).intervalCount).toBe(1);
+  });
+
+  it("includes count-only gaps in the pause duration and keeps missing counts unknown", () => {
+    const countOnly = {
+      ...progress, intervals: [first, rest("partial", 11, 15), middle],
+      unassessed: [{ start_secs: 10, end_secs: 11, clock: "media", reason: "incomplete_cycle" }],
+    };
+    expect(getContiguousExerciseSpan(first, countOnly)).toMatchObject({ endSecs: 25, intervalCount: 2, measurement: "window" });
+    const tooLong = { ...countOnly, intervals: [first, rest("partial", 16, 21), exercise("after", 21, 31)], unassessed: [{ start_secs: 10, end_secs: 16, clock: "media", reason: "incomplete_cycle" }] };
+    expect(getContiguousExerciseSpan(first, tooLong).intervalCount).toBe(1);
+    const unknown = { ...progress, intervals: progress.intervals.map(row => ({ ...row, rep_events: [] })) };
+    expect(getContiguousExerciseSpan(unknown.intervals[0], unknown).observedReps).toBeNull();
+  });
+
+  it("keeps a rest-free chain as a set when only an unmatched outer rest is present", () => {
+    const consecutive = { ...progress, intervals: [first, exercise("second", 10, 20), exercise("third", 20, 30), rest("trailing", 30, 35), { ...last, movement: "Front Squat" }] };
+    expect(getContiguousExerciseSpan(first, consecutive)).toEqual({ startSecs: 0, endSecs: 30, intervalCount: 3, observedReps: 3 });
+  });
+});
+
 it("rejects a selected mapped span whose rounded endpoint makes elapsed time nonpositive", () => {
   const mapped = { ...interval, start_secs: 0, end_secs: 20, capture_start_secs: 0, capture_end_secs: 19.995 };
   const progress = { version: 1 as const, clock: "media" as const, source_version: "mapped", intervals: [mapped], unassessed: [] };
@@ -289,6 +382,7 @@ describe("extractWodLoads and summarizeWorkoutMovements", () => {
       reps: "5",
       measurement: "set" as const,
       targetIntervalId: "seg-fs",
+      movement: "Front Squat",
       reviewed: true,
     };
     expect(diagnosePerformanceDraft(squatClean, mergedAsFrontSquatDraft, multiMovementProgress)).toBeNull();

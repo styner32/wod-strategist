@@ -3,11 +3,13 @@ import { Alert } from "react-native";
 import { act, fireEvent, render, waitFor } from "@testing-library/react-native";
 
 import VisionTestPage from "../visionTestPage";
+import type { RecentSetupSnapshot } from "@/features/wod/recentWorkoutSetup";
 
 const mockRef = { ownerUserId: 7, profileId: 3, sessionId: "WOD-20260929-LIFECYCLE" };
 const mockPrepare = jest.fn();
-const mockValidateRecordingSetup = jest.fn(async (..._args: unknown[]) => {});
+const mockValidateRecordingSetup = jest.fn(async (..._args: unknown[]): Promise<unknown> => undefined);
 const mockSaveRecordingSetup = jest.fn(async (..._args: unknown[]) => {});
+const mockFetchArchiveStates = jest.fn();
 const mockBegin = jest.fn();
 const mockAdd = jest.fn();
 const mockStopped = jest.fn();
@@ -22,6 +24,7 @@ const mockCancelCompression = jest.fn();
 const mockMergeChunks = jest.fn();
 let mockContinuousRecording = true;
 let mockSkipCompression = true;
+let mockRecordingSetupParam: string | string[] | undefined = "launch-snapshot";
 const mockEnvironment = {
   status: "off", start: jest.fn(), stop: jest.fn(), pause: jest.fn(), resume: jest.fn(),
   event: jest.fn(), offerChunk: jest.fn(),
@@ -33,10 +36,11 @@ const mockNative = { startRecording: (...args: unknown[]) => mockStartCamera(...
 const mockDevice = { id: "rear", physicalDevices: [] };
 const mockFormat = { videoWidth: 1280, videoHeight: 720, videoStabilizationModes: [] };
 
+jest.mock("@react-native-async-storage/async-storage", () => require("@react-native-async-storage/async-storage/jest/async-storage-mock"));
 jest.mock("expo-router", () => ({
   router: { replace: (...args: unknown[]) => mockReplace(...args), back: jest.fn(), push: jest.fn() },
   useFocusEffect: () => {},
-  useLocalSearchParams: () => ({ recordingSetup: "launch-snapshot", autoRecord: "true", continuousRecording: String(mockContinuousRecording), showSkeleton: "false", skipCompression: String(mockSkipCompression) }),
+  useLocalSearchParams: () => ({ recordingSetup: mockRecordingSetupParam, autoRecord: "true", continuousRecording: String(mockContinuousRecording), showSkeleton: "false", skipCompression: String(mockSkipCompression) }),
 }));
 jest.mock("expo-router/react-navigation", () => ({ useIsFocused: () => true }));
 jest.mock("react-native-vision-camera", () => {
@@ -66,7 +70,12 @@ jest.mock("@/features/auth/useAuthStore", () => ({ useAuthStore: { getState: () 
 jest.mock("@/store/useProfileStore", () => ({ useProfileStore: (selector: (value: unknown) => unknown) => selector({ activeProfileId: 3 }) }));
 jest.mock("@/store/useMergeStatus", () => ({ useMergeStatus: { getState: () => ({ addPending: mockAddPending, removePending: jest.fn() }) } }));
 jest.mock("@/features/wod/recentWorkoutSetup", () => ({ saveRecordingSetup: (...args: unknown[]) => mockSaveRecordingSetup(...args), validateRecordingSetup: (...args: unknown[]) => mockValidateRecordingSetup(...args) }));
+jest.mock("@/features/wod/archiveStates", () => ({
+  ...jest.requireActual("@/features/wod/archiveStates"),
+  fetchArchiveStates: (...args: unknown[]) => mockFetchArchiveStates(...args),
+}));
 jest.mock("@/features/wod/workoutType", () => ({
+  ...jest.requireActual("@/features/wod/workoutType"),
   buildWorkoutSessionId: () => mockRef.sessionId, parseWorkoutType: () => "WOD", formatWorkoutTypeLabel: () => "WOD",
 }));
 jest.mock("@/features/video/originalVideoStore", () => ({
@@ -136,8 +145,11 @@ let warnings: jest.SpyInstance;
 beforeEach(() => {
   jest.clearAllMocks();
   mockStartCamera.mockReset();
+  mockValidateRecordingSetup.mockReset().mockResolvedValue(undefined);
+  mockFetchArchiveStates.mockReset().mockRejectedValue(new Error("unexpected_archive_check"));
   mockContinuousRecording = true;
   mockSkipCompression = true;
+  mockRecordingSetupParam = "launch-snapshot";
   mockReleases.length = 0;
   mockPrepare.mockResolvedValue(mockRef);
   mockBegin.mockImplementation(async (_ref: unknown, order: number) => `file:///documents/run-${order}/`);
@@ -755,4 +767,82 @@ it("checks again after first source-directory preparation before starting the na
   await act(async()=>{directory.resolve("file:///documents/run-1/");});
   expect(mockStartCamera).not.toHaveBeenCalled(); expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
   view.unmount();
+});
+
+describe("recording setup validation at camera start", () => {
+  const inheritedSessionId = "WOD-20261029-SOURCE";
+  const launchParam = (overrides: Partial<RecentSetupSnapshot> = {}) => JSON.stringify({
+    version: 2,
+    snapshotId: "recording-start-regression",
+    ownerUserId: 7,
+    profileId: 3,
+    savedAt: Date.now(),
+    origin: "draft",
+    workoutType: "wod",
+    wodDescription: "",
+    rawText: "",
+    selectedMovements: [],
+    customMovements: [],
+    sessionAppearance: "",
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    const { validateRecordingSetup } = jest.requireActual<typeof import("@/features/wod/recentWorkoutSetup")>("@/features/wod/recentWorkoutSetup");
+    mockValidateRecordingSetup.mockImplementation((raw, scope) => validateRecordingSetup(raw as string | undefined, scope as { ownerUserId: number; profileId: number }));
+  });
+
+  it.each(["string", "array"])("starts native recording from an empty draft passed as a %s without an archive request", async paramKind => {
+    const raw = launchParam();
+    mockRecordingSetupParam = paramKind === "array" ? [raw] : raw;
+    const alert = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const view = render(<VisionTestPage />);
+    try {
+      await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+      expect(mockValidateRecordingSetup).toHaveBeenCalledTimes(2);
+      expect(mockValidateRecordingSetup).toHaveBeenNthCalledWith(2, raw, { ownerUserId: 7, profileId: 3 });
+      expect(mockFetchArchiveStates).not.toHaveBeenCalled();
+      expect(alert).not.toHaveBeenCalled();
+      fireEvent.press(view.getByText("square.fill"));
+      await act(async () => { await mockStartCamera.mock.calls[0][0].onRecordingFinished(source()); });
+      await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    } finally { view.unmount(); alert.mockRestore(); }
+  });
+
+  it("starts native recording with selected movements and no WOD description", async () => {
+    mockRecordingSetupParam = launchParam({ selectedMovements: ["Air Squat"] });
+    const view = render(<VisionTestPage />);
+    try {
+      await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+      expect(mockValidateRecordingSetup).toHaveBeenCalledTimes(2);
+      expect(mockFetchArchiveStates).not.toHaveBeenCalled();
+      fireEvent.press(view.getByText("square.fill"));
+      await act(async () => { await mockStartCamera.mock.calls[0][0].onRecordingFinished(source()); });
+      await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    } finally { view.unmount(); }
+  });
+
+  it.each(["malformed", "foreign account", "foreign profile", "archived inherited"])("blocks a %s snapshot before native recording", async scenario => {
+    if (scenario === "malformed") mockRecordingSetupParam = "{invalid-json";
+    else if (scenario === "foreign account") mockRecordingSetupParam = launchParam({ ownerUserId: 99 });
+    else if (scenario === "foreign profile") mockRecordingSetupParam = launchParam({ profileId: 99 });
+    else {
+      mockRecordingSetupParam = launchParam({ origin: "recording", sourceSessionId: inheritedSessionId });
+      mockFetchArchiveStates.mockResolvedValue({
+        checked_at: "now", history_revision: "2",
+        states: [{ session_id: inheritedSessionId, state: "archived" }],
+      });
+    }
+    const alert = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const view = render(<VisionTestPage />);
+    try {
+      await waitFor(() => expect(mockStopped).toHaveBeenCalledWith(mockRef, { complete: false, reason: "recording_source_unavailable" }));
+      expect(mockStartCamera).not.toHaveBeenCalled();
+      expect(mockBegin).not.toHaveBeenCalled();
+      expect(mockSaveRecordingSetup).not.toHaveBeenCalled();
+      expect(alert).toHaveBeenCalledWith("common.error", "setup.archiveSourceUnavailable");
+      if (scenario === "archived inherited") expect(mockFetchArchiveStates).toHaveBeenCalledWith(3, [inheritedSessionId], undefined);
+      else expect(mockFetchArchiveStates).not.toHaveBeenCalled();
+    } finally { view.unmount(); alert.mockRestore(); }
+  });
 });

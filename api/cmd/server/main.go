@@ -46,9 +46,14 @@ func main() {
 	defer logger.Sync()
 
 	// Initialize Database
-	dbConn, err := db.Connect(cfg.DatabaseURL)
+	dbConn, err := db.ConnectWithPool(cfg.DatabaseURL, db.PoolConfig{
+		MaxOpenConns: cfg.DBMaxOpenConns,
+	})
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
+	}
+	if sqlDB, sqlErr := dbConn.DB(); sqlErr == nil {
+		defer sqlDB.Close()
 	}
 
 	// Initialize Redis Connection for Asynq Client

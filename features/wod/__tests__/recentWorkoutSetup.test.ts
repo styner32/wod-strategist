@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { fetchArchiveStates } from "../archiveStates";
 import { RECENT_WORKOUT_SETUP_KEY } from "../workoutType";
-import { clearRecentSetup, createSetupSnapshot, loadRecentSetup, recentSetupStorageKey, saveDraftSetup, saveRecordingSetup, saveSetupForLater, validateRecordingSetup, verifyRecentSetup } from "../recentWorkoutSetup";
+import { clearRecentSetup, createSetupSnapshot, loadRecentSetup, recentSetupStorageKey, saveDraftSetup, saveRecordingSetup, saveSetupForLater, serializeSetupSnapshot, validateRecordingSetup, verifyRecentSetup } from "../recentWorkoutSetup";
 let mockUser = 1;
 const mockStorage = new Map<string, string>();
 jest.mock("@react-native-async-storage/async-storage", () => ({
@@ -79,4 +79,88 @@ it("preserves recorded provenance through editing and save-later so archive or o
   jest.mocked(fetchArchiveStates).mockRejectedValue(new Error("offline"));
   expect(await loadRecentSetup(scope)).toBeUndefined();
   await expect(saveSetupForLater(fields, scope, saved)).rejects.toThrow("offline");
+});
+
+it("allows launching a fresh recording without WOD text or selected movements and does not clobber recentRecording", async () => {
+  const existingLaunch = createSetupSnapshot(fields, scope);
+  await saveRecordingSetup(serializeSetupSnapshot(existingLaunch), scope, "WOD-20261029-PRIOR");
+
+  const emptyLaunch = createSetupSnapshot(
+    { workoutType: "wod", wodDescription: "", rawText: "", selectedMovements: [], customMovements: [], sessionAppearance: "" },
+    scope,
+  );
+  jest.mocked(fetchArchiveStates).mockRejectedValue(new Error("offline"));
+  await expect(validateRecordingSetup(serializeSetupSnapshot(emptyLaunch), scope)).resolves.toMatchObject({
+    origin: "draft",
+    wodDescription: "",
+    selectedMovements: [],
+  });
+  expect(fetchArchiveStates).not.toHaveBeenCalled();
+
+  await saveRecordingSetup(serializeSetupSnapshot(emptyLaunch), scope, "WOD-20261030-EMPTY");
+  const saved = JSON.parse(mockStorage.get(recentSetupStorageKey(scope))!);
+  expect(saved.recentRecording).toMatchObject({
+    origin: "recording",
+    sourceSessionId: "WOD-20261029-PRIOR",
+    wodDescription: "Fran",
+  });
+});
+
+it("still rechecks archived provenance when an inherited recording setup has cleared WOD text and movements", async () => {
+  const launch = createSetupSnapshot(fields, scope);
+  await saveRecordingSetup(serializeSetupSnapshot(launch), scope, "WOD-20261029-SOURCE");
+  jest.mocked(fetchArchiveStates).mockResolvedValueOnce({
+    checked_at: "now",
+    history_revision: "1",
+    states: [{ session_id: "WOD-20261029-SOURCE", state: "active" }],
+  });
+  const reused = (await loadRecentSetup(scope))!;
+  const clearedInherited = createSetupSnapshot(
+    { workoutType: "wod", wodDescription: "", rawText: "", selectedMovements: [], customMovements: [], sessionAppearance: "blue top" },
+    scope,
+    Date.now(),
+    reused,
+  );
+  jest.mocked(fetchArchiveStates).mockResolvedValueOnce({
+    checked_at: "now",
+    history_revision: "2",
+    states: [{ session_id: "WOD-20261029-SOURCE", state: "archived" }],
+  });
+  await expect(validateRecordingSetup(serializeSetupSnapshot(clearedInherited), scope)).rejects.toThrow("archived_source");
+});
+
+it("allows an empty inherited launch only after confirming its original recording is active", async () => {
+  const recorded = {
+    ...createSetupSnapshot(fields, scope),
+    origin: "recording" as const,
+    sourceSessionId: "WOD-20261029-SOURCE",
+  };
+  const launch = createSetupSnapshot(
+    { ...fields, wodDescription: "", rawText: "", selectedMovements: [] },
+    scope,
+    Date.now(),
+    recorded,
+  );
+  jest.mocked(fetchArchiveStates).mockResolvedValueOnce({
+    checked_at: "now", history_revision: "1",
+    states: [{ session_id: recorded.sourceSessionId, state: "active" }],
+  });
+
+  await expect(validateRecordingSetup(serializeSetupSnapshot(launch), scope)).resolves.toMatchObject({
+    origin: "recording", sourceSessionId: recorded.sourceSessionId, wodDescription: "",
+  });
+  expect(fetchArchiveStates).toHaveBeenCalledTimes(1);
+  expect(fetchArchiveStates).toHaveBeenCalledWith(scope.profileId, [recorded.sourceSessionId], undefined);
+});
+
+it("preserves percent sequences in serializeSetupSnapshot across extra decodeURIComponent in route params", async () => {
+  const launch = createSetupSnapshot(
+    { ...fields, wodDescription: "Back Squat 5x5 @ 80%20 & 50%22 effort" },
+    scope,
+  );
+  const serialized = serializeSetupSnapshot(launch);
+  expect(serialized).not.toContain("%");
+  const afterExtraDecode = decodeURIComponent(serialized);
+  const validated = await validateRecordingSetup(afterExtraDecode, scope);
+  expect(validated?.wodDescription).toBe("Back Squat 5x5 @ 80%20 & 50%22 effort");
 });

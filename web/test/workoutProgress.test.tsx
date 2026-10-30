@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WorkoutProgressPanel } from "../src/history/components/WorkoutProgressPanel";
 import { historyApi } from "../src/api/history";
-import type { WorkoutProgressResponse, PerformanceRecord } from "../../shared/workoutProgress";
+import type { WorkoutProgressResponse, PerformanceRecord, WorkoutProgressInterval } from "../../shared/workoutProgress";
 jest.mock("../src/api/history", () => ({ historyApi: { getWorkoutProgress: jest.fn(), confirmPerformanceRecords: jest.fn(), getPerformanceBenchmarks: jest.fn() } }));
 const { act, create } = require("react-test-renderer");
 const evidence: WorkoutProgressResponse = { progress: { version: 1, clock: "media", source_version: "a", intervals: [{ id: "set-1", start_secs: 10, end_secs: 70, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total" }, observation_refs: [], rep_events: [] }], unassessed: [] }, records: [] };
@@ -165,6 +165,56 @@ it("merges contiguous 10-second segment intervals and confirms them as a single 
     source_version: "split",
     records: [{ interval_id: "seg-0", start_secs: 0, end_secs: 20, reps: 10, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" }],
   });
+  await act(() => tree.unmount()); client.clear();
+});
+
+it("merges all same-movement intervals across short rests from the middle row and saves their total repetitions as a window", async () => {
+  const exercise = (id: string, start: number, end: number): WorkoutProgressInterval => ({
+    ...evidence.progress!.intervals[0], id, start_secs: start, end_secs: end,
+    rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: start + 1, end_secs: start + 3, complete: true, evidence: "Visible complete rep" }],
+  });
+  const shortRestEvidence: WorkoutProgressResponse = {
+    progress: {
+      ...evidence.progress!, source_version: "short-rest",
+      intervals: [
+        exercise("first", 0, 10),
+        { id: "rest-1", start_secs: 10, end_secs: 15, activity: "rest", movement: null, load: null, observation_refs: [] },
+        exercise("middle", 15, 25),
+        { id: "rest-2", start_secs: 25, end_secs: 35, activity: "rest", movement: null, load: null, observation_refs: [] },
+        exercise("last", 35, 45),
+      ],
+    }, records: [],
+  };
+  const merged: PerformanceRecord = { ...current, interval_id: "middle", source_version: "short-rest", start_secs: 0, end_secs: 45, reps: 3, measurement: "window" };
+  (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(shortRestEvidence);
+  (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({ ...shortRestEvidence, records: [merged] });
+  const { tree, client, seek } = await mount();
+  for (const id of ["first", "middle", "last"]) {
+    expect(tree.root.find((node: any) => node.props?.["data-testid"] === `contiguous-badge-${id}`).children.join("")).toContain("00:00–00:45");
+  }
+  const middleCard = tree.root.find((node: any) => node.props?.["data-testid"] === "exercise-interval-middle");
+  const edit = middleCard.findAllByType("button").find((node: any) => node.children.join("") === "반복수·구간·중량 확인/수정");
+  await act(async () => edit.props.onClick());
+  await flush();
+  expect(allText(tree)).toContain("같은 동작의 연속 3개 구간");
+  expect(allText(tree)).toContain("중간 휴식이 각각 10초 이내");
+  await click(tree, "연속된 구간 합치기");
+  const input = (label: string) => tree.root.findAllByType("input").find((node: any) => node.props["aria-label"] === label);
+  expect(input("시작(초)").props.value).toBe("0");
+  expect(input("종료(초)").props.value).toBe("45");
+  expect(input("완료 반복수").props.value).toBe("3");
+  expect(tree.root.findAllByType("select").some((node: any) => node.props.value === "window")).toBe(true);
+  await click(tree, "선택한 영상 범위 확인");
+  expect(seek).toHaveBeenCalledWith(0, 45);
+  await act(async () => tree.root.findAllByType("input").find((node: any) => node.props.type === "checkbox").props.onChange({ target: { checked: true } }));
+  await click(tree, "확인한 기록 저장");
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
+    source_version: "short-rest",
+    records: [{ interval_id: "middle", start_secs: 0, end_secs: 45, reps: 3, load: { value: 135, unit: "lb", basis: "total" }, measurement: "window", technique: "singles" }],
+  });
+  for (const id of ["first", "middle", "last"]) {
+    expect(tree.root.find((node: any) => node.props?.["data-testid"] === `confirmed-badge-${id}`).children.join("")).toContain("확정 기록");
+  }
   await act(() => tree.unmount()); client.clear();
 });
 

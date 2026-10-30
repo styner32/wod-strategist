@@ -17,7 +17,6 @@ import (
 
 // Archive is terminal for original recording jobs. A restore does not clear the
 // durable fence; separately identified manual runs can still be requested.
-const sessionCancellationPollInterval = 250 * time.Millisecond
 
 type sessionWorkContextKey struct{}
 type sessionWorkGuard struct {
@@ -75,29 +74,19 @@ func (w *Worker) withSessionWorkContext(ctx context.Context, sessionID string, p
 		if err := db.WithSessionAutomaticWork(ctx, w.DB, profileID, sessionID, func(*gorm.DB) error { return nil }); err != nil {
 			return ctx, func() {}, err
 		}
-	}
-	if err := guard.allowed(ctx); err != nil {
+		if guard.stillCurrent != nil {
+			ok, err := guard.stillCurrent(ctx)
+			if err != nil {
+				return ctx, func() {}, err
+			}
+			if !ok {
+				return ctx, func() {}, db.ErrSessionWorkCancelled
+			}
+		}
+	} else if err := guard.allowed(ctx); err != nil {
 		return ctx, func() {}, err
 	}
 	workCtx, cancel := context.WithCancelCause(context.WithValue(ctx, sessionWorkContextKey{}, guard))
-	go func() {
-		ticker := time.NewTicker(sessionCancellationPollInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-workCtx.Done():
-				return
-			case <-ticker.C:
-				probe, done := context.WithTimeout(context.WithoutCancel(workCtx), sessionCancellationPollInterval)
-				err := guard.allowed(probe)
-				done()
-				if err != nil {
-					cancel(err)
-					return
-				}
-			}
-		}
-	}()
 	return workCtx, func() { cancel(context.Canceled) }, nil
 }
 

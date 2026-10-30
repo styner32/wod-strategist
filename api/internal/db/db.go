@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"database/sql/driver"
 	"fmt"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/wod-strategist/api/internal/logger"
+	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -284,7 +286,58 @@ type SessionAppearanceHint struct {
 	UpdatedAt time.Time    `json:"updated_at"`
 }
 
+const (
+	// DefaultMaxOpenConns keeps total client connections within 20 so shared
+	// minimal PostgreSQL tiers (e.g. db-f1-micro: 25 max_connections, ~22 usable)
+	// retain headroom. Server (12) + Worker (8) split this budget to 20 total.
+	DefaultMaxOpenConns       = 20
+	DefaultServerMaxOpenConns = 12
+	DefaultWorkerMaxOpenConns = 8
+	DefaultConnMaxIdleTime    = 5 * time.Minute
+	DefaultConnMaxLifetime    = 30 * time.Minute
+)
+
+type PoolConfig struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxIdleTime time.Duration
+	ConnMaxLifetime time.Duration
+}
+
+func normalizePoolConfig(pool PoolConfig) PoolConfig {
+	if pool.MaxOpenConns <= 0 {
+		pool.MaxOpenConns = DefaultMaxOpenConns
+	}
+	// Match MaxIdleConns to MaxOpenConns by default so database/sql retains warm
+	// connections for reuse instead of closing down to Go's default of 2 after bursts.
+	if pool.MaxIdleConns <= 0 || pool.MaxIdleConns > pool.MaxOpenConns {
+		pool.MaxIdleConns = pool.MaxOpenConns
+	}
+	if pool.ConnMaxIdleTime <= 0 {
+		pool.ConnMaxIdleTime = DefaultConnMaxIdleTime
+	}
+	if pool.ConnMaxLifetime <= 0 {
+		pool.ConnMaxLifetime = DefaultConnMaxLifetime
+	}
+	return pool
+}
+
+func applyPoolConfig(sqlDB *sql.DB, pool PoolConfig) PoolConfig {
+	resolved := normalizePoolConfig(pool)
+	if sqlDB != nil {
+		sqlDB.SetMaxOpenConns(resolved.MaxOpenConns)
+		sqlDB.SetMaxIdleConns(resolved.MaxIdleConns)
+		sqlDB.SetConnMaxIdleTime(resolved.ConnMaxIdleTime)
+		sqlDB.SetConnMaxLifetime(resolved.ConnMaxLifetime)
+	}
+	return resolved
+}
+
 func Connect(databaseURL string) (*gorm.DB, error) {
+	return ConnectWithPool(databaseURL, PoolConfig{})
+}
+
+func ConnectWithPool(databaseURL string, pool PoolConfig) (*gorm.DB, error) {
 	dsn, err := normalizeDatabaseURL(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid database configuration: %w", err)
@@ -298,7 +351,20 @@ func Connect(databaseURL string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	logger.Log.Info("Database connection established")
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to configure database pool: %w", err)
+	}
+	resolved := applyPoolConfig(sqlDB, pool)
+
+	if logger.Log != nil {
+		logger.Log.Info("Database connection established",
+			zap.Int("max_open_conns", resolved.MaxOpenConns),
+			zap.Int("max_idle_conns", resolved.MaxIdleConns),
+			zap.Duration("conn_max_idle_time", resolved.ConnMaxIdleTime),
+			zap.Duration("conn_max_lifetime", resolved.ConnMaxLifetime),
+		)
+	}
 	return db, nil
 }
 

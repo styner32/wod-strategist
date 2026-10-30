@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -77,6 +78,8 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 	c.JSON(http.StatusOK, compactAnalysisSummaries(normalizeHighlightResultsForResponseWithSchema(results, workoutLoadSchemaVersion(c))))
 }
 
+var errSessionProcessingActive = errors.New("session processing is active")
+
 func (ctl *Controller) ArchiveHistory(c *gin.Context)   { ctl.setHistoryArchived(c, true) }
 func (ctl *Controller) UnarchiveHistory(c *gin.Context) { ctl.setHistoryArchived(c, false) }
 
@@ -111,11 +114,15 @@ func (ctl *Controller) setHistoryArchived(c *gin.Context, archive bool) {
 		}
 		now := time.Now().UTC()
 		if archive {
-			updates := map[string]any{"archived_at": now, "automatic_processing_cancelled_at": gorm.Expr("COALESCE(automatic_processing_cancelled_at, ?)", now), "updated_at": now}
-			if row.Status != "COMPLETED" && row.Status != "FAILED" {
-				updates["status"] = "CANCELLED"
+			active, err := hasActiveSessionProcessing(tx, &row)
+			if err != nil {
+				return err
 			}
-			if row.SensorState == db.SensorStateUploading || row.SensorState == db.SensorStatePending || row.SensorState == db.SensorStateRunning {
+			if active {
+				return errSessionProcessingActive
+			}
+			updates := map[string]any{"archived_at": now, "automatic_processing_cancelled_at": gorm.Expr("COALESCE(automatic_processing_cancelled_at, ?)", now), "updated_at": now}
+			if row.SensorState == db.SensorStateUploading {
 				updates["sensor_state"], updates["sensor_next_attempt_at"] = db.SensorStateCancelled, nil
 				updates["sensor_version"] = gorm.Expr("sensor_version + 1")
 				var processing map[string]any
@@ -135,17 +142,7 @@ func (ctl *Controller) setHistoryArchived(c *gin.Context, archive bool) {
 			if err := tx.Model(&db.AnalysisResult{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 				return err
 			}
-			for _, table := range []string{"chunk_analysis_results", "highlight_results", "chunk_reanalysis_runs", "session_reanalysis_runs", "recognition_review_runs"} {
-				values := map[string]any{"status": "CANCELLED", "updated_at": now}
-				if table == "chunk_reanalysis_runs" || table == "session_reanalysis_runs" || table == "recognition_review_runs" {
-					values["safe_error"] = "SESSION_ARCHIVED"
-					values["completed_at"] = now
-				}
-				if err := tx.Table(table).Where("session_id = ? AND profile_id = ? AND UPPER(status) IN ('QUEUED','PENDING','UPLOADED','PROCESSING','MERGING','RUNNING')", row.SessionID, row.ProfileID).Updates(values).Error; err != nil {
-					return err
-				}
-			}
-			if err := tx.Exec(`UPDATE sessions SET activity_summary = jsonb_set(activity_summary, '{review_state}', '"unavailable"'::jsonb), updated_at = ? WHERE session_id = ? AND profile_id = ? AND activity_summary->>'review_state' IN ('provisional','queued','running')`, now, row.SessionID, row.ProfileID).Error; err != nil {
+			if err := tx.Exec(`UPDATE sessions SET activity_summary = jsonb_set(activity_summary, '{review_state}', '"unavailable"'::jsonb), updated_at = ? WHERE session_id = ? AND profile_id = ? AND activity_summary->>'review_state' = 'provisional'`, now, row.SessionID, row.ProfileID).Error; err != nil {
 				return err
 			}
 		} else if err := tx.Model(&db.AnalysisResult{}).Where("id = ?", id).Updates(map[string]any{"archived_at": nil, "updated_at": now}).Error; err != nil {
@@ -157,6 +154,10 @@ func (ctl *Controller) setHistoryArchived(c *gin.Context, archive bool) {
 		revision++
 		return tx.Table("profiles").Where("id = ?", row.ProfileID).Update("workout_history_revision", revision).Error
 	})
+	if errors.Is(err, errSessionProcessingActive) {
+		c.JSON(http.StatusConflict, gin.H{"error": "session is still processing", "error_code": "SESSION_PROCESSING_ACTIVE"})
+		return
+	}
 	if err != nil {
 		logger.Log.Error("failed to change history archive state", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to change archive state"})
@@ -167,6 +168,63 @@ func (ctl *Controller) setHistoryArchived(c *gin.Context, archive bool) {
 		message = "history archived"
 	}
 	c.JSON(http.StatusOK, gin.H{"message": message, "history_revision": strconv.FormatInt(revision, 10)})
+}
+
+func isTerminalAnalysisStatus(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "COMPLETED", "FAILED", "CANCELLED":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasActiveEnrichmentWork(raw db.JSONDocument) bool {
+	var value map[string]any
+	if json.Unmarshal(raw, &value) != nil || value == nil {
+		return false
+	}
+	running := func(status any) bool {
+		s, _ := status.(string)
+		return s == "pending" || s == "preparing" || s == "running"
+	}
+	if running(value["status"]) {
+		return true
+	}
+	if items, ok := value["items"].([]any); ok {
+		for _, item := range items {
+			if m, ok := item.(map[string]any); ok && running(m["status"]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasActiveSessionProcessing(tx *gorm.DB, row *db.AnalysisResult) (bool, error) {
+	if !isTerminalAnalysisStatus(row.Status) {
+		return true, nil
+	}
+	if row.SensorState == db.SensorStatePending || row.SensorState == db.SensorStateRunning {
+		return true, nil
+	}
+	if hasActiveEnrichmentWork(row.AnalysisSummary) || hasActiveEnrichmentWork(row.AgenticHighlightAnalysis) {
+		return true, nil
+	}
+	for _, table := range []string{"chunk_analysis_results", "highlight_results", "chunk_reanalysis_runs", "session_reanalysis_runs", "recognition_review_runs"} {
+		var count int64
+		if err := tx.Table(table).Where("session_id = ? AND profile_id = ? AND UPPER(status) IN ('QUEUED','PENDING','UPLOADED','PROCESSING','MERGING','RUNNING')", row.SessionID, row.ProfileID).Limit(1).Count(&count).Error; err != nil {
+			return false, err
+		}
+		if count > 0 {
+			return true, nil
+		}
+	}
+	var activeReviews int64
+	if err := tx.Table("sessions").Where("session_id = ? AND profile_id = ? AND activity_summary->>'review_state' IN ('queued','running')", row.SessionID, row.ProfileID).Limit(1).Count(&activeReviews).Error; err != nil {
+		return false, err
+	}
+	return activeReviews > 0, nil
 }
 
 func interruptArchiveEnrichment(raw db.JSONDocument) db.JSONDocument {

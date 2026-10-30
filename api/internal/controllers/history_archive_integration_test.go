@@ -99,9 +99,16 @@ var _ = Describe("POST /api/v1/history/:id/archive", func() {
 		Expect(transport.Verify()).To(Succeed())
 	})
 
-	It("cancels unfinished original and manual work once, preserving completed evidence", func() {
+	It("rejects archiving while original or manual work is active, then archives idempotently once terminal", func() {
 		profile, user, router := historyArchiveOwner()
-		session := testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WOD-20261029-ARCHIVECANCEL", ProfileID: profile.ID})
+		otherCompleted := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+			SessionID: "WOD-20261029-ARCHIVEOTHERDONE", ProfileID: profile.ID, Status: "COMPLETED", Output: "finished sibling workout",
+		})
+		session := testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:       "WOD-20261029-ARCHIVECANCEL",
+			ProfileID:       profile.ID,
+			ActivitySummary: db.NullableJSONDocument(`{"review_state":"running"}`),
+		})
 		nextAttempt := time.Now().Add(time.Minute)
 		analysis := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
 			SessionID: session.SessionID, ProfileID: profile.ID, Status: "PENDING", Output: "saved partial evidence",
@@ -112,47 +119,86 @@ var _ = Describe("POST /api/v1/history/:id/archive", func() {
 		})
 		chunk := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{SessionID: session.SessionID, ProfileID: profile.ID, Status: "PENDING", FilePath: "pending.mp4"})
 		completedChunk := testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", FilePath: "completed.mp4", Output: "confirmed observation"})
+		highlight := db.HighlightResult{SessionID: session.SessionID, ProfileID: profile.ID, Title: "Full Reel", Status: "PROCESSING", Segments: "[]"}
+		Expect(dbConn.Create(&highlight).Error).To(Succeed())
 		chunkRun := testhelpers.CreateChunkReanalysisRun(dbConn, &db.ChunkReanalysisRun{SessionID: session.SessionID, ProfileID: profile.ID, ChunkAnalysisResultID: chunk.ID, Status: "QUEUED"})
 		sessionRun := testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{SessionID: session.SessionID, ProfileID: profile.ID, Status: "RUNNING"})
 		reviewRun := testhelpers.CreateRecognitionReviewRun(dbConn, &db.RecognitionReviewRun{SessionID: session.SessionID, ProfileID: profile.ID, Status: "RUNNING"})
+
 		path := fmt.Sprintf("/api/v1/history/%d/archive", analysis.ID)
+		expectRejected := func(step string) {
+			response := historyArchiveRequest(router, user, http.MethodPost, path, "")
+			Expect(response.Code).To(Equal(http.StatusConflict), "%s: %s", step, response.Body.String())
+			Expect(decodeMapBody(response)["error_code"]).To(Equal("SESSION_PROCESSING_ACTIVE"), step)
+			var current db.AnalysisResult
+			Expect(dbConn.First(&current, analysis.ID).Error).To(Succeed())
+			Expect(current.ArchivedAt).To(BeNil(), step)
+			Expect(current.AutomaticProcessingCancelledAt).To(BeNil(), step)
+		}
+
+		// 1. Main analysis PENDING blocks archive, while another completed session on the same profile can still be archived.
+		expectRejected("pending main analysis")
+		siblingResp := historyArchiveRequest(router, user, http.MethodPost, fmt.Sprintf("/api/v1/history/%d/archive", otherCompleted.ID), "")
+		Expect(siblingResp.Code).To(Equal(http.StatusOK), siblingResp.Body.String())
+		Expect(decodeMapBody(siblingResp)["history_revision"]).To(Equal("1"))
+
+		// 2. Each remaining active sub-task continues to block archiving this session until terminal.
+		Expect(dbConn.Model(&analysis).Update("status", "COMPLETED").Error).To(Succeed())
+		expectRejected("pending sensor work")
+
+		Expect(dbConn.Model(&analysis).Update("sensor_state", db.SensorStateUploading).Error).To(Succeed())
+		expectRejected("running enrichment summary")
+
+		Expect(dbConn.Model(&analysis).Update("analysis_summary", db.JSONDocument(`{"run_id":"old-summary","status":"stale","last_success":{"overview":"saved summary"}}`)).Error).To(Succeed())
+		expectRejected("running agentic highlight item")
+
+		Expect(dbConn.Model(&analysis).Update("agentic_highlight_analysis", db.JSONDocument(`{"run_id":"old-agentic","status":"completed","items":[{"status":"completed"},{"status":"completed","result":{"movement":"Power Clean"}}]}`)).Error).To(Succeed())
+		expectRejected("pending chunk analysis")
+
+		Expect(dbConn.Model(&chunk).Update("status", "COMPLETED").Error).To(Succeed())
+		expectRejected("processing highlight reel")
+
+		Expect(dbConn.Model(&highlight).Update("status", "COMPLETED").Error).To(Succeed())
+		expectRejected("queued chunk reanalysis")
+
+		Expect(dbConn.Model(&chunkRun).Update("status", "COMPLETED").Error).To(Succeed())
+		expectRejected("running session reanalysis")
+
+		Expect(dbConn.Model(&sessionRun).Update("status", "COMPLETED").Error).To(Succeed())
+		expectRejected("running recognition review")
+
+		Expect(dbConn.Model(&reviewRun).Update("status", "COMPLETED").Error).To(Succeed())
+		expectRejected("running activity summary review")
+
+		// 3. Once all active worker tasks finish (idle UPLOADING / stale / provisional allowed), archive succeeds and is idempotent.
+		Expect(dbConn.Model(&session).Update("activity_summary", db.NullableJSONDocument(`{"review_state":"provisional"}`)).Error).To(Succeed())
 		response := historyArchiveRequest(router, user, http.MethodPost, path, "")
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
-		Expect(decodeMapBody(response)["history_revision"]).To(Equal("1"))
+		Expect(decodeMapBody(response)["history_revision"]).To(Equal("2"))
+
 		var saved db.AnalysisResult
 		Expect(dbConn.First(&saved, analysis.ID).Error).To(Succeed())
 		Expect(saved.ArchivedAt).NotTo(BeNil())
 		Expect(saved.AutomaticProcessingCancelledAt).NotTo(BeNil())
-		Expect(saved.Status).To(Equal("CANCELLED"))
+		Expect(saved.Status).To(Equal("COMPLETED"))
 		Expect(saved.Output).To(Equal(analysis.Output))
 		Expect(saved.SensorState).To(Equal(db.SensorStateCancelled))
 		Expect(saved.SensorVersion).To(Equal(int64(4)))
 		Expect(saved.SensorNextAttemptAt).To(BeNil())
 		Expect(string(saved.SensorProcessing)).NotTo(ContainSubstring("old-lease"))
-		var summary, agentic map[string]any
+		var summary map[string]any
 		Expect(json.Unmarshal(saved.AnalysisSummary, &summary)).To(Succeed())
-		Expect(json.Unmarshal(saved.AgenticHighlightAnalysis, &agentic)).To(Succeed())
 		Expect(summary["status"]).To(Equal("interrupted"))
 		Expect(summary["last_success"]).To(HaveKeyWithValue("overview", "saved summary"))
-		Expect(agentic["status"]).To(Equal("interrupted"))
-		items := agentic["items"].([]any)
-		Expect(items[0]).To(HaveKeyWithValue("status", "interrupted"))
-		Expect(items[1]).To(HaveKeyWithValue("status", "completed"))
-		for _, row := range []struct {
-			table string
-			id    uint
-		}{{"chunk_analysis_results", chunk.ID}, {"chunk_reanalysis_runs", chunkRun.ID}, {"session_reanalysis_runs", sessionRun.ID}, {"recognition_review_runs", reviewRun.ID}} {
-			var state struct{ Status string }
-			Expect(dbConn.Table(row.table).Select("status").Where("id = ?", row.id).Scan(&state).Error).To(Succeed())
-			Expect(state.Status).To(Equal("CANCELLED"), row.table)
-		}
+
 		var retained db.ChunkAnalysisResult
 		Expect(dbConn.First(&retained, completedChunk.ID).Error).To(Succeed())
 		Expect(retained.Status).To(Equal("COMPLETED"))
 		Expect(retained.Output).To(Equal(completedChunk.Output))
+
 		response = historyArchiveRequest(router, user, http.MethodPost, path, "")
 		Expect(response.Code).To(Equal(http.StatusOK))
-		Expect(decodeMapBody(response)["history_revision"]).To(Equal("1"))
+		Expect(decodeMapBody(response)["history_revision"]).To(Equal("2"))
 		var repeated db.AnalysisResult
 		Expect(dbConn.First(&repeated, analysis.ID).Error).To(Succeed())
 		Expect(repeated.ArchivedAt).NotTo(BeNil())

@@ -95,12 +95,32 @@ it("confirms archive, changes cache only after success, and retains records on f
   (historyApi.archive as jest.Mock).mockRejectedValueOnce(new Error("offline"));
   await mount(createElement(HistoryArchiveAction, { result: row }));
   await click("보관");
-  expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("진행 중인 분석을 중단"));
+  expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("피로도·훈련 부하·과거 운동 비교에서 제외합니다"));
+  expect(window.confirm).not.toHaveBeenCalledWith(expect.stringContaining("진행 중인 분석을 중단"));
   expect((client.getQueryData(key) as any).pages[0]).toHaveLength(1);
   expect(tree.root.findAllByProps({ role: "alert" })).toHaveLength(1);
   await click("보관");
   expect((client.getQueryData(key) as any).pages[0]).toHaveLength(0);
   expect(historyApi.archive).toHaveBeenCalledTimes(2);
+});
+
+it("disables archive while processing and surfaces 409 conflict when server work is active", async () => {
+  const pendingRow = { ...record(55), status: "PENDING" };
+  await mount(createElement(HistoryArchiveAction, { result: pendingRow }));
+  const disabledBtn = tree.root.findByType("button");
+  expect(disabledBtn.props.disabled).toBe(true);
+  expect(disabledBtn.props.children).toBe("분석 중");
+  await act(async () => disabledBtn.props.onClick());
+  expect(historyApi.archive).not.toHaveBeenCalled();
+
+  const completedRow = { ...record(56), status: "COMPLETED" };
+  const key = ["history-infinite", 2, "active"];
+  client.setQueryData(key, { pages: [[completedRow]], pageParams: [undefined] });
+  (historyApi.archive as jest.Mock).mockRejectedValueOnce(Object.assign(new Error("session is still processing"), { status: 409 }));
+  await act(async () => tree.update(createElement(QueryClientProvider, { client }, createElement(HistoryArchiveAction, { result: completedRow }))));
+  await click("보관");
+  expect((client.getQueryData(key) as any).pages[0]).toHaveLength(1);
+  expect(tree.root.findByProps({ role: "alert" }).children).toContain("진행 중인 분석이 완료된 후 보관할 수 있습니다.");
 });
 
 it("refetches after an archive refresh fails so a shortened page cannot lose its next cursor", async () => {

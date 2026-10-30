@@ -1,4 +1,4 @@
-import { createSetupSnapshot, recentSetupStorageKey } from "@/features/wod/recentWorkoutSetup";
+import { createSetupSnapshot, recentSetupStorageKey, validateRecordingSetup } from "@/features/wod/recentWorkoutSetup";
 import * as ImagePicker from "expo-image-picker";
 import { parseWorkoutImage } from "@/features/wod/api";
 import { fetchArchiveStates, notifyHistoryChanged } from "@/features/wod/archiveStates";
@@ -435,6 +435,24 @@ describe("WorkoutSetup redesign", () => {
     const slots=JSON.parse(mockStorageMap.get(recentSetupStorageKey({ownerUserId:1,profileId:7}))!);
     expect(slots.draft).toBeUndefined();
     expect(slots.recentRecording.wodDescription).toBe("Fran");
+  });
+
+  it("produces a valid recordingSetup param when starting without WOD text or selected movements", async () => {
+    const view = render(<WorkoutSetup />);
+    fireEvent.press(view.getByTestId("setup-next-btn"));
+    await waitFor(() => expect(view.getByTestId("verify-workout-popup")).toBeTruthy());
+    await act(async () => {
+      fireEvent.press(view.getByTestId("setup-start-workout-btn"));
+    });
+    expect(mockRouterPush).toHaveBeenCalledTimes(1);
+    const rawParam = mockRouterPush.mock.calls[0][0].params.recordingSetup as string;
+    await expect(
+      validateRecordingSetup(decodeURIComponent(rawParam), { ownerUserId: 1, profileId: 7 }),
+    ).resolves.toMatchObject({
+      origin: "draft",
+      wodDescription: "",
+      selectedMovements: [],
+    });
   });
 
 });

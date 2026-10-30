@@ -17,6 +17,7 @@ import {
   inferDefaultLoadMode,
   inferLoadBasis,
   isLikelyBodyweightMovement,
+  MAX_MERGE_REST_SECS,
   observedReps,
   performanceDraft,
   timelineProgressIntervals,
@@ -282,7 +283,7 @@ function PerformanceEditor({
           <span className="text-text-secondary">
             {contiguousSpan.movementOptions && contiguousSpan.movementOptions.length > 1
               ? `연속된 운동 구간이 있습니다 (${progressTime(contiguousSpan.startSecs)}–${progressTime(contiguousSpan.endSecs)} · ${contiguousSpan.movementOptions.map(o => o.movement).join(" + ")}). 합칠 기준 동작을 선택하세요:`
-              : `10초 세그먼트 경계로 나뉜 연속 동일 운동 구간이 있습니다 (${progressTime(contiguousSpan.startSecs)}–${progressTime(contiguousSpan.endSecs)}).`}
+              : `같은 동작의 연속 ${contiguousSpan.intervalCount}개 구간을 합칠 수 있습니다 (${progressTime(contiguousSpan.startSecs)}–${progressTime(contiguousSpan.endSecs)}).${contiguousSpan.measurement === "window" ? ` 중간 휴식이 각각 ${MAX_MERGE_REST_SECS}초 이내인 구간을 휴식 포함 시간 구간으로 저장합니다.` : ""}`}
           </span>
           <div className="flex flex-wrap items-center gap-1.5">
             {contiguousSpan.movementOptions && contiguousSpan.movementOptions.length > 1 ? (
@@ -299,6 +300,7 @@ function PerformanceEditor({
                       movement: opt.movement,
                       start: String(contiguousSpan.startSecs),
                       end: String(contiguousSpan.endSecs),
+                      measurement: contiguousSpan.measurement ?? d.measurement,
                       targetIntervalId: opt.intervalId,
                       reps:
                         d.reps === "" || d.reps === String(observedReps(interval) ?? "")
@@ -321,6 +323,7 @@ function PerformanceEditor({
                     ...d,
                     start: String(contiguousSpan.startSecs),
                     end: String(contiguousSpan.endSecs),
+                    measurement: contiguousSpan.measurement ?? d.measurement,
                     reps:
                       d.reps === "" || d.reps === String(observedReps(interval) ?? "")
                         ? String(contiguousSpan.observedReps ?? d.reps)
