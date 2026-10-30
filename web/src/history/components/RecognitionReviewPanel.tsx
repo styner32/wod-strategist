@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatStartTimestamp, parseStartTimestamp } from "../../../../shared/wodTraining";
-import { describeUnassessedReason } from "../../../../shared/workoutProgress";
+import { describeUnassessedReason, normalizePerformanceOutcome, type PerformanceRecord } from "../../../../shared/workoutProgress";
 import { historyApi, type CreateRecognitionReviewRequest, type RecognitionReviewFinding, type RecognitionReviewStatus } from "../../api/history";
 import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from "../historyPolling";
 import { recognitionReviewSelection } from "../recognitionReview";
+
+function formatConfirmedRecordLabel(rec: PerformanceRecord): string {
+  const outcome = normalizePerformanceOutcome(rec.outcome);
+  if (outcome === "rest") return "휴식·전환";
+  if (outcome === "incomplete") return `${rec.movement || "운동"} (미완료·노렙)`;
+  if (rec.reps == null) return `${rec.movement} (횟수 미지정)`;
+  return `${rec.movement} ${rec.reps}회`;
+}
 
 const button = "rounded-lg border border-border bg-bg-secondary px-3 py-2 text-xs font-medium text-text-primary hover:bg-bg-tertiary disabled:opacity-40";
 const field = "rounded-lg border border-border bg-bg-base px-3 py-2 text-sm text-text-primary";
@@ -164,7 +172,7 @@ function RecognitionReviewContent({ sessionId, profileId, sourceUpdatedAt, curre
               const movement = item.movement || "운동명 확인 불가";
               return row.evidence_complete ? `${movement} ${item.reps}회` : item.reps === 0 ? `${movement} · 횟수 확인 불가` : `${movement} · 확인된 ${item.reps}회`;
             }).join(" / ") : row.observed_complete_reps === 0 ? "완료 반복 0회" : "확인 불가"}{!row.evidence_complete && row.predicted_movements.length > 0 && <span className="block text-warning">일부 관찰만 확인됨</span>}</td>
-            <td className="min-w-28 p-2">{row.record.movement} {row.record.reps}회</td>
+            <td className="min-w-28 p-2">{formatConfirmedRecordLabel(row.record)}</td>
             <td className="p-2">{row.movement_match == null ? "확인 불가" : row.movement_match ? "일치" : "불일치"}</td>
             <td className="whitespace-nowrap p-2">{row.reps_delta == null ? "확인 불가" : `${row.reps_delta > 0 ? "+" : ""}${row.reps_delta}회`}<span className="block text-text-muted">기존 인식 − 확정</span></td>
             <td className="min-w-28 p-2">{row.evidence_complete ? "확인됨" : "근거 부족"}{row.gaps.length > 0 && <details><summary className="cursor-pointer">미판독 구간 {row.gaps.length}개</summary>{row.gaps.map((gap, index) => <p key={index}>{formatStartTimestamp(gap.start_secs)}–{formatStartTimestamp(gap.end_secs)} · {describeUnassessedReason(gap.reason)}</p>)}</details>}</td>
@@ -206,7 +214,7 @@ function RecognitionReviewContent({ sessionId, profileId, sourceUpdatedAt, curre
         <p className="text-xs text-text-secondary">모델 {selectedRun.model || "확인 불가"} · 입력 토큰 {tokens(selectedRun.input_tokens)} · 출력 토큰 {tokens(selectedRun.output_tokens)} · 총 토큰 {tokens(selectedRun.total_tokens)}{selectedRun.duration_ms != null && selectedRun.duration_ms > 0 ? ` · 소요 ${seconds(selectedRun.duration_ms / 1000)}` : ""}</p>
         {selectedRun.error && <p role={selectedRun.status === "CANCELLED" ? "status" : "alert"} className={`text-sm ${selectedRun.status === "CANCELLED" ? "text-text-secondary" : "text-error"}`}>{selectedRun.error}</p>}
         {selectedRun.batches.map(batch => <div key={batch.id} className="space-y-2 rounded-lg border border-border p-3">
-          {(() => { const saved = selectedRun.evaluation?.records.find(row => row.record.id === batch.record_id)?.record; return saved ? <p className="text-xs font-medium text-text-secondary">확정 기록 전체: {saved.movement} {saved.reps}회 ({formatStartTimestamp(saved.start_secs)}–{formatStartTimestamp(saved.end_secs)})</p> : null; })()}
+          {(() => { const saved = selectedRun.evaluation?.records.find(row => row.record.id === batch.record_id)?.record; return saved ? <p className="text-xs font-medium text-text-secondary">확정 기록 전체: {formatConfirmedRecordLabel(saved)} ({formatStartTimestamp(saved.start_secs)}–{formatStartTimestamp(saved.end_secs)})</p> : null; })()}
           <p className="text-xs text-text-secondary">검토 구간: {formatStartTimestamp(batch.core_start_secs)}–{formatStartTimestamp(batch.core_end_secs)}</p>
           {batch.status === "CANCELLED" ? <p role="status" className="text-sm text-text-secondary">중단됨</p> : batch.error && <p role="alert" className="text-sm text-error">이 구간을 진단하지 못했습니다. {batch.error}</p>}
           {batch.status === "COMPLETED" && !(batch.findings ?? []).length && <p className="text-sm text-text-secondary">이 구간에서 설명할 수 있는 추가 오류 근거를 찾지 못했습니다.</p>}

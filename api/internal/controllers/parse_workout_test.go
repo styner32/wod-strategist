@@ -93,4 +93,20 @@ var _ = Describe("parseWorkoutBlock", func() {
 		Expect(resp.WODDescription).To(Equal("Murph"))
 		Expect(resp.Movements).To(Equal([]string{"Run", "Pull-up", "Push-up", "Air Squat"}))
 	})
+
+	It("normalizes distance-prescribed lunges to canonical * Walking Lunge while preserving rep-based lunges", func() {
+		promoted := normalizeParsedWorkoutMovements(
+			[]string{"Dumbbell Overhead Lunge", "Pull-up"},
+			"For Time:\n200ft Dumbbell Overhead Lunge (50/35lb)\n30 Pull-ups",
+			"FOR TIME\n200ft DB OH Lunge",
+		)
+		Expect(promoted).To(Equal([]string{"DB Overhead Walking Lunge", "Pull-up"}))
+
+		repBased := normalizeParsedWorkoutMovements(
+			[]string{"Dumbbell Overhead Lunge"},
+			"AMRAP 10m:\n12 Dumbbell Overhead Lunges",
+			"AMRAP 10m\n12 DB OH Lunges",
+		)
+		Expect(repBased).To(Equal([]string{"DB Overhead Lunge"}))
+	})
 })

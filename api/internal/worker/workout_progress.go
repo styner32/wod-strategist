@@ -181,6 +181,9 @@ func isCompositeMovementUpgrade(base, candidate string) bool {
 	if (c == "thruster" || c == "cluster") && (strings.Contains(b, "front squat") || strings.Contains(b, "push press") || strings.Contains(b, "clean")) {
 		return true
 	}
+	if c == "burpee broad jump" && (b == "burpee" || b == "broad jump") {
+		return true
+	}
 	return false
 }
 

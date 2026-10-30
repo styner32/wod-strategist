@@ -16,7 +16,15 @@ func reviewProgress(intervals []workoutprogress.Interval, gaps []workoutprogress
 }
 
 func reviewRecord(id uint, start, end float64, movement string, reps int) workoutprogress.Record {
-	return workoutprogress.Record{ID: id, Status: "confirmed", SourceVersion: "source", Start: start, End: end, Movement: movement, Reps: reps}
+	return workoutprogress.Record{ID: id, Status: "confirmed", Outcome: "completed", SourceVersion: "source", Start: start, End: end, Movement: movement, Reps: workoutprogress.IntPtr(reps)}
+}
+
+func reviewIncompleteRecord(id uint, start, end float64, movement string) workoutprogress.Record {
+	return workoutprogress.Record{ID: id, Status: "confirmed", Outcome: "incomplete", SourceVersion: "source", Start: start, End: end, Movement: movement, Reps: nil}
+}
+
+func reviewRestRecord(id uint, start, end float64) workoutprogress.Record {
+	return workoutprogress.Record{ID: id, Status: "confirmed", Outcome: "rest", SourceVersion: "source", Start: start, End: end, Movement: "", Reps: nil}
 }
 
 func reviewCycle(start, end float64, movement string) activity.Observation {
@@ -35,17 +43,41 @@ var _ = Describe("Recognition evaluation", func() {
 	})
 	It("keeps unavailable coverage distinct from an observed zero", func() {
 		p := reviewProgress([]workoutprogress.Interval{}, []workoutprogress.Gap{{Start: 0, End: 20, Clock: "media", Reason: "not_analyzed"}})
-		e := recognitionreview.BuildEvaluation(p, []workoutprogress.Record{reviewRecord(1, 0, 20, "Power Clean", 0)}, nil, "")
+		e := recognitionreview.BuildEvaluation(p, []workoutprogress.Record{reviewIncompleteRecord(1, 0, 20, "Power Clean")}, nil, "")
 		Expect(e.Summary.InsufficientEvidence).To(Equal(1))
 		Expect(e.Records[0].ObservedCompleteReps).To(BeNil())
 		Expect(e.Records[0].MovementMatch).To(BeNil())
 		Expect(e.Records[0].RepsDelta).To(BeNil())
 	})
-	It("compares an observed incomplete attempt with a confirmed zero", func() {
+	It("compares an observed incomplete attempt with an explicit incomplete confirmation", func() {
 		p := reviewProgress([]workoutprogress.Interval{{Start: 0, End: 20, Activity: "exercise", Movement: "Power Clean", RepEvents: []activity.Observation{{Start: 1, End: 3, Movement: "Power Clean", Unit: "reps", Complete: false, Evidence: "failed rack"}}}}, []workoutprogress.Gap{{Start: 1, End: 3, Clock: "media", Reason: "incomplete_cycle"}})
-		e := recognitionreview.BuildEvaluation(p, []workoutprogress.Record{reviewRecord(1, 0, 20, "Power Clean", 0)}, nil, "")
+		e := recognitionreview.BuildEvaluation(p, []workoutprogress.Record{reviewIncompleteRecord(1, 0, 20, "Power Clean")}, nil, "")
 		Expect(e.Summary.Matched).To(Equal(1))
 		Expect(*e.Records[0].ObservedCompleteReps).To(BeZero())
+		Expect(*e.Records[0].RepsDelta).To(BeZero())
+	})
+	It("evaluates explicit rest confirmations and optional-count walking lunge confirmations", func() {
+		falseExercise := reviewProgress([]workoutprogress.Interval{{Start: 0, End: 10, Activity: "exercise", Movement: "Power Clean"}}, nil)
+		e := recognitionreview.BuildEvaluation(falseExercise, []workoutprogress.Record{reviewRestRecord(1, 0, 10)}, nil, "")
+		Expect(e.Summary.Mismatch).To(Equal(1))
+		Expect(*e.Records[0].MovementMatch).To(BeFalse())
+
+		trueRest := reviewProgress([]workoutprogress.Interval{{Start: 0, End: 10, Activity: "rest"}}, nil)
+		e2 := recognitionreview.BuildEvaluation(trueRest, []workoutprogress.Record{reviewRestRecord(1, 0, 10)}, nil, "")
+		Expect(e2.Summary.Matched).To(Equal(1))
+		Expect(*e2.Records[0].MovementMatch).To(BeTrue())
+
+		lungeRecord := workoutprogress.Record{ID: 3, Status: "confirmed", Outcome: "completed", SourceVersion: "source", Start: 0, End: 15, Movement: "DB Overhead Walking Lunge", Reps: nil}
+		lungeMatched := reviewProgress([]workoutprogress.Interval{{Start: 0, End: 15, Activity: "exercise", Movement: "DB Overhead Walking Lunge"}}, nil)
+		e3 := recognitionreview.BuildEvaluation(lungeMatched, []workoutprogress.Record{lungeRecord}, nil, "")
+		Expect(e3.Summary.Matched).To(Equal(1))
+		Expect(*e3.Records[0].MovementMatch).To(BeTrue())
+		Expect(e3.Records[0].RepsDelta).To(BeNil())
+
+		lungeFalseRest := reviewProgress([]workoutprogress.Interval{{Start: 0, End: 15, Activity: "rest"}}, nil)
+		e4 := recognitionreview.BuildEvaluation(lungeFalseRest, []workoutprogress.Record{lungeRecord}, nil, "")
+		Expect(e4.Summary.Mismatch).To(Equal(1))
+		Expect(*e4.Records[0].MovementMatch).To(BeFalse())
 	})
 	It("counts a merged confirmation once across exercise and observed rest", func() {
 		p := reviewProgress([]workoutprogress.Interval{{Start: 0, End: 10, Activity: "exercise", Movement: "Power Clean", RepEvents: []activity.Observation{reviewCycle(1, 3, "Power Clean")}}, {Start: 10, End: 15, Activity: "rest"}, {Start: 15, End: 20, Activity: "exercise", Movement: "Power Clean", RepEvents: []activity.Observation{reviewCycle(16, 18, "Power Clean")}}}, nil)
@@ -79,7 +111,7 @@ var _ = Describe("Recognition evaluation", func() {
 		stale := reviewRecord(2, 0, 10, "Run", 2)
 		stale.SourceVersion = "old"
 		p := reviewProgress([]workoutprogress.Interval{{Start: 0, End: 10, Activity: "exercise", Movement: "Run"}}, nil)
-		e := recognitionreview.BuildEvaluation(p, []workoutprogress.Record{reviewRecord(1, 0, 10, "Run", 0), stale}, nil, "")
+		e := recognitionreview.BuildEvaluation(p, []workoutprogress.Record{reviewRecord(1, 0, 10, "Run", 2), stale}, nil, "")
 		Expect(e.Summary.Total).To(Equal(1))
 		Expect(e.Summary.InsufficientEvidence).To(Equal(1))
 		Expect(e.Records[0].ObservedCompleteReps).To(BeNil())
@@ -89,7 +121,7 @@ var _ = Describe("Recognition evaluation", func() {
 		records := []workoutprogress.Record{reviewRecord(1, 0, 10, "Power Clean", 1)}
 		a := recognitionreview.BuildEvaluation(p, records, []recognitionreview.ChunkEvidence{{ID: 1, SkipReason: "rest"}}, "old")
 		b := recognitionreview.BuildEvaluation(p, records, []recognitionreview.ChunkEvidence{{ID: 1, SkipReason: "unknown"}}, "old")
-		records[0].Reps = 2
+		records[0].Reps = workoutprogress.IntPtr(2)
 		c := recognitionreview.BuildEvaluation(p, records, []recognitionreview.ChunkEvidence{{ID: 1, SkipReason: "rest"}}, "old")
 		Expect(a.Fingerprint).NotTo(Equal(b.Fingerprint))
 		Expect(a.Fingerprint).NotTo(Equal(c.Fingerprint))

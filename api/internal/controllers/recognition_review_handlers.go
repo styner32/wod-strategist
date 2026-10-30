@@ -64,7 +64,7 @@ func loadRecognitionSnapshot(ctx context.Context, tx *gorm.DB, sid string, pid u
 	for _, row := range rows {
 		// Exclude derived rest comparisons to keep this path independent of the
 		// confirmation candidate even when it is malformed or synthesized.
-		r := workoutprogress.Record{ID: row.ID, SessionID: row.SessionID, IntervalID: row.IntervalID, SourceVersion: row.SourceVersion, Status: row.Status, Movement: row.Movement, Start: row.StartSecs, End: row.EndSecs, ElapsedSeconds: row.ElapsedSeconds, Reps: row.Reps, LoadKG: row.LoadKG, Measurement: row.Measurement, Technique: row.Technique, WorkoutPrescription: row.WorkoutPrescription, RepsPerMinute: row.RepsPerMinute, RateBasis: row.RateBasis, MedianCycleSeconds: row.MedianCycleSeconds, PerformedAt: row.PerformedAt, PerformedAtSource: row.PerformedAtSource, ConfirmedAt: row.ConfirmedAt}
+		r := workoutprogress.Record{ID: row.ID, SessionID: row.SessionID, IntervalID: row.IntervalID, SourceVersion: row.SourceVersion, Status: row.Status, Outcome: workoutprogress.NormalizedOutcome(row.Outcome), Movement: row.Movement, Start: row.StartSecs, End: row.EndSecs, ElapsedSeconds: row.ElapsedSeconds, Reps: row.Reps, LoadKG: row.LoadKG, Measurement: row.Measurement, Technique: row.Technique, WorkoutPrescription: row.WorkoutPrescription, RepsPerMinute: row.RepsPerMinute, RateBasis: row.RateBasis, MedianCycleSeconds: row.MedianCycleSeconds, PerformedAt: row.PerformedAt, PerformedAtSource: row.PerformedAtSource, ConfirmedAt: row.ConfirmedAt}
 		if row.LoadValue != nil && row.LoadUnit != nil && row.LoadBasis != nil {
 			r.Load = &workoutprogress.Load{Value: *row.LoadValue, Unit: *row.LoadUnit, Basis: *row.LoadBasis, Status: "confirmed"}
 		}

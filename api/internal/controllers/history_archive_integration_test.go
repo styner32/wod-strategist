@@ -235,7 +235,7 @@ var _ = Describe("POST /api/v1/history/:id/archive", func() {
 		progress, progressRaw := progressFixture("archive-consumer-source")
 		analysis := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: "WOD-20261029-ARCHIVECONSUMERS", ProfileID: profile.ID, Status: "COMPLETED", AnalysisType: db.AnalysisTypeWOD, WorkoutAt: &at, WorkoutAtSource: &source,
 			SessionScore: `{"evaluation_version":1,"intensity":80,"movements":{"Power Clean":{"form":80}},"wod_start":{"seconds":0,"end_seconds":600,"status":"confirmed"}}`, WorkoutProgress: progressRaw, NormalizedWorkout: `[{"movement":"Power Clean","weight_kg":60,"is_main":true}]`})
-		testhelpers.CreatePerformanceRecord(dbConn, &db.PerformanceRecord{ProfileID: profile.ID, AnalysisID: analysis.ID, SessionID: analysis.SessionID, IntervalID: progress.Intervals[0].ID, SourceVersion: progress.SourceVersion, Movement: "Power Clean", StartSecs: 0, EndSecs: 60, Reps: 3, RepsPerMinute: 3, Technique: "singles", WorkoutPrescription: "Grace", PerformedAt: &at})
+		testhelpers.CreatePerformanceRecord(dbConn, &db.PerformanceRecord{ProfileID: profile.ID, AnalysisID: analysis.ID, SessionID: analysis.SessionID, IntervalID: progress.Intervals[0].ID, SourceVersion: progress.SourceVersion, Movement: "Power Clean", StartSecs: 0, EndSecs: 60, Reps: workoutprogress.IntPtr(3), RepsPerMinute: workoutprogress.Float64Ptr(3), Technique: "singles", WorkoutPrescription: "Grace", PerformedAt: &at})
 		assertConsumers := func(included int) {
 			response := historyArchiveRequest(router, user, http.MethodGet, fmt.Sprintf("/api/v1/strategies/readiness?profile_id=%d", profile.ID), "")
 			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())

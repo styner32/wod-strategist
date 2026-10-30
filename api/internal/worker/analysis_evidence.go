@@ -9,6 +9,7 @@ import (
 
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
+	"github.com/wod-strategist/api/internal/movement"
 )
 
 const MovementEvidenceRulesPrompt = `
@@ -70,6 +71,17 @@ const ObservationOnlyOutputCheckPrompt = `
 점검 과정이나 금지 예시는 출력하지 말고, 요청된 관찰 결과 형식을 그대로 유지하세요.
 `
 
+const TravelingMovementPolicyPrompt = `
+
+## 이동형 종목 관찰 규칙 (보행 런지 및 Burpee Broad Jump 구간 전용)
+이 규칙은 보행 런지(* Walking Lunge)와 Burpee Broad Jump 수행 구간에만 적용하며, 다른 고정형 종목 구간은 기존 종목 판정·반복 기록 규칙을 그대로 따르세요.
+- 보행 런지(* Walking Lunge) 명칭 및 단위: 전진 보행하며 수행하는 런지는 제자리 런지(Lunge, DB Overhead Lunge 등)가 아니라 보행형 공식 영어 명칭(Walking Lunge, DB Overhead Walking Lunge, DB Walking Lunge, DB Front Rack Walking Lunge, Barbell Walking Lunge, Front Rack Walking Lunge, Back Rack Walking Lunge, Overhead Walking Lunge, KB Walking Lunge, KB Front Rack Walking Lunge, KB Overhead Walking Lunge, Goblet Walking Lunge, Weighted Walking Lunge, Sandbag Walking Lunge)을 사용하세요.
+- 보행 런지 관찰 기록(events / rep_events)은 개별 걸음 수(reps)가 아니라 대상 인물이 화면에서 실제로 보행 런지를 수행하는 연속 시간 구간(unit: "seconds", complete: true)으로 기록하세요. 기구를 유지한 채 레인 끝에서 몸을 돌리는 방향 전환(턴어라운드)도 연속 수행 구간에 포함합니다. (제자리에서 발을 모으는 일반 런지는 기존 제자리 명칭과 unit: "reps"를 유지합니다.)
+- 이동 구간이 길어 화각에 일부만 담기더라도 전진 보행 진행이 보이거나 거리형 WOD 처방(ft, m, yd)과 부합하면 제자리 런지가 아닌 해당 * Walking Lunge로 분류하세요.
+- Burpee Broad Jump: 고정 스테이션 동작이 아니며, 바닥에 엎드리는 버피 동작 후 두 발 전방 멀리뛰기 착지까지 이어지는 전체 이동 복합 사이클 1회를 movement: "Burpee Broad Jump", unit: "reps"로 기록하세요(Burpee와 Broad Jump로 분리해 이중 기록하지 마세요).
+- 동선 겹침·전경 가림·화각 이탈: 다른 운동자·보행자와 동선이 겹쳐 전경 인물에 대상 인물이 가려지거나 이동 레인 끝에서 화면 밖으로 벗어난 시간은 전경·주변 인물의 정지/운동을 대상 인물의 rest나 exercise로 절대 대체하지 말고 unassessed(reason: "not_visible" 또는 "ambiguous")로 분리하세요.
+`
+
 var allowedVisualFatigueEvidenceTypes = map[string]struct{}{
 	"rep_slowdown":         {},
 	"cadence_loss":         {},
@@ -79,6 +91,90 @@ var allowedVisualFatigueEvidenceTypes = map[string]struct{}{
 
 func baseChunkAnalysisPrompt() string {
 	return ChunkAnalysisPrompt + MovementEvidenceRulesPrompt + ObservationOnlyRulesPrompt + SpinalObservationRulesPrompt
+}
+
+func normalizeMovementHintsForWOD(movements []string, wodDescription string) []string {
+	if len(movements) == 0 || strings.TrimSpace(wodDescription) == "" {
+		return movements
+	}
+	var copied []string
+	for i, m := range movements {
+		promoted := movement.PromoteDistanceLungeInWOD(m, wodDescription)
+		if promoted != "" && promoted != m {
+			if copied == nil {
+				copied = make([]string, len(movements))
+				copy(copied, movements)
+			}
+			copied[i] = promoted
+		}
+	}
+	if copied != nil {
+		return copied
+	}
+	return movements
+}
+
+func (w *Worker) hasChunkTravelingPolicyContext(profileID uint, sessionID string, movements []string, wodDescription string) bool {
+	if movement.HasTravelingPolicyContext(movements, wodDescription) {
+		return true
+	}
+	if w == nil || w.DB == nil || profileID == 0 || sessionID == "" {
+		return false
+	}
+	var prev db.ChunkAnalysisResult
+	if err := w.DB.Select("exercise_type", "observed_signals", "movement_observations").
+		Where("profile_id = ? AND session_id = ? AND status = ?", profileID, sessionID, "COMPLETED").
+		Order("id DESC").
+		First(&prev).Error; err != nil {
+		return false
+	}
+	_, detected := classifyChunkActivity(prev, WorkoutTypeWOD)
+	return movement.IsTravelingPolicyMovement(detected) || movement.IsTravelingPolicyMovement(prev.ExerciseType)
+}
+
+func hasSegmentTravelingPolicyContext(p VideoAnalysisPayload, seg Segment) bool {
+	if movement.IsTravelingPolicyMovement(seg.Type) || movement.PromoteDistanceLungeInWOD(seg.Type, p.WODDescription) != "" {
+		return true
+	}
+	for _, cand := range segmentCandidateMovements(seg) {
+		if movement.IsTravelingPolicyMovement(cand) || movement.PromoteDistanceLungeInWOD(cand, p.WODDescription) != "" {
+			return true
+		}
+	}
+	segType := strings.TrimSpace(seg.Type)
+	if (isUnknownSegment(seg) || strings.EqualFold(segType, "Full Video")) &&
+		movement.HasTravelingPolicyContext(p.Movements, p.WODDescription) {
+		return true
+	}
+	return false
+}
+
+func hasLegacyTravelingPolicyContext(p VideoAnalysisPayload) bool {
+	return movement.HasTravelingPolicyContext(p.Movements, p.WODDescription)
+}
+
+func hasActivityBatchTravelingPolicyContext(session db.Session, rows []db.ChunkAnalysisResult, indices []int) bool {
+	sessionHasTraveling := movement.HasTravelingPolicyContext(movementHintsFromDocument(session.MovementHints), session.WODDescription)
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(rows) {
+			continue
+		}
+		row := rows[idx]
+		_, detected := classifyChunkActivity(row, session.WorkoutType)
+		if movement.IsTravelingPolicyMovement(detected) ||
+			movement.IsTravelingPolicyMovement(row.ExerciseType) ||
+			movement.PromoteDistanceLungeInWOD(detected, session.WODDescription) != "" ||
+			movement.PromoteDistanceLungeInWOD(row.ExerciseType, session.WODDescription) != "" {
+			return true
+		}
+		if sessionHasTraveling {
+			trimmed := strings.TrimSpace(row.ExerciseType)
+			if trimmed == "" || strings.EqualFold(trimmed, "unknown") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func buildMovementHintsContext(movements []string) string {

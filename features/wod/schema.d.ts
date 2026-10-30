@@ -2048,11 +2048,12 @@ export interface components {
             measurement?: string;
             median_cycle_seconds?: number;
             movement?: string;
+            outcome?: string;
             performed_at?: string;
             performed_at_source?: string;
-            rate_basis?: string;
-            reps?: number;
-            reps_per_minute?: number;
+            rate_basis?: string | null;
+            reps?: number | null;
+            reps_per_minute?: number | null;
             rest_comparisons?: components["schemas"]["workoutprogress.RestComparison"][];
             session_id?: string;
             source_version?: string;
@@ -2066,7 +2067,9 @@ export interface components {
             interval_id?: string;
             load?: Record<string, never>;
             measurement?: string;
-            reps?: number;
+            movement?: string;
+            outcome?: string;
+            reps?: number | null;
             start_secs?: number;
             technique?: string;
         };

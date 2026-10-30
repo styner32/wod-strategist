@@ -789,7 +789,11 @@ func (w *Worker) buildChunkDebugReanalysisPrompt(target *chunkDebugTarget) strin
 	if wod := buildWODContext(target.WODDescription); wod != "" {
 		prompt += wod
 	}
-	prompt += buildMovementHintsContext(movementHintsFromDocument(target.MovementHints))
+	hints := normalizeMovementHintsForWOD(movementHintsFromDocument(target.MovementHints), target.WODDescription)
+	prompt += buildMovementHintsContext(hints)
+	if w.hasChunkTravelingPolicyContext(target.ProfileID, target.SessionID, hints, target.WODDescription) {
+		prompt += TravelingMovementPolicyPrompt
+	}
 	if target.ProfileInjuries != nil && strings.TrimSpace(*target.ProfileInjuries) != "" {
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(영상에서 해당 부위의 위험한 자세가 직접 보일 때만 경고하세요.)", *target.ProfileInjuries)
 	}

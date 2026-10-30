@@ -35,6 +35,23 @@ var _ = Describe("Movement evidence and accumulation", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(Own(timed, 0, 10).Events[0].End).To(Equal(10.0))
 		Expect(Own(timed, 10, 20).Events[0].Start).To(Equal(10.0))
+
+		walkingLunge, err := Decode(observationJSON(Observation{"Dumbbell Walking Overhead Lunge", "seconds", 1, 14, true, "continuous walking overhead lunge"}), 0, 20)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(walkingLunge.Events).To(HaveLen(1))
+		Expect(walkingLunge.Events[0].Movement).To(Equal("DB Overhead Walking Lunge"))
+		Expect(Own(walkingLunge, 0, 10).Events[0].End).To(Equal(10.0))
+		Expect(Own(walkingLunge, 10, 20).Events[0].Start).To(Equal(10.0))
+
+		stationaryLunge, err := Decode(observationJSON(Observation{"Dumbbell Overhead Lunge", "reps", 1, 3, true, "in-place overhead lunge"}), 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stationaryLunge.Events).To(HaveLen(1))
+		Expect(stationaryLunge.Events[0].Movement).To(Equal("DB Overhead Lunge"))
+
+		bbj, err := Decode(observationJSON(Observation{"Burpee Broad Jump", "reps", 2, 6, true, "burpee and forward broad jump"}), 0, 10)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(bbj.Events).To(HaveLen(1))
+		Expect(bbj.Events[0].Movement).To(Equal("Burpee Broad Jump"))
 	})
 	It("builds clean rest observations via ConfirmedRest", func() {
 		rest := ConfirmedRest(10.0)

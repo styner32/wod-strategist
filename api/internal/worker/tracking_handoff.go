@@ -18,6 +18,7 @@ import (
 	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
+	"github.com/wod-strategist/api/internal/movement"
 	"go.uber.org/zap"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/inconsolata"
@@ -135,11 +136,17 @@ func buildTrackingHandoff(prev db.ChunkAnalysisResult, workoutType string) track
 		h.FrameRegion = sanitizeTrackingLabel(tp.FrameRegion)
 		h.Station = sanitizeTrackingLabel(tp.Station)
 	}
-	class, movement := classifyChunkActivity(prev, workoutType)
+	class, detectedMovement := classifyChunkActivity(prev, workoutType)
 	if class == chunkActive {
 		h.ActivityState = "exercise"
-		if isConcreteMovement(movement) {
-			h.MovementHint = sanitizeTrackingLabel(movement)
+		if isConcreteMovement(detectedMovement) {
+			h.MovementHint = sanitizeTrackingLabel(detectedMovement)
+		}
+	}
+	if movement.IsTraveling(detectedMovement) || movement.IsTraveling(prev.ExerciseType) {
+		h.FrameRegion = ""
+		if h.Station != "" || len(h.MatchedCues) > 0 {
+			h.Station = "moving"
 		}
 	}
 	return h
@@ -168,6 +175,9 @@ func trackingInputPrompt(h trackingHandoff, hasPrevious, hasAnchor bool) string 
 	}
 	b.WriteString("- 이 정보와 첨부 정지 이미지는 오직 '누가 대상 인물인지' 식별하는 용도로만 쓰세요. 정지 이미지 속 바벨 위치나 서 있는/숙인 자세를 현재 구간의 휴식 근거로 절대 사용하지 마세요.\n")
 	b.WriteString("- 현재 구간의 운동·휴식 판정과 반복 관찰은 반드시 먼저 제공된 현재 동영상 프레임들의 시간에 따른 움직임으로만 결정하세요. 현재 영상과 모순되면 현재 영상을 따르세요.\n")
+	if h.Station == "moving" || movement.IsTraveling(h.MovementHint) {
+		b.WriteString("- 직전 구간은 고정 스테이션이 아닌 이동형 동작이므로 대상 인물이 레인을 따라 좌우 횡단·방향 전환하거나 화면 밖 이탈 후 재진입할 수 있습니다. 전경의 다른 운동자·보행자와 동선이 겹쳐 가려질 때 이전 위치나 근처 기구(박스·바벨 등) 옆에 서 있는 다른 인물로 대상을 절대 전환하지 말고, 핵심 외형 단서가 가려지면 ambiguous: true 또는 not_visible로 남기세요.\n")
+	}
 	b.WriteString("- 표시된 사람이 현재 영상에 보이지 않으면 다른 사람으로 바꾸지 말고 대상이 보이지 않는다고 기록하세요.\n")
 	b.WriteString("- 자세·가동범위·템포 평가는 현재 영상에서 보이는 것만 기록하고, 직전 운동이나 누적 수행을 원인이나 변명으로 쓰지 마세요.\n")
 	return b.String()

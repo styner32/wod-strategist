@@ -122,6 +122,37 @@ function escapeRegexLiteral(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const TIME_HEADER_METER_COLLISION_RE =
+  /\b(?:amrap|emom|e\d+mom|every|for\s*time|time\s*cap|cap|rest)\s*:?\s*\d+(?:\.\d+)?\s*m(?:in(?:ute)?s?)?\b/gi;
+const DISTANCE_PRESCRIPTION_RE =
+  /(?:^|[^a-z0-9])\d+(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yards?|m|meters?|metres?)(?=$|[^a-z0-9])|\d+(?:\.\d+)?\s*(?:미터|피트|야드)/i;
+const STATIONARY_ONLY_LUNGE_RE = /\b(?:walking|reverse|step[\s-]*back|jumping)\b|워킹|리버스|점핑/i;
+
+function promoteDistancePrescribedLunges(text: string): string {
+  return text
+    .split(/([\n,;]+)/)
+    .map((part) => {
+      if (!/lunge|런지/i.test(part) || STATIONARY_ONLY_LUNGE_RE.test(part)) {
+        return part;
+      }
+      const scrubbed = part.replace(TIME_HEADER_METER_COLLISION_RE, " ");
+      if (!DISTANCE_PRESCRIPTION_RE.test(scrubbed)) {
+        return part;
+      }
+      return part
+        .replace(/\b(lunges?)\b/gi, "walking $1")
+        .replace(/런지/g, "워킹 런지");
+    })
+    .join("");
+}
+
+function tokenRegexPattern(token: string): string {
+  if (token === "db") return "(?:db|dumbbells?)";
+  if (token === "kb") return "(?:kb|kettlebells?)";
+  if (token === "&") return "(?:&|and)";
+  return escapeRegexLiteral(token);
+}
+
 /**
  * Extracts known catalog movements mentioned in free-form WOD text.
  * Matches longest movement names first (e.g. "Power Snatch" before "Snatch")
@@ -141,9 +172,16 @@ export function extractCatalogMovementsFromText(
         .map((m) => m.trim())
         .filter(Boolean),
     ),
-  ).sort((a, b) => b.length - a.length);
+  ).sort((a, b) => {
+    const aTokens = a.split(/[\s-]+/).filter(Boolean).length;
+    const bTokens = b.split(/[\s-]+/).filter(Boolean).length;
+    return bTokens - aTokens || b.length - a.length;
+  });
 
-  let remaining = trimmed.toLowerCase();
+  const hasWalkingLungeCatalog = uniqueMovements.some((m) => /walking\s+lunge/i.test(m));
+  const prepared = hasWalkingLungeCatalog ? promoteDistancePrescribedLunges(trimmed) : trimmed;
+
+  let remaining = prepared.toLowerCase();
   const matched: { movement: string; index: number }[] = [];
 
   for (const movement of uniqueMovements) {
@@ -151,7 +189,7 @@ export function extractCatalogMovementsFromText(
       .toLowerCase()
       .split(/[\s-]+/)
       .filter(Boolean)
-      .map(escapeRegexLiteral);
+      .map(tokenRegexPattern);
     if (tokens.length === 0) continue;
 
     const bodyPattern = tokens.join("[\\s-]*");

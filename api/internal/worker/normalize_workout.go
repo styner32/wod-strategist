@@ -42,6 +42,7 @@ func BuildNormalizedWorkoutPrompt(wodDescription string, hints []string, gender 
 ` + hintsText + `
 ## 규칙
 1. **운동명 (movement)**: 공식 카탈로그 이름과 정확히 일치시켜야 합니다. 카탈로그에 없는 경우 약어를 교정하거나 원문 이름을 유지하세요.
+   - 거리 단위(ft, m, yd, 미터, 피트 등 — 예: "200ft dumbbell overhead lunge", "50m front rack lunge")가 함께 처방된 런지는 반드시 보행형 카탈로그 이름("* Walking Lunge", 예: "DB Overhead Walking Lunge", "Front Rack Walking Lunge", "Walking Lunge")으로 변환하세요. 거리 단위 없이 횟수만 처방된 런지는 제자리/교대형 이름(예: "DB Overhead Lunge", "Lunge")을 사용하세요.
    - 약어 및 오타 교정 규칙:
      - "Thuster" → "Thruster"
      - "PU" → "Pull-up"
@@ -125,6 +126,7 @@ func ParseNormalizedWorkoutOutput(raw string) ([]db.NormalizedMovement, error) {
 		// Fallback: try parsing direct JSON if not enclosed in backticks
 		var wrapper movementsJSONWrapper
 		if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &wrapper); err == nil && len(wrapper.Movements) > 0 {
+			promoteDistanceLungesInNormalizedMovements(wrapper.Movements, "")
 			return wrapper.Movements, nil
 		}
 		return nil, fmt.Errorf("no fenced movements JSON block found in output")
@@ -136,7 +138,22 @@ func ParseNormalizedWorkoutOutput(raw string) ([]db.NormalizedMovement, error) {
 		return nil, fmt.Errorf("failed to unmarshal movements JSON: %w", err)
 	}
 
+	promoteDistanceLungesInNormalizedMovements(wrapper.Movements, "")
 	return wrapper.Movements, nil
+}
+
+func promoteDistanceLungesInNormalizedMovements(items []db.NormalizedMovement, wodDescription string) {
+	for i := range items {
+		if promoted := movement.PromoteDistanceLunge(items[i].Movement, items[i].Reps); promoted != "" {
+			items[i].Movement = promoted
+			continue
+		}
+		if wodDescription != "" {
+			if promoted := movement.PromoteDistanceLungeInWOD(items[i].Movement, wodDescription); promoted != "" {
+				items[i].Movement = promoted
+			}
+		}
+	}
 }
 
 func (w *Worker) lookupGender(profileID uint) string {
@@ -201,6 +218,7 @@ func (w *Worker) normalizeWorkout(ctx context.Context, sessionID string, profile
 	if len(movements) == 0 {
 		return ""
 	}
+	promoteDistanceLungesInNormalizedMovements(movements, trimmedDesc)
 
 	jsonBytes, err := json.Marshal(movements)
 	if err != nil {

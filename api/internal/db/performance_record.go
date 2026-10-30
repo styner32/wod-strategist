@@ -16,11 +16,12 @@ type PerformanceRecord struct {
 	IntervalID          string       `json:"interval_id"`
 	SourceVersion       string       `json:"source_version"`
 	Status              string       `json:"status"`
+	Outcome             string       `json:"outcome"`
 	Movement            string       `json:"movement"`
 	StartSecs           float64      `json:"start_secs"`
 	EndSecs             float64      `json:"end_secs"`
 	ElapsedSeconds      float64      `json:"elapsed_seconds"`
-	Reps                int          `json:"reps"`
+	Reps                *int         `json:"reps"`
 	LoadValue           *float64     `json:"-"`
 	LoadUnit            *string      `json:"-"`
 	LoadBasis           *string      `json:"-"`
@@ -28,8 +29,8 @@ type PerformanceRecord struct {
 	Measurement         string       `json:"measurement"`
 	Technique           string       `json:"technique"`
 	WorkoutPrescription string       `json:"workout_prescription"`
-	RepsPerMinute       float64      `json:"reps_per_minute"`
-	RateBasis           string       `json:"rate_basis"`
+	RepsPerMinute       *float64     `json:"reps_per_minute"`
+	RateBasis           *string      `json:"rate_basis"`
 	MedianCycleSeconds  *float64     `json:"median_cycle_seconds"`
 	OriginalCandidate   JSONDocument `json:"-"`
 	PerformedAt         *time.Time   `json:"performed_at"`

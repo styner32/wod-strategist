@@ -144,14 +144,22 @@ it("saves all short-rest merged intervals with Enter and advances beyond the com
   await mounted.cleanup();
 });
 
-it("keeps missing repetitions unknown and displays validation when Enter cannot confirm", async () => {
+it("rejects 0 repetitions on Enter while allowing blank optional-count confirmation to advance", async () => {
   const mounted = await mount(response([exercise("first", 0, 10, 0), exercise("next", 20, 30)]));
   await open(mounted.tree, "first");
+  await act(async () => input(mounted.tree, "완료 반복수").props.onChange({ target: { value: "0" } }));
   await enter(mounted.tree);
   expect(historyApi.confirmPerformanceRecords).not.toHaveBeenCalled();
   expect(input(mounted.tree, "시작(초)").props.value).toBe("0");
-  expect(input(mounted.tree, "완료 반복수").props.value).toBe("");
-  expect(JSON.stringify(mounted.tree.toJSON())).toContain("완료 반복수에 0 이상의 정수를 입력해주세요");
+  expect(JSON.stringify(mounted.tree.toJSON())).toContain("0회는 저장할 수 없습니다");
+
+  await act(async () => input(mounted.tree, "완료 반복수").props.onChange({ target: { value: "" } }));
+  await enter(mounted.tree);
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("keyboard", {
+    source_version: "keyboard-source",
+    records: [expect.objectContaining({ interval_id: "first", reps: null })],
+  });
+  expect(input(mounted.tree, "시작(초)").props.value).toBe("20");
   await mounted.cleanup();
 });
 

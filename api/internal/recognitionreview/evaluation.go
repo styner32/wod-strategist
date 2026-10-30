@@ -69,13 +69,14 @@ func movementName(name string) string {
 }
 
 func compareRecord(p workoutprogress.Progress, r workoutprogress.Record) RecordEvaluation {
+	outcome := workoutprogress.NormalizedOutcome(r.Outcome)
 	out := RecordEvaluation{Record: r, PredictedMovements: []MovementCount{}, Gaps: []workoutprogress.Gap{}, SourceRefs: []string{}, Status: "insufficient_evidence"}
 	counts := map[string]int{}
 	refs := map[string]bool{}
 	events := map[string]bool{}
 	covered := []workoutprogress.Gap{}
 	count := 0
-	knownMovement, wrongMovement := false, false
+	knownMovement, wrongMovement, hasExercise := false, false, false
 	complete := true
 	for _, in := range p.Intervals {
 		lo, hi := math.Max(r.Start, in.Start), math.Min(r.End, in.End)
@@ -88,12 +89,13 @@ func compareRecord(p workoutprogress.Progress, r workoutprogress.Record) RecordE
 			covered = append(covered, workoutprogress.Gap{Start: lo, End: hi})
 		}
 		if in.Activity == "exercise" {
+			hasExercise = true
 			name := movementName(in.Movement)
 			if name == "" || strings.EqualFold(name, "unknown") {
 				complete = false
 			} else {
 				knownMovement = true
-				if !strings.EqualFold(name, movementName(r.Movement)) {
+				if outcome != "rest" && !strings.EqualFold(name, movementName(r.Movement)) {
 					wrongMovement = true
 				}
 				if _, ok := counts[name]; !ok {
@@ -118,9 +120,10 @@ func compareRecord(p workoutprogress.Progress, r workoutprogress.Record) RecordE
 			events[key] = true
 			counts[name]++
 			count++
+			hasExercise = true
 			if name != "" {
 				knownMovement = true
-				if !strings.EqualFold(name, movementName(r.Movement)) {
+				if outcome != "rest" && !strings.EqualFold(name, movementName(r.Movement)) {
 					wrongMovement = true
 				}
 			}
@@ -137,7 +140,7 @@ func compareRecord(p workoutprogress.Progress, r workoutprogress.Record) RecordE
 		out.Gaps = append(out.Gaps, gap)
 		// An observed incomplete cycle establishes no completed repetition for
 		// that cycle; missing/unsupported evidence does not establish zero.
-		if gap.Reason != "incomplete_cycle" {
+		if outcome == "rest" || gap.Reason != "incomplete_cycle" {
 			complete = false
 		}
 	}
@@ -152,9 +155,6 @@ func compareRecord(p workoutprogress.Progress, r workoutprogress.Record) RecordE
 	if cursor < r.End-epsilon {
 		complete = false
 	}
-	if activity.UnitForMovement(movementName(r.Movement)) != "reps" {
-		complete = false
-	}
 	for name, n := range counts {
 		out.PredictedMovements = append(out.PredictedMovements, MovementCount{Movement: name, Reps: n})
 	}
@@ -163,11 +163,38 @@ func compareRecord(p workoutprogress.Progress, r workoutprogress.Record) RecordE
 		out.SourceRefs = append(out.SourceRefs, ref)
 	}
 	sort.Strings(out.SourceRefs)
+
+	if outcome == "rest" {
+		out.EvidenceComplete = complete
+		if complete {
+			out.ObservedCompleteReps = &count
+		}
+		if hasExercise {
+			v := false
+			out.MovementMatch = &v
+			out.Status = "mismatch"
+		} else if complete {
+			v := true
+			out.MovementMatch = &v
+			out.Status = "matched"
+		}
+		return out
+	}
+
+	isRepUnit := activity.UnitForMovement(movementName(r.Movement)) == "reps"
+	if (outcome == "incomplete" || r.Reps != nil) && !isRepUnit {
+		complete = false
+	}
 	out.EvidenceComplete = complete
-	if complete {
+	if complete && isRepUnit {
 		out.ObservedCompleteReps = &count
-		delta := count - r.Reps
-		out.RepsDelta = &delta
+		if outcome == "incomplete" {
+			delta := count
+			out.RepsDelta = &delta
+		} else if r.Reps != nil {
+			delta := count - *r.Reps
+			out.RepsDelta = &delta
+		}
 	}
 	if wrongMovement {
 		v := false
@@ -180,6 +207,12 @@ func compareRecord(p workoutprogress.Progress, r workoutprogress.Record) RecordE
 		out.Status = "mismatch"
 	} else if complete && out.RepsDelta != nil {
 		if *out.RepsDelta == 0 {
+			out.Status = "matched"
+		} else {
+			out.Status = "mismatch"
+		}
+	} else if complete && outcome == "completed" && r.Reps == nil {
+		if knownMovement {
 			out.Status = "matched"
 		} else {
 			out.Status = "mismatch"

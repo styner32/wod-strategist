@@ -120,3 +120,55 @@ it("displays observed rest duration and before/after cycle times separately, pre
   expect(view.getByText("workoutProgress.touch_and_go")).toBeTruthy();
   expect(view.queryByText("workoutProgress.unspecified")).toBeNull();
 });
+it("supports incomplete, rest, and optional-count walking lunge confirmations without zero-rep fallbacks", async () => {
+  (confirmPerformanceRecords as jest.Mock).mockResolvedValue(evidence);
+  const view = render(<WorkoutProgressCard sessionId="new" profileId={1} />);
+  await open(view);
+  await act(async () => fireEvent.press(view.getByText("workoutProgress.edit")));
+
+  // Switch to incomplete outcome and confirm while retaining attempted load
+  await act(async () => fireEvent.press(view.getByText("workoutProgress.incomplete")));
+  expect(view.queryByLabelText("workoutProgress.reps")).toBeNull();
+  await act(async () => fireEvent.press(view.getByLabelText("workoutProgress.reviewed")));
+  await act(async () => fireEvent.press(view.getByText("workoutProgress.save")));
+  await waitFor(() =>
+    expect(confirmPerformanceRecords).toHaveBeenLastCalledWith("new", {
+      source_version: "source-a",
+      records: [
+        {
+          interval_id: "set-1",
+          outcome: "incomplete",
+          start_secs: 10,
+          end_secs: 70,
+          reps: null,
+          load: { value: 135, unit: "lb", basis: "total" },
+          measurement: "set",
+          technique: "singles",
+        },
+      ],
+    }),
+  );
+
+  // Reopen and reclassify to rest
+  await act(async () => fireEvent.press(view.getByText("workoutProgress.edit")));
+  await act(async () => fireEvent.press(view.getByText("workoutProgress.reclassifyRest")));
+  await act(async () => fireEvent.press(view.getByLabelText("workoutProgress.reviewed")));
+  await act(async () => fireEvent.press(view.getByText("workoutProgress.save")));
+  await waitFor(() =>
+    expect(confirmPerformanceRecords).toHaveBeenLastCalledWith("new", {
+      source_version: "source-a",
+      records: [
+        {
+          interval_id: "set-1",
+          outcome: "rest",
+          start_secs: 10,
+          end_secs: 70,
+          reps: null,
+          load: null,
+          measurement: "set",
+          technique: "unspecified",
+        },
+      ],
+    }),
+  );
+});

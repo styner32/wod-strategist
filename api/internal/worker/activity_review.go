@@ -863,7 +863,11 @@ func (w *Worker) handleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 
 			chunkReviews := make([]activity.ReviewedChunk, 0, len(batch.Indices))
 			if batch.Valid && batch.WinEnd <= duration+0.001 {
-				prompt := movementObservationPrompt + target + batchTrackingPrompt + fmt.Sprintf(
+				batchPolicy := ""
+				if hasActivityBatchTravelingPolicyContext(session, rows, batch.Indices) {
+					batchPolicy = TravelingMovementPolicyPrompt
+				}
+				prompt := movementObservationPrompt + batchPolicy + target + batchTrackingPrompt + fmt.Sprintf(
 					"\n검토 영상의 절대 media 초를 사용하세요. 문맥 구간 %.6f~%.6f초. 현재 집계 소유 구간은 (%.6f, %.6f]초입니다. 문맥에서 사이클 시작과 끝을 확인하고 기록하되, 이전 합계나 목표 횟수로 추측하지 마세요. 구간 중 일부에서만 대상이나 동작이 확인되고 다른 하위 구간만 가림·이탈·판독불가인 경우, 확인된 구간이 있으면 target_state는 identified로 유지하고 판독불가 하위 구간만 unassessed 배열에 기록하세요. 전체 구간 내내 대상을 식별할 수 없을 때만 unknown입니다.",
 					batch.WinStart, batch.WinEnd, batch.CoreStart, batch.CoreEnd,
 				)

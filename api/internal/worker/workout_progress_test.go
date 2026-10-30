@@ -298,7 +298,7 @@ var _ = Describe("Independent workout progress helpers", func() {
 		Expect(items[0].CaptureStart).To(BeNil())
 		Expect(gaps).To(ContainElement(workoutprogress.Gap{Start: 10, End: 30, Clock: "media", Reason: "unverified_capture_mapping"}))
 		progress := workoutprogress.Build(items, gaps, "source")
-		_, err := workoutprogress.Confirm(progress, workoutprogress.Confirmation{IntervalID: items[0].ID, Start: 10, End: 30, Reps: 1, Measurement: "set", Technique: "singles"})
+		_, err := workoutprogress.Confirm(progress, workoutprogress.Confirmation{IntervalID: items[0].ID, Start: 10, End: 30, Reps: workoutprogress.IntPtr(1), Measurement: "set", Technique: "singles"})
 		Expect(err).To(HaveOccurred())
 		in := interval()
 		in.Start, in.End = 20, 30

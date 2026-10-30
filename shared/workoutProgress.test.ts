@@ -1,4 +1,4 @@
-import { buildUnassessedIntervals, confirmedPerformanceInput, diagnosePerformanceDraft, extractWodLoads, findCoveringConfirmedRecord, getContiguousExerciseSpan, incompleteRepCount, isDisplayableProgressGap, observedReps, performanceDraft, summarizeWorkoutMovements, timelineProgressIntervals, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
+import { buildUnassessedIntervals, confirmedPerformanceInput, diagnosePerformanceDraft, extractSuggestedMovements, extractWodLoads, findCoveringConfirmedRecord, getContiguousExerciseSpan, incompleteRepCount, isDisplayableProgressGap, observedReps, performanceDraft, summarizeWorkoutMovements, timelineProgressIntervals, type WorkoutProgressInterval, type PerformanceRecord } from "./workoutProgress";
 import { withoutWorkoutEvidence } from "./analysisEvidence";
 const interval: WorkoutProgressInterval = { id: "set-1", start_secs: 10, end_secs: 70, activity: "exercise", movement: "Power Clean", load: { value: 135, unit: "lb", basis: "total", status: "pending_confirmation" }, observation_refs: [], rep_events: [{ movement: "Power Clean", unit: "reps", start_secs: 12, end_secs: 16, complete: true, evidence: "Complete cycle" }, { movement: "Power Clean", unit: "reps", start_secs: 17, end_secs: 20, complete: false, evidence: "Occluded lockout" }] };
 it("uses complete repetition evidence but preserves missing counts rather than zero", () => {
@@ -9,36 +9,47 @@ it("uses complete repetition evidence but preserves missing counts rather than z
   expect(observedReps({ ...interval, rep_events: [{ ...interval.rep_events![0], unit: "seconds" }] })).toBeNull();
   expect(performanceDraft({ ...interval, rep_events: [] }).reps).toBe("");
 });
-it("requires explicit review and actual load, retaining original units without changing evidence", () => {
+it("supports optional count on completed records, explicit incomplete/rest outcomes, and rejects zero reps", () => {
   const before = JSON.stringify(interval);
   const draft = performanceDraft(interval);
   expect(confirmedPerformanceInput(interval, draft)).toBeNull();
   expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "5" })).toEqual({ interval_id: "set-1", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: 5, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
-  // A zero-rep attempt keeps its actual load; null load would claim no external load.
-  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0" })).toEqual({ interval_id: "set-1", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: 0, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
-  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "none" })).toEqual({ interval_id: "set-1", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: 0, load: null, measurement: "set", technique: "singles" });
-  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "unresolved" })).toBeNull();
-  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0", loadMode: "weighted", weight: "" })).toBeNull();
+  // Optional count (blank reps) confirms elapsed time + load with reps: null.
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "" })).toEqual({ interval_id: "set-1", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: null, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
+  // Zero reps are rejected under completed; incomplete and rest use explicit outcome states.
+  expect(confirmedPerformanceInput(interval, { ...draft, reviewed: true, reps: "0" })).toBeNull();
+  expect(diagnosePerformanceDraft(interval, { ...draft, reviewed: true, reps: "0" })).toContain("0회는 저장할 수 없습니다");
+  expect(confirmedPerformanceInput(interval, { ...draft, outcome: "incomplete", reviewed: true, reps: "" })).toEqual({ interval_id: "set-1", outcome: "incomplete", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: null, load: { value: 135, unit: "lb", basis: "total" }, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput(interval, { ...draft, outcome: "incomplete", reviewed: true, reps: "", loadMode: "none" })).toEqual({ interval_id: "set-1", outcome: "incomplete", movement: "Power Clean", start_secs: 10, end_secs: 70, reps: null, load: null, measurement: "set", technique: "singles" });
+  expect(confirmedPerformanceInput(interval, { ...draft, outcome: "incomplete", reviewed: true, loadMode: "unresolved" })).toBeNull();
+  expect(confirmedPerformanceInput(interval, { ...draft, outcome: "incomplete", reviewed: true, loadMode: "weighted", weight: "" })).toBeNull();
+  expect(confirmedPerformanceInput(interval, { ...draft, outcome: "rest", reviewed: true, loadMode: "unresolved" })).toEqual({ interval_id: "set-1", outcome: "rest", start_secs: 10, end_secs: 70, reps: null, load: null, measurement: "set", technique: "unspecified" });
   expect(JSON.stringify(interval)).toBe(before);
 });
-it.each([{ start: "9" }, { end: "71" }, { end: "10" }, { reps: "2.5" }, { reps: "-1" }, { reps: "" }, { weight: "" }, { weight: "0" }, { loadMode: "unresolved" as const }])("rejects invalid reviewed values %j", values => {
+it.each([{ start: "9" }, { end: "71" }, { end: "10" }, { reps: "0" }, { reps: "2.5" }, { reps: "-1" }, { weight: "" }, { weight: "0" }, { loadMode: "unresolved" as const }])("rejects invalid reviewed values %j", values => {
   expect(confirmedPerformanceInput(interval, { ...performanceDraft(interval), reviewed: true, ...values })).toBeNull();
 });
-it("defaults loadMode and basis from movement type while leaving ambiguous movements unresolved", () => {
+it("defaults loadMode and basis across lunge variants and burpee broad jump while leaving ambiguous movements unresolved", () => {
   const ambiguous = { ...interval, movement: "Squat", load: null };
   expect(performanceDraft(ambiguous).loadMode).toBe("unresolved");
 
   const airSquat = { ...interval, movement: "Air Squat", load: null };
-  const burpee = { ...interval, movement: "Burpee", load: null };
+  const burpeeBroadJump = { ...interval, movement: "Burpee Broad Jump", load: null };
+  const walkingLunge = { ...interval, movement: "Walking Lunge", load: null };
   expect(performanceDraft(airSquat).loadMode).toBe("none");
-  expect(performanceDraft(burpee).loadMode).toBe("none");
+  expect(performanceDraft(burpeeBroadJump).loadMode).toBe("none");
+  expect(performanceDraft(walkingLunge).loadMode).toBe("none");
   expect(confirmedPerformanceInput(airSquat, { ...performanceDraft(airSquat), reviewed: true })?.load).toBeNull();
 
-  const dbSquat = { ...interval, movement: "Dumbbell Squat", load: null };
+  const dbOhWalkingLunge = { ...interval, movement: "DB Overhead Walking Lunge", load: null };
+  const ohWalkingLunge = { ...interval, movement: "Overhead Walking Lunge", load: null };
   const powerClean = { ...interval, movement: "Power Clean", load: null };
-  expect(performanceDraft(dbSquat)).toMatchObject({ loadMode: "weighted", weight: "", basis: "per_implement" });
+  expect(performanceDraft(dbOhWalkingLunge)).toMatchObject({ loadMode: "weighted", weight: "", basis: "per_implement" });
+  expect(performanceDraft(ohWalkingLunge)).toMatchObject({ loadMode: "weighted", weight: "", basis: "total" });
   expect(performanceDraft(powerClean)).toMatchObject({ loadMode: "weighted", weight: "", basis: "total" });
   expect(confirmedPerformanceInput(powerClean, { ...performanceDraft(powerClean), reviewed: true })).toBeNull();
+  expect(extractSuggestedMovements("200ft dumbbell overhead lunge")).toEqual(["DB Overhead Walking Lunge"]);
+  expect(extractSuggestedMovements("AMRAP 10m\n20 dumbbell lunges")).toEqual(["DB Lunge"]);
 });
 it("resets stale confirmed values to current candidate evidence", () => {
   const stale = { status: "needs_confirmation", start_secs: 20, end_secs: 40, reps: 99, load: { value: 225, unit: "lb", basis: "total" } } as PerformanceRecord;

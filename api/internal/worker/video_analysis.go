@@ -1250,6 +1250,9 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 	if IsRecoveryWorkoutType(p.WorkoutType) {
 		prompt += RecoveryChunkPolicyPrompt
 	}
+	if hasSegmentTravelingPolicyContext(p, seg) {
+		prompt += TravelingMovementPolicyPrompt
+	}
 	prompt += MovementEvidenceRulesPrompt
 	prompt += ObservationOnlyRulesPrompt
 	prompt += SpinalObservationRulesPrompt
@@ -1261,7 +1264,7 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 	prompt += highlightSelectionPromptFor(p.WorkoutType)
 	prompt += MobilityOutputPrompt
 
-	prompt += buildMovementHintsContext(p.Movements)
+	prompt += buildMovementHintsContext(normalizeMovementHintsForWOD(p.Movements, p.WODDescription))
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
@@ -1867,7 +1870,7 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	prompt += highlightSelectionPromptFor(p.WorkoutType)
 	prompt += MobilityOutputPrompt
 
-	prompt += buildMovementHintsContext(p.Movements)
+	prompt += buildMovementHintsContext(normalizeMovementHintsForWOD(p.Movements, p.WODDescription))
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
@@ -1898,6 +1901,9 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	prompt += independentSegmentPolicy
 	if IsRecoveryWorkoutType(p.WorkoutType) {
 		prompt += RecoveryChunkPolicyPrompt
+	}
+	if hasLegacyTravelingPolicyContext(p) {
+		prompt += TravelingMovementPolicyPrompt
 	}
 	prompt += workoutObservationPrompt
 	prompt += ObservationOnlyOutputCheckPrompt

@@ -839,7 +839,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses/:run_id/apply", f
 			next, nextRaw := progressFixture("new-video")
 			s := testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WARMUP-20261013-APPLY", ProfileID: profile.ID, WorkoutType: "warmup"})
 			a := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: s.SessionID, ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: oldRaw})
-			record := testhelpers.CreatePerformanceRecord(dbConn, &db.PerformanceRecord{ProfileID: profile.ID, AnalysisID: a.ID, SessionID: s.SessionID, IntervalID: old.Intervals[0].ID, SourceVersion: old.SourceVersion, Movement: "Power Clean", StartSecs: 0, EndSecs: 60, Reps: 3, RepsPerMinute: 3})
+			record := testhelpers.CreatePerformanceRecord(dbConn, &db.PerformanceRecord{ProfileID: profile.ID, AnalysisID: a.ID, SessionID: s.SessionID, IntervalID: old.Intervals[0].ID, SourceVersion: old.SourceVersion, Movement: "Power Clean", StartSecs: 0, EndSecs: 60, Reps: workoutprogress.IntPtr(3), RepsPerMinute: workoutprogress.Float64Ptr(3)})
 			snapshot, err := json.Marshal(map[string]any{"workout_progress": old})
 			Expect(err).NotTo(HaveOccurred())
 			run := testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{SessionID: s.SessionID, ProfileID: profile.ID, Status: "COMPLETED", OriginalAnalysisSnapshot: db.JSONDocument(snapshot), WorkoutProgress: nextRaw, SessionScore: `{}`, WorkoutType: "warmup"})

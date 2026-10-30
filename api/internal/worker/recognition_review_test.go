@@ -42,7 +42,7 @@ var _ = Describe("recognition review helpers", func() {
 	})
 	It("bounds raw nested events and explanations to the requested interval", func() {
 		p := workoutprogress.Progress{Intervals: []workoutprogress.Interval{{ID: "wide", Start: 0, End: 300, Activity: "exercise", Movement: "Clean", RepEvents: []activity.Observation{{Start: 1, End: 2, Unit: "reps", Complete: true, Evidence: "outside-first"}, {Start: 11, End: 12, Unit: "reps", Complete: true, Evidence: "inside"}, {Start: 299, End: 300, Unit: "reps", Complete: true, Evidence: "outside-last"}}, FormObservations: []workoutprogress.Observation{{Start: 1, End: 2, Evidence: "outside form"}, {Start: 9, End: 11, Evidence: "inside form"}}}}, Unassessed: []workoutprogress.Gap{{Start: 0, End: 15, Clock: "media", Reason: "not_analyzed"}, {Start: 250, End: 280, Clock: "media", Reason: "outside gap"}}}
-		snapshot := recognitionreview.Snapshot{Progress: p, Evaluation: recognitionreview.Evaluation{Records: []recognitionreview.RecordEvaluation{{Record: workoutprogress.Record{ID: 1, Start: 0, End: 300, Reps: 30}}}}, AnalysisOutput: "## 세그먼트 1: Clean (0:00 ~ 0:20)\ninside original\n## 최종 평가\noutside final assessment\n## 세그먼트 2: Clean (4:00 ~ 5:00)\noutside section"}
+		snapshot := recognitionreview.Snapshot{Progress: p, Evaluation: recognitionreview.Evaluation{Records: []recognitionreview.RecordEvaluation{{Record: workoutprogress.Record{ID: 1, Outcome: "completed", Start: 0, End: 300, Reps: workoutprogress.IntPtr(30)}}}}, AnalysisOutput: "## 세그먼트 1: Clean (0:00 ~ 0:20)\ninside original\n## 최종 평가\noutside final assessment\n## 세그먼트 2: Clean (4:00 ~ 5:00)\noutside section"}
 		batch := recognitionreview.Batch{RecordID: 1, StartSecs: 10, EndSecs: 20, CoreStartSecs: 10, CoreEndSecs: 20}
 		input, ok := recognitionBatchInput(snapshot, batch)
 		Expect(ok).To(BeTrue())
@@ -261,8 +261,8 @@ var _ = Describe("HandleRecognitionReviewTask", func() {
 		p := workoutprogress.Progress{Version: 1, Clock: "media", SourceVersion: "test-source", Intervals: []workoutprogress.Interval{{ID: "one", Start: 0.2, End: 0.8, Activity: "exercise", Movement: "Deadlift", ObservationRefs: []string{"segment-1:interval-0"}, RepEvents: []activity.Observation{{Movement: "Deadlift", Unit: "reps", Start: 0.2, End: 0.4, Complete: true, Evidence: "original visible cycle"}}}}, Unassessed: []workoutprogress.Gap{}}
 		raw, _ := json.Marshal(p)
 		original = testhelpers.CreateAnalysisResult(conn, &db.AnalysisResult{SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", Output: "original immutable analysis", WorkoutProgress: raw})
-		record := testhelpers.CreatePerformanceRecord(conn, &db.PerformanceRecord{AnalysisID: original.ID, ProfileID: profile.ID, SessionID: session.SessionID, SourceVersion: "test-source", IntervalID: "one", Movement: "Power Clean", StartSecs: 0.2, EndSecs: 0.8, Reps: 2, OriginalCandidate: db.JSONDocument(`{"movement":"Power Clean"}`)})
-		snapshot = recognitionreview.Snapshot{Progress: p, Evaluation: recognitionreview.Evaluation{SourceVersion: "test-source", Records: []recognitionreview.RecordEvaluation{{Record: workoutprogress.Record{ID: record.ID, SessionID: session.SessionID, SourceVersion: "test-source", Status: "confirmed", Movement: record.Movement, Start: record.StartSecs, End: record.EndSecs, Reps: record.Reps}, Status: "mismatch"}}}}
+		record := testhelpers.CreatePerformanceRecord(conn, &db.PerformanceRecord{AnalysisID: original.ID, ProfileID: profile.ID, SessionID: session.SessionID, SourceVersion: "test-source", IntervalID: "one", Movement: "Power Clean", StartSecs: 0.2, EndSecs: 0.8, Reps: workoutprogress.IntPtr(2), OriginalCandidate: db.JSONDocument(`{"movement":"Power Clean"}`)})
+		snapshot = recognitionreview.Snapshot{Progress: p, Evaluation: recognitionreview.Evaluation{SourceVersion: "test-source", Records: []recognitionreview.RecordEvaluation{{Record: workoutprogress.Record{ID: record.ID, SessionID: session.SessionID, SourceVersion: "test-source", Status: "confirmed", Outcome: record.Outcome, Movement: record.Movement, Start: record.StartSecs, End: record.EndSecs, Reps: record.Reps}, Status: "mismatch"}}}}
 	})
 	AfterEach(func() {
 		Expect(storageTransport.Verify()).To(Succeed())
@@ -339,7 +339,7 @@ var _ = Describe("HandleRecognitionReviewTask", func() {
 		Expect(string(unchanged.WorkoutProgress)).To(MatchJSON(string(original.WorkoutProgress)))
 		var confirmed db.PerformanceRecord
 		Expect(conn.First(&confirmed, snapshot.Evaluation.Records[0].Record.ID).Error).To(Succeed())
-		Expect(confirmed.Reps).To(Equal(2))
+		Expect(*confirmed.Reps).To(Equal(2))
 		Expect(confirmed.Movement).To(Equal("Power Clean"))
 		var usage db.TokenUsage
 		Expect(conn.Where("session_id = ? AND task_type = ?", session.SessionID, TypeRecognitionReview).First(&usage).Error).To(Succeed())

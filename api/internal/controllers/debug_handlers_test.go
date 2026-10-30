@@ -14,6 +14,8 @@ import (
 )
 
 var _ = Describe("POST /api/v1/debug/telemetry", func() {
+	const validSessionID = "WOD-20261030-01JQXYZ3K4M5N6P7Q8R9ABCDEF"
+
 	var (
 		profile db.Profile
 		user    db.User
@@ -32,7 +34,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 		storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
 		Expect(err).NotTo(HaveOccurred())
 
-		objectName := fmt.Sprintf("debug/telemetry/%d/session-tel-1.json", profile.ID)
+		objectName := fmt.Sprintf("debug/telemetry/%d/%s.json", profile.ID, validSessionID)
 		transport.New("https://storage.googleapis.com").
 			Post(gcsUploadURL("test-bucket", objectName)).
 			Reply(http.StatusOK).
@@ -44,7 +46,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 		})
 
 		body := fmt.Sprintf(`{
-			"sessionId": "session-tel-1",
+			"sessionId": %q,
 			"profileId": %d,
 			"startedAt": 1714303200000,
 			"endedAt": 1714303800000,
@@ -55,7 +57,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 			"appVersion": "1.4.2",
 			"platform": "ios",
 			"deviceModel": "iPhone15,3"
-		}`, profile.ID)
+		}`, validSessionID, profile.ID)
 
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
 		w := httptest.NewRecorder()
@@ -94,7 +96,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 	It("returns bad request for missing profileId", func() {
 		router := newTestRouter(controllers.Config{})
 
-		body := `{"sessionId": "s1", "samples": []}`
+		body := fmt.Sprintf(`{"sessionId": %q, "samples": []}`, validSessionID)
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -111,7 +113,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 		for i := 0; i <= 7200; i++ {
 			sampleEntries = append(sampleEntries, `{"ts": 0}`)
 		}
-		body := fmt.Sprintf(`{"sessionId": "s1", "profileId": %d, "samples": [%s]}`, profile.ID, strings.Join(sampleEntries, ","))
+		body := fmt.Sprintf(`{"sessionId": %q, "profileId": %d, "samples": [%s]}`, validSessionID, profile.ID, strings.Join(sampleEntries, ","))
 
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
 		w := httptest.NewRecorder()
@@ -137,7 +139,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 		storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)
 		Expect(err).NotTo(HaveOccurred())
 
-		objectName := fmt.Sprintf("debug/telemetry/%d/s1.json", profile.ID)
+		objectName := fmt.Sprintf("debug/telemetry/%d/%s.json", profile.ID, validSessionID)
 		transport.New("https://storage.googleapis.com").
 			Post(gcsUploadURL("test-bucket", objectName)).
 			Reply(http.StatusInternalServerError).
@@ -148,7 +150,7 @@ var _ = Describe("POST /api/v1/debug/telemetry", func() {
 			BucketName:    "test-bucket",
 		})
 
-		body := fmt.Sprintf(`{"sessionId": "s1", "profileId": %d, "samples": [{"ts": 0}]}`, profile.ID)
+		body := fmt.Sprintf(`{"sessionId": %q, "profileId": %d, "samples": [{"ts": 0}]}`, validSessionID, profile.ID)
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/debug/telemetry", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)

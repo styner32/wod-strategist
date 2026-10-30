@@ -467,14 +467,24 @@ func CreatePerformanceRecord(dbConn *gorm.DB, attr *db.PerformanceRecord) db.Per
 	if record.Status == "" {
 		record.Status = "confirmed"
 	}
+	if record.Outcome == "" {
+		record.Outcome = "completed"
+	}
 	if record.Measurement == "" {
 		record.Measurement = "window"
 	}
 	if record.Technique == "" {
 		record.Technique = "unspecified"
 	}
-	if record.RateBasis == "" {
-		record.RateBasis = "normalized_per_minute"
+	if record.Outcome == "completed" && record.Reps != nil && *record.Reps > 0 {
+		if record.RepsPerMinute == nil && record.ElapsedSeconds > 0 {
+			rpm := float64(*record.Reps) * 60 / record.ElapsedSeconds
+			record.RepsPerMinute = &rpm
+		}
+		if record.RateBasis == nil {
+			basis := "normalized_per_minute"
+			record.RateBasis = &basis
+		}
 	}
 	if len(record.OriginalCandidate) == 0 {
 		record.OriginalCandidate = db.JSONDocument(`{}`)

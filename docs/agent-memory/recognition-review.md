@@ -18,6 +18,12 @@ automatic correction, or model training. It never updates observations,
   media-clock gaps. Use canonical movements and complete `unit=reps` events with
   completion ownership `(record.start_secs, record.end_secs]`; do not double count
   merged records or repeated references. Missing count evidence remains null.
+  `RecordComparison` preserves `Outcome` (`completed`, `incomplete`, `rest`): `rest`
+  compares as `ConfirmedActivity: "rest"` (`ConfirmedMovement: ""`), `incomplete`
+  keeps `ConfirmedActivity: "exercise"` and `ConfirmedMovement` with
+  `ConfirmedReps: nil` (`CountComparable: false`), and `completed` with omitted
+  `reps` (`nil`) keeps `CountComparable: false` while evaluating activity/movement
+  alignment. `EvaluationFingerprint` includes `Outcome` and nullable `Reps`.
 - Overall comparison covers current confirmed records only. It is not a metric
   for unconfirmed portions of the video.
 - Review times are original merged-media seconds. Both bounds filter complete

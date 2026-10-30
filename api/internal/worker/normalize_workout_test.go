@@ -29,6 +29,15 @@ var _ = Describe("normalize workout", func() {
 		Expect(m.IsMain).To(BeTrue())
 	})
 
+	It("promotes distance-prescribed lunges to * Walking Lunge without altering rep-based lunges", func() {
+		rawDistance := "```movements\n{\n  \"movements\": [\n    {\n      \"movement\": \"Dumbbell Overhead Lunge\",\n      \"weight_raw\": \"50lb\",\n      \"weight_kg\": 22.7,\n      \"reps\": \"200ft\",\n      \"is_main\": true\n    },\n    {\n      \"movement\": \"Dumbbell Overhead Lunge\",\n      \"weight_raw\": \"50lb\",\n      \"weight_kg\": 22.7,\n      \"reps\": \"20\",\n      \"is_main\": false\n    }\n  ]\n}\n```"
+		movements, err := ParseNormalizedWorkoutOutput(rawDistance)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(movements).To(HaveLen(2))
+		Expect(movements[0].Movement).To(Equal("DB Overhead Walking Lunge"))
+		Expect(movements[1].Movement).To(Equal("Dumbbell Overhead Lunge"))
+	})
+
 	It("builds non-empty normalized workout prompt", func() {
 		prompt := BuildNormalizedWorkoutPrompt("5x5 Power Clean 135lb", []string{"Power Clean"}, "male")
 		Expect(prompt).NotTo(BeEmpty())

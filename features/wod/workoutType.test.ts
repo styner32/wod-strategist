@@ -73,8 +73,9 @@ describe("workoutType", () => {
 
   describe("extractCatalogMovementsFromText", () => {
     const groups = [
-      { movements: ["Snatch", "Power Snatch", "Squat Snatch", "Thruster"] },
-      { movements: ["Pull-up", "Chest-to-Bar Pull-up", "Push-up", "Burpee", "Row"] },
+      { movements: ["Snatch", "Power Snatch", "Squat Snatch", "Thruster", "Front Rack Lunge", "Front Rack Walking Lunge"] },
+      { movements: ["DB Lunge", "DB Overhead Lunge", "DB Walking Lunge", "DB Overhead Walking Lunge"] },
+      { movements: ["Pull-up", "Chest-to-Bar Pull-up", "Push-up", "Burpee", "Burpee Broad Jump", "Lunge", "Walking Lunge", "Row"] },
     ];
 
     it("matches plural/hyphenated movements in order and prefers specific compound names", () => {
@@ -91,6 +92,19 @@ describe("workoutType", () => {
         "Thruster",
         "Burpee",
         "Row",
+      ]);
+    });
+
+    it("promotes distance-prescribed lunges to walking lunges while keeping AMRAP/rep lunges stationary", () => {
+      expect(extractCatalogMovementsFromText("200ft dumbbell overhead lunge", groups)).toEqual([
+        "DB Overhead Walking Lunge",
+      ]);
+      expect(extractCatalogMovementsFromText("25m front rack lunges + 10 burpee broad jumps", groups)).toEqual([
+        "Front Rack Walking Lunge",
+        "Burpee Broad Jump",
+      ]);
+      expect(extractCatalogMovementsFromText("AMRAP 10m: 20 dumbbell lunges", groups)).toEqual([
+        "DB Lunge",
       ]);
     });
   });

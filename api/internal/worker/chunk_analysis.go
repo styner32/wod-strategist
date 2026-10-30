@@ -699,7 +699,11 @@ func (w *Worker) buildChunkAnalysisPrompt(p VideoAnalysisPayload) string {
 		prompt += wod
 	}
 
-	prompt += buildMovementHintsContext(p.Movements)
+	hints := normalizeMovementHintsForWOD(p.Movements, p.WODDescription)
+	prompt += buildMovementHintsContext(hints)
+	if w.hasChunkTravelingPolicyContext(p.ProfileID, p.SessionID, hints, p.WODDescription) {
+		prompt += TravelingMovementPolicyPrompt
+	}
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", strings.Join(p.Injuries, ", "))
@@ -732,11 +736,21 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 		prompt += levelPolicyForFitnessLevel(fitnessLevel)
 	}
 
-	if wod := buildWODContext(session.WODDescription); wod != "" {
+	var wodDesc string
+	var rawHints []string
+	if session != nil {
+		wodDesc = session.WODDescription
+		rawHints = movementHintsFromDocument(session.MovementHints)
+	}
+	if wod := buildWODContext(wodDesc); wod != "" {
 		prompt += wod
 	}
 
-	prompt += buildMovementHintsContext(movementHintsFromDocument(session.MovementHints))
+	hints := normalizeMovementHintsForWOD(rawHints, wodDesc)
+	prompt += buildMovementHintsContext(hints)
+	if w.hasChunkTravelingPolicyContext(p.ProfileID, p.SessionID, hints, wodDesc) {
+		prompt += TravelingMovementPolicyPrompt
+	}
 
 	if profile.Injuries != nil && *profile.Injuries != "" {
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", *profile.Injuries)

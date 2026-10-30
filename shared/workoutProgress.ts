@@ -51,12 +51,19 @@ export interface WorkoutProgress {
 }
 export type PerformanceMeasurement = "set" | "window";
 export type PerformanceTechnique = "unspecified" | "singles" | "touch_and_go";
+export type PerformanceOutcome = "completed" | "incomplete" | "rest";
+export function normalizePerformanceOutcome(outcome?: string | null): PerformanceOutcome {
+  const trimmed = outcome?.trim().toLowerCase();
+  if (trimmed === "incomplete" || trimmed === "rest") return trimmed;
+  return "completed";
+}
 export interface ConfirmPerformanceRecord {
   interval_id: string;
+  outcome?: PerformanceOutcome;
   movement?: string;
   start_secs: number;
   end_secs: number;
-  reps: number;
+  reps: number | null;
   load: ProgressLoad | null;
   measurement: PerformanceMeasurement;
   technique: PerformanceTechnique;
@@ -74,12 +81,13 @@ export interface PerformanceRecord extends ConfirmPerformanceRecord {
   session_id: string;
   source_version: string;
   status: "confirmed" | "needs_confirmation";
+  outcome?: PerformanceOutcome;
   movement: string;
   load_kg: number | null;
   workout_prescription: string;
-  reps_per_minute: number;
+  reps_per_minute: number | null;
   elapsed_seconds?: number;
-  rate_basis: "actual_60_second_window" | "normalized_per_minute";
+  rate_basis: "actual_60_second_window" | "normalized_per_minute" | null;
   median_cycle_seconds: number | null;
   performed_at: string | null;
   performed_at_source?: string | null;
@@ -110,6 +118,7 @@ export interface PerformanceBenchmarksResponse {
 }
 
 export interface PerformanceDraft {
+  outcome: PerformanceOutcome;
   movement?: string;
   start: string;
   end: string;
@@ -244,7 +253,7 @@ const WEIGHTED_MOVEMENT_PATTERNS = [
   /farmer'?s?\s*(?:carry|walk)/i,
   /turkish\s*get-?up/i,
   /\btgu\b/i,
-  /(?:overhead|front\s*rack)\s*lunge/i,
+  /(?:barbell|back\s*rack|front\s*rack|overhead|goblet)\s*(?:walking\s*)?lunge/i,
   /(?:pendlay|bent[\s-]*over|renegade)\s*row/i,
   /스내치/,
   /클린/,
@@ -256,6 +265,7 @@ const WEIGHTED_MOVEMENT_PATTERNS = [
   /스윙/,
   /맨메이커/,
   /파머스/,
+  /(?:백랙|프론트\s*랙|프런트\s*랙|오버헤드|고블릿)\s*(?:워킹\s*)?런지/,
 ];
 
 export function isLikelyBodyweightMovement(movement?: string | null): boolean {
@@ -263,7 +273,8 @@ export function isLikelyBodyweightMovement(movement?: string | null): boolean {
   const trimmed = movement.trim();
   if (
     WEIGHTED_MODIFIER_PATTERN.test(trimmed) ||
-    /(?:overhead|front\s*rack)\s*lunge/i.test(trimmed) ||
+    /(?:barbell|back\s*rack|front\s*rack|overhead|goblet)\s*(?:walking\s*)?lunge/i.test(trimmed) ||
+    /(?:백랙|프론트\s*랙|프런트\s*랙|오버헤드|고블릿)\s*(?:워킹\s*)?런지/.test(trimmed) ||
     /(?:pendlay|bent[\s-]*over|renegade)\s*row/i.test(trimmed)
   ) {
     return false;
@@ -414,6 +425,7 @@ export function summarizeWorkoutMovements(
   for (const interval of progress.intervals) {
     if (interval.activity !== "exercise" || !interval.movement?.trim()) continue;
     const covering = findCoveringConfirmedRecord(interval, active);
+    if (covering && normalizePerformanceOutcome(covering.outcome) === "rest") continue;
     const name = covering?.movement?.trim() || interval.movement.trim();
     const existing = map.get(name) ?? {
       movement: name,
@@ -440,7 +452,9 @@ export function summarizeWorkoutMovements(
   }
 
   for (const rec of active) {
-    if (rec.status !== "confirmed" || !rec.movement?.trim()) continue;
+    if (rec.status !== "confirmed") continue;
+    const outcome = normalizePerformanceOutcome(rec.outcome);
+    if (outcome === "rest" || !rec.movement?.trim()) continue;
     const name = rec.movement.trim();
     const coversObservedExercise = progress.intervals.some(
       interval =>
@@ -461,8 +475,10 @@ export function summarizeWorkoutMovements(
     if (!coversObservedExercise) {
       existing.intervalCount += 1;
     }
-    existing.confirmedCount += 1;
-    existing.confirmedReps += rec.reps;
+    if (outcome === "completed") {
+      existing.confirmedCount += 1;
+      existing.confirmedReps += rec.reps ?? 0;
+    }
     if (rec.load) {
       existing.loadLabel = `${rec.load.value} ${rec.load.unit}`;
     }
@@ -494,8 +510,9 @@ export function rememberedMovementDefaults(
     .find(
       r =>
         r.status === "confirmed" &&
+        normalizePerformanceOutcome(r.outcome) !== "rest" &&
         r.movement?.trim().toLowerCase() === key &&
-        (r.reps > 0 || r.load != null),
+        ((r.reps != null && r.reps > 0) || r.load != null || normalizePerformanceOutcome(r.outcome) === "completed"),
     );
   if (!inMemory && !confirmedForMovement) return undefined;
   const fromRecord: MovementDraftDefaults | undefined = confirmedForMovement
@@ -524,15 +541,16 @@ export function performanceDraft(
 ): PerformanceDraft {
   // Stale confirmations must be reviewed against current evidence, not silently reused.
   const current = record?.status === "confirmed" ? record : undefined;
+  const outcome = current ? normalizePerformanceOutcome(current.outcome) : "completed";
   const effectiveMovement = current?.movement?.trim() || interval.movement?.trim() || "";
-  const load = current?.load ?? interval.load ?? fallbackLoad ?? null;
-  const reps = current?.reps ?? observedReps(interval);
+  const load = (outcome === "rest" ? null : current?.load) ?? interval.load ?? fallbackLoad ?? null;
+  const reps = current ? current.reps : observedReps(interval);
   const rememberedMode =
     movementDefaults?.loadMode && movementDefaults.loadMode !== "unresolved"
       ? movementDefaults.loadMode
       : undefined;
   const loadMode: PerformanceDraft["loadMode"] =
-    current && current.load == null
+    current && outcome !== "rest" && current.load == null
       ? "none"
       : load
         ? "weighted"
@@ -552,6 +570,7 @@ export function performanceDraft(
         ? movementDefaults.technique
         : "singles";
   return {
+    outcome,
     movement: effectiveMovement,
     start: String(current?.start_secs ?? interval.start_secs),
     end: String(current?.end_secs ?? interval.end_secs),
@@ -750,12 +769,68 @@ const WOD_MOVEMENT_PATTERNS: { pattern: RegExp; canonical: string }[] = [
   { pattern: /toes[\s-]*to[\s-]*bar|\bt2b\b|토\s*투\s*바|토투바/i, canonical: "Toes to Bar" },
   { pattern: /pull[\s-]*ups?|풀업|턱걸이/i, canonical: "Pull-up" },
   { pattern: /handstand\s*push[\s-]*ups?|\bhspu\b|핸드스탠드\s*푸시업|핸드스탠드\s*푸쉬업/i, canonical: "Handstand Push-up" },
+  { pattern: /burpee\s*broad\s*jumps?|\bbbj\b|버피\s*(?:브로드\s*점프|멀리뛰기)/i, canonical: "Burpee Broad Jump" },
   { pattern: /burpees?|버피/i, canonical: "Burpee" },
+  { pattern: /broad\s*jumps?|브로드\s*점프|제자리\s*멀리뛰기/i, canonical: "Broad Jump" },
   { pattern: /box\s*jumps?|박스\s*점프/i, canonical: "Box Jump" },
   { pattern: /double[\s-]*unders?|\bdus\b|더블\s*언더|이단뛰기/i, canonical: "Double-under" },
   { pattern: /shuttle\s*runs?|셔틀\s*런|왕복\s*달리기/i, canonical: "Shuttle Run" },
   { pattern: /plate\s*ground[\s-]*to[\s-]*overhead|플레이트\s*그라운드\s*투\s*오버헤드/i, canonical: "Plate Ground-to-Overhead" },
+  { pattern: /(?:db|dumbbells?)\s*(?:overhead\s*walking|walking\s*overhead)\s*lunges?|덤벨\s*(?:오버헤드\s*워킹|워킹\s*오버헤드)\s*런지/i, canonical: "DB Overhead Walking Lunge" },
+  { pattern: /(?:db|dumbbells?)\s*(?:front\s*rack\s*walking|walking\s*front\s*rack)\s*lunges?|덤벨\s*프론트\s*랙\s*워킹\s*런지/i, canonical: "DB Front Rack Walking Lunge" },
+  { pattern: /(?:db|dumbbells?)\s*walking\s*lunges?|덤벨\s*워킹\s*런지/i, canonical: "DB Walking Lunge" },
+  { pattern: /(?:db|dumbbells?)\s*overhead\s*lunges?|덤벨\s*오버헤드\s*런지/i, canonical: "DB Overhead Lunge" },
+  { pattern: /(?:db|dumbbells?)\s*front\s*rack\s*lunges?|덤벨\s*프론트\s*랙\s*런지/i, canonical: "DB Front Rack Lunge" },
+  { pattern: /(?:db|dumbbells?)\s*(?:reverse|step[\s-]*back)\s*lunges?|덤벨\s*리버스\s*런지/i, canonical: "DB Reverse Lunge" },
+  { pattern: /(?:db|dumbbells?)\s*lunges?|덤벨\s*런지/i, canonical: "DB Lunge" },
+  { pattern: /(?:kb|kettlebells?)\s*(?:overhead\s*walking|walking\s*overhead)\s*lunges?|케틀벨\s*오버헤드\s*워킹\s*런지/i, canonical: "KB Overhead Walking Lunge" },
+  { pattern: /(?:kb|kettlebells?)\s*(?:front\s*rack\s*walking|walking\s*front\s*rack)\s*lunges?|케틀벨\s*프론트\s*랙\s*워킹\s*런지/i, canonical: "KB Front Rack Walking Lunge" },
+  { pattern: /goblet\s*walking\s*lunges?|고블릿\s*워킹\s*런지/i, canonical: "Goblet Walking Lunge" },
+  { pattern: /(?:kb|kettlebells?)\s*walking\s*lunges?|케틀벨\s*워킹\s*런지/i, canonical: "KB Walking Lunge" },
+  { pattern: /(?:kb|kettlebells?)\s*overhead\s*lunges?|케틀벨\s*오버헤드\s*런지/i, canonical: "KB Overhead Lunge" },
+  { pattern: /(?:kb|kettlebells?)\s*front\s*rack\s*lunges?|케틀벨\s*프론트\s*랙\s*런지/i, canonical: "KB Front Rack Lunge" },
+  { pattern: /goblet\s*lunges?|고블릿\s*런지/i, canonical: "Goblet Lunge" },
+  { pattern: /(?:kb|kettlebells?)\s*lunges?|케틀벨\s*런지/i, canonical: "KB Lunge" },
+  { pattern: /barbell\s*walking\s*lunges?|바벨\s*워킹\s*런지/i, canonical: "Barbell Walking Lunge" },
+  { pattern: /back\s*rack\s*walking\s*lunges?|백랙\s*워킹\s*런지/i, canonical: "Back Rack Walking Lunge" },
+  { pattern: /front\s*rack\s*walking\s*lunges?|프론트\s*랙\s*워킹\s*런지/i, canonical: "Front Rack Walking Lunge" },
+  { pattern: /overhead\s*walking\s*lunges?|오버헤드\s*워킹\s*런지/i, canonical: "Overhead Walking Lunge" },
+  { pattern: /sandbag\s*walking\s*lunges?|샌드백\s*워킹\s*런지/i, canonical: "Sandbag Walking Lunge" },
+  { pattern: /weighted\s*walking\s*lunges?|중량\s*워킹\s*런지/i, canonical: "Weighted Walking Lunge" },
+  { pattern: /walking\s*lunges?|워킹\s*런지/i, canonical: "Walking Lunge" },
+  { pattern: /barbell\s*lunges?|바벨\s*런지/i, canonical: "Barbell Lunge" },
+  { pattern: /back\s*rack\s*lunges?|백랙\s*런지/i, canonical: "Back Rack Lunge" },
+  { pattern: /front\s*rack\s*lunges?|프론트\s*랙\s*런지/i, canonical: "Front Rack Lunge" },
+  { pattern: /overhead\s*lunges?|오버헤드\s*런지/i, canonical: "Overhead Lunge" },
+  { pattern: /sandbag\s*lunges?|샌드백\s*런지/i, canonical: "Sandbag Lunge" },
+  { pattern: /weighted\s*lunges?|중량\s*런지/i, canonical: "Weighted Lunge" },
+  { pattern: /(?:reverse|step[\s-]*back)\s*lunges?|리버스\s*런지/i, canonical: "Reverse Lunge" },
+  { pattern: /jumping\s*lunges?|점핑\s*런지/i, canonical: "Jumping Lunge" },
+  { pattern: /lunges?|런지/i, canonical: "Lunge" },
 ];
+
+const SUGGESTION_TIME_HEADER_RE =
+  /\b(?:amrap|emom|e\d+mom|every|for\s*time|time\s*cap|cap|rest)\s*:?\s*\d+(?:\.\d+)?\s*m(?:in(?:ute)?s?)?\b/gi;
+const SUGGESTION_DISTANCE_RE =
+  /(?:^|[^a-z0-9])\d+(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yards?|m|meters?|metres?)(?=$|[^a-z0-9])|\d+(?:\.\d+)?\s*(?:미터|피트|야드)/i;
+const SUGGESTION_NON_WALKING_LUNGE_RE = /\b(?:walking|reverse|step[\s-]*back|jumping)\b|워킹|리버스|점핑/i;
+
+function normalizeDistanceLungeClauses(text: string): string {
+  return text
+    .split(/([\n,;]+)/)
+    .map(clause => {
+      if (!/lunge|런지/i.test(clause) || SUGGESTION_NON_WALKING_LUNGE_RE.test(clause)) {
+        return clause;
+      }
+      if (!SUGGESTION_DISTANCE_RE.test(clause.replace(SUGGESTION_TIME_HEADER_RE, " "))) {
+        return clause;
+      }
+      return clause
+        .replace(/\b(lunges?)\b/gi, "walking $1")
+        .replace(/런지/g, "워킹 런지");
+    })
+    .join("");
+}
 
 export function normalizeMovementName(raw?: string | null): string {
   const trimmed = raw?.trim() ?? "";
@@ -781,9 +856,12 @@ export function extractSuggestedMovements(
     if (!seen.has(trimmed)) seen.add(trimmed);
   };
   if (wodDescription?.trim()) {
+    let remaining = normalizeDistanceLungeClauses(wodDescription);
     for (const { pattern, canonical } of WOD_MOVEMENT_PATTERNS) {
-      if (pattern.test(wodDescription)) {
+      const globalPattern = new RegExp(pattern.source, "gi");
+      if (globalPattern.test(remaining)) {
         add(canonical);
+        remaining = remaining.replace(new RegExp(pattern.source, "gi"), " ");
       }
     }
   }
@@ -1175,6 +1253,45 @@ export function performanceSelectionCovered(interval: WorkoutProgressInterval, s
   return true;
 }
 
+export function restSelectionCovered(
+  interval: WorkoutProgressInterval,
+  start: number,
+  end: number,
+  progress?: WorkoutProgress,
+): boolean {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= interval.end_secs || end <= interval.start_secs || end <= start) {
+    return false;
+  }
+  if (!progress && (start < interval.start_secs || end > interval.end_secs)) return false;
+  if (
+    progress?.unassessed.some(
+      gap =>
+        gap.clock === "media" &&
+        gap.reason === "unverified_capture_mapping" &&
+        start < gap.end_secs &&
+        end > gap.start_secs,
+    )
+  ) {
+    return false;
+  }
+  if ((interval.capture_start_secs != null) !== (interval.capture_end_secs != null)) return false;
+  if (interval.capture_start_secs != null && interval.capture_end_secs != null) {
+    const captureStart = interval.capture_start_secs;
+    const captureEnd = interval.capture_end_secs;
+    if (!Number.isFinite(captureStart) || !Number.isFinite(captureEnd) || captureStart < 0 || captureEnd <= captureStart) {
+      return false;
+    }
+    let mappedStart = start === interval.start_secs ? captureStart : captureStart + (start - interval.start_secs);
+    let mappedEnd = end === interval.end_secs ? captureEnd : captureStart + (end - interval.start_secs);
+    if (mappedStart < 0 && start < interval.start_secs) {
+      mappedEnd -= mappedStart;
+      mappedStart = 0;
+    }
+    if (!Number.isFinite(mappedStart) || !Number.isFinite(mappedEnd) || mappedEnd <= mappedStart) return false;
+  }
+  return true;
+}
+
 function resolveTargetInterval(
   interval: WorkoutProgressInterval,
   draft: PerformanceDraft,
@@ -1202,6 +1319,23 @@ export function diagnosePerformanceDraft(
   draft: PerformanceDraft,
   progress?: WorkoutProgress,
 ): string | null {
+  const outcome = normalizePerformanceOutcome(draft.outcome);
+  if (outcome === "rest") {
+    if (draft.start.trim() === "" || draft.end.trim() === "") {
+      return "시작(초)과 종료(초)를 입력해주세요.";
+    }
+    const start = Number(draft.start), end = Number(draft.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      return "종료(초)는 시작(초)보다 커야 합니다.";
+    }
+    if (start < 0 || start >= interval.end_secs || end <= interval.start_secs) {
+      return `시작~종료 범위가 현재 선택한 구간(${progressTime(interval.start_secs)}–${progressTime(interval.end_secs)})과 겹쳐야 합니다.`;
+    }
+    if (!restSelectionCovered(interval, start, end, progress)) {
+      return "선택한 시작~종료 범위에 원본 영상 매핑 미검증 구간이 포함되어 있습니다.";
+    }
+    return null;
+  }
   const effectiveInterval = resolveTargetInterval(interval, draft, progress);
   if (!effectiveInterval.movement?.trim()) {
     return "운동 종목을 입력하거나 선택해주세요.";
@@ -1216,11 +1350,15 @@ export function diagnosePerformanceDraft(
   if (start < 0 || start >= effectiveInterval.end_secs || end <= effectiveInterval.start_secs) {
     return `시작~종료 범위가 현재 선택한 운동 구간(${progressTime(effectiveInterval.start_secs)}–${progressTime(effectiveInterval.end_secs)})과 겹쳐야 합니다.`;
   }
-  const reps = Number(draft.reps);
-  if (draft.reps.trim() === "" || !Number.isSafeInteger(reps) || reps < 0) {
-    return "완료 반복수에 0 이상의 정수를 입력해주세요.";
+  if (outcome === "completed" && draft.reps.trim() !== "") {
+    const reps = Number(draft.reps);
+    if (reps === 0) {
+      return "0회는 저장할 수 없습니다. 미완료·노렙이거나 휴식 구간이면 위의 수행 상태를 변경해주세요.";
+    }
+    if (!Number.isSafeInteger(reps) || reps < 1) {
+      return "완료 반복수는 비워두거나(횟수 미지정) 1 이상의 정수를 입력해주세요.";
+    }
   }
-  // A zero-rep attempt still records its actual load; null load means no external load.
   if (draft.loadMode === "unresolved") {
     return "수행 중량 구분이 '미확인' 상태입니다. '맨몸 수행' 또는 '중량 기구 사용'을 선택해주세요.";
   }
@@ -1244,11 +1382,30 @@ export function diagnosePerformanceDraft(
 }
 
 export function confirmedPerformanceInput(interval: WorkoutProgressInterval, draft: PerformanceDraft, progress?: WorkoutProgress): ConfirmPerformanceRecord | null {
-  if (!draft.reviewed || draft.start.trim() === "" || draft.end.trim() === "" || draft.reps.trim() === "") return null;
+  if (!draft.reviewed || draft.start.trim() === "" || draft.end.trim() === "") return null;
+  const outcome = normalizePerformanceOutcome(draft.outcome);
+  const start = Number(draft.start), end = Number(draft.end);
+  if (outcome === "rest") {
+    if (!restSelectionCovered(interval, start, end, progress)) return null;
+    return {
+      interval_id: interval.id,
+      outcome: "rest",
+      start_secs: start,
+      end_secs: end,
+      reps: null,
+      load: null,
+      measurement: "set",
+      technique: "unspecified",
+    };
+  }
   const effectiveInterval = resolveTargetInterval(interval, draft, progress);
-  const start = Number(draft.start), end = Number(draft.end), reps = Number(draft.reps);
-  if (!performanceSelectionCovered(effectiveInterval, start, end, draft.measurement, progress) || !Number.isSafeInteger(reps) || reps < 0) return null;
-  // Zero reps still need the actual load: null load explicitly means no external load.
+  if (!performanceSelectionCovered(effectiveInterval, start, end, draft.measurement, progress)) return null;
+  let reps: number | null = null;
+  if (outcome === "completed" && draft.reps.trim() !== "") {
+    const parsed = Number(draft.reps);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) return null;
+    reps = parsed;
+  }
   if (draft.loadMode === "unresolved") return null;
   let load: ProgressLoad | null = null;
   if (draft.loadMode === "weighted") {
@@ -1259,12 +1416,14 @@ export function confirmedPerformanceInput(interval: WorkoutProgressInterval, dra
   const originalRow = progress?.intervals.find(row => row.id === effectiveInterval.id);
   const originalMovement = originalRow?.movement?.trim() ?? interval.movement?.trim() ?? "";
   const effectiveMovement = normalizeMovementName(effectiveInterval.movement);
+  if (!effectiveMovement) return null;
   const isSyntheticOrUnassessed =
     !originalRow || originalRow.activity !== "exercise" || !originalRow.movement?.trim();
   const shouldIncludeMovement =
     Boolean(effectiveMovement) && (isSyntheticOrUnassessed || effectiveMovement !== originalMovement);
   return {
     interval_id: effectiveInterval.id,
+    ...(outcome !== "completed" ? { outcome } : {}),
     ...(shouldIncludeMovement ? { movement: effectiveMovement } : {}),
     start_secs: start,
     end_secs: end,

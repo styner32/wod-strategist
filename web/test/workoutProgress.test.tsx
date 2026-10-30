@@ -373,19 +373,21 @@ it("lets the user choose which movement to merge as when contiguous intervals ha
   await act(() => tree.unmount()); client.clear();
 });
 
-it("shows incomplete cycle notice when observed complete reps are 0 and confirms 0-rep (incomplete/no-rep) with one click", async () => {
-  const zeroConfirmed: PerformanceRecord = {
+it("supports explicit incomplete and rest radio outcomes plus optional-count walking lunge confirmation while rejecting 0 reps", async () => {
+  const incompleteConfirmed: PerformanceRecord = {
     ...current,
     id: 99,
+    outcome: "incomplete",
     interval_id: "set-incomplete",
     source_version: "zero-src",
     start_secs: 10,
     end_secs: 20,
     elapsed_seconds: 10,
-    reps: 0,
+    reps: null,
     load: { value: 135, unit: "lb", basis: "total" },
     load_kg: 61.2,
-    reps_per_minute: 0,
+    reps_per_minute: null,
+    rate_basis: null,
   };
   const incompleteEvidence: WorkoutProgressResponse = {
     progress: {
@@ -412,6 +414,16 @@ it("shows incomplete cycle notice when observed complete reps are 0 and confirms
             },
           ],
         },
+        {
+          id: "set-lunge",
+          start_secs: 311,
+          end_secs: 316.8,
+          activity: "exercise",
+          movement: "DB Overhead Walking Lunge",
+          load: { value: 50, unit: "lb", basis: "per_implement" },
+          observation_refs: ["chunk:31"],
+          rep_events: [],
+        },
       ],
       unassessed: [],
     },
@@ -420,38 +432,96 @@ it("shows incomplete cycle notice when observed complete reps are 0 and confirms
   (historyApi.getWorkoutProgress as jest.Mock).mockResolvedValue(incompleteEvidence);
   (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValue({
     ...incompleteEvidence,
-    records: [zeroConfirmed],
+    records: [incompleteConfirmed],
   });
   const { tree, client } = await mount("new", true, "30 Power Cleans (135 lb)");
   expect(allText(tree)).toContain("랩 기준 미달(불완전 반복) 1회 감지 · 완료 반복 0회");
 
-  await click(tree, "반복수·구간·중량 확인/수정");
+  const openButtons = () => tree.root.findAllByType("button").filter((b: any) => b.children.join("") === "반복수·구간·중량 확인/수정");
+  await act(async () => openButtons()[0].props.onClick());
+  await flush();
+
+  // Select "미완료·노렙" radio inside accessible fieldset
+  const radio = (label: string) => tree.root.findAllByType("input").find((i: any) => i.props.type === "radio" && i.props["aria-label"] === label);
+  expect(tree.root.findAllByType("fieldset")).toHaveLength(1);
+  await act(async () => { radio("미완료·노렙").props.onChange({ target: { checked: true } }); });
+
   const loadSelect = () => tree.root.findAllByType("select").find((s: any) => ["unresolved", "none", "weighted"].includes(s.props.value));
-  await act(async () => { loadSelect().props.onChange({ target: { value: "unresolved" } }); });
-  await click(tree, "0회(미완료/노렙)로 확정");
+  await act(async () => {
+    loadSelect().props.onChange({ target: { value: "unresolved" } });
+    tree.root.findAllByType("input").find((i: any) => i.props.type === "checkbox").props.onChange({ target: { checked: true } });
+  });
   // A failed attempt is not a bodyweight record: the actual load must still be confirmed.
-  expect(historyApi.confirmPerformanceRecords).not.toHaveBeenCalled();
   expect(allText(tree)).toContain("'미확인'");
 
-  await act(async () => { loadSelect().props.onChange({ target: { value: "weighted" } }); });
-  await click(tree, "0회(미완료/노렙)로 확정");
+  await act(async () => {
+    loadSelect().props.onChange({ target: { value: "weighted" } });
+  });
+  await act(async () => {
+    tree.root.findAllByType("input").find((i: any) => i.props.type === "checkbox").props.onChange({ target: { checked: true } });
+  });
+  await click(tree, "확인한 기록 저장");
 
   expect(historyApi.confirmPerformanceRecords).toHaveBeenCalledWith("new", {
     source_version: "zero-src",
     records: [
       {
         interval_id: "set-incomplete",
+        outcome: "incomplete",
         start_secs: 10,
         end_secs: 20,
-        reps: 0,
+        reps: null,
         load: { value: 135, unit: "lb", basis: "total" },
         measurement: "set",
         technique: "singles",
       },
     ],
   });
-  expect(allText(tree)).toContain("0회 · 미완료/노렙");
-  expect(allText(tree)).toContain("확정 총 0회");
+  expect(allText(tree)).toContain("미완료·노렙");
+  expect(allText(tree)).not.toContain("확정 총 0회");
+
+  // Confirm DB Overhead Walking Lunge with blank reps (optional count -> reps: null)
+  const lungeConfirmed: PerformanceRecord = {
+    ...current,
+    id: 100,
+    outcome: "completed",
+    interval_id: "set-lunge",
+    source_version: "zero-src",
+    movement: "DB Overhead Walking Lunge",
+    start_secs: 311,
+    end_secs: 316.8,
+    elapsed_seconds: 5.8,
+    reps: null,
+    load: { value: 50, unit: "lb", basis: "per_implement" },
+    load_kg: 22.7,
+    reps_per_minute: null,
+    rate_basis: null,
+  };
+  (historyApi.confirmPerformanceRecords as jest.Mock).mockResolvedValueOnce({
+    ...incompleteEvidence,
+    records: [incompleteConfirmed, lungeConfirmed],
+  });
+  await act(async () => openButtons()[1].props.onClick());
+  await flush();
+  await act(async () => {
+    tree.root.findAllByType("input").find((i: any) => i.props.type === "checkbox").props.onChange({ target: { checked: true } });
+  });
+  await click(tree, "확인한 기록 저장");
+  expect(historyApi.confirmPerformanceRecords).toHaveBeenLastCalledWith("new", {
+    source_version: "zero-src",
+    records: [
+      {
+        interval_id: "set-lunge",
+        start_secs: 311,
+        end_secs: 316.8,
+        reps: null,
+        load: { value: 50, unit: "lb", basis: "per_implement" },
+        measurement: "set",
+        technique: "singles",
+      },
+    ],
+  });
+  expect(allText(tree)).toContain("횟수 미지정");
   await act(() => tree.unmount()); client.clear();
 });
 

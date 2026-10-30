@@ -34,7 +34,7 @@ func newRecognitionFixture() recognitionFixtureData {
 	session := testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WOD-20261028-RECOGNITION", ProfileID: profile.ID, WorkoutType: "wod"})
 	p, raw := progressFixture("review-source")
 	analysis := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: raw, Output: "original output"})
-	record := testhelpers.CreatePerformanceRecord(dbConn, &db.PerformanceRecord{ProfileID: profile.ID, AnalysisID: analysis.ID, SessionID: session.SessionID, IntervalID: p.Intervals[0].ID, SourceVersion: p.SourceVersion, Movement: "Power Clean", StartSecs: 0, EndSecs: 60, Reps: 2, OriginalCandidate: db.JSONDocument(`{"movement":"User supplied candidate must not be read"}`)})
+	record := testhelpers.CreatePerformanceRecord(dbConn, &db.PerformanceRecord{ProfileID: profile.ID, AnalysisID: analysis.ID, SessionID: session.SessionID, IntervalID: p.Intervals[0].ID, SourceVersion: p.SourceVersion, Movement: "Power Clean", StartSecs: 0, EndSecs: 60, Reps: workoutprogress.IntPtr(2), OriginalCandidate: db.JSONDocument(`{"movement":"User supplied candidate must not be read"}`)})
 	transport := testhelpers.NewMockTransport()
 	storage, err := testhelpers.NewStorageClient("test-bucket", transport)
 	Expect(err).NotTo(HaveOccurred())
@@ -130,7 +130,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/recognition-reviews", func()
 		Expect(string(analysis.WorkoutProgress)).To(ContainSubstring(f.progress.SourceVersion))
 		var record db.PerformanceRecord
 		Expect(dbConn.First(&record, f.record.ID).Error).To(Succeed())
-		Expect(record.Reps).To(Equal(2))
+		Expect(*record.Reps).To(Equal(2))
 		Expect(f.transport.Verify()).To(Succeed())
 	})
 	It("rejects stale confirmation fingerprints before reading video metadata", func() {
@@ -226,7 +226,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/recognition-reviews/:run_id",
 		Expect(json.Unmarshal(w.Body.Bytes(), &out)).To(Succeed())
 		Expect(out.Outdated).To(BeTrue())
 		Expect(out.Evaluation).NotTo(BeNil())
-		Expect(out.Evaluation.Records[0].Record.Reps).To(Equal(2))
+		Expect(*out.Evaluation.Records[0].Record.Reps).To(Equal(2))
 		Expect(f.transport.Verify()).To(Succeed())
 	})
 	It("scopes run IDs to the owned session", func() {

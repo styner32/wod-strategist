@@ -68,7 +68,7 @@ Use existing activity validation and cycle ownership. Never use `observed_signal
 ## Confirmation and APIs
 
 - `GET /api/v1/sessions/:session_id/workout-progress`: `{progress, records}`; progress is null when unavailable.
-- `PUT /api/v1/sessions/:session_id/performance-records`: `{source_version, records:[{interval_id, start_secs, end_secs, reps, load:{value,unit,basis}, measurement: set|window, technique: unspecified|singles|touch_and_go}]}`. Confirms a complete selected video window, repetitions and actual load. Repeated saves replace the same interval record; source changes return 409. User confirmation never changes raw observations.
+- `PUT /api/v1/sessions/:session_id/performance-records`: `{source_version, records:[{interval_id, start_secs, end_secs, outcome?: completed|incomplete|rest, reps?: number|null, load:{value,unit,basis}|null, measurement: set|window, technique: unspecified|singles|touch_and_go}]}`. Confirms a complete selected video window, outcome, optional repetitions (`>= 1` or `null`) and actual load across any supported movement (the `UnitForMovement != "reps"` restriction was removed so count is optional even on duration movements). Repeated saves replace the same interval record; source changes return 409. User confirmation never changes raw observations.
 - `GET /api/v1/performance-benchmarks?profile_id=...&movement=...`: confirmed current-source records, comparisons and best records. Exact owned profile/session scope is required for all reads/writes.
 
 A `set` stays inside its selected exercise interval. A `window` can continue
@@ -96,7 +96,11 @@ loads, missing media and discontinuous or incomplete capture mappings stop it.
 When no valid rest-bearing run exists, retain the existing rest-free `set`
 merge and explicit target-movement selection for back-to-back movements.
 
-A confirmation may record 0 repetitions (attempted but no complete repetition: below standard, no-rep, failed or setup). It still requires a resolved actual load (`null` means no external load, never "unknown"). Zero-rep records are stored and shown but excluded from comparisons, best records, median cycle and rest comparisons and from benchmark reads (`reps > 0`). Migration `000057` relaxes the checks to `reps >= 0`/`reps_per_minute >= 0`; its down migration preserves zero-rep rows and restores the positive checks as `NOT VALID`.
+`reps == 0` is never used for incomplete attempts, no-reps, or rest. Instead, migration `000062` (`performance_records.outcome` + nullable `reps`, `reps_per_minute`, `rate_basis`) enforces an explicit `outcome` (`completed`, `incomplete`, `rest`) alongside `status`:
+- `completed` (default when omitted on input): requires non-empty `movement` and resolved actual `load` (`null` means no external load, never "unknown"). `reps` is optional: `null`/omitted confirms elapsed time and load (`reps_per_minute = null`, `rate_basis = null`), while an integer `>= 1` derives `reps_per_minute` and `rate_basis`; `reps <= 0` is rejected.
+- `incomplete`: preserves attempted `movement` and resolved actual `load`, sets `reps = null`, `reps_per_minute = null`, `rate_basis = null`.
+- `rest`: reclassifies an exercise or unassessed interval to rest/transition (`movement = ""`, `load = null`, `reps = null`, `reps_per_minute = null`, `rate_basis = null`, `measurement = "set"`, `technique = "unspecified"`).
+Migration `000062` backfills any legacy `reps = 0` rows to `outcome = 'incomplete'` with `reps = NULL`. Only `outcome = 'completed'` records with `reps >= 1` participate in benchmark reads (`FindConfirmedPerformanceRecordsForBenchmarks`), comparisons, best records, median cycle, and rest comparisons; `incomplete`, `rest`, and count-omitted (`reps = null`) records remain stored and displayed on the session timeline.
 
 The web performance editor focuses itself when opened. Enter in the editor or
 an input explicitly reviews the current draft and saves it through the existing

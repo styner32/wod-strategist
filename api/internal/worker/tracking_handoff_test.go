@@ -120,6 +120,33 @@ var _ = Describe("Tracking channel", func() {
 		Expect(restHandoff.MatchedCues).To(Equal([]string{"black shirt", "red shoes"}))
 		Expect(restHandoff.Station).To(Equal("barbell"))
 		Expect(restHandoff.ActivityState).To(BeEmpty(), "prior rest state must not prime the next chunk to classify exercise as rest")
+
+		travelingPrev := db.ChunkAnalysisResult{
+			Status:           "COMPLETED",
+			ExerciseType:     "DB Overhead Walking Lunge",
+			ObservedSignals:  `{"movement":"DB Overhead Walking Lunge","activity_state":"exercise"}`,
+			TargetConfidence: 0.92,
+			TargetCues:       `{"matched_cues":["black shirt","red shoes"],"ambiguous":false,"confidence":0.92,"frame_region":"left","station":"box"}`,
+		}
+		travelingHandoff := buildTrackingHandoff(travelingPrev, WorkoutTypeWOD)
+		Expect(travelingHandoff.FrameRegion).To(BeEmpty(), "traveling movement clears fixed frame_region lock")
+		Expect(travelingHandoff.Station).To(Equal("moving"))
+		Expect(travelingHandoff.MovementHint).To(Equal("DB Overhead Walking Lunge"))
+		travelingPrompt := trackingInputPrompt(travelingHandoff, true, true)
+		Expect(travelingPrompt).To(ContainSubstring("고정 스테이션이 아닌 이동형 동작"))
+		Expect(travelingPrompt).To(ContainSubstring("ambiguous: true"))
+
+		stationaryLungePrev := db.ChunkAnalysisResult{
+			Status:           "COMPLETED",
+			ExerciseType:     "Lunge",
+			ObservedSignals:  `{"movement":"Lunge","activity_state":"exercise"}`,
+			TargetConfidence: 0.92,
+			TargetCues:       `{"matched_cues":["black shirt","red shoes"],"ambiguous":false,"confidence":0.92,"frame_region":"left","station":"floor"}`,
+		}
+		stationaryLungeHandoff := buildTrackingHandoff(stationaryLungePrev, WorkoutTypeWOD)
+		Expect(stationaryLungeHandoff.FrameRegion).To(Equal("left"), "stationary lunge keeps existing tracking handoff untouched")
+		Expect(stationaryLungeHandoff.Station).To(Equal("floor"))
+		Expect(trackingInputPrompt(stationaryLungeHandoff, true, true)).NotTo(ContainSubstring("고정 스테이션이 아닌 이동형 동작"))
 	})
 
 	It("selects an in-cycle or mid-chunk usable box and rejects tiny edge slivers", func() {

@@ -11,7 +11,7 @@ jest.mock("../src/api/history", () => ({ historyApi: {
 const { act, create } = require("react-test-renderer");
 const record: PerformanceRecord = { id: 1, session_id: "session", interval_id: "set-1", source_version: "source", status: "confirmed", movement: "Power Clean", start_secs: 10, end_secs: 40, reps: 5, load: null, load_kg: null, measurement: "set", technique: "singles", workout_prescription: "test", reps_per_minute: 10, rate_basis: "normalized_per_minute", median_cycle_seconds: null, performed_at: null, confirmed_at: "2026-10-28T00:00:00Z" };
 const row: RecognitionRecordEvaluation = { record, predicted_movements: [{ movement: "Deadlift", reps: 3 }], observed_complete_reps: 3, movement_match: false, reps_delta: -2, evidence_complete: true, status: "mismatch", gaps: [], source_refs: [] };
-const missing: RecognitionRecordEvaluation = { ...row, record: { ...record, id: 2, start_secs: 50, end_secs: 70, reps: 0 }, predicted_movements: [], observed_complete_reps: null, movement_match: null, reps_delta: null, evidence_complete: false, status: "insufficient_evidence", gaps: [{ start_secs: 50, end_secs: 70, reason: "not_analyzed", clock: "media" }] };
+const missing: RecognitionRecordEvaluation = { ...row, record: { ...record, id: 2, start_secs: 50, end_secs: 70, reps: null }, predicted_movements: [], observed_complete_reps: null, movement_match: null, reps_delta: null, evidence_complete: false, status: "insufficient_evidence", gaps: [{ start_secs: 50, end_secs: 70, reason: "not_analyzed", clock: "media" }] };
 const evaluation: RecognitionEvaluation = { source_version: "source", fingerprint: "fingerprint", records: [row, missing], summary: { total: 2, matched: 0, mismatch: 1, insufficient_evidence: 1 } };
 const run: RecognitionReviewRun = {
   id: 9, status: "COMPLETED", source_version: "source", evaluation_fingerprint: "fingerprint", record_ids: [1], start_secs: 0, end_secs: 70, model: "test-model", prompt_version: "v1", schema_version: "v1", outdated: false, input_tokens: 0, output_tokens: null, total_tokens: null, created_at: "2026-10-28T00:00:00Z", updated_at: "2026-10-28T00:01:00Z", evaluation,
@@ -42,9 +42,9 @@ function button(tree: any, label: string) { return tree.root.findAllByType("butt
 async function click(tree: any, label: string) { const found = button(tree, label); expect(found).toBeDefined(); await act(async () => found.props.onClick()); await flush(); }
 async function input(tree: any, label: string, value: string) { await act(async () => tree.root.findAllByType("input").find((item: any) => item.props["aria-label"] === label).props.onChange({ target: { value } })); await flush(); }
 
-it("compares confirmed records without submitting AI and preserves missing versus zero", async () => {
+it("compares confirmed records without submitting AI and preserves missing count, incomplete, and rest labels", async () => {
   const { tree, cleanup } = await mount();
-  expect(text(tree)).toContain("확정 2구간"); expect(text(tree)).toContain("Deadlift 3회"); expect(text(tree)).toContain("Power Clean 0회"); expect(text(tree)).toContain("근거 부족");
+  expect(text(tree)).toContain("확정 2구간"); expect(text(tree)).toContain("Deadlift 3회"); expect(text(tree)).toContain("Power Clean (횟수 미지정)"); expect(text(tree)).toContain("근거 부족");
   expect(text(tree)).toContain("-2회"); expect(text(tree)).toContain("확인 불가");
   expect(historyApi.createRecognitionReview).not.toHaveBeenCalled();
   expect(tree.root.findByProps({ "data-testid": "recognition-review-preview" }).children.join("")).toContain("2구간");

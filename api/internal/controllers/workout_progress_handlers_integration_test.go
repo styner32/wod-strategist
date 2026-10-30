@@ -71,9 +71,9 @@ var _ = Describe("PUT /api/v1/sessions/:session_id/performance-records", func() 
 		Expect(response.Code).To(Equal(200), response.Body.String())
 		var row db.PerformanceRecord
 		Expect(dbConn.Where("profile_id = ? AND session_id = ?", profile.ID, sid).First(&row).Error).To(Succeed())
-		Expect(row.RepsPerMinute).To(Equal(5.0))
+		Expect(*row.RepsPerMinute).To(Equal(5.0))
 		Expect(row.ElapsedSeconds).To(Equal(60.0))
-		Expect(row.RateBasis).To(Equal("actual_60_second_window"))
+		Expect(*row.RateBasis).To(Equal("actual_60_second_window"))
 		Expect(row.MedianCycleSeconds).NotTo(BeNil())
 		Expect(*row.MedianCycleSeconds).To(Equal(2.0))
 		var confirmed controllers.WorkoutProgressResponse
@@ -160,7 +160,7 @@ var _ = Describe("PUT /api/v1/sessions/:session_id/performance-records", func() 
 		var rows []db.PerformanceRecord
 		Expect(dbConn.Where("profile_id = ? AND session_id = ?", profile.ID, s.SessionID).Find(&rows).Error).To(Succeed())
 		Expect(rows).To(HaveLen(1))
-		Expect(rows[0].Reps).To(Equal(5))
+		Expect(*rows[0].Reps).To(Equal(5))
 		Expect(rows[0].MedianCycleSeconds).To(BeNil())
 		Expect(rows[0].LoadKG).NotTo(BeNil())
 		Expect(*rows[0].LoadKG).To(Equal(61.2))
@@ -226,15 +226,82 @@ var _ = Describe("PUT /api/v1/sessions/:session_id/performance-records", func() 
 		Expect(json.Unmarshal(response.Body.Bytes(), &got)).To(Succeed())
 		Expect(got.Records).To(HaveLen(1))
 		Expect(got.Records[0].IntervalID).To(Equal(p.Intervals[1].ID))
-		Expect(got.Records[0].Movement).To(Equal("Clean and Jerk"))
+		Expect(got.Records[0].Movement).To(Equal("Clean & Jerk"))
 		Expect(got.Records[0].Start).To(Equal(488.0))
 		Expect(got.Records[0].End).To(Equal(491.8))
-		Expect(got.Records[0].Reps).To(Equal(1))
+		Expect(*got.Records[0].Reps).To(Equal(1))
 
 		var rows []db.PerformanceRecord
 		Expect(dbConn.Where("profile_id = ? AND session_id = ?", profile.ID, sid).Find(&rows).Error).To(Succeed())
 		Expect(rows).To(HaveLen(1))
 		Expect(rows[0].IntervalID).To(Equal(p.Intervals[1].ID))
+	})
+	It("persists explicit incomplete, rest, and optional-count walking lunge confirmations while rejecting zero reps", func() {
+		profile, user := progressOwner()
+		p := workoutprogress.Build(
+			[]workoutprogress.Interval{
+				{Start: 10, End: 20, Activity: "exercise", Movement: "Power Clean", ObservationRefs: []string{"seg-1"}},
+				{Start: 30, End: 40, Activity: "exercise", Movement: "Power Clean", ObservationRefs: []string{"seg-2"}},
+				{Start: 311, End: 316.8, Activity: "exercise", Movement: "DB Overhead Walking Lunge", ObservationRefs: []string{"seg-3"}},
+			},
+			nil,
+			"outcomes-source",
+		)
+		raw, err := json.Marshal(p)
+		Expect(err).NotTo(HaveOccurred())
+		sid := "WOD-20261030-OUTCOMES"
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sid, ProfileID: profile.ID, WorkoutType: "wod", WODDescription: "200ft dumbbell overhead lunge"})
+		testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: sid, ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: db.NullableJSONDocument(raw)})
+		router := newTestRouterWithAuthService(controllers.Config{})
+		path := "/api/v1/sessions/" + sid + "/performance-records"
+
+		// Reject reps: 0 under completed
+		zeroBody := fmt.Sprintf(`{"source_version":%q,"records":[{"interval_id":%q,"outcome":"completed","start_secs":10,"end_secs":20,"reps":0,"load":null,"measurement":"set","technique":"singles"}]}`, p.SourceVersion, p.Intervals[0].ID)
+		res := httptest.NewRecorder()
+		router.ServeHTTP(res, newAuthorizedJSONRequest(http.MethodPut, path, zeroBody, &user))
+		Expect(res.Code).To(Equal(400))
+
+		// Confirm incomplete (with attempted load), rest reclassification, and walking lunge without count
+		validBody := fmt.Sprintf(`{"source_version":%q,"records":[
+			{"interval_id":%q,"outcome":"incomplete","start_secs":10,"end_secs":20,"reps":null,"load":{"value":102.5,"unit":"kg","basis":"total"},"measurement":"set","technique":"singles"},
+			{"interval_id":%q,"outcome":"rest","start_secs":30,"end_secs":40,"reps":null,"load":null,"measurement":"set","technique":"unspecified"},
+			{"interval_id":%q,"outcome":"completed","start_secs":311,"end_secs":316.8,"reps":null,"load":{"value":22.5,"unit":"kg","basis":"per_implement"},"measurement":"set","technique":"unspecified"}
+		]}`, p.SourceVersion, p.Intervals[0].ID, p.Intervals[1].ID, p.Intervals[2].ID)
+		res = httptest.NewRecorder()
+		router.ServeHTTP(res, newAuthorizedJSONRequest(http.MethodPut, path, validBody, &user))
+		Expect(res.Code).To(Equal(200), res.Body.String())
+
+		var got controllers.WorkoutProgressResponse
+		Expect(json.Unmarshal(res.Body.Bytes(), &got)).To(Succeed())
+		Expect(got.Records).To(HaveLen(3))
+		Expect(got.Records[0].Outcome).To(Equal("incomplete"))
+		Expect(got.Records[0].Reps).To(BeNil())
+		Expect(*got.Records[0].LoadKG).To(Equal(102.5))
+		Expect(got.Records[1].Outcome).To(Equal("rest"))
+		Expect(got.Records[1].Movement).To(Equal(""))
+		Expect(got.Records[1].Load).To(BeNil())
+		Expect(got.Records[2].Outcome).To(Equal("completed"))
+		Expect(got.Records[2].Movement).To(Equal("DB Overhead Walking Lunge"))
+		Expect(got.Records[2].Reps).To(BeNil())
+		Expect(got.Records[2].RepsPerMinute).To(BeNil())
+		Expect(*got.Records[2].LoadKG).To(Equal(22.5))
+
+		// Re-upserting a weighted interval to rest clears load columns in DB cleanly
+		reclassifyBody := fmt.Sprintf(`{"source_version":%q,"records":[{"interval_id":%q,"outcome":"rest","start_secs":10,"end_secs":20,"reps":null,"load":null,"measurement":"set","technique":"unspecified"}]}`, p.SourceVersion, p.Intervals[0].ID)
+		res = httptest.NewRecorder()
+		router.ServeHTTP(res, newAuthorizedJSONRequest(http.MethodPut, path, reclassifyBody, &user))
+		Expect(res.Code).To(Equal(200), res.Body.String())
+
+		// Benchmarks exclude incomplete/rest and keep optional-count completed walking lunge without crashing
+		benchRes := httptest.NewRecorder()
+		router.ServeHTTP(benchRes, newAuthorizedJSONRequest(http.MethodGet, fmt.Sprintf("/api/v1/performance-benchmarks?profile_id=%d", profile.ID), "", &user))
+		Expect(benchRes.Code).To(Equal(200), benchRes.Body.String())
+		var benchBody controllers.PerformanceBenchmarksResponse
+		Expect(json.Unmarshal(benchRes.Body.Bytes(), &benchBody)).To(Succeed())
+		Expect(benchBody.Records).To(HaveLen(1))
+		Expect(benchBody.Records[0].Movement).To(Equal("DB Overhead Walking Lunge"))
+		Expect(benchBody.Comparisons).To(BeEmpty())
+		Expect(benchBody.Best).To(BeEmpty())
 	})
 })
 
@@ -261,7 +328,7 @@ var _ = Describe("GET /api/v1/performance-benchmarks", func() {
 			if i == 3 {
 				Expect(dbConn.Model(&a).Update("archived_at", now).Error).To(Succeed())
 			}
-			testhelpers.CreatePerformanceRecord(dbConn, &db.PerformanceRecord{ProfileID: profile.ID, AnalysisID: a.ID, SessionID: sid, IntervalID: p.Intervals[0].ID, SourceVersion: source, Movement: "Power Clean", StartSecs: 0, EndSecs: 60, Reps: reps, LoadValue: &loadValue, LoadUnit: &loadUnit, LoadBasis: &loadBasis, LoadKG: &kg, Measurement: "window", Technique: "singles", WorkoutPrescription: "Grace", RepsPerMinute: float64(reps), PerformedAt: &at})
+			testhelpers.CreatePerformanceRecord(dbConn, &db.PerformanceRecord{ProfileID: profile.ID, AnalysisID: a.ID, SessionID: sid, IntervalID: p.Intervals[0].ID, SourceVersion: source, Movement: "Power Clean", StartSecs: 0, EndSecs: 60, Reps: workoutprogress.IntPtr(reps), LoadValue: &loadValue, LoadUnit: &loadUnit, LoadBasis: &loadBasis, LoadKG: &kg, Measurement: "window", Technique: "singles", WorkoutPrescription: "Grace", RepsPerMinute: workoutprogress.Float64Ptr(float64(reps)), PerformedAt: &at})
 		}
 		testhelpers.CreateSessionReanalysisRun(dbConn, &db.SessionReanalysisRun{SessionID: "WOD-20261013-BENCH0", ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: db.NullableJSONDocument(`{"source_version":"candidate"}`)})
 		router := newTestRouterWithAuthService(controllers.Config{})
