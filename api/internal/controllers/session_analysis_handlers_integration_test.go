@@ -26,7 +26,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 		router = newTestRouterWithAuthService(controllers.Config{})
 
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
@@ -289,7 +289,7 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
 		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())
 		defaultTestUser = user

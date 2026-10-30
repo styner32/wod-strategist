@@ -23,7 +23,7 @@ var _ = Describe("POST /api/v1/profiles", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 		router = newTestRouterWithAuthService(controllers.Config{})
 		user = testhelpers.CreateUser(dbConn, &db.User{Username: "profile-create-user"})
 	})
@@ -56,7 +56,7 @@ var _ = Describe("PUT /api/v1/profiles/:id", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 		router = newTestRouterWithAuthService(controllers.Config{})
 
 		resting := 62

@@ -563,7 +563,8 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		createRow(0, 10)
 		inspector := testhelpers.NewQueueInspector()
 		defer inspector.Close()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.CleanupQueueWithInspector(inspector)
+
 		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
 		for i := 0; i < 2; i++ {
 			storageTransport.New(testhelpers.GCSBaseURL).Get("/storage/v1/b/test-bucket/o/" + object).Reply(200).JSON(map[string]any{"name": object, "bucket": "test-bucket", "generation": "17"})
@@ -590,7 +591,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(json.Unmarshal(session.ActivitySummary, &partial)).To(Succeed())
 		Expect(partial.ReviewState).To(Equal("partial"))
 		Expect(storageTransport.Verify()).To(Succeed())
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.CleanupQueueWithInspector(inspector)
 	})
 
 	It("retains partial observations after a final review failure without failing full analysis", func() {

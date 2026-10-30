@@ -144,7 +144,7 @@ var _ = Describe("Controller handlers", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		profileID = p.ID
@@ -342,6 +342,34 @@ var _ = Describe("Controller handlers", func() {
 			var session db.Session
 			Expect(dbConn.Where("session_id = ?", "session-hints").First(&session).Error).NotTo(HaveOccurred())
 			Expect(string(session.MovementHints)).To(MatchJSON(`["Pull-up","Sandbag Over Shoulder"]`))
+		})
+
+		It("clears uniqueness lock keys on FlushRedis so identical payloads can be re-enqueued", func() {
+			reqBody := fmt.Sprintf(`{"session_id":"session-1","gcs_uri":"gs://test-bucket-name/videos/%d/session-1/video.mp4","movements":[],"profile_id":%d}`, profileID, profileID)
+
+			first := httptest.NewRecorder()
+			router.ServeHTTP(first, newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", reqBody))
+			Expect(first.Code).To(Equal(http.StatusAccepted))
+			Expect(decodeMapBody(first)["message"]).To(Equal("Analysis started"))
+
+			// Without flushing, the 1h asynq.Unique lock returns "Analysis already queued".
+			dup := httptest.NewRecorder()
+			router.ServeHTTP(dup, newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", reqBody))
+			Expect(dup.Code).To(Equal(http.StatusAccepted))
+			Expect(decodeMapBody(dup)["message"]).To(Equal("Analysis already queued"))
+
+			// FlushRedis must wipe uniqueness lock keys while keeping "default" inspectable.
+			testhelpers.FlushRedis()
+			pending, err := inspector.ListPendingTasks("default")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pending).To(BeEmpty())
+
+			second := httptest.NewRecorder()
+			router.ServeHTTP(second, newAuthorizedJSONRequest(http.MethodPost, "/api/v1/upload-complete", reqBody))
+			Expect(second.Code).To(Equal(http.StatusAccepted))
+			secondBody := decodeMapBody(second)
+			Expect(secondBody["message"]).To(Equal("Analysis started"))
+			Expect(secondBody["task_id"]).NotTo(BeEmpty())
 		})
 	})
 

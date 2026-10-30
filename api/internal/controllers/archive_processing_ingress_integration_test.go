@@ -41,7 +41,7 @@ type archiveIngressFixture struct {
 func newArchiveIngressFixture() archiveIngressFixture {
 	ensureTestDB()
 	testhelpers.CleanupDB(dbConn)
-	testhelpers.CleanupQueue(inspector)
+	testhelpers.FlushRedis()
 	profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
 	var owner db.User
 	Expect(dbConn.First(&owner, profile.UserID).Error).To(Succeed())

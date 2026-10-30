@@ -254,7 +254,8 @@ var _ = Describe("HandleRecognitionReviewTask", func() {
 		Expect(err).NotTo(HaveOccurred())
 		queue = testhelpers.NewQueueClient()
 		inspector = testhelpers.NewQueueInspector()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
+
 		w = NewWorker(conn, storageClient, "test-bucket", client, queue, zap.NewNop())
 		profile = testhelpers.CreateProfile(conn, &db.Profile{})
 		session = testhelpers.CreateSession(conn, &db.Session{ProfileID: profile.ID, SessionID: "WOD-20261028-01JRECOGNITIONREVIEW00", WorkoutType: "wod"})

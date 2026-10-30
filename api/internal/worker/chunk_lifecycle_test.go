@@ -40,7 +40,7 @@ var _ = Describe("Chunk lifecycle recovery", Ordered, func() {
 	})
 	BeforeEach(func() {
 		testhelpers.CleanupDB(database)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 		profile = testhelpers.CreateProfile(database, &db.Profile{})
 		transport = testhelpers.NewMockTransport()
 		storageClient, err := testhelpers.NewStorageClient("test-bucket", transport)

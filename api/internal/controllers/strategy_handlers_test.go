@@ -5,10 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go.uber.org/zap"
 	"net/http"
 	"net/http/httptest"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/onsi/ginkgo/v2"
@@ -43,7 +44,7 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{
 			FitnessLevel: "advanced",
@@ -440,7 +441,7 @@ var _ = Describe("GET /api/v1/strategies/readiness", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{
 			FitnessLevel: "intermediate",

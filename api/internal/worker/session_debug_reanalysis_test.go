@@ -110,7 +110,8 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(err).NotTo(HaveOccurred())
 		queue := testhelpers.NewQueueClient()
 		inspector = testhelpers.NewQueueInspector()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
+
 		w = NewWorker(database, storageClient, "test-bucket", client, queue, zap.NewNop())
 		profile = testhelpers.CreateProfile(database, &db.Profile{})
 		session = testhelpers.CreateSession(database, &db.Session{
@@ -387,7 +388,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			Reply(http.StatusOK).JSON(map[string]any{"name": "files/wod-usage-cache", "state": "ACTIVE"})
 
 		// 1. video:wod-start (QueryVideoFlash)
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
 			MatchBodyContains("Locate the earliest actual WOD exercise onset").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -412,7 +413,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		})
 
 		// 3. session:normalize-workout (ParseText)
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
 			MatchBodyContains("weight_raw").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -422,7 +423,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		})
 
 		// 4. video:wod-synthesis (ParseText)
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
 			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -492,14 +493,14 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			"usageMetadata": map[string]any{"promptTokenCount": 14, "candidatesTokenCount": 6, "totalTokenCount": 20},
 		})
 		expectAnalysis(baseURL+"/files/segment-reuse-cache", false)
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
 			MatchBodyContains("weight_raw").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
 				"content": map[string]any{"parts": []map[string]any{{"text": "```movements\n{\"movements\":[]}\n```"}}},
 			}},
 		})
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
 			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -551,7 +552,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			}},
 			"usageMetadata": map[string]any{"promptTokenCount": 14, "candidatesTokenCount": 6, "totalTokenCount": 20},
 		})
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
 			MatchBodyContains("weight_raw").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -782,4 +783,3 @@ var _ = Describe("session debug re-analysis helpers", func() {
 		Expect(persistCtx.Err()).NotTo(HaveOccurred())
 	})
 })
-

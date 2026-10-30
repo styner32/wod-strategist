@@ -547,7 +547,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 
 		queueClient = testhelpers.NewQueueClient()
 		inspector = testhelpers.NewQueueInspector()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		logger, _ := zap.NewDevelopment()
 		w = &Worker{
@@ -1106,7 +1106,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		queueClient = testhelpers.NewQueueClient()
 		inspector = testhelpers.NewQueueInspector()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		storageTransport = testhelpers.NewMockTransport()
 		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)

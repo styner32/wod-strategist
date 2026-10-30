@@ -75,7 +75,7 @@ describe("workoutType", () => {
     const groups = [
       { movements: ["Snatch", "Power Snatch", "Squat Snatch", "Thruster", "Front Rack Lunge", "Front Rack Walking Lunge"] },
       { movements: ["DB Lunge", "DB Overhead Lunge", "DB Walking Lunge", "DB Overhead Walking Lunge"] },
-      { movements: ["Pull-up", "Chest-to-Bar Pull-up", "Push-up", "Burpee", "Burpee Broad Jump", "Lunge", "Walking Lunge", "Row"] },
+      { movements: ["Pull-up", "Chest-to-Bar Pull-up", "Push-up", "Burpee", "Burpee Broad Jump", "Lunge", "Walking Lunge", "Run", "Row"] },
     ];
 
     it("matches plural/hyphenated movements in order and prefers specific compound names", () => {
@@ -106,6 +106,16 @@ describe("workoutType", () => {
       expect(extractCatalogMovementsFromText("AMRAP 10m: 20 dumbbell lunges", groups)).toEqual([
         "DB Lunge",
       ]);
+      expect(
+        extractCatalogMovementsFromText("400m Run / 20 DB Lunges (50/35lb)", groups),
+      ).toEqual(["Run", "DB Lunge"]);
+      expect(extractCatalogMovementsFromText("400m Run 20 DB Lunges", groups)).toEqual([
+        "Run",
+        "DB Lunge",
+      ]);
+      expect(
+        extractCatalogMovementsFromText("400m Run / 200ft dumbbell overhead lunges", groups),
+      ).toEqual(["Run", "DB Overhead Walking Lunge"]);
     });
   });
 });

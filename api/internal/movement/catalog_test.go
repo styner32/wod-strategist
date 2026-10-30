@@ -150,12 +150,32 @@ var _ = Describe("movement catalog", func() {
 			Entry("AMRAP 10m inline without colon does NOT promote stationary lunge", "DB Overhead Lunge", "AMRAP 10m 12 DB Overhead Lunges", ""),
 			Entry("Different lunge on distance line does NOT promote stationary DB lunge", "DB Overhead Lunge", "200ft Walking Lunge\n20 DB Overhead Lunges", ""),
 			Entry("Mobility stretch with lunge word is NOT promoted", "Samson (Hip Flexor Lunge) Stretch", "20m Samson (Hip Flexor Lunge) Stretch", ""),
+			Entry("Slash-separated 400m Run / 20 DB Lunges does NOT promote DB Lunge", "DB Lunge", "400m Run / 20 DB Lunges", ""),
+			Entry("Compact slash 400m Run/20 DB Lunges with Rx ratio does NOT promote DB Lunge", "DB Lunge", "400m Run/20 DB Lunges (50/35lb)", ""),
+			Entry("Unpunctuated 400m Run 20 DB Lunges does NOT promote DB Lunge", "DB Lunge", "400m Run 20 DB Lunges", ""),
+			Entry("Middle-dot 500m Row · 16 DB Overhead Lunges does NOT promote DB Overhead Lunge", "DB Overhead Lunge", "500m Row · 16 DB Overhead Lunges", ""),
+			Entry("Slash-separated 400m Run / 200ft DB Overhead Lunges promotes DB Overhead Lunge", "DB Overhead Lunge", "400m Run / 200ft DB Overhead Lunges (50/35lb)", "DB Overhead Walking Lunge"),
+			Entry("Rx distance ratio 200/150ft Dumbbell Overhead Lunge promotes to walking lunge", "Dumbbell Overhead Lunge", "200/150ft Dumbbell Overhead Lunge (50/35lb)", "DB Overhead Walking Lunge"),
+			Entry("Mixed distance and stationary clauses of same lunge stay conservative on WOD fallback", "DB Overhead Lunge", "200ft DB Overhead Lunge / 20 DB Overhead Lunges", ""),
 		)
+
+		It("splits multi-workout single lines while preserving Rx weight and distance ratios", func() {
+			Expect(movement.SplitWorkoutClauses("400m Run / 20 DB Lunges (50/35lb)")).To(Equal([]string{
+				"400m Run",
+				"20 DB Lunges (50/35lb)",
+			}))
+			Expect(movement.SplitWorkoutClauses("200/150ft Dumbbell Overhead Lunge (50/35lb)")).To(Equal([]string{
+				"200/150ft Dumbbell Overhead Lunge (50/35lb)",
+			}))
+		})
 
 		It("detects traveling policy context only when traveling lunge or Burpee Broad Jump is present", func() {
 			Expect(movement.HasTravelingPolicyContext([]string{"Power Clean", "Thruster"}, "21-15-9 Thrusters and Pull-ups")).To(BeFalse())
 			Expect(movement.HasTravelingPolicyContext([]string{"DB Overhead Lunge"}, "AMRAP 10m:\n12 DB Overhead Lunges")).To(BeFalse())
+			Expect(movement.HasTravelingPolicyContext([]string{"Run", "DB Lunge"}, "400m Run / 20 DB Lunges")).To(BeFalse())
+			Expect(movement.HasTravelingPolicyContext([]string{"Run", "DB Lunge"}, "400m Run 20 DB Lunges")).To(BeFalse())
 			Expect(movement.HasTravelingPolicyContext(nil, "For Time:\n200ft dumbbell overhead lunge\n30 Pull-ups")).To(BeTrue())
+			Expect(movement.HasTravelingPolicyContext(nil, "400m Run / 200ft DB Overhead Lunges")).To(BeTrue())
 			Expect(movement.HasTravelingPolicyContext([]string{"DB Overhead Walking Lunge"}, "")).To(BeTrue())
 			Expect(movement.HasTravelingPolicyContext(nil, "5 Rounds: 10 Burpee Broad Jumps")).To(BeTrue())
 		})

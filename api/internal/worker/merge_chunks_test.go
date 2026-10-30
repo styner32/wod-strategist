@@ -801,7 +801,7 @@ var _ = Describe("HandleMergeChunksTask", func() {
 
 		queueClient = testhelpers.NewQueueClient()
 		inspector = testhelpers.NewQueueInspector()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		storageTransport = testhelpers.NewMockTransport()
 		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)

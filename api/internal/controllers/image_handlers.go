@@ -74,16 +74,74 @@ func buildWODParsePrompt() string {
 	return wodParsePrompt + "\n\n## 공식 운동 카탈로그\n[" + strings.Join(movement.All(), ", ") + "]"
 }
 
+var (
+	leadingOrTrailingClauseCountRe = regexp.MustCompile(`(?i)^\s*(?:\d+(?:[-/x]\d+)*(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|cal|cals|calories?|reps?|회|개|미터|피트|야드)?\s+)|(?:\s+\d+(?:[-/x]\d+)*(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|cal|cals|calories?|reps?|회|개|미터|피트|야드)?)\s*$`)
+	subclauseParenOrAtRe           = regexp.MustCompile(`(?:\([^)]*\)|@[^\r\n,;:+|]*)`)
+)
+
+func resolveSubclauseMovementName(clause, wodDescription, rawText string) string {
+	trimmed := strings.TrimSpace(clause)
+	if trimmed == "" {
+		return ""
+	}
+	if promoted := movement.PromoteDistanceLunge(trimmed); promoted != "" {
+		return promoted
+	}
+	cleaned := strings.TrimSpace(subclauseParenOrAtRe.ReplaceAllString(trimmed, " "))
+	if promoted := movement.PromoteDistanceLungeInWOD(cleaned, wodDescription, rawText); promoted != "" {
+		return promoted
+	}
+	if canon := movement.Canonical(cleaned); canon != "" {
+		return canon
+	}
+	stripped := strings.TrimSpace(leadingOrTrailingClauseCountRe.ReplaceAllString(cleaned, " "))
+	if stripped != "" && stripped != cleaned {
+		if promoted := movement.PromoteDistanceLungeInWOD(stripped, wodDescription, rawText); promoted != "" {
+			return promoted
+		}
+		if canon := movement.Canonical(stripped); canon != "" {
+			return canon
+		}
+	}
+	return ""
+}
+
 func normalizeParsedWorkoutMovements(movements []string, wodDescription, rawText string) []string {
 	if len(movements) == 0 {
 		return movements
 	}
 	out := make([]string, 0, len(movements))
 	seen := make(map[string]struct{}, len(movements))
+	appendUnique := func(resolved string) {
+		key := strings.ToLower(resolved)
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, resolved)
+	}
 	for _, raw := range movements {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" {
 			continue
+		}
+		if clauses := movement.SplitWorkoutClauses(trimmed); len(clauses) > 1 {
+			resolvedParts := make([]string, 0, len(clauses))
+			allResolved := true
+			for _, clause := range clauses {
+				r := resolveSubclauseMovementName(clause, wodDescription, rawText)
+				if r == "" {
+					allResolved = false
+					break
+				}
+				resolvedParts = append(resolvedParts, r)
+			}
+			if allResolved {
+				for _, r := range resolvedParts {
+					appendUnique(r)
+				}
+				continue
+			}
 		}
 		resolved := trimmed
 		if promoted := movement.PromoteDistanceLungeInWOD(trimmed, wodDescription, rawText); promoted != "" {
@@ -91,12 +149,7 @@ func normalizeParsedWorkoutMovements(movements []string, wodDescription, rawText
 		} else if canon := movement.Canonical(trimmed); canon != "" {
 			resolved = canon
 		}
-		key := strings.ToLower(resolved)
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, resolved)
+		appendUnique(resolved)
 	}
 	return out
 }

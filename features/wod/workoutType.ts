@@ -123,19 +123,85 @@ function escapeRegexLiteral(input: string): string {
 }
 
 const TIME_HEADER_METER_COLLISION_RE =
-  /\b(?:amrap|emom|e\d+mom|every|for\s*time|time\s*cap|cap|rest)\s*:?\s*\d+(?:\.\d+)?\s*m(?:in(?:ute)?s?)?\b/gi;
+  /\b(?:amrap|emom|e\d+mom|otm|every|for\s*time|time\s*cap|cap|rest)\s*:?\s*\d+(?:\.\d+)?\s*m(?:in(?:ute)?s?)?\b/gi;
+const NON_LUNGE_DISTANCE_BEFORE_RE =
+  /(?:^|[^a-z0-9])\d+(?:\/\d+)?(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yards?|m|meters?|metres?)\s*(?:shuttle\s+runs?|runs?|running|sprints?|jogs?|rows?|rowing|ski\s*ergs?|skis?|bike\s*ergs?|echo\s*bikes?|assault\s*bikes?|air\s*bikes?|bikes?|swims?|swimming|handstand\s+walks?|hsw\b|farmer'?s?\s+carr(?:y|ies)|carr(?:y|ies)|sled\s+(?:push(?:es)?|pulls?)|broad\s+jumps?|달리기|런닝|셔틀\s*런|런|로잉|스키|바이크|파머스\s*캐리|물구나무\s*걷기)/gi;
+const NON_LUNGE_DISTANCE_AFTER_RE =
+  /(?:\b(?:shuttle\s+runs?|runs?|running|sprints?|jogs?|rows?|rowing|ski\s*ergs?|skis?|bike\s*ergs?|echo\s*bikes?|assault\s*bikes?|air\s*bikes?|bikes?|swims?|swimming|handstand\s+walks?|hsw|farmer'?s?\s+carr(?:y|ies)|carr(?:y|ies)|sled\s+(?:push(?:es)?|pulls?)|broad\s+jumps?)|(?:달리기|런닝|셔틀\s*런|로잉|스키|바이크|파머스\s*캐리|물구나무\s*걷기))\s*[:\-]?\s*\d+(?:\/\d+)?(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yards?|m|meters?|metres?|미터|피트|야드)/gi;
 const DISTANCE_PRESCRIPTION_RE =
-  /(?:^|[^a-z0-9])\d+(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yards?|m|meters?|metres?)(?=$|[^a-z0-9])|\d+(?:\.\d+)?\s*(?:미터|피트|야드)/i;
+  /(?:^|[^a-z0-9])\d+(?:\/\d+)?(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yards?|m|meters?|metres?)(?=$|[^a-z0-9])|\d+(?:\.\d+)?\s*(?:미터|피트|야드)/i;
 const STATIONARY_ONLY_LUNGE_RE = /\b(?:walking|reverse|step[\s-]*back|jumping)\b|워킹|리버스|점핑/i;
 
+function splitWorkoutClausesPreservingDelimiters(text: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let parenDepth = 0;
+
+  const isDigit = (ch: string | undefined) => ch !== undefined && ch >= "0" && ch <= "9";
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\r" || ch === "\n") {
+      if (i > start) parts.push(text.slice(start, i));
+      parts.push(ch);
+      start = i + 1;
+      parenDepth = 0;
+      continue;
+    }
+    if (ch === "(" || ch === "[") {
+      parenDepth++;
+      continue;
+    }
+    if (ch === ")" || ch === "]") {
+      if (parenDepth > 0) parenDepth--;
+      continue;
+    }
+    if (parenDepth > 0) continue;
+
+    if (
+      ch === ";" ||
+      ch === ":" ||
+      ch === "+" ||
+      ch === "," ||
+      ch === "|" ||
+      ch === "·" ||
+      ch === "•" ||
+      ch === "→"
+    ) {
+      if (i > start) parts.push(text.slice(start, i));
+      parts.push(ch);
+      start = i + 1;
+      continue;
+    }
+    if ((ch === "-" || ch === "=") && text[i + 1] === ">") {
+      if (i > start) parts.push(text.slice(start, i));
+      parts.push(text.slice(i, i + 2));
+      i++;
+      start = i + 1;
+      continue;
+    }
+    if (ch === "/" && (!isDigit(text[i - 1]) || !isDigit(text[i + 1]))) {
+      if (i > start) parts.push(text.slice(start, i));
+      parts.push(ch);
+      start = i + 1;
+    }
+  }
+  if (start < text.length) {
+    parts.push(text.slice(start));
+  }
+  return parts;
+}
+
 function promoteDistancePrescribedLunges(text: string): string {
-  return text
-    .split(/([\n,;]+)/)
+  return splitWorkoutClausesPreservingDelimiters(text)
     .map((part) => {
       if (!/lunge|런지/i.test(part) || STATIONARY_ONLY_LUNGE_RE.test(part)) {
         return part;
       }
-      const scrubbed = part.replace(TIME_HEADER_METER_COLLISION_RE, " ");
+      const scrubbed = part
+        .replace(TIME_HEADER_METER_COLLISION_RE, " ")
+        .replace(NON_LUNGE_DISTANCE_BEFORE_RE, " ")
+        .replace(NON_LUNGE_DISTANCE_AFTER_RE, " ");
       if (!DISTANCE_PRESCRIPTION_RE.test(scrubbed)) {
         return part;
       }

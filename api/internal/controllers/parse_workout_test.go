@@ -108,5 +108,19 @@ var _ = Describe("parseWorkoutBlock", func() {
 			"AMRAP 10m\n12 DB OH Lunges",
 		)
 		Expect(repBased).To(Equal([]string{"DB Overhead Lunge"}))
+
+		singleLineMulti := normalizeParsedWorkoutMovements(
+			[]string{"Run", "DB Lunge"},
+			"400m Run / 20 DB Lunges (50/35lb)",
+			"400m Run / 20 DB Lunges",
+		)
+		Expect(singleLineMulti).To(Equal([]string{"Run", "DB Lunge"}))
+
+		combinedElement := normalizeParsedWorkoutMovements(
+			[]string{"400m Run / 20 DB Lunges (50/35lb)"},
+			"400m Run / 20 DB Lunges (50/35lb)",
+			"400m Run / 20 DB Lunges",
+		)
+		Expect(combinedElement).To(Equal([]string{"Run", "DB Lunge"}))
 	})
 })

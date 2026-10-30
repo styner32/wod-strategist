@@ -31,7 +31,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/reanalyses", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
 		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())
@@ -445,7 +445,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/reanalyses", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
 		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())
@@ -539,7 +539,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/reanalyses/:run_id", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
 		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())

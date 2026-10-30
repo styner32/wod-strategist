@@ -162,11 +162,18 @@ Uses Redis **DB 15** (app uses DB 5) so tests don't collide with the running
 local app. Concurrent test runs still collide — see
 [Parallelism & isolation](#parallelism--isolation-load-bearing).
 
+- `testhelpers.FlushRedis()` runs
+  `FLUSHDB` on Redis **DB 15** and re-registers `"asynq:queues"` (`"default"` plus
+  any previously published queues). Full flush is required because
+  `inspector.DeleteAllPendingTasks` in `hibiken/asynq` does **not** remove
+  `asynq.Unique` lock keys (`asynq:{<queue>}:unique:*`), which would otherwise
+  survive across specs/runs with a 1-hour TTL and return `asynq.ErrDuplicateTask`.
+
 ```go
 BeforeEach(func() {
     queueClient = testhelpers.NewQueueClient()
     inspector   = testhelpers.NewQueueInspector()
-    testhelpers.CleanupQueue(inspector)
+    testhelpers.FlushRedis()
     w.QueueClient = queueClient
 })
 

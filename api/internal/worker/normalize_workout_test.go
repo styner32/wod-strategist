@@ -38,6 +38,40 @@ var _ = Describe("normalize workout", func() {
 		Expect(movements[1].Movement).To(Equal("Dumbbell Overhead Lunge"))
 	})
 
+	It("splits combined single-line workouts like '400m Run / 20 DB Lunges' and keeps stationary lunges unaffected by Run distance", func() {
+		rawCombined := "```movements\n{\n  \"movements\": [\n    {\n      \"movement\": \"400m Run / 20 DB Lunges (50/35lb)\",\n      \"weight_raw\": \"\",\n      \"weight_kg\": null,\n      \"reps\": \"\",\n      \"is_main\": true\n    }\n  ]\n}\n```"
+		movements, err := ParseNormalizedWorkoutOutput(rawCombined)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(movements).To(HaveLen(2))
+		Expect(movements[0].Movement).To(Equal("Run"))
+		Expect(movements[0].Reps).To(Equal("400m"))
+		Expect(movements[0].WeightRaw).To(BeEmpty())
+		Expect(movements[0].IsMain).To(BeFalse())
+		Expect(movements[1].Movement).To(Equal("DB Lunge"))
+		Expect(movements[1].Reps).To(Equal("20"))
+		Expect(movements[1].WeightRaw).To(Equal("50/35lb"))
+		Expect(movements[1].IsMain).To(BeTrue())
+
+		promoteDistanceLungesInNormalizedMovements(movements, "3 Rounds For Time: 400m Run / 20 DB Lunges (50/35lb)")
+		Expect(movements[0].Movement).To(Equal("Run"))
+		Expect(movements[1].Movement).To(Equal("DB Lunge"))
+	})
+
+	It("splits combined single-line workouts and promotes when the lunge clause itself has a distance", func() {
+		rawCombinedDist := "```movements\n{\n  \"movements\": [\n    {\n      \"movement\": \"400m Run / 200ft DB Overhead Lunges\",\n      \"weight_raw\": \"50lb\",\n      \"weight_kg\": 22.7,\n      \"reps\": \"\",\n      \"is_main\": true\n    }\n  ]\n}\n```"
+		movements, err := ParseNormalizedWorkoutOutput(rawCombinedDist)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(movements).To(HaveLen(2))
+		Expect(movements[0].Movement).To(Equal("Run"))
+		Expect(movements[0].Reps).To(Equal("400m"))
+		Expect(movements[0].WeightRaw).To(BeEmpty())
+		Expect(movements[0].IsMain).To(BeFalse())
+		Expect(movements[1].Movement).To(Equal("DB Overhead Walking Lunge"))
+		Expect(movements[1].Reps).To(Equal("200ft"))
+		Expect(movements[1].WeightRaw).To(Equal("50lb"))
+		Expect(movements[1].IsMain).To(BeTrue())
+	})
+
 	It("builds non-empty normalized workout prompt", func() {
 		prompt := BuildNormalizedWorkoutPrompt("5x5 Power Clean 135lb", []string{"Power Clean"}, "male")
 		Expect(prompt).NotTo(BeEmpty())

@@ -964,19 +964,94 @@ func IsTravelingPolicyMovement(raw string) bool {
 }
 
 var (
-	explicitDistanceUnitRegex = regexp.MustCompile(`(?i)(?:\b\d+(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters)\b|\d+(?:\.\d+)?\s*(?:미터|피트))`)
-	meterTokenRegex           = regexp.MustCompile(`(?i)\b\d+(?:\.\d+)?\s*m\b`)
+	explicitDistanceUnitRegex = regexp.MustCompile(`(?i)(?:\b\d+(?:/\d+)?(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres)\b|\d+(?:\.\d+)?\s*(?:미터|피트|야드))`)
+	meterTokenRegex           = regexp.MustCompile(`(?i)\b\d+(?:/\d+)?(?:\.\d+)?\s*m\b`)
 	timeHeaderPrefixRegex     = regexp.MustCompile(`(?i)(?:\bamrap|\bemom|\be\d+mom|\botm|\btime\s*cap|\bcap|\bevery|\brest|\bin|\bfor)\s*[:\-]?\s*$`)
-	clauseSplitRegex          = regexp.MustCompile(`[\r\n;:+,]+`)
-	parenOrAtLoadRegex        = regexp.MustCompile(`(?:\([^)]*\)|@[^\r\n,;:+]*)`)
-	prescriptionNumberRegex   = regexp.MustCompile(`(?i)(?:\b\d+(?:/\d+)?(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|m|lb|lbs|kg|kgs|reps?|cal|cals|calories?|in|inch|inches)?\b|\d+(?:\.\d+)?\s*(?:미터|피트|회|개))`)
+	nonLungeDistanceBeforeRe  = regexp.MustCompile(`(?i)(?:\b\d+(?:/\d+)?(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m)\b|\d+(?:\.\d+)?\s*(?:미터|피트|야드))\s*(?:shuttle\s+runs?|runs?|running|sprints?|jogs?|rows?|rowing|ski\s*ergs?|skis?|bike\s*ergs?|echo\s*bikes?|assault\s*bikes?|air\s*bikes?|bikes?|swims?|swimming|handstand\s+walks?|hsw\b|farmer'?s?\s+carr(?:y|ies)|carr(?:y|ies)|sled\s+(?:push(?:es)?|pulls?)|broad\s+jumps?|달리기|런닝|셔틀\s*런|런|로잉|스키|바이크|파머스\s*캐리|물구나무\s*걷기)`)
+	nonLungeDistanceAfterRe   = regexp.MustCompile(`(?i)(?:\b(?:shuttle\s+runs?|runs?|running|sprints?|jogs?|rows?|rowing|ski\s*ergs?|skis?|bike\s*ergs?|echo\s*bikes?|assault\s*bikes?|air\s*bikes?|bikes?|swims?|swimming|handstand\s+walks?|hsw|farmer'?s?\s+carr(?:y|ies)|carr(?:y|ies)|sled\s+(?:push(?:es)?|pulls?)|broad\s+jumps?)|(?:달리기|런닝|셔틀\s*런|로잉|스키|바이크|파머스\s*캐리|물구나무\s*걷기))\s*[:\-]?\s*(?:\b\d+(?:/\d+)?(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m)\b|\d+(?:\.\d+)?\s*(?:미터|피트|야드))`)
+	parenOrAtLoadRegex        = regexp.MustCompile(`(?:\([^)]*\)|@[^\r\n,;:+|]*)`)
+	prescriptionNumberRegex   = regexp.MustCompile(`(?i)(?:\b\d+(?:/\d+)?(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|lb|lbs|kg|kgs|reps?|cal|cals|calories?|in|inch|inches)?\b|\d+(?:\.\d+)?\s*(?:미터|피트|야드|회|개))`)
 	nonWordPunctRegex         = regexp.MustCompile(`[#"'\[\]/\\]+`)
 )
 
+func isASCIIDigit(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
+// SplitWorkoutClauses splits WOD text into individual workout clauses across line breaks and
+// inline workout delimiters (;, :, +, ,, |, ·, •, →, ->, =>, and / outside parentheses when
+// not part of an unspaced numeric ratio like 50/35lb or 200/150ft).
+func SplitWorkoutClauses(text string) []string {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	runes := []rune(text)
+	var clauses []string
+	start := 0
+	parenDepth := 0
+
+	flush := func(end int) {
+		if end > start {
+			if seg := strings.TrimSpace(string(runes[start:end])); seg != "" {
+				clauses = append(clauses, seg)
+			}
+		}
+	}
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if r == '\r' || r == '\n' {
+			flush(i)
+			start = i + 1
+			parenDepth = 0
+			continue
+		}
+		switch r {
+		case '(', '[':
+			parenDepth++
+			continue
+		case ')', ']':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+			continue
+		}
+		if parenDepth > 0 {
+			continue
+		}
+		switch r {
+		case ';', ':', '+', ',', '|', '·', '•', '→':
+			flush(i)
+			start = i + 1
+		case '-', '=':
+			if i+1 < len(runes) && runes[i+1] == '>' {
+				flush(i)
+				i++
+				start = i + 1
+			}
+		case '/':
+			prevDigit := i > 0 && isASCIIDigit(runes[i-1])
+			nextDigit := i+1 < len(runes) && isASCIIDigit(runes[i+1])
+			if !prevDigit || !nextDigit {
+				flush(i)
+				start = i + 1
+			}
+		}
+	}
+	flush(len(runes))
+	return clauses
+}
+
+func scrubNonLungeDistances(clause string) string {
+	scrubbed := nonLungeDistanceBeforeRe.ReplaceAllString(clause, " ")
+	return nonLungeDistanceAfterRe.ReplaceAllString(scrubbed, " ")
+}
+
 // HasLungeDistancePrescription reports whether a single prescription clause contains a
-// horizontal distance unit (e.g. 200ft, 25m, 50yd) rather than a time/rep/weight token.
+// horizontal distance unit (e.g. 200ft, 25m, 50yd) for a lunge rather than a time/rep/weight
+// token or another movement's distance (e.g. 400m Run).
 func HasLungeDistancePrescription(clause string) bool {
-	trimmed := strings.TrimSpace(clause)
+	trimmed := strings.TrimSpace(scrubNonLungeDistances(clause))
 	if trimmed == "" {
 		return false
 	}
@@ -1046,14 +1121,18 @@ func resolveLungeBaseFromClause(clause string) string {
 // accompanying prescription clause such as NormalizedMovement.Reps) prescribes a distance lunge.
 // Returns "" when no distance-lunge promotion applies, leaving non-promoted inputs untouched.
 func PromoteDistanceLunge(rawMovement string, clauseContexts ...string) string {
-	base := resolveLungeBaseFromClause(rawMovement)
+	if len(SplitWorkoutClauses(rawMovement)) > 1 {
+		return ""
+	}
+	scrubbedMov := scrubNonLungeDistances(rawMovement)
+	base := resolveLungeBaseFromClause(scrubbedMov)
 	if base == "" {
 		return ""
 	}
-	hasDistance := HasLungeDistancePrescription(rawMovement)
+	hasDistance := HasLungeDistancePrescription(scrubbedMov)
 	if !hasDistance {
 		for _, ctx := range clauseContexts {
-			if HasLungeDistancePrescription(ctx) {
+			if len(SplitWorkoutClauses(ctx)) <= 1 && HasLungeDistancePrescription(ctx) {
 				hasDistance = true
 				break
 			}
@@ -1072,10 +1151,13 @@ func PromoteDistanceLunge(rawMovement string, clauseContexts ...string) string {
 // when rawMovement itself or a matching lunge clause in texts carries a distance prescription.
 // Returns "" if rawMovement is not a distance-prescribed lunge.
 func PromoteDistanceLungeInWOD(rawMovement string, texts ...string) string {
+	if len(SplitWorkoutClauses(rawMovement)) > 1 {
+		return ""
+	}
 	if promoted := PromoteDistanceLunge(rawMovement); promoted != "" {
 		return promoted
 	}
-	base := resolveLungeBaseFromClause(rawMovement)
+	base := resolveLungeBaseFromClause(scrubNonLungeDistances(rawMovement))
 	if base == "" {
 		return ""
 	}
@@ -1087,16 +1169,24 @@ func PromoteDistanceLungeInWOD(rawMovement string, texts ...string) string {
 			return ""
 		}
 	}
+	hasDistanceClause := false
+	hasStationaryClause := false
 	for _, text := range texts {
-		for _, clause := range clauseSplitRegex.Split(text, -1) {
-			if !HasLungeDistancePrescription(clause) {
+		for _, clause := range SplitWorkoutClauses(text) {
+			scrubbed := scrubNonLungeDistances(clause)
+			clauseBase := resolveLungeBaseFromClause(scrubbed)
+			if clauseBase != base && clauseBase != targetWalking {
 				continue
 			}
-			clauseBase := resolveLungeBaseFromClause(clause)
-			if clauseBase == base || clauseBase == targetWalking {
-				return targetWalking
+			if HasLungeDistancePrescription(scrubbed) {
+				hasDistanceClause = true
+			} else if clauseBase == base && !walkingLungeMovements[base] {
+				hasStationaryClause = true
 			}
 		}
+	}
+	if hasDistanceClause && !hasStationaryClause {
+		return targetWalking
 	}
 	return ""
 }
@@ -1105,20 +1195,23 @@ func PromoteDistanceLungeInWOD(rawMovement string, texts ...string) string {
 // clause references a traveling lunge (* Walking Lunge) or Burpee Broad Jump.
 func HasTravelingPolicyContext(movements []string, wodDescription string) bool {
 	for _, m := range movements {
-		if IsTravelingPolicyMovement(m) || PromoteDistanceLungeInWOD(m, wodDescription) != "" {
-			return true
+		for _, sub := range SplitWorkoutClauses(m) {
+			if IsTravelingPolicyMovement(sub) || PromoteDistanceLungeInWOD(sub, wodDescription) != "" {
+				return true
+			}
 		}
 	}
 	if strings.TrimSpace(wodDescription) == "" {
 		return false
 	}
-	for _, clause := range clauseSplitRegex.Split(wodDescription, -1) {
+	for _, clause := range SplitWorkoutClauses(wodDescription) {
 		norm := " " + NormalizeKey(clause) + " "
 		if strings.Contains(norm, " burpee broad jump ") || strings.Contains(norm, " burpee broad jumps ") || strings.Contains(norm, " bbj ") || strings.Contains(clause, "버피 브로드 점프") || strings.Contains(clause, "버피브로드점프") || strings.Contains(clause, "버피 멀리뛰기") {
 			return true
 		}
-		if base := resolveLungeBaseFromClause(clause); base != "" {
-			if walkingLungeMovements[base] || HasLungeDistancePrescription(clause) {
+		scrubbed := scrubNonLungeDistances(clause)
+		if base := resolveLungeBaseFromClause(scrubbed); base != "" {
+			if walkingLungeMovements[base] || HasLungeDistancePrescription(scrubbed) {
 				return true
 			}
 		}

@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -71,8 +70,6 @@ var _ = Describe("validation helpers", func() {
 
 	DescribeTable("validateMovements",
 		func(values []string, wantOK bool, wantReason string) {
-			fmt.Printf("Testing validateMovements with values: %v %d\n", values, len(values))
-
 			ok, reason := validateMovements(values)
 			Expect(ok).To(Equal(wantOK))
 			if !wantOK {

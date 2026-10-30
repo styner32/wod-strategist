@@ -30,7 +30,6 @@ type recognitionFixtureData struct {
 
 func newRecognitionFixture() recognitionFixtureData {
 	profile, user := progressOwner()
-	testhelpers.CleanupQueue(inspector)
 	session := testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WOD-20261028-RECOGNITION", ProfileID: profile.ID, WorkoutType: "wod"})
 	p, raw := progressFixture("review-source")
 	analysis := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: session.SessionID, ProfileID: profile.ID, Status: "COMPLETED", WorkoutProgress: raw, Output: "original output"})
@@ -75,6 +74,10 @@ func (f recognitionFixtureData) mockCurrentSource(generation string) {
 }
 
 var _ = Describe("GET /api/v1/sessions/:session_id/recognition-evaluation", func() {
+	BeforeEach(func() {
+		testhelpers.FlushRedis()
+	})
+
 	It("compares current raw observations without calling storage or AI and ignores corrected candidates", func() {
 		f := newRecognitionFixture()
 		e := f.getEvaluation()
@@ -85,6 +88,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/recognition-evaluation", func
 		Expect(e.Records[0].PredictedMovements[0].Movement).To(Equal("Power Clean"))
 		Expect(f.transport.Requests()).To(BeEmpty())
 	})
+
 	It("requires authentication and owned session scope", func() {
 		f := newRecognitionFixture()
 		w := httptest.NewRecorder()
@@ -100,6 +104,10 @@ var _ = Describe("GET /api/v1/sessions/:session_id/recognition-evaluation", func
 })
 
 var _ = Describe("POST /api/v1/sessions/:session_id/recognition-reviews", func() {
+	BeforeEach(func() {
+		testhelpers.FlushRedis()
+	})
+
 	It("snapshots source generation and confirmations, queues once, and preserves production data", func() {
 		f := newRecognitionFixture()
 		req := f.request("create-review")
@@ -133,6 +141,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/recognition-reviews", func()
 		Expect(*record.Reps).To(Equal(2))
 		Expect(f.transport.Verify()).To(Succeed())
 	})
+
 	It("rejects stale confirmation fingerprints before reading video metadata", func() {
 		f := newRecognitionFixture()
 		req := f.request("stale-review")
@@ -141,6 +150,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/recognition-reviews", func()
 		Expect(w.Code).To(Equal(409), w.Body.String())
 		Expect(f.transport.Requests()).To(BeEmpty())
 	})
+
 	It("rejects a crossing record, unknown record, duplicate IDs, and arbitrary input fields", func() {
 		f := newRecognitionFixture()
 		req := f.request("invalid-range")
@@ -157,6 +167,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/recognition-reviews", func()
 		Expect(w.Code).To(Equal(400))
 		Expect(f.transport.Requests()).To(BeEmpty())
 	})
+
 	It("rejects changed idempotent payload and another active run", func() {
 		f := newRecognitionFixture()
 		req := f.request("idempotent-review")
@@ -168,6 +179,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/recognition-reviews", func()
 		Expect(f.post(req).Code).To(Equal(409))
 		Expect(f.transport.Verify()).To(Succeed())
 	})
+
 	It("forbids another profile from creating a diagnosis", func() {
 		f := newRecognitionFixture()
 		req := f.request("wrong-owner")
@@ -183,6 +195,10 @@ var _ = Describe("POST /api/v1/sessions/:session_id/recognition-reviews", func()
 })
 
 var _ = Describe("GET /api/v1/sessions/:session_id/recognition-reviews", func() {
+	BeforeEach(func() {
+		testhelpers.FlushRedis()
+	})
+
 	It("lists metadata and flags changed media without exposing snapshots or provider file names", func() {
 		f := newRecognitionFixture()
 		req := f.request("history-review")
@@ -209,6 +225,10 @@ var _ = Describe("GET /api/v1/sessions/:session_id/recognition-reviews", func() 
 })
 
 var _ = Describe("GET /api/v1/sessions/:session_id/recognition-reviews/:run_id", func() {
+	BeforeEach(func() {
+		testhelpers.FlushRedis()
+	})
+
 	It("returns the historical comparison and flags subsequent confirmation edits", func() {
 		f := newRecognitionFixture()
 		req := f.request("detail-review")
@@ -229,6 +249,7 @@ var _ = Describe("GET /api/v1/sessions/:session_id/recognition-reviews/:run_id",
 		Expect(*out.Evaluation.Records[0].Record.Reps).To(Equal(2))
 		Expect(f.transport.Verify()).To(Succeed())
 	})
+
 	It("scopes run IDs to the owned session", func() {
 		f := newRecognitionFixture()
 		run := testhelpers.CreateRecognitionReviewRun(dbConn, &db.RecognitionReviewRun{SessionID: "WOD-OTHER", ProfileID: f.profile.ID})

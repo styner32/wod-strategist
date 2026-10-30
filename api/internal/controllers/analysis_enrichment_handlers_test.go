@@ -22,7 +22,7 @@ func enrichmentRouteSpecs(method, suffix string) {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 		p := testhelpers.CreateProfile(dbConn, &db.Profile{})
 		Expect(dbConn.First(&owner, p.UserID).Error).To(Succeed())
 		q := testhelpers.CreateProfile(dbConn, &db.Profile{})
