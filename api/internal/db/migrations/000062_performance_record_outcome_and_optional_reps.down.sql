@@ -1,4 +1,6 @@
--- Drop new outcome constraints before restoring legacy zero-rep rows on rollback.
+-- Preserve distinct reversible shapes on rollback: incomplete uses legacy zero
+-- reps, rest retains empty movement/null count/load, and count-omitted completed
+-- records retain non-empty movement/null count. The up migration restores them.
 ALTER TABLE performance_records
     DROP CONSTRAINT IF EXISTS performance_records_outcome_fields_check,
     DROP CONSTRAINT IF EXISTS performance_records_outcome_check;

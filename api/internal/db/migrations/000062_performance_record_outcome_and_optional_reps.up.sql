@@ -7,6 +7,19 @@ ALTER TABLE performance_records
     DROP CONSTRAINT IF EXISTS performance_records_reps_per_minute_check,
     DROP CONSTRAINT IF EXISTS performance_records_rate_basis_check;
 
+-- The down migration preserves rest as its distinct empty-movement/null-count
+-- shape. Restore it before validating completed records during a reapply.
+UPDATE performance_records
+SET outcome = 'rest'
+WHERE movement = ''
+    AND reps IS NULL
+    AND reps_per_minute IS NULL
+    AND rate_basis IS NULL
+    AND load_value IS NULL
+    AND load_unit IS NULL
+    AND load_basis IS NULL
+    AND load_kg IS NULL;
+
 UPDATE performance_records
 SET outcome = 'incomplete',
     reps = NULL,
