@@ -1,3 +1,5 @@
+import { normalizeDistanceLungeClauses } from "./lungePrescription";
+
 /** Evidence and confirmation contracts. Assessments never modify this timeline. */
 export interface ProgressLoad {
   value: number;
@@ -808,29 +810,6 @@ const WOD_MOVEMENT_PATTERNS: { pattern: RegExp; canonical: string }[] = [
   { pattern: /jumping\s*lunges?|점핑\s*런지/i, canonical: "Jumping Lunge" },
   { pattern: /lunges?|런지/i, canonical: "Lunge" },
 ];
-
-const SUGGESTION_TIME_HEADER_RE =
-  /\b(?:amrap|emom|e\d+mom|every|for\s*time|time\s*cap|cap|rest)\s*:?\s*\d+(?:\.\d+)?\s*m(?:in(?:ute)?s?)?\b/gi;
-const SUGGESTION_DISTANCE_RE =
-  /(?:^|[^a-z0-9])\d+(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yards?|m|meters?|metres?)(?=$|[^a-z0-9])|\d+(?:\.\d+)?\s*(?:미터|피트|야드)/i;
-const SUGGESTION_NON_WALKING_LUNGE_RE = /\b(?:walking|reverse|step[\s-]*back|jumping)\b|워킹|리버스|점핑/i;
-
-function normalizeDistanceLungeClauses(text: string): string {
-  return text
-    .split(/([\n,;]+)/)
-    .map(clause => {
-      if (!/lunge|런지/i.test(clause) || SUGGESTION_NON_WALKING_LUNGE_RE.test(clause)) {
-        return clause;
-      }
-      if (!SUGGESTION_DISTANCE_RE.test(clause.replace(SUGGESTION_TIME_HEADER_RE, " "))) {
-        return clause;
-      }
-      return clause
-        .replace(/\b(lunges?)\b/gi, "walking $1")
-        .replace(/런지/g, "워킹 런지");
-    })
-    .join("");
-}
 
 export function normalizeMovementName(raw?: string | null): string {
   const trimmed = raw?.trim() ?? "";

@@ -123,4 +123,17 @@ var _ = Describe("parseWorkoutBlock", func() {
 		)
 		Expect(combinedElement).To(Equal([]string{"Run", "DB Lunge"}))
 	})
+
+	DescribeTable("keeps OCR lunge prescriptions local and prioritizes the corrected description",
+		func(movements []string, description, raw string, expected []string) {
+			Expect(normalizeParsedWorkoutMovements(movements, description, raw)).To(Equal(expected))
+		},
+		Entry("raw line breaks cannot veto corrected distance", []string{"DB Lunge"}, "200ft DB Lunge", "200ft\nDB Lunge", []string{"DB Walking Lunge"}),
+		Entry("corrected reps take precedence over raw distance", []string{"DB Lunge"}, "20 DB Lunges", "200ft DB Lunge", []string{"DB Lunge"}),
+		Entry("raw explicit distance is a fallback for an unquantified description", []string{"DB Lunge"}, "DB Lunge", "200ft DB Lunge", []string{"DB Walking Lunge"}),
+		Entry("movement colon distance stays attached", []string{"DB Lunge:20m"}, "DB Lunge:20m", "", []string{"DB Walking Lunge"}),
+		Entry("combined movement colon prescriptions", []string{"Run:400m / DB Lunge:20m"}, "Run:400m / DB Lunge:20m", "", []string{"Run", "DB Walking Lunge"}),
+		Entry("parenthesized run distance does not promote reps", []string{"Run", "DB Lunge"}, "Run (400m) 20 DB Lunges", "", []string{"Run", "DB Lunge"}),
+		Entry("an inline rep clause cannot inherit another occurrence's distance", []string{"20 DB Lunges"}, "200ft DB Lunge", "", []string{"DB Lunge"}),
+	)
 })

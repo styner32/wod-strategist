@@ -87,7 +87,7 @@ func resolveSubclauseMovementName(clause, wodDescription, rawText string) string
 	if promoted := movement.PromoteDistanceLunge(trimmed); promoted != "" {
 		return promoted
 	}
-	cleaned := strings.TrimSpace(subclauseParenOrAtRe.ReplaceAllString(trimmed, " "))
+	cleaned := strings.TrimSpace(strings.ReplaceAll(subclauseParenOrAtRe.ReplaceAllString(trimmed, " "), ":", " "))
 	if promoted := movement.PromoteDistanceLungeInWOD(cleaned, wodDescription, rawText); promoted != "" {
 		return promoted
 	}
@@ -96,9 +96,8 @@ func resolveSubclauseMovementName(clause, wodDescription, rawText string) string
 	}
 	stripped := strings.TrimSpace(leadingOrTrailingClauseCountRe.ReplaceAllString(cleaned, " "))
 	if stripped != "" && stripped != cleaned {
-		if promoted := movement.PromoteDistanceLungeInWOD(stripped, wodDescription, rawText); promoted != "" {
-			return promoted
-		}
+		// A local rep prescription is more specific than a same-name movement
+		// prescribed elsewhere in the WOD.
 		if canon := movement.Canonical(stripped); canon != "" {
 			return canon
 		}
@@ -143,11 +142,9 @@ func normalizeParsedWorkoutMovements(movements []string, wodDescription, rawText
 				continue
 			}
 		}
-		resolved := trimmed
-		if promoted := movement.PromoteDistanceLungeInWOD(trimmed, wodDescription, rawText); promoted != "" {
-			resolved = promoted
-		} else if canon := movement.Canonical(trimmed); canon != "" {
-			resolved = canon
+		resolved := resolveSubclauseMovementName(trimmed, wodDescription, rawText)
+		if resolved == "" {
+			resolved = trimmed
 		}
 		appendUnique(resolved)
 	}

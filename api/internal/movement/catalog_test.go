@@ -157,7 +157,40 @@ var _ = Describe("movement catalog", func() {
 			Entry("Slash-separated 400m Run / 200ft DB Overhead Lunges promotes DB Overhead Lunge", "DB Overhead Lunge", "400m Run / 200ft DB Overhead Lunges (50/35lb)", "DB Overhead Walking Lunge"),
 			Entry("Rx distance ratio 200/150ft Dumbbell Overhead Lunge promotes to walking lunge", "Dumbbell Overhead Lunge", "200/150ft Dumbbell Overhead Lunge (50/35lb)", "DB Overhead Walking Lunge"),
 			Entry("Mixed distance and stationary clauses of same lunge stay conservative on WOD fallback", "DB Overhead Lunge", "200ft DB Overhead Lunge / 20 DB Overhead Lunges", ""),
+			Entry("Parenthesized Run distance does not belong to lunge", "DB Lunge", "Run (400m) 20 DB Lunges", ""),
+			Entry("Parenthesized Run name does not belong to lunge", "DB Lunge", "400m (Run) 20 DB Lunges", ""),
+			Entry("Distance between two movement names stays ambiguous", "DB Lunge", "Run 400m DB Lunge", ""),
+			Entry("Trailing distance between two movement names stays ambiguous", "DB Lunge", "DB Lunge 400m Run", ""),
+			Entry("Movement colon distance", "DB Lunge", "DB Lunge:20m", "DB Walking Lunge"),
+			Entry("Parenthesized local distance", "DB Lunge", "DB Lunge (20m)", "DB Walking Lunge"),
+			Entry("Parenthesized prefix distance", "DB Lunge", "(20m) DB Lunge", "DB Walking Lunge"),
+			Entry("Header colon retains minute ownership", "DB Lunge", "AMRAP:10m DB Lunge", ""),
+			Entry("Header colon and explicit rep prescription", "DB Lunge", "AMRAP:10m 20 DB Lunges", ""),
+			Entry("Bare same-movement heading does not veto distance", "DB Lunge", "DB Lunge\n200ft DB Lunge", "DB Walking Lunge"),
+			Entry("Reverse modifier never falls through to generic lunge", "Lunge", "20m Reverse Lunge", ""),
+			Entry("Jumping modifier never falls through to generic lunge", "Lunge", "20m Jumping Lunge", ""),
+			Entry("Weight does not become distance", "DB Lunge", "20 DB Lunge (50/35lb)", ""),
+			Entry("Leading count overrides trailing distance", "DB Lunge", "20 DB Lunge 20m", ""),
+			Entry("Trailing reps override leading distance", "DB Lunge", "20m DB Lunge 20 reps", ""),
+			Entry("Leading reps override parenthesized distance", "DB Lunge", "20 reps DB Lunge (20m)", ""),
+			Entry("Load does not veto a local distance", "DB Lunge", "20m DB Lunge 50lb", "DB Walking Lunge"),
 		)
+
+		It("uses explicit prescriptions from the first source and treats bare OCR names as unknown", func() {
+			Expect(movement.PromoteDistanceLungeInWOD("DB Lunge", "200ft DB Lunge", "200ft\nDB Lunge")).To(Equal("DB Walking Lunge"))
+			Expect(movement.PromoteDistanceLungeInWOD("DB Lunge", "20 DB Lunges", "200ft DB Lunge")).To(BeEmpty())
+			Expect(movement.PromoteDistanceLungeInWOD("DB Lunge", "DB Lunge", "200ft DB Lunge")).To(Equal("DB Walking Lunge"))
+			Expect(movement.PromoteDistanceLungeInWOD("DB Lunge", "200ft DB Lunge / 20 DB Lunges", "200ft DB Lunge")).To(BeEmpty())
+			Expect(movement.PromoteDistanceLungeInWOD("20 DB Lunges", "200ft DB Lunge")).To(BeEmpty())
+		})
+
+		It("only accepts an owned distance or an isolated structured distance prescription", func() {
+			Expect(movement.PromoteDistanceLunge("DB Lunge", "200/150ft")).To(Equal("DB Walking Lunge"))
+			Expect(movement.PromoteDistanceLunge("DB Lunge", "Run (400m)")).To(BeEmpty())
+			Expect(movement.PromoteDistanceLunge("20 DB Lunges", "200ft")).To(BeEmpty())
+			Expect(movement.HasLungeDistancePrescription("Run (400m) 20 DB Lunges")).To(BeFalse())
+			Expect(movement.HasLungeDistancePrescription("DB Lunge:20m")).To(BeTrue())
+		})
 
 		It("splits multi-workout single lines while preserving Rx weight and distance ratios", func() {
 			Expect(movement.SplitWorkoutClauses("400m Run / 20 DB Lunges (50/35lb)")).To(Equal([]string{
@@ -166,6 +199,9 @@ var _ = Describe("movement catalog", func() {
 			}))
 			Expect(movement.SplitWorkoutClauses("200/150ft Dumbbell Overhead Lunge (50/35lb)")).To(Equal([]string{
 				"200/150ft Dumbbell Overhead Lunge (50/35lb)",
+			}))
+			Expect(movement.SplitWorkoutClauses("AMRAP 10m: Run:400m / DB Lunge:20m")).To(Equal([]string{
+				"AMRAP 10m", "Run:400m", "DB Lunge:20m",
 			}))
 		})
 

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -71,6 +72,56 @@ var _ = Describe("normalize workout", func() {
 		Expect(movements[1].WeightRaw).To(Equal("50lb"))
 		Expect(movements[1].IsMain).To(BeTrue())
 	})
+
+	It("uses structured lunge prescriptions before WOD fallback", func() {
+		items := []db.NormalizedMovement{
+			{Movement: "DB Lunge", Reps: "20"},
+			{Movement: "DB Lunge", Reps: "21-15-9"},
+			{Movement: "DB Lunge", Reps: "200/150ft"},
+			{Movement: "DB Lunge"},
+		}
+		promoteDistanceLungesInNormalizedMovements(items, "200ft DB Lunge")
+		Expect(items[0].Movement).To(Equal("DB Lunge"))
+		Expect(items[1].Movement).To(Equal("DB Lunge"))
+		Expect(items[2].Movement).To(Equal("DB Walking Lunge"))
+		Expect(items[3].Movement).To(Equal("DB Walking Lunge"))
+	})
+
+	It("preserves explicit structured counts while parsing inline lunge distances", func() {
+		input := []db.NormalizedMovement{
+			{Movement: "DB Lunge:20m", Reps: "20"},
+			{Movement: "200ft DB Lunge", Reps: "20"},
+			{Movement: "DB Walking Lunge:20m", Reps: "20"},
+			{Movement: "20 DB Lunge", Reps: "200ft"},
+		}
+		raw, err := json.Marshal(map[string]any{"movements": input})
+		Expect(err).NotTo(HaveOccurred())
+		items, err := ParseNormalizedWorkoutOutput(string(raw))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(items).To(HaveLen(4))
+		Expect(items[0].Movement).To(Equal("DB Lunge"))
+		Expect(items[1].Movement).To(Equal("DB Lunge"))
+		Expect(items[2].Movement).To(Equal("DB Walking Lunge"))
+		Expect(items[3].Movement).To(Equal("DB Walking Lunge"))
+		for i := range items {
+			Expect(items[i].Reps).To(Equal(input[i].Reps))
+		}
+	})
+
+	DescribeTable("preserves normalized local lunge quantities and load ratios",
+		func(clause, expectedReps string) {
+			items := splitCombinedNormalizedMovements([]db.NormalizedMovement{{Movement: clause, IsMain: true}})
+			Expect(items).To(HaveLen(1))
+			Expect(items[0].Movement).To(Equal("DB Walking Lunge"))
+			Expect(items[0].Reps).To(Equal(expectedReps))
+			Expect(items[0].WeightRaw).To(Equal("50/35lb"))
+			Expect(items[0].WeightKG).To(BeNil())
+			Expect(items[0].IsMain).To(BeTrue())
+		},
+		Entry("movement colon distance", "DB Lunge:20m (50/35lb)", "20m"),
+		Entry("parenthesized distance", "DB Lunge (20m) (50/35lb)", "20m"),
+		Entry("distance ratio is not a weight ratio", "DB Lunge (200/150ft) (50/35lb)", "200/150ft"),
+	)
 
 	It("builds non-empty normalized workout prompt", func() {
 		prompt := BuildNormalizedWorkoutPrompt("5x5 Power Clean 135lb", []string{"Power Clean"}, "male")
@@ -157,4 +208,3 @@ var _ = Describe("normalize workout", func() {
 		Expect(transport.Requests()).To(BeEmpty())
 	})
 })
-

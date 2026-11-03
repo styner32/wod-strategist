@@ -16,12 +16,12 @@ import (
 )
 
 var (
-	movementsBlockRegex         = regexp.MustCompile("```movements\\s*([\\s\\S]*?)\\s*```")
-	clauseParenWeightRegex       = regexp.MustCompile(`(?i)\(([^)]*(?:lb|lbs|kg|kgs|\d+\s*/\s*\d+)[^)]*)\)|@\s*([^\s,;:+|]+(?:\s*(?:lb|lbs|kg|kgs))?)`)
+	movementsBlockRegex          = regexp.MustCompile("```movements\\s*([\\s\\S]*?)\\s*```")
+	clauseParenWeightRegex       = regexp.MustCompile(`(?i)\(([^)]*(?:lb|lbs|kg|kgs)\b[^)]*|\s*\d+(?:\.\d+)?\s*/\s*\d+(?:\.\d+)?\s*)\)|@\s*([^\s,;:+|]+(?:\s*(?:lb|lbs|kg|kgs))?)`)
 	clauseAnyParenOrAtRegex      = regexp.MustCompile(`(?:\([^)]*\)|@[^\r\n,;:+|]*)`)
-	clauseLeadingPrescriptionRe = regexp.MustCompile(`(?i)^\s*(\d+(?:[-/x]\d+)*(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|cal|cals|calories?|reps?|회|개|미터|피트|야드)?)\s+(.+?)\s*$`)
+	clauseLeadingPrescriptionRe  = regexp.MustCompile(`(?i)^\s*(\d+(?:[-/x]\d+)*(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|cal|cals|calories?|reps?|회|개|미터|피트|야드)?)\s+(.+?)\s*$`)
 	clauseTrailingPrescriptionRe = regexp.MustCompile(`(?i)^\s*(.+?)\s+(\d+(?:[-/x]\d+)*(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|cal|cals|calories?|reps?|회|개|미터|피트|야드)?)\s*$`)
-	singleWeightValueRegex      = regexp.MustCompile(`(?i)^\s*(\d+(?:\.\d+)?)\s*(lb|lbs|kg|kgs)\s*$`)
+	singleWeightValueRegex       = regexp.MustCompile(`(?i)^\s*(\d+(?:\.\d+)?)\s*(lb|lbs|kg|kgs)\s*$`)
 )
 
 // BuildNormalizedWorkoutPrompt creates the prompt for normalizing WOD description into structured movements.
@@ -178,7 +178,7 @@ func isUnweightedMovement(canon string) bool {
 	}
 }
 
-func parseSingleClauseMovement(clause string) (db.NormalizedMovement, bool) {
+func parseSingleClauseMovement(clause string, allowDistancePromotion bool) (db.NormalizedMovement, bool) {
 	var weightRaw string
 	var weightKG *float64
 	if wm := clauseParenWeightRegex.FindStringSubmatch(clause); len(wm) > 0 {
@@ -198,7 +198,16 @@ func parseSingleClauseMovement(clause string) (db.NormalizedMovement, bool) {
 		}
 	}
 
-	body := strings.TrimSpace(clauseAnyParenOrAtRegex.ReplaceAllString(clause, " "))
+	body := clauseAnyParenOrAtRegex.ReplaceAllStringFunc(clause, func(part string) string {
+		if strings.HasPrefix(part, "(") {
+			inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(part, "("), ")"))
+			if movement.HasLungeDistancePrescription(inner) {
+				return " " + inner + " "
+			}
+		}
+		return " "
+	})
+	body = strings.TrimSpace(strings.ReplaceAll(body, ":", " "))
 	if body == "" {
 		return db.NormalizedMovement{}, false
 	}
@@ -206,8 +215,10 @@ func parseSingleClauseMovement(clause string) (db.NormalizedMovement, bool) {
 	var reps string
 	var movName string
 
-	if promoted := movement.PromoteDistanceLunge(body); promoted != "" {
-		movName = promoted
+	if allowDistancePromotion {
+		movName = movement.PromoteDistanceLunge(body)
+	}
+	if movName != "" {
 		if lm := clauseLeadingPrescriptionRe.FindStringSubmatch(body); len(lm) == 3 {
 			reps = strings.TrimSpace(lm[1])
 		} else if tm := clauseTrailingPrescriptionRe.FindStringSubmatch(body); len(tm) == 3 {
@@ -216,10 +227,7 @@ func parseSingleClauseMovement(clause string) (db.NormalizedMovement, bool) {
 	} else if canon := movement.Canonical(body); canon != "" {
 		movName = canon
 	} else if lm := clauseLeadingPrescriptionRe.FindStringSubmatch(body); len(lm) == 3 {
-		if promoted := movement.PromoteDistanceLunge(body); promoted != "" {
-			movName = promoted
-			reps = strings.TrimSpace(lm[1])
-		} else if canon := movement.Canonical(lm[2]); canon != "" {
+		if canon := movement.Canonical(lm[2]); canon != "" {
 			movName = canon
 			reps = strings.TrimSpace(lm[1])
 		}
@@ -252,6 +260,16 @@ func splitCombinedNormalizedMovements(items []db.NormalizedMovement) []db.Normal
 	for _, item := range items {
 		clauses := movement.SplitWorkoutClauses(item.Movement)
 		if len(clauses) <= 1 {
+			allowDistance := strings.TrimSpace(item.Reps) == "" || movement.HasLungeDistancePrescription(item.Reps)
+			if parsed, ok := parseSingleClauseMovement(item.Movement, allowDistance); ok && parsed.Reps != "" {
+				if item.Reps == "" {
+					item.Reps = parsed.Reps
+				}
+				item.Movement = parsed.Movement
+				if parsed.WeightRaw != "" {
+					item.WeightRaw, item.WeightKG = parsed.WeightRaw, parsed.WeightKG
+				}
+			}
 			out = append(out, item)
 			continue
 		}
@@ -259,7 +277,7 @@ func splitCombinedNormalizedMovements(items []db.NormalizedMovement) []db.Normal
 		allValid := true
 		hasInlineWeight := false
 		for _, clause := range clauses {
-			p, ok := parseSingleClauseMovement(clause)
+			p, ok := parseSingleClauseMovement(clause, true)
 			if !ok {
 				allValid = false
 				break
@@ -312,9 +330,15 @@ func splitCombinedNormalizedMovements(items []db.NormalizedMovement) []db.Normal
 
 func promoteDistanceLungesInNormalizedMovements(items []db.NormalizedMovement, wodDescription string) {
 	for i := range items {
+		if strings.TrimSpace(items[i].Reps) != "" && !movement.HasLungeDistancePrescription(items[i].Reps) {
+			continue // the structured row's explicit count also wins over inline distance text
+		}
 		if promoted := movement.PromoteDistanceLunge(items[i].Movement, items[i].Reps); promoted != "" {
 			items[i].Movement = promoted
 			continue
+		}
+		if strings.TrimSpace(items[i].Reps) != "" {
+			continue // an explicit row prescription cannot inherit another row's distance
 		}
 		if wodDescription != "" {
 			if promoted := movement.PromoteDistanceLungeInWOD(items[i].Movement, wodDescription); promoted != "" {
