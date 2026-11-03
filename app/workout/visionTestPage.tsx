@@ -29,6 +29,7 @@ import {
 } from "react-native";
 import { Video } from "react-native-compressor";
 import { getInfoAsync } from "expo-file-system/legacy";
+import { ulid } from "ulid";
 import {
   initialWindowMetrics,
   SafeAreaInsetsContext,
@@ -78,6 +79,9 @@ import {
   processWorkoutChunk,
   is4xxError,
   getErrorStatusCode,
+  type RecordingMediaChunkIdentity,
+  type RecordingMediaManifestChunk,
+  type UploadResult,
 } from "../../features/wod/api";
 import {
   prepareOriginalSession, beginOriginalChunk, addOriginalChunk,
@@ -103,6 +107,7 @@ type FailedChunkRecoveryItem = {
   startSecs: number;
   endSecs: number;
   heartRateBpm?: number;
+  mediaChunk?: RecordingMediaChunkIdentity;
   release: () => void;
 };
 type OriginalCapture = {
@@ -115,6 +120,9 @@ type OriginalCapture = {
   failedUploads: number;
   pendingUploads: number;
   completedUploads: number;
+  mediaPipelineVersion: 0 | 1;
+  mediaChunkCount: number;
+  mediaReceipts: Map<number, RecordingMediaManifestChunk>;
   failedChunks: FailedChunkRecoveryItem[];
   recoveringChunks?: Promise<void>;
   recoveryFinished?: boolean;
@@ -124,6 +132,17 @@ type OriginalCapture = {
   release: () => void;
 };
 const IS_ANDROID = Platform.OS === "android";
+
+function acceptMediaReceipt(capture: OriginalCapture, chunk: RecordingMediaChunkIdentity | undefined, result: UploadResult): void {
+  if (!chunk) return;
+  if (!result?.chunkId || !result.sourceGeneration) {
+    throw new Error("Cannot complete a media chunk without its approved source receipt");
+  }
+  capture.mediaReceipts.set(chunk.captureOrder, {
+    chunk_id: result.chunkId,
+    source_generation: result.sourceGeneration,
+  });
+}
 
 function localPath(uri: string): string {
   return decodeURIComponent(uri.replace(/^file:\/\//, ""));
@@ -926,7 +945,7 @@ function VisionTestPageContent() {
       while (capture.failedChunks.length > 0) {
         const item = capture.failedChunks.shift()!;
         try {
-          await processWorkoutChunk(item.path, capture.ref.sessionId, {
+          const result = await processWorkoutChunk(item.path, capture.ref.sessionId, {
             movements: movements ? movements.split(", ") : [],
             injuries: injuries ? injuries.split(", ") : [],
             workoutType,
@@ -935,9 +954,11 @@ function VisionTestPageContent() {
             endSecs: item.endSecs,
             heartRateBpm: item.heartRateBpm,
             appearanceHints,
+            ...(item.mediaChunk ? { mediaPipelineVersion: 1 as const, ...item.mediaChunk } : {}),
             maxRetries: 2,
             retryDelayMs: 2000,
           });
+          acceptMediaReceipt(capture, item.mediaChunk, result);
           capture.failedUploads = Math.max(0, capture.failedUploads - 1);
           capture.completedUploads += 1;
           clearRetryBanner();
@@ -978,6 +999,9 @@ function VisionTestPageContent() {
     const startSecs = Math.max(0, (start - capture.startedAt) / 1000);
     const endSecs = Math.max(startSecs, (end - capture.startedAt) / 1000);
     const heartRateBpm = heartRateWindow.current.peak(start, end);
+    const mediaChunk = capture.mediaPipelineVersion === 1
+      ? { clientChunkId: ulid(), captureOrder: ++capture.mediaChunkCount }
+      : undefined;
     const rawRelease = holdOriginalFiles(capture.ref);
     let isReleased = false;
     const release = () => {
@@ -1016,11 +1040,12 @@ function VisionTestPageContent() {
       const upload = async () => {
         let heldForRecovery = false;
         try {
-          await processWorkoutChunk(uri, capture.ref.sessionId, {
+          const result = await processWorkoutChunk(uri, capture.ref.sessionId, {
             movements: movements ? movements.split(", ") : [],
             injuries: injuries ? injuries.split(", ") : [],
             workoutType, profileId: capture.ref.profileId, startSecs, endSecs,
             heartRateBpm, appearanceHints,
+            ...(mediaChunk ? { mediaPipelineVersion: 1 as const, ...mediaChunk } : {}),
             maxRetries: 5,
             retryDelayMs: 5000,
             onRetry: (attempt, maxRetries) => {
@@ -1033,6 +1058,7 @@ function VisionTestPageContent() {
               });
             },
           });
+          acceptMediaReceipt(capture, mediaChunk, result);
           capture.completedUploads += 1;
           clearRetryBanner();
           if (capture.failedChunks.length > 0 && !capture.recoveryFinished) {
@@ -1061,6 +1087,7 @@ function VisionTestPageContent() {
                 startSecs,
                 endSecs,
                 heartRateBpm,
+                mediaChunk,
                 release,
               });
             }
@@ -1293,7 +1320,12 @@ function VisionTestPageContent() {
       }
       const startedAt = Date.now();
       preparationQueue.current = Promise.resolve();
-      originalCapture.current = { ref, startedAt, setupSnapshot: recordingSetup, order: 0, complete: true, failedUploads: 0, pendingUploads: 0, completedUploads: 0, failedChunks: [], drains: [], release: holdOriginalFiles(ref) };
+      originalCapture.current = {
+        ref, startedAt, setupSnapshot: recordingSetup, order: 0, complete: true,
+        failedUploads: 0, pendingUploads: 0, completedUploads: 0, failedChunks: [], drains: [],
+        mediaPipelineVersion: process.env.EXPO_PUBLIC_MEDIA_PIPELINE_VERSION === "1" ? 1 : 0,
+        mediaChunkCount: 0, mediaReceipts: new Map(), release: holdOriginalFiles(ref),
+      };
       heartRateWindow.current.clear();
       stoppingWorkout.current = false;
       resetQuality();
@@ -1550,7 +1582,11 @@ function VisionTestPageContent() {
               console.warn("Server merge skipped because no chunks were uploaded");
               return;
             }
-            if (capture.pendingUploads > 0 || capture.failedUploads > 0) {
+            const missingMediaReceipts = capture.mediaPipelineVersion === 1 &&
+              (capture.mediaReceipts.size !== capture.mediaChunkCount ||
+                Array.from({ length: capture.mediaChunkCount }, (_, index) => index + 1)
+                  .some((order) => !capture.mediaReceipts.has(order)));
+            if (capture.pendingUploads > 0 || capture.failedUploads > 0 || missingMediaReceipts) {
               console.warn(
                 `⚠️ Server merge withheld: ${capture.completedUploads} uploaded, ${capture.failedUploads} failed, ${capture.pendingUploads} pending`,
               );
@@ -1564,6 +1600,13 @@ function VisionTestPageContent() {
               profileId: capturedProfileIdRef.current!,
               wodDescription: wodDescription || undefined,
               appearanceHints,
+              ...(capture.mediaPipelineVersion === 1 ? {
+                mediaPipelineVersion: 1 as const,
+                expectedChunkCount: capture.mediaChunkCount,
+                chunks: [...capture.mediaReceipts.entries()]
+                  .sort(([first], [second]) => first - second)
+                  .map(([, receipt]) => receipt),
+              } : {}),
             });
             console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
           } catch (e) {
