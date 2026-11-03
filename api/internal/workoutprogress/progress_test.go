@@ -86,9 +86,10 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 	It("reports observed rest and before/after cycle duration without physiological recovery estimates", func() {
 		p := Build([]Interval{exercise(0, 20, cleanCycle(1, 3), cleanCycle(6, 8), cleanCycle(12, 14)), {Start: 20, End: 40, Activity: "rest", ObservationRefs: []string{"rest"}}, exercise(40, 60, cleanCycle(44, 47), cleanCycle(49, 52))}, nil, "video")
 		before, _ := json.Marshal(p)
-		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: 5, Measurement: "window", Technique: "singles"}
+		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: IntPtr(5), Measurement: "window", Technique: "singles"}
 		r, err := Confirm(p, input)
 		Expect(err).NotTo(HaveOccurred())
+		Expect(r.Outcome).To(Equal("completed"))
 		Expect(r.RestComparisons).To(HaveLen(1))
 		rest := r.RestComparisons[0]
 		Expect(rest.RestStart).To(Equal(20.0))
@@ -100,7 +101,7 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		envelope, err := json.Marshal(map[string]any{"version": p.Version, "clock": p.Clock, "interval_id": input.IntervalID, "start_secs": input.Start, "end_secs": input.End, "source_version": p.SourceVersion, "intervals": p.Intervals, "unassessed": p.Unassessed})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(RestComparisonsFromCandidate(envelope, r)).To(Equal(r.RestComparisons))
-		r.Reps = 6
+		r.Reps = IntPtr(6)
 		mismatch := RestComparisonsFromCandidate(envelope, r)
 		Expect(mismatch).To(HaveLen(1))
 		Expect(*mismatch[0].RestElapsedSeconds).To(Equal(20.0))
@@ -117,7 +118,7 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 	})
 	It("keeps uncertain post-rest cycle changes null while preserving verified rest elapsed", func() {
 		p := Build([]Interval{exercise(0, 20, cleanCycle(1, 3)), {Start: 20, End: 40, Activity: "rest", ObservationRefs: []string{"rest"}}, exercise(40, 60, cleanCycle(44, 47))}, nil, "video")
-		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: 2, Measurement: "window", Technique: "singles"}
+		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: IntPtr(2), Measurement: "window", Technique: "singles"}
 		for i := range p.Intervals {
 			start, end := float64(i*40), float64((i+1)*40)
 			p.Intervals[i].CaptureStart = &start
@@ -141,12 +142,12 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 	})
 	It("confirms a real 60-second repeated-movement window including observed rest", func() {
 		p := Build([]Interval{exercise(0, 20, cleanCycle(1, 3), cleanCycle(6, 8), cleanCycle(12, 14)), {Start: 20, End: 40, Activity: "rest", ObservationRefs: []string{"rest"}}, exercise(40, 60, cleanCycle(44, 46), cleanCycle(49, 51))}, nil, "video")
-		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: 5, Load: &Load{Value: 135, Unit: "lb", Basis: "total"}, Measurement: "window", Technique: "singles"}
+		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: IntPtr(5), Load: &Load{Value: 135, Unit: "lb", Basis: "total"}, Measurement: "window", Technique: "singles"}
 		r, err := Confirm(p, input)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r.ElapsedSeconds).To(Equal(60.0))
-		Expect(r.RepsPerMinute).To(Equal(5.0))
-		Expect(r.RateBasis).To(Equal("actual_60_second_window"))
+		Expect(*r.RepsPerMinute).To(Equal(5.0))
+		Expect(*r.RateBasis).To(Equal("actual_60_second_window"))
 		Expect(*r.MedianCycleSeconds).To(Equal(2.0))
 		start, end, ok := WindowBounds(p, p.Intervals[0].ID)
 		Expect(ok).To(BeTrue())
@@ -156,7 +157,7 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		_, err = Confirm(p, input)
 		Expect(err).To(HaveOccurred())
 		input.Measurement = "window"
-		input.Reps = 6
+		input.Reps = IntPtr(6)
 		r, err = Confirm(p, input)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r.MedianCycleSeconds).To(BeNil())
@@ -164,7 +165,7 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 	It("rejects cross-window unknown activity, other movement, coverage holes and load changes", func() {
 		base := []Interval{exercise(0, 20, cleanCycle(1, 3)), {Start: 20, End: 40, Activity: "rest", ObservationRefs: []string{"rest"}}, exercise(40, 60, cleanCycle(44, 46))}
 		p := Build(base, nil, "video")
-		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: 2, Measurement: "window", Technique: "singles"}
+		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: IntPtr(2), Measurement: "window", Technique: "singles"}
 		p.Intervals[1].Activity = "unknown"
 		_, err := Confirm(p, input)
 		Expect(err).To(HaveOccurred())
@@ -193,11 +194,11 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 			p.Intervals[i].CaptureStart = &a
 			p.Intervals[i].CaptureEnd = &b
 		}
-		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: 2, Measurement: "window", Technique: "singles"}
+		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: IntPtr(2), Measurement: "window", Technique: "singles"}
 		r, err := Confirm(p, input)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r.ElapsedSeconds).To(Equal(120.0))
-		Expect(r.RepsPerMinute).To(Equal(1.0))
+		Expect(*r.RepsPerMinute).To(Equal(1.0))
 		Expect(r.MedianCycleSeconds).To(BeNil())
 		input.End = 50
 		_, err = Confirm(p, input)
@@ -218,33 +219,33 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		start, end := 0.0, 19.995
 		p.Intervals[0].CaptureStart = &start
 		p.Intervals[0].CaptureEnd = &end
-		_, err := Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 19.999, End: 20, Reps: 1, Measurement: "window", Technique: "singles"})
+		_, err := Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 19.999, End: 20, Reps: IntPtr(1), Measurement: "window", Technique: "singles"})
 		Expect(err).To(HaveOccurred())
 	})
 	It("distinguishes a true 60-second window from normalized rate and preserves load", func() {
 		p := Build([]Interval{exercise(0, 60, cleanCycle(1, 3), cleanCycle(5, 9), cleanCycle(12, 18))}, nil, "video")
-		r, err := Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: 3, Load: &Load{Value: 135, Unit: "lb", Basis: "total"}, Measurement: "window", Technique: "singles"})
+		r, err := Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: IntPtr(3), Load: &Load{Value: 135, Unit: "lb", Basis: "total"}, Measurement: "window", Technique: "singles"})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(r.RepsPerMinute).To(Equal(3.0))
-		Expect(r.RateBasis).To(Equal("actual_60_second_window"))
+		Expect(*r.RepsPerMinute).To(Equal(3.0))
+		Expect(*r.RateBasis).To(Equal("actual_60_second_window"))
 		Expect(*r.LoadKG).To(Equal(61.2))
 		Expect(r.Load.Value).To(Equal(135.0))
 		Expect(*r.MedianCycleSeconds).To(Equal(4.0))
-		r, err = Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 30, Reps: 3, Load: nil, Measurement: "set", Technique: "singles"})
+		r, err = Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 30, Reps: IntPtr(3), Load: nil, Measurement: "set", Technique: "singles"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r.Load).To(BeNil())
-		Expect(r.RepsPerMinute).To(Equal(6.0))
-		Expect(r.RateBasis).To(Equal("normalized_per_minute"))
+		Expect(*r.RepsPerMinute).To(Equal(6.0))
+		Expect(*r.RateBasis).To(Equal("normalized_per_minute"))
 	})
 	It("withholds median speed when manual count differs and rejects unavailable windows", func() {
 		p := Build([]Interval{exercise(0, 60, cleanCycle(1, 3))}, nil, "video")
-		r, err := Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: 5, Measurement: "window", Technique: "unspecified"})
+		r, err := Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: IntPtr(5), Measurement: "window", Technique: "unspecified"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r.MedianCycleSeconds).To(BeNil())
 		p.Unassessed = append(p.Unassessed, Gap{Start: 10, End: 20, Clock: "media", Reason: "camera_gap"})
-		_, err = Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: 5, Measurement: "window", Technique: "unspecified"})
+		_, err = Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: IntPtr(5), Measurement: "window", Technique: "unspecified"})
 		Expect(err).To(HaveOccurred())
-		_, err = Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 61, Reps: 5, Measurement: "window", Technique: "singles"})
+		_, err = Confirm(p, Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 61, Reps: IntPtr(5), Measurement: "window", Technique: "singles"})
 		Expect(err).To(HaveOccurred())
 	})
 	It("never normalizes away recording pauses and uses verified elapsed capture time", func() {
@@ -252,12 +253,12 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		start, end := 0.0, 120.0
 		p.Intervals[0].CaptureStart = &start
 		p.Intervals[0].CaptureEnd = &end
-		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: 5, Measurement: "window", Technique: "singles"}
+		input := Confirmation{IntervalID: p.Intervals[0].ID, Start: 0, End: 60, Reps: IntPtr(5), Measurement: "window", Technique: "singles"}
 		r, err := Confirm(p, input)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r.ElapsedSeconds).To(Equal(120.0))
-		Expect(r.RepsPerMinute).To(Equal(2.5))
-		Expect(r.RateBasis).To(Equal("normalized_per_minute"))
+		Expect(*r.RepsPerMinute).To(Equal(2.5))
+		Expect(*r.RateBasis).To(Equal("normalized_per_minute"))
 		Expect(r.MedianCycleSeconds).To(BeNil())
 		input.End = 30
 		_, err = Confirm(p, input)
@@ -275,12 +276,12 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 		next := day.Add(24 * time.Hour)
 		load := &Load{Value: 135, Unit: "lb", Basis: "total", Status: "confirmed"}
-		base := Record{ID: 1, SessionID: "old", Status: "confirmed", Movement: "Power Clean", Load: load, LoadKG: Kilograms(load), Start: 0, End: 60, Reps: 3, RepsPerMinute: 3, Measurement: "window", Technique: "singles", WorkoutPrescription: "Grace", PerformedAt: &day}
+		base := Record{ID: 1, SessionID: "old", Status: "confirmed", Outcome: "completed", Movement: "Power Clean", Load: load, LoadKG: Kilograms(load), Start: 0, End: 60, Reps: IntPtr(3), RepsPerMinute: Float64Ptr(3), Measurement: "window", Technique: "singles", WorkoutPrescription: "Grace", PerformedAt: &day}
 		current := base
 		current.ID = 2
 		current.SessionID = "new"
-		current.Reps = 5
-		current.RepsPerMinute = 5
+		current.Reps = IntPtr(5)
+		current.RepsPerMinute = Float64Ptr(5)
 		current.PerformedAt = &next
 		out := Comparisons([]Record{current, base})
 		Expect(out).To(HaveLen(1))
@@ -303,7 +304,7 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		day := time.Now()
 		next := day.Add(time.Hour)
 		load := &Load{Value: 60, Unit: "kg", Basis: "total", Status: "confirmed"}
-		base := Record{ID: 1, SessionID: "old", Status: "confirmed", Movement: "Power Clean", Load: load, LoadKG: Kilograms(load), Start: 0, End: 60, Reps: 3, RepsPerMinute: 3, Measurement: "window", Technique: "singles", WorkoutPrescription: "Grace", PerformedAt: &day}
+		base := Record{ID: 1, SessionID: "old", Status: "confirmed", Outcome: "completed", Movement: "Power Clean", Load: load, LoadKG: Kilograms(load), Start: 0, End: 60, Reps: IntPtr(3), RepsPerMinute: Float64Ptr(3), Measurement: "window", Technique: "singles", WorkoutPrescription: "Grace", PerformedAt: &day}
 		current := base
 		current.ID = 2
 		current.PerformedAt = &next
@@ -325,20 +326,20 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		latest := later.Add(time.Hour)
 		light := &Load{Value: 60, Unit: "kg", Basis: "total", Status: "confirmed"}
 		heavy := &Load{Value: 65, Unit: "kg", Basis: "total", Status: "confirmed"}
-		base := Record{ID: 1, SessionID: "light", Status: "confirmed", Movement: "Power Clean", Load: light, LoadKG: Kilograms(light), Start: 0, End: 60, Reps: 5, RepsPerMinute: 5, Measurement: "window", Technique: "singles", WorkoutPrescription: "Grace", PerformedAt: &day}
+		base := Record{ID: 1, SessionID: "light", Status: "confirmed", Outcome: "completed", Movement: "Power Clean", Load: light, LoadKG: Kilograms(light), Start: 0, End: 60, Reps: IntPtr(5), RepsPerMinute: Float64Ptr(5), Measurement: "window", Technique: "singles", WorkoutPrescription: "Grace", PerformedAt: &day}
 		pace := base
 		pace.ID = 2
 		pace.SessionID = "heavy-prior"
 		pace.Load = heavy
 		pace.LoadKG = Kilograms(heavy)
-		pace.Reps = 3
-		pace.RepsPerMinute = 3
+		pace.Reps = IntPtr(3)
+		pace.RepsPerMinute = Float64Ptr(3)
 		pace.PerformedAt = &later
 		current := pace
 		current.ID = 3
 		current.SessionID = "current"
-		current.Reps = 5
-		current.RepsPerMinute = 5
+		current.Reps = IntPtr(5)
+		current.RepsPerMinute = Float64Ptr(5)
 		current.PerformedAt = &latest
 		out := Comparisons([]Record{current, pace, base})
 		Expect(out[0].BaselineRecordID).To(Equal(uint(2)))
@@ -351,14 +352,14 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		day := time.Now()
 		next := day.Add(time.Hour)
 		load := &Load{Value: 60, Unit: "kg", Basis: "total", Status: "confirmed"}
-		base := Record{ID: 1, SessionID: "old", Status: "confirmed", Movement: "Power Clean", Load: load, LoadKG: Kilograms(load), Start: 0, End: 60, ElapsedSeconds: 60, Reps: 5, RepsPerMinute: 5, Measurement: "set", Technique: "singles", WorkoutPrescription: "5 power cleans", PerformedAt: &day}
+		base := Record{ID: 1, SessionID: "old", Status: "confirmed", Outcome: "completed", Movement: "Power Clean", Load: load, LoadKG: Kilograms(load), Start: 0, End: 60, ElapsedSeconds: 60, Reps: IntPtr(5), RepsPerMinute: Float64Ptr(5), Measurement: "set", Technique: "singles", WorkoutPrescription: "5 power cleans", PerformedAt: &day}
 		current := base
 		current.ID = 2
 		current.SessionID = "new"
 		current.PerformedAt = &next
 		current.End = 30
 		current.ElapsedSeconds = 30
-		current.RepsPerMinute = 10
+		current.RepsPerMinute = Float64Ptr(10)
 		out := Comparisons([]Record{current, base})
 		Expect(out[0].Kind).To(Equal("direct"))
 		Expect(*out[0].RateChangePercent).To(Equal(100.0))
@@ -367,7 +368,7 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		out = Comparisons([]Record{current, base})
 		Expect(*out[0].HeavierLoadKG).To(Equal(5.0))
 		Expect(out[0].RateChangePercent).To(BeNil())
-		current.Reps = 6
+		current.Reps = IntPtr(6)
 		out = Comparisons([]Record{current, base})
 		Expect(out[0].Kind).To(Equal("reference"))
 		Expect(out[0].ConditionDifferences).To(ContainElement("reps"))
@@ -386,15 +387,15 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 			IntervalID:  p.Intervals[0].ID,
 			Start:       0,
 			End:         20,
-			Reps:        10,
+			Reps:        IntPtr(10),
 			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
 			Measurement: "set",
 			Technique:   "touch_and_go",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r.ElapsedSeconds).To(Equal(20.0))
-		Expect(r.Reps).To(Equal(10))
-		Expect(r.RepsPerMinute).To(Equal(30.0))
+		Expect(*r.Reps).To(Equal(10))
+		Expect(*r.RepsPerMinute).To(Equal(30.0))
 		Expect(r.Measurement).To(Equal("set"))
 
 		capStart, capEnd := 113.0, 120.0
@@ -410,15 +411,15 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 			IntervalID:  tailProgress.Intervals[0].ID,
 			Start:       113,
 			End:         125,
-			Reps:        10,
+			Reps:        IntPtr(10),
 			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
 			Measurement: "set",
 			Technique:   "unspecified",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(r2.ElapsedSeconds).To(Equal(12.0))
-		Expect(r2.Reps).To(Equal(10))
-		Expect(r2.RepsPerMinute).To(Equal(50.0))
+		Expect(*r2.Reps).To(Equal(10))
+		Expect(*r2.RepsPerMinute).To(Equal(50.0))
 	})
 	It("confirms a merged contiguous set across two movements under whichever movement interval ID is selected", func() {
 		sc := Interval{Start: 10, End: 13, Activity: "exercise", Movement: "Squat Clean", ObservationRefs: []string{"chunk:1"}, RepEvents: []activity.Observation{cleanCycle(10, 13)}}
@@ -429,7 +430,7 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 			IntervalID:  p.Intervals[1].ID,
 			Start:       10,
 			End:         25,
-			Reps:        5,
+			Reps:        IntPtr(5),
 			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
 			Measurement: "set",
 			Technique:   "singles",
@@ -439,13 +440,13 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(asFrontSquat.Start).To(Equal(10.0))
 		Expect(asFrontSquat.End).To(Equal(25.0))
 		Expect(asFrontSquat.ElapsedSeconds).To(Equal(15.0))
-		Expect(asFrontSquat.Reps).To(Equal(5))
+		Expect(*asFrontSquat.Reps).To(Equal(5))
 
 		asSquatClean, err := Confirm(p, Confirmation{
 			IntervalID:  p.Intervals[0].ID,
 			Start:       10,
 			End:         25,
-			Reps:        5,
+			Reps:        IntPtr(5),
 			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
 			Measurement: "set",
 			Technique:   "singles",
@@ -454,66 +455,185 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(asSquatClean.Movement).To(Equal("Squat Clean"))
 		Expect(asSquatClean.ElapsedSeconds).To(Equal(15.0))
 	})
-	It("allows confirming 0 repetitions for incomplete/no-rep exercise intervals while excluding them from comparisons and best records", func() {
-		incomplete := cleanCycle(11, 14)
-		incomplete.Complete = false
-		p := Build([]Interval{exercise(10, 20, incomplete)}, nil, "video-zero-reps")
+	It("handles explicit incomplete, rest, and optional-count completed outcomes while rejecting zero reps", func() {
+		incompleteObs := cleanCycle(11, 14)
+		incompleteObs.Complete = false
+		lungeInterval := Interval{
+			Start:           30,
+			End:             45,
+			Activity:        "exercise",
+			Movement:        "DB Overhead Walking Lunge",
+			ObservationRefs: []string{"segment-lunge"},
+			RepEvents: []activity.Observation{
+				{Movement: "DB Overhead Walking Lunge", Unit: "seconds", Start: 30, End: 45, Complete: true, Evidence: "continuous overhead walking lunge"},
+			},
+		}
+		p := Build([]Interval{exercise(10, 20, incompleteObs), lungeInterval}, nil, "video-outcomes")
 
-		zeroRec, err := Confirm(p, Confirmation{
+		// Zero and negative reps are strictly rejected for completed confirmations.
+		for _, badReps := range []int{0, -1} {
+			_, err := Confirm(p, Confirmation{
+				IntervalID:  p.Intervals[0].ID,
+				Outcome:     "completed",
+				Start:       10,
+				End:         20,
+				Reps:        IntPtr(badReps),
+				Load:        nil,
+				Measurement: "set",
+				Technique:   "singles",
+			})
+			Expect(err).To(HaveOccurred())
+		}
+
+		// Explicit incomplete preserves movement + attempted load with null reps/rate.
+		incompleteRec, err := Confirm(p, Confirmation{
 			IntervalID:  p.Intervals[0].ID,
+			Outcome:     "incomplete",
 			Start:       10,
 			End:         20,
-			Reps:        0,
-			Load:        nil,
+			Reps:        nil,
+			Load:        &Load{Value: 102.5, Unit: "kg", Basis: "total"},
 			Measurement: "set",
 			Technique:   "singles",
 		})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(zeroRec.Reps).To(Equal(0))
-		Expect(zeroRec.RepsPerMinute).To(Equal(0.0))
-		Expect(zeroRec.MedianCycleSeconds).To(BeNil())
-		Expect(zeroRec.RestComparisons).To(BeEmpty())
+		Expect(incompleteRec.Outcome).To(Equal("incomplete"))
+		Expect(incompleteRec.Movement).To(Equal("Power Clean"))
+		Expect(incompleteRec.Reps).To(BeNil())
+		Expect(incompleteRec.RepsPerMinute).To(BeNil())
+		Expect(incompleteRec.RateBasis).To(BeNil())
+		Expect(incompleteRec.MedianCycleSeconds).To(BeNil())
+		Expect(incompleteRec.RestComparisons).To(BeEmpty())
+		Expect(incompleteRec.Load).NotTo(BeNil())
+		Expect(*incompleteRec.LoadKG).To(Equal(102.5))
 
 		_, err = Confirm(p, Confirmation{
 			IntervalID:  p.Intervals[0].ID,
+			Outcome:     "incomplete",
 			Start:       10,
 			End:         20,
-			Reps:        -1,
+			Reps:        IntPtr(0),
 			Load:        nil,
 			Measurement: "set",
 			Technique:   "singles",
 		})
 		Expect(err).To(HaveOccurred())
 
+		// Explicit rest reclassifies an observed exercise interval to rest/transition.
+		restRec, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Outcome:     "rest",
+			Start:       10,
+			End:         20,
+			Reps:        nil,
+			Load:        nil,
+			Measurement: "set",
+			Technique:   "unspecified",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(restRec.Outcome).To(Equal("rest"))
+		Expect(restRec.Movement).To(Equal(""))
+		Expect(restRec.Reps).To(BeNil())
+		Expect(restRec.Load).To(BeNil())
+		Expect(restRec.LoadKG).To(BeNil())
+		Expect(restRec.RepsPerMinute).To(BeNil())
+		Expect(restRec.RateBasis).To(BeNil())
+
+		_, err = Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[0].ID,
+			Outcome:     "rest",
+			Movement:    "Power Clean",
+			Start:       10,
+			End:         20,
+			Measurement: "set",
+			Technique:   "unspecified",
+		})
+		Expect(err).To(HaveOccurred())
+
+		// Duration/walking movement can be confirmed BOTH without count (reps == nil) AND with count (reps >= 1).
+		lungeNoCount, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[1].ID,
+			Outcome:     "completed",
+			Start:       30,
+			End:         45,
+			Reps:        nil,
+			Load:        &Load{Value: 22.5, Unit: "kg", Basis: "per_implement"},
+			Measurement: "set",
+			Technique:   "unspecified",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(lungeNoCount.Outcome).To(Equal("completed"))
+		Expect(lungeNoCount.Movement).To(Equal("DB Overhead Walking Lunge"))
+		Expect(lungeNoCount.ElapsedSeconds).To(Equal(15.0))
+		Expect(lungeNoCount.Reps).To(BeNil())
+		Expect(lungeNoCount.RepsPerMinute).To(BeNil())
+		Expect(lungeNoCount.RateBasis).To(BeNil())
+		Expect(*lungeNoCount.LoadKG).To(Equal(22.5))
+
+		lungeWithCount, err := Confirm(p, Confirmation{
+			IntervalID:  p.Intervals[1].ID,
+			Outcome:     "completed",
+			Start:       30,
+			End:         45,
+			Reps:        IntPtr(12),
+			Load:        &Load{Value: 22.5, Unit: "kg", Basis: "per_implement"},
+			Measurement: "set",
+			Technique:   "unspecified",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(*lungeWithCount.Reps).To(Equal(12))
+		Expect(*lungeWithCount.RepsPerMinute).To(Equal(48.0))
+		Expect(*lungeWithCount.RateBasis).To(Equal("normalized_per_minute"))
+
+		rowConfirmed, err := Confirm(p, Confirmation{
+			IntervalID:  "unassessed-60-90",
+			Outcome:     "completed",
+			Movement:    "Row",
+			Start:       60,
+			End:         90,
+			Reps:        nil,
+			Load:        nil,
+			Measurement: "set",
+			Technique:   "unspecified",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rowConfirmed.Movement).To(Equal("Row"))
+		Expect(rowConfirmed.Reps).To(BeNil())
+
+		// Non-countable outcomes (incomplete, rest, completed with null reps) are excluded from Comparisons and Best.
 		day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 		next := day.Add(time.Hour)
-		zeroRec.ID = 1
-		zeroRec.SessionID = "s-zero"
-		zeroRec.WorkoutPrescription = "Grace"
-		zeroRec.PerformedAt = &day
+		for _, nonComparable := range []*Record{&incompleteRec, &restRec, &lungeNoCount} {
+			nonComparable.ID = 1
+			nonComparable.SessionID = "s-non-comp"
+			nonComparable.WorkoutPrescription = "Grace"
+			nonComparable.PerformedAt = &day
+		}
 
 		validRec := Record{
 			ID:                  2,
 			SessionID:           "s-valid",
 			Status:              "confirmed",
+			Outcome:             "completed",
 			Movement:            "Power Clean",
 			Start:               0,
 			End:                 30,
 			ElapsedSeconds:      30,
-			Reps:                5,
-			RepsPerMinute:       10,
+			Reps:                IntPtr(5),
+			RepsPerMinute:       Float64Ptr(10),
+			RateBasis:           StringPtr("normalized_per_minute"),
 			Measurement:         "set",
 			Technique:           "singles",
 			WorkoutPrescription: "Grace",
 			PerformedAt:         &next,
 		}
 
-		Expect(Comparisons([]Record{validRec, zeroRec})).To(BeEmpty())
-		Expect(Comparisons([]Record{zeroRec})).To(BeEmpty())
-		best := Best([]Record{zeroRec, validRec})
+		Expect(Comparisons([]Record{validRec, incompleteRec, restRec, lungeNoCount})).To(BeEmpty())
+		Expect(Comparisons([]Record{incompleteRec, restRec, lungeNoCount})).To(BeEmpty())
+		best := Best([]Record{incompleteRec, restRec, lungeNoCount, validRec})
 		Expect(best).To(HaveLen(1))
 		Expect(best[0].ID).To(Equal(uint(2)))
-		Expect(Best([]Record{zeroRec})).To(BeEmpty())
+		Expect(Best([]Record{incompleteRec, restRec, lungeNoCount})).To(BeEmpty())
 	})
 	It("supersedes a narrower overlapping same-session confirmation when a merged record covers the span", func() {
 		day := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
@@ -522,10 +642,11 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 			SessionID:   "WOD-20260930-01M3QZH8TPXYMBGP9ER5W6SMBB",
 			IntervalID:  "seg-488",
 			Status:      "confirmed",
+			Outcome:     "completed",
 			Movement:    "Power Clean",
 			Start:       488,
 			End:         490,
-			Reps:        1,
+			Reps:        IntPtr(1),
 			PerformedAt: &day,
 			ConfirmedAt: day,
 		}
@@ -534,10 +655,11 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 			SessionID:   "WOD-20260930-01M3QZH8TPXYMBGP9ER5W6SMBB",
 			IntervalID:  "seg-490",
 			Status:      "confirmed",
+			Outcome:     "completed",
 			Movement:    "Clean & Jerk",
 			Start:       488,
 			End:         491.8,
-			Reps:        1,
+			Reps:        IntPtr(1),
 			PerformedAt: &day,
 			ConfirmedAt: day.Add(time.Minute),
 		}
@@ -557,21 +679,21 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 			Movement:    "Clean and Jerk",
 			Start:       260,
 			End:         270,
-			Reps:        1,
+			Reps:        IntPtr(1),
 			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
 			Measurement: "set",
 			Technique:   "singles",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(overridden.Movement).To(Equal("Clean & Jerk"))
-		Expect(overridden.Reps).To(Equal(1))
+		Expect(*overridden.Reps).To(Equal(1))
 
 		gapConfirmed, err := Confirm(p, Confirmation{
 			IntervalID:  "unassessed-250-260",
 			Movement:    "클린앤저크",
 			Start:       255.5,
 			End:         258.0,
-			Reps:        1,
+			Reps:        IntPtr(1),
 			Load:        &Load{Value: 135, Unit: "lb", Basis: "total"},
 			Measurement: "set",
 			Technique:   "singles",
@@ -580,35 +702,35 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(gapConfirmed.IntervalID).To(Equal("unassessed-250-260"))
 		Expect(gapConfirmed.Movement).To(Equal("Clean & Jerk"))
 		Expect(gapConfirmed.ElapsedSeconds).To(Equal(2.5))
-		Expect(gapConfirmed.Reps).To(Equal(1))
+		Expect(*gapConfirmed.Reps).To(Equal(1))
 
 		shuttleConfirmed, err := Confirm(p, Confirmation{
 			IntervalID:  "unassessed-470-480",
 			Movement:    "Shuttle Run",
 			Start:       470.1,
 			End:         480.1,
-			Reps:        2,
+			Reps:        IntPtr(2),
 			Load:        nil,
 			Measurement: "set",
 			Technique:   "singles",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(shuttleConfirmed.Movement).To(Equal("Shuttle Run"))
-		Expect(shuttleConfirmed.Reps).To(Equal(2))
+		Expect(*shuttleConfirmed.Reps).To(Equal(2))
 
 		customConfirmed, err := Confirm(p, Confirmation{
 			IntervalID:  "unassessed-500-510",
 			Movement:    "Sandbag Clean",
 			Start:       500,
 			End:         510,
-			Reps:        3,
+			Reps:        IntPtr(3),
 			Load:        &Load{Value: 100, Unit: "lb", Basis: "total"},
 			Measurement: "set",
 			Technique:   "singles",
 		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(customConfirmed.Movement).To(Equal("Sandbag Clean"))
-		Expect(customConfirmed.Reps).To(Equal(3))
+		Expect(*customConfirmed.Reps).To(Equal(3))
 	})
 })
 

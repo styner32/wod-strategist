@@ -268,7 +268,7 @@ describe("ProcessingSection", () => {
   });
 });
 
-describe("parseRecentWorkoutSetup (1-hour whiteboard/dashboard reuse)", () => {
+describe("parseRecentWorkoutSetup (24-hour pre-workout setup reuse)", () => {
   const now = 1775700000000;
   const sample = {
     savedAt: now - 25 * 60 * 1000, // 25 minutes ago
@@ -281,12 +281,12 @@ describe("parseRecentWorkoutSetup (1-hour whiteboard/dashboard reuse)", () => {
     sessionAppearance: "Black shirt",
   };
 
-  it("returns the saved workout setup when captured within 1 hour", () => {
+  it("returns the saved workout setup when captured within TTL", () => {
     const parsed = parseRecentWorkoutSetup(JSON.stringify(sample), now);
     expect(parsed).toEqual(sample);
   });
 
-  it("returns null when the saved workout setup is older than 1 hour", () => {
+  it("returns null when the saved workout setup is older than TTL", () => {
     const expired = {
       ...sample,
       savedAt: now - RECENT_WORKOUT_TTL_MS - 1000,

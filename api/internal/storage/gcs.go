@@ -96,6 +96,18 @@ func (c *Client) NewReaderWithGeneration(ctx context.Context, objectName string,
 	return c.client.Bucket(c.bucketName).Object(objectName).Generation(generation).NewReader(ctx)
 }
 
+// CopyObjectGeneration publishes immutable bytes without overwriting a newer
+// destination. A zero expected generation means the destination must not exist.
+func (c *Client) CopyObjectGeneration(ctx context.Context, source string, sourceGeneration int64, destination string, expectedGeneration int64, metadata map[string]string) (*gcs.ObjectAttrs, error) {
+	condition := gcs.Conditions{GenerationMatch: expectedGeneration}
+	if expectedGeneration == 0 {
+		condition = gcs.Conditions{DoesNotExist: true}
+	}
+	copy := c.client.Bucket(c.bucketName).Object(destination).If(condition).CopierFrom(c.client.Bucket(c.bucketName).Object(source).Generation(sourceGeneration))
+	copy.Metadata = metadata
+	return copy.Run(ctx)
+}
+
 func (c *Client) UploadFile(ctx context.Context, file multipart.File, filename string) (string, error) {
 	wc := c.client.Bucket(c.bucketName).Object(filename).NewWriter(ctx)
 	if _, err := io.Copy(wc, file); err != nil {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
+	"github.com/wod-strategist/api/internal/movement"
 )
 
 const MovementEvidenceRulesPrompt = `
@@ -24,7 +25,8 @@ const MovementEvidenceRulesPrompt = `
 - 대상 인물 근처에 로프, 바벨, 박스 또는 다른 기구가 있다는 사실만으로 종목을 판정하지 마세요.
 - 힌트에 없는 종목이라도 시각적 근거가 충분하면 실제 관찰한 영어 종목명을 그대로 사용하세요.
 - 대상 인물이 운동 중인 것은 분명하지만 종목 근거가 부족하면 종목을 Unknown으로 처리하세요. 추측해서 힌트에 맞추지 마세요.
-- 바벨이나 덤벨을 손에 쥐고 행(Hang) 위치(무릎 위/허벅지/골반)에 들고 있거나 세트 중 서서 호흡을 고르는 상태는 운동 세트(exercise) 진행 중입니다. 바벨을 바닥에 내려놓거나 기구를 완전히 놓았을 때만 휴식/준비입니다.
+- 바벨이나 덤벨을 손으로 쥐고 세트를 이어가는 구간은 기구의 바닥 접촉 여부와 관계없이 운동 세트(exercise) 진행 중입니다. 행(Hang) 위치(무릎 위/허벅지/골반)에서의 유지뿐 아니라 바닥에 둔 기구의 그립을 유지한 채 반복 사이에 잠시 멈추는 구간도 포함하세요. 잡고 멈춘 것만으로 새로운 반복을 추가하지 마세요.
+- 바닥 접촉이나 순간적인 그립 해제만으로 휴식/준비로 판정하지 마세요. 장비 세팅·정리를 위한 단순 접촉은 세트 진행과 구분하세요. 손이 가려져 그립 여부를 확인할 수 없으면 기구를 놓았다고 추정하지 말고 현재 영상의 자세와 기구 움직임을 함께 확인하세요. 운동 여부가 불명확하면 휴식으로 단정하지 마세요.
 - 클린과 스내치는 포괄적 명칭(Clean, Hang Clean, Snatch, Hang Snatch)을 쓰지 말고, 출발 위치(Floor vs Hang)와 캐치 깊이(Power: 평행 위 vs Squat: 평행 이하 풀 스쿼트)에 따라 정확한 세부 종목명을 사용하세요:
   · Hang Power Clean, Hang Squat Clean, Power Clean, Squat Clean
   · Hang Power Snatch, Hang Squat Snatch, Power Snatch, Squat Snatch
@@ -33,7 +35,10 @@ const MovementEvidenceRulesPrompt = `
   · Split Jerk (딥-드라이브 후 앞뒤로 발을 벌리며 캐치)
   · Push Press (무릎 1회 딥-드라이브 반동으로 밀어 올리고 무릎을 다시 굽히지 않음)
   · Strict Press (무릎 딥이나 재굽힘 없이 머리 위로 밀어 올림)
-- 기구를 완전히 내려놓은 상태에서의 걷기, 휴식, 회복, 준비 또는 장비 세팅은 운동 종목이 아닙니다.`
+- 박스 위로 올라가거나 넘어가는 동작은 WOD 계획 종목이 Box Jump / Box Jump Over라도 실제 발의 이륙 방식에 따라 엄격히 구분하세요:
+  · Box Jump / Box Jump Over (두 발이 바닥에서 동시에 떨어져 점프로 박스 위에 착지. 반대편 바닥으로 내려가면 Box Jump Over)
+  · Box Step-up / Box Step-over (두 발 동시 점프 없이 한 발을 먼저 박스 위에 딛고 올라섬. 반대편 바닥으로 내려가면 Box Step-over)
+- 실제 운동 동작이나 세트 진행이 없는 휴식·장비 세팅·정리, 운동과 무관한 걷기는 운동 종목이 아닙니다.`
 
 const SpinalObservationRulesPrompt = `
 
@@ -66,6 +71,17 @@ const ObservationOnlyOutputCheckPrompt = `
 점검 과정이나 금지 예시는 출력하지 말고, 요청된 관찰 결과 형식을 그대로 유지하세요.
 `
 
+const TravelingMovementPolicyPrompt = `
+
+## 이동형 종목 관찰 규칙 (보행 런지 및 Burpee Broad Jump 구간 전용)
+이 규칙은 보행 런지(* Walking Lunge)와 Burpee Broad Jump 수행 구간에만 적용하며, 다른 고정형 종목 구간은 기존 종목 판정·반복 기록 규칙을 그대로 따르세요.
+- 보행 런지(* Walking Lunge) 명칭 및 단위: 전진 보행하며 수행하는 런지는 제자리 런지(Lunge, DB Overhead Lunge 등)가 아니라 보행형 공식 영어 명칭(Walking Lunge, DB Overhead Walking Lunge, DB Walking Lunge, DB Front Rack Walking Lunge, Barbell Walking Lunge, Front Rack Walking Lunge, Back Rack Walking Lunge, Overhead Walking Lunge, KB Walking Lunge, KB Front Rack Walking Lunge, KB Overhead Walking Lunge, Goblet Walking Lunge, Weighted Walking Lunge, Sandbag Walking Lunge)을 사용하세요.
+- 보행 런지 관찰 기록(events / rep_events)은 개별 걸음 수(reps)가 아니라 대상 인물이 화면에서 실제로 보행 런지를 수행하는 연속 시간 구간(unit: "seconds", complete: true)으로 기록하세요. 기구를 유지한 채 레인 끝에서 몸을 돌리는 방향 전환(턴어라운드)도 연속 수행 구간에 포함합니다. (제자리에서 발을 모으는 일반 런지는 기존 제자리 명칭과 unit: "reps"를 유지합니다.)
+- 이동 구간이 길어 화각에 일부만 담기더라도 전진 보행 진행이 보이거나 거리형 WOD 처방(ft, m, yd)과 부합하면 제자리 런지가 아닌 해당 * Walking Lunge로 분류하세요.
+- Burpee Broad Jump: 고정 스테이션 동작이 아니며, 바닥에 엎드리는 버피 동작 후 두 발 전방 멀리뛰기 착지까지 이어지는 전체 이동 복합 사이클 1회를 movement: "Burpee Broad Jump", unit: "reps"로 기록하세요(Burpee와 Broad Jump로 분리해 이중 기록하지 마세요).
+- 동선 겹침·전경 가림·화각 이탈: 다른 운동자·보행자와 동선이 겹쳐 전경 인물에 대상 인물이 가려지거나 이동 레인 끝에서 화면 밖으로 벗어난 시간은 전경·주변 인물의 정지/운동을 대상 인물의 rest나 exercise로 절대 대체하지 말고 unassessed(reason: "not_visible" 또는 "ambiguous")로 분리하세요.
+`
+
 var allowedVisualFatigueEvidenceTypes = map[string]struct{}{
 	"rep_slowdown":         {},
 	"cadence_loss":         {},
@@ -75,6 +91,90 @@ var allowedVisualFatigueEvidenceTypes = map[string]struct{}{
 
 func baseChunkAnalysisPrompt() string {
 	return ChunkAnalysisPrompt + MovementEvidenceRulesPrompt + ObservationOnlyRulesPrompt + SpinalObservationRulesPrompt
+}
+
+func normalizeMovementHintsForWOD(movements []string, wodDescription string) []string {
+	if len(movements) == 0 || strings.TrimSpace(wodDescription) == "" {
+		return movements
+	}
+	var copied []string
+	for i, m := range movements {
+		promoted := movement.PromoteDistanceLungeInWOD(m, wodDescription)
+		if promoted != "" && promoted != m {
+			if copied == nil {
+				copied = make([]string, len(movements))
+				copy(copied, movements)
+			}
+			copied[i] = promoted
+		}
+	}
+	if copied != nil {
+		return copied
+	}
+	return movements
+}
+
+func (w *Worker) hasChunkTravelingPolicyContext(profileID uint, sessionID string, movements []string, wodDescription string) bool {
+	if movement.HasTravelingPolicyContext(movements, wodDescription) {
+		return true
+	}
+	if w == nil || w.DB == nil || profileID == 0 || sessionID == "" {
+		return false
+	}
+	var prev db.ChunkAnalysisResult
+	if err := w.DB.Select("exercise_type", "observed_signals", "movement_observations").
+		Where("profile_id = ? AND session_id = ? AND status = ?", profileID, sessionID, "COMPLETED").
+		Order("id DESC").
+		First(&prev).Error; err != nil {
+		return false
+	}
+	_, detected := classifyChunkActivity(prev, WorkoutTypeWOD)
+	return movement.IsTravelingPolicyMovement(detected) || movement.IsTravelingPolicyMovement(prev.ExerciseType)
+}
+
+func hasSegmentTravelingPolicyContext(p VideoAnalysisPayload, seg Segment) bool {
+	if movement.IsTravelingPolicyMovement(seg.Type) || movement.PromoteDistanceLungeInWOD(seg.Type, p.WODDescription) != "" {
+		return true
+	}
+	for _, cand := range segmentCandidateMovements(seg) {
+		if movement.IsTravelingPolicyMovement(cand) || movement.PromoteDistanceLungeInWOD(cand, p.WODDescription) != "" {
+			return true
+		}
+	}
+	segType := strings.TrimSpace(seg.Type)
+	if (isUnknownSegment(seg) || strings.EqualFold(segType, "Full Video")) &&
+		movement.HasTravelingPolicyContext(p.Movements, p.WODDescription) {
+		return true
+	}
+	return false
+}
+
+func hasLegacyTravelingPolicyContext(p VideoAnalysisPayload) bool {
+	return movement.HasTravelingPolicyContext(p.Movements, p.WODDescription)
+}
+
+func hasActivityBatchTravelingPolicyContext(session db.Session, rows []db.ChunkAnalysisResult, indices []int) bool {
+	sessionHasTraveling := movement.HasTravelingPolicyContext(movementHintsFromDocument(session.MovementHints), session.WODDescription)
+	for _, idx := range indices {
+		if idx < 0 || idx >= len(rows) {
+			continue
+		}
+		row := rows[idx]
+		_, detected := classifyChunkActivity(row, session.WorkoutType)
+		if movement.IsTravelingPolicyMovement(detected) ||
+			movement.IsTravelingPolicyMovement(row.ExerciseType) ||
+			movement.PromoteDistanceLungeInWOD(detected, session.WODDescription) != "" ||
+			movement.PromoteDistanceLungeInWOD(row.ExerciseType, session.WODDescription) != "" {
+			return true
+		}
+		if sessionHasTraveling {
+			trimmed := strings.TrimSpace(row.ExerciseType)
+			if trimmed == "" || strings.EqualFold(trimmed, "unknown") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func buildMovementHintsContext(movements []string) string {

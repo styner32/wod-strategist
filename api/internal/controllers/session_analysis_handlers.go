@@ -65,6 +65,7 @@ func (ctl *Controller) GetSessionAnalysis(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
+	chunks = db.FilterRedundantSplitChunks(chunks)
 
 	history := make([]db.AnalysisFeedback, 0)
 	if err := ctl.db.WithContext(ctx).

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/wod-strategist/api/internal/db"
@@ -13,7 +15,14 @@ import (
 	"go.uber.org/zap"
 )
 
-var movementsBlockRegex = regexp.MustCompile("```movements\\s*([\\s\\S]*?)\\s*```")
+var (
+	movementsBlockRegex          = regexp.MustCompile("```movements\\s*([\\s\\S]*?)\\s*```")
+	clauseParenWeightRegex       = regexp.MustCompile(`(?i)\(([^)]*(?:lb|lbs|kg|kgs)\b[^)]*|\s*\d+(?:\.\d+)?\s*/\s*\d+(?:\.\d+)?\s*)\)|@\s*([^\s,;:+|]+(?:\s*(?:lb|lbs|kg|kgs))?)`)
+	clauseAnyParenOrAtRegex      = regexp.MustCompile(`(?:\([^)]*\)|@[^\r\n,;:+|]*)`)
+	clauseLeadingPrescriptionRe  = regexp.MustCompile(`(?i)^\s*(\d+(?:[-/x]\d+)*(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|cal|cals|calories?|reps?|회|개|미터|피트|야드)?)\s+(.+?)\s*$`)
+	clauseTrailingPrescriptionRe = regexp.MustCompile(`(?i)^\s*(.+?)\s+(\d+(?:[-/x]\d+)*(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|cal|cals|calories?|reps?|회|개|미터|피트|야드)?)\s*$`)
+	singleWeightValueRegex       = regexp.MustCompile(`(?i)^\s*(\d+(?:\.\d+)?)\s*(lb|lbs|kg|kgs)\s*$`)
+)
 
 // BuildNormalizedWorkoutPrompt creates the prompt for normalizing WOD description into structured movements.
 func BuildNormalizedWorkoutPrompt(wodDescription string, hints []string, gender string) string {
@@ -42,6 +51,8 @@ func BuildNormalizedWorkoutPrompt(wodDescription string, hints []string, gender 
 ` + hintsText + `
 ## 규칙
 1. **운동명 (movement)**: 공식 카탈로그 이름과 정확히 일치시켜야 합니다. 카탈로그에 없는 경우 약어를 교정하거나 원문 이름을 유지하세요.
+   - 한 줄에 "/", "+", ",", "·", "|" 등으로 여러 운동이 함께 적힌 경우(예: "400m Run / 20 DB Lunges", "500m Row + 15 Thrusters")에는 합치지 말고 반드시 각 운동을 별도의 배열 항목으로 분리하세요. 단, "50/35lb", "70/45kg", "20/15 cal"처럼 무게·횟수·칼로리 비율을 나타내는 "/"는 운동 구분자가 아닙니다.
+   - 거리 단위(ft, m, yd, 미터, 피트 등 — 예: "200ft dumbbell overhead lunge", "50m front rack lunge")가 해당 런지 절에 직접 처방된 경우에만 보행형 카탈로그 이름("* Walking Lunge", 예: "DB Overhead Walking Lunge", "Front Rack Walking Lunge", "Walking Lunge")으로 변환하세요. 앞이나 뒤에 함께 적힌 다른 운동의 거리(예: "400m Run / 20 DB Lunges"의 "400m")는 런지 거리가 아니므로 거리 단위 없이 횟수만 처방된 런지는 반드시 제자리/교대형 이름(예: "DB Lunge", "DB Overhead Lunge", "Lunge")을 사용하세요.
    - 약어 및 오타 교정 규칙:
      - "Thuster" → "Thruster"
      - "PU" → "Pull-up"
@@ -125,7 +136,9 @@ func ParseNormalizedWorkoutOutput(raw string) ([]db.NormalizedMovement, error) {
 		// Fallback: try parsing direct JSON if not enclosed in backticks
 		var wrapper movementsJSONWrapper
 		if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &wrapper); err == nil && len(wrapper.Movements) > 0 {
-			return wrapper.Movements, nil
+			items := splitCombinedNormalizedMovements(wrapper.Movements)
+			promoteDistanceLungesInNormalizedMovements(items, "")
+			return items, nil
 		}
 		return nil, fmt.Errorf("no fenced movements JSON block found in output")
 	}
@@ -136,7 +149,203 @@ func ParseNormalizedWorkoutOutput(raw string) ([]db.NormalizedMovement, error) {
 		return nil, fmt.Errorf("failed to unmarshal movements JSON: %w", err)
 	}
 
-	return wrapper.Movements, nil
+	items := splitCombinedNormalizedMovements(wrapper.Movements)
+	promoteDistanceLungesInNormalizedMovements(items, "")
+	return items, nil
+}
+
+func isCardioMonostructural(canon string) bool {
+	switch canon {
+	case "Run", "Shuttle Run", "Row", "Echo Bike", "Bike Erg", "Skierg", "Double-under", "Single-under":
+		return true
+	default:
+		return false
+	}
+}
+
+func isUnweightedMovement(canon string) bool {
+	if isCardioMonostructural(canon) {
+		return true
+	}
+	switch canon {
+	case "Burpee", "Burpee Broad Jump", "Broad Jump", "Pull-up", "Chest to Bar", "Bar Muscle-up", "Ring Muscle-up",
+		"Toes to Bar", "Handstand Push-up", "Handstand Walk", "Rope Climb", "Ring Dip", "Pistol", "Wall Walk",
+		"GHD Sit-up", "Push-up", "Air Squat", "Sit-up", "Lunge", "Walking Lunge", "Reverse Lunge", "Jumping Lunge",
+		"Box Jump", "Box Jump Over", "Burpee Box Jump Over", "Box Step-up", "Box Step-over":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseSingleClauseMovement(clause string, allowDistancePromotion bool) (db.NormalizedMovement, bool) {
+	var weightRaw string
+	var weightKG *float64
+	if wm := clauseParenWeightRegex.FindStringSubmatch(clause); len(wm) > 0 {
+		weightRaw = strings.TrimSpace(wm[1])
+		if weightRaw == "" {
+			weightRaw = strings.TrimSpace(wm[2])
+		}
+		if sm := singleWeightValueRegex.FindStringSubmatch(weightRaw); len(sm) == 3 {
+			if val, err := strconv.ParseFloat(sm[1], 64); err == nil {
+				if strings.HasPrefix(strings.ToLower(sm[2]), "lb") {
+					val = math.Round(val*0.45359237*10) / 10
+				} else {
+					val = math.Round(val*10) / 10
+				}
+				weightKG = &val
+			}
+		}
+	}
+
+	body := clauseAnyParenOrAtRegex.ReplaceAllStringFunc(clause, func(part string) string {
+		if strings.HasPrefix(part, "(") {
+			inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(part, "("), ")"))
+			if movement.HasLungeDistancePrescription(inner) {
+				return " " + inner + " "
+			}
+		}
+		return " "
+	})
+	body = strings.TrimSpace(strings.ReplaceAll(body, ":", " "))
+	if body == "" {
+		return db.NormalizedMovement{}, false
+	}
+
+	var reps string
+	var movName string
+
+	if allowDistancePromotion {
+		movName = movement.PromoteDistanceLunge(body)
+	}
+	if movName != "" {
+		if lm := clauseLeadingPrescriptionRe.FindStringSubmatch(body); len(lm) == 3 {
+			reps = strings.TrimSpace(lm[1])
+		} else if tm := clauseTrailingPrescriptionRe.FindStringSubmatch(body); len(tm) == 3 {
+			reps = strings.TrimSpace(tm[2])
+		}
+	} else if canon := movement.Canonical(body); canon != "" {
+		movName = canon
+	} else if lm := clauseLeadingPrescriptionRe.FindStringSubmatch(body); len(lm) == 3 {
+		if canon := movement.Canonical(lm[2]); canon != "" {
+			movName = canon
+			reps = strings.TrimSpace(lm[1])
+		}
+	}
+	if movName == "" {
+		if tm := clauseTrailingPrescriptionRe.FindStringSubmatch(body); len(tm) == 3 {
+			if canon := movement.Canonical(tm[1]); canon != "" {
+				movName = canon
+				reps = strings.TrimSpace(tm[2])
+			}
+		}
+	}
+	if movName == "" {
+		return db.NormalizedMovement{}, false
+	}
+
+	return db.NormalizedMovement{
+		Movement:  movName,
+		Reps:      reps,
+		WeightRaw: weightRaw,
+		WeightKG:  weightKG,
+	}, true
+}
+
+func splitCombinedNormalizedMovements(items []db.NormalizedMovement) []db.NormalizedMovement {
+	if len(items) == 0 {
+		return items
+	}
+	out := make([]db.NormalizedMovement, 0, len(items))
+	for _, item := range items {
+		clauses := movement.SplitWorkoutClauses(item.Movement)
+		if len(clauses) <= 1 {
+			allowDistance := strings.TrimSpace(item.Reps) == "" || movement.HasLungeDistancePrescription(item.Reps)
+			if parsed, ok := parseSingleClauseMovement(item.Movement, allowDistance); ok && parsed.Reps != "" {
+				if item.Reps == "" {
+					item.Reps = parsed.Reps
+				}
+				item.Movement = parsed.Movement
+				if parsed.WeightRaw != "" {
+					item.WeightRaw, item.WeightKG = parsed.WeightRaw, parsed.WeightKG
+				}
+			}
+			out = append(out, item)
+			continue
+		}
+		parsed := make([]db.NormalizedMovement, 0, len(clauses))
+		allValid := true
+		hasInlineWeight := false
+		for _, clause := range clauses {
+			p, ok := parseSingleClauseMovement(clause, true)
+			if !ok {
+				allValid = false
+				break
+			}
+			if p.WeightRaw != "" {
+				hasInlineWeight = true
+			}
+			parsed = append(parsed, p)
+		}
+		if !allValid || len(parsed) < 2 {
+			out = append(out, item)
+			continue
+		}
+		if !hasInlineWeight && (item.WeightRaw != "" || item.WeightKG != nil) {
+			for i := range parsed {
+				if !isUnweightedMovement(parsed[i].Movement) {
+					parsed[i].WeightRaw = item.WeightRaw
+					parsed[i].WeightKG = item.WeightKG
+				}
+			}
+		}
+		if item.Reps != "" {
+			allEmptyReps := true
+			for i := range parsed {
+				if parsed[i].Reps != "" {
+					allEmptyReps = false
+					break
+				}
+			}
+			if allEmptyReps {
+				for i := range parsed {
+					parsed[i].Reps = item.Reps
+				}
+			}
+		}
+		if item.IsMain {
+			mainIdx := 0
+			for i := range parsed {
+				if !isCardioMonostructural(parsed[i].Movement) {
+					mainIdx = i
+					break
+				}
+			}
+			parsed[mainIdx].IsMain = true
+		}
+		out = append(out, parsed...)
+	}
+	return out
+}
+
+func promoteDistanceLungesInNormalizedMovements(items []db.NormalizedMovement, wodDescription string) {
+	for i := range items {
+		if strings.TrimSpace(items[i].Reps) != "" && !movement.HasLungeDistancePrescription(items[i].Reps) {
+			continue // the structured row's explicit count also wins over inline distance text
+		}
+		if promoted := movement.PromoteDistanceLunge(items[i].Movement, items[i].Reps); promoted != "" {
+			items[i].Movement = promoted
+			continue
+		}
+		if strings.TrimSpace(items[i].Reps) != "" {
+			continue // an explicit row prescription cannot inherit another row's distance
+		}
+		if wodDescription != "" {
+			if promoted := movement.PromoteDistanceLungeInWOD(items[i].Movement, wodDescription); promoted != "" {
+				items[i].Movement = promoted
+			}
+		}
+	}
 }
 
 func (w *Worker) lookupGender(profileID uint) string {
@@ -201,6 +410,7 @@ func (w *Worker) normalizeWorkout(ctx context.Context, sessionID string, profile
 	if len(movements) == 0 {
 		return ""
 	}
+	promoteDistanceLungesInNormalizedMovements(movements, trimmedDesc)
 
 	jsonBytes, err := json.Marshal(movements)
 	if err != nil {

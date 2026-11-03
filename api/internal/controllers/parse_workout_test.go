@@ -93,4 +93,47 @@ var _ = Describe("parseWorkoutBlock", func() {
 		Expect(resp.WODDescription).To(Equal("Murph"))
 		Expect(resp.Movements).To(Equal([]string{"Run", "Pull-up", "Push-up", "Air Squat"}))
 	})
+
+	It("normalizes distance-prescribed lunges to canonical * Walking Lunge while preserving rep-based lunges", func() {
+		promoted := normalizeParsedWorkoutMovements(
+			[]string{"Dumbbell Overhead Lunge", "Pull-up"},
+			"For Time:\n200ft Dumbbell Overhead Lunge (50/35lb)\n30 Pull-ups",
+			"FOR TIME\n200ft DB OH Lunge",
+		)
+		Expect(promoted).To(Equal([]string{"DB Overhead Walking Lunge", "Pull-up"}))
+
+		repBased := normalizeParsedWorkoutMovements(
+			[]string{"Dumbbell Overhead Lunge"},
+			"AMRAP 10m:\n12 Dumbbell Overhead Lunges",
+			"AMRAP 10m\n12 DB OH Lunges",
+		)
+		Expect(repBased).To(Equal([]string{"DB Overhead Lunge"}))
+
+		singleLineMulti := normalizeParsedWorkoutMovements(
+			[]string{"Run", "DB Lunge"},
+			"400m Run / 20 DB Lunges (50/35lb)",
+			"400m Run / 20 DB Lunges",
+		)
+		Expect(singleLineMulti).To(Equal([]string{"Run", "DB Lunge"}))
+
+		combinedElement := normalizeParsedWorkoutMovements(
+			[]string{"400m Run / 20 DB Lunges (50/35lb)"},
+			"400m Run / 20 DB Lunges (50/35lb)",
+			"400m Run / 20 DB Lunges",
+		)
+		Expect(combinedElement).To(Equal([]string{"Run", "DB Lunge"}))
+	})
+
+	DescribeTable("keeps OCR lunge prescriptions local and prioritizes the corrected description",
+		func(movements []string, description, raw string, expected []string) {
+			Expect(normalizeParsedWorkoutMovements(movements, description, raw)).To(Equal(expected))
+		},
+		Entry("raw line breaks cannot veto corrected distance", []string{"DB Lunge"}, "200ft DB Lunge", "200ft\nDB Lunge", []string{"DB Walking Lunge"}),
+		Entry("corrected reps take precedence over raw distance", []string{"DB Lunge"}, "20 DB Lunges", "200ft DB Lunge", []string{"DB Lunge"}),
+		Entry("raw explicit distance is a fallback for an unquantified description", []string{"DB Lunge"}, "DB Lunge", "200ft DB Lunge", []string{"DB Walking Lunge"}),
+		Entry("movement colon distance stays attached", []string{"DB Lunge:20m"}, "DB Lunge:20m", "", []string{"DB Walking Lunge"}),
+		Entry("combined movement colon prescriptions", []string{"Run:400m / DB Lunge:20m"}, "Run:400m / DB Lunge:20m", "", []string{"Run", "DB Walking Lunge"}),
+		Entry("parenthesized run distance does not promote reps", []string{"Run", "DB Lunge"}, "Run (400m) 20 DB Lunges", "", []string{"Run", "DB Lunge"}),
+		Entry("an inline rep clause cannot inherit another occurrence's distance", []string{"20 DB Lunges"}, "200ft DB Lunge", "", []string{"DB Lunge"}),
+	)
 })

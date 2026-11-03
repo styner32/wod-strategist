@@ -1,6 +1,10 @@
-import { t } from "@/features/i18n";
+import { IconSymbol } from "@/components/ui/icon-symbol";
+import { VoltButton } from "@/components/ui/TacticalBento";
+import { Fonts, TacticalTheme } from "@/constants/theme";
+import { t, useLocale } from "@/features/i18n";
 import { useProfileStore, type Profile } from "@/store/useProfileStore";
 import { router } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useCallback } from "react";
 import {
   Alert,
@@ -8,11 +12,16 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+const T = TacticalTheme.light;
+const monoFont = Fonts?.mono ?? "monospace";
+
 export default function ProfilesScreen() {
+  useLocale();
   const { profiles, activeProfileId, selectProfile, archiveProfile } =
     useProfileStore();
 
@@ -21,18 +30,23 @@ export default function ProfilesScreen() {
       selectProfile(profile.id);
       router.back();
     },
-    [selectProfile]
+    [selectProfile],
   );
 
   const handleEdit = useCallback((profile: Profile) => {
-    router.push({ pathname: "/profile", params: { id: String(profile.id) } });
+    router.push({
+      pathname: "/profile-edit",
+      params: { id: String(profile.id) },
+    } as any);
   }, []);
 
   const handleArchive = useCallback(
     (profile: Profile) => {
       Alert.alert(
         t("profiles.archiveProfile"),
-        t("profiles.archiveConfirm", { name: profile.name || t("common.profileNumber", { id: profile.id }) }),
+        t("profiles.archiveConfirm", {
+          name: profile.name || t("common.profileNumber", { id: profile.id }),
+        }),
         [
           { text: t("common.cancel"), style: "cancel" },
           {
@@ -40,18 +54,22 @@ export default function ProfilesScreen() {
             style: "destructive",
             onPress: () => archiveProfile(profile.id),
           },
-        ]
+        ],
       );
     },
-    [archiveProfile]
+    [archiveProfile],
   );
 
   const handleAddProfile = useCallback(() => {
-    router.push("/profile");
+    router.push("/profile-edit" as any);
   }, []);
 
   const genderLabel = (g: string) =>
-    g === "male" ? t("common.maleShort") : g === "female" ? t("common.femaleShort") : t("common.otherShort");
+    g === "male"
+      ? t("common.maleShort")
+      : g === "female"
+        ? t("common.femaleShort")
+        : t("common.otherShort");
 
   const summaryLine = (p: Profile) => {
     const parts: string[] = [];
@@ -64,45 +82,67 @@ export default function ProfilesScreen() {
 
   const renderProfile = ({ item }: { item: Profile }) => {
     const isActive = item.id === activeProfileId;
+    const monogram = item.name ? item.name.slice(0, 2).toUpperCase() : "👤";
+    const summary = summaryLine(item);
 
     return (
       <Pressable
+        testID={`roster-card-${item.id}`}
         style={[styles.card, isActive && styles.cardActive]}
         onPress={() => handleSelect(item)}
         onLongPress={() => handleArchive(item)}
       >
         <View style={styles.cardContent}>
           {/* Avatar Circle */}
-          <View
-            style={[styles.avatar, isActive && styles.avatarActive]}
-          >
-            <Text style={styles.avatarText}>
-              {item.name ? item.name[0].toUpperCase() : "👤"}
+          <View style={[styles.avatar, isActive && styles.avatarActive]}>
+            <Text style={[styles.avatarText, isActive && styles.avatarTextActive]}>
+              {monogram}
             </Text>
           </View>
 
           {/* Profile Info */}
           <View style={styles.info}>
-            <Text style={styles.name} numberOfLines={1}>
-              {item.name || t("common.profileNumber", { id: item.id })}
-            </Text>
-            <Text style={styles.summary}>{summaryLine(item)}</Text>
-            {isActive && (
-              <View style={styles.activeBadge}>
-                <View style={styles.activeDot} />
-                <Text style={styles.activeText}>{t("common.active")}</Text>
-              </View>
-            )}
+            <View style={styles.nameRow}>
+              <Text style={styles.name} numberOfLines={1}>
+                {item.name || t("common.profileNumber", { id: item.id })}
+              </Text>
+              {isActive && (
+                <View style={styles.activeBadge}>
+                  <Text style={styles.activeText}>{t("common.active")}</Text>
+                </View>
+              )}
+            </View>
+            {summary ? <Text style={styles.summary}>{summary}</Text> : null}
+            {item.fitnessLevel ? (
+              <Text style={styles.levelMeta}>
+                {t(`profileEdit.${item.fitnessLevel}`)}
+              </Text>
+            ) : null}
           </View>
 
-          {/* Edit Button */}
-          <Pressable
-            style={styles.editBtn}
-            onPress={() => handleEdit(item)}
-            hitSlop={12}
-          >
-            <Text style={styles.editBtnText}>{t("common.edit")}</Text>
-          </Pressable>
+          {/* Actions */}
+          <View style={styles.actionGroup}>
+            {!isActive && (
+              <Pressable
+                testID={`switch-profile-${item.id}`}
+                style={styles.switchBtn}
+                onPress={() => handleSelect(item)}
+                hitSlop={8}
+              >
+                <Text style={styles.switchBtnText}>
+                  {t("profiles.switchBtn")}
+                </Text>
+              </Pressable>
+            )}
+            <Pressable
+              testID={`edit-profile-${item.id}`}
+              style={styles.editBtn}
+              onPress={() => handleEdit(item)}
+              hitSlop={8}
+            >
+              <Text style={styles.editBtnText}>{t("common.edit")}</Text>
+            </Pressable>
+          </View>
         </View>
       </Pressable>
     );
@@ -110,11 +150,24 @@ export default function ProfilesScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar style="dark" />
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <Text style={styles.backBtnText}>{t("common.back")}</Text>
-        </Pressable>
-        <Text style={styles.title}>{t("profiles.title")}</Text>
+        <TouchableOpacity
+          testID="profiles-back-btn"
+          onPress={() => router.back()}
+          style={styles.backBtn}
+          accessibilityRole="button"
+        >
+          <IconSymbol name="chevron.left" size={22} color={T.ink} />
+        </TouchableOpacity>
+        <Text style={styles.title} numberOfLines={1}>
+          {t("profiles.title")}
+        </Text>
+        <View style={styles.rosterBadge}>
+          <Text style={styles.rosterBadgeText}>
+            {t("profiles.rosterCount", { count: profiles.length })}
+          </Text>
+        </View>
       </View>
 
       <FlatList
@@ -132,10 +185,12 @@ export default function ProfilesScreen() {
           </View>
         }
         ListFooterComponent={
-          <Pressable style={styles.addBtn} onPress={handleAddProfile}>
-            <Text style={styles.addBtnIcon}>+</Text>
-            <Text style={styles.addBtnText}>{t("profiles.addNew")}</Text>
-          </Pressable>
+          <VoltButton
+            testID="add-profile-btn"
+            label={`+ ${t("profiles.addNew")}`}
+            onPress={handleAddProfile}
+            style={{ marginTop: 6 }}
+          />
         }
       />
 
@@ -145,141 +200,194 @@ export default function ProfilesScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#000" },
+  container: { flex: 1, backgroundColor: T.canvas },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: "#222",
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    gap: 12,
   },
-  backBtn: { marginRight: 15 },
-  backBtnText: { color: "#007AFF", fontSize: 16 },
-  title: { fontSize: 20, fontWeight: "bold", color: "#fff" },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  title: {
+    flex: 1,
+    flexShrink: 1,
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: -0.5,
+    color: T.ink,
+  },
+  rosterBadge: {
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  rosterBadgeText: {
+    color: T.electricBlue,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+    fontFamily: monoFont,
+  },
 
-  list: { padding: 16, paddingBottom: 20 },
+  list: { paddingHorizontal: 18, paddingTop: 4, paddingBottom: 24 },
 
   card: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: T.surface,
     borderRadius: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "#333",
-    overflow: "hidden",
+    borderColor: T.border,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   cardActive: {
-    borderColor: "#007AFF",
-    backgroundColor: "#0B1A2F",
+    borderWidth: 2,
+    borderColor: T.electricBlue,
   },
   cardContent: {
     flexDirection: "row",
     alignItems: "center",
     padding: 16,
+    gap: 12,
   },
 
   avatar: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: "#333",
+    backgroundColor: T.surfaceContainer,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 14,
   },
   avatarActive: {
-    backgroundColor: "#0D3B66",
+    backgroundColor: T.electricBlue,
   },
   avatarText: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#fff",
+    fontSize: 17,
+    fontWeight: "900",
+    color: T.inkSecondary,
+  },
+  avatarTextActive: {
+    color: "#FFFFFF",
   },
 
-  info: { flex: 1 },
+  info: { flex: 1, gap: 2 },
+  nameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
+  },
   name: {
-    color: "#fff",
+    color: T.ink,
     fontSize: 17,
-    fontWeight: "700",
+    fontWeight: "800",
+    flexShrink: 1,
   },
   summary: {
-    color: "#888",
+    color: T.inkMuted,
     fontSize: 13,
-    marginTop: 3,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  levelMeta: {
+    color: T.electricBlue,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 1,
   },
   activeBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 5,
-  },
-  activeDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#34C759",
-    marginRight: 5,
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
   },
   activeText: {
-    color: "#34C759",
-    fontSize: 11,
-    fontWeight: "600",
+    color: T.voltInk,
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
   },
 
-  editBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: "#2A2A2A",
-  },
-  editBtnText: {
-    color: "#007AFF",
-    fontSize: 13,
-    fontWeight: "600",
-  },
-
-  addBtn: {
+  actionGroup: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    padding: 18,
-    borderRadius: 16,
+    gap: 6,
+  },
+  switchBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: T.electricBlueBg,
     borderWidth: 1,
-    borderColor: "#333",
-    borderStyle: "dashed",
-    marginTop: 4,
+    borderColor: T.electricBlueBorder,
   },
-  addBtnIcon: {
-    color: "#007AFF",
-    fontSize: 22,
-    fontWeight: "bold",
-    marginRight: 8,
+  switchBtnText: {
+    color: T.electricBlue,
+    fontSize: 12,
+    fontWeight: "800",
   },
-  addBtnText: {
-    color: "#007AFF",
-    fontSize: 16,
-    fontWeight: "600",
+  editBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: T.surfaceMuted,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+  },
+  editBtnText: {
+    color: T.inkSecondary,
+    fontSize: 12,
+    fontWeight: "800",
   },
 
   emptyContainer: {
     alignItems: "center",
-    paddingVertical: 60,
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+    backgroundColor: T.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: T.border,
+    marginBottom: 14,
   },
-  emptyIcon: { fontSize: 48, marginBottom: 16 },
+  emptyIcon: { fontSize: 44, marginBottom: 12 },
   emptyTitle: {
-    color: "#fff",
-    fontSize: 20,
-    fontWeight: "bold",
-    marginBottom: 8,
+    color: T.ink,
+    fontSize: 18,
+    fontWeight: "800",
+    marginBottom: 6,
   },
   emptyDesc: {
-    color: "#888",
+    color: T.inkMuted,
     fontSize: 14,
     textAlign: "center",
-    paddingHorizontal: 40,
+    lineHeight: 20,
   },
 
   hint: {
-    color: "#555",
-    fontSize: 11,
+    color: T.inkMuted,
+    fontSize: 12,
+    fontWeight: "600",
     textAlign: "center",
     paddingBottom: 16,
   },

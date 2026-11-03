@@ -13,10 +13,11 @@ import (
 
 type Confirmation struct {
 	IntervalID  string  `json:"interval_id"`
+	Outcome     string  `json:"outcome,omitempty"`
 	Movement    string  `json:"movement,omitempty"`
 	Start       float64 `json:"start_secs"`
 	End         float64 `json:"end_secs"`
-	Reps        int     `json:"reps"`
+	Reps        *int    `json:"reps"`
 	Load        *Load   `json:"load"`
 	Measurement string  `json:"measurement"`
 	Technique   string  `json:"technique"`
@@ -28,23 +29,51 @@ type Record struct {
 	IntervalID          string           `json:"interval_id"`
 	SourceVersion       string           `json:"source_version"`
 	Status              string           `json:"status"`
+	Outcome             string           `json:"outcome"`
 	Movement            string           `json:"movement"`
 	Start               float64          `json:"start_secs"`
 	End                 float64          `json:"end_secs"`
 	ElapsedSeconds      float64          `json:"elapsed_seconds"`
-	Reps                int              `json:"reps"`
+	Reps                *int             `json:"reps"`
 	Load                *Load            `json:"load"`
 	LoadKG              *float64         `json:"load_kg"`
 	Measurement         string           `json:"measurement"`
 	Technique           string           `json:"technique"`
 	WorkoutPrescription string           `json:"workout_prescription"`
-	RepsPerMinute       float64          `json:"reps_per_minute"`
-	RateBasis           string           `json:"rate_basis"`
+	RepsPerMinute       *float64         `json:"reps_per_minute"`
+	RateBasis           *string          `json:"rate_basis"`
 	MedianCycleSeconds  *float64         `json:"median_cycle_seconds"`
 	PerformedAt         *time.Time       `json:"performed_at"`
 	PerformedAtSource   *string          `json:"performed_at_source"`
 	ConfirmedAt         time.Time        `json:"confirmed_at"`
 	RestComparisons     []RestComparison `json:"rest_comparisons"`
+}
+
+func IntPtr(v int) *int             { return &v }
+func Float64Ptr(v float64) *float64 { return &v }
+func StringPtr(v string) *string    { return &v }
+
+func NormalizedOutcome(raw string) string {
+	trimmed := strings.ToLower(strings.TrimSpace(raw))
+	if trimmed == "" {
+		return "completed"
+	}
+	return trimmed
+}
+
+func sameReps(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func comparableRecord(r Record) bool {
+	return NormalizedOutcome(r.Outcome) == "completed" &&
+		r.Status == "confirmed" &&
+		r.Reps != nil && *r.Reps > 0 &&
+		r.RepsPerMinute != nil && *r.RepsPerMinute > 0 &&
+		!math.IsInf(*r.RepsPerMinute, 0) && !math.IsNaN(*r.RepsPerMinute)
 }
 
 type RestComparison struct {
@@ -81,7 +110,37 @@ func Kilograms(load *Load) *float64 {
 // Confirm leaves the raw interval unchanged. A null load explicitly confirms no
 // external load, while an unconfirmed candidate remains absent from benchmarks.
 func Confirm(progress Progress, input Confirmation) (Record, error) {
-	if !activity.ValidInterval(input.Start, input.End) || input.Reps < 0 || input.Reps > math.MaxInt32 || !ValidLoad(input.Load) || (input.Measurement != "set" && input.Measurement != "window") || (input.Technique != "unspecified" && input.Technique != "singles" && input.Technique != "touch_and_go") {
+	outcome := NormalizedOutcome(input.Outcome)
+	if outcome != "completed" && outcome != "incomplete" && outcome != "rest" {
+		return Record{}, errors.New("invalid performance confirmation")
+	}
+	if !activity.ValidInterval(input.Start, input.End) {
+		return Record{}, errors.New("invalid performance confirmation")
+	}
+	measurement := input.Measurement
+	technique := input.Technique
+	if outcome == "rest" {
+		if measurement == "" {
+			measurement = "set"
+		}
+		if technique == "" {
+			technique = "unspecified"
+		}
+	}
+	if (measurement != "set" && measurement != "window") || (technique != "unspecified" && technique != "singles" && technique != "touch_and_go") {
+		return Record{}, errors.New("invalid performance confirmation")
+	}
+	if outcome == "rest" {
+		return confirmRest(progress, input)
+	}
+	if !ValidLoad(input.Load) {
+		return Record{}, errors.New("invalid performance confirmation")
+	}
+	if outcome == "incomplete" {
+		if input.Reps != nil {
+			return Record{}, errors.New("incomplete confirmation cannot specify repetitions")
+		}
+	} else if input.Reps != nil && (*input.Reps <= 0 || *input.Reps > math.MaxInt32) {
 		return Record{}, errors.New("invalid performance confirmation")
 	}
 	explicitMovement := strings.TrimSpace(input.Movement)
@@ -109,7 +168,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		if explicitMovement == "" {
 			return Record{}, errors.New("selected window is not within an observed exercise interval")
 		}
-		if input.Measurement == "set" {
+		if measurement == "set" {
 			for _, in := range progress.Intervals {
 				if in.Activity == "rest" && in.End > input.Start+1e-6 && in.Start < input.End-1e-6 {
 					return Record{}, errors.New("a set cannot include rest intervals")
@@ -139,7 +198,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 	}
 	for _, gap := range progress.Unassessed {
 		if gap.Clock == "media" && input.Start < gap.End && input.End > gap.Start {
-			if input.Measurement == "set" || isSyntheticInterval {
+			if measurement == "set" || isSyntheticInterval {
 				if gap.Reason == "unverified_capture_mapping" {
 					return Record{}, errors.New("selected window contains unavailable video evidence")
 				}
@@ -152,7 +211,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		elapsed         float64
 		continuousClock bool
 	)
-	if (input.Measurement == "set" || isSyntheticInterval) && len(spans) == 1 {
+	if (measurement == "set" || isSyntheticInterval) && len(spans) == 1 {
 		in := spans[0].Interval
 		if (in.CaptureStart != nil) != (in.CaptureEnd != nil) {
 			return Record{}, errors.New("capture mapping is invalid")
@@ -189,19 +248,31 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 			return Record{}, err
 		}
 	}
-	movement := interval.Movement
+	if elapsed <= 0 || math.IsInf(elapsed, 0) || math.IsNaN(elapsed) {
+		return Record{}, errors.New("selected window cannot produce a finite performance rate")
+	}
+	movement := strings.TrimSpace(interval.Movement)
 	if explicitMovement != "" {
 		movement = explicitMovement
 	}
 	if canonical := activity.CanonicalMovement(movement); canonical != "" {
 		movement = canonical
 	}
-	if activity.UnitForMovement(movement) != "reps" {
-		return Record{}, errors.New("duration movements cannot confirm repetition benchmarks")
+	if movement == "" {
+		return Record{}, errors.New("unknown exercise movement")
 	}
-	record := Record{IntervalID: input.IntervalID, SourceVersion: progress.SourceVersion, Status: "confirmed", Movement: movement, Start: input.Start, End: input.End, ElapsedSeconds: elapsed, Reps: input.Reps, Measurement: input.Measurement, Technique: input.Technique, RateBasis: "normalized_per_minute", RepsPerMinute: float64(input.Reps) * 60 / elapsed}
-	if record.RepsPerMinute < 0 || (input.Reps > 0 && record.RepsPerMinute <= 0) || math.IsInf(record.RepsPerMinute, 0) || math.IsNaN(record.RepsPerMinute) {
-		return Record{}, errors.New("selected window cannot produce a finite performance rate")
+	record := Record{
+		IntervalID:      input.IntervalID,
+		SourceVersion:   progress.SourceVersion,
+		Status:          "confirmed",
+		Outcome:         outcome,
+		Movement:        movement,
+		Start:           input.Start,
+		End:             input.End,
+		ElapsedSeconds:  elapsed,
+		Measurement:     measurement,
+		Technique:       technique,
+		RestComparisons: []RestComparison{},
 	}
 	if input.Load != nil {
 		load := *input.Load
@@ -209,9 +280,21 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 		record.Load = &load
 	}
 	record.LoadKG = Kilograms(record.Load)
-	if input.Measurement == "window" && math.Abs(elapsed-60) < 0.001 {
-		record.RateBasis = "actual_60_second_window"
+	if outcome == "incomplete" || input.Reps == nil {
+		return record, nil
 	}
+	repsVal := *input.Reps
+	rpm := float64(repsVal) * 60 / elapsed
+	if rpm <= 0 || math.IsInf(rpm, 0) || math.IsNaN(rpm) {
+		return Record{}, errors.New("selected window cannot produce a finite performance rate")
+	}
+	rateBasis := "normalized_per_minute"
+	if measurement == "window" && math.Abs(elapsed-60) < 0.001 {
+		rateBasis = "actual_60_second_window"
+	}
+	record.Reps = &repsVal
+	record.RepsPerMinute = &rpm
+	record.RateBasis = &rateBasis
 	cycles := []float64{}
 	for _, span := range spans {
 		for _, e := range span.Interval.RepEvents {
@@ -226,7 +309,7 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 			completeCoverage = false
 		}
 	}
-	if input.Reps > 0 && continuousClock && completeCoverage && len(cycles) == input.Reps {
+	if repsVal > 0 && continuousClock && completeCoverage && len(cycles) == repsVal {
 		sort.Float64s(cycles)
 		median := cycles[len(cycles)/2]
 		if len(cycles)%2 == 0 {
@@ -238,11 +321,119 @@ func Confirm(progress Progress, input Confirmation) (Record, error) {
 	return record, nil
 }
 
+func confirmRest(progress Progress, input Confirmation) (Record, error) {
+	if input.Reps != nil || input.Load != nil {
+		return Record{}, errors.New("rest confirmation cannot specify repetitions or load")
+	}
+	explicitMovement := strings.TrimSpace(input.Movement)
+	if explicitMovement != "" && !strings.EqualFold(explicitMovement, "rest") {
+		return Record{}, errors.New("rest confirmation cannot specify an exercise movement")
+	}
+	var interval *Interval
+	for i := range progress.Intervals {
+		if progress.Intervals[i].ID == input.IntervalID {
+			interval = &progress.Intervals[i]
+			break
+		}
+	}
+	if interval != nil && (input.Start >= interval.End || input.End <= interval.Start) {
+		return Record{}, errors.New("window must overlap its selected exercise interval")
+	}
+	spans, err := selectRestSpans(progress, input.Start, input.End)
+	if err != nil {
+		return Record{}, err
+	}
+	elapsed, _, err := selectedElapsed(progress, spans)
+	if err != nil {
+		return Record{}, err
+	}
+	if elapsed <= 0 || math.IsInf(elapsed, 0) || math.IsNaN(elapsed) {
+		return Record{}, errors.New("selected window cannot produce a finite performance rate")
+	}
+	return Record{
+		IntervalID:      input.IntervalID,
+		SourceVersion:   progress.SourceVersion,
+		Status:          "confirmed",
+		Outcome:         "rest",
+		Movement:        "",
+		Start:           input.Start,
+		End:             input.End,
+		ElapsedSeconds:  elapsed,
+		Measurement:     "set",
+		Technique:       "unspecified",
+		RestComparisons: []RestComparison{},
+	}, nil
+}
+
+// Rest corrections may replace any observed activity or explicit unassessed
+// media, but classification changes cannot supply missing clock mappings.
+func selectRestSpans(progress Progress, start, end float64) ([]observedSpan, error) {
+	mediaGaps := []Gap{}
+	for _, gap := range progress.Unassessed {
+		if gap.Clock != "media" || gap.End <= start || gap.Start >= end {
+			continue
+		}
+		if gap.Reason == "unverified_capture_mapping" {
+			return nil, errors.New("selected window contains unavailable video evidence")
+		}
+		mediaGaps = append(mediaGaps, gap)
+	}
+	sort.SliceStable(mediaGaps, func(i, j int) bool { return mediaGaps[i].Start < mediaGaps[j].Start })
+	gapCovered := func(from, to float64) bool {
+		cursor := from
+		for _, gap := range mediaGaps {
+			if gap.End <= cursor {
+				continue
+			}
+			if gap.Start > cursor+1e-6 {
+				return false
+			}
+			cursor = math.Max(cursor, gap.End)
+			if cursor >= to-1e-6 {
+				return true
+			}
+		}
+		return cursor >= to-1e-6
+	}
+	spans := []observedSpan{}
+	cursor := start
+	appendGap := func(to float64) error {
+		if !gapCovered(cursor, to) {
+			return errors.New("selected window contains an observation coverage gap")
+		}
+		spans = append(spans, observedSpan{Interval: Interval{Start: cursor, End: to}, Start: cursor, End: to})
+		cursor = to
+		return nil
+	}
+	for _, in := range progress.Intervals {
+		if in.End <= cursor || in.Start >= end {
+			continue
+		}
+		if in.Start > cursor+1e-6 {
+			if err := appendGap(in.Start); err != nil {
+				return nil, err
+			}
+		}
+		spanEnd := math.Min(in.End, end)
+		spans = append(spans, observedSpan{Interval: in, Start: math.Max(cursor, in.Start), End: spanEnd})
+		cursor = spanEnd
+		if cursor >= end {
+			break
+		}
+	}
+	if cursor < end-1e-6 {
+		if err := appendGap(end); err != nil {
+			return nil, err
+		}
+	}
+	return spans, nil
+}
+
 // RestComparisons describes observed before/after cycle duration. It does not
 // estimate biological recovery and never mutates the source observations.
 func RestComparisons(progress Progress, input Confirmation) []RestComparison {
 	out := []RestComparison{}
-	if input.Measurement != "window" || input.Reps <= 0 || !activity.ValidInterval(input.Start, input.End) {
+	if NormalizedOutcome(input.Outcome) != "completed" || input.Measurement != "window" || input.Reps == nil || *input.Reps <= 0 || !activity.ValidInterval(input.Start, input.End) {
 		return out
 	}
 	spans, err := selectObservedSpans(progress, input)
@@ -264,7 +455,7 @@ func RestComparisons(progress Progress, input Confirmation) []RestComparison {
 	for _, span := range spans {
 		completeCount += len(spanCycleSeconds(span, movement))
 	}
-	completeEvidence := cycleClockVerified && completeCount == input.Reps
+	completeEvidence := cycleClockVerified && completeCount == *input.Reps
 	for _, gap := range progress.Unassessed {
 		if gap.Clock == "media" && input.Start < gap.End && input.End > gap.Start {
 			completeEvidence = false
@@ -328,7 +519,7 @@ func medianCycleSeconds(cycles []float64) *float64 {
 // preserved confirmed window, including after the operational source changes.
 func RestComparisonsFromCandidate(raw []byte, record Record) []RestComparison {
 	out := []RestComparison{}
-	if record.Measurement != "window" {
+	if NormalizedOutcome(record.Outcome) != "completed" || record.Measurement != "window" || record.Reps == nil || *record.Reps <= 0 {
 		return out
 	}
 	var candidate struct {
@@ -353,7 +544,7 @@ func RestComparisonsFromCandidate(raw []byte, record Record) []RestComparison {
 	if err != nil {
 		return out
 	}
-	return RestComparisons(progress, Confirmation{IntervalID: record.IntervalID, Start: record.Start, End: record.End, Reps: record.Reps, Measurement: record.Measurement})
+	return RestComparisons(progress, Confirmation{IntervalID: record.IntervalID, Outcome: record.Outcome, Start: record.Start, End: record.End, Reps: record.Reps, Measurement: record.Measurement})
 }
 
 type observedSpan struct {
@@ -656,7 +847,7 @@ func conditionDifferences(current, previous Record) []string {
 		diff = append(diff, "measurement")
 	}
 	if current.Measurement == "set" && previous.Measurement == "set" {
-		if current.Reps != previous.Reps {
+		if !sameReps(current.Reps, previous.Reps) {
 			diff = append(diff, "reps")
 		}
 	} else if math.Abs(recordDuration(current)-recordDuration(previous)) > 0.001 {
@@ -753,62 +944,9 @@ func ActiveRecords(records []Record) []Record {
 func Comparisons(records []Record) []Comparison {
 	out := []Comparison{}
 	for _, current := range records {
-		if current.Status != "confirmed" || current.Reps <= 0 || current.RepsPerMinute <= 0 || current.PerformedAt == nil {
-			continue
+		if comparison, ok := ComparisonFor(current, records); ok {
+			out = append(out, comparison)
 		}
-		var direct, reference *Record
-		for i := range records {
-			prior := &records[i]
-			if prior.ID == current.ID || prior.Status != "confirmed" || prior.Reps <= 0 || prior.RepsPerMinute <= 0 || prior.Movement != current.Movement || !recordBefore(*prior, current) {
-				continue
-			}
-			if reference == nil || recordBefore(*reference, *prior) {
-				reference = prior
-			}
-			if len(conditionDifferences(current, *prior)) == 0 && (direct == nil || recordBefore(*direct, *prior)) {
-				direct = prior
-			}
-		}
-		base := direct
-		kind := "direct"
-		if base == nil {
-			base = reference
-			kind = "reference"
-		}
-		if base == nil {
-			continue
-		}
-		comparison := Comparison{CurrentRecordID: current.ID, BaselineRecordID: base.ID, Kind: kind, ConditionDifferences: conditionDifferences(current, *base)}
-		if kind == "direct" && base.RepsPerMinute > 0 {
-			change := (current.RepsPerMinute/base.RepsPerMinute - 1) * 100
-			comparison.RateChangePercent = &change
-		}
-		// The most recent comparable lower-load equal-rep record is independent
-		// of the same-load pace baseline. This is performed load, not force/1RM.
-		var heavierBaseline *Record
-		for i := range records {
-			prior := &records[i]
-			if prior.Status != "confirmed" || prior.Reps <= 0 || prior.RepsPerMinute <= 0 || prior.Movement != current.Movement || !recordBefore(*prior, current) || current.Reps != prior.Reps || current.LoadKG == nil || prior.LoadKG == nil || current.Load == nil || prior.Load == nil || current.Load.Basis != prior.Load.Basis || *current.LoadKG <= *prior.LoadKG {
-				continue
-			}
-			compatible := true
-			for _, d := range conditionDifferences(current, *prior) {
-				if d != "load" {
-					compatible = false
-					break
-				}
-			}
-			if compatible && (heavierBaseline == nil || recordBefore(*heavierBaseline, *prior)) {
-				heavierBaseline = prior
-			}
-		}
-		if heavierBaseline != nil {
-			gain := *current.LoadKG - *heavierBaseline.LoadKG
-			id := heavierBaseline.ID
-			comparison.HeavierLoadKG = &gain
-			comparison.HeavierLoadBaselineRecordID = &id
-		}
-		out = append(out, comparison)
 	}
 	return out
 }
@@ -816,13 +954,13 @@ func Comparisons(records []Record) []Comparison {
 func Best(records []Record) []Record {
 	out := []Record{}
 	for _, r := range records {
-		if r.Status != "confirmed" || r.Reps <= 0 || r.RepsPerMinute <= 0 || r.PerformedAt == nil || r.Technique == "unspecified" || strings.TrimSpace(r.WorkoutPrescription) == "" || activity.CanonicalMovement(r.Movement) == "" {
+		if !comparableRecord(r) || r.PerformedAt == nil || r.Technique == "unspecified" || strings.TrimSpace(r.WorkoutPrescription) == "" || activity.CanonicalMovement(r.Movement) == "" {
 			continue
 		}
 		found := false
 		for i := range out {
 			if out[i].Movement == r.Movement && len(conditionDifferences(r, out[i])) == 0 {
-				if r.RepsPerMinute > out[i].RepsPerMinute {
+				if *r.RepsPerMinute > *out[i].RepsPerMinute {
 					out[i] = r
 				}
 				found = true

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -314,6 +315,125 @@ var _ = Describe("Gemini client", func() {
 			Expect(result).To(Equal("chunk response"))
 			Expect(geminiFile).To(Equal("files/mock-chunk"))
 			Expect(transport.Requests()).To(HaveLen(4))
+		})
+
+		It("places video part before reference images and prompt in AnalyzeChunkVideoWithImages", func() {
+			transport.New(baseURL).
+				Post("/upload/v1beta/files").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+				JSON(map[string]any{})
+
+			transport.New(baseURL).
+				Post("/upload-session").
+				Reply(http.StatusOK).
+				Header("X-Goog-Upload-Status", "final").
+				JSON(map[string]any{
+					"file": map[string]any{
+						"name":     "files/mock-chunk-img",
+						"uri":      "https://example.test/files/mock-chunk-img",
+						"mimeType": mimeType,
+					},
+				})
+
+			transport.New(baseURL).
+				Get("/v1beta/files/mock-chunk-img").
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"name":  "files/mock-chunk-img",
+					"state": "ACTIVE",
+				})
+
+			transport.New(baseURL).
+				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				Reply(http.StatusOK).
+				JSON(map[string]any{
+					"candidates": []map[string]any{{
+						"content": map[string]any{
+							"parts": []map[string]any{{"text": "[EXERCISE: Deadlift]"}},
+						},
+					}},
+				})
+
+			ref := encodeJPEG(makeTestImage(32, 32))
+			result, geminiFile, _, err := client.AnalyzeChunkVideoWithImages(
+				context.Background(), videoPath, "analyze chunk with ref", ModelFlash38, [][]byte{ref},
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("[EXERCISE: Deadlift]"))
+			Expect(geminiFile).To(Equal("files/mock-chunk-img"))
+
+			genBody := string(transport.Requests()[3].Body)
+			videoIdx := strings.Index(genBody, `"fileUri":"https://example.test/files/mock-chunk-img"`)
+			imgIdx := strings.Index(genBody, `"mimeType":"image/jpeg"`)
+			promptIdx := strings.Index(genBody, `"text":"analyze chunk with ref"`)
+			Expect(videoIdx).To(BeNumerically(">", 0))
+			Expect(imgIdx).To(BeNumerically(">", videoIdx), "reference image must follow video part")
+			Expect(promptIdx).To(BeNumerically(">", imgIdx), "prompt text must follow reference image")
+		})
+
+		It("attaches configured ChunkFPS only to chunk video calls and omits it from AnalyzeVideoWithModel", func() {
+			chunkClient, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
+				APIKey:       apiKey,
+				BaseURL:      baseURL,
+				HTTPClient:   &http.Client{Transport: transport},
+				PollInterval: time.Millisecond,
+				Sleep:        func(time.Duration) {},
+				ChunkFPS:     2.0,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			mockUploadAndGenerate := func(fileName string, text string) {
+				transport.New(baseURL).
+					Post("/upload/v1beta/files").
+					Reply(http.StatusOK).
+					Header("X-Goog-Upload-Url", baseURL+"/upload-session").
+					JSON(map[string]any{})
+				transport.New(baseURL).
+					Post("/upload-session").
+					Reply(http.StatusOK).
+					Header("X-Goog-Upload-Status", "final").
+					JSON(map[string]any{
+						"file": map[string]any{
+							"name":     "files/" + fileName,
+							"uri":      "https://example.test/files/" + fileName,
+							"mimeType": mimeType,
+						},
+					})
+				transport.New(baseURL).
+					Get("/v1beta/files/" + fileName).
+					Reply(http.StatusOK).
+					JSON(map[string]any{
+						"name":  "files/" + fileName,
+						"state": "ACTIVE",
+					})
+				transport.New(baseURL).
+					Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+					Reply(http.StatusOK).
+					JSON(map[string]any{
+						"candidates": []map[string]any{{
+							"content": map[string]any{
+								"parts": []map[string]any{{"text": text}},
+							},
+						}},
+					})
+			}
+
+			mockUploadAndGenerate("fps-chunk", "[EXERCISE: Box Step-up]")
+			_, _, _, err = chunkClient.AnalyzeChunkVideo(context.Background(), videoPath, "chunk prompt", ModelFlash38)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(transport.Requests()[3].Body)).To(ContainSubstring(`"videoMetadata":{"fps":2}`))
+
+			mockUploadAndGenerate("fps-chunk-img", "[EXERCISE: Power Snatch]")
+			ref := encodeJPEG(makeTestImage(16, 16))
+			_, _, _, err = chunkClient.AnalyzeChunkVideoWithImages(context.Background(), videoPath, "chunk img prompt", ModelFlash38, [][]byte{ref})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(transport.Requests()[7].Body)).To(ContainSubstring(`"videoMetadata":{"fps":2}`))
+
+			mockUploadAndGenerate("full-video", "full video response")
+			_, _, _, err = chunkClient.AnalyzeVideoWithModel(context.Background(), videoPath, "full prompt", ModelFlash38)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(transport.Requests()[11].Body)).NotTo(ContainSubstring("videoMetadata"))
 		})
 
 		It("returns an error when the local file does not exist", func() {
@@ -1027,8 +1147,12 @@ var _ = Describe("Gemini client", func() {
 
 			body := string(transport.Requests()[0].Body)
 			Expect(body).To(ContainSubstring(`"thinkingLevel":"MEDIUM"`))
-			Expect(body).To(ContainSubstring(`"mimeType":"image/jpeg"`))
-			Expect(body).To(ContainSubstring(`"fileUri":"https://example.test/files/vid1"`))
+			videoIdx := strings.Index(body, `"fileUri":"https://example.test/files/vid1"`)
+			imgIdx := strings.Index(body, `"mimeType":"image/jpeg"`)
+			promptIdx := strings.Index(body, `"text":"prompt"`)
+			Expect(videoIdx).To(BeNumerically(">", 0))
+			Expect(imgIdx).To(BeNumerically(">", videoIdx), "reference image must follow video segment")
+			Expect(promptIdx).To(BeNumerically(">", imgIdx), "prompt text must follow reference image")
 		})
 	})
 })

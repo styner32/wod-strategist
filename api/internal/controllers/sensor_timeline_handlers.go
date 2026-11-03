@@ -64,6 +64,7 @@ func (ctl *Controller) GetSensorTimeline(c *gin.Context) {
 		Where("session_id = ?", sessionID).
 		Order("start_secs ASC, id ASC").
 		Find(&chunks).Error
+	chunks = db.FilterRedundantSplitChunks(chunks)
 
 	segments := make([]VideoMappingSegmentDTO, 0, len(chunks))
 	for _, ch := range chunks {
@@ -136,6 +137,9 @@ func (ctl *Controller) GetSensorTimeline(c *gin.Context) {
 	}
 
 	switch row.SensorState {
+	case db.SensorStateCancelled:
+		c.JSON(http.StatusOK, SensorTimelineResponse{Status: "unavailable", Reason: "processing_cancelled", Timeline: nil, VideoMapping: videoMapping})
+		return
 	case db.SensorStateUploading, db.SensorStatePending, db.SensorStateRunning:
 		c.JSON(http.StatusOK, SensorTimelineResponse{
 			Status:       "pending",

@@ -137,4 +137,29 @@ var _ = Describe("Pass 1 chunk continuity", func() {
 		Expect(segments[1].Start).To(Equal("19:00.37"))
 		Expect(skipped).To(BeEmpty(), "not_visible chunks remain unanalyzed rather than claimed as Rest")
 	})
+
+	It("treats an identified target with non-empty unassessed spans as active rather than explicit rest", func() {
+		// Exact shape of chunk 36085 in WOD-20261028-01M602PXNAAZFKKNKXNSN2D61S:
+		// [NO_EXERCISE] + activity_state: rest, but unassessed records a barbell lockout drop.
+		lockoutDrop := chunkAt(2, "", `{}`,
+			`{"version":1,"duration_secs":10.033,"target_state":"identified","activity_state":"rest","events":[],"unassessed":[{"start_secs":0,"end_secs":1,"reason":"clip begins at barbell lockout and barbell is immediately dropped to the floor"}]}`)
+		class, movement := classifyChunkActivity(lockoutDrop, WorkoutTypeWOD)
+		Expect(class).To(Equal(chunkActive))
+		Expect(movement).To(Equal("Unknown"))
+
+		withNamedGap := chunkAt(2, "", `{}`,
+			`{"version":1,"duration_secs":10,"target_state":"identified","activity_state":"rest","events":[],"unassessed":[{"start_secs":0,"end_secs":3,"reason":"partial_visibility","movement":"Deadlift"}]}`)
+		class, movement = classifyChunkActivity(withNamedGap, WorkoutTypeWOD)
+		Expect(class).To(Equal(chunkActive))
+		Expect(movement).To(Equal("Deadlift"))
+
+		// When preceded by one genuine rest chunk and one false-rest chunk, rescuing chunk 2
+		// bridges chunk 1? Note chunk 0 is rest, chunk 1 is falseRest, chunk 2 is active lockoutDrop, chunk 3 is active:
+		// chunk 2..3 stay observed instead of losing the entire 30s window to Rest.
+		segments, skipped := build(falseRest(0), falseRest(1), lockoutDrop, rowing(3))
+		Expect(segments).To(HaveLen(1))
+		Expect(segments[0].Start).To(Equal("18:40.37"))
+		Expect(segments[0].End).To(Equal("19:00.37"))
+		Expect(skipped).To(Equal([]Segment{{Start: "18:20.37", End: "18:40.37", Type: "Rest"}}))
+	})
 })

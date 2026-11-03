@@ -169,7 +169,7 @@ func runReplay(ctx context.Context, opts RunOptions, client *http.Client, out io
 		}
 		fmt.Fprintf(out, "%s — %s\nReport: %s\nSession: %s\n", strings.ToUpper(report.Status), sid, filepath.Join(dir, "report.json"), report.SessionURL)
 	}()
-	fmt.Fprintf(out, "Live replay: profile 10, new session %s\nResults are retained. Input replay takes about 5 minutes; analysis continues afterwards.\n", sid)
+	fmt.Fprintf(out, "Live replay: profile 10, new session %s\nResults are retained. Input replay follows recorded capture timing; analysis continues afterwards.\n", sid)
 	var raw []byte
 	if err = r.stage("fixture", func() error {
 		if _, err := exec.LookPath("ffprobe"); err != nil {
@@ -177,7 +177,7 @@ func runReplay(ctx context.Context, opts RunOptions, client *http.Client, out io
 		}
 		data, err := os.ReadFile(filepath.Join(opts.FixtureDir, "manifest.json"))
 		if err != nil {
-			return fmt.Errorf("load fixture; run test-live-prepare first: %w", err)
+			return fmt.Errorf("load fixture; run make live-test-prepare first: %w", err)
 		}
 		report.FixtureSHA256 = digest(data)
 		if err = json.Unmarshal(data, &report.Fixture); err != nil {
@@ -188,6 +188,7 @@ func runReplay(ctx context.Context, opts RunOptions, client *http.Client, out io
 	}); err != nil {
 		return err
 	}
+	fmt.Fprintf(out, "Fixture: %s (%.1fs media / %.1fs capture, %d chunks)\n", report.Fixture.SourceSessionID, report.Fixture.MediaEndSecs-report.Fixture.MediaStartSecs, report.Fixture.Stats.DurationMs/1000, len(report.Fixture.Chunks))
 	if err = r.stage("authenticate", func() error {
 		if api.token == "" {
 			if opts.Username == "" || opts.Password == "" {

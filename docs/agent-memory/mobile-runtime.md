@@ -16,15 +16,32 @@ Android performance protections must be controlled by user-configurable flags, n
 
 | Optimization | File | Android | iOS |
 |---|---|---|---|
-| MoveNet inference FPS throttle | `usePoseDetection.ts` | 2 fps recording / 1 fps preview | 2 fps recording / 1 fps preview |
+| MoveNet inference FPS throttle | `usePoseDetection.ts` | 2 fps in `previewOnly` / disabled on recording routes | 2 fps in `previewOnly` / disabled on recording routes |
 | `android:largeHeap` | `AndroidManifest.xml` | `true` | N/A |
 
 ### Rules
 - Do NOT hardcode `IS_ANDROID` for feature gating in `visionTestPage.tsx` — use the route-param configuration pattern.
-- The `usePoseDetection.ts` throttle uses `runAtTargetFps()` from `react-native-vision-camera`. Do not remove it — it is the single most impactful fix for Android OOM.
+- Enabled MoveNet previews use the `usePoseDetection.ts` throttle via `runAtTargetFps()` from `react-native-vision-camera`. Keep the throttle to bound resize/inference allocations and protect Android memory.
 - The recording dashboard shows **OPT FLAGS** during recording. Keep this in sync when adding new flags.
 - `onDeviceAi` defaults OFF and controls the Apple Foundation Models feedback experiment independently of MoveNet. See [apple-on-device-ai.md](apple-on-device-ai.md) for the iOS 27 native build requirement, image sampling, cancellation, and power protection contract.
 - `continuousRecording` defaults OFF and is an experimental iOS recorder capability, separate from Android performance flags. See [original-video.md](original-video.md) for durable originals, automatic Photos saving, native source-versus-analysis completion and device acceptance requirements.
+
+### MoveNet preview scope
+
+- Enable MoveNet only in the `previewOnly=true` camera preview and the standalone `poseTestPage`, while the screen is focused and the app is active.
+- `usePoseDetection(enabled, options)` takes activation as its first argument, not recording state. Disabled hooks do not load the model or create a resize plugin or polling timer; the camera receives no frame processor.
+- Frame history and motion state use worklets-core shared values. The JS bridge alone updates the Reanimated value consumed by the skeleton. Generation checks reject old model loads, worklet writes, and JS callbacks after preview closes or restarts.
+- The normal recording route does not load the MoveNet model, initialize its resize plugin, run inference or monitor polling, register pose telemetry providers, or send `workout_confidence` for new chunks, including upload retries.
+- The camera preview defaults to 2 fps inference. The standalone pose test explicitly requests the heavier 15 fps mode. `showSkeleton` controls only the preview overlay; recording routes do not render it.
+- Preserve the optional legacy API field, backend schema, and archived confidence values. Stopping new collection does not reinterpret historical values.
+- JavaScript checks do not establish model/resource release, camera continuity, or performance on physical devices; device validation remains pending.
+
+## UI polling lifecycle
+
+- `useHighlightResults` owns History's initial highlight read, generation request and result polling. Run only while the screen is focused and `AppState === "active"`; abort requests and clear timers on blur, inactivity, identity change or unmount. Ignore late responses even if a transport ignores abort.
+- The highlight deadline is five minutes from the user's generation request, including a slow POST. It is independent of query success and aborts a hung request as well as repeated failures. Schedule the next query five seconds after the previous one settles, without overlap.
+- Retain that absolute deadline while the screen is hidden. Returning within it resumes result checks without resubmitting the generation POST; returning after it expires ends the wait. HTTP cancellation does not cancel a server job that was already enqueued.
+- `EnergyMonitor` reads only while focused and active, scheduling another read ten seconds after completion. Native battery reads have no cancellation API: ignore late values and wait for an old read to finish before starting a fresh one after reactivation. Unmounting (including collapsing the diagnostics panel) must never create a late timer.
 
 ## BLE heart rate monitor
 BLE HR integration uses `react-native-ble-plx`.
@@ -43,12 +60,13 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - Never remove the `"Polar mobile"` exclusion from scan filtering.
 - Keep `BleManager` as a singleton outside React components to prevent memory leaks.
 - `react-native-ble-plx` v3.5.1+ is required — earlier versions crash on Android (RN 0.76+) when `Promise.reject` receives a `null` error code.
-- Optional device registration is stored in `AsyncStorage` under `wod_registered_ble_hr_device` (`{ id, name }`). When registered, `useBleHeartRate` only auto-connects to a matching device (`id` or `name`) while still populating `discoveredDevices` so the user can switch or register from the recording screen's BPM pill (`ble-hr-device-pill`) or clear registration in `setup.tsx`.
+- Optional device registration is stored in `AsyncStorage` under `wod_registered_ble_hr_device` (`{ id, name }`). When registered, `useBleHeartRate` only auto-connects to a matching device (`id` or `name`) while still populating `discoveredDevices` so the user can switch or register from the recording screen's BPM pill (`ble-hr-device-pill`), the Home tab's HR card (`HomeBleHeartRateCard`), or clear registration in `setup.tsx`.
+- Any `<Tabs>` screen using `useBleHeartRate` (such as `HomeBleHeartRateCard` on `app/(tabs)/index.tsx`) MUST gate `enabled` on screen focus and `AppState === "active"` (and avoid auto-scanning when no sensor is registered unless explicitly tapped). Tab screens stay mounted during `/workout/setup` and `/workout/visionTestPage`; passing `enabled: false` on blur cancels scans, reconnect timers, and GATT connections cleanly so `visionTestPage.tsx` has exclusive access to the singleton `BleManager` and Polar PMD stream.
 - `H10MemoryRecorder` checks `isH10Device` (`"polar h10"` case-insensitive) before issuing PS-FTP commands; non-H10 sensors (such as Polar Sense) record `UNSUPPORTED_DEVICE` without showing an error banner.
 
 ### Chunk heart rate sampling (Peak BPM)
 - Accepted readings are retained in `CaptureWindow` with their original `receivedAt` timestamps. Query each video's capture interval to send its peak as `heartRateBpm` to `processWorkoutChunk`.
-- Delayed segment/export callbacks must not reset a mutable current-chunk maximum: they may arrive during the next capture interval. Continuous iOS events carry native epoch start/end times; MoveNet observations use the same native clock anchor.
+- Delayed segment/export callbacks must not reset a mutable current-chunk maximum: they may arrive during the next capture interval. Continuous iOS events carry native epoch start/end times.
 - 1Hz telemetry recording continues to record instantaneous samples via `bpmRef.current`.
 
 ### Polar ACC packet timing
@@ -69,6 +87,7 @@ The scan filter matches devices by name or HR service UUID (`180D`) and explicit
 - Use current window dimensions for the iOS layout. Size the viewfinder within its measured flex area after safe-area insets and recording controls; rotation must not remount the camera or restart recording.
 - In a physically landscape window (`width > height`), put header/status in one row and the camera beside a controls/telemetry sidebar. Expanded telemetry must not share the camera's vertical space or impose the portrait thumbnail height cap. Keep the same camera subtree across orientation/toggle changes.
 - Android retains the existing portrait Activity restriction for CameraX; `landscapeMode` uses the sideways-mount layout there. JavaScript tests do not establish physical-device rotation or capture continuity.
+- **iOS `fullScreenModal` safe-area & back navigation (`visionTestPage.tsx`)**: Under Fabric, `<SafeAreaView>` inside `presentation: "fullScreenModal"` mounts in a separate UIKit `UITransitionView` without an ancestor `RNCSafeAreaProviderComponentView` and falls back to `0` insets (placing top-left controls under the status bar / Dynamic Island). Wrap `fullScreenModal` screens in a modal-local `<SafeAreaProvider>` and apply insets from `SafeAreaInsetsContext` (`initialWindowMetrics` portrait fallback), and dispatch back navigation via screen-scoped `useNavigation().goBack()` before falling back to `router.back()`.
 
 ## iOS sensor upload startup safety
 - A reinstall can change the absolute `file:///var/mobile/Containers/Data/Application/{UUID}/Documents/` prefix while retaining the files. `loadQueue()` rebases saved `Documents/sensor/*.ndjson` paths against the current `documentDirectory`, including backup recovery, without changing request IDs or upload stages.
@@ -89,6 +108,9 @@ Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/
 - Use `t("key", { ...vars })` for every user-facing string — do not hardcode English.
 - `setLanguage(code)` switches the locale at runtime.
 - When adding a new string, add the key to **both** `en.json` and `ko.json` in the same change.
+- **Expo Router `<Link asChild>` gotcha**: Never pass a function-form `style={({ pressed }) => [...]}` to a `<Pressable>` wrapped in `<Link asChild>`. `Slot` prop-merging drops function styles, stripping card layout (`flexDirection`, `backgroundColor`, `border`, `padding`) at runtime. Use `<TouchableOpacity style={...} onPress={() => router.push(...)}>` or a plain/flattened `ViewStyle` object.
+- **Expo Router route-group URL collision (`/(tabs)/profile` vs `/profile-edit`)**: Because `(tabs)` is omitted from URLs, `app/(tabs)/profile.tsx` owns `/profile`. Never create a root Stack screen at `app/profile.tsx` — pushing `/profile` resolves to the Profile tab instead of opening the form. Keep the profile create/edit form at `app/profile-edit.tsx` (`/profile-edit`) and push sub-pages (`profile-edit`, `profiles`, `workout/setup`, `upload/index`, `queue`, `settings/deleteAccount`) with `presentation: "card"` and `animation: "slide_from_right"`.
+- **Flex row `<Text>` overflow**: In React Native, a `<Text>` inside a nested `flexDirection: "row"` wrapper (`headerLeft`) will overflow horizontally onto sibling badges unless `<Text>` itself has `flexShrink: 1`.
 
 ## Contact quality and sensor summaries
 
@@ -102,9 +124,15 @@ Setup lives in `features/i18n/index.ts`. Locale resources are at `features/i18n/
 - **Graceful Degradation**: If 2160p is persisted from a previous device session but the current device lacks 4K 30fps support, auto-fallback to 1080p (`resolveSafeResolution`).
 - **Frame Processor Compatibility**: Recording and pose-test cameras explicitly use `pixelFormat="yuv"`, `videoHdr={false}`, and `enableBufferCompression={false}`. The installed `vision-camera-resize-plugin` accepts uncompressed 8-bit YUV/BGRA only; HDR selects 10-bit YUV and throws `Invalid PixelFormat`, even if `supportsVideoHdr` is true. Do not prefer HDR in format selection or enable it while using this processor. This preserves 4K resolution with SDR; buffer compression is unrelated to the saved-video `skipCompression` option.
 - **Stabilization**: Cinematic stabilization (`cinematic-extended` or `cinematic`) is preferred when available in `videoStabilizationModes`.
-- **Inference Throttle Safety**: Production MoveNet frame processing uses `runAtTargetFps()` at 2 fps during recording and 1 fps in preview, regardless of resolution. The pose test page can explicitly request a higher rate. The Apple AI experiment has a separate image-sampling schedule and does not change MoveNet's throttle.
+- **Inference Throttle Safety**: MoveNet is disabled on normal recording routes, regardless of resolution. Enabled `previewOnly` cameras use `runAtTargetFps()` at 2 fps; the standalone pose test requests 15 fps. The Apple AI experiment has a separate image-sampling schedule and does not change MoveNet's preview scope or throttle.
 
 ### Environment observation journal
 - Optional `environmentObservation` / `environmentAnalysis` / `observationIntervalSeconds` (120/300/600) are passed from setup. Defaults: off / false / 300. Existing saved interval choices are normalized.
 - `OPT FLAGS` includes `environment:<status>:<questionId|->:<review_needed|->`. Uses completed video chunks; never add another live frame processor for this journal.
 - See [environment-observation.md](environment-observation.md) for source separation, shared AI slot, evidence uploads, review, and device validation boundaries.
+
+## Stitch Tactical Bento theme & floating dock
+- Design system tokens from Stitch project `projects/11381319408891102008` (*Tactical Bento Metrics*) live in `constants/theme.ts` as `TacticalTheme.light` (default Bright Bento: `#F1F4F9` canvas, `#FFFFFF` cards, `#D4FF00` Volt CTA, `#0B0E14` ink, `#003EC6` electric blue) and `TacticalTheme.dark` (reserved for `visionTestPage.tsx` HUD and `player.tsx`). Do not mutate `Colors` in `constants/theme.ts` (`constants/__snapshots__/theme.test.ts.snap` locks its shape).
+- Shared UI motion helpers (`constants/motion.ts`, `components/ui/TacticalBento.tsx`) must use React Native's built-in `Animated` (`useNativeDriver: true`), `LayoutAnimation`, and `AccessibilityInfo` instead of importing `react-native-reanimated` directly, because `jest.config.js` `transformIgnorePatterns` excludes `react-native-worklets` (`0.10.1`) ESM.
+- `app/(tabs)/_layout.tsx` renders an absolute-positioned `FloatingTacticalDock`. Every tab screen `<ScrollView>` / `<FlatList>` content container must keep `paddingBottom: 112` (or greater), and `components/VideoQueueOverlay.tsx` stays anchored at `bottom: 98` so controls never collide with the dock.
+- Data honesty rule: never display unbacked Stitch mockup metrics (`HRV`, `VO2 Peak`, `WOD BPM Cap`, `Bar Velocity`); bind strictly to real backend/device fields.

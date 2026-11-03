@@ -1,6 +1,8 @@
-import { t } from "@/features/i18n";
+import { TacticalTheme } from "@/constants/theme";
+import { t, useLocale } from "@/features/i18n";
 import { useAuthStore } from "@/features/auth/useAuthStore";
 import { router } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useState } from "react";
 import {
   ActivityIndicator,
@@ -16,9 +18,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+const T = TacticalTheme.light;
 const USERNAME_REGEX = /^[a-z0-9_]{3,20}$/;
 
 export default function SignupScreen() {
+  useLocale();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -59,6 +63,7 @@ export default function SignupScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar style="dark" />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
@@ -68,16 +73,23 @@ export default function SignupScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.header}>
-            <Text style={styles.appName}>WOD Strategist</Text>
+            <View style={styles.eyebrowRow}>
+              <View style={styles.eyebrowDot} />
+              <Text style={styles.eyebrowText}>{t("home.brandEyebrow")}</Text>
+            </View>
+            <View style={styles.brandRow}>
+              <Text style={styles.appName}>WOD Strategist</Text>
+              <View style={styles.voltDot} />
+            </View>
             <Text style={styles.subtitle}>{t("auth.signup")}</Text>
           </View>
 
-          <View style={styles.form}>
+          <View style={styles.formCard}>
             <Text style={styles.label}>{t("auth.username")}</Text>
             <TextInput
               style={styles.input}
               placeholder="username"
-              placeholderTextColor="#555"
+              placeholderTextColor={T.inkMuted}
               value={username}
               onChangeText={setUsername}
               autoCapitalize="none"
@@ -90,7 +102,7 @@ export default function SignupScreen() {
             <TextInput
               style={styles.input}
               placeholder="••••••••"
-              placeholderTextColor="#555"
+              placeholderTextColor={T.inkMuted}
               value={password}
               onChangeText={setPassword}
               secureTextEntry
@@ -102,7 +114,7 @@ export default function SignupScreen() {
             <TextInput
               style={styles.input}
               placeholder="••••••••"
-              placeholderTextColor="#555"
+              placeholderTextColor={T.inkMuted}
               value={confirmPassword}
               onChangeText={setConfirmPassword}
               secureTextEntry
@@ -112,12 +124,21 @@ export default function SignupScreen() {
             />
 
             <TouchableOpacity
-              style={[styles.primaryBtn, loading && styles.btnDisabled]}
+              style={[
+                styles.primaryBtn,
+                (loading ||
+                  !username.trim() ||
+                  !password ||
+                  !confirmPassword) &&
+                  styles.btnDisabled,
+              ]}
               onPress={handleSignup}
-              disabled={loading || !username.trim() || !password || !confirmPassword}
+              disabled={
+                loading || !username.trim() || !password || !confirmPassword
+              }
             >
               {loading ? (
-                <ActivityIndicator color="#000" />
+                <ActivityIndicator color={T.voltInk} />
               ) : (
                 <Text style={styles.primaryBtnText}>{t("auth.signup")}</Text>
               )}
@@ -126,7 +147,9 @@ export default function SignupScreen() {
 
           <View style={styles.footer}>
             <Text style={styles.footerText}>{t("auth.haveAccount")}</Text>
-            <TouchableOpacity onPress={() => router.replace("/auth/login" as any)}>
+            <TouchableOpacity
+              onPress={() => router.replace("/auth/login" as any)}
+            >
               <Text style={styles.footerLink}>{t("auth.login")}</Text>
             </TouchableOpacity>
           </View>
@@ -137,75 +160,124 @@ export default function SignupScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#000" },
+  container: { flex: 1, backgroundColor: T.canvas },
   content: {
     flexGrow: 1,
     justifyContent: "center",
-    padding: 24,
+    padding: 22,
   },
   header: {
     alignItems: "center",
-    marginBottom: 48,
+    marginBottom: 32,
+    gap: 4,
+  },
+  eyebrowRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  eyebrowDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: T.electricBlue,
+  },
+  eyebrowText: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1.2,
+    color: T.electricBlue,
+    textTransform: "uppercase",
+  },
+  brandRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   appName: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: "#fff",
-    letterSpacing: 1,
+    fontSize: 30,
+    fontWeight: "900",
+    color: T.ink,
+    letterSpacing: -0.7,
+  },
+  voltDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
   },
   subtitle: {
-    fontSize: 16,
-    color: "#888",
-    marginTop: 8,
+    fontSize: 15,
+    fontWeight: "600",
+    color: T.inkMuted,
+    marginTop: 2,
   },
-  form: {
-    gap: 12,
+  formCard: {
+    backgroundColor: T.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 20,
+    gap: 10,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
   },
   label: {
-    color: "#007AFF",
-    fontSize: 13,
-    fontWeight: "bold",
+    color: T.electricBlue,
+    fontSize: 12,
+    fontWeight: "800",
     textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginTop: 8,
+    letterSpacing: 0.7,
+    marginTop: 4,
   },
   input: {
-    backgroundColor: "#1A1A1A",
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "600",
+    backgroundColor: T.surfaceMuted,
+    color: T.ink,
+    fontSize: 17,
+    fontWeight: "700",
     padding: 14,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "#333",
+    borderColor: T.borderStrong,
   },
   primaryBtn: {
-    backgroundColor: "#fff",
-    padding: 18,
-    borderRadius: 12,
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
+    padding: 16,
+    borderRadius: 14,
     alignItems: "center",
-    marginTop: 16,
+    marginTop: 12,
   },
   btnDisabled: { opacity: 0.5 },
   primaryBtnText: {
-    color: "#000",
-    fontSize: 18,
-    fontWeight: "bold",
+    color: T.voltInk,
+    fontSize: 16,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
   },
   footer: {
     flexDirection: "row",
     justifyContent: "center",
     alignItems: "center",
-    marginTop: 32,
+    marginTop: 28,
     gap: 6,
+    flexWrap: "wrap",
   },
   footerText: {
-    color: "#888",
-    fontSize: 15,
+    color: T.inkMuted,
+    fontSize: 14,
+    fontWeight: "600",
   },
   footerLink: {
-    color: "#007AFF",
-    fontSize: 15,
-    fontWeight: "600",
+    color: T.electricBlue,
+    fontSize: 14,
+    fontWeight: "800",
   },
 });

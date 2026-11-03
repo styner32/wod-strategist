@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, AppState, Linking, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
+import { TacticalTheme } from "@/constants/theme";
 import { useAuthStore } from "../auth/useAuthStore";
 import { t, useLocale } from "../i18n";
 import { useProfileId } from "../../store/useProfileStore";
-import { useColorScheme } from "../../hooks/use-color-scheme";
 import { formatSessionLabel } from "../wod/sessionLabel";
 import {
   confirmOriginalAlreadySaved,
@@ -15,13 +15,14 @@ import {
   type OriginalVideoSession,
 } from "./originalVideoStore";
 
+const T = TacticalTheme.light;
+
 /** Independent of analysis history: an offline recording can still be recovered and saved. */
 export function OriginalVideosPending() {
   useLocale();
   const profileId = useProfileId();
   const userId = useAuthStore(state => state.userId);
   const loggedIn = useAuthStore(state => state.isLoggedIn);
-  const dark = useColorScheme() === "dark";
   const [sessions, setSessions] = useState<OriginalVideoSession[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [details, setDetails] = useState<string | null>(null);
@@ -62,8 +63,8 @@ export function OriginalVideosPending() {
 
   const visible = loggedIn ? sessions.filter(item => item.ownerUserId === userId && (profileId == null || item.profileId === profileId)) : [];
   if (visible.length === 0) return null;
-  const color = dark ? "#F5F5F7" : "#1C1C1E";
-  const muted = dark ? "#C7C7CC" : "#636366";
+  const color = T.ink;
+  const muted = T.inkMuted;
 
   return (
     <View style={styles.section}>
@@ -74,10 +75,10 @@ export function OriginalVideosPending() {
         const canRetry = session.complete && !session.captureIssue && !working;
         const canDiscard = !working;
         return (
-          <View key={session.sessionId} style={[styles.card, { backgroundColor: dark ? "#2C2C2E" : "#F5F5F5" }]}>
+          <View key={session.sessionId} style={styles.card}>
             <View style={styles.row}>
               <Text style={[styles.label, { color }]}>{formatSessionLabel(session.sessionId)}</Text>
-              {working && <ActivityIndicator size="small" color="#64D2FF" />}
+              {working && <ActivityIndicator size="small" color={T.electricBlue} />}
             </View>
             {profileId == null && <Text style={[styles.description, { color: muted }]}>{t("originalVideos.profile", { id: session.profileId })}</Text>}
             <Text style={[styles.description, { color: muted }]}>{t(`originalVideos.status.${session.status}`)}</Text>
@@ -137,14 +138,40 @@ export function OriginalVideosPending() {
 
 const styles = StyleSheet.create({
   section: { gap: 8, marginBottom: 16 },
-  title: { fontSize: 16, fontWeight: "700" },
+  title: { fontSize: 16, fontWeight: "800", letterSpacing: -0.2 },
   description: { fontSize: 13, lineHeight: 19 },
-  card: { borderRadius: 14, padding: 14, gap: 8 },
+  card: {
+    backgroundColor: T.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 16,
+    gap: 8,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
   row: { flexDirection: "row", alignItems: "center", gap: 8 },
-  label: { fontSize: 14, fontWeight: "600", flex: 1 },
-  actions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  button: { paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8, backgroundColor: "rgba(100,210,255,0.15)" },
-  buttonText: { color: "#287EA3", fontSize: 13, fontWeight: "600" },
-  discardButton: { paddingVertical: 9, paddingHorizontal: 12, borderRadius: 8, backgroundColor: "rgba(255,69,58,0.12)" },
-  discardButtonText: { color: "#FF453A", fontSize: 13, fontWeight: "600" },
+  label: { fontSize: 14, fontWeight: "700", flex: 1, flexShrink: 1 },
+  actions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 4 },
+  button: {
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
+  },
+  buttonText: { color: T.electricBlue, fontSize: 13, fontWeight: "700" },
+  discardButton: {
+    paddingVertical: 9,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: T.statusExhaustedBg,
+    borderWidth: 1,
+    borderColor: T.statusExhaustedBorder,
+  },
+  discardButtonText: { color: T.statusExhausted, fontSize: 13, fontWeight: "700" },
 });

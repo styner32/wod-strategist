@@ -168,6 +168,12 @@ func (w *Worker) scheduleEnrichment(ctx context.Context, sessionID string, agent
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("session_id = ? AND status = ?", sessionID, "COMPLETED").First(&a).Error; err != nil {
 			return err
 		}
+		if a.ArchivedAt != nil {
+			return db.ErrSessionWorkCancelled
+		}
+		if a.AutomaticProcessingCancelledAt != nil && !force {
+			return db.ErrSessionWorkCancelled
+		}
 		s, b := decodeEnrichment(a)
 		_, sfp, err := summarySource(tx, a)
 		if err != nil {
@@ -176,7 +182,7 @@ func (w *Worker) scheduleEnrichment(ctx context.Context, sessionID string, agent
 		afp := agenticFingerprint(a)
 		now := time.Now().UTC()
 		updates := map[string]any{}
-		if !activeEnrichment(s.Status) && (s.Fingerprint != sfp || s.Status == "" || s.Status == "stale" || (!agentic && force)) {
+		if !activeEnrichment(s.Status) && (s.Fingerprint != sfp || s.Status == "" || s.Status == "stale" || (s.Status == "interrupted" && force) || (!agentic && force)) {
 			s = AnalysisSummary{Status: "pending", RunID: uuid.NewString(), Fingerprint: sfp, Stage: "base", UpdatedAt: now, LastSuccess: s.LastSuccess, Result: s.LastSuccess}
 			if !agentic && force && b.Fingerprint == afp && !activeEnrichment(b.Status) {
 				for _, it := range b.Items {
@@ -253,21 +259,61 @@ func (w *Worker) scheduleEnrichment(ctx context.Context, sessionID string, agent
 // recovery passes never pile up copies of queued work. An archived task (crash,
 // timeout) releases its lock when the TTL expires.
 func (w *Worker) enqueueEnrichment(p enrichmentTask) {
-	if w.QueueClient == nil {
+	if w.QueueClient == nil || w.DB == nil {
 		return
 	}
-	raw, _ := json.Marshal(p)
-	unique := 15 * time.Minute
-	opts := []asynq.Option{asynq.MaxRetry(0), asynq.Timeout(12 * time.Minute)}
-	if p.Phase == "cleanup" && p.Index > 0 {
-		// Index counts previous cleanup attempts; back off between them.
-		delay := time.Duration(p.Index) * time.Minute
-		unique += delay
-		opts = append(opts, asynq.ProcessIn(delay))
+	ctx := w.DB.Statement.Context
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	opts = append(opts, asynq.Unique(unique))
-	_, err := w.QueueClient.Enqueue(asynq.NewTask(TypeAnalysisEnrichment, raw), opts...)
-	if err != nil && !errors.Is(err, asynq.ErrDuplicateTask) && w.logger != nil {
+	ctx, done := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer done()
+	err := w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var a db.AnalysisResult
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("session_id = ?", p.SessionID).First(&a).Error; err != nil {
+			return err
+		}
+		s, b := decodeEnrichment(a)
+		if p.Phase != "cleanup" && a.ArchivedAt != nil {
+			return db.ErrSessionWorkCancelled
+		}
+		switch p.Phase {
+		case "summary":
+			if s.RunID != p.RunID || s.Status != "pending" {
+				return nil
+			}
+		case "prepare":
+			if b.RunID != p.RunID || b.Status != "pending" {
+				return nil
+			}
+		case "highlight":
+			if b.RunID != p.RunID || b.Status != "running" || p.Index < 0 || p.Index >= len(b.Items) || b.Items[p.Index].Status != "pending" {
+				return nil
+			}
+		case "cleanup":
+			if b.RunID != p.RunID || !b.CleanupPending || activeEnrichment(b.Status) {
+				return nil
+			}
+		default:
+			return nil
+		}
+		raw, _ := json.Marshal(p)
+		unique := 15 * time.Minute
+		opts := []asynq.Option{asynq.MaxRetry(0), asynq.Timeout(12 * time.Minute)}
+		if p.Phase == "cleanup" && p.Index > 0 {
+			delay := time.Duration(p.Index) * time.Minute
+			unique += delay
+			opts = append(opts, asynq.ProcessIn(delay))
+		}
+		opts = append(opts, asynq.Unique(unique))
+		queue := w.QueueClient
+		if guarded, ok := queue.(*sessionWorkQueue); ok {
+			queue = guarded.QueueClient
+		}
+		_, err := queue.Enqueue(asynq.NewTask(TypeAnalysisEnrichment, raw), opts...)
+		return err
+	})
+	if err != nil && !errors.Is(err, asynq.ErrDuplicateTask) && !errors.Is(err, db.ErrSessionWorkCancelled) && w.logger != nil {
 		w.logger.Warn("enrichment scheduling deferred", zap.Error(err))
 	}
 }
@@ -338,6 +384,12 @@ func (w *Worker) reconcileEnrichmentOnce(ctx context.Context, sessionID string) 
 			return err
 		}
 		s, b := decodeEnrichment(a)
+		if a.ArchivedAt != nil {
+			if b.CleanupPending && !activeEnrichment(b.Status) {
+				tasks = append(tasks, enrichmentTask{SessionID: sessionID, RunID: b.RunID, Phase: "cleanup", Index: b.CleanupAttempts})
+			}
+			return nil
+		}
 		oldS, oldB := enrichmentJSON(s), enrichmentJSON(b)
 		now := time.Now().UTC()
 		_, sfp, err := summarySource(tx, a)
@@ -465,7 +517,7 @@ func (w *Worker) reconcileEnrichmentOnce(ctx context.Context, sessionID string) 
 			s.AgenticRunID = b.RunID
 		}
 		// Scheduling needs a completed analysis; a failed one restarts on its next completion.
-		restart = a.Status == "COMPLETED" && ((w.AgenticHighlightsEnabled && b.Status == "stale" && !b.CleanupPending) || s.Status == "stale")
+		restart = a.ArchivedAt == nil && a.AutomaticProcessingCancelledAt == nil && a.Status == "COMPLETED" && ((w.AgenticHighlightsEnabled && b.Status == "stale" && !b.CleanupPending) || s.Status == "stale")
 		if b.CleanupPending && !activeEnrichment(b.Status) {
 			tasks = append(tasks, enrichmentTask{SessionID: sessionID, RunID: b.RunID, Phase: "cleanup", Index: b.CleanupAttempts})
 		}
@@ -487,7 +539,7 @@ func (w *Worker) reconcileEnrichmentOnce(ctx context.Context, sessionID string) 
 	return restart
 }
 
-func (w *Worker) HandleAnalysisEnrichmentTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleAnalysisEnrichmentTask(ctx context.Context, t *asynq.Task) error {
 	var p enrichmentTask
 	if json.Unmarshal(t.Payload(), &p) != nil {
 		return asynq.SkipRetry
@@ -501,6 +553,9 @@ func (w *Worker) HandleAnalysisEnrichmentTask(ctx context.Context, t *asynq.Task
 			return err
 		}
 		s, b = decodeEnrichment(a)
+		if p.Phase != "cleanup" && a.ArchivedAt != nil {
+			return db.ErrSessionWorkCancelled
+		}
 		now := time.Now().UTC()
 		if p.Phase == "summary" {
 			_, sfp, err := summarySource(tx, a)
@@ -596,6 +651,25 @@ func (w *Worker) saveAgenticState(ctx context.Context, a db.AnalysisResult, b Ag
 		if old.RunID != b.RunID {
 			return nil
 		}
+		if !checkSource {
+			// Cleanup may finish after cancellation. Retain the current run and
+			// item statuses rather than writing the stale worker snapshot.
+			old.CleanupPending = b.CleanupPending
+			old.CleanupAttempts = b.CleanupAttempts
+			old.OwnedUpload = b.OwnedUpload
+			old.UpdatedAt = time.Now().UTC()
+			if !b.OwnedUpload {
+				old.FileURI = ""
+				old.FileName = ""
+				old.MIMEType = ""
+			}
+			err := tx.Model(&current).UpdateColumn("agentic_highlight_analysis", enrichmentJSON(old)).Error
+			saved = err == nil
+			return err
+		}
+		if current.ArchivedAt != nil || old.Status == "interrupted" {
+			return nil
+		}
 		if checkSource && old.Fingerprint != agenticFingerprint(current) {
 			old.Status = "stale"
 			old.Error = "원본 분석이 변경되었습니다."
@@ -623,6 +697,21 @@ func (w *Worker) prepareAgenticHighlights(ctx context.Context, a db.AnalysisResu
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	start := time.Now()
+	defer func() {
+		if !b.OwnedUpload || b.FileName == "" {
+			return
+		}
+		cleanup, done := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+		defer done()
+		var current db.AnalysisResult
+		if err := w.DB.WithContext(cleanup).Select("agentic_highlight_analysis").First(&current, a.ID).Error; err == nil {
+			_, retained := decodeEnrichment(current)
+			if retained.RunID == b.RunID && retained.FileName == b.FileName && retained.OwnedUpload {
+				return
+			}
+		}
+		_ = w.GeminiClient.DeleteFile(cleanup, b.FileName)
+	}()
 	fail := func() {
 		b.Status = "failed"
 		b.Error = "영상 준비에 실패했습니다."
@@ -869,6 +958,9 @@ func (w *Worker) generateAnalysisSummary(ctx context.Context, a db.AnalysisResul
 			return err
 		}
 		old, _ := decodeEnrichment(current)
+		if current.ArchivedAt != nil || old.Status == "interrupted" {
+			return nil
+		}
 		_, sfp, sourceErr := summarySource(tx, current)
 		if sourceErr != nil {
 			return sourceErr
@@ -901,10 +993,18 @@ func (w *Worker) AgenticSourceCurrent(a db.AnalysisResult) bool {
 // back the caller's write. Call PublishEnrichmentOutbox after commit; the
 // recovery loop handles a crash in between.
 func (w *Worker) PrepareEnrichmentOutbox(ctx context.Context, tx *gorm.DB, sessionID string) {
+	w.prepareEnrichmentOutbox(ctx, tx, sessionID, false)
+}
+
+func (w *Worker) PrepareManualEnrichmentOutbox(ctx context.Context, tx *gorm.DB, sessionID string) {
+	w.prepareEnrichmentOutbox(ctx, tx, sessionID, true)
+}
+
+func (w *Worker) prepareEnrichmentOutbox(ctx context.Context, tx *gorm.DB, sessionID string, explicit bool) {
 	staged := *w
 	err := tx.Transaction(func(savepoint *gorm.DB) error {
 		staged.DB = savepoint
-		_, err := staged.scheduleEnrichment(ctx, sessionID, staged.AgenticHighlightsEnabled, false)
+		_, err := staged.scheduleEnrichment(ctx, sessionID, staged.AgenticHighlightsEnabled, explicit)
 		return err
 	})
 	if err != nil && w.logger != nil {

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,12 +11,16 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/subtitle"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
+
+const generateHardSubUniqueTTL = 15 * time.Minute
 
 // defaultTTSVoice is the prebuilt voice used for TTS narration.
 // Change this to any of the 30 supported voices (e.g. "Aoede", "Charon", "Puck").
@@ -67,7 +72,7 @@ func NewGenerateHardSubTask(sessionID string, profileID uint, enableTTS bool) (*
 //
 // If the final analysis is not yet available (e.g. manual trigger before
 // analysis completes), falls back to chunk-only subtitles.
-func (w *Worker) HandleGenerateHardSubTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleGenerateHardSubTask(ctx context.Context, t *asynq.Task) error {
 	var p HardSubPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
@@ -105,6 +110,7 @@ func (w *Worker) HandleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 			zap.String("session_id", p.SessionID),
 			zap.Error(err))
 	}
+	chunks = db.FilterRedundantSplitChunks(chunks)
 
 	// 3. Generate mixed SRT: final analysis (✅/⚠️) for analyzed segments,
 	//    chunk cues fill time gaps where no final analysis exists.
@@ -214,7 +220,9 @@ func (w *Worker) HandleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 		}
 		if !hasHardsubbed {
 			analysis.AvailableVideos = append(analysis.AvailableVideos, "hardsubbed")
-			if dbErr := w.DB.WithContext(ctx).Model(&analysis).Update("available_videos", analysis.AvailableVideos).Error; dbErr != nil {
+			if dbErr := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error {
+				return tx.Model(&analysis).Update("available_videos", analysis.AvailableVideos).Error
+			}); dbErr != nil {
 				w.logger.Error("Failed to update available_videos in DB",
 					zap.String("session_id", p.SessionID),
 					zap.Error(dbErr))
@@ -396,21 +404,38 @@ func (w *Worker) buildNarrationTrack(ctx context.Context, clips []ttsClip, outpu
 // If the video has no audio stream (e.g. the hardsub step dropped it, or the
 // original recording was silent), the narration is added as the sole audio track.
 func (w *Worker) runFFmpegMixAudio(ctx context.Context, videoPath, audioPath, outputPath string) error {
-	// Probe whether the video already has an audio stream.
-	hasAudio := videoHasAudioStream(ctx, videoPath)
+	timeline, err := probeVideoTimeline(ctx, videoPath)
+	if err != nil {
+		return fmt.Errorf("probe narration source video: %w", err)
+	}
+	sourceFrames, err := readVideoFrameSignature(ctx, videoPath)
+	if err != nil {
+		return fmt.Errorf("verify narration source video: %w", err)
+	}
+	duration := fmt.Sprintf("%.6f", timeline.Duration())
+
+	// An unsuccessful probe must not be interpreted as a silent source: that
+	// could discard the original recording's audio while preserving its video.
+	profile, err := probeChunkStreamProfile(ctx, videoPath)
+	if err != nil {
+		return fmt.Errorf("probe narration source streams: %w", err)
+	}
+	hasAudio := profile.HasAudio
 
 	var args []string
 	if hasAudio {
 		// Mix original video audio [0:a] with narration [1:a]
 		// Volume weights: original=1.0, narration=0.6
 		args = []string{
+			"-nostdin", "-xerror", "-copyts",
 			"-i", videoPath,
 			"-i", audioPath,
-			"-filter_complex", "[1:a]volume=0.6[narr];[0:a][narr]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-			"-map", "0:v",
+			"-filter_complex", "[1:a:0]volume=0.6[narr];[0:a:0][narr]amix=inputs=2:duration=first:dropout_transition=2,apad[aout]",
+			"-map", "0:v:0",
 			"-map", "[aout]",
 			"-c:v", "copy",
 			"-c:a", "aac", "-b:a", "128k",
+			"-t", duration,
 			"-movflags", "+faststart",
 			"-y", outputPath,
 		}
@@ -418,20 +443,31 @@ func (w *Worker) runFFmpegMixAudio(ctx context.Context, videoPath, audioPath, ou
 		// No existing audio — add narration as the sole audio track
 		w.logger.Info("Video has no audio stream, adding narration as sole audio track")
 		args = []string{
+			"-nostdin", "-xerror", "-copyts",
 			"-i", videoPath,
 			"-i", audioPath,
-			"-filter_complex", "[1:a]volume=0.8[aout]",
-			"-map", "0:v",
+			"-filter_complex", "[1:a:0]volume=0.8,apad[aout]",
+			"-map", "0:v:0",
 			"-map", "[aout]",
 			"-c:v", "copy",
 			"-c:a", "aac", "-b:a", "128k",
+			"-t", duration,
 			"-movflags", "+faststart",
 			"-shortest",
 			"-y", outputPath,
 		}
 	}
 
-	return w.runFFmpegCmd(ctx, "mix-audio", args)
+	if err := w.runFFmpegCmd(ctx, "mix-audio", args); err != nil {
+		return err
+	}
+	if err := verifyVideoFrameSequence(ctx, outputPath, []videoFrameSignature{sourceFrames}); err != nil {
+		return fmt.Errorf("narration changed source video frames: %w", err)
+	}
+	if err := verifyVideoDuration(ctx, outputPath, timeline.Duration(), 0.1); err != nil {
+		return fmt.Errorf("narration changed source video duration: %w", err)
+	}
+	return nil
 }
 
 // videoHasAudioStream probes a video file to check if it contains an audio stream.
@@ -484,7 +520,13 @@ func (w *Worker) enqueueHardSub(sessionID string, profileID uint, enableTTS bool
 		return
 	}
 
-	if _, err := w.QueueClient.Enqueue(task); err != nil {
+	if _, err := w.QueueClient.Enqueue(task, asynq.Unique(generateHardSubUniqueTTL)); err != nil {
+		if errors.Is(err, asynq.ErrDuplicateTask) {
+			w.logger.Info("Hardsub generation already queued",
+				zap.String("session_id", sessionID),
+				zap.Uint("profile_id", profileID))
+			return
+		}
 		w.logger.Warn("Failed to enqueue hardsub task",
 			zap.String("session_id", sessionID),
 			zap.Error(err))

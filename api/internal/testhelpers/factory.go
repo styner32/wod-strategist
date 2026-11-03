@@ -179,30 +179,31 @@ func CreateSession(dbConn *gorm.DB, sessionAttr *db.Session) db.Session {
 
 func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.AnalysisResult {
 	result := db.AnalysisResult{
-		SessionID:              resultAttr.SessionID,
-		ProfileID:              resultAttr.ProfileID,
-		AnalysisType:           resultAttr.AnalysisType,
-		Status:                 resultAttr.Status,
-		Output:                 resultAttr.Output,
-		GeminiFileURI:          resultAttr.GeminiFileURI,
-		GeminiFileName:         resultAttr.GeminiFileName,
-		GeminiMIMEType:         resultAttr.GeminiMIMEType,
-		GeminiFileExpiresAt:    resultAttr.GeminiFileExpiresAt,
-		HighlightSegments:      resultAttr.HighlightSegments,
-		WODDescription:         resultAttr.WODDescription,
-		SessionScore:           resultAttr.SessionScore,
-		NormalizedWorkout:      resultAttr.NormalizedWorkout,
-		MobilityObservations:   resultAttr.MobilityObservations,
-		StretchRecommendations: resultAttr.StretchRecommendations,
-		SensorVersion:          resultAttr.SensorVersion,
-		SensorState:            resultAttr.SensorState,
-		SensorProcessing:       resultAttr.SensorProcessing,
-		SensorSummary:          resultAttr.SensorSummary,
-		SensorTimeline:         resultAttr.SensorTimeline,
-		SensorNextAttemptAt:    resultAttr.SensorNextAttemptAt,
-		WorkoutAt:              resultAttr.WorkoutAt,
-		WorkoutAtSource:        resultAttr.WorkoutAtSource,
-		ArchivedAt:             resultAttr.ArchivedAt,
+		AutomaticProcessingCancelledAt: resultAttr.AutomaticProcessingCancelledAt,
+		SessionID:                      resultAttr.SessionID,
+		ProfileID:                      resultAttr.ProfileID,
+		AnalysisType:                   resultAttr.AnalysisType,
+		Status:                         resultAttr.Status,
+		Output:                         resultAttr.Output,
+		GeminiFileURI:                  resultAttr.GeminiFileURI,
+		GeminiFileName:                 resultAttr.GeminiFileName,
+		GeminiMIMEType:                 resultAttr.GeminiMIMEType,
+		GeminiFileExpiresAt:            resultAttr.GeminiFileExpiresAt,
+		HighlightSegments:              resultAttr.HighlightSegments,
+		WODDescription:                 resultAttr.WODDescription,
+		SessionScore:                   resultAttr.SessionScore,
+		NormalizedWorkout:              resultAttr.NormalizedWorkout,
+		MobilityObservations:           resultAttr.MobilityObservations,
+		StretchRecommendations:         resultAttr.StretchRecommendations,
+		SensorVersion:                  resultAttr.SensorVersion,
+		SensorState:                    resultAttr.SensorState,
+		SensorProcessing:               resultAttr.SensorProcessing,
+		SensorSummary:                  resultAttr.SensorSummary,
+		SensorTimeline:                 resultAttr.SensorTimeline,
+		SensorNextAttemptAt:            resultAttr.SensorNextAttemptAt,
+		WorkoutAt:                      resultAttr.WorkoutAt,
+		WorkoutAtSource:                resultAttr.WorkoutAtSource,
+		ArchivedAt:                     resultAttr.ArchivedAt,
 	}
 	result.AnalysisSummary = resultAttr.AnalysisSummary
 	result.WorkoutProgress = resultAttr.WorkoutProgress
@@ -408,6 +409,54 @@ func CreateSessionReanalysisRun(dbConn *gorm.DB, runAttr *db.SessionReanalysisRu
 	return run
 }
 
+func CreateRecognitionReviewRun(dbConn *gorm.DB, attr *db.RecognitionReviewRun) db.RecognitionReviewRun {
+	run := *attr
+	if run.ClientRequestID == "" {
+		run.ClientRequestID = uuid.NewString()
+	}
+	if run.TaskID == "" {
+		run.TaskID = uuid.NewString()
+	}
+	if run.RequestHash == "" {
+		run.RequestHash = "test-request"
+	}
+	if run.Status == "" {
+		run.Status = db.RecognitionReviewStatusQueued
+	}
+	if run.SourceVersion == "" {
+		run.SourceVersion = "test-source"
+	}
+	if run.EvaluationFingerprint == "" {
+		run.EvaluationFingerprint = "test-evaluation"
+	}
+	if run.SourceObject == "" {
+		run.SourceObject = fmt.Sprintf("videos/%d/%s/merged.mp4", run.ProfileID, run.SessionID)
+	}
+	if run.SourceGCSURI == "" {
+		run.SourceGCSURI = "gs://test-bucket/" + run.SourceObject
+	}
+	if run.SourceGeneration <= 0 {
+		run.SourceGeneration = 1
+	}
+	if len(run.RecordIDs) == 0 {
+		run.RecordIDs = db.JSONDocument(`[]`)
+	}
+	if len(run.Snapshot) == 0 {
+		run.Snapshot = db.JSONDocument(`{}`)
+	}
+	if len(run.Batches) == 0 {
+		run.Batches = db.JSONDocument(`[]`)
+	}
+	if run.EndSecs <= run.StartSecs {
+		run.EndSecs = run.StartSecs + 1
+	}
+	if run.CreatedAt.IsZero() {
+		run.CreatedAt = time.Now().UTC()
+	}
+	g.Expect(dbConn.Create(&run).Error).NotTo(g.HaveOccurred())
+	return run
+}
+
 var stretchCounter uint64
 
 func CreatePerformanceRecord(dbConn *gorm.DB, attr *db.PerformanceRecord) db.PerformanceRecord {
@@ -418,14 +467,24 @@ func CreatePerformanceRecord(dbConn *gorm.DB, attr *db.PerformanceRecord) db.Per
 	if record.Status == "" {
 		record.Status = "confirmed"
 	}
+	if record.Outcome == "" {
+		record.Outcome = "completed"
+	}
 	if record.Measurement == "" {
 		record.Measurement = "window"
 	}
 	if record.Technique == "" {
 		record.Technique = "unspecified"
 	}
-	if record.RateBasis == "" {
-		record.RateBasis = "normalized_per_minute"
+	if record.Outcome == "completed" && record.Reps != nil && *record.Reps > 0 {
+		if record.RepsPerMinute == nil && record.ElapsedSeconds > 0 {
+			rpm := float64(*record.Reps) * 60 / record.ElapsedSeconds
+			record.RepsPerMinute = &rpm
+		}
+		if record.RateBasis == nil {
+			basis := "normalized_per_minute"
+			record.RateBasis = &basis
+		}
 	}
 	if len(record.OriginalCandidate) == 0 {
 		record.OriginalCandidate = db.JSONDocument(`{}`)
@@ -520,4 +579,3 @@ func CreatePipelineStageMetric(dbConn *gorm.DB, metricAttr *db.PipelineStageMetr
 	g.Expect(dbConn.Create(&m).Error).NotTo(g.HaveOccurred())
 	return m
 }
-

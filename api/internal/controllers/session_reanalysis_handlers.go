@@ -66,6 +66,9 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !ctl.requireSessionProcessing(c, sessionID, profileID, false) {
+		return
+	}
 
 	req, err := decodeCreateSessionReanalysisRequest(c.Request.Body)
 	if err != nil {
@@ -199,6 +202,9 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&lockedProfile, profileID).Error; err != nil {
 			return err
 		}
+		if err := lockActiveSession(tx, sessionID, profileID); err != nil {
+			return err
+		}
 
 		var concurrent db.SessionReanalysisRun
 		err := tx.Where("profile_id = ? AND client_request_id = ?", profileID, req.ClientRequestID).First(&concurrent).Error
@@ -241,6 +247,9 @@ func (ctl *Controller) CreateSessionReanalysis(c *gin.Context) {
 		return tx.Create(&run).Error
 	})
 	if createErr != nil {
+		if writeSessionProcessingConflict(c, createErr) {
+			return
+		}
 		switch {
 		case errors.Is(createErr, errSessionReanalysisChunkActive):
 			c.JSON(http.StatusConflict, gin.H{"error": "chunk re-analyses must finish before whole-workout re-analysis"})
@@ -349,6 +358,9 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !ctl.requireSessionProcessing(c, sessionID, profileID, false) {
+		return
+	}
 	runID, err := strconv.ParseUint(strings.TrimSpace(c.Param("run_id")), 10, 64)
 	if err != nil || runID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid run_id"})
@@ -375,6 +387,13 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 
 	now := time.Now().UTC()
 	err = ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		var lockedProfile db.Profile
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&lockedProfile, profileID).Error; err != nil {
+			return err
+		}
+		if err := lockActiveSession(tx, sessionID, profileID); err != nil {
+			return err
+		}
 		var candidateVersion struct {
 			Version int `json:"evaluation_version"`
 		}
@@ -525,11 +544,14 @@ func (ctl *Controller) ApplySessionReanalysis(c *gin.Context) {
 			}
 		}
 
-		ctl.enrichmentWorker().PrepareEnrichmentOutbox(c.Request.Context(), tx, sessionID)
+		ctl.enrichmentWorker().PrepareManualEnrichmentOutbox(c.Request.Context(), tx, sessionID)
 		return nil
 	})
 
 	if err != nil {
+		if writeSessionProcessingConflict(c, err) {
+			return
+		}
 		if errors.Is(err, errWODCandidateStale) {
 			c.JSON(http.StatusConflict, gin.H{"error": "analysis changed; create a new re-analysis"})
 			return
@@ -779,7 +801,7 @@ func (ctl *Controller) ensureSessionReanalysisTask(ctx context.Context, run *db.
 
 func (ctl *Controller) markSessionReanalysisEnqueueFailed(ctx context.Context, runID uint) {
 	now := time.Now().UTC()
-	_ = ctl.db.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ?", runID).Updates(map[string]any{
+	_ = ctl.db.WithContext(ctx).Model(&db.SessionReanalysisRun{}).Where("id = ? AND status = ?", runID, "QUEUED").Updates(map[string]any{
 		"status": db.SessionReanalysisStatusFailed, "safe_error": "The session re-analysis task could not be queued.",
 		"completed_at": now,
 	}).Error

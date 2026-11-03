@@ -43,7 +43,7 @@ func (w *Worker) activityRows(ctx context.Context, profileID uint, sessionID str
 // Save under the session lock, compare the original source snapshot, then rebuild
 // totals. A late job cannot replace a summary for different source observations.
 func (w *Worker) saveActivityReview(ctx context.Context, p activityReviewPayload, summary *activity.Summary) error {
-	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error {
 		var session db.Session
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("profile_id = ? AND session_id = ?", p.ProfileID, p.SessionID).First(&session).Error; err != nil {
 			return err
@@ -73,6 +73,16 @@ func (w *Worker) saveActivityReview(ctx context.Context, p activityReviewPayload
 
 func (w *Worker) enqueueActivityReview(ctx context.Context, p VideoAnalysisPayload, uri string) error {
 	if !w.ActivityCountingEnabled {
+		return nil
+	}
+	// refreshLiveActivity reconstructs its payload without MediaRunID. Check the
+	// durable session fence so late chunk observations cannot bypass the limit.
+	var overlongRecording int64
+	if err := w.DB.WithContext(ctx).Model(&db.RecordingMediaRun{}).
+		Where("profile_id = ? AND session_id = ? AND version = ? AND failed_stage = ?", p.ProfileID, p.SessionID, db.RecordingMediaVersion, "duration").Count(&overlongRecording).Error; err != nil {
+		return err
+	}
+	if overlongRecording > 0 {
 		return nil
 	}
 	rows, err := w.activityRows(ctx, p.ProfileID, p.SessionID)
@@ -114,7 +124,22 @@ func (w *Worker) enqueueActivityReview(ctx context.Context, p VideoAnalysisPaylo
 	}
 	data, _ := json.Marshal(payload)
 	task := asynq.NewTask(TypeActivityReview, data, asynq.MaxRetry(2), asynq.Timeout(20*time.Minute), asynq.Retention(24*time.Hour))
-	_, err = w.QueueClient.Enqueue(task, asynq.TaskID(fmt.Sprintf("activity:%d:%s:%s:%d", p.ProfileID, p.SessionID, payload.SourceVersion, payload.Generation)))
+	skippedForDuration := false
+	err = w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error {
+		var blocked int64
+		if err := tx.Model(&db.RecordingMediaRun{}).Where("profile_id = ? AND session_id = ? AND version = ? AND failed_stage = ?", p.ProfileID, p.SessionID, db.RecordingMediaVersion, "duration").Count(&blocked).Error; err != nil {
+			return err
+		}
+		if blocked > 0 {
+			skippedForDuration = true
+			return nil
+		}
+		_, enqueueErr := recordingBaseQueue(w.QueueClient).Enqueue(task, asynq.TaskID(fmt.Sprintf("activity:%d:%s:%s:%d", p.ProfileID, p.SessionID, payload.SourceVersion, payload.Generation)))
+		return enqueueErr
+	})
+	if skippedForDuration {
+		return nil
+	}
 	if errors.Is(err, asynq.ErrTaskIDConflict) {
 		if previous.SourceVersion == summary.SourceVersion && previous.MediaGeneration == strconv.FormatInt(payload.Generation, 10) && previous.ReviewState == "failed" {
 			summary.ReviewState = "failed"
@@ -127,6 +152,65 @@ func (w *Worker) enqueueActivityReview(ctx context.Context, p VideoAnalysisPaylo
 		_ = w.saveActivityReview(ctx, payload, &summary)
 	}
 	return err
+}
+
+func (w *Worker) skipOverlongActivityReview(ctx context.Context, p VideoAnalysisPayload, uri string) error {
+	if !w.ActivityCountingEnabled {
+		return nil
+	}
+	rows, err := w.activityRows(ctx, p.ProfileID, p.SessionID)
+	if err != nil {
+		return err
+	}
+	summary := activity.Build(rows, nil)
+	if !summary.Available {
+		return nil
+	}
+	object := fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID)
+	if uri != "gs://"+w.BucketName+"/"+object {
+		return errors.New("unexpected activity media source")
+	}
+	attrs, err := w.StorageClient.ObjectAttrs(ctx, object)
+	if err != nil {
+		return err
+	}
+	payload := activityReviewPayload{p.SessionID, p.ProfileID, summary.SourceVersion, object, attrs.Generation}
+	if payload.Generation <= 0 {
+		return errors.New("activity media generation unavailable")
+	}
+	var session db.Session
+	if err = w.DB.WithContext(ctx).Where("profile_id = ? AND session_id = ?", p.ProfileID, p.SessionID).First(&session).Error; err != nil {
+		return err
+	}
+	var previous activity.Summary
+	_ = json.Unmarshal(session.ActivitySummary, &previous)
+	if previous.SourceVersion == summary.SourceVersion && previous.MediaGeneration == strconv.FormatInt(payload.Generation, 10) {
+		if previous.ReviewState == "completed" || previous.ReviewState == "partial" || previous.ReviewState == "disabled" {
+			return nil
+		}
+		summary = activity.Build(rows, &previous)
+	}
+	completed := map[uint]activity.ReviewedChunk{}
+	for _, r := range summary.Reviews {
+		if r.State == "completed" {
+			completed[r.ChunkID] = r
+		}
+	}
+	canonical := activity.CanonicalChunks(rows)
+	reviews := make([]activity.ReviewedChunk, 0, len(canonical))
+	for _, row := range canonical {
+		if saved, ok := completed[row.ID]; ok {
+			reviews = append(reviews, saved)
+			continue
+		}
+		reviews = append(reviews, activity.ReviewedChunk{
+			ChunkID: row.ID,
+			State:   "failed",
+		})
+	}
+	summary.Reviews = reviews
+	summary.ReviewState = "partial"
+	return w.saveActivityReview(ctx, payload, &summary)
 }
 
 const (
@@ -564,7 +648,7 @@ func buildActivityReviewBatches(rows []db.ChunkAnalysisResult, completedIDs map[
 	return batches
 }
 
-func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (taskErr error) {
+func (w *Worker) handleActivityReviewTask(ctx context.Context, t *asynq.Task) (taskErr error) {
 
 	var p activityReviewPayload
 	if json.Unmarshal(t.Payload(), &p) != nil || p.ProfileID == 0 || validateSessionID(p.SessionID) != nil || p.Generation <= 0 || p.Object != fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID) {
@@ -758,6 +842,22 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 	if duration <= 0 {
 		return errors.New("activity review media duration unavailable")
 	}
+	if duration > maxAnalysisVideoDuration.Seconds() {
+		w.logger.Warn("Activity review skipped: video duration exceeds maximum analysis limit",
+			zap.String("session_id", p.SessionID),
+			zap.Float64("duration_secs", duration),
+			zap.Float64("max_duration_secs", maxAnalysisVideoDuration.Seconds()))
+		for _, b := range batches {
+			for _, idx := range b.Indices {
+				replaceReview(activity.ReviewedChunk{
+					ChunkID: rows[idx].ID,
+					State:   "failed",
+				})
+			}
+		}
+		summary.ReviewState = "partial"
+		return w.saveActivityReview(ctx, p, &summary)
+	}
 
 	failed := false
 	target := w.buildTargetPersonContext(p.ProfileID, p.SessionID)
@@ -788,7 +888,11 @@ func (w *Worker) HandleActivityReviewTask(ctx context.Context, t *asynq.Task) (t
 
 			chunkReviews := make([]activity.ReviewedChunk, 0, len(batch.Indices))
 			if batch.Valid && batch.WinEnd <= duration+0.001 {
-				prompt := movementObservationPrompt + target + batchTrackingPrompt + fmt.Sprintf(
+				batchPolicy := ""
+				if hasActivityBatchTravelingPolicyContext(session, rows, batch.Indices) {
+					batchPolicy = TravelingMovementPolicyPrompt
+				}
+				prompt := movementObservationPrompt + batchPolicy + target + batchTrackingPrompt + fmt.Sprintf(
 					"\n검토 영상의 절대 media 초를 사용하세요. 문맥 구간 %.6f~%.6f초. 현재 집계 소유 구간은 (%.6f, %.6f]초입니다. 문맥에서 사이클 시작과 끝을 확인하고 기록하되, 이전 합계나 목표 횟수로 추측하지 마세요. 구간 중 일부에서만 대상이나 동작이 확인되고 다른 하위 구간만 가림·이탈·판독불가인 경우, 확인된 구간이 있으면 target_state는 identified로 유지하고 판독불가 하위 구간만 unassessed 배열에 기록하세요. 전체 구간 내내 대상을 식별할 수 없을 때만 unknown입니다.",
 					batch.WinStart, batch.WinEnd, batch.CoreStart, batch.CoreEnd,
 				)

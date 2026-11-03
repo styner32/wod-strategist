@@ -1,0 +1,110 @@
+CREATE TABLE recording_media_runs (
+    id BIGSERIAL PRIMARY KEY,
+    profile_id BIGINT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version IN (0,1)),
+    state TEXT NOT NULL DEFAULT 'RECORDING' CHECK (state IN ('LEGACY','RECORDING','WAITING_PREPARATION','MERGING','MERGED','PREPARING_ANALYSIS','READY_FOR_ANALYSIS','ANALYZING','COMPLETED','FAILED','CANCELLED')),
+    manifest JSONB NOT NULL DEFAULT '[]'::jsonb,
+    manifest_hash TEXT NOT NULL DEFAULT '',
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    output_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    intervals JSONB NOT NULL DEFAULT '[]'::jsonb,
+    merged_object TEXT NOT NULL DEFAULT '',
+    merged_generation BIGINT NOT NULL DEFAULT 0,
+    merged_bytes BIGINT NOT NULL DEFAULT 0,
+    merged_staging_object TEXT NOT NULL DEFAULT '',
+    merged_staging_generation BIGINT NOT NULL DEFAULT 0,
+    failed_stage TEXT NOT NULL DEFAULT '',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    analysis_attempts INTEGER NOT NULL DEFAULT 0,
+    dispatch_version BIGINT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ,
+    lease_token TEXT NOT NULL DEFAULT '',
+    lease_expires_at TIMESTAMPTZ,
+    safe_error TEXT NOT NULL DEFAULT '',
+    activity_dispatched BOOLEAN NOT NULL DEFAULT FALSE,
+    analysis_dispatched BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (profile_id, session_id),
+    UNIQUE (session_id)
+);
+CREATE INDEX recording_media_runs_recovery ON recording_media_runs(state, next_attempt_at, lease_expires_at);
+
+CREATE TABLE recording_chunks (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES recording_media_runs(id) ON DELETE CASCADE,
+    profile_id BIGINT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    client_chunk_id VARCHAR(128) NOT NULL,
+    capture_order INTEGER NOT NULL CHECK (capture_order >= 1),
+    source_uri TEXT NOT NULL,
+    source_object TEXT NOT NULL,
+    source_generation BIGINT NOT NULL CHECK (source_generation > 0),
+    source_bytes BIGINT NOT NULL CHECK (source_bytes > 0),
+    capture_start_secs DOUBLE PRECISION NOT NULL CHECK (capture_start_secs >= 0 AND capture_start_secs < 'Infinity'::float8),
+    capture_end_secs DOUBLE PRECISION NOT NULL CHECK (capture_end_secs > capture_start_secs AND capture_end_secs < 'Infinity'::float8),
+    source_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source_timeline JSONB NOT NULL DEFAULT '{}'::jsonb,
+    leading_trim_secs DOUBLE PRECISION NOT NULL DEFAULT 0,
+    probe_ready BOOLEAN NOT NULL DEFAULT FALSE,
+    ai_type TEXT NOT NULL,
+    ai_payload JSONB NOT NULL,
+    ai_dispatched BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (run_id, client_chunk_id),
+    UNIQUE (run_id, capture_order),
+    UNIQUE (run_id, source_object)
+);
+CREATE INDEX recording_chunks_session ON recording_chunks(profile_id, session_id);
+CREATE INDEX recording_chunks_ai_dispatch ON recording_chunks(ai_dispatched, run_id);
+
+CREATE TABLE chunk_media_preparations (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES recording_media_runs(id) ON DELETE CASCADE,
+    chunk_id BIGINT NOT NULL REFERENCES recording_chunks(id) ON DELETE CASCADE,
+    source_generation BIGINT NOT NULL CHECK (source_generation > 0),
+    recipe_version TEXT NOT NULL,
+    profile_key TEXT NOT NULL,
+    resolved_profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    timeline JSONB NOT NULL DEFAULT '{}'::jsonb,
+    signature JSONB NOT NULL DEFAULT '{}'::jsonb,
+    state TEXT NOT NULL DEFAULT 'PENDING' CHECK (state IN ('PENDING','RUNNING','READY','FAILED','CANCELLED')),
+    output_object TEXT NOT NULL DEFAULT '',
+    output_generation BIGINT NOT NULL DEFAULT 0,
+    output_bytes BIGINT NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    dispatch_version BIGINT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ,
+    lease_token TEXT NOT NULL DEFAULT '',
+    lease_expires_at TIMESTAMPTZ,
+    safe_error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (chunk_id, source_generation, recipe_version, profile_key)
+);
+CREATE INDEX chunk_media_preparations_run ON chunk_media_preparations(run_id, state);
+CREATE INDEX chunk_media_preparations_recovery ON chunk_media_preparations(state, next_attempt_at, lease_expires_at);
+
+CREATE TABLE analysis_video_preparations (
+    id BIGSERIAL PRIMARY KEY,
+    run_id BIGINT NOT NULL REFERENCES recording_media_runs(id) ON DELETE CASCADE,
+    source_object TEXT NOT NULL,
+    source_generation BIGINT NOT NULL CHECK (source_generation > 0),
+    preset_version TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'PENDING' CHECK (state IN ('PENDING','RUNNING','READY','FAILED','CANCELLED')),
+    output_object TEXT NOT NULL DEFAULT '',
+    output_generation BIGINT NOT NULL DEFAULT 0,
+    output_bytes BIGINT NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    dispatch_version BIGINT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ,
+    lease_token TEXT NOT NULL DEFAULT '',
+    lease_expires_at TIMESTAMPTZ,
+    safe_error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (run_id, source_object, source_generation, preset_version)
+);
+CREATE INDEX analysis_video_preparations_recovery ON analysis_video_preparations(state, next_attempt_at, lease_expires_at);

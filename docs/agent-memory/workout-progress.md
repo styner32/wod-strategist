@@ -6,16 +6,26 @@
 2. `workout_progress` assembles observed intervals and complete repetition events chronologically. It contains evidence, not fatigue, recovery or intensity scores.
 3. Final assessment reads this evidence. It must never update observations or feed its output back into the timeline builder.
 
-Before `Build`, `buildWorkoutProgress` runs `workoutprogress.NormalizeContinuity`
-(after coverage gaps are added): `MinIntervalDurationSecs = 1.0`. A sub-second
-interval is attached to the following touching interval (≤1 s apart; the
-preceding one when it is last) — evidence moves only when activity/movement
-match. A sub-second media gap outside every interval is absorbed the same way
-(count-only markers stay inside the extended interval; gaps already inside an
-interval stay). Touching intervals with the same activity, canonical movement
-and load are stitched into one (first ID kept; touching `seconds` events join).
-Nothing is attached or stitched across a capture pause
-(`captureDiscontinuityPoints`) or discontinuous capture endpoints.
+Before `Build`, `buildWorkoutProgress` subtracts verified `exercise` intervals
+from overlapping `skipped_non_exercise` gaps (`subtractSkippedNonExerciseByIntervals`,
+preserving Pass 2 rest-spillover boundary reps while keeping remaining rest
+`skipped_non_exercise` and `progressCoverageComplete == true`), fills uncovered
+media, and runs `workoutprogress.NormalizeContinuity`:
+`MinIntervalDurationSecs = 1.0`. A sub-second interval prefers a touching
+(≤1 s apart) `sameMovement && sameLoad && captureContinuous` neighbor (following
+first, then preceding) before falling back to the following interval (or
+preceding when last) — evidence moves only when activity/movement match, so a
+split-boundary sub-second fragment merges back into its preceding same-movement
+interval rather than losing `rep_events` to a following different movement. A
+sub-second media gap outside every interval is absorbed the same way (count-only
+markers stay inside the extended interval; gaps already inside an interval stay).
+Touching intervals with the same activity, canonical movement and load are
+stitched into one (first ID kept; touching `seconds` events join). Nothing is
+attached or stitched across a capture pause (`captureDiscontinuityPoints`) or
+discontinuous capture endpoints. `mergeChunkFallbackObservations` requires
+`sameCanonicalMovement` or `isCompositeMovementUpgrade` before merging Pass 1
+chunk fallback events into a concrete Pass 2 exercise interval so 1–2 FPS chunk
+labels never overwrite 5 FPS Pass 2 movement classifications.
 `workoutprogress.Decode` still accepts stored sub-second entries; the web/mobile
 timelines hide them (`timelineProgressIntervals`, `isDisplayableProgressGap`,
 `buildUnassessedIntervals`) unless a record references them.
@@ -58,7 +68,7 @@ Use existing activity validation and cycle ownership. Never use `observed_signal
 ## Confirmation and APIs
 
 - `GET /api/v1/sessions/:session_id/workout-progress`: `{progress, records}`; progress is null when unavailable.
-- `PUT /api/v1/sessions/:session_id/performance-records`: `{source_version, records:[{interval_id, start_secs, end_secs, reps, load:{value,unit,basis}, measurement: set|window, technique: unspecified|singles|touch_and_go}]}`. Confirms a complete selected video window, repetitions and actual load. Repeated saves replace the same interval record; source changes return 409. User confirmation never changes raw observations.
+- `PUT /api/v1/sessions/:session_id/performance-records`: `{source_version, records:[{interval_id, start_secs, end_secs, outcome?: completed|incomplete|rest, reps?: number|null, load:{value,unit,basis}|null, measurement: set|window, technique: unspecified|singles|touch_and_go}]}`. Confirms a complete selected video window, outcome, optional repetitions (`>= 1` or `null`) and actual load across any supported movement (the `UnitForMovement != "reps"` restriction was removed so count is optional even on duration movements). Repeated saves replace the same interval record; source changes return 409. User confirmation never changes raw observations.
 - `GET /api/v1/performance-benchmarks?profile_id=...&movement=...`: confirmed current-source records, comparisons and best records. Exact owned profile/session scope is required for all reads/writes.
 
 A `set` stays inside its selected exercise interval. A `window` can continue
@@ -74,7 +84,56 @@ where one observed segment contains the rest. A 30-second set with
 five reps is instead labeled a normalized 10 reps/minute. Window confirmations
 retain every participating source interval in their original-candidate snapshot.
 
-A confirmation may record 0 repetitions (attempted but no complete repetition: below standard, no-rep, failed or setup). It still requires a resolved actual load (`null` means no external load, never "unknown"). Zero-rep records are stored and shown but excluded from comparisons, best records, median cycle and rest comparisons and from benchmark reads (`reps > 0`). Migration `000057` relaxes the checks to `reps >= 0`/`reps_per_minute >= 0`; its down migration preserves zero-rep rows and restores the positive checks as `NOT VALID`.
+The web merge suggestion traverses the entire same-movement run in both
+directions, including directly observed rests of at most
+`MAX_MERGE_REST_SECS = 10` seconds between adjacent exercise intervals. Count
+consecutive rest fragments and count-only gaps together; prefer verified capture
+elapsed time when available. A rest-bearing merge uses `measurement: window`,
+counts exercise intervals only, sums observed complete reps, and excludes
+unmatched leading/trailing rests. Validate the entire proposed window with
+`performanceSelectionCovered`; unknown activity, different movements/known
+loads, missing media and discontinuous or incomplete capture mappings stop it.
+When no valid rest-bearing run exists, retain the existing rest-free `set`
+merge and explicit target-movement selection for back-to-back movements.
+
+`reps == 0` is never used for incomplete attempts, no-reps, or rest. Instead, migration `000062` (`performance_records.outcome` + nullable `reps`, `reps_per_minute`, `rate_basis`) enforces an explicit `outcome` (`completed`, `incomplete`, `rest`) alongside `status`:
+- `completed` (default when omitted on input): requires non-empty `movement` and resolved actual `load` (`null` means no external load, never "unknown"). `reps` is optional: `null`/omitted confirms elapsed time and load (`reps_per_minute = null`, `rate_basis = null`), while an integer `>= 1` derives `reps_per_minute` and `rate_basis`; `reps <= 0` is rejected.
+- `incomplete`: preserves attempted `movement` and resolved actual `load`, sets `reps = null`, `reps_per_minute = null`, `rate_basis = null`.
+- `rest`: reclassifies an exercise or unassessed interval to rest/transition (`movement = ""`, `load = null`, `reps = null`, `reps_per_minute = null`, `rate_basis = null`, `measurement = "set"`, `technique = "unspecified"`).
+
+Rest confirmations select timing independently of the original activity, movement,
+or load. Clip every selected source interval and reuse its own capture mapping;
+never extrapolate one anchor mapping over neighboring intervals. Explicit media
+unassessed ranges may fill otherwise uncovered time. Reject holes, unverified
+mapping, mixed mapped/unmapped spans, recording gaps and discontinuous capture
+timing. Use media duration only when all selected spans are unmapped and no
+capture-clock gap exists. Whole intervals with different media/capture durations
+are valid; partial intervals require an identity mapping. The shared
+`restSelectionCovered` validator mirrors these backend rules.
+
+Movement summaries subtract the union of active confirmed rest ranges from each
+source exercise interval without changing raw observations. A partially remaining
+source interval counts once. Reps are excluded only when their completion belongs
+to `(rest.start_secs, rest.end_secs]`; seconds events contribute only their
+remaining overlap. Direct record lookup still supports editing partial records.
+
+Migration `000062` backfills any legacy `reps = 0` rows to `outcome = 'incomplete'` with `reps = NULL`. Only `outcome = 'completed'` records with `reps >= 1` participate in benchmark reads (`FindConfirmedPerformanceRecordsForBenchmarks`), comparisons, best records, median cycle, and rest comparisons; `incomplete`, `rest`, and count-omitted (`reps = null`) records remain stored and displayed on the session timeline.
+
+The web performance editor focuses itself when opened. Enter in the editor or
+an input explicitly reviews the current draft and saves it through the existing
+validation/API; a separate checkbox click is unnecessary. After a successful
+keyboard save, open and focus the next displayed, unconfirmed `exercise`
+interval at or after the saved window's end. Use response records and
+`findCoveringConfirmedRecord` to skip merged/covered confirmations; rest,
+unknown activity, unassessed gaps and hidden sub-second intervals are skipped.
+Missing values must still be entered; invalid drafts and failed saves retain
+the current editor. Ignore held Enter, modifiers and IME composition (including
+key code 229), and preserve native Enter on buttons/selects/links/textareas.
+Keep a synchronous in-flight save guard as React state alone cannot prevent two
+same-tick requests. Release it after the successful response/cache update;
+benchmark and diagnostic query refreshes run in the background so they cannot
+disable the next editor. Mouse saving retains the existing review-checkbox and close
+behavior. These UI actions never start recognition diagnostics automatically.
 
 Performance records preserve source, original candidate and user-confirmed values. `workout_prescription` uses `analysis_results.wod_description`, falling back to `sessions.wod_description` like reads do. `performed_at` and `performed_at_source` refer to the workout's resolved time, never the confirmation time. The server derives repetitions/minute from confirmed `elapsed_seconds` (including observed pauses), distinguishes actual 60-second windows from normalized rates, and derives median cycle seconds only when complete event evidence matches the confirmed window/count. Verified continuous capture timing takes precedence when media and capture durations differ; ambiguous partial mappings cannot produce a rate. Missing values are null. Preserve original weight/unit; comparison uses kg rounded to one decimal, with total/per-implement bases separate.
 

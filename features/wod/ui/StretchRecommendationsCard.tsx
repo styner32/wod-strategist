@@ -1,6 +1,9 @@
 import React from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { TacticalTheme } from "@/constants/theme";
 import { t } from "@/features/i18n";
+
+const T = TacticalTheme.light;
 
 export interface StretchRecommendationItem {
   stretch: string;
@@ -96,25 +99,27 @@ export function StretchRecommendationsCard({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#1C1C1E",
+    backgroundColor: T.surfaceMuted,
     borderRadius: 12,
     padding: 14,
     marginTop: 12,
     borderWidth: 1,
-    borderColor: "#2C2C2E",
+    borderColor: T.border,
   },
   title: {
-    color: "#FFFFFF",
+    color: T.ink,
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "800",
     marginBottom: 10,
   },
   list: {
     gap: 10,
   },
   itemRow: {
-    backgroundColor: "#2C2C2E",
-    borderRadius: 10,
+    backgroundColor: T.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.border,
     padding: 12,
   },
   headerRow: {
@@ -122,10 +127,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 6,
+    gap: 8,
   },
   leftHeader: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
     gap: 8,
     flex: 1,
   },
@@ -135,57 +142,63 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   chevron: {
-    color: "#8E8E93",
+    color: T.inkMuted,
     fontSize: 18,
-    fontWeight: "600",
+    fontWeight: "700",
     marginLeft: 4,
   },
   stretchName: {
-    color: "#FFD60A",
+    color: T.ink,
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "800",
+    flexShrink: 1,
   },
   targetBadge: {
-    backgroundColor: "rgba(255, 214, 10, 0.15)",
-    paddingHorizontal: 6,
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
+    paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 6,
   },
   targetText: {
-    color: "#FFD60A",
+    color: T.voltInk,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "800",
   },
   provisionalBadge: {
-    backgroundColor: "rgba(255, 159, 10, 0.2)",
+    backgroundColor: T.statusWarningBg,
+    borderWidth: 1,
+    borderColor: T.statusWarningBorder,
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 4,
+    borderRadius: 6,
   },
   provisionalText: {
-    color: "#FF9F0A",
+    color: T.statusWarning,
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   reasonText: {
-    color: "#E5E5EA",
+    color: T.inkSecondary,
     fontSize: 13,
     lineHeight: 18,
   },
   hintText: {
-    color: "#8E8E93",
+    color: T.inkMuted,
     fontSize: 11,
     marginTop: 6,
   },
   cautionText: {
-    color: "#FF453A",
+    color: T.statusExhausted,
+    fontWeight: "600",
     fontSize: 11,
     marginTop: 4,
   },
   tapDetailHint: {
-    color: "#64D2FF",
+    color: T.electricBlue,
     fontSize: 11,
     marginTop: 6,
-    fontWeight: "500",
+    fontWeight: "700",
   },
 });

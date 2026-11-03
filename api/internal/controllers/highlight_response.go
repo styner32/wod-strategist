@@ -162,6 +162,8 @@ func populateSessionFatigueWithSchema(res *db.AnalysisResult, schemaVersion int)
 		}
 	} else if res.SensorState == db.SensorStatePending || res.SensorState == db.SensorStateRunning || res.SensorState == db.SensorStateUploading {
 		sensorStatus = "pending"
+	} else if res.SensorState == db.SensorStateCancelled {
+		sensorStatus = "unavailable"
 	} else if res.SensorState == db.SensorStateFailed || res.SensorState == db.SensorStateExpired {
 		sensorStatus = "failed"
 	}

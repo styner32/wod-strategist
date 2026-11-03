@@ -130,4 +130,85 @@ var _ = Describe("Observation-only prompt boundaries", func() {
 			Expect(prompt).To(ContainSubstring("운동은 보이지만 정확한 종목이 불명확하면 [EXERCISE: Unknown]"))
 		}
 	})
+
+	It("enforces visual takeoff distinction for Box Jump vs Box Step-up and boundary incomplete_cycle rules", func() {
+		wCounting := NewWorker(nil, nil, "", nil, nil, zap.NewNop())
+		wCounting.ActivityCountingEnabled = true
+
+		segPrompt := wCounting.buildSegmentAnalysisPrompt(
+			VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over", Movements: []string{"Box Jump Over"}},
+			Segment{Start: "14:10", End: "14:30", Type: "Box Jump Over"},
+			"", "", false,
+		)
+		checkBoundary(segPrompt)
+		Expect(segPrompt).To(ContainSubstring("Box Step-up / Box Step-over"))
+		Expect(segPrompt).To(ContainSubstring("두 발이 바닥에서 동시에 떨어져"))
+		Expect(segPrompt).To(ContainSubstring(`emit activity "rest" with target_confirmed true`))
+
+		livePrompts := []string{
+			wCounting.buildChunkAnalysisPrompt(VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over"}) + wCounting.livePrompt(1),
+			wCounting.buildChunkAnalysisWithSessionPrompt(VideoAnalysisWithSessionPayload{}, &db.Profile{}, &db.Session{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over"}) + wCounting.livePrompt(1),
+		}
+		for _, basePrompt := range []string{
+			wCounting.buildChunkAnalysisPrompt(VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over"}),
+			wCounting.buildChunkAnalysisWithSessionPrompt(VideoAnalysisWithSessionPayload{}, &db.Profile{}, &db.Session{WorkoutType: WorkoutTypeWOD, WODDescription: "Box Jump Over"}),
+		} {
+			checkBoundary(basePrompt)
+			Expect(basePrompt).To(ContainSubstring("Box Step-up / Box Step-over"))
+		}
+		for _, lp := range livePrompts {
+			Expect(lp).To(ContainSubstring("Box Step-up"))
+			Expect(lp).To(ContainSubstring("reason: incomplete_cycle"))
+		}
+	})
+
+	It("injects TravelingMovementPolicyPrompt only for traveling lunge / Burpee Broad Jump contexts while keeping stationary prompts untouched", func() {
+		stationaryChunk := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{
+			WorkoutType:    WorkoutTypeWOD,
+			WODDescription: "AMRAP 10m:\n12 DB Overhead Lunges\n12 Pull-ups",
+			Movements:      []string{"DB Overhead Lunge", "Pull-up"},
+		})
+		checkBoundary(stationaryChunk)
+		Expect(stationaryChunk).NotTo(ContainSubstring("이동형 종목 관찰 규칙"))
+
+		travelingChunk := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{
+			WorkoutType:    WorkoutTypeWOD,
+			WODDescription: "For Time:\n200ft Dumbbell Overhead Lunge\n30 Pull-ups",
+			Movements:      []string{"Dumbbell Overhead Lunge", "Pull-up"},
+		})
+		checkBoundary(travelingChunk)
+		Expect(travelingChunk).To(ContainSubstring("이동형 종목 관찰 규칙"))
+		Expect(travelingChunk).To(ContainSubstring("DB Overhead Walking Lunge"))
+		Expect(travelingChunk).To(ContainSubstring(`unit: "seconds"`))
+
+		// In a mixed WOD, a stationary Thruster segment in Pass 2 must NOT receive TravelingMovementPolicyPrompt.
+		mixedPayload := VideoAnalysisPayload{
+			WorkoutType:    WorkoutTypeWOD,
+			WODDescription: "For Time:\n21 Thrusters\n200ft DB Overhead Walking Lunge",
+			Movements:      []string{"Thruster", "DB Overhead Walking Lunge"},
+		}
+		thrusterSegPrompt := w.buildSegmentAnalysisPrompt(mixedPayload, Segment{Start: "0:00", End: "0:40", Type: "Thruster"}, "", "", false)
+		checkBoundary(thrusterSegPrompt)
+		Expect(thrusterSegPrompt).NotTo(ContainSubstring("이동형 종목 관찰 규칙"))
+
+		pureThrusterSegPrompt := w.buildSegmentAnalysisPrompt(
+			VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD, WODDescription: "For Time:\n21 Thrusters\n200ft DB Overhead Walking Lunge", Movements: []string{"Thruster", "DB Overhead Walking Lunge"}},
+			Segment{Start: "0:00", End: "0:40", Type: "Thruster"},
+			"", "", false,
+		)
+		Expect(thrusterSegPrompt).To(Equal(pureThrusterSegPrompt))
+
+		lungeSegPrompt := w.buildSegmentAnalysisPrompt(mixedPayload, Segment{Start: "0:45", End: "1:30", Type: "Dumbbell Overhead Lunge"}, "", "", false)
+		checkBoundary(lungeSegPrompt)
+		Expect(lungeSegPrompt).To(ContainSubstring("이동형 종목 관찰 규칙"))
+
+		bbjSegPrompt := w.buildSegmentAnalysisPrompt(
+			VideoAnalysisPayload{WorkoutType: WorkoutTypeWOD, Movements: []string{"Burpee Broad Jump"}},
+			Segment{Start: "1:30", End: "2:10", Type: "Burpee Broad Jump"},
+			"", "", false,
+		)
+		checkBoundary(bbjSegPrompt)
+		Expect(bbjSegPrompt).To(ContainSubstring("이동형 종목 관찰 규칙"))
+		Expect(bbjSegPrompt).To(ContainSubstring("Burpee Broad Jump"))
+	})
 })

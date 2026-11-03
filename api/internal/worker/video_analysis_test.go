@@ -8,7 +8,10 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -443,6 +446,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	)
 
 	var (
+		dbOnce           sync.Once
 		dbConn           *gorm.DB
 		storageTransport *testhelpers.MockTransport
 		queueClient      *asynq.Client
@@ -530,9 +534,11 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 	}
 
 	BeforeEach(func() {
-		var err error
-		dbConn, err = testhelpers.InitDB()
-		Expect(err).NotTo(HaveOccurred())
+		dbOnce.Do(func() {
+			var err error
+			dbConn, err = testhelpers.InitDB()
+			Expect(err).NotTo(HaveOccurred())
+		})
 		testhelpers.CleanupDB(dbConn)
 
 		storageTransport = testhelpers.NewMockTransport()
@@ -541,7 +547,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 
 		queueClient = testhelpers.NewQueueClient()
 		inspector = testhelpers.NewQueueInspector()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		logger, _ := zap.NewDevelopment()
 		w = &Worker{
@@ -866,12 +872,59 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		err := w.HandleVideoAnalysisTask(context.Background(), task)
 		Expect(err).To(MatchError(ContainSubstring("invalid file path")))
 	})
+
+	It("rejects legacy analysis videos longer than 90 minutes before calling Gemini while ensuring merged.mp4 playback", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not found in PATH")
+		}
+		Expect(maxAnalysisVideoDuration).To(Equal(90 * time.Minute))
+
+		const sessionID = "COOLDOWN-20261029-01JLEGACYOVERLONG000000000"
+		testhelpers.CreateSession(dbConn, &db.Session{SessionID: sessionID, ProfileID: profileID, WorkoutType: WorkoutTypeCooldown})
+
+		overlongBytes := createDurationMP4Bytes(GinkgoT(), 5460) // 91 minutes (> 90m)
+		source := fmt.Sprintf("gs://test-bucket/videos/%d/%s/upload.mp4", profileID, sessionID)
+		mergedObject := fmt.Sprintf("videos/%d/%s/merged.mp4", profileID, sessionID)
+
+		testhelpers.MockGCSDownloadWithBody(storageTransport, source, overlongBytes)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", mergedObject, []string{})
+		testhelpers.MockGCSUpload(storageTransport, "test-bucket", "merged")
+
+		geminiTransport := testhelpers.NewMockTransport()
+		realClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:     geminiAPIKey,
+			BaseURL:    geminiBaseURL,
+			HTTPClient: &http.Client{Transport: geminiTransport},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		w.GeminiClient = realClient
+
+		task := makeVideoAnalysisTask(VideoAnalysisPayload{
+			SessionID:   sessionID,
+			ProfileID:   profileID,
+			FilePath:    source,
+			WorkoutType: WorkoutTypeCooldown,
+		})
+
+		err = w.HandleVideoAnalysisTask(context.Background(), task)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
+		Expect(geminiTransport.Requests()).To(BeEmpty(), "overlong legacy video must not invoke Gemini")
+		Expect(storageTransport.Verify()).To(Succeed())
+
+		var result db.AnalysisResult
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&result).Error).To(Succeed())
+		Expect(result.Status).To(Equal("FAILED"))
+		Expect(result.Output).To(Equal(videoTooLongUserMessage))
+		Expect([]string(result.AvailableVideos)).To(Equal([]string{"merged"}))
+	})
 })
 
 var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 	var (
 		geminiBaseURL    = "https://generativelanguage.googleapis.com"
 		geminiAPIKey     = "test-api-key"
+		dbOnce           sync.Once
 		dbConn           *gorm.DB
 		storageTransport *testhelpers.MockTransport
 		queueClient      *asynq.Client
@@ -944,11 +997,11 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("Locate the earliest actual WOD exercise onset").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"seconds":0,"target_confirmed":true,"preceding_activity":"rest_setup","evidence":"target begins the first visible exercise at video time zero"}`}}}}}})
 		}
 
-		// Segment 1 (Snatch) analysis
+		// Segment 1 (Snatch) analysis — 45..50s walking gap is bisected at 47.5s for rest-boundary spillover context.
 		transport.New(geminiBaseURL).
 			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
-			MatchBodyContains(`"startOffset":"0s"`).MatchBodyContains(`"endOffset":"45s"`).
+			MatchBodyContains(`"startOffset":"0s"`).MatchBodyContains(`"endOffset":"47.500s"`).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
 				"candidates": []map[string]any{{
@@ -958,11 +1011,11 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 				}},
 			})
 
-		// Segment 2 (Pull-up) analysis
+		// Segment 2 (Pull-up) analysis — leading rest-boundary spillover starts at 47.5s.
 		transport.New(geminiBaseURL).
 			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
-			MatchBodyContains(`"startOffset":"50s"`).MatchBodyContains(`"endOffset":"90s"`).
+			MatchBodyContains(`"startOffset":"47.500s"`).MatchBodyContains(`"endOffset":"90s"`).
 			Reply(http.StatusOK).
 			JSON(map[string]any{
 				"candidates": []map[string]any{{
@@ -1044,14 +1097,16 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 	}
 
 	BeforeEach(func() {
-		var err error
-		dbConn, err = testhelpers.InitDB()
-		Expect(err).NotTo(HaveOccurred())
+		dbOnce.Do(func() {
+			var err error
+			dbConn, err = testhelpers.InitDB()
+			Expect(err).NotTo(HaveOccurred())
+		})
 		testhelpers.CleanupDB(dbConn)
 
 		queueClient = testhelpers.NewQueueClient()
 		inspector = testhelpers.NewQueueInspector()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		storageTransport = testhelpers.NewMockTransport()
 		storageClient, sErr := testhelpers.NewStorageClient("test-bucket", storageTransport)
@@ -1290,6 +1345,135 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(progress.Intervals).To(HaveLen(2))
 		Expect(progress.Unassessed).To(Equal([]workoutprogress.Gap{{Start: 45, End: 50, Clock: "media", Reason: skippedNonExerciseReason}}))
+	})
+
+	It("rejects videos longer than 90 minutes before FFmpeg re-encode or Gemini upload while preserving merged.mp4 playback", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not found in PATH")
+		}
+		Expect(maxAnalysisVideoDuration).To(Equal(90 * time.Minute))
+
+		const sessionID = "WOD-20261029-01JTWOPASSOVERLONG00000000"
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:   sessionID,
+			ProfileID:   profileID,
+			WorkoutType: WorkoutTypeWOD,
+		})
+
+		overlongBytes := createDurationMP4Bytes(GinkgoT(), 5460) // 91 minutes (> 90m)
+		source := fmt.Sprintf("gs://test-bucket/videos/%d/%s/upload.mp4", profileID, sessionID)
+		mergedObject := fmt.Sprintf("videos/%d/%s/merged.mp4", profileID, sessionID)
+
+		testhelpers.MockGCSDownloadWithBody(storageTransport, source, overlongBytes)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", mergedObject, []string{})
+		testhelpers.MockGCSUpload(storageTransport, "test-bucket", "merged")
+
+		geminiTransport := testhelpers.NewMockTransport()
+		realClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:     geminiAPIKey,
+			BaseURL:    geminiBaseURL,
+			HTTPClient: &http.Client{Transport: geminiTransport},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		w.GeminiClient = realClient
+
+		task := makeVideoAnalysisTask(VideoAnalysisPayload{
+			SessionID:   sessionID,
+			ProfileID:   profileID,
+			FilePath:    source,
+			WorkoutType: WorkoutTypeWOD,
+		})
+
+		err = w.HandleVideoAnalysisTask(context.Background(), task)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
+		Expect(geminiTransport.Requests()).To(BeEmpty(), "overlong video must be rejected before Gemini upload")
+		Expect(storageTransport.Verify()).To(Succeed())
+
+		var result db.AnalysisResult
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&result).Error).To(Succeed())
+		Expect(result.Status).To(Equal("FAILED"))
+		Expect(result.Output).To(Equal(videoTooLongUserMessage))
+		Expect([]string(result.AvailableVideos)).To(Equal([]string{"merged"}))
+
+		pending, err := inspector.ListPendingTasks("default")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pending).To(BeEmpty(), "failed overlong session must not enqueue hardsub or enrichment")
+	})
+
+	It("deletes uploaded Gemini file and skips Pass 1/2 when Gemini reports videoDuration > 90m after unprobed local file", func() {
+		const sessionID = "WOD-20261029-01JTWOPASSGEMINIDUR0000000"
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:   sessionID,
+			ProfileID:   profileID,
+			WorkoutType: WorkoutTypeWOD,
+		})
+
+		mergedObject := fmt.Sprintf("videos/%d/%s/merged.mp4", profileID, sessionID)
+		source := "gs://test-bucket/" + mergedObject
+		// Non-MP4 bytes cause local probeVideoDuration to return 0, exercising the post-UploadVideo fallback check.
+		testhelpers.MockGCSDownload(storageTransport, source)
+		testhelpers.MockGCSListObjects(storageTransport, "test-bucket", mergedObject, []string{mergedObject})
+
+		geminiTransport := testhelpers.NewMockTransport()
+		realClient, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
+			APIKey:       geminiAPIKey,
+			BaseURL:      geminiBaseURL,
+			HTTPClient:   &http.Client{Transport: geminiTransport},
+			PollInterval: time.Millisecond,
+			Sleep:        func(time.Duration) {},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		w.GeminiClient = realClient
+
+		geminiTransport.New(geminiBaseURL).
+			Post("/upload/v1beta/files").
+			Reply(http.StatusOK).
+			Header("X-Goog-Upload-Url", geminiBaseURL+"/upload-session").
+			JSON(map[string]any{})
+		geminiTransport.New(geminiBaseURL).
+			Post("/upload-session").
+			Reply(http.StatusOK).
+			Header("X-Goog-Upload-Status", "final").
+			JSON(map[string]any{
+				"file": map[string]any{
+					"name": "files/overlong-file",
+					"uri":  geminiBaseURL + "/files/overlong-file",
+				},
+			})
+		geminiTransport.New(geminiBaseURL).
+			Get("/v1beta/files/overlong-file").
+			Reply(http.StatusOK).
+			JSON(map[string]any{
+				"name":          "files/overlong-file",
+				"state":         "ACTIVE",
+				"videoMetadata": map[string]any{"videoDuration": "5401s"},
+			})
+		geminiTransport.New(geminiBaseURL).
+			Delete("/v1beta/files/overlong-file").
+			Reply(http.StatusOK).
+			JSON(map[string]any{})
+
+		task := makeVideoAnalysisTask(VideoAnalysisPayload{
+			SessionID:   sessionID,
+			ProfileID:   profileID,
+			FilePath:    source,
+			WorkoutType: WorkoutTypeWOD,
+		})
+
+		err = w.HandleVideoAnalysisTask(context.Background(), task)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
+		Expect(geminiTransport.Verify()).To(Succeed())
+		for _, req := range geminiTransport.Requests() {
+			Expect(req.URL).NotTo(ContainSubstring(":generateContent"))
+		}
+
+		var result db.AnalysisResult
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", sessionID, profileID).First(&result).Error).To(Succeed())
+		Expect(result.Status).To(Equal("FAILED"))
+		Expect(result.Output).To(Equal(videoTooLongUserMessage))
+		Expect([]string(result.AvailableVideos)).To(Equal([]string{"merged"}))
 	})
 })
 
@@ -1647,3 +1831,47 @@ var _ = Describe("parseTriagedSegments", func() {
 		Expect(result).To(HaveLen(2))
 	})
 })
+
+var _ = Describe("shouldSplitVideoForPass1", func() {
+	DescribeTable("decides Pass 1 splitting using media-clock coverage and non-exercise chunks",
+		func(segments, skipped []Segment, videoDuration, maxMediaEndSecs float64, want bool) {
+			Expect(shouldSplitVideoForPass1(segments, skipped, videoDuration, maxMediaEndSecs)).To(Equal(want))
+		},
+		Entry("uploaded video with no chunks splits",
+			nil, nil, 120.0, 0.0, true,
+		),
+		Entry("mobile session with full media_end_secs coverage does not split despite Pause",
+			[]Segment{{Start: "0:00", End: "43:59", Type: "Exercise"}}, nil, 2639.3, 2639.3, false,
+		),
+		Entry("rest-only mobile session with verified skippedSegments does not re-split",
+			nil, []Segment{{Start: "0:00", End: "0:30", Type: "Rest"}}, 30.0, 30.0, false,
+		),
+		Entry("session missing >10s of trailing media coverage triggers split",
+			[]Segment{{Start: "0:00", End: "0:20", Type: "Exercise"}}, nil, 45.0, 20.0, true,
+		),
+		Entry("tiny muxer duration rounding (<10s) does not trigger split",
+			[]Segment{{Start: "0:00", End: "43:59", Type: "Exercise"}}, nil, 2639.8, 2639.3, false,
+		),
+	)
+})
+
+func createDurationMP4Bytes(t GinkgoTInterface, durationSecs int) []byte {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), fmt.Sprintf("duration_%ds.mp4", durationSecs))
+	out, err := exec.Command(
+		"ffmpeg",
+		"-v", "error",
+		"-nostdin",
+		"-f", "lavfi",
+		"-i", "color=c=black:s=16x16:r=1/60",
+		"-t", fmt.Sprintf("%d", durationSecs),
+		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-pix_fmt", "yuv420p",
+		"-y", path,
+	).CombinedOutput()
+	Expect(err).NotTo(HaveOccurred(), string(out))
+	data, readErr := os.ReadFile(path)
+	Expect(readErr).NotTo(HaveOccurred())
+	return data
+}

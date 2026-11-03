@@ -1,6 +1,13 @@
-import React, { useState } from 'react';
-import { ActivityIndicator, Alert, Image, Linking, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, AppState, Image, Linking, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { TacticalTheme } from '@/constants/theme';
 import { t, useLocale } from '../i18n';
+import { useFocusEffect } from 'expo-router';
+import { useAuthStore } from '../auth/useAuthStore';
+import { subscribeHistoryChanges } from '../wod/archiveStates';
+import { readEligibleEnvironmentHistory } from './eligibleHistory';
+
+const T = TacticalTheme.light;
 import { useProfileId } from '../../store/useProfileStore';
 import { aggregateHabits, checkObservation, latestReview } from './observation';
 import { deleteEnvironmentSession, evidencePath, listSessions, readRecords } from './store';
@@ -22,6 +29,15 @@ export function EnvironmentLiveCard({ status, record }: { status: string; record
 export function EnvironmentHistoryCard({ sessionId, profileId }: { sessionId: string; profileId?: number }) {
   useLocale();
   const activeProfile = useProfileId();
+  const ownerUserId = useAuthStore(s => s.userId);
+  const pid = profileId ?? activeProfile;
+  const scope = `${ownerUserId}:${activeProfile}:${pid}:${sessionId}`;
+  const scopeRef = useRef(scope); scopeRef.current = scope;
+  const loadRequest = useRef(0);
+  const openRef = useRef(false);
+  const focusedRef = useRef(false);
+  const [loadedScope, setLoadedScope] = useState("");
+  const [aggregationUnavailable, setAggregationUnavailable] = useState(false);
   const [session, setSession] = useState<EnvironmentSession | null>(null);
   const [records, setRecords] = useState<EnvironmentRecord[] | null>(null);
   const [allRecords, setAllRecords] = useState<EnvironmentRecord[]>([]);
@@ -34,37 +50,67 @@ export function EnvironmentHistoryCard({ sessionId, profileId }: { sessionId: st
   const [correctedObservation, setCorrectedObservation] = useState('');
   const [visibleCount, setVisibleCount] = useState(30);
   const [habitEvidence, setHabitEvidence] = useState<EnvironmentRecord | null>(null);
-  const load = async () => {
-    const pid = profileId ?? activeProfile;
-    if (!pid) return;
-    const sessions = (await listSessions(pid)).filter(s => !s.deleting).slice(0,30);
-    const current = sessions.find(s => s.sessionId === sessionId) ?? (await listSessions(pid)).find(s => s.sessionId === sessionId);
-    const history: EnvironmentRecord[] = [];
-    for (const s of sessions) history.push(...await readRecords(s));
-    setAllRecords(history); setSession(current ?? null);
-    setRecords(current ? await readRecords(current) : []);
-  };
+  const load = useCallback(async () => {
+    if (scopeRef.current !== scope || !focusedRef.current || !openRef.current) return;
+    const request = ++loadRequest.current;
+    const current = () => request === loadRequest.current && scopeRef.current === scope;
+    setAllRecords([]); setHabitEvidence(null); setAggregationUnavailable(false);
+    if (!pid || !ownerUserId) return;
+    const sessions = (await listSessions(pid)).filter(s => !s.deleting && s.ownerUserId === ownerUserId);
+    const selectedSession = sessions.find(s => s.sessionId === sessionId);
+    const raw = selectedSession ? await readRecords(selectedSession) : [];
+    if (!current()) return;
+    setSession(selectedSession ?? null); setRecords(raw); setLoadedScope(scope);
+    try {
+      const history = await readEligibleEnvironmentHistory(pid);
+      if (current()) setAllRecords(history);
+    } catch { if (current()) { setAllRecords([]); setAggregationUnavailable(true); } }
+  }, [pid, ownerUserId, scope, sessionId]);
+  useEffect(() => {
+    ++loadRequest.current; openRef.current = false;
+    setRecords(null); setAllRecords([]); setSession(null); setHabitEvidence(null);
+    setBusy(false); setError(false);
+    return () => { ++loadRequest.current; };
+  }, [scope]);
+  useFocusEffect(useCallback(() => {
+    focusedRef.current = true;
+    if (openRef.current) void load().catch(() => setError(true));
+    return () => { focusedRef.current = false; ++loadRequest.current; setAllRecords([]); setHabitEvidence(null); };
+  }, [load]));
+  useEffect(() => {
+    const app = AppState.addEventListener('change', state => {
+      ++loadRequest.current; setAllRecords([]); setHabitEvidence(null);
+      if (state === 'active' && focusedRef.current && openRef.current) void load().catch(() => setError(true));
+    });
+    const unsubscribe = subscribeHistoryChanges(profile => {
+      if (profile === pid && focusedRef.current && openRef.current) void load().catch(() => setError(true));
+    });
+    return () => { app.remove(); unsubscribe(); };
+  }, [pid, load]);
   const action = async (fn: () => Promise<unknown>) => {
+    if (scopeRef.current !== scope) return;
     setBusy(true); setError(false);
-    try { await fn(); } catch { setError(true); } finally { setBusy(false); }
+    try { await fn(); } catch { if (scopeRef.current === scope) setError(true); }
+    finally { if (scopeRef.current === scope) setBusy(false); }
   };
   const button = (label: string, onPress: () => void) => <TouchableOpacity disabled={busy} onPress={onPress} style={styles.button}><Text style={styles.link}>{label}</Text></TouchableOpacity>;
   const observations = (records ?? []).filter(r => r.kind !== 'review');
   const ai = observations.filter(r => ['FoundationModels','SoundAnalysis'].includes(r.source) && r.outcome !== 'skipped');
   return <View style={styles.card}>
-    {button(t('environment.history'), () => { if (records) setRecords(null); else void action(load); })}
-    {busy && <ActivityIndicator />}
+    {button(t('environment.history'), () => { openRef.current = !openRef.current; if (!openRef.current) { ++loadRequest.current; setRecords(null); setAllRecords([]); setHabitEvidence(null); } else void action(load); })}
+    {busy && <ActivityIndicator color={T.electricBlue} />}
     {error && <Text style={styles.text}>{t('environment.actionError')}</Text>}
-    {records && <>
+    {records && loadedScope === scope && <>
       <Text style={styles.text}>{t('environment.localScope')}</Text>
       {!session && <Text style={styles.text}>{t('environment.noData')}</Text>}
       <Text style={styles.text}>{t('environment.execution', { count: ai.length, success: ai.filter(r => r.outcome === 'success').length,
         ms: ai.length ? Math.round(ai.reduce((sum,r) => sum+r.inferenceMs,0)/ai.length) : 0,
         reviewed: records.filter(r => r.review).length })}</Text>
+      {aggregationUnavailable && <Text style={styles.text}>{t('environment.archiveVerificationUnavailable')}</Text>}
       {aggregateHabits(allRecords).map(h => <View key={h.behavior}>
         <Text style={styles.text}>{t(`environment.behavior.${h.behavior}`)} · {t(h.repeated ? 'environment.repeated' : 'environment.observed', { count: h.evidence.length })}</Text>
         <View style={{ flexDirection:'row', flexWrap:'wrap' }}>{h.evidence.map(e => <React.Fragment key={e.recordId}>
-          {button(new Date(e.at).toLocaleDateString(), () => setHabitEvidence(allRecords.find(r => r.id === e.recordId) ?? null))}
+          {button(new Date(e.at).toLocaleDateString(), () => void action(async () => { const history = await readEligibleEnvironmentHistory(pid!); if (scopeRef.current === scope) { setAllRecords(history); setHabitEvidence(history.find(r => r.id === e.recordId) ?? null); } }))}
         </React.Fragment>)}</View>
       </View>)}
       {habitEvidence && <View>
@@ -73,7 +119,7 @@ export function EnvironmentHistoryCard({ sessionId, profileId }: { sessionId: st
         {habitEvidence.evidence.filter(e => e.mime === 'image/jpeg').map(e => <Image key={e.filename}
           source={{ uri: evidencePath(habitEvidence.bundleId,e.filename) }} style={{ width:'100%',height:160 }} resizeMode="contain" />)}
       </View>}
-      {session && button(t('environment.summarize'), () => void action(async () => { await summarizeHabits(session, allRecords); await load(); }))}
+      {session && !aggregationUnavailable && button(t('environment.summarize'), () => void action(async () => { await summarizeHabits(session, allRecords); await load(); }))}
       <ScrollView style={{ maxHeight: 520 }} nestedScrollEnabled>
         {observations.slice().reverse().slice(0,visibleCount).map(r => <View key={r.id} style={styles.entry}>
           {button(`${t(`environment.kind.${r.kind}`)} · ${new Date(r.startedAt).toLocaleTimeString()}`, () => { setSelected(selected === r.id ? null : r.id); setNote(''); setTargetConfirmed(false); setConfirmedBehaviors([]); setCorrectedObservation(''); })}
@@ -111,9 +157,9 @@ export function EnvironmentHistoryCard({ sessionId, profileId }: { sessionId: st
                   {button((confirmedBehaviors.includes(b) ? '✓ ' : '○ ') + t(`environment.behavior.${b}`), () => setConfirmedBehaviors(current => current.includes(b) ? current.filter(v => v !== b) : [...current, b]))}
                 </React.Fragment>)}</View>
                 <TextInput style={styles.input} value={correctedObservation} onChangeText={setCorrectedObservation} maxLength={2000}
-                  accessibilityLabel={t('environment.correctedObservation')} placeholder={t('environment.correctedObservation')} placeholderTextColor="#aaa" multiline />
+                  accessibilityLabel={t('environment.correctedObservation')} placeholder={t('environment.correctedObservation')} placeholderTextColor={T.inkMuted} multiline />
               </>}
-              <TextInput style={styles.input} value={note} onChangeText={setNote} maxLength={1000} placeholder={t('environment.note')} placeholderTextColor="#aaa" multiline />
+              <TextInput style={styles.input} value={note} onChangeText={setNote} maxLength={1000} placeholder={t('environment.note')} placeholderTextColor={T.inkMuted} multiline />
               <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>{(['correct','incorrect','abstract','uncertain'] as Verdict[]).map(v => <React.Fragment key={v}>
                 {button(t(`environment.verdict.${v}`), () => void action(async () => { await reviewObservation(session,r,v,note,{ targetConfirmed, confirmedBehaviors, correctedObservation }); await load(); }))}
               </React.Fragment>)}</View>
@@ -169,14 +215,31 @@ function WeatherEvidence({ data }: { data?: Record<string, unknown> }) {
   </View>;
 }
 const styles = StyleSheet.create({
-  card: { backgroundColor: '#253442', padding: 12, borderRadius: 10, marginVertical: 6 },
+  card: {
+    backgroundColor: T.surfaceMuted,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.border,
+    marginVertical: 6,
+  },
   liveCard: { backgroundColor: '#1c2834', padding: 8, borderRadius: 8, marginVertical: 4, borderWidth: 1, borderColor: '#3d5266' },
   liveHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   liveTitle: { color: '#cce9ff', fontWeight: '700', fontSize: 12 },
   liveStatus: { color: '#8ec5fc', fontSize: 10, fontWeight: '600' },
   liveText: { color: '#cbd5e1', fontSize: 11, lineHeight: 15, marginTop: 2 },
-  title: { color: '#cce9ff', fontWeight: '600' }, text: { color: '#ddd', fontSize: 12, lineHeight: 18, marginVertical: 4 },
-  link: { color: '#86ceff', fontSize: 13 }, button: { paddingVertical: 8, paddingRight: 12 },
-  entry: { borderTopWidth: 1, borderColor: '#53616b', paddingVertical: 6 },
-  input: { color: '#fff', borderWidth: 1, borderColor: '#64727e', padding: 8, borderRadius: 6 },
+  title: { color: T.ink, fontWeight: '800', flexShrink: 1 },
+  text: { color: T.inkSecondary, fontSize: 12, lineHeight: 18, marginVertical: 4, flexShrink: 1 },
+  link: { color: T.electricBlue, fontSize: 13, fontWeight: '700' },
+  button: { paddingVertical: 8, paddingRight: 12 },
+  entry: { borderTopWidth: 1, borderColor: T.border, paddingVertical: 8 },
+  input: {
+    color: T.ink,
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+    padding: 8,
+    borderRadius: 8,
+    marginVertical: 4,
+  },
 });

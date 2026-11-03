@@ -1,6 +1,9 @@
-import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { Fonts, TacticalTheme } from "@/constants/theme";
 import { t } from "@/features/i18n";
+import React from "react";
+import { StyleSheet, Text, View } from "react-native";
+
+const T = TacticalTheme.light;
 
 export interface NormalizedMovement {
   movement: string;
@@ -74,7 +77,9 @@ export function RelatedWodsCard({ related }: RelatedWodsCardProps) {
           return (
             <View key={item.session_id} style={styles.itemRow}>
               <View style={styles.headerRow}>
-                <Text style={styles.dateText}>{formatDate(item.created_at)}</Text>
+                <Text style={styles.dateText}>
+                  {formatDate(item.created_at)}
+                </Text>
                 {overallScore != null && (
                   <View style={styles.scoreBadge}>
                     <Text style={styles.scoreText}>
@@ -115,81 +120,102 @@ export function RelatedWodsCard({ related }: RelatedWodsCardProps) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: "#141A22",
-    borderRadius: 12,
-    padding: 14,
+    backgroundColor: T.surface,
+    borderRadius: 16,
+    padding: 16,
     borderWidth: 1,
-    borderColor: "#222",
-    marginTop: 16,
+    borderColor: T.border,
+    marginTop: 14,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   title: {
-    color: "#00E5FF",
+    color: T.ink,
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "800",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
     marginBottom: 10,
   },
   list: {
     gap: 10,
   },
   itemRow: {
-    backgroundColor: "#1A222D",
-    borderRadius: 8,
-    padding: 10,
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 12,
+    padding: 12,
     borderWidth: 1,
-    borderColor: "#2A3442",
+    borderColor: T.border,
   },
   headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 4,
+    gap: 8,
   },
   dateText: {
-    color: "#888",
-    fontSize: 12,
-  },
-  scoreBadge: {
-    backgroundColor: "#1E2A38",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  scoreText: {
-    color: "#00E5FF",
+    fontFamily: Fonts?.mono,
+    color: T.inkMuted,
     fontSize: 11,
     fontWeight: "600",
+    flexShrink: 1,
+  },
+  scoreBadge: {
+    backgroundColor: T.electricBlueBg,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
+  },
+  scoreText: {
+    fontFamily: Fonts?.mono,
+    color: T.electricBlue,
+    fontSize: 11,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
   },
   descText: {
-    color: "#E0E0E0",
+    color: T.inkSecondary,
     fontSize: 13,
     lineHeight: 18,
-    marginBottom: 6,
+    marginBottom: 8,
   },
   chipRow: {
     flexDirection: "row",
-    alignItems: "center",
+    flexWrap: "wrap",
     gap: 6,
+    alignItems: "center",
   },
   movementChip: {
-    backgroundColor: "#243040",
+    backgroundColor: T.surface,
     paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+  },
+  chipText: {
+    fontFamily: Fonts?.mono,
+    color: T.ink,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  mainBadge: {
+    backgroundColor: T.surfaceInverse,
+    paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 6,
   },
-  chipText: {
-    color: "#FFF",
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  mainBadge: {
-    backgroundColor: "#FF9800",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
   mainBadgeText: {
-    color: "#000",
+    fontFamily: Fonts?.mono,
+    color: T.volt,
     fontSize: 10,
-    fontWeight: "700",
+    fontWeight: "800",
+    textTransform: "uppercase",
   },
 });

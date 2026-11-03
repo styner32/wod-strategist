@@ -236,6 +236,11 @@ var _ = Describe("Auth Service", func() {
 				ProfileID: profile.ID,
 				Status:    db.SessionReanalysisStatusCompleted,
 			})
+			testhelpers.CreateRecognitionReviewRun(dbConn, &db.RecognitionReviewRun{
+				SessionID: "sess-delete-001",
+				ProfileID: profile.ID,
+				Status:    db.RecognitionReviewStatusCompleted,
+			})
 
 			thinking := int64(25)
 			Expect(cost.RecordUsage(dbConn, "sess-delete-001", profile.ID, userID, "video:analysis", "delete-test-req-1", &gemini.TokenUsage{
@@ -296,6 +301,10 @@ var _ = Describe("Auth Service", func() {
 			var sessionReanalysisCount int64
 			dbConn.Model(&db.SessionReanalysisRun{}).Where("profile_id = ?", profileID).Count(&sessionReanalysisCount)
 			Expect(sessionReanalysisCount).To(BeZero())
+
+			var recognitionReviewCount int64
+			Expect(dbConn.Model(&db.RecognitionReviewRun{}).Where("profile_id = ?", profileID).Count(&recognitionReviewCount).Error).To(Succeed())
+			Expect(recognitionReviewCount).To(BeZero())
 		})
 
 		It("rejects wrong password", func() {

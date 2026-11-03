@@ -563,7 +563,8 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		createRow(0, 10)
 		inspector := testhelpers.NewQueueInspector()
 		defer inspector.Close()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.CleanupQueueWithInspector(inspector)
+
 		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
 		for i := 0; i < 2; i++ {
 			storageTransport.New(testhelpers.GCSBaseURL).Get("/storage/v1/b/test-bucket/o/" + object).Reply(200).JSON(map[string]any{"name": object, "bucket": "test-bucket", "generation": "17"})
@@ -590,7 +591,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(json.Unmarshal(session.ActivitySummary, &partial)).To(Succeed())
 		Expect(partial.ReviewState).To(Equal("partial"))
 		Expect(storageTransport.Verify()).To(Succeed())
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.CleanupQueueWithInspector(inspector)
 	})
 
 	It("retains partial observations after a final review failure without failing full analysis", func() {
@@ -610,6 +611,34 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(summary.Movements[0].Count).To(Equal(1))
 		Expect(summary.Unassessed).NotTo(BeEmpty())
 		Expect(transport.Verify()).To(Succeed())
+	})
+
+	It("skips Gemini review calls and retains partial live observations when merged video exceeds 90 minutes", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not found in PATH")
+		}
+		Expect(maxAnalysisVideoDuration).To(Equal(90 * time.Minute))
+
+		createRow(0, 10)
+		rows, err := w.activityRows(context.Background(), profile.ID, session.SessionID)
+		Expect(err).NotTo(HaveOccurred())
+
+		overlongBytes := createDurationMP4Bytes(GinkgoT(), 5460) // 91 minutes (> 90m)
+		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
+		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+object, overlongBytes)
+
+		payload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, activity.SourceVersion(rows), object, 1})
+		Expect(w.HandleActivityReviewTask(context.Background(), asynq.NewTask(TypeActivityReview, payload))).To(Succeed())
+
+		Expect(transport.Requests()).To(BeEmpty(), "overlong activity review must not call Gemini")
+		Expect(storageTransport.Verify()).To(Succeed())
+		Expect(conn.First(&session, session.ID).Error).To(Succeed())
+		var summary activity.Summary
+		Expect(json.Unmarshal(session.ActivitySummary, &summary)).To(Succeed())
+		Expect(summary.ReviewState).To(Equal("partial"))
+		Expect(summary.Movements).To(HaveLen(1))
+		Expect(summary.Movements[0].Count).To(Equal(1))
+		Expect(summary.Unassessed).NotTo(BeEmpty())
 	})
 
 	It("completes rest->rest->rest sessions without downloading merged.mp4 or calling Gemini", func() {

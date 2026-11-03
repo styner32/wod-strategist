@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	geminiPkg "github.com/wod-strategist/api/internal/gemini"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/movement"
 	"go.uber.org/zap"
 )
 
@@ -64,10 +65,91 @@ const wodParsePrompt = `당신은 크로스핏 박스의 화이트보드 사진�
 ## 규칙
 - wod_description과 raw_text는 가독성과 모바일 앱에서의 쉬운 편집을 위해 **반드시 한 줄로 합치지 말고, 줄바꿈 문자(\\n)를 활용하여 여러 줄(multi-line)로 포맷팅**하여 반환하세요.
 - wod_description은 가능한 한 구체적으로 작성하세요 (세트, 반복수, 무게 포함). 각 운동이나 라운드 정보 사이에는 쉼표 대신 줄바꿈(\\n)을 포함하여 구조화하세요.
-- movements에는 교정된 공식 운동 이름만 포함하세요.
+- movements에는 교정된 공식 운동 이름만 포함하세요. 거리 단위(ft, m, yd, 미터, 피트 등 — 예: "200ft Dumbbell Overhead Lunge", "50m Front Rack Lunge")가 함께 적힌 런지 동작은 보행형 공식 명칭("DB Overhead Walking Lunge", "Front Rack Walking Lunge", "Walking Lunge" 등)으로 반환하고, 거리 단위 없이 횟수만 적힌 런지는 제자리/교대형 공식 명칭("DB Overhead Lunge", "Lunge" 등)으로 반환하세요.
 - raw_text에는 화이트보드 원본 레이아웃의 줄바꿈과 줄 번호 등을 그대로 살려 교정 전 원본 텍스트를 포함하세요.
 - 화이트보드를 읽을 수 없으면 빈 JSON을 반환하세요: {"wod_description": "", "movements": [], "raw_text": ""}
 - 운동과 관련 없는 텍스트(날짜, 공지사항 등)는 wod_description에서 제외하세요.`
+
+func buildWODParsePrompt() string {
+	return wodParsePrompt + "\n\n## 공식 운동 카탈로그\n[" + strings.Join(movement.All(), ", ") + "]"
+}
+
+var (
+	leadingOrTrailingClauseCountRe = regexp.MustCompile(`(?i)^\s*(?:\d+(?:[-/x]\d+)*(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|cal|cals|calories?|reps?|회|개|미터|피트|야드)?\s+)|(?:\s+\d+(?:[-/x]\d+)*(?:\.\d+)?\s*(?:ft|feet|foot|yd|yds|yard|yards|meter|meters|metres|m|cal|cals|calories?|reps?|회|개|미터|피트|야드)?)\s*$`)
+	subclauseParenOrAtRe           = regexp.MustCompile(`(?:\([^)]*\)|@[^\r\n,;:+|]*)`)
+)
+
+func resolveSubclauseMovementName(clause, wodDescription, rawText string) string {
+	trimmed := strings.TrimSpace(clause)
+	if trimmed == "" {
+		return ""
+	}
+	if promoted := movement.PromoteDistanceLunge(trimmed); promoted != "" {
+		return promoted
+	}
+	cleaned := strings.TrimSpace(strings.ReplaceAll(subclauseParenOrAtRe.ReplaceAllString(trimmed, " "), ":", " "))
+	if promoted := movement.PromoteDistanceLungeInWOD(cleaned, wodDescription, rawText); promoted != "" {
+		return promoted
+	}
+	if canon := movement.Canonical(cleaned); canon != "" {
+		return canon
+	}
+	stripped := strings.TrimSpace(leadingOrTrailingClauseCountRe.ReplaceAllString(cleaned, " "))
+	if stripped != "" && stripped != cleaned {
+		// A local rep prescription is more specific than a same-name movement
+		// prescribed elsewhere in the WOD.
+		if canon := movement.Canonical(stripped); canon != "" {
+			return canon
+		}
+	}
+	return ""
+}
+
+func normalizeParsedWorkoutMovements(movements []string, wodDescription, rawText string) []string {
+	if len(movements) == 0 {
+		return movements
+	}
+	out := make([]string, 0, len(movements))
+	seen := make(map[string]struct{}, len(movements))
+	appendUnique := func(resolved string) {
+		key := strings.ToLower(resolved)
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, resolved)
+	}
+	for _, raw := range movements {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if clauses := movement.SplitWorkoutClauses(trimmed); len(clauses) > 1 {
+			resolvedParts := make([]string, 0, len(clauses))
+			allResolved := true
+			for _, clause := range clauses {
+				r := resolveSubclauseMovementName(clause, wodDescription, rawText)
+				if r == "" {
+					allResolved = false
+					break
+				}
+				resolvedParts = append(resolvedParts, r)
+			}
+			if allResolved {
+				for _, r := range resolvedParts {
+					appendUnique(r)
+				}
+				continue
+			}
+		}
+		resolved := resolveSubclauseMovementName(trimmed, wodDescription, rawText)
+		if resolved == "" {
+			resolved = trimmed
+		}
+		appendUnique(resolved)
+	}
+	return out
+}
 
 // ParseWorkoutImage reads a whiteboard photo, sends it to Gemini Flash for
 // OCR + typo correction, and returns structured WOD data.
@@ -132,7 +214,7 @@ func (ctl *Controller) ParseWorkoutImage(c *gin.Context) {
 		zap.Int("normalized_bytes", len(normalized)))
 
 	// Call Gemini Flash for parsing
-	output, usage, err := ctl.imageParser.ParseImage(c.Request.Context(), normalized, normalizedMIME, wodParsePrompt)
+	output, usage, err := ctl.imageParser.ParseImage(c.Request.Context(), normalized, normalizedMIME, buildWODParsePrompt())
 	ctl.recordTokenUsage(c, 0, "image:workout", usage)
 	if err != nil {
 		logger.Log.Error("Gemini ParseImage failed", zap.Error(err))
@@ -152,6 +234,7 @@ func (ctl *Controller) ParseWorkoutImage(c *gin.Context) {
 		})
 		return
 	}
+	resp.Movements = normalizeParsedWorkoutMovements(resp.Movements, resp.WODDescription, resp.RawText)
 
 	c.JSON(http.StatusOK, resp)
 }

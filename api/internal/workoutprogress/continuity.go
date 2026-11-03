@@ -140,6 +140,26 @@ func moveObservations(from Interval, to *Interval) {
 }
 
 func absorbShortIntervals(items []Interval, boundaries []float64) []Interval {
+	mergeIntoNext := func(in Interval, next *Interval) {
+		moveObservations(in, next)
+		next.Start = in.Start
+		if next.CaptureStart != nil && in.CaptureStart != nil {
+			v := *in.CaptureStart
+			next.CaptureStart = &v
+		} else {
+			next.CaptureStart, next.CaptureEnd = nil, nil
+		}
+	}
+	mergeIntoPrev := func(in Interval, prev *Interval) {
+		moveObservations(in, prev)
+		prev.End = in.End
+		if prev.CaptureEnd != nil && in.CaptureEnd != nil {
+			v := *in.CaptureEnd
+			prev.CaptureEnd = &v
+		} else {
+			prev.CaptureStart, prev.CaptureEnd = nil, nil
+		}
+	}
 	for changed := true; changed; {
 		changed = false
 		for i := range items {
@@ -147,28 +167,25 @@ func absorbShortIntervals(items []Interval, boundaries []float64) []Interval {
 			if in.End-in.Start >= MinIntervalDurationSecs {
 				continue
 			}
-			// Prefer the following interval; at the end of a run use the preceding one.
-			if i+1 < len(items) && touches(in.End, items[i+1].Start) && !crossesHardBoundary(in.End, items[i+1].Start, boundaries) &&
-				(i == 0 || items[i-1].End <= in.Start+1e-6) {
-				next := &items[i+1]
-				moveObservations(in, next)
-				next.Start = in.Start
-				if next.CaptureStart != nil && in.CaptureStart != nil {
-					v := *in.CaptureStart
-					next.CaptureStart = &v
-				} else {
-					next.CaptureStart, next.CaptureEnd = nil, nil
-				}
-			} else if i > 0 && touches(items[i-1].End, in.Start) && !crossesHardBoundary(items[i-1].End, in.Start, boundaries) {
-				prev := &items[i-1]
-				moveObservations(in, prev)
-				prev.End = in.End
-				if prev.CaptureEnd != nil && in.CaptureEnd != nil {
-					v := *in.CaptureEnd
-					prev.CaptureEnd = &v
-				} else {
-					prev.CaptureStart, prev.CaptureEnd = nil, nil
-				}
+			canNext := i+1 < len(items) && touches(in.End, items[i+1].Start) && !crossesHardBoundary(in.End, items[i+1].Start, boundaries) &&
+				(i == 0 || items[i-1].End <= in.Start+1e-6)
+			canPrev := i > 0 && touches(items[i-1].End, in.Start) && !crossesHardBoundary(items[i-1].End, in.Start, boundaries) &&
+				(i+1 == len(items) || items[i+1].Start >= in.End-1e-6)
+			nextSame := canNext && sameMovement(in, items[i+1]) && sameLoad(in.Load, items[i+1].Load) && captureContinuous(in, items[i+1])
+			prevSame := canPrev && sameMovement(items[i-1], in) && sameLoad(items[i-1].Load, in.Load) && captureContinuous(items[i-1], in)
+
+			// Prefer a same-movement neighbor (following first, then preceding) so
+			// split-boundary fragments never drop completed reps into an adjacent
+			// different movement; otherwise keep the following-first fallback.
+			switch {
+			case nextSame:
+				mergeIntoNext(in, &items[i+1])
+			case prevSame:
+				mergeIntoPrev(in, &items[i-1])
+			case canNext:
+				mergeIntoNext(in, &items[i+1])
+			case i > 0 && touches(items[i-1].End, in.Start) && !crossesHardBoundary(items[i-1].End, in.Start, boundaries):
+				mergeIntoPrev(in, &items[i-1])
 			}
 			items = append(items[:i], items[i+1:]...)
 			changed = true

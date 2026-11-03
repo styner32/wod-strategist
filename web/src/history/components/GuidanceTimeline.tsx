@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
+import { historyStatusLabel } from '../historyArchive';
 import type {
   AnalysisFeedback,
   ChunkAnalysisResult,
@@ -69,12 +70,14 @@ function StatusBadge({ status }: { status: string }) {
   const normalized = status.toUpperCase();
   const classes = normalized === 'COMPLETED'
     ? 'bg-success/10 text-success'
+    : normalized === 'CANCELLED'
+      ? 'bg-bg-secondary text-text-muted'
     : normalized === 'FAILED'
       ? 'bg-error/10 text-error'
       : 'bg-warning/10 text-warning';
   return (
     <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${classes}`}>
-      {normalized.replaceAll('_', ' ')}
+      {historyStatusLabel(normalized).replaceAll('_', ' ')}
     </span>
   );
 }

@@ -31,20 +31,30 @@
   `false` to disable): `trackingInputs` supplies the single unified
   `target_person` instruction (`trackingOutputPrompt`, omitting legacy
   `TargetPersonPrompt` so duplicate blocks are never requested), attaches up to
-  two marked reference JPEGs (the
-  latest within 60 s of the chunk start, plus the session's first) and a
-  whitelisted `trackingHandoff` (matched cues, frame region, station, previous
-  activity state, non-authoritative movement hint). It never waits for a late
-  previous chunk. The chunk reports `target_person.boxes` (≤3, `{t, box_2d}` in
-  normalized [ymin,xmin,ymax,xmax] 0..1000), `frame_region`, `station` inside
-  the existing `target_cues` text column (no migration), even on `[NO_EXERCISE]`
-  chunks when the target person is visible, and does not force `confidence: 0.5`
-  when explicit appearance cues are absent. When
-  `target_confidence ≥ 0.7` and not ambiguous, `saveTrackingReference` renders
-  the last box onto that frame (ffmpeg + `image/draw`) to
+  two marked reference JPEGs (`trackingReferenceMaxWidth = 512`, placed **after**
+  the video `FileData` part in `AnalyzeChunkVideoWithImages` and
+  `AnalyzeSegmentWithModelAndImages` so static snapshots never bias dynamic motion
+  judgment; prefers `chunkActive` references over `[NO_EXERCISE]` rest chunks for
+  both the latest reference within 60 s of the chunk start and the session anchor)
+  and a whitelisted `trackingHandoff` (matched cues, frame region, station;
+  `activity_state: "exercise"` and `movement_hint` are included **only** when the
+  prior chunk is `chunkActive`, never injecting `"rest"` or `"unknown"`). It never
+  waits for a late previous chunk. The chunk reports `target_person.boxes` (≤3,
+  `{t, box_2d}` in normalized [ymin,xmin,ymax,xmax] 0..1000), `frame_region`,
+  `station` inside the existing `target_cues` text column (no migration), even on
+  `[NO_EXERCISE]` chunks when the target person is visible, keeping boxes on
+  inverted/prone athletes (HSPU, Burpee) rather than shifting to peripheral
+  bystanders, and does not force `confidence: 0.5` when explicit appearance cues
+  are absent. When `target_confidence ≥ 0.7` and not ambiguous,
+  `saveTrackingReference` filters boxes through `usableTrackingReferenceBox`
+  (`h ≥ 80`, `w ≥ 40`, `h*w ≥ 8000` on 0..1000) and `selectTrackingReferenceBox`
+  (preferring a box strictly inside an observed cycle `[ev.Start, max(ev.Start, ev.End-0.3)]`,
+  otherwise the middle usable box rather than the `t=9.0s` post-drop edge),
+  renders it onto that frame (ffmpeg + `image/draw`) to
   `videos/{pid}/{sid}/tracking/{chunkID}.jpg` and records `reference_image`;
-  failures never fail the chunk. Pass 2 (production and reanalysis) attaches the
-  reference nearest the window plus the session anchor. The web player overlays
+  failures never fail the chunk. Pass 2 (production and reanalysis) likewise
+  prefers active-chunk references for both the reference nearest the window and
+  the session anchor. The web player overlays
   the same boxes (toggle, default off; see [web-media-playback.md](web-media-playback.md)).
   New structured blocks are
   stripped before the legacy observed-signals regex is applied. Independent

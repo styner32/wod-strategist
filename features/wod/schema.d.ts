@@ -4,6 +4,82 @@
  */
 
 export interface paths {
+    "/appearance-from-image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Parse Appearance Image
+         * @description Extracts person visual appearance cues from a photo
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "multipart/form-data": {
+                        /**
+                         * Format: binary
+                         * @description Person photo (JPEG/PNG, max 10MB)
+                         */
+                        image: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.AppearanceInput"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Unprocessable Entity */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/chunk-analysis/:session_id": {
         parameters: {
             query?: never;
@@ -76,7 +152,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["controllers.CompleteUploadResponse"];
+                        "application/json": components["schemas"]["controllers.RecordingMediaChunkReceipt"];
                     };
                 };
             };
@@ -327,132 +403,6 @@ export interface paths {
         };
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/generate-hardsub": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Hardsubbed Video
-         * @description Creates a hardsubbed version of the video with burned-in subtitles
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            /** @description Session and profile */
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["controllers.GenerateHardSubRequest"];
-                };
-            };
-            responses: {
-                /** @description Accepted */
-                202: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.GenerateHardSubResponse"];
-                    };
-                };
-                /** @description Bad Request */
-                400: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.ErrorResponse"];
-                    };
-                };
-                /** @description Internal Server Error */
-                500: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.ErrorResponse"];
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/generate-highlight": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Generate Highlight
-         * @description Triggers short-form highlight video generation from WOD analysis for a session
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            /** @description Session ID and options */
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["controllers.GenerateHighlightRequest"];
-                };
-            };
-            responses: {
-                /** @description Accepted */
-                202: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-                /** @description Bad Request */
-                400: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.ErrorResponse"];
-                    };
-                };
-                /** @description Internal Server Error */
-                500: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.ErrorResponse"];
-                    };
-                };
-            };
-        };
         delete?: never;
         options?: never;
         head?: never;
@@ -834,40 +784,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/retry-analysis": {
+    "/performance-benchmarks": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
-        /**
-         * Retry Analysis
-         * @description Re-enqueues a video analysis task for a failed session using existing GCS files
-         */
-        post: {
+        /** Get confirmed workout performance benchmarks */
+        get: {
             parameters: {
-                query?: never;
+                query: {
+                    /** @description Owned profile ID */
+                    profile_id: number;
+                    /** @description Canonical movement or recognized alias */
+                    movement?: string;
+                };
                 header?: never;
                 path?: never;
                 cookie?: never;
             };
-            /** @description Session and profile */
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["controllers.RetryAnalysisRequest"];
-                };
-            };
+            requestBody?: never;
             responses: {
-                /** @description Accepted */
-                202: {
+                /** @description OK */
+                200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["controllers.RetryAnalysisResponse"];
+                        "application/json": components["schemas"]["controllers.PerformanceBenchmarksResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/related-wods": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Related WODs
+         * @description Returns nearest past WODs of the same profile containing the specified movement, ranked by recency, weight match, and main movement status.
+         */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Profile ID */
+                    profile_id: number;
+                    /** @description Movement name (Mode A) */
+                    movement?: string;
+                    /** @description Movement weight in kg (Mode A) */
+                    weight_kg?: number;
+                    /** @description Anchor session ID (Mode B) */
+                    session_id?: string;
+                    /** @description Max results (default 5, max 20) */
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.RelatedWODsResponse"];
                     };
                 };
                 /** @description Bad Request */
@@ -879,8 +907,8 @@ export interface paths {
                         "application/json": components["schemas"]["controllers.ErrorResponse"];
                     };
                 };
-                /** @description Not Found */
-                404: {
+                /** @description Forbidden */
+                403: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -899,6 +927,8 @@ export interface paths {
                 };
             };
         };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -941,6 +971,582 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{session_id}/performance-records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Confirm workout performance records */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Confirm interval, window, outcome, optional integer reps and actual load (or explicit null for no external load) */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.PerformanceRecordsRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.WorkoutProgressResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{session_id}/recognition-evaluation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Compare confirmed performance with original video recognition */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["recognitionreview.Evaluation"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{session_id}/recognition-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List recognition diagnoses */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ListRecognitionReviewsResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Manually diagnose selected video recognition errors */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Confirmed records and review range */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.CreateRecognitionReviewRequest"];
+                };
+            };
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.CreateRecognitionReviewResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Service Unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{session_id}/recognition-reviews/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a recognition diagnosis */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                    /** @description Diagnosis ID */
+                    run_id: number;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.RecognitionReviewRunResponse"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{session_id}/share-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a read-only workout context for explicit external sharing */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Owned profile ID */
+                    profile_id: number;
+                    /** @description IANA timezone (default Asia/Seoul) */
+                    timezone?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.WorkoutShareContextResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{session_id}/workout-progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get chronological workout observations */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.WorkoutProgressResponse"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/strategies/pre-wod-advice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get Pre-WOD Strategy & Scaling Advice
+         * @description Calculates 6-muscle group readiness from recent workouts and returns tailored coaching advice for today's WOD.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Pre-WOD Advice Request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["controllers.PreWODAdviceRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.PreWODAdviceResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.ErrorResponse"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -1122,70 +1728,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/verify-highlights": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Verify Highlights
-         * @description Triggers verification of highlight segments to detect hallucinated movements
-         */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            /** @description Session ID */
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["controllers.VerifyHighlightsRequest"];
-                };
-            };
-            responses: {
-                /** @description Accepted */
-                202: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-                /** @description Bad Request */
-                400: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.ErrorResponse"];
-                    };
-                };
-                /** @description Internal Server Error */
-                500: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.ErrorResponse"];
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/video-download/:session_id": {
         parameters: {
             query?: never;
@@ -1195,12 +1737,12 @@ export interface paths {
         };
         /**
          * Get Video Download URL
-         * @description Returns a time-limited signed URL for downloading the merged or hardsubbed video
+         * @description Returns a time-limited signed URL for one requested video kind
          */
         get: {
             parameters: {
                 query?: {
-                    /** @description Video kind: merged (default) or hardsubbed */
+                    /** @description Video kind: merged (default), hardsubbed, or encoded */
                     kind?: string;
                 };
                 header?: never;
@@ -1258,240 +1800,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/sessions/{session_id}/workout-progress": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get chronological workout observations */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    /** @description Owned session ID */
-                    session_id: string;
-                };
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.WorkoutProgressResponse"];
-                    };
-                };
-                /** @description Unauthorized */
-                401: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-                /** @description Forbidden */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-                /** @description Not Found */
-                404: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/sessions/{session_id}/performance-records": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Confirm workout performance records */
-        put: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path: {
-                    /** @description Owned session ID */
-                    session_id: string;
-                };
-                cookie?: never;
-            };
-            /** @description Confirm interval, window, integer reps and actual load (or explicit null for no external load) */
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["controllers.PerformanceRecordsRequest"];
-                };
-            };
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.WorkoutProgressResponse"];
-                    };
-                };
-                /** @description Bad Request */
-                400: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-                /** @description Unauthorized */
-                401: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-                /** @description Forbidden */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-                /** @description Conflict */
-                409: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-            };
-        };
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/performance-benchmarks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get confirmed workout performance benchmarks */
-        get: {
-            parameters: {
-                query: {
-                    /** @description Owned profile ID */
-                    profile_id: number;
-                    /** @description Canonical movement or recognized alias */
-                    movement?: string;
-                };
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["controllers.PerformanceBenchmarksResponse"];
-                    };
-                };
-                /** @description Bad Request */
-                400: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-                /** @description Unauthorized */
-                401: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-                /** @description Forbidden */
-                403: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": {
-                            [key: string]: string;
-                        };
-                    };
-                };
-            };
-        };
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1500,11 +1808,13 @@ export interface components {
             chunk_id?: number;
             clock?: string;
             end_secs?: number;
+            movement?: string;
             reason?: string;
             start_secs?: number;
         };
         "activity.Interval": {
             end_secs?: number;
+            movement?: string;
             reason?: string;
             start_secs?: number;
         };
@@ -1550,6 +1860,9 @@ export interface components {
             seconds?: number;
             unit?: string;
         };
+        "controllers.AppearanceInput": {
+            appearance?: string;
+        };
         "controllers.ChunkAnalysisSummaryResponse": {
             completed?: number;
             failed?: number;
@@ -1558,11 +1871,14 @@ export interface components {
         };
         "controllers.ChunkCompleteRequest": {
             appearance_hints?: string;
+            capture_order?: number;
+            client_chunk_id?: string;
             end_secs?: number;
             gcs_uri?: string;
             heart_rate_bpm?: number;
             injuries?: string[];
             live_analysis_version?: number;
+            media_pipeline_version?: number;
             movements?: string[];
             profile_id?: number;
             session_id?: string;
@@ -1573,10 +1889,12 @@ export interface components {
             workout_type?: string;
         };
         "controllers.CompleteUploadRequest": {
+            appearance_hints?: string;
             enable_tts?: boolean;
             gcs_uri?: string;
             injuries?: string[];
             movements?: string[];
+            pipeline_mode?: string;
             profile_id?: number;
             session_id?: string;
             /** @description e.g. "Fran" or "For Time: 5 rounds of..." */
@@ -1587,6 +1905,18 @@ export interface components {
             message?: string;
             session_id?: string;
             task_id?: string;
+        };
+        "controllers.CreateRecognitionReviewRequest": {
+            client_request_id?: string;
+            end_secs?: number;
+            evaluation_fingerprint?: string;
+            record_ids?: number[];
+            source_version?: string;
+            start_secs?: number;
+        };
+        "controllers.CreateRecognitionReviewResponse": {
+            run_id?: number;
+            status?: string;
         };
         "controllers.CreateUploadURLRequest": {
             filename?: string;
@@ -1625,26 +1955,19 @@ export interface components {
             status?: string;
             updated_at?: string;
         };
-        "controllers.GenerateHardSubRequest": {
-            enable_tts?: boolean;
-            profile_id?: number;
-            session_id?: string;
-        };
-        "controllers.GenerateHardSubResponse": {
-            message?: string;
-            session_id?: string;
-            task_id?: string;
-        };
-        "controllers.GenerateHighlightRequest": {
-            /** @description seconds, default 60 */
-            max_duration?: number;
-            profile_id?: number;
-            session_id?: string;
+        "controllers.ListRecognitionReviewsResponse": {
+            active_run_id?: number;
+            runs?: components["schemas"]["controllers.RecognitionReviewRunResponse"][];
         };
         "controllers.MergeChunksRequest": {
+            appearance_hints?: string;
+            chunks?: components["schemas"]["controllers.RecordingMediaReceiptInput"][];
             enable_tts?: boolean;
+            expected_chunk_count?: number;
             injuries?: string[];
+            media_pipeline_version?: number;
             movements?: string[];
+            pipeline_mode?: string;
             profile_id?: number;
             session_id?: string;
             /** @description e.g. "Fran" or "For Time: 5 rounds of..." */
@@ -1652,6 +1975,7 @@ export interface components {
             workout_type?: string;
         };
         "controllers.MergeChunksResponse": {
+            media_run_id?: string;
             message?: string;
             session_id?: string;
             task_id?: string;
@@ -1668,6 +1992,26 @@ export interface components {
             /** @description e.g. "Fran" or "For Time: 5 rounds of 10 Deadlifts + 15 Box Jumps" */
             wod_description?: string;
         };
+        "controllers.PerformanceBenchmarksResponse": {
+            best?: components["schemas"]["workoutprogress.Record"][];
+            comparisons?: components["schemas"]["workoutprogress.Comparison"][];
+            records?: components["schemas"]["workoutprogress.Record"][];
+        };
+        "controllers.PerformanceConfirmationInput": {
+            end_secs?: number;
+            interval_id?: string;
+            load?: Record<string, never>;
+            measurement?: string;
+            movement?: string;
+            outcome?: string;
+            reps?: number;
+            start_secs?: number;
+            technique?: string;
+        };
+        "controllers.PerformanceRecordsRequest": {
+            records?: components["schemas"]["controllers.PerformanceConfirmationInput"][];
+            source_version?: string;
+        };
         "controllers.PlayURLResponse": {
             cache_key?: string;
             expires_at?: string;
@@ -1678,14 +2022,102 @@ export interface components {
             signed_url?: string;
             variant?: string;
         };
-        "controllers.RetryAnalysisRequest": {
-            profile_id?: number;
-            session_id?: string;
+        "controllers.PreWODAdviceRequest": {
+            movements?: string[];
+            profile_id: number;
+            wod_description?: string;
         };
-        "controllers.RetryAnalysisResponse": {
+        "controllers.PreWODAdviceResponse": {
+            advice_code?: string;
+            as_of?: string;
+            effort_reflection?: components["schemas"]["fatigue.EffortReflectionInfo"];
+            effort_reflection_reason?: string;
+            evidence?: components["schemas"]["fatigue.EvidenceCounts"];
+            evidence_status?: string;
+            history_revision?: string;
+            last_workout_at?: string;
+            mobility_warmup?: components["schemas"]["fatigue.MobilityWarmupItem"][];
+            muscle_readiness?: components["schemas"]["fatigue.MuscleReadinessItem"][];
+            overall_fatigue_score?: number;
+            overall_state?: string;
+            overall_state_ko?: string;
+            overall_summary?: string;
+            profile_id?: number;
+            scaling_advice?: components["schemas"]["fatigue.ScalingAdviceItem"][];
+            target_rpe?: components["schemas"]["fatigue.TargetRPEInfo"];
+        };
+        "controllers.RecognitionReviewBatchResponse": {
+            core_end_secs?: number;
+            core_start_secs?: number;
+            end_secs?: number;
+            error?: string;
+            findings?: components["schemas"]["recognitionreview.Finding"][];
+            id?: number;
+            input_tokens?: number;
+            output_tokens?: number;
+            record_id?: number;
+            start_secs?: number;
+            status?: string;
+            total_tokens?: number;
+        };
+        "controllers.RecognitionReviewRunResponse": {
+            batches?: components["schemas"]["controllers.RecognitionReviewBatchResponse"][];
+            created_at?: string;
+            duration_ms?: number;
+            end_secs?: number;
+            error?: string;
+            evaluation?: components["schemas"]["recognitionreview.Evaluation"];
+            evaluation_fingerprint?: string;
+            id?: number;
+            input_tokens?: number;
+            model?: string;
+            outdated?: boolean;
+            output_tokens?: number;
+            prompt_version?: string;
+            record_ids?: number[];
+            schema_version?: string;
+            source_version?: string;
+            start_secs?: number;
+            status?: string;
+            total_tokens?: number;
+            updated_at?: string;
+        };
+        "controllers.RecordingMediaChunkReceipt": {
+            chunk_id?: string;
+            gcs_uri?: string;
+            media_run_id?: string;
             message?: string;
             session_id?: string;
+            source_generation?: string;
             task_id?: string;
+        };
+        "controllers.RecordingMediaReceiptInput": {
+            chunk_id?: string;
+            source_generation?: string;
+        };
+        "controllers.RelatedWODItem": {
+            analysis_id?: number;
+            created_at?: string;
+            movement?: components["schemas"]["db.NormalizedMovement"];
+            score?: number;
+            score_parts?: components["schemas"]["controllers.ScoreParts"];
+            session_id?: string;
+            session_score?: string;
+            wod_description?: string;
+        };
+        "controllers.RelatedWODQuery": {
+            movement?: string;
+            source_session_id?: string;
+            weight_kg?: number;
+        };
+        "controllers.RelatedWODsResponse": {
+            query?: components["schemas"]["controllers.RelatedWODQuery"];
+            related?: components["schemas"]["controllers.RelatedWODItem"][];
+        };
+        "controllers.ScoreParts": {
+            main?: number;
+            recency?: number;
+            weight?: number;
         };
         "controllers.SessionAssetResponse": {
             cache_key?: string;
@@ -1715,15 +2147,61 @@ export interface components {
         "controllers.SessionCatalogResponse": {
             sessions?: components["schemas"]["controllers.SessionCatalogItemResponse"][];
         };
-        "controllers.VerifyHighlightsRequest": {
-            session_id?: string;
-        };
         "controllers.VideoDownloadURLResponse": {
             download_url?: string;
             expires_at?: string;
             filename?: string;
             kind?: string;
             session_id?: string;
+        };
+        "controllers.WorkoutProgressResponse": {
+            progress?: components["schemas"]["workoutprogress.Progress"];
+            records?: components["schemas"]["workoutprogress.Record"][];
+        };
+        "controllers.WorkoutShareContextResponse": {
+            baseline_records?: components["schemas"]["workoutprogress.Record"][];
+            comparisons?: components["schemas"]["workoutprogress.Comparison"][];
+            confirmed_records?: components["schemas"]["workoutprogress.Record"][];
+            effort?: number;
+            generated_at?: string;
+            observations?: components["schemas"]["controllers.WorkoutShareObservation"][];
+            schema_version?: number;
+            sensor_summary?: components["schemas"]["controllers.WorkoutShareSensorSummary"];
+            session?: components["schemas"]["controllers.WorkoutShareSession"];
+            timezone?: string;
+            unassessed?: components["schemas"]["workoutprogress.Gap"][];
+            warnings?: string[];
+        };
+        "controllers.WorkoutShareObservation": {
+            activity?: string;
+            end_secs?: number;
+            form_observations?: components["schemas"]["workoutprogress.Observation"][];
+            id?: string;
+            load?: components["schemas"]["workoutprogress.Load"];
+            movement?: string;
+            observed_reps?: number;
+            pace_observations?: components["schemas"]["workoutprogress.Observation"][];
+            rom_observations?: components["schemas"]["workoutprogress.Observation"][];
+            start_secs?: number;
+        };
+        "controllers.WorkoutShareSensorSummary": {
+            avg_bpm?: number;
+            calculation_version?: number;
+            coverage?: number;
+            excluded_seconds?: number;
+            peak_bpm?: number;
+            quality_status?: string;
+            status?: string;
+            unknown_seconds?: number;
+            valid_seconds?: number;
+        };
+        "controllers.WorkoutShareSession": {
+            performed_at?: string;
+            performed_at_source?: string;
+            session_id?: string;
+            source_version?: string;
+            workout_prescription?: string;
+            workout_type?: string;
         };
         "db.ChunkAnalysisResult": {
             capture_assessment?: Record<string, never>;
@@ -1733,18 +2211,24 @@ export interface components {
             /** @description detected movement (e.g. "Snatch", "Pull-up") */
             exercise_type?: string;
             file_path?: string;
-            /** @description BLE heart rate at chunk capture time (0 = unavailable) */
+            /** @description BLE heart rate associated with the chunk; exact sample time is unavailable (0 = unavailable) */
             heart_rate_bpm?: number;
             id?: number;
+            media_end_secs?: number;
+            media_start_secs?: number;
+            motion_score?: number;
             movement_observations?: Record<string, never>;
             /** @description JSON: estimated workout metrics for benchmarking */
             observed_signals?: string;
             output?: string;
             profile_id?: number;
             session_id?: string;
+            skip_reason?: string;
             start_secs?: number;
             /** @description PENDING, COMPLETED, FAILED */
             status?: string;
+            target_confidence?: number;
+            target_cues?: string;
             updated_at?: string;
             /** @description confidence if person actually workout */
             workout_confidence?: number;
@@ -1770,18 +2254,148 @@ export interface components {
             title?: string;
             updated_at?: string;
         };
-        "controllers.WorkoutProgressResponse": {
-            progress?: components["schemas"]["workoutprogress.Progress"];
-            records?: components["schemas"]["workoutprogress.Record"][];
+        "db.NormalizedMovement": {
+            is_main?: boolean;
+            movement?: string;
+            reps?: string;
+            weight_kg?: number;
+            weight_raw?: string;
         };
-        "controllers.PerformanceRecordsRequest": {
-            records?: components["schemas"]["controllers.PerformanceConfirmationInput"][];
+        "fatigue.EffortReflectionInfo": {
+            applied?: boolean;
+            rated_count?: number;
+            reason?: string;
+            recent_workouts?: components["schemas"]["fatigue.RecentWorkoutSummary"][];
+            sensor_count?: number;
+            total_recent?: number;
+        };
+        "fatigue.EvidenceCounts": {
+            excluded_sessions?: number;
+            total_sessions?: number;
+            unresolved_time_sessions?: number;
+            valid_sessions?: number;
+        };
+        "fatigue.HybridSensorBrief": {
+            calibration_version?: string;
+            data_coverage?: number;
+            heart_intensity?: number;
+            hybrid_intensity?: number;
+            hybrid_load_au?: number;
+            motion_intensity?: number;
+        };
+        "fatigue.MobilityWarmupItem": {
+            duration?: string;
+            reason?: string;
+            target_area?: string;
+            title?: string;
+        };
+        "fatigue.MuscleReadinessItem": {
+            fatigue_score?: number;
+            group?: string;
+            name_ko?: string;
+            note?: string;
+            state?: string;
+            state_ko?: string;
+        };
+        "fatigue.RecentWorkoutSummary": {
+            duration_seconds?: number;
+            effort?: number;
+            hybrid_sensor?: components["schemas"]["fatigue.HybridSensorBrief"];
+            hybrid_sensor_excluded_reason?: string;
+            movements?: string[];
+            session_id?: string;
+            workout_at?: string;
+        };
+        "fatigue.ScalingAdviceItem": {
+            detail?: string;
+            movement?: string;
+            recommendation?: string;
+        };
+        "fatigue.TargetRPEInfo": {
+            label?: string;
+            pacing_strategy?: string;
+            score?: number;
+        };
+        "recognitionreview.Evaluation": {
+            fingerprint?: string;
+            records?: components["schemas"]["recognitionreview.RecordEvaluation"][];
             source_version?: string;
+            summary?: components["schemas"]["recognitionreview.Summary"];
         };
-        "controllers.PerformanceBenchmarksResponse": {
-            best?: components["schemas"]["workoutprogress.Record"][];
-            comparisons?: components["schemas"]["workoutprogress.Comparison"][];
-            records?: components["schemas"]["workoutprogress.Record"][];
+        "recognitionreview.Finding": {
+            category?: string;
+            difference?: string;
+            end_secs?: number;
+            evidence_level?: string;
+            limitations?: string;
+            original_evidence?: string;
+            possible_reason?: string;
+            stage?: string;
+            start_secs?: number;
+            visual_evidence?: string;
+        };
+        "recognitionreview.MovementCount": {
+            movement?: string;
+            reps?: number;
+        };
+        "recognitionreview.RecordEvaluation": {
+            evidence_complete?: boolean;
+            gaps?: components["schemas"]["workoutprogress.Gap"][];
+            movement_match?: boolean | null;
+            observed_complete_reps?: number | null;
+            predicted_movements?: components["schemas"]["recognitionreview.MovementCount"][];
+            record?: components["schemas"]["workoutprogress.Record"];
+            reps_delta?: number | null;
+            source_refs?: string[];
+            status?: string;
+        };
+        "recognitionreview.Summary": {
+            insufficient_evidence?: number;
+            matched?: number;
+            mismatch?: number;
+            total?: number;
+        };
+        "workoutprogress.Comparison": {
+            baseline_record_id?: number;
+            condition_differences?: string[];
+            current_record_id?: number;
+            heavier_load_baseline_record_id?: number;
+            heavier_load_kg?: number;
+            kind?: string;
+            rate_change_percent?: number;
+        };
+        "workoutprogress.Gap": {
+            clock?: string;
+            end_secs?: number;
+            movement?: string;
+            reason?: string;
+            start_secs?: number;
+        };
+        "workoutprogress.Interval": {
+            activity?: string;
+            capture_end_secs?: number;
+            capture_start_secs?: number;
+            end_secs?: number;
+            form_observations?: components["schemas"]["workoutprogress.Observation"][];
+            id?: string;
+            load?: components["schemas"]["workoutprogress.Load"];
+            movement?: string;
+            observation_refs?: string[];
+            pace_observations?: components["schemas"]["workoutprogress.Observation"][];
+            rep_events?: components["schemas"]["activity.Observation"][];
+            rom_observations?: components["schemas"]["workoutprogress.Observation"][];
+            start_secs?: number;
+        };
+        "workoutprogress.Load": {
+            basis?: string;
+            status?: string;
+            unit?: string;
+            value?: number;
+        };
+        "workoutprogress.Observation": {
+            end_secs?: number;
+            evidence?: string;
+            start_secs?: number;
         };
         "workoutprogress.Progress": {
             clock?: string;
@@ -1802,6 +2416,7 @@ export interface components {
             measurement?: string;
             median_cycle_seconds?: number;
             movement?: string;
+            outcome?: string;
             performed_at?: string;
             performed_at_source?: string;
             rate_basis?: string;
@@ -1814,88 +2429,6 @@ export interface components {
             status?: string;
             technique?: string;
             workout_prescription?: string;
-        };
-        "controllers.PerformanceConfirmationInput": {
-            end_secs?: number;
-            interval_id?: string;
-            load?: Record<string, never>;
-            measurement?: string;
-            reps?: number;
-            start_secs?: number;
-            technique?: string;
-        };
-        "workoutprogress.Comparison": {
-            baseline_record_id?: number;
-            condition_differences?: string[];
-            current_record_id?: number;
-            heavier_load_baseline_record_id?: number;
-            heavier_load_kg?: number;
-            kind?: string;
-            rate_change_percent?: number;
-        };
-        "workoutprogress.Interval": {
-            activity?: string;
-            capture_end_secs?: number;
-            capture_start_secs?: number;
-            end_secs?: number;
-            form_observations?: components["schemas"]["workoutprogress.Observation"][];
-            id?: string;
-            load?: components["schemas"]["workoutprogress.Load"];
-            movement?: string;
-            observation_refs?: string[];
-            pace_observations?: components["schemas"]["workoutprogress.Observation"][];
-            rep_events?: components["schemas"]["activity.Observation"][];
-            rom_observations?: components["schemas"]["workoutprogress.Observation"][];
-            start_secs?: number;
-        };
-        "workoutprogress.Gap": {
-            clock?: string;
-            end_secs?: number;
-            movement?: string;
-            reason?: string;
-            start_secs?: number;
-        };
-        "workoutprogress.Load": {
-            basis?: string;
-            status?: string;
-            unit?: string;
-            value?: number;
-        };
-        "workoutprogress.Observation": {
-            end_secs?: number;
-            evidence?: string;
-            start_secs?: number;
-        };
-        "controllers.RelatedWODQuery": {
-            movement?: string;
-            source_session_id?: string;
-            weight_kg?: number;
-        };
-        "controllers.ScoreParts": {
-            main?: number;
-            recency?: number;
-            weight?: number;
-        };
-        "db.NormalizedMovement": {
-            is_main?: boolean;
-            movement?: string;
-            reps?: string;
-            weight_kg?: number;
-            weight_raw?: string;
-        };
-        "controllers.RelatedWODItem": {
-            analysis_id?: number;
-            created_at?: string;
-            movement?: components["schemas"]["db.NormalizedMovement"];
-            score?: number;
-            score_parts?: components["schemas"]["controllers.ScoreParts"];
-            session_id?: string;
-            session_score?: string;
-            wod_description?: string;
-        };
-        "controllers.RelatedWODsResponse": {
-            query?: components["schemas"]["controllers.RelatedWODQuery"];
-            related?: components["schemas"]["controllers.RelatedWODItem"][];
         };
         "workoutprogress.RestComparison": {
             after_median_cycle_seconds?: number;

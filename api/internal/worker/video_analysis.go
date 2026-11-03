@@ -31,6 +31,8 @@ const (
 	// The Gemini Files API struggles with very large uploads (timeouts, OOM).
 	maxAnalysisFileSizeBytes = 1 << 30 // 1 GB
 
+	videoTooLongUserMessage = "동영상 길이가 너무 깁니다 (90분 초과). 더 짧은 영상으로 시도해주세요."
+
 	// videoAnalysisTaskTimeout is the explicit Asynq execution timeout for full
 	// two-pass video analysis tasks (overrides Asynq's 30-minute default).
 	videoAnalysisTaskTimeout = time.Hour
@@ -98,6 +100,14 @@ const (
 ` + "```injury_timestamps\n" + `[{"start": "0:32", "end": "0:45", "reason": "무릎 내전 관찰"}]` + "\n```"
 )
 
+// maxAnalysisVideoDuration is the hard duration limit for full-session AI video
+// analysis and post-merge activity review. Videos longer than 90 minutes remain
+// playable via merged.mp4, while expensive FFmpeg re-encodes and Gemini calls
+// are skipped immediately with a terminal FAILED analysis result.
+var maxAnalysisVideoDuration = 90 * time.Minute // 5400s
+
+var errVideoTooLong = errors.New("video duration exceeds maximum analysis limit")
+
 // highlightBlockRegex matches fenced ```highlights ... ``` or <highlights> ... </highlights> blocks in Gemini output.
 var highlightBlockRegex = regexp.MustCompile("(?is)(?:```highlights\\s*(\\[.*?\\])\\s*```|<highlights>\\s*(\\[.*?\\])\\s*</highlights>)")
 
@@ -120,10 +130,10 @@ func NewVideoAnalysisTask(sessionID, filePath, workoutType string, movements []s
 	if err != nil {
 		return nil, err
 	}
-	return asynq.NewTask(TypeVideoAnalysis, data, asynq.Timeout(videoAnalysisTaskTimeout)), nil
+	return asynq.NewTask(TypeVideoAnalysis, data, asynq.Timeout(videoAnalysisTaskTimeout), asynq.Unique(videoAnalysisTaskTimeout)), nil
 }
 
-func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleVideoAnalysisTask(ctx context.Context, t *asynq.Task) error {
 	var p VideoAnalysisPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
@@ -281,7 +291,16 @@ func (w *Worker) resolveVideoAnalysisProfile(ctx context.Context, sessionID stri
 }
 
 func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnalysisPayload, result *db.AnalysisResult) error {
-	err := w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error {
+		if w.stretchHistoryRevision != nil {
+			var profile db.Profile
+			if err := tx.Select("workout_history_revision").First(&profile, p.ProfileID).Error; err != nil {
+				return err
+			}
+			if profile.WorkoutHistoryRevision != *w.stretchHistoryRevision {
+				result.StretchRecommendations = "[]"
+			}
+		}
 		var session db.Session
 		var sessionCreatedAt *time.Time
 		if err := tx.Select("created_at", "wod_description").Where("session_id = ?", p.SessionID).First(&session).Error; err == nil {
@@ -371,7 +390,7 @@ func (w *Worker) persistVideoAnalysisCompleted(ctx context.Context, p VideoAnaly
 }
 
 func (w *Worker) persistVideoAnalysisFailed(ctx context.Context, p VideoAnalysisPayload, failedResult *db.AnalysisResult) error {
-	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error {
 		var session db.Session
 		var sessionCreatedAt *time.Time
 		if err := tx.Select("created_at").Where("session_id = ?", p.SessionID).First(&session).Error; err == nil {
@@ -407,6 +426,9 @@ func (w *Worker) persistVideoAnalysisFailed(ctx context.Context, p VideoAnalysis
 			"output":        failedResult.Output,
 			"analysis_type": failedResult.AnalysisType,
 			"updated_at":    time.Now(),
+		}
+		if len(failedResult.AvailableVideos) > 0 {
+			updates["available_videos"] = failedResult.AvailableVideos
 		}
 
 		if existing.WorkoutAt == nil {
@@ -473,7 +495,7 @@ They are suggestions, not confirmation and not a closed list. Omit any hint not 
 5. Static stretch holds and slow mobility movements ARE active exercise segments — label with the pose or stretch name (e.g., "Pigeon Pose", "Cossack Squat Hold", "Mobility"). Do NOT discard slow stretching or static holds as rest.`
 	} else {
 		prompt += `
-5. Active exercise sets include barbell/dumbbell cycling where the target person holds the bar at the hang position between reps. Only omit walking, rest, setup, and intervals where equipment is released on the floor.
+5. Active barbell/dumbbell sets include intervals where the target person maintains their grip between reps, whether holding the equipment at the hang position or pausing with it resting on the floor. Floor contact or a brief grip release alone does not establish rest. Distinguish ongoing sets from non-exercise walking, clear rest, and equipment setup/cleanup; touching equipment for setup/cleanup alone is not exercise. If hands are occluded, do not assume the equipment was released; use visible body position and equipment motion, and preserve uncertainty when exercise cannot be confirmed.
 6. Use specific standard CrossFit exercise names: 'Hang Power Clean', 'Hang Squat Clean', 'Power Clean', 'Squat Clean', 'Hang Power Snatch', 'Hang Squat Snatch', 'Power Snatch', 'Squat Snatch', 'Push Jerk', 'Split Jerk', 'Push Press', 'Strict Press', 'Deadlift'. Avoid ambiguous names like 'Clean', 'Hang Clean', 'Snatch', or 'Hang Snatch'. If exercise is visible but exact movement is unclear, use type "Unknown"; do not force a hint.`
 	}
 
@@ -497,6 +519,39 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%d:%02d", mins, secs)
 }
 
+func (w *Worker) ensureMergedPlaybackVideo(ctx context.Context, p VideoAnalysisPayload, localFilePath string) bool {
+	if p.ProfileID == 0 || w.StorageClient == nil {
+		return false
+	}
+	mergedObjectName := fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID)
+	existing, listErr := w.StorageClient.ListObjects(ctx, mergedObjectName)
+	if listErr != nil {
+		w.logger.Warn("Failed to check for existing merged.mp4, skipping copy",
+			zap.String("session_id", p.SessionID),
+			zap.Error(listErr))
+		return strings.HasSuffix(p.FilePath, "/"+mergedObjectName)
+	}
+	if len(existing) == 0 {
+		w.logger.Info("No merged.mp4 found, uploading original as merged.mp4 for playback",
+			zap.String("session_id", p.SessionID),
+			zap.String("object_name", mergedObjectName))
+		mergedURI, uploadErr := w.StorageClient.UploadFromFile(ctx, localFilePath, mergedObjectName)
+		if uploadErr != nil {
+			w.logger.Warn("Failed to upload merged.mp4 for playback, continuing with analysis",
+				zap.String("session_id", p.SessionID),
+				zap.Error(uploadErr))
+			return false
+		}
+		w.logger.Info("Uploaded merged.mp4 for playback",
+			zap.String("session_id", p.SessionID),
+			zap.String("gcs_uri", mergedURI))
+		return true
+	}
+	w.logger.Info("merged.mp4 already exists, skipping upload",
+		zap.String("session_id", p.SessionID))
+	return true
+}
+
 // handleVideoAnalysisTwoPass uses a two-pass approach:
 //  1. Upload video to Gemini Files API
 //  2. Index video with Flash model → find exercise segments
@@ -504,6 +559,7 @@ func formatDuration(d time.Duration) string {
 func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysisPayload) (retErr error) {
 	started := time.Now()
 	apiCalls := 0
+	mergedAvailable := false
 	// Deferred error handler: write FAILED analysis result to DB on any error
 	// so the user always sees something in history instead of silent nothingness.
 	defer func() {
@@ -513,7 +569,9 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				zap.Error(retErr))
 
 			userMsg := "동영상 분석 중 오류가 발생했습니다. 다시 시도해주세요."
-			if strings.Contains(retErr.Error(), "file too large") {
+			if errors.Is(retErr, errVideoTooLong) {
+				userMsg = videoTooLongUserMessage
+			} else if strings.Contains(retErr.Error(), "file too large") {
 				userMsg = "동영상 파일이 너무 큽니다 (1GB 초과). 더 짧은 영상으로 시도해주세요."
 			}
 
@@ -523,11 +581,19 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 				Output:       userMsg,
 				AnalysisType: db.AnalysisTypeWOD,
 			}
+			if mergedAvailable {
+				failedResult.AvailableVideos = db.CommaStringArray{"merged"}
+			}
 			failedResult.ProfileID = p.ProfileID
-			if dbErr := w.persistVideoAnalysisFailed(ctx, p, failedResult); dbErr != nil {
+			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			if dbErr := w.persistVideoAnalysisFailed(persistCtx, p, failedResult); dbErr != nil {
 				w.logger.Error("Failed to write FAILED analysis result",
 					zap.String("session_id", p.SessionID),
 					zap.Error(dbErr))
+				if errors.Is(retErr, asynq.SkipRetry) {
+					retErr = fmt.Errorf("failed to write FAILED analysis result (%v): %w", retErr, dbErr)
+				}
 			}
 		}
 	}()
@@ -540,7 +606,8 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	w.logger.Info("Downloading file from GCS for two-pass analysis",
 		zap.String("uri", p.FilePath),
 		zap.String("dest", localFilePath))
-	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+	if err := w.downloadAnalysisInput(ctx, p, localFilePath); err != nil {
+		_ = os.Remove(localFilePath)
 		return fmt.Errorf("failed to download file from GCS: %w", err)
 	}
 	defer func() {
@@ -568,36 +635,22 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	// no merged.mp4 is created. The frontend requires merged.mp4 to show the
 	// "Watch" button and enable video downloads. Upload the original file as
 	// merged.mp4 if it doesn't already exist.
-	if p.ProfileID > 0 {
-		mergedObjectName := fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID)
-		existing, listErr := w.StorageClient.ListObjects(ctx, mergedObjectName)
-		if listErr != nil {
-			w.logger.Warn("Failed to check for existing merged.mp4, skipping copy",
-				zap.String("session_id", p.SessionID),
-				zap.Error(listErr))
-		} else if len(existing) == 0 {
-			w.logger.Info("No merged.mp4 found, uploading original as merged.mp4 for playback",
-				zap.String("session_id", p.SessionID),
-				zap.String("object_name", mergedObjectName))
-			if mergedURI, uploadErr := w.StorageClient.UploadFromFile(ctx, localFilePath, mergedObjectName); uploadErr != nil {
-				w.logger.Warn("Failed to upload merged.mp4 for playback, continuing with analysis",
-					zap.String("session_id", p.SessionID),
-					zap.Error(uploadErr))
-			} else {
-				w.logger.Info("Uploaded merged.mp4 for playback",
-					zap.String("session_id", p.SessionID),
-					zap.String("gcs_uri", mergedURI))
-			}
-		} else {
-			w.logger.Info("merged.mp4 already exists, skipping upload",
-				zap.String("session_id", p.SessionID))
-		}
+	mergedAvailable = w.ensureMergedPlaybackVideo(ctx, p, localFilePath)
+
+	// ── Hard duration guardrail (before FFmpeg re-encode & Gemini upload) ──
+	if probedDurationSecs := probeVideoDuration(ctx, localFilePath); probedDurationSecs > maxAnalysisVideoDuration.Seconds() {
+		w.logger.Error("Video duration exceeds maximum analysis limit",
+			zap.String("session_id", p.SessionID),
+			zap.Float64("duration_secs", probedDurationSecs),
+			zap.Float64("max_duration_secs", maxAnalysisVideoDuration.Seconds()))
+		return fmt.Errorf("%w (%.1fs, max %s): %w",
+			errVideoTooLong, probedDurationSecs, maxAnalysisVideoDuration, asynq.SkipRetry)
 	}
 
 	// Path used for Gemini upload — may be replaced by re-encoded copy below
 	geminiInputPath := localFilePath
 
-	if fileSizeBytes > maxAnalysisVideoSizeBytes {
+	if p.AnalysisPreparationID == 0 && fileSizeBytes > maxAnalysisVideoSizeBytes {
 		w.logger.Info("Video exceeds analysis threshold, creating analysis-grade re-encode",
 			zap.String("session_id", p.SessionID),
 			zap.Int64("file_size_bytes", fileSizeBytes),
@@ -662,6 +715,14 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			}
 		}
 	}()
+	if upload.VideoDuration > maxAnalysisVideoDuration {
+		w.logger.Error("Uploaded video duration exceeds maximum analysis limit",
+			zap.String("session_id", p.SessionID),
+			zap.Duration("video_duration", upload.VideoDuration),
+			zap.Duration("max_duration", maxAnalysisVideoDuration))
+		return fmt.Errorf("%w (%s, max %s): %w",
+			errVideoTooLong, upload.VideoDuration, maxAnalysisVideoDuration, asynq.SkipRetry)
+	}
 	hasInjuries := len(p.Injuries) > 0
 
 	// ── Pass 1: Build segment index ──
@@ -672,31 +733,34 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	segments, skippedSegments := w.buildChunkSegments(p.SessionID, p.WorkoutType)
 
 	// Determine if we need to (re-)split the video.
-	// If existing chunks don't cover the full video duration (e.g. worker restarted
-	// mid-split), we re-run the split so the remaining segments get analyzed.
-	needsSplit := len(segments) == 0
-	if len(segments) > 0 {
-		videoDuration := probeVideoDuration(ctx, geminiInputPath)
+	// If existing chunks don't cover the full video duration on the merged media
+	// clock (e.g. worker restarted mid-split), we re-run the split so the
+	// remaining segments get analyzed. Verified non-exercise chunks (skippedSegments)
+	// also count as indexed chunk data so rest-only mobile sessions do not re-split.
+	hasIndexedChunks := len(segments) > 0 || len(skippedSegments) > 0
+	var videoDuration, maxEndSecs float64
+	if hasIndexedChunks {
+		videoDuration = probeVideoDuration(ctx, geminiInputPath)
 		if videoDuration > 0 {
-			maxEndSecs := w.queryMaxChunkEndSecs(p.SessionID)
-			gap := videoDuration - maxEndSecs
-			if gap > float64(splitChunkDurationSecs) {
-				needsSplit = true
-				w.logger.Warn("Pass 1: Existing chunks appear incomplete, will re-split",
-					zap.String("session_id", p.SessionID),
-					zap.Float64("max_chunk_end_secs", maxEndSecs),
-					zap.Float64("video_duration_secs", videoDuration),
-					zap.Float64("gap_secs", gap),
-					zap.Int("existing_segments", len(segments)))
-			}
+			maxEndSecs = w.queryMaxChunkEndSecs(p.SessionID)
 		}
+	}
+	needsSplit := shouldSplitVideoForPass1(segments, skippedSegments, videoDuration, maxEndSecs)
+	if needsSplit && hasIndexedChunks {
+		w.logger.Warn("Pass 1: Existing chunks appear incomplete, will re-split",
+			zap.String("session_id", p.SessionID),
+			zap.Float64("max_chunk_end_secs", maxEndSecs),
+			zap.Float64("video_duration_secs", videoDuration),
+			zap.Float64("gap_secs", videoDuration-maxEndSecs),
+			zap.Int("existing_segments", len(segments)),
+			zap.Int("skipped_segments", len(skippedSegments)))
 	}
 
 	if needsSplit {
 		// No chunks from recording or incomplete — try splitting the uploaded video into chunks
 		w.logger.Info("Pass 1: Splitting uploaded video into 10s chunks",
 			zap.String("session_id", p.SessionID),
-			zap.Bool("had_partial_chunks", len(segments) > 0))
+			zap.Bool("had_partial_chunks", hasIndexedChunks))
 
 		if splitErr := w.splitAndAnalyzeChunks(ctx, geminiInputPath, p); splitErr != nil {
 			// The existing index was already found incomplete; do not reuse it
@@ -816,7 +880,11 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 
 	// Continuous bouts are observed whole; only bouts longer than
 	// maxPass2WindowSecs are split, with overlap, and stitched back later.
-	windows := splitPass2Windows(segments)
+	minClipStart := 0.0
+	if wodStart.Status == "confirmed" && wodStart.Seconds != nil {
+		minClipStart = *wodStart.Seconds
+	}
+	windows := splitPass2WindowsWithRestContext(segments, progressGaps, w.sessionCaptureDiscontinuities(ctx, p.SessionID, p.ProfileID), minClipStart)
 	trackingRefs := w.loadTrackingReferences(ctx, p.SessionID, p.ProfileID)
 	segResults := make([]segmentAnalysisResult, len(windows))
 	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
@@ -929,7 +997,11 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			HardGapBoundary: !win.Split,
 		})...)
 
-		allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n", i+1, seg.Type, seg.Start, seg.End))
+		headerSeg := seg
+		if !win.Split {
+			headerSeg = win.core()
+		}
+		allAnalysis.WriteString(fmt.Sprintf("\n\n---\n## 세그먼트 %d: %s (%s ~ %s)\n\n", i+1, headerSeg.Type, headerSeg.Start, headerSeg.End))
 		allAnalysis.WriteString(segAnalysis)
 	}
 	sortWODEvidence(wodEvidence)
@@ -1178,6 +1250,9 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 	if IsRecoveryWorkoutType(p.WorkoutType) {
 		prompt += RecoveryChunkPolicyPrompt
 	}
+	if hasSegmentTravelingPolicyContext(p, seg) {
+		prompt += TravelingMovementPolicyPrompt
+	}
 	prompt += MovementEvidenceRulesPrompt
 	prompt += ObservationOnlyRulesPrompt
 	prompt += SpinalObservationRulesPrompt
@@ -1189,7 +1264,7 @@ func (w *Worker) buildSegmentAnalysisPrompt(p VideoAnalysisPayload, seg Segment,
 	prompt += highlightSelectionPromptFor(p.WorkoutType)
 	prompt += MobilityOutputPrompt
 
-	prompt += buildMovementHintsContext(p.Movements)
+	prompt += buildMovementHintsContext(normalizeMovementHintsForWOD(p.Movements, p.WODDescription))
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
@@ -1246,22 +1321,32 @@ func parseSegments(text string) []Segment {
 	return segments
 }
 
-// queryMaxChunkEndSecs returns the maximum end_secs value from chunk analysis
-// records for the given session. Returns 0 if no chunks exist or on error.
-// Used to detect incomplete splits (partial chunk coverage vs full video duration).
+func shouldSplitVideoForPass1(segments, skippedSegments []Segment, videoDuration, maxChunkEndSecs float64) bool {
+	if len(segments) == 0 && len(skippedSegments) == 0 {
+		return true
+	}
+	if videoDuration > 0 && videoDuration-maxChunkEndSecs > float64(splitChunkDurationSecs) {
+		return true
+	}
+	return false
+}
+
+// queryMaxChunkEndSecs returns the maximum verified media-clock end timestamp
+// from COMPLETED chunk analysis records for the given session. Capture-clock
+// end_secs from mobile chunks are never compared against merged.mp4 duration.
 func (w *Worker) queryMaxChunkEndSecs(sessionID string) float64 {
 	if w.DB == nil {
 		return 0
 	}
-	var maxEnd *float64
+	var chunks []db.ChunkAnalysisResult
 	err := w.DB.Model(&db.ChunkAnalysisResult{}).
-		Where("session_id = ?", sessionID).
-		Select("MAX(end_secs)").
-		Row().Scan(&maxEnd)
-	if err != nil || maxEnd == nil {
+		Select("file_path, status, start_secs, end_secs, media_start_secs, media_end_secs").
+		Where("session_id = ? AND status = ?", sessionID, "COMPLETED").
+		Find(&chunks).Error
+	if err != nil || len(chunks) == 0 {
 		return 0
 	}
-	return *maxEnd
+	return db.MaxCompletedChunkMediaEndSecs(chunks)
 }
 
 // buildSegmentsFromChunks queries completed chunk analysis records from the DB
@@ -1292,6 +1377,7 @@ func (w *Worker) buildChunkSegments(sessionID string, workoutType string) ([]Seg
 	if err != nil || len(chunks) == 0 {
 		return nil, nil
 	}
+	chunks = db.FilterRedundantSplitChunks(chunks)
 
 	timeline := make([]timelineChunk, 0, len(chunks))
 	for _, chunk := range chunks {
@@ -1571,9 +1657,14 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err := os.Remove(localFilePath); err != nil {
+			w.logger.Error("Failed to remove temp file", zap.Error(err))
+		}
+	}()
 
 	w.logger.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
-	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+	if err := w.downloadAnalysisInput(ctx, p, localFilePath); err != nil {
 		return fmt.Errorf("failed to download file from GCS: %w", err)
 	}
 
@@ -1586,16 +1677,38 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	videoDuration := probeVideoDuration(ctx, localFilePath)
 	w.logger.Info("Probed video duration", zap.Float64("duration_secs", videoDuration))
 
+	if videoDuration > maxAnalysisVideoDuration.Seconds() {
+		w.logger.Error("Video duration exceeds maximum analysis limit (legacy)",
+			zap.String("session_id", p.SessionID),
+			zap.Float64("duration_secs", videoDuration),
+			zap.Float64("max_duration_secs", maxAnalysisVideoDuration.Seconds()))
+
+		mergedAvailable := w.ensureMergedPlaybackVideo(ctx, p, localFilePath)
+		failedResult := &db.AnalysisResult{
+			SessionID:    p.SessionID,
+			ProfileID:    p.ProfileID,
+			Status:       "FAILED",
+			Output:       videoTooLongUserMessage,
+			AnalysisType: db.AnalysisTypeWOD,
+		}
+		if mergedAvailable {
+			failedResult.AvailableVideos = db.CommaStringArray{"merged"}
+		}
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if dbErr := w.persistVideoAnalysisFailed(persistCtx, p, failedResult); dbErr != nil {
+			w.logger.Error("Failed to persist legacy FAILED analysis result for overlong video",
+				zap.String("session_id", p.SessionID),
+				zap.Error(dbErr))
+			return fmt.Errorf("failed to persist FAILED analysis result for overlong video: %w", dbErr)
+		}
+		return fmt.Errorf("%w (%.1fs, max %s): %w",
+			errVideoTooLong, videoDuration, maxAnalysisVideoDuration, asynq.SkipRetry)
+	}
+
 	prompt := w.buildAnalysisPrompt(p, videoDuration)
 
 	analysis, geminiFile, usage, err := w.GeminiClient.AnalyzeVideo(ctx, localFilePath, prompt)
-
-	// Clean up local file
-	defer func() {
-		if err := os.Remove(localFilePath); err != nil {
-			w.logger.Error("Failed to remove temp file", zap.Error(err))
-		}
-	}()
 
 	// Clean up Gemini file if it was uploaded
 	if geminiFile != "" {
@@ -1757,7 +1870,7 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	prompt += highlightSelectionPromptFor(p.WorkoutType)
 	prompt += MobilityOutputPrompt
 
-	prompt += buildMovementHintsContext(p.Movements)
+	prompt += buildMovementHintsContext(normalizeMovementHintsForWOD(p.Movements, p.WODDescription))
 
 	if len(p.Injuries) > 0 {
 		prompt += fmt.Sprintf("%s\n## 알려진 부상 사항: %s", KnownInjuriesPrompt, strings.Join(p.Injuries, ", "))
@@ -1788,6 +1901,9 @@ func (w *Worker) buildAnalysisPrompt(p VideoAnalysisPayload, videoDurationSecs f
 	prompt += independentSegmentPolicy
 	if IsRecoveryWorkoutType(p.WorkoutType) {
 		prompt += RecoveryChunkPolicyPrompt
+	}
+	if hasLegacyTravelingPolicyContext(p) {
+		prompt += TravelingMovementPolicyPrompt
 	}
 	prompt += workoutObservationPrompt
 	prompt += ObservationOnlyOutputCheckPrompt

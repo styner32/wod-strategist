@@ -1,8 +1,9 @@
 import React from "react";
 import { Platform, StyleSheet, Text, View } from "react-native";
 
-import { Fonts } from "@/constants/theme";
-import { useColorScheme } from "@/hooks/use-color-scheme";
+import { Fonts, TacticalTheme } from "@/constants/theme";
+
+const T = TacticalTheme.light;
 
 /**
  * Lightweight markdown renderer for Gemini's Korean coaching output.
@@ -17,8 +18,10 @@ import { useColorScheme } from "@/hooks/use-color-scheme";
 
 interface MarkdownTextProps {
   children: string;
-  /** Base text color — auto-detected from theme if not specified */
+  /** Base text color — defaults to Tactical Light inkSecondary */
   color?: string;
+  /** Accent color for list bullets/numbers — defaults to Tactical Electric Blue */
+  accentColor?: string;
 }
 
 interface ParsedBlock {
@@ -126,11 +129,14 @@ function renderInlineText(text: string, color: string): React.ReactNode[] {
   });
 }
 
-export function MarkdownText({ children, color: colorProp }: MarkdownTextProps) {
-  const scheme = useColorScheme() ?? "light";
-  const isDark = scheme === "dark";
-  const color = colorProp ?? (isDark ? "#D0D0D0" : "#2C2C2E");
-  const accentColor = isDark ? "#64D2FF" : "#0A84FF";
+export function MarkdownText({
+  children,
+  color: colorProp,
+  accentColor: accentColorProp,
+}: MarkdownTextProps) {
+  const color = colorProp ?? T.inkSecondary;
+  const headingColor = colorProp ?? T.ink;
+  const accentColor = accentColorProp ?? T.electricBlue;
 
   if (!children) return null;
 
@@ -145,15 +151,15 @@ export function MarkdownText({ children, color: colorProp }: MarkdownTextProps) 
 
           case "h2":
             return (
-              <Text key={i} style={[styles.h2, { color }]}>
-                {renderInlineText(block.content, color)}
+              <Text key={i} style={[styles.h2, { color: headingColor }]}>
+                {renderInlineText(block.content, headingColor)}
               </Text>
             );
 
           case "h3":
             return (
-              <Text key={i} style={[styles.h3, { color }]}>
-                {renderInlineText(block.content, color)}
+              <Text key={i} style={[styles.h3, { color: headingColor }]}>
+                {renderInlineText(block.content, headingColor)}
               </Text>
             );
 
@@ -257,11 +263,13 @@ const styles = StyleSheet.create({
   },
   hr: {
     height: 1,
-    backgroundColor: "rgba(255,255,255,0.1)",
+    backgroundColor: T.border,
     marginVertical: 12,
   },
   codeBlock: {
-    backgroundColor: "rgba(128,128,128,0.1)",
+    backgroundColor: T.surfaceMuted,
+    borderWidth: 1,
+    borderColor: T.border,
     borderRadius: 8,
     padding: 12,
     marginVertical: 4,
@@ -269,7 +277,7 @@ const styles = StyleSheet.create({
   codeText: {
     fontSize: 12,
     lineHeight: 18,
-    color: "#A0A0A0",
+    color: T.inkSecondary,
     fontFamily: monoFont,
     ...Platform.select({
       android: { fontFamily: "monospace" },

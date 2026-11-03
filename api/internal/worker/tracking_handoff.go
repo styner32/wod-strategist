@@ -15,12 +15,15 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
+	"github.com/wod-strategist/api/internal/movement"
 	"go.uber.org/zap"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/inconsolata"
 	"golang.org/x/image/math/fixed"
+	"gorm.io/gorm"
 )
 
 // Two-channel contract. Observers may receive the Tracking channel — who the
@@ -35,7 +38,10 @@ const (
 	trackingMaxBoxes             = 3
 	trackingFallbackWindowSecs   = 60.0
 	trackingCaptureToleranceSecs = 0.5
-	trackingReferenceMaxWidth    = 960
+	trackingReferenceMaxWidth    = 512
+	trackingMinBoxHeight         = 80.0
+	trackingMinBoxWidth          = 40.0
+	trackingMinBoxArea           = 8000.0
 )
 
 // trackingBox is the target's box at chunk-local second T, in Gemini's
@@ -92,6 +98,7 @@ const trackingOutputPrompt = `
 - boxes: 클립 처음·가운데·끝 근처에서 대상 인물이 보이는 시점마다 최대 3개(최소 1개 이상). t는 이 클립 시작 기준 초(예: 0.5, 5.0, 9.0), box_2d는 대상 인물 전신을 감싸는 [ymin, xmin, ymax, xmax] 0~1000 정규화 좌표입니다.
 - frame_region: 대상 인물의 화면 위치 left, center, right 중 하나.
 - station: 대상 인물이 사용 중인 기구나 위치(예: rower, barbell, dumbbell, box, pull-up bar, floor). 모르면 빈 문자열.
+- 대상 인물이 벽에서 물구나무(Handstand Push-up 등)로 뒤집혀 있거나 바닥에 엎드린 동작(Burpee, Push-up 등) 중이어도 동일 대상 인물에 박스를 유지하고, 화면 가장자리에 앉거나 서서 쉬는 주변인에게 박스를 옮기지 마세요.
 - 대상 인물이 화면에 없거나 확신할 수 없으면 ambiguous를 true, confidence를 0.5 이하, boxes를 []로 두세요. 다른 사람에게 박스를 그리지 마세요.
 `
 
@@ -129,23 +136,25 @@ func buildTrackingHandoff(prev db.ChunkAnalysisResult, workoutType string) track
 		h.FrameRegion = sanitizeTrackingLabel(tp.FrameRegion)
 		h.Station = sanitizeTrackingLabel(tp.Station)
 	}
-	class, movement := classifyChunkActivity(prev, workoutType)
-	switch class {
-	case chunkActive:
+	class, detectedMovement := classifyChunkActivity(prev, workoutType)
+	if class == chunkActive {
 		h.ActivityState = "exercise"
-		if isConcreteMovement(movement) {
-			h.MovementHint = sanitizeTrackingLabel(movement)
+		if isConcreteMovement(detectedMovement) {
+			h.MovementHint = sanitizeTrackingLabel(detectedMovement)
 		}
-	case chunkExplicitRest:
-		h.ActivityState = "rest"
-	default:
-		h.ActivityState = "unknown"
+	}
+	if movement.IsTraveling(detectedMovement) || movement.IsTraveling(prev.ExerciseType) {
+		h.FrameRegion = ""
+		if h.Station != "" || len(h.MatchedCues) > 0 {
+			h.Station = "moving"
+		}
 	}
 	return h
 }
 
-// trackingInputPrompt explains the attached reference images (in order) and
-// the handoff, and fixes the boundary between tracking and assessment.
+// trackingInputPrompt explains the attached reference images (in order, placed
+// after the video) and the handoff, and fixes the boundary between tracking and
+// assessment.
 func trackingInputPrompt(h trackingHandoff, hasPrevious, hasAnchor bool) string {
 	if h.empty() && !hasPrevious && !hasAnchor {
 		return ""
@@ -154,17 +163,21 @@ func trackingInputPrompt(h trackingHandoff, hasPrevious, hasAnchor bool) string 
 	b.WriteString("\n\n## 대상 인물 추적 정보 (추적용 참고, 확정 아님)\n")
 	index := 1
 	if hasPrevious {
-		fmt.Fprintf(&b, "- 첨부 이미지 %d: 직전 구간에서 대상 인물에 초록 박스와 TARGET 라벨을 표시한 프레임입니다.\n", index)
+		fmt.Fprintf(&b, "- 영상 뒤에 첨부된 첨부 이미지 %d: 직전 구간에서 대상 인물에 초록 박스와 TARGET 라벨을 표시한 정지 프레임입니다.\n", index)
 		index++
 	}
 	if hasAnchor {
-		fmt.Fprintf(&b, "- 첨부 이미지 %d: 이 세션에서 처음 대상 인물을 확인한 기준 프레임입니다(같은 표시).\n", index)
+		fmt.Fprintf(&b, "- 영상 뒤에 첨부된 첨부 이미지 %d: 이 세션에서 처음 대상 인물을 확인한 기준 정지 프레임입니다(같은 표시).\n", index)
 	}
 	if !h.empty() {
 		raw, _ := json.Marshal(h)
 		fmt.Fprintf(&b, "- 직전 구간 추적 요약: %s\n", raw)
 	}
-	b.WriteString("- 이 정보는 대상 인물 식별과 활동 연속성 확인에만 사용하세요. 현재 영상과 모순되면 현재 영상을 따르세요.\n")
+	b.WriteString("- 이 정보와 첨부 정지 이미지는 오직 '누가 대상 인물인지' 식별하는 용도로만 쓰세요. 정지 이미지 속 바벨 위치나 서 있는/숙인 자세를 현재 구간의 휴식 근거로 절대 사용하지 마세요.\n")
+	b.WriteString("- 현재 구간의 운동·휴식 판정과 반복 관찰은 반드시 먼저 제공된 현재 동영상 프레임들의 시간에 따른 움직임으로만 결정하세요. 현재 영상과 모순되면 현재 영상을 따르세요.\n")
+	if h.Station == "moving" || movement.IsTraveling(h.MovementHint) {
+		b.WriteString("- 직전 구간은 고정 스테이션이 아닌 이동형 동작이므로 대상 인물이 레인을 따라 좌우 횡단·방향 전환하거나 화면 밖 이탈 후 재진입할 수 있습니다. 전경의 다른 운동자·보행자와 동선이 겹쳐 가려질 때 이전 위치나 근처 기구(박스·바벨 등) 옆에 서 있는 다른 인물로 대상을 절대 전환하지 말고, 핵심 외형 단서가 가려지면 ambiguous: true 또는 not_visible로 남기세요.\n")
+	}
 	b.WriteString("- 표시된 사람이 현재 영상에 보이지 않으면 다른 사람으로 바꾸지 말고 대상이 보이지 않는다고 기록하세요.\n")
 	b.WriteString("- 자세·가동범위·템포 평가는 현재 영상에서 보이는 것만 기록하고, 직전 운동이나 누적 수행을 원인이나 변명으로 쓰지 마세요.\n")
 	return b.String()
@@ -269,19 +282,36 @@ func (w *Worker) trackingInputs(ctx context.Context, profileID uint, sessionID, 
 	if previous != nil {
 		handoff = buildTrackingHandoff(*previous, workoutType)
 	}
-	recentObject, anchorObject := "", ""
+	recentActiveObject, recentFallbackObject := "", ""
+	anchorActiveObject, anchorFallbackObject := "", ""
 	for i := range rows {
 		tp, ok := parseStoredTargetPerson(rows[i].TargetCues)
 		if !ok || tp.ReferenceImage == "" {
 			continue
 		}
-		if anchorObject == "" {
-			anchorObject = tp.ReferenceImage
+		class, _ := classifyChunkActivity(rows[i], workoutType)
+		isActive := class == chunkActive
+		if anchorFallbackObject == "" {
+			anchorFallbackObject = tp.ReferenceImage
+		}
+		if isActive && anchorActiveObject == "" {
+			anchorActiveObject = tp.ReferenceImage
 		}
 		end := *rows[i].EndSecs
 		if end <= captureStart+trackingCaptureToleranceSecs && end >= captureStart-trackingFallbackWindowSecs {
-			recentObject = tp.ReferenceImage
+			recentFallbackObject = tp.ReferenceImage
+			if isActive {
+				recentActiveObject = tp.ReferenceImage
+			}
 		}
+	}
+	anchorObject := anchorActiveObject
+	if anchorObject == "" {
+		anchorObject = anchorFallbackObject
+	}
+	recentObject := recentActiveObject
+	if recentObject == "" {
+		recentObject = recentFallbackObject
 	}
 	if anchorObject == recentObject {
 		anchorObject = ""
@@ -317,6 +347,56 @@ func (w *Worker) downloadTrackingReference(ctx context.Context, object string) [
 	return raw
 }
 
+func usableTrackingReferenceBox(b trackingBox) bool {
+	if len(b.Box) != 4 {
+		return false
+	}
+	h := b.Box[2] - b.Box[0]
+	w := b.Box[3] - b.Box[1]
+	return h >= trackingMinBoxHeight && w >= trackingMinBoxWidth && h*w >= trackingMinBoxArea
+}
+
+// selectTrackingReferenceBox chooses a usable box for rendering the reference
+// frame, preferring a timestamp inside an observed exercise cycle (avoiding the
+// trailing drop/rest edge at t=9s when a mid-clip or in-cycle box exists).
+func selectTrackingReferenceBox(boxes []trackingBox, rawObservations []byte) (trackingBox, bool) {
+	usable := make([]trackingBox, 0, len(boxes))
+	for _, b := range boxes {
+		if usableTrackingReferenceBox(b) {
+			usable = append(usable, b)
+		}
+	}
+	if len(usable) == 0 {
+		return trackingBox{}, false
+	}
+	if len(rawObservations) > 0 {
+		var doc activity.Observations
+		if json.Unmarshal(rawObservations, &doc) == nil {
+			for i := len(usable) - 1; i >= 0; i-- {
+				t := usable[i].T
+				for _, ev := range doc.Events {
+					activeEnd := math.Max(ev.Start, ev.End-0.3)
+					if t >= ev.Start && t <= activeEnd {
+						return usable[i], true
+					}
+				}
+			}
+			// Partner-swap or boundary-split chunks often record the target's lift
+			// as incomplete_cycle with empty events; prefer a box inside that span
+			// before falling back to the mid-chunk frame.
+			for i := len(usable) - 1; i >= 0; i-- {
+				t := usable[i].T
+				for _, u := range doc.Unassessed {
+					if u.Reason == "incomplete_cycle" && t >= u.Start && t <= u.End {
+						return usable[i], true
+					}
+				}
+			}
+		}
+	}
+	return usable[len(usable)/2], true
+}
+
 // saveTrackingReference renders and stores the marked frame for the next
 // chunk. Failures are logged and never fail chunk analysis.
 func (w *Worker) saveTrackingReference(ctx context.Context, videoPath string, chunk *db.ChunkAnalysisResult) {
@@ -327,7 +407,10 @@ func (w *Worker) saveTrackingReference(ctx context.Context, videoPath string, ch
 	if !ok || tp.Ambiguous || chunk.TargetConfidence < trackingMinConfidence || len(tp.Boxes) == 0 || tp.ReferenceImage != "" {
 		return
 	}
-	box := tp.Boxes[len(tp.Boxes)-1]
+	box, ok := selectTrackingReferenceBox(tp.Boxes, chunk.MovementObservations)
+	if !ok {
+		return
+	}
 	rendered, err := renderTrackingReference(ctx, videoPath, box)
 	if err != nil {
 		w.logger.Warn("tracking reference render failed", zap.Uint("chunk_id", chunk.ID), zap.Error(err))
@@ -351,7 +434,9 @@ func (w *Worker) saveTrackingReference(ctx context.Context, videoPath string, ch
 	if err != nil {
 		return
 	}
-	if err := w.DB.WithContext(ctx).Model(&db.ChunkAnalysisResult{}).Where("id = ?", chunk.ID).Update("target_cues", string(raw)).Error; err != nil {
+	if err := w.withSessionPublication(ctx, chunk.ProfileID, chunk.SessionID, func(tx *gorm.DB) error {
+		return tx.Model(&db.ChunkAnalysisResult{}).Where("id = ?", chunk.ID).Update("target_cues", string(raw)).Error
+	}); err != nil {
 		w.logger.Warn("tracking reference reference not recorded", zap.Uint("chunk_id", chunk.ID), zap.Error(err))
 		return
 	}
@@ -369,6 +454,7 @@ func (w *Worker) analyzeChunkVideo(ctx context.Context, localPath, prompt, model
 type trackingReferenceRef struct {
 	Start, End float64 // verified merged-media seconds of the source chunk
 	Object     string
+	Active     bool
 }
 
 // loadTrackingReferences lists chunk reference images on the merged-media
@@ -388,7 +474,13 @@ func (w *Worker) loadTrackingReferences(ctx context.Context, sessionID string, p
 			continue
 		}
 		if tp, ok := parseStoredTargetPerson(row.TargetCues); ok && tp.ReferenceImage != "" {
-			refs = append(refs, trackingReferenceRef{Start: *row.MediaStartSecs, End: *row.MediaEndSecs, Object: tp.ReferenceImage})
+			class, _ := classifyChunkActivity(row, WorkoutTypeWOD)
+			refs = append(refs, trackingReferenceRef{
+				Start:  *row.MediaStartSecs,
+				End:    *row.MediaEndSecs,
+				Object: tp.ReferenceImage,
+				Active: class == chunkActive,
+			})
 		}
 	}
 	return refs
@@ -397,25 +489,41 @@ func (w *Worker) loadTrackingReferences(ctx context.Context, sessionID string, p
 const pass2TrackingPrompt = `
 
 ## 대상 인물 추적 기준 (추적용 참고, 확정 아님)
-- 첨부된 기준 이미지에는 대상 인물이 초록 박스와 TARGET 라벨로 표시되어 있습니다(이 구간 부근과 세션 첫 확인 프레임).
+- 영상 뒤에 첨부된 기준 이미지에는 대상 인물이 초록 박스와 TARGET 라벨로 표시되어 있습니다(이 구간 부근과 세션 기준 정지 프레임).
 - 이 사람만 관찰하세요. 현재 영상에서 보이지 않으면 다른 사람으로 바꾸지 말고 unknown 또는 unassessed로 기록하세요.
-- 기준 이미지는 대상 식별용이며 자세·가동범위·템포 평가의 근거가 아닙니다.
+- 기준 이미지는 대상 식별용 정지 스냅샷이며 현재 구간의 운동·휴식 판정이나 자세·가동범위·템포 평가의 근거가 아닙니다.
 `
 
 // pass2TrackingInputs returns the reference nearest the window start plus the
-// session anchor, and the prompt that explains them.
+// session anchor (preferring active-exercise references over rest chunks), and
+// the prompt that explains them.
 func (w *Worker) pass2TrackingInputs(ctx context.Context, refs []trackingReferenceRef, start, end float64) (string, [][]byte) {
 	if len(refs) == 0 {
 		return "", nil
 	}
-	near := ""
+	nearActive, nearFallback := "", ""
+	anchorActive := ""
 	for _, ref := range refs {
+		if ref.Active && anchorActive == "" {
+			anchorActive = ref.Object
+		}
 		if ref.End > start && ref.Start < end {
-			near = ref.Object
-			break
+			if nearFallback == "" {
+				nearFallback = ref.Object
+			}
+			if ref.Active && nearActive == "" {
+				nearActive = ref.Object
+			}
 		}
 	}
-	anchor := refs[0].Object
+	near := nearActive
+	if near == "" {
+		near = nearFallback
+	}
+	anchor := anchorActive
+	if anchor == "" {
+		anchor = refs[0].Object
+	}
 	var images [][]byte
 	if img := w.downloadTrackingReference(ctx, near); img != nil {
 		images = append(images, img)

@@ -1,9 +1,11 @@
 import { HeartRateBadge } from "./components/HeartRateSummaryPanel";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { memo, useEffect, useMemo, useRef } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { historyApi, type AnalysisResult } from "../api/history";
 import { useAuth } from "../auth/useAuth";
+import { HistoryArchiveAction } from "./components/HistoryArchiveAction";
+import { historyStatusLabel } from "./historyArchive";
 
 function HistoryCardSkeleton() {
   return (
@@ -36,13 +38,14 @@ function StatusBadge({ status }: { status: string }) {
     processing: "bg-warning/10 text-warning border-warning/20",
     failed: "bg-error/10 text-error border-error/20",
     pending: "bg-info/10 text-info border-info/20",
+    cancelled: "bg-bg-secondary text-text-muted border-border",
   };
   const style = styles[status.toLowerCase()] || styles.pending;
   return (
     <span
       className={`text-xs font-medium px-2.5 py-0.5 rounded-full border ${style}`}
     >
-      {status}
+      {historyStatusLabel(status)}
     </span>
   );
 }
@@ -72,7 +75,7 @@ function parseAnalysisOutput(output: string): {
   }
 }
 
-const HistoryCard = memo(function HistoryCard({ result }: { result: AnalysisResult }) {
+const HistoryCard = memo(function HistoryCard({ result, archiveView }: { result: AnalysisResult; archiveView: boolean }) {
   const parsed = parseAnalysisOutput(result.output || "{}");
   // `||`, not `??`: an empty overview must fall back to the legacy summary.
   parsed.summary = result.analysis_summary?.result?.overview || result.analysis_summary?.last_success?.overview || parsed.summary;
@@ -90,9 +93,10 @@ const HistoryCard = memo(function HistoryCard({ result }: { result: AnalysisResu
   }, [result.stretch_recommendations]);
 
   return (
+    <article className="bg-bg-elevated border border-border rounded-xl hover:border-accent/40 transition-all duration-200 group">
     <Link
-      to={`/sessions/${result.session_id}?profile_id=${result.profile_id}`}
-      className="block bg-bg-elevated border border-border rounded-xl p-5 hover:border-accent/40 hover:bg-bg-elevated/80 transition-all duration-200 group"
+      to={`/sessions/${encodeURIComponent(result.session_id)}?profile_id=${result.profile_id}${archiveView ? "&archived=true" : ""}`}
+      className="block p-5 hover:bg-bg-elevated/80"
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
@@ -172,27 +176,39 @@ const HistoryCard = memo(function HistoryCard({ result }: { result: AnalysisResu
         </p>
       )}
     </Link>
+    <div className="flex justify-end border-t border-border px-5 py-3">
+      <HistoryArchiveAction result={result} />
+    </div>
+    </article>
   );
 });
 
 export function HistoryListPage() {
   const { user } = useAuth();
   const profiles = user?.profiles || [];
-  const [selectedProfileId, setSelectedProfileId] = useState<number | null>(
-    profiles.length > 0 ? profiles[0].id : null,
-  );
+  const [searchParams, setSearchParams] = useSearchParams();
+  const archiveView = searchParams.get("archived") === "true";
+  const requestedProfileId = Number(searchParams.get("profile_id"));
+  const selectedProfileId = profiles.find(profile => profile.id === requestedProfileId)?.id ?? profiles[0]?.id ?? null;
+  const selectView = (profileId: number | null, archived: boolean) => {
+    const next = new URLSearchParams(searchParams);
+    if (profileId) next.set("profile_id", String(profileId));
+    if (archived) next.set("archived", "true"); else next.delete("archived");
+    setSearchParams(next);
+  };
 
   const {
     data,
     isLoading,
     error,
     fetchNextPage,
+    refetch,
     hasNextPage,
     isFetching,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ["history-infinite", selectedProfileId],
-    queryFn: ({ pageParam }) => historyApi.list(selectedProfileId!, pageParam),
+    queryKey: ["history-infinite", selectedProfileId, archiveView ? "archived" : "active"],
+    queryFn: ({ pageParam }) => historyApi.list(selectedProfileId!, pageParam, undefined, archiveView),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (lastPage) => {
       if (!lastPage || lastPage.length < 20) return undefined;
@@ -252,7 +268,7 @@ export function HistoryListPage() {
         {profiles.length > 1 && (
           <select
             value={selectedProfileId ?? ""}
-            onChange={(e) => setSelectedProfileId(Number(e.target.value))}
+            onChange={(e) => selectView(Number(e.target.value), archiveView)}
             className="bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/50"
           >
             {profiles.map((p) => (
@@ -263,6 +279,12 @@ export function HistoryListPage() {
           </select>
         )}
       </div>
+
+      <div className="mb-6 flex gap-2" role="group" aria-label="운동 기록 보기">
+        <button type="button" aria-pressed={!archiveView} onClick={() => selectView(selectedProfileId, false)} className={`rounded-lg border px-4 py-2 text-sm ${!archiveView ? "border-accent text-accent" : "border-border text-text-secondary"}`}>운동 기록</button>
+        <button type="button" aria-pressed={archiveView} onClick={() => selectView(selectedProfileId, true)} className={`rounded-lg border px-4 py-2 text-sm ${archiveView ? "border-accent text-accent" : "border-border text-text-secondary"}`}>보관함</button>
+      </div>
+      {archiveView && <p className="mb-6 text-sm text-text-secondary">보관한 기록은 피로도·훈련 부하·운동 비교에서 제외됩니다. 복원해도 중단된 분석은 자동 재개되지 않습니다.</p>}
 
       {totalCost && (totalCost.total_tokens > 0 || !!totalCost.unmeasured_calls || !!totalCost.unpriced_calls) && (
         <div className="bg-bg-elevated border border-border rounded-xl p-4 mb-6 flex flex-wrap items-center justify-between gap-4">
@@ -317,7 +339,8 @@ export function HistoryListPage() {
 
       {error && uniqueResults.length === 0 && (
         <div className="bg-error/10 border border-error/30 text-error rounded-lg px-4 py-3 text-sm mb-6">
-          Failed to load history. Please try again.
+          <p>Failed to load history. Please try again.</p>
+          <button type="button" onClick={() => void refetch()} disabled={isFetching} className="mt-2 rounded border border-error/30 px-3 py-1.5 font-medium disabled:opacity-50">Retry</button>
         </div>
       )}
 
@@ -339,17 +362,17 @@ export function HistoryListPage() {
             </svg>
           </div>
           <h3 className="text-lg font-medium text-text-primary mb-1">
-            No workouts yet
+            {archiveView ? "보관한 기록이 없습니다" : "No workouts yet"}
           </h3>
           <p className="text-text-secondary text-sm">
-            Upload a workout video to get started.
+            {archiveView ? "운동 기록에서 보관한 항목을 여기서 확인하고 복원할 수 있습니다." : "Upload a workout video to get started."}
           </p>
-          <Link
+          {!archiveView && <Link
             to="/upload"
             className="inline-flex items-center gap-2 mt-4 bg-accent hover:bg-accent-hover text-white font-medium rounded-lg px-4 py-2.5 transition-all duration-200"
           >
             Upload Video
-          </Link>
+          </Link>}
         </div>
       )}
 
@@ -357,7 +380,7 @@ export function HistoryListPage() {
         <>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {uniqueResults.map((result) => (
-              <HistoryCard key={result.id} result={result} />
+              <HistoryCard key={result.id} result={result} archiveView={archiveView} />
             ))}
           </div>
 
@@ -378,11 +401,12 @@ export function HistoryListPage() {
           {error && (
             <div className="mt-8 flex flex-col items-center justify-center py-6 bg-error/5 border border-error/10 rounded-lg">
               <p className="text-error text-sm font-medium mb-2">
-                Failed to load more history
+                Failed to load history
               </p>
               <button
                 type="button"
-                onClick={() => fetchNextPage()}
+                onClick={() => void refetch()}
+                disabled={isFetching}
                 className="px-4 py-2 bg-bg-secondary hover:bg-bg-tertiary text-text-primary border border-border rounded-lg text-sm font-medium transition-colors"
               >
                 Retry

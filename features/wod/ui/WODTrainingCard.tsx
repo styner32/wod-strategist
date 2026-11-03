@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { TacticalTheme } from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
 import { getWODTraining, getWODTrainingLoad, updateWODEffort } from "../api";
 import { newWODScore, wodSeconds, type WODTraining, type WODTrainingLoad } from "../../../shared/wodTraining";
+
+const T = TacticalTheme.light;
 
 export function WODTrainingCard({ sessionId, profileId, scoreJSON }: { sessionId: string; profileId?: number; scoreJSON?: string }) {
   useLocale();
@@ -34,8 +37,11 @@ export function WODTrainingCard({ sessionId, profileId, scoreJSON }: { sessionId
     <Text style={styles.text}>{t("wodTraining.intensity", { score: score.intensity ?? t("wodTraining.unknown") })}</Text>
     {expanded && <>
       <Text style={styles.text}>{t("wodTraining.effortHelp")}</Text>
-      <View style={styles.row}>{Array.from({ length: 10 }, (_, i) => i + 1).map(n => <Pressable key={n} accessibilityRole="button" accessibilityLabel={t("wodTraining.effortChoice", { score: n })} accessibilityState={{ selected: (effort ?? data?.effort) === n }} disabled={saving} onPress={() => setEffort(n)} style={[styles.choice, (effort ?? data?.effort) === n && styles.selected]}><Text style={styles.text}>{n}</Text></Pressable>)}</View>
-      <Pressable accessibilityRole="button" disabled={effort == null || saving} onPress={() => void save()} style={styles.choice}><Text style={styles.text}>{t(saving ? "wodTraining.saving" : "wodTraining.save")}</Text></Pressable>
+      <View style={styles.row}>{Array.from({ length: 10 }, (_, i) => i + 1).map(n => {
+        const isSelected = (effort ?? data?.effort) === n;
+        return <Pressable key={n} accessibilityRole="button" accessibilityLabel={t("wodTraining.effortChoice", { score: n })} accessibilityState={{ selected: isSelected }} disabled={saving} onPress={() => setEffort(n)} style={[styles.choice, isSelected && styles.selected]}><Text style={[styles.text, isSelected && styles.selectedText]}>{n}</Text></Pressable>;
+      })}</View>
+      <Pressable accessibilityRole="button" disabled={effort == null || saving} onPress={() => void save()} style={[styles.saveButton, (effort == null || saving) && styles.disabled]}><Text style={styles.saveText}>{t(saving ? "wodTraining.saving" : "wodTraining.save")}</Text></Pressable>
       <Text style={styles.text}>{t("wodTraining.sessionLoad", { value: data?.session_load == null ? t("wodTraining.unknown") : data.session_load.toFixed(1) })}</Text>
       {comparison && <>
         <Text style={styles.text}>{t("wodTraining.averages", { seven: comparison.seven.daily_average.toFixed(1), twentyEight: comparison.twenty_eight.daily_average.toFixed(1) })}</Text>
@@ -49,11 +55,50 @@ export function WODTrainingCard({ sessionId, profileId, scoreJSON }: { sessionId
   </View>;
 }
 const styles = StyleSheet.create({
-  card: { backgroundColor: "#1C1C1E", borderRadius: 12, padding: 12, marginVertical: 8, gap: 8 },
-  title: { color: "#f4f4f4", fontWeight: "600", fontSize: 14 },
-  text: { color: "#ddd", fontSize: 12 },
+  card: {
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 12,
+    marginVertical: 8,
+    gap: 8,
+  },
+  title: { color: T.ink, fontWeight: "800", fontSize: 14, flexShrink: 1 },
+  text: { color: T.inkSecondary, fontSize: 12, flexShrink: 1 },
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  choice: { padding: 12, borderRadius: 8, borderWidth: 1, borderColor: "#666" },
-  selected: { backgroundColor: "#3868b0" },
-  error: { color: "#ffbe72" },
+  choice: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+    backgroundColor: T.surface,
+  },
+  selected: {
+    backgroundColor: T.electricBlueBg,
+    borderColor: T.electricBlue,
+  },
+  selectedText: {
+    color: T.electricBlue,
+    fontWeight: "800",
+  },
+  saveButton: {
+    alignSelf: "flex-start",
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
+    backgroundColor: T.volt,
+  },
+  saveText: {
+    color: T.voltInk,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  disabled: {
+    opacity: 0.45,
+  },
+  error: { color: T.statusWarning, fontWeight: "600", fontSize: 12 },
 });

@@ -9,6 +9,7 @@ import {
   wodSeconds,
 } from '../../../../shared/wodTraining';
 import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from '../historyPolling';
+import { historyStatusLabel } from '../historyArchive';
 import {
   historyApi,
   type AnalysisResult,
@@ -32,6 +33,7 @@ function isTerminal(status?: SessionReanalysisStatus) {
 
 function statusClasses(status: SessionReanalysisStatus) {
   switch (status) {
+    case 'CANCELLED': return 'border-border bg-bg-secondary text-text-muted';
     case 'COMPLETED': return 'border-success/20 bg-success/10 text-success';
     case 'FAILED':
     case 'VIDEO_UNAVAILABLE':
@@ -316,7 +318,7 @@ export function SessionReanalysisPanel({
         {blockedReason && !canCreate && <p className="text-warning">{blockedReason}</p>}
         {selectedRun && (
           <p className={isTerminal(selectedRun.status) ? 'text-text-secondary' : 'text-warning'}>
-            Attempt #{selectedRun.id}: {selectedRun.status.replaceAll('_', ' ').toLowerCase()}.
+            Attempt #{selectedRun.id}: {historyStatusLabel(selectedRun.status).replaceAll('_', ' ').toLowerCase()}.
           </p>
         )}
       </div>
@@ -384,7 +386,7 @@ export function SessionReanalysisPanel({
               <h3 className="text-sm font-semibold text-text-primary">Re-analysis candidate</h3>
               {selectedRun ? (
                 <span className={`rounded border px-1.5 py-0.5 text-[11px] font-medium ${statusClasses(selectedRun.status)}`}>
-                  {selectedRun.status.replaceAll('_', ' ')}
+                  {historyStatusLabel(selectedRun.status).replaceAll('_', ' ')}
                 </span>
               ) : (
                 <span className="text-xs font-medium text-text-muted">Not applied</span>

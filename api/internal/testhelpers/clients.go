@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 
 	"github.com/hibiken/asynq"
 	g "github.com/onsi/gomega"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/api/option"
 
 	"github.com/wod-strategist/api/internal/storage"
@@ -62,6 +64,15 @@ const (
 	// testRedisDB is the Redis DB index used exclusively for tests.
 	// Using a dedicated DB avoids interfering with the application's DB 5.
 	testRedisDB = 15
+
+	asynqAllQueuesKey    = "asynq:queues"
+	asynqDefaultQueueKey = "default"
+)
+
+var (
+	redisMu             sync.Mutex
+	testRedisClient     *redis.Client
+	testRedisClientAddr string
 )
 
 func testRedisAddr() string {
@@ -79,27 +90,76 @@ func testRedisAddr() string {
 	return "localhost:6379"
 }
 
+func testRedisClientOpt() asynq.RedisClientOpt {
+	return asynq.RedisClientOpt{
+		Addr: testRedisAddr(),
+		DB:   testRedisDB,
+	}
+}
+
+func getTestRedisClient() *redis.Client {
+	opt := testRedisClientOpt()
+	redisMu.Lock()
+	defer redisMu.Unlock()
+
+	if testRedisClient == nil || testRedisClientAddr != opt.Addr {
+		if testRedisClient != nil {
+			_ = testRedisClient.Close()
+		}
+		client, ok := opt.MakeRedisClient().(*redis.Client)
+		g.Expect(ok).To(g.BeTrue(), "FlushRedis: expected *redis.Client from asynq.RedisClientOpt")
+		testRedisClient = client
+		testRedisClientAddr = opt.Addr
+	}
+	return testRedisClient
+}
+
 // NewQueueClient returns a real asynq.Client connected to the local test Redis.
 // The environment variable TEST_REDIS_URL can override the default address.
 func NewQueueClient() *asynq.Client {
-	return asynq.NewClient(asynq.RedisClientOpt{
-		Addr: testRedisAddr(),
-		DB:   testRedisDB,
-	})
+	return asynq.NewClient(testRedisClientOpt())
 }
 
 // NewQueueInspector returns an asynq.Inspector for the same test Redis DB,
 // allowing tests to inspect what was enqueued.
 func NewQueueInspector() *asynq.Inspector {
-	return asynq.NewInspector(asynq.RedisClientOpt{
-		Addr: testRedisAddr(),
-		DB:   testRedisDB,
-	})
+	return asynq.NewInspector(testRedisClientOpt())
 }
 
-// CleanupQueue deletes all tasks from all queues in the test Redis DB.
-// Call this in BeforeEach to ensure each test starts with a clean queue.
-func CleanupQueue(inspector *asynq.Inspector) {
+// FlushRedis flushes all keys (queues, tasks, asynq.Unique locks, and any other
+// locks/state) from the dedicated test Redis DB (DB 15).
+// It restores registered queue names in "asynq:queues" (including "default")
+// so reused asynq.Client instances (which cache published queue names in memory)
+// and inspector.ListPendingTasks("default") continue to work on empty queues.
+func FlushRedis() {
+	ctx := context.Background()
+	client := getTestRedisClient()
+	g.Expect(client.Options().DB).To(g.Equal(testRedisDB), "FlushRedis: refusing to flush non-test Redis DB")
+
+	existingQueues, err := client.SMembers(ctx, asynqAllQueuesKey).Result()
+	g.Expect(err).NotTo(g.HaveOccurred(), "FlushRedis: failed to read asynq queues")
+
+	err = client.FlushDB(ctx).Err()
+	g.Expect(err).NotTo(g.HaveOccurred(), "FlushRedis: failed to flush test Redis DB")
+
+	queuesToRestore := make([]any, 0, len(existingQueues)+1)
+	queuesToRestore = append(queuesToRestore, asynqDefaultQueueKey)
+	for _, q := range existingQueues {
+		if q != asynqDefaultQueueKey {
+			queuesToRestore = append(queuesToRestore, q)
+		}
+	}
+	err = client.SAdd(ctx, asynqAllQueuesKey, queuesToRestore...).Err()
+	g.Expect(err).NotTo(g.HaveOccurred(), "FlushRedis: failed to restore asynq queue registry")
+}
+
+// CleanupQueue flushes the dedicated test Redis DB so all queues, tasks, and
+// uniqueness/lock keys are cleared before each test.
+func CleanupQueue(_ *asynq.Inspector) {
+	FlushRedis()
+}
+
+func CleanupQueueWithInspector(inspector *asynq.Inspector) {
 	queues, err := inspector.Queues()
 	g.Expect(err).NotTo(g.HaveOccurred(), "CleanupQueue: failed to list queues")
 	for _, q := range queues {

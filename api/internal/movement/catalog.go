@@ -2,7 +2,10 @@ package movement
 
 import (
 	"regexp"
+	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // MovementGroup represents a category of workout movements.
@@ -49,6 +52,14 @@ var MovementGroups = []MovementGroup{
 		"Split Jerk",
 		"Jerk",
 		"Bench Press",
+		"Barbell Lunge",
+		"Back Rack Lunge",
+		"Front Rack Lunge",
+		"Overhead Lunge",
+		"Barbell Walking Lunge",
+		"Back Rack Walking Lunge",
+		"Front Rack Walking Lunge",
+		"Overhead Walking Lunge",
 	}},
 	{Category: "Dumbbell & Kettlebell", Movements: []string{
 		"DB Press",
@@ -71,7 +82,22 @@ var MovementGroups = []MovementGroup{
 		"DB Clean & Jerk",
 		"Hang DB Clean & Jerk",
 		"DB Thruster",
+		"DB Lunge",
+		"DB Reverse Lunge",
+		"DB Front Rack Lunge",
+		"DB Overhead Lunge",
+		"DB Walking Lunge",
+		"DB Front Rack Walking Lunge",
+		"DB Overhead Walking Lunge",
 		"KB Swing",
+		"KB Lunge",
+		"Goblet Lunge",
+		"KB Front Rack Lunge",
+		"KB Overhead Lunge",
+		"KB Walking Lunge",
+		"Goblet Walking Lunge",
+		"KB Front Rack Walking Lunge",
+		"KB Overhead Walking Lunge",
 		"Devil Press",
 		"Manmaker",
 		"Farmer's Carry",
@@ -101,6 +127,13 @@ var MovementGroups = []MovementGroup{
 		"Air Squat",
 		"Sit-up",
 		"Lunge",
+		"Walking Lunge",
+		"Reverse Lunge",
+		"Jumping Lunge",
+		"Weighted Lunge",
+		"Weighted Walking Lunge",
+		"Sandbag Lunge",
+		"Sandbag Walking Lunge",
 		"Box Jump",
 		"Box Jump Over",
 		"Burpee Box Jump Over",
@@ -109,6 +142,7 @@ var MovementGroups = []MovementGroup{
 		"Weighted Box Step-up",
 		"Weighted Box Step-over",
 		"Broad Jump",
+		"Burpee Broad Jump",
 		"Wallball Shot",
 	}},
 	{Category: "Cardio", Movements: []string{
@@ -559,6 +593,251 @@ var rawAliases = map[string]string{
 	"스키에르그":          "Skierg",
 	"플레이트 그라운드 투 오버헤드": "Plate Ground-to-Overhead",
 	"그라운드 투 오버헤드":      "Plate Ground-to-Overhead",
+
+	// Barbell, Dumbbell, Kettlebell & Bodyweight Lunges + Burpee Broad Jump (EN)
+	"forward lunge":                               "Lunge",
+	"stationary lunge":                            "Lunge",
+	"in place lunge":                              "Lunge",
+	"alternating lunge":                           "Lunge",
+	"alt lunge":                                   "Lunge",
+	"step back lunge":                             "Reverse Lunge",
+	"backward lunge":                              "Reverse Lunge",
+	"jump lunge":                                  "Jumping Lunge",
+	"plyo lunge":                                  "Jumping Lunge",
+	"split lunge jump":                            "Jumping Lunge",
+	"walking weighted lunge":                      "Weighted Walking Lunge",
+	"walking sandbag lunge":                       "Sandbag Walking Lunge",
+	"bb lunge":                                    "Barbell Lunge",
+	"walking barbell lunge":                       "Barbell Walking Lunge",
+	"bb walking lunge":                            "Barbell Walking Lunge",
+	"barbell back rack lunge":                     "Back Rack Lunge",
+	"walking back rack lunge":                     "Back Rack Walking Lunge",
+	"barbell back rack walking lunge":             "Back Rack Walking Lunge",
+	"barbell front rack lunge":                    "Front Rack Lunge",
+	"walking front rack lunge":                    "Front Rack Walking Lunge",
+	"barbell front rack walking lunge":            "Front Rack Walking Lunge",
+	"barbell overhead lunge":                      "Overhead Lunge",
+	"oh lunge":                                    "Overhead Lunge",
+	"plate overhead lunge":                        "Overhead Lunge",
+	"walking overhead lunge":                      "Overhead Walking Lunge",
+	"barbell overhead walking lunge":              "Overhead Walking Lunge",
+	"oh walking lunge":                            "Overhead Walking Lunge",
+	"plate overhead walking lunge":                "Overhead Walking Lunge",
+	"dumbbell lunge":                              "DB Lunge",
+	"alt db lunge":                                "DB Lunge",
+	"alt dumbbell lunge":                          "DB Lunge",
+	"alternating db lunge":                        "DB Lunge",
+	"alternating dumbbell lunge":                  "DB Lunge",
+	"single db lunge":                             "DB Lunge",
+	"single dumbbell lunge":                       "DB Lunge",
+	"dual db lunge":                               "DB Lunge",
+	"dual dumbbell lunge":                         "DB Lunge",
+	"dumbbell walking lunge":                      "DB Walking Lunge",
+	"walking db lunge":                            "DB Walking Lunge",
+	"walking dumbbell lunge":                      "DB Walking Lunge",
+	"single db walking lunge":                     "DB Walking Lunge",
+	"single dumbbell walking lunge":               "DB Walking Lunge",
+	"dual db walking lunge":                       "DB Walking Lunge",
+	"dual dumbbell walking lunge":                 "DB Walking Lunge",
+	"dumbbell reverse lunge":                      "DB Reverse Lunge",
+	"dumbbell step back lunge":                    "DB Reverse Lunge",
+	"db step back lunge":                          "DB Reverse Lunge",
+	"alt db reverse lunge":                        "DB Reverse Lunge",
+	"alternating db reverse lunge":                "DB Reverse Lunge",
+	"alternating dumbbell reverse lunge":          "DB Reverse Lunge",
+	"dumbbell front rack lunge":                   "DB Front Rack Lunge",
+	"db rack lunge":                               "DB Front Rack Lunge",
+	"dumbbell rack lunge":                         "DB Front Rack Lunge",
+	"single db front rack lunge":                  "DB Front Rack Lunge",
+	"single dumbbell front rack lunge":            "DB Front Rack Lunge",
+	"dual db front rack lunge":                    "DB Front Rack Lunge",
+	"dual dumbbell front rack lunge":              "DB Front Rack Lunge",
+	"dumbbell front rack walking lunge":           "DB Front Rack Walking Lunge",
+	"dumbbell walking front rack lunge":           "DB Front Rack Walking Lunge",
+	"db walking front rack lunge":                 "DB Front Rack Walking Lunge",
+	"walking db front rack lunge":                 "DB Front Rack Walking Lunge",
+	"walking dumbbell front rack lunge":           "DB Front Rack Walking Lunge",
+	"dual db front rack walking lunge":            "DB Front Rack Walking Lunge",
+	"dual dumbbell front rack walking lunge":      "DB Front Rack Walking Lunge",
+	"dumbbell overhead lunge":                     "DB Overhead Lunge",
+	"db oh lunge":                                 "DB Overhead Lunge",
+	"dumbbell oh lunge":                           "DB Overhead Lunge",
+	"single arm db overhead lunge":                "DB Overhead Lunge",
+	"single arm dumbbell overhead lunge":          "DB Overhead Lunge",
+	"one arm db overhead lunge":                   "DB Overhead Lunge",
+	"one arm dumbbell overhead lunge":             "DB Overhead Lunge",
+	"dual db overhead lunge":                      "DB Overhead Lunge",
+	"dual dumbbell overhead lunge":                "DB Overhead Lunge",
+	"alt db overhead lunge":                       "DB Overhead Lunge",
+	"alternating db overhead lunge":               "DB Overhead Lunge",
+	"alternating dumbbell overhead lunge":         "DB Overhead Lunge",
+	"dumbbell overhead walking lunge":             "DB Overhead Walking Lunge",
+	"dumbbell walking overhead lunge":             "DB Overhead Walking Lunge",
+	"db walking overhead lunge":                   "DB Overhead Walking Lunge",
+	"walking db overhead lunge":                   "DB Overhead Walking Lunge",
+	"walking dumbbell overhead lunge":             "DB Overhead Walking Lunge",
+	"db oh walking lunge":                         "DB Overhead Walking Lunge",
+	"dumbbell oh walking lunge":                   "DB Overhead Walking Lunge",
+	"single arm db overhead walking lunge":        "DB Overhead Walking Lunge",
+	"single arm dumbbell overhead walking lunge":  "DB Overhead Walking Lunge",
+	"single arm db walking overhead lunge":        "DB Overhead Walking Lunge",
+	"single arm dumbbell walking overhead lunge":  "DB Overhead Walking Lunge",
+	"one arm db overhead walking lunge":           "DB Overhead Walking Lunge",
+	"one arm dumbbell overhead walking lunge":     "DB Overhead Walking Lunge",
+	"dual db overhead walking lunge":              "DB Overhead Walking Lunge",
+	"dual dumbbell overhead walking lunge":        "DB Overhead Walking Lunge",
+	"kettlebell lunge":                            "KB Lunge",
+	"alt kb lunge":                                "KB Lunge",
+	"alternating kb lunge":                        "KB Lunge",
+	"alternating kettlebell lunge":                "KB Lunge",
+	"kettlebell walking lunge":                    "KB Walking Lunge",
+	"walking kb lunge":                            "KB Walking Lunge",
+	"walking kettlebell lunge":                    "KB Walking Lunge",
+	"kb goblet lunge":                             "Goblet Lunge",
+	"kettlebell goblet lunge":                     "Goblet Lunge",
+	"db goblet lunge":                             "Goblet Lunge",
+	"dumbbell goblet lunge":                       "Goblet Lunge",
+	"walking goblet lunge":                        "Goblet Walking Lunge",
+	"kb goblet walking lunge":                     "Goblet Walking Lunge",
+	"kettlebell goblet walking lunge":             "Goblet Walking Lunge",
+	"db goblet walking lunge":                     "Goblet Walking Lunge",
+	"dumbbell goblet walking lunge":               "Goblet Walking Lunge",
+	"kettlebell front rack lunge":                 "KB Front Rack Lunge",
+	"kb rack lunge":                               "KB Front Rack Lunge",
+	"kettlebell rack lunge":                       "KB Front Rack Lunge",
+	"dual kb front rack lunge":                    "KB Front Rack Lunge",
+	"kettlebell front rack walking lunge":         "KB Front Rack Walking Lunge",
+	"kettlebell walking front rack lunge":         "KB Front Rack Walking Lunge",
+	"kb walking front rack lunge":                 "KB Front Rack Walking Lunge",
+	"walking kb front rack lunge":                 "KB Front Rack Walking Lunge",
+	"walking kettlebell front rack lunge":         "KB Front Rack Walking Lunge",
+	"kettlebell overhead lunge":                   "KB Overhead Lunge",
+	"kb oh lunge":                                 "KB Overhead Lunge",
+	"kettlebell oh lunge":                         "KB Overhead Lunge",
+	"single arm kb overhead lunge":                "KB Overhead Lunge",
+	"single arm kettlebell overhead lunge":        "KB Overhead Lunge",
+	"kettlebell overhead walking lunge":           "KB Overhead Walking Lunge",
+	"kettlebell walking overhead lunge":           "KB Overhead Walking Lunge",
+	"kb walking overhead lunge":                   "KB Overhead Walking Lunge",
+	"walking kb overhead lunge":                   "KB Overhead Walking Lunge",
+	"walking kettlebell overhead lunge":           "KB Overhead Walking Lunge",
+	"kb oh walking lunge":                         "KB Overhead Walking Lunge",
+	"single arm kb overhead walking lunge":        "KB Overhead Walking Lunge",
+	"single arm kettlebell overhead walking lunge": "KB Overhead Walking Lunge",
+	"bbj": "Burpee Broad Jump",
+
+	// Lunges + Burpee Broad Jump (KR)
+	"워킹 런지":          "Walking Lunge",
+	"워킹런지":           "Walking Lunge",
+	"리버스 런지":         "Reverse Lunge",
+	"리버스런지":          "Reverse Lunge",
+	"백 런지":           "Reverse Lunge",
+	"백런지":            "Reverse Lunge",
+	"점핑 런지":          "Jumping Lunge",
+	"점핑런지":           "Jumping Lunge",
+	"점프 런지":          "Jumping Lunge",
+	"점프런지":           "Jumping Lunge",
+	"중량 런지":          "Weighted Lunge",
+	"웨이트 런지":         "Weighted Lunge",
+	"중량 워킹 런지":       "Weighted Walking Lunge",
+	"웨이트 워킹 런지":      "Weighted Walking Lunge",
+	"샌드백 런지":         "Sandbag Lunge",
+	"샌드백런지":          "Sandbag Lunge",
+	"샌드백 워킹 런지":      "Sandbag Walking Lunge",
+	"샌드백워킹런지":        "Sandbag Walking Lunge",
+	"바벨 런지":          "Barbell Lunge",
+	"바벨런지":           "Barbell Lunge",
+	"바벨 워킹 런지":       "Barbell Walking Lunge",
+	"바벨워킹런지":         "Barbell Walking Lunge",
+	"백랙 런지":          "Back Rack Lunge",
+	"백랙런지":           "Back Rack Lunge",
+	"백 랙 런지":         "Back Rack Lunge",
+	"백랙 워킹 런지":       "Back Rack Walking Lunge",
+	"백랙워킹런지":         "Back Rack Walking Lunge",
+	"백 랙 워킹 런지":      "Back Rack Walking Lunge",
+	"프론트랙 런지":        "Front Rack Lunge",
+	"프론트랙런지":         "Front Rack Lunge",
+	"프론트 랙 런지":       "Front Rack Lunge",
+	"프런트랙 런지":        "Front Rack Lunge",
+	"프론트랙 워킹 런지":     "Front Rack Walking Lunge",
+	"프론트랙워킹런지":       "Front Rack Walking Lunge",
+	"프론트 랙 워킹 런지":    "Front Rack Walking Lunge",
+	"프런트랙 워킹 런지":     "Front Rack Walking Lunge",
+	"오버헤드 런지":        "Overhead Lunge",
+	"오버헤드런지":         "Overhead Lunge",
+	"오버헤드 워킹 런지":     "Overhead Walking Lunge",
+	"오버헤드워킹런지":       "Overhead Walking Lunge",
+	"덤벨 런지":          "DB Lunge",
+	"덤벨런지":           "DB Lunge",
+	"덤벨 워킹 런지":       "DB Walking Lunge",
+	"덤벨워킹런지":         "DB Walking Lunge",
+	"덤벨 리버스 런지":      "DB Reverse Lunge",
+	"덤벨리버스런지":        "DB Reverse Lunge",
+	"덤벨 프론트랙 런지":     "DB Front Rack Lunge",
+	"덤벨프론트랙런지":       "DB Front Rack Lunge",
+	"덤벨 프론트 랙 런지":    "DB Front Rack Lunge",
+	"덤벨 프론트랙 워킹 런지":  "DB Front Rack Walking Lunge",
+	"덤벨프론트랙워킹런지":    "DB Front Rack Walking Lunge",
+	"덤벨 워킹 프론트랙 런지":  "DB Front Rack Walking Lunge",
+	"덤벨 오버헤드 런지":     "DB Overhead Lunge",
+	"덤벨오버헤드런지":       "DB Overhead Lunge",
+	"덤벨 오버헤드 워킹 런지":  "DB Overhead Walking Lunge",
+	"덤벨오버헤드워킹런지":    "DB Overhead Walking Lunge",
+	"덤벨 워킹 오버헤드 런지":  "DB Overhead Walking Lunge",
+	"케틀벨 런지":         "KB Lunge",
+	"케틀벨런지":          "KB Lunge",
+	"케틀벨 워킹 런지":      "KB Walking Lunge",
+	"케틀벨워킹런지":        "KB Walking Lunge",
+	"고블릿 런지":         "Goblet Lunge",
+	"고블릿런지":          "Goblet Lunge",
+	"고블릿 워킹 런지":      "Goblet Walking Lunge",
+	"고블릿워킹런지":        "Goblet Walking Lunge",
+	"케틀벨 프론트랙 런지":    "KB Front Rack Lunge",
+	"케틀벨프론트랙런지":      "KB Front Rack Lunge",
+	"케틀벨 프론트랙 워킹 런지": "KB Front Rack Walking Lunge",
+	"케틀벨프론트랙워킹런지":   "KB Front Rack Walking Lunge",
+	"케틀벨 오버헤드 런지":    "KB Overhead Lunge",
+	"케틀벨오버헤드런지":      "KB Overhead Lunge",
+	"케틀벨 오버헤드 워킹 런지": "KB Overhead Walking Lunge",
+	"케틀벨오버헤드워킹런지":   "KB Overhead Walking Lunge",
+	"케틀벨 워킹 오버헤드 런지": "KB Overhead Walking Lunge",
+	"버피 브로드 점프":      "Burpee Broad Jump",
+	"버피브로드점프":        "Burpee Broad Jump",
+	"버피 멀리뛰기":        "Burpee Broad Jump",
+}
+
+var stationaryToWalkingLunge = map[string]string{
+	"Lunge":               "Walking Lunge",
+	"Weighted Lunge":      "Weighted Walking Lunge",
+	"Sandbag Lunge":       "Sandbag Walking Lunge",
+	"Barbell Lunge":       "Barbell Walking Lunge",
+	"Back Rack Lunge":     "Back Rack Walking Lunge",
+	"Front Rack Lunge":    "Front Rack Walking Lunge",
+	"Overhead Lunge":      "Overhead Walking Lunge",
+	"DB Lunge":            "DB Walking Lunge",
+	"DB Front Rack Lunge": "DB Front Rack Walking Lunge",
+	"DB Overhead Lunge":   "DB Overhead Walking Lunge",
+	"KB Lunge":            "KB Walking Lunge",
+	"Goblet Lunge":        "Goblet Walking Lunge",
+	"KB Front Rack Lunge": "KB Front Rack Walking Lunge",
+	"KB Overhead Lunge":   "KB Overhead Walking Lunge",
+}
+
+var walkingLungeMovements = map[string]bool{
+	"Walking Lunge":               true,
+	"Weighted Walking Lunge":      true,
+	"Sandbag Walking Lunge":       true,
+	"Barbell Walking Lunge":       true,
+	"Back Rack Walking Lunge":     true,
+	"Front Rack Walking Lunge":    true,
+	"Overhead Walking Lunge":      true,
+	"DB Walking Lunge":            true,
+	"DB Front Rack Walking Lunge": true,
+	"DB Overhead Walking Lunge":   true,
+	"KB Walking Lunge":            true,
+	"Goblet Walking Lunge":        true,
+	"KB Front Rack Walking Lunge": true,
+	"KB Overhead Walking Lunge":   true,
 }
 
 // These names omit the variant, implement, or cycle needed to identify a catalog movement.
@@ -593,6 +872,7 @@ func init() {
 			aliasLookup[normAlias] = canonical
 		}
 	}
+	lungePhraseRegex = buildLungePhraseRegex()
 }
 
 // All returns a flat list of all movement names across all categories.
@@ -655,4 +935,342 @@ func Canonical(raw string) string {
 	}
 
 	return ""
+}
+
+// IsWalkingLunge reports whether raw resolves to one of the canonical walking lunge movements.
+func IsWalkingLunge(raw string) bool {
+	c := Canonical(raw)
+	return c != "" && walkingLungeMovements[c]
+}
+
+// IsTraveling reports whether raw resolves to a floor-traversing movement without a fixed station.
+func IsTraveling(raw string) bool {
+	c := Canonical(raw)
+	if c == "" {
+		return false
+	}
+	if walkingLungeMovements[c] {
+		return true
+	}
+	switch c {
+	case "Burpee Broad Jump", "Broad Jump", "Handstand Walk", "Farmer's Carry":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsTravelingPolicyMovement reports whether raw resolves to a movement governed by the
+// conditional traveling-lunge / burpee-broad-jump observation policy.
+func IsTravelingPolicyMovement(raw string) bool {
+	c := Canonical(raw)
+	return walkingLungeMovements[c] || c == "Burpee Broad Jump"
+}
+
+const prescriptionNumberPattern = `\d+(?:\.\d+)?(?:[-/x]\d+(?:\.\d+)?)*`
+const distanceUnitPattern = `(?:ft|feet|foot|yd|yds|yards?|met(?:er|re)s?|m|미터|피트|야드)`
+const prescriptionUnitPattern = `(?:ft|feet|foot|yd|yds|yards?|met(?:er|re)s?|m|미터|피트|야드|reps?|회|개|lb|lbs|kg|kgs|cal|cals|calories?|min(?:ute)?s?|seconds?|secs?|s)`
+
+var (
+	timeHeaderPrefixRegex       = regexp.MustCompile(`(?i)(?:\bamrap|\bemom|\be\d+mom|\botm|\btime\s*cap|\bcap|\bevery|\brest|\bin|\bfor)\s*[:\-]?\s*$`)
+	prefixPrescriptionRegex     = regexp.MustCompile(`(?i)(?:^|[^\pL\pN.])(` + prescriptionNumberPattern + `)\s*(` + prescriptionUnitPattern + `)?\s*[)\]]?\s*[:\-]?\s*$`)
+	suffixPrescriptionRegex     = regexp.MustCompile(`(?i)^\s*[:\-]?\s*[(\[]?\s*(` + prescriptionNumberPattern + `)\s*(` + prescriptionUnitPattern + `)?(?:$|[^\pL\pN.])`)
+	standalonePrescriptionRegex = regexp.MustCompile(`(?i)^\s*[(\[]?\s*(` + prescriptionNumberPattern + `)\s*(` + prescriptionUnitPattern + `)?\s*[)\]]?\s*$`)
+	distanceUnitRegex           = regexp.MustCompile(`(?i)^` + distanceUnitPattern + `$`)
+	lungePhraseRegex            *regexp.Regexp
+)
+
+// Match complete catalog aliases, longest first, so a modifier such as Reverse,
+// Jumping or DB Overhead cannot fall through to a generic Lunge suffix.
+func buildLungePhraseRegex() *regexp.Regexp {
+	seen := map[string]bool{}
+	for _, lookup := range []map[string]string{canonicalLookup, aliasLookup} {
+		for phrase, name := range lookup {
+			if strings.Contains(name, "Lunge") {
+				seen[phrase] = true
+			}
+		}
+	}
+	phrases := make([]string, 0, len(seen))
+	for phrase := range seen {
+		phrases = append(phrases, phrase)
+	}
+	sort.Slice(phrases, func(i, j int) bool {
+		if len(phrases[i]) != len(phrases[j]) {
+			return len(phrases[i]) > len(phrases[j])
+		}
+		return phrases[i] < phrases[j]
+	})
+	for i := range phrases {
+		phrases[i] = regexp.QuoteMeta(phrases[i])
+	}
+	return regexp.MustCompile(`(?i)(?:` + strings.Join(phrases, "|") + `)(?:es|s)?`)
+}
+
+func isASCIIDigit(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
+// SplitWorkoutClauses splits WOD text into individual workout clauses across line breaks and
+// inline workout delimiters (;, :, +, ,, |, ·, •, →, ->, =>, and / outside parentheses when
+// not part of an unspaced numeric ratio like 50/35lb or 200/150ft).
+func SplitWorkoutClauses(text string) []string {
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	runes := []rune(text)
+	var clauses []string
+	start := 0
+	parenDepth := 0
+
+	flush := func(end int) {
+		if end > start {
+			if seg := strings.TrimSpace(string(runes[start:end])); seg != "" {
+				clauses = append(clauses, seg)
+			}
+		}
+	}
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if r == '\r' || r == '\n' {
+			flush(i)
+			start = i + 1
+			parenDepth = 0
+			continue
+		}
+		switch r {
+		case '(', '[':
+			parenDepth++
+			continue
+		case ')', ']':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+			continue
+		}
+		if parenDepth > 0 {
+			continue
+		}
+		switch r {
+		case ':':
+			left := strings.TrimSpace(string(runes[start:i]))
+			right := string(runes[i+1:])
+			// Keep a movement's own prescription and a header's duration attached.
+			if suffixPrescriptionRegex.MatchString(right) && (Canonical(left) != "" || timeHeaderPrefixRegex.MatchString(left)) {
+				continue
+			}
+			flush(i)
+			start = i + 1
+		case ';', '+', ',', '|', '·', '•', '→':
+			flush(i)
+			start = i + 1
+		case '-', '=':
+			if i+1 < len(runes) && runes[i+1] == '>' {
+				flush(i)
+				i++
+				start = i + 1
+			}
+		case '/':
+			prevDigit := i > 0 && isASCIIDigit(runes[i-1])
+			nextDigit := i+1 < len(runes) && isASCIIDigit(runes[i+1])
+			if !prevDigit || !nextDigit {
+				flush(i)
+				start = i + 1
+			}
+		}
+	}
+	flush(len(runes))
+	return clauses
+}
+
+type lungePrescription struct {
+	movement string
+	distance bool
+	reps     bool
+}
+
+func wordBoundary(text string, index int) bool {
+	if index == 0 || index == len(text) {
+		return true
+	}
+	before, _ := utf8.DecodeLastRuneInString(text[:index])
+	after, _ := utf8.DecodeRuneInString(text[index:])
+	return !(unicode.IsLetter(before) || unicode.IsNumber(before)) || !(unicode.IsLetter(after) || unicode.IsNumber(after))
+}
+
+// A quantity between two movement names has no unambiguous owner. Use the
+// existing catalog rather than maintaining a second list of cardio/carry names.
+func hasAdjacentMovement(text string, atEnd bool) bool {
+	fields := strings.Fields(strings.Trim(text, " \t\r\n()[]:-"))
+	for i := range fields {
+		candidate := strings.Join(fields[:i+1], " ")
+		if atEnd {
+			candidate = strings.Join(fields[i:], " ")
+		}
+		if Canonical(candidate) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func classifyPrescription(unit string) (distance, reps bool) {
+	unit = strings.ToLower(unit)
+	return distanceUnitRegex.MatchString(unit), unit == "" || unit == "rep" || unit == "reps" || unit == "회" || unit == "개"
+}
+
+func lungePrescriptions(clause string) []lungePrescription {
+	norm := NormalizeKey(clause)
+	if strings.Contains(norm, "stretch") || strings.Contains(norm, "스트레칭") {
+		return nil
+	}
+	var out []lungePrescription
+	for _, loc := range lungePhraseRegex.FindAllStringIndex(norm, -1) {
+		if !wordBoundary(norm, loc[0]) || !wordBoundary(norm, loc[1]) {
+			continue
+		}
+		name := Canonical(norm[loc[0]:loc[1]])
+		if !walkingLungeMovements[name] && stationaryToWalkingLunge[name] == "" {
+			continue
+		}
+		item := lungePrescription{movement: name}
+		prefix, suffix := norm[:loc[0]], norm[loc[1]:]
+		if m := prefixPrescriptionRegex.FindStringSubmatchIndex(prefix); m != nil {
+			before := prefix[:m[2]]
+			if !timeHeaderPrefixRegex.MatchString(strings.TrimRight(before, " ([")) && !hasAdjacentMovement(before, true) {
+				unit := ""
+				if m[4] >= 0 {
+					unit = prefix[m[4]:m[5]]
+				}
+				item.distance, item.reps = classifyPrescription(unit)
+			}
+		}
+		if m := suffixPrescriptionRegex.FindStringSubmatchIndex(suffix); m != nil {
+			end := m[3]
+			unit := ""
+			if m[4] >= 0 {
+				unit, end = suffix[m[4]:m[5]], m[5]
+			}
+			if !hasAdjacentMovement(suffix[end:], false) {
+				distance, reps := classifyPrescription(unit)
+				item.distance = item.distance || distance
+				item.reps = item.reps || reps
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// HasLungeDistancePrescription accepts a quantity on its own (the structured
+// Reps field), or a distance directly attached to a complete lunge name.
+func HasLungeDistancePrescription(clause string) bool {
+	if m := standalonePrescriptionRegex.FindStringSubmatch(clause); m != nil {
+		return distanceUnitRegex.MatchString(m[2])
+	}
+	for _, item := range lungePrescriptions(clause) {
+		if item.distance && !item.reps {
+			return true
+		}
+	}
+	return false
+}
+
+func singleLungePrescription(raw string) (lungePrescription, bool) {
+	if len(SplitWorkoutClauses(raw)) > 1 {
+		return lungePrescription{}, false
+	}
+	items := lungePrescriptions(raw)
+	if len(items) != 1 {
+		return lungePrescription{}, false
+	}
+	return items[0], true
+}
+
+func walkingLungeName(base string) string {
+	if walkingLungeMovements[base] {
+		return base
+	}
+	return stationaryToWalkingLunge[base]
+}
+
+// PromoteDistanceLunge uses only the movement's own adjacent prescription or a
+// structured prescription field; another movement's distance cannot promote it.
+func PromoteDistanceLunge(rawMovement string, clauseContexts ...string) string {
+	item, ok := singleLungePrescription(rawMovement)
+	if !ok || item.reps {
+		return ""
+	}
+	if item.distance {
+		return walkingLungeName(item.movement)
+	}
+	for _, ctx := range clauseContexts {
+		if m := standalonePrescriptionRegex.FindStringSubmatch(ctx); m != nil {
+			if distanceUnitRegex.MatchString(m[2]) {
+				return walkingLungeName(item.movement)
+			}
+			return ""
+		}
+		if other, valid := singleLungePrescription(ctx); valid && other.movement == item.movement && other.distance && !other.reps {
+			return walkingLungeName(item.movement)
+		}
+	}
+	return ""
+}
+
+// PromoteDistanceLungeInWOD consults texts in priority order (corrected WOD,
+// then raw OCR). Bare names are unknown; explicit rep and distance prescriptions
+// of the same variant in one source keep the global hint unpromoted.
+func PromoteDistanceLungeInWOD(rawMovement string, texts ...string) string {
+	item, ok := singleLungePrescription(rawMovement)
+	if !ok || item.reps {
+		return ""
+	}
+	if item.distance {
+		return walkingLungeName(item.movement)
+	}
+	target := walkingLungeName(item.movement)
+	for _, text := range texts {
+		hasDistance, hasReps := false, false
+		for _, clause := range SplitWorkoutClauses(text) {
+			for _, candidate := range lungePrescriptions(clause) {
+				if candidate.movement == item.movement || candidate.movement == target {
+					hasDistance = hasDistance || candidate.distance
+					hasReps = hasReps || candidate.reps
+				}
+			}
+		}
+		if hasDistance || hasReps {
+			if hasDistance && !hasReps {
+				return target
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// HasTravelingPolicyContext reports whether a movement hint or a local WOD
+// prescription references a walking lunge or Burpee Broad Jump.
+func HasTravelingPolicyContext(movements []string, wodDescription string) bool {
+	for _, m := range movements {
+		for _, sub := range SplitWorkoutClauses(m) {
+			if IsTravelingPolicyMovement(sub) || PromoteDistanceLungeInWOD(sub, wodDescription) != "" {
+				return true
+			}
+		}
+	}
+	for _, clause := range SplitWorkoutClauses(wodDescription) {
+		norm := " " + NormalizeKey(clause) + " "
+		if strings.Contains(norm, " burpee broad jump ") || strings.Contains(norm, " burpee broad jumps ") || strings.Contains(norm, " bbj ") || strings.Contains(clause, "버피 브로드 점프") || strings.Contains(clause, "버피브로드점프") || strings.Contains(clause, "버피 멀리뛰기") {
+			return true
+		}
+		for _, item := range lungePrescriptions(clause) {
+			if walkingLungeMovements[item.movement] || (item.distance && !item.reps) {
+				return true
+			}
+		}
+	}
+	return false
 }

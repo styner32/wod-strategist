@@ -11,6 +11,8 @@ import { getToken } from "@/features/auth/storage";
 import type { components } from "./schema";
 import type { WorkoutType } from "./workoutType";
 import type { ConfirmPerformanceRecordsRequest, PerformanceBenchmarksResponse, WorkoutProgressResponse } from "../../shared/workoutProgress";
+import type { WorkoutShareContext } from "../../shared/workoutShare";
+import { ulid } from "ulid";
 
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL || "http://localhost:8088/api/v1";
@@ -102,6 +104,19 @@ export async function apiClient<T = any>(
 export interface UploadResult {
   taskId: string;
   sessionId: string;
+  chunkId?: string;
+  gcsUri?: string;
+  sourceGeneration?: string;
+}
+
+export interface RecordingMediaChunkIdentity {
+  clientChunkId: string;
+  captureOrder: number;
+}
+
+export interface RecordingMediaManifestChunk {
+  chunk_id: string;
+  source_generation: string;
 }
 
 export interface ProcessWorkoutVideoOptions {
@@ -122,6 +137,9 @@ export interface ProcessWorkoutVideoOptions {
   retryDelayMs?: number;
   stepTimeoutMs?: number;
   uploadTimeoutMs?: number;
+  mediaPipelineVersion?: 1;
+  clientChunkId?: string;
+  captureOrder?: number;
 }
 
 /**
@@ -171,6 +189,11 @@ export type UploadUrlResponse = Required<
 export type UploadCompleteResponse = Required<
   components["schemas"]["controllers.CompleteUploadResponse"]
 >;
+type ChunkUploadCompleteResponse = UploadCompleteResponse & {
+  chunk_id?: string;
+  gcs_uri?: string;
+  source_generation?: string;
+};
 
 export interface ChunkAnalysisResult {
  capture_assessment?: CaptureAssessment | null;
@@ -200,6 +223,10 @@ export async function fetchMovements(): Promise<string[]> {
 
 export function getWorkoutProgress(sessionId: string, signal?: AbortSignal): Promise<WorkoutProgressResponse> {
   return apiClient(`/sessions/${encodeURIComponent(sessionId)}/workout-progress`, { signal });
+}
+export function getWorkoutShareContext(sessionId: string, profileId: number, timezone: string, signal?: AbortSignal): Promise<WorkoutShareContext> {
+  const params = new URLSearchParams({ profile_id: String(profileId), timezone });
+  return apiClient(`/sessions/${encodeURIComponent(sessionId)}/share-context?${params}`, { signal });
 }
 export function confirmPerformanceRecords(sessionId: string, body: ConfirmPerformanceRecordsRequest): Promise<WorkoutProgressResponse> {
   return apiClient(`/sessions/${encodeURIComponent(sessionId)}/performance-records`, { method: "PUT", bodyPayload: body });
@@ -590,12 +617,18 @@ export async function notifyChunkUploadComplete(
   workoutConfidence?: number,
   appearanceHints?: string,
   signal?: AbortSignal,
-): Promise<UploadCompleteResponse> {
-  return apiClient<UploadCompleteResponse>("/chunk-complete", {
+  mediaChunk?: RecordingMediaChunkIdentity,
+): Promise<ChunkUploadCompleteResponse> {
+  return apiClient<ChunkUploadCompleteResponse>("/chunk-complete", {
     method: "POST",
     signal,
     bodyPayload: {
       live_analysis_version: 1,
+      ...(mediaChunk ? {
+        media_pipeline_version: 1,
+        client_chunk_id: mediaChunk.clientChunkId,
+        capture_order: mediaChunk.captureOrder,
+      } : {}),
       session_id: sessionId,
       gcs_uri: gcsUri,
       movements,
@@ -694,8 +727,18 @@ export async function processWorkoutChunk(
     stepTimeoutMs = 15000,
     uploadTimeoutMs = 30000,
     onRetry,
+    mediaPipelineVersion,
+    clientChunkId,
+    captureOrder,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
+  let mediaChunk: RecordingMediaChunkIdentity | undefined;
+  if (mediaPipelineVersion === 1) {
+    if (!clientChunkId || typeof captureOrder !== "number" || !Number.isSafeInteger(captureOrder) || captureOrder <= 0) {
+      throw new Error("A version-1 chunk requires a stable chunk ID and capture order");
+    }
+    mediaChunk = { clientChunkId, captureOrder };
+  }
 
   // DEBUG: Simulate slow upload. Set to 0 for normal behavior.
   // e.g. 15000 = each upload takes 15s extra, causing pile-up with 10s chunks.
@@ -708,27 +751,37 @@ export async function processWorkoutChunk(
   }
 
   let lastError: unknown;
+  // A completed PUT is immutable. Notification retries must keep the same object,
+  // including when the server accepted the first notification but its reply was lost.
+  let uploadedGcsUri: string | undefined;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const { upload_url, gcs_uri } = await withStepTimeout(
-        (signal) => getUploadUrl(sessionId, filename, profileId, signal),
-        stepTimeoutMs,
-        "getUploadUrl",
-      );
-      await uploadToGcs(
-        upload_url,
-        fileUri,
-        mimeType,
-        undefined,
-        undefined,
-        uploadTimeoutMs,
-      );
+      if (!mediaChunk || !uploadedGcsUri) {
+        const extension = filename.match(/\.(mp4|mov)$/i)?.[0] || ".mp4";
+        const attemptFilename = mediaChunk
+          ? `chunk_${mediaChunk.clientChunkId}_${ulid()}${extension}`
+          : filename;
+        const { upload_url, gcs_uri } = await withStepTimeout(
+          (signal) => getUploadUrl(sessionId, attemptFilename, profileId, signal),
+          stepTimeoutMs,
+          "getUploadUrl",
+        );
+        await uploadToGcs(
+          upload_url,
+          fileUri,
+          mimeType,
+          undefined,
+          undefined,
+          uploadTimeoutMs,
+        );
+        uploadedGcsUri = gcs_uri;
+      }
 
       const result = await withStepTimeout(
         (signal) =>
           notifyChunkUploadComplete(
             sessionId,
-            gcs_uri,
+            uploadedGcsUri!,
             movements,
             injuries,
             workoutType,
@@ -739,14 +792,25 @@ export async function processWorkoutChunk(
             workoutConfidence,
             appearanceHints,
             signal,
+            mediaChunk,
           ),
         stepTimeoutMs,
         "notifyChunkUploadComplete",
       );
 
+      if (mediaChunk && (!isPositiveDecimalString(result.chunk_id) ||
+          !isPositiveDecimalString(result.source_generation) || !result.gcs_uri?.startsWith("gs://"))) {
+        throw new Error("Version-1 chunk approval did not include a valid source receipt");
+      }
+
       return {
         taskId: result.task_id,
         sessionId: result.session_id,
+        ...(mediaChunk ? {
+          chunkId: result.chunk_id,
+          gcsUri: result.gcs_uri,
+          sourceGeneration: result.source_generation,
+        } : {}),
       };
     } catch (error) {
       lastError = error;
@@ -775,6 +839,11 @@ export interface MergeChunksResult {
   taskId: string;
   sessionId: string;
   message: string;
+  mediaRunId?: string;
+}
+
+function isPositiveDecimalString(value: unknown): value is string {
+  return typeof value === "string" && /^[1-9]\d*$/.test(value);
 }
 
 /**
@@ -792,6 +861,9 @@ export async function mergeChunks(
     enableTts?: boolean;
     wodDescription?: string;
     appearanceHints?: string;
+    mediaPipelineVersion?: 1;
+    expectedChunkCount?: number;
+    chunks?: RecordingMediaManifestChunk[];
     maxRetries?: number;
     retryDelayMs?: number;
   },
@@ -804,9 +876,20 @@ export async function mergeChunks(
     enableTts = false,
     wodDescription,
     appearanceHints,
+    mediaPipelineVersion,
+    expectedChunkCount,
+    chunks,
     maxRetries = 3,
     retryDelayMs = 3000,
   } = options;
+
+  if (mediaPipelineVersion === 1 && (typeof expectedChunkCount !== "number" ||
+      !Number.isSafeInteger(expectedChunkCount) || expectedChunkCount <= 0 || !chunks || chunks.length !== expectedChunkCount ||
+      chunks.some((chunk) => !isPositiveDecimalString(chunk.chunk_id) ||
+        !isPositiveDecimalString(chunk.source_generation)) ||
+      new Set(chunks.map((chunk) => chunk.chunk_id)).size !== expectedChunkCount)) {
+    throw new Error("A version-1 merge requires one approved receipt for every captured chunk");
+  }
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -815,6 +898,7 @@ export async function mergeChunks(
         task_id: string;
         session_id: string;
         message: string;
+        media_run_id?: string;
       }>("/merge-chunks", {
         method: "POST",
         bodyPayload: {
@@ -824,6 +908,11 @@ export async function mergeChunks(
           injuries,
           profile_id: profileId,
           enable_tts: enableTts,
+          ...(mediaPipelineVersion === 1 ? {
+            media_pipeline_version: 1,
+            expected_chunk_count: expectedChunkCount,
+            chunks,
+          } : {}),
           ...(wodDescription ? { wod_description: wodDescription } : {}),
           ...(appearanceHints ? { appearance_hints: appearanceHints } : {}),
         },
@@ -833,6 +922,7 @@ export async function mergeChunks(
         taskId: result.task_id,
         sessionId: result.session_id,
         message: result.message,
+        ...(result.media_run_id ? { mediaRunId: result.media_run_id } : {}),
       };
     } catch (error) {
       lastError = error;
@@ -899,9 +989,11 @@ export async function generateHighlight(
   sessionId: string,
   profileId: number,
   maxDuration: number = 60,
+  signal?: AbortSignal,
 ): Promise<GenerateHighlightResult> {
   return apiClient<GenerateHighlightResult>("/generate-highlight", {
     method: "POST",
+    signal,
     bodyPayload: {
       session_id: sessionId,
       profile_id: profileId,
@@ -915,8 +1007,9 @@ export async function generateHighlight(
  */
 export async function fetchHighlightResults(
   sessionId: string,
+  signal?: AbortSignal,
 ): Promise<HighlightResult[]> {
-  return apiClient<HighlightResult[]>(`/highlight/${sessionId}`);
+  return apiClient<HighlightResult[]>(`/highlight/${sessionId}`, { signal });
 }
 
 /**
@@ -1216,6 +1309,7 @@ export interface RecentWorkoutSummary {
   duration_seconds?: number | null;
   effort?: number | null;
   hybrid_sensor?: HybridSensorBrief | null;
+  hybrid_sensor_excluded_reason?: "calibration_changed" | "calibration_provenance_unknown";
 }
 
 export interface EffortReflectionInfo {
@@ -1229,6 +1323,7 @@ export interface EffortReflectionInfo {
 
 export interface PreWodAdviceResponse {
   profile_id: number;
+  history_revision?: string;
   overall_fatigue_score?: number | null;
   overall_state: string;
   overall_state_ko: string;
@@ -1249,6 +1344,31 @@ export interface PreWodAdviceRequest {
   profile_id: number;
   wod_description?: string;
   movements?: string[];
+}
+
+export interface ProfileReadinessResponse {
+  profile_id: number;
+  history_revision?: string;
+  overall_fatigue_score?: number | null;
+  overall_state: string;
+  overall_state_ko: string;
+  muscle_readiness?: MuscleReadinessItem[];
+  recent_workouts?: RecentWorkoutSummary[];
+  evidence_status: "no_history" | "insufficient" | "partial" | "complete" | string;
+  evidence: EvidenceCounts;
+  as_of: string;
+  last_workout_at?: string | null;
+}
+
+export async function fetchProfileReadiness(
+  profileId: number,
+  signal?: AbortSignal,
+): Promise<ProfileReadinessResponse> {
+  const params = new URLSearchParams({ profile_id: String(profileId) });
+  return apiClient<ProfileReadinessResponse>(
+    `/strategies/readiness?${params.toString()}`,
+    { signal },
+  );
 }
 
 export async function fetchPreWodAdvice(

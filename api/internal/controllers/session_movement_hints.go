@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/wod-strategist/api/internal/db"
+	"gorm.io/gorm"
 )
 
 func normalizeMovementHints(movements []string) []string {
@@ -52,7 +53,7 @@ func decodeMovementHints(document db.JSONDocument) ([]string, error) {
 // by newer clients. A nil slice means an older caller omitted the field and
 // leaves existing hints untouched. Legacy sessions without a sessions row are
 // intentionally left unchanged.
-func (ctl *Controller) persistSessionMovementHints(ctx context.Context, sessionID string, profileID uint, movements []string) error {
+func persistSessionMovementHints(ctx context.Context, database *gorm.DB, sessionID string, profileID uint, movements []string) error {
 	if movements == nil {
 		return nil
 	}
@@ -62,7 +63,7 @@ func (ctl *Controller) persistSessionMovementHints(ctx context.Context, sessionI
 		return err
 	}
 
-	result := ctl.db.WithContext(ctx).
+	result := database.WithContext(ctx).
 		Model(&db.Session{}).
 		Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 		Update("movement_hints", document)
@@ -72,12 +73,12 @@ func (ctl *Controller) persistSessionMovementHints(ctx context.Context, sessionI
 	return nil
 }
 
-func (ctl *Controller) persistSessionWODDescription(ctx context.Context, sessionID string, profileID uint, wodDescription string) error {
+func persistSessionWODDescription(ctx context.Context, database *gorm.DB, sessionID string, profileID uint, wodDescription string) error {
 	trimmed := strings.TrimSpace(wodDescription)
-	if trimmed == "" || ctl.db == nil {
+	if trimmed == "" || database == nil {
 		return nil
 	}
-	result := ctl.db.WithContext(ctx).
+	result := database.WithContext(ctx).
 		Model(&db.Session{}).
 		Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 		Update("wod_description", trimmed)

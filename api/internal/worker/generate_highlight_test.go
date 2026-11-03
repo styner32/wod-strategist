@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -117,6 +120,101 @@ var _ = Describe("runFFmpegFinalPolish", func() {
 		finalDuration := probeVideoDuration(context.Background(), output)
 		Expect(finalDuration).To(BeNumerically(">", 0))
 		Expect(finalDuration).To(BeNumerically("<=", sourceDuration+0.25))
+	})
+
+	It("rejects a source whose actual duration differs from the requested polish duration", func() {
+		requireAdjacentMediaTools()
+		input := createTinyMP4(GinkgoT())
+		output := filepath.Join(GinkgoT().TempDir(), "invalid-polish.mp4")
+		Expect(runFFmpegFinalPolish(context.Background(), zap.NewNop(), input, "", output, 0.2)).
+			To(MatchError(ContainSubstring("invalid highlight polish source")))
+		_, err := os.Stat(output)
+		Expect(os.IsNotExist(err)).To(BeTrue())
+	})
+})
+
+var _ = Describe("runFFmpegTrim media integrity", func() {
+	BeforeEach(requireAdjacentMediaTools)
+
+	DescribeTable("accurately extracts a non-keyframe interval into a canonical clip",
+		func(hasAudio bool) {
+			source := filepath.Join(GinkgoT().TempDir(), "long-gop.mp4")
+			args := []string{"-f", "lavfi", "-i", "color=c=red:size=96x64:rate=25"}
+			if hasAudio {
+				args = append(args, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono")
+			}
+			args = append(args, "-t", "12", "-vf", "drawbox=x=0:y=0:w=iw:h=ih:color=blue:t=fill:enable='gte(t,4)'",
+				"-c:v", "libx264", "-g", "250", "-keyint_min", "250", "-sc_threshold", "0", "-bf", "2")
+			if hasAudio {
+				args = append(args, "-c:a", "aac")
+			} else {
+				args = append(args, "-an")
+			}
+			runAdjacentMediaFixture(append(args, source)...)
+			output := filepath.Join(GinkgoT().TempDir(), "clip.mp4")
+
+			Expect(runFFmpegTrim(context.Background(), zap.NewNop(), source, output, 4.01, 1)).To(Succeed())
+			timeline, err := probeVideoTimeline(context.Background(), output)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(timeline.FrameCount).To(Equal(30))
+			Expect(timeline.Start).To(BeNumerically("~", 0, 0.0001))
+			Expect(timeline.Duration()).To(BeNumerically("~", 1, 0.034))
+			profile, err := probeChunkStreamProfile(context.Background(), output)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(profile.VideoCodec).To(Equal("h264"))
+			Expect(profile.VideoTimescale).To(Equal(canonicalConcatVideoTimescale))
+			Expect(profile.PixFmt).To(Equal("yuv420p"))
+			Expect(profile.HasAudio).To(Equal(hasAudio))
+			if hasAudio {
+				Expect(profile.AudioCodec).To(Equal("aac"))
+				Expect(profile.SampleRate).To(Equal(44100))
+				Expect(profile.Channels).To(Equal(2))
+			}
+			// Before the fix, stream copying retained the red footage before the
+			// requested interval. Verify content as well as the resulting duration.
+			frame, err := exec.Command("ffmpeg", "-v", "error", "-nostdin", "-i", output,
+				"-frames:v", "1", "-vf", "scale=1:1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-").Output()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(frame).To(HaveLen(3))
+			Expect(int(frame[0])).To(BeNumerically("<", 30))
+			Expect(int(frame[2])).To(BeNumerically(">", 200))
+		},
+		Entry("without audio", false),
+		Entry("with audio resampled to the concat format", true),
+	)
+
+	It("keeps a tail interval bounded and rejects a clip extending past EOF", func() {
+		source := createNarrationSource(false)
+		output := filepath.Join(GinkgoT().TempDir(), "tail.mp4")
+		Expect(runFFmpegTrim(context.Background(), zap.NewNop(), source, output, 2.01, 0.99)).To(Succeed())
+		Expect(verifyVideoDuration(context.Background(), output, 0.99, 0.1)).To(Succeed())
+		Expect(runFFmpegTrim(context.Background(), zap.NewNop(), source, output, 2.5, 2)).
+			To(MatchError(ContainSubstring("highlight clip does not match requested duration")))
+	})
+
+	It("concatenates separately extracted intervals without losing or duplicating frames", func() {
+		source := createNarrationSource(true)
+		directory := GinkgoT().TempDir()
+		var entries []string
+		var frames []videoFrameSignature
+		var expectedDuration float64
+		for i, start := range []float64{0.21, 1.51} {
+			clip := filepath.Join(directory, fmt.Sprintf("clip-%d.mp4", i))
+			Expect(runFFmpegTrim(context.Background(), zap.NewNop(), source, clip, start, 1)).To(Succeed())
+			timeline, err := probeVideoTimeline(context.Background(), clip)
+			Expect(err).NotTo(HaveOccurred())
+			signature, err := readVideoFrameSignature(context.Background(), clip)
+			Expect(err).NotTo(HaveOccurred())
+			frames = append(frames, signature)
+			expectedDuration += timeline.Duration()
+			entries = append(entries, fmt.Sprintf("file '%s'\nduration %.9f", clip, timeline.Duration()))
+		}
+		manifest := filepath.Join(directory, "concat.txt")
+		Expect(os.WriteFile(manifest, []byte(strings.Join(entries, "\n")), 0o600)).To(Succeed())
+		output := filepath.Join(directory, "joined.mp4")
+		Expect(runFFmpegStreamCopyConcat(context.Background(), zap.NewNop(), manifest, output, expectedDuration, true)).To(Succeed())
+		Expect(verifyVideoFrameSequence(context.Background(), output, frames)).To(Succeed())
+		Expect(verifyMediaEndpoints(context.Background(), output, expectedDuration, 0.1)).To(Succeed())
 	})
 })
 
@@ -247,14 +345,14 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 		})
 
 		It("normalizes legacy events and creates reels from one merged-media download", func() {
-			Expect(dbConn.Create(&db.AnalysisResult{
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
 				SessionID:         "sess-hl-happy",
 				ProfileID:         profileID,
 				AnalysisType:      db.AnalysisTypeWOD,
 				Status:            "COMPLETED",
 				Output:            "훌륭한 운동",
 				HighlightSegments: highlightSegs,
-			}).Error).NotTo(HaveOccurred())
+			})
 
 			tiny := createTinyMP4(GinkgoT())
 			mp4Bytes, readErr := os.ReadFile(tiny)
@@ -323,8 +421,38 @@ var _ = Describe("HandleGenerateHighlightTask", func() {
 				Where("session_id = ?", "sess-hl-happy").
 				Count(&resultCount).Error).NotTo(HaveOccurred())
 			Expect(resultCount).To(Equal(int64(3)))
+			uploads := adjacentUploadedVideos(ffmpegTransport.Requests())
+			Expect(uploads).To(HaveLen(3))
+			var results []db.HighlightResult
+			Expect(dbConn.Where("session_id = ?", "sess-hl-happy").Order("id ASC").Find(&results).Error).NotTo(HaveOccurred())
+			for i, upload := range uploads {
+				timeline, err := probeVideoTimeline(context.Background(), upload)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(results[i].DurationSec).To(BeNumerically("~", timeline.Duration(), 0.000001))
+			}
 			Expect(ffmpegTransport.Verify()).To(Succeed())
 			Expect(geminiTransport.Verify()).To(Succeed())
+		})
+
+		It("rejects an unverified source before uploading or marking a highlight complete", func() {
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				SessionID: "sess-hl-damaged", ProfileID: profileID, Status: "COMPLETED", HighlightSegments: highlightSegs,
+			})
+			transport := testhelpers.NewMockTransport()
+			client, err := testhelpers.NewStorageClient("test-bucket", transport)
+			Expect(err).NotTo(HaveOccurred())
+			w.StorageClient = client
+			testhelpers.MockGCSDownloadWithBody(transport,
+				fmt.Sprintf("gs://test-bucket/videos/%d/sess-hl-damaged/merged.mp4", profileID), []byte("damaged source"))
+			task, err := NewGenerateHighlightTask("sess-hl-damaged", profileID, 60)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(w.HandleGenerateHighlightTask(context.Background(), task)).To(MatchError(ContainSubstring("probe merged highlight source")))
+			var count int64
+			Expect(dbConn.Model(&db.HighlightResult{}).Where("session_id = ? AND status = ?", "sess-hl-damaged", "COMPLETED").Count(&count).Error).NotTo(HaveOccurred())
+			Expect(count).To(BeZero())
+			Expect(adjacentUploadedVideos(transport.Requests())).To(BeEmpty())
+			Expect(transport.Verify()).To(Succeed())
 		})
 	})
 })

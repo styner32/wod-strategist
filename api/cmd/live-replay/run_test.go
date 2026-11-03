@@ -202,6 +202,7 @@ var _ = Describe("Live replay execution", func() {
 		transport.New(runTestAPI).Get("/api/v1/profiles/10").Reply(200).JSON(map[string]any{"id": 10, "name": "Live test"})
 		var output bytes.Buffer
 		Expect(runReplay(context.Background(), opts, &http.Client{Transport: transport}, &output)).To(Succeed())
+		Expect(output.String()).To(ContainSubstring("Fixture: " + manifest.SourceSessionID + " (2.0s media / 2.0s capture, 2 chunks)"))
 		Expect(transport.Verify()).To(Succeed())
 		report, data := runTestReport(opts)
 		Expect(report.Status).To(Equal("passed"))

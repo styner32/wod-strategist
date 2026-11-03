@@ -191,7 +191,7 @@ func (ctl *Controller) PrepareSensorUpload(c *gin.Context) {
 			return errors.New("profile mismatch")
 		}
 
-		if row.ArchivedAt != nil {
+		if row.ArchivedAt != nil || row.AutomaticProcessingCancelledAt != nil {
 			c.JSON(http.StatusConflict, gin.H{"error": "session is archived", "error_code": "SESSION_ARCHIVED"})
 			return errors.New("session archived")
 		}
@@ -430,7 +430,7 @@ func (ctl *Controller) CompleteSensorUpload(c *gin.Context) {
 		return
 	}
 
-	if row.ArchivedAt != nil || row.SensorVersion != versionInt {
+	if row.ArchivedAt != nil || row.AutomaticProcessingCancelledAt != nil || row.SensorVersion != versionInt {
 		c.JSON(http.StatusConflict, gin.H{"error": "sensor request superseded", "error_code": "SENSOR_REQUEST_SUPERSEDED"})
 		return
 	}
@@ -561,7 +561,7 @@ func (ctl *Controller) CompleteSensorUpload(c *gin.Context) {
 
 		var lockedRow db.AnalysisResult
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ? AND profile_id = ? AND sensor_version = ? AND sensor_state = 'UPLOADING' AND archived_at IS NULL",
+			Where("id = ? AND profile_id = ? AND sensor_version = ? AND sensor_state = 'UPLOADING' AND archived_at IS NULL AND automatic_processing_cancelled_at IS NULL",
 				row.ID, req.ProfileID, versionInt).
 			First(&lockedRow).Error; err != nil {
 			return err
@@ -727,6 +727,9 @@ func (ctl *Controller) ReprocessSensor(c *gin.Context) {
 		return
 	}
 
+	if !ctl.requireSessionProcessing(c, sessionID, req.ProfileID, true) {
+		return
+	}
 	var row db.AnalysisResult
 	var processing SensorProcessingData
 
@@ -745,6 +748,10 @@ func (ctl *Controller) ReprocessSensor(c *gin.Context) {
 			return err
 		}
 
+		if row.AutomaticProcessingCancelledAt != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "session processing cancelled", "error_code": "SESSION_PROCESSING_CANCELLED"})
+			return db.ErrSessionWorkCancelled
+		}
 		if row.ProfileID != req.ProfileID {
 			c.JSON(http.StatusConflict, gin.H{"error": "session belongs to another profile", "error_code": "PROFILE_MISMATCH"})
 			return errors.New("profile mismatch")

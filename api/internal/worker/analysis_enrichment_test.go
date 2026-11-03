@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/wod-strategist/api/internal/cost"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/wod-strategist/api/internal/cost"
 
 	"github.com/hibiken/asynq"
 	. "github.com/onsi/ginkgo/v2"
@@ -56,7 +57,7 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 	AfterAll(func() { _ = queue.Close(); _ = inspector.Close(); sql, _ := conn.DB(); _ = sql.Close() })
 	BeforeEach(func() {
 		testhelpers.CleanupDB(conn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 		transport = testhelpers.NewMockTransport()
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}, ThinkingLevel: "LOW"})
 		Expect(err).NotTo(HaveOccurred())
@@ -450,10 +451,12 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 		_, b = load()
 		Expect(b.CleanupPending).To(BeFalse())
 	})
+
 	It("leaves stale state that cannot restart untouched during recovery", func() {
 		_, err := w.ScheduleAnalysisEnrichment(context.Background(), sid, true, false)
 		Expect(err).NotTo(HaveOccurred())
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.CleanupQueueWithInspector(inspector)
+
 		s, b := load()
 		s.Status = "stale"
 		b.Status = "stale"
@@ -517,7 +520,7 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 			"usageMetadata": map[string]int{"promptTokenCount": 10, "candidatesTokenCount": 5, "thoughtsTokenCount": 42, "toolUsePromptTokenCount": 65, "totalTokenCount": 122},
 		})
 		transport.New(base).
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":streamGenerateContent?alt=sse").
+			Post("/v1beta/models/"+gemini.ModelFlash38+":streamGenerateContent?alt=sse").
 			MatchBodyContains(`"includeThoughts":true`).
 			Reply(200).
 			Header("Content-Type", "text/event-stream").

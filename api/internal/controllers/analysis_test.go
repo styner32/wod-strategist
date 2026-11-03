@@ -28,7 +28,7 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		queueClient = testhelpers.NewQueueClient()
 		router = newTestRouterWithAuthService(controllers.Config{

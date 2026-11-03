@@ -261,7 +261,8 @@ var _ = Describe("HandleChunkDebugReanalysisTask", func() {
 		geminiTransport = testhelpers.NewMockTransport()
 		queueClient := testhelpers.NewQueueClient()
 		inspector = testhelpers.NewQueueInspector()
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
+
 		w = NewWorker(dbConn, storageClient, "test-bucket", nil, queueClient, zap.NewNop())
 		newGeminiClient()
 

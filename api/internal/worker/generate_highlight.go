@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // HighlightPayload is the payload for the highlight:generate task.
@@ -55,7 +58,7 @@ func NewGenerateHighlightTask(sessionID string, profileID uint, maxDuration int)
 	return asynq.NewTask(TypeGenerateHighlight, data), nil
 }
 
-func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleGenerateHighlightTask(ctx context.Context, t *asynq.Task) error {
 	var p HighlightPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
@@ -137,7 +140,15 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			zap.String("gcs_uri", mergedGCSURI), zap.Error(err))
 		return fmt.Errorf("failed to download merged highlight source: %w", err)
 	}
-	videoDuration := probeVideoDuration(ctx, mergedLocalPath)
+	sourceTimeline, err := probeVideoTimeline(ctx, mergedLocalPath)
+	if err != nil {
+		return fmt.Errorf("probe merged highlight source: %w", err)
+	}
+	videoDuration := sourceTimeline.Duration()
+	sourceProfile, err := probeChunkStreamProfile(ctx, mergedLocalPath)
+	if err != nil {
+		return fmt.Errorf("probe merged highlight streams: %w", err)
+	}
 
 	// 3. Normalize both legacy flat segments and v2 parent events. This is a
 	// read-time conversion only; the source analysis row is intentionally not
@@ -178,13 +189,18 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			Segments:  normalizedSegmentsJSON,
 			Output:    "No highlight segments fit the reel duration budget",
 		}
-		w.DB.Create(failedResult)
+		if persistErr := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error { return tx.Create(failedResult).Error }); persistErr != nil {
+			return persistErr
+		}
 		return fmt.Errorf("no segments selected: %w", asynq.SkipRetry)
 	}
 
 	// 4. Trim each selected parent event once, even when it appears in multiple
 	// thematic reels. Exact child observations remain metadata inside the event.
 	trimmedPaths := make(map[int]string, len(selectedIndices))
+	trimmedDurations := make(map[int]float64, len(selectedIndices))
+	trimmedFrames := make(map[int]videoFrameSignature, len(selectedIndices))
+	hasSourceAudio := sourceProfile.HasAudio
 	var validSegments []HighlightSegment
 	for _, i := range selectedIndices {
 		clip := clips[i]
@@ -194,8 +210,20 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 				zap.Int("index", i), zap.Error(err))
 			continue
 		}
+		timeline, err := probeVideoTimeline(ctx, trimmedPath)
+		if err != nil {
+			w.logger.Warn("Failed to verify highlight clip timeline", zap.Int("index", i), zap.Error(err))
+			continue
+		}
+		frames, err := readVideoFrameSignature(ctx, trimmedPath)
+		if err != nil {
+			w.logger.Warn("Failed to verify highlight clip frames", zap.Int("index", i), zap.Error(err))
+			continue
+		}
 
 		trimmedPaths[i] = trimmedPath
+		trimmedDurations[i] = timeline.Duration()
+		trimmedFrames[i] = frames
 		validSegments = append(validSegments, clip.Segment)
 
 		w.logger.Info("Highlight segment trimmed",
@@ -217,7 +245,9 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			Output:    "No highlight segments could be extracted from merged video",
 		}
 		failedResult.ProfileID = p.ProfileID
-		w.DB.Create(failedResult)
+		if persistErr := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error { return tx.Create(failedResult).Error }); persistErr != nil {
+			return persistErr
+		}
 		return fmt.Errorf("no segments extracted: %w", asynq.SkipRetry)
 	}
 
@@ -246,15 +276,17 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		var concatEntries []string
 		var groupSegments []HighlightSegment
 		var groupDuration float64
+		var groupFrames []videoFrameSignature
 
 		for _, idx := range group.Indices {
 			trimmedPath, ok := trimmedPaths[idx]
 			if !ok {
 				continue
 			}
-			concatEntries = append(concatEntries, fmt.Sprintf("file '%s'", trimmedPath))
+			concatEntries = append(concatEntries, fmt.Sprintf("file '%s'\nduration %.9f", trimmedPath, trimmedDurations[idx]))
 			groupSegments = append(groupSegments, clips[idx].Segment)
-			groupDuration += clips[idx].duration()
+			groupDuration += trimmedDurations[idx]
+			groupFrames = append(groupFrames, trimmedFrames[idx])
 		}
 
 		if len(concatEntries) == 0 {
@@ -267,8 +299,16 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		}
 
 		rawConcatPath := filepath.Join(tmpDir, fmt.Sprintf("hl_raw_%s_%s.mp4", group.Prefix, p.SessionID))
-		if err := runFFmpegConcat(ctx, w.logger, concatListPath, rawConcatPath); err != nil {
+		if err := runFFmpegStreamCopyConcat(ctx, w.logger, concatListPath, rawConcatPath, groupDuration, hasSourceAudio); err != nil {
 			w.logger.Error("Failed to concat highlight group", zap.String("group", group.Title), zap.Error(err))
+			continue
+		}
+		if err := verifyVideoFrameSequence(ctx, rawConcatPath, groupFrames); err != nil {
+			w.logger.Error("Highlight concat changed prepared video frames", zap.String("group", group.Title), zap.Error(err))
+			continue
+		}
+		if err := verifyMediaEndpoints(ctx, rawConcatPath, groupDuration, 0.1); err != nil {
+			w.logger.Error("Highlight concat has an invalid timeline", zap.String("group", group.Title), zap.Error(err))
 			continue
 		}
 
@@ -281,6 +321,12 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 		} else {
 			uploadPath = polishedPath
 		}
+		finalTimeline, err := probeVideoTimeline(ctx, uploadPath)
+		if err != nil {
+			w.logger.Error("Failed to verify final highlight duration", zap.String("group", group.Title), zap.Error(err))
+			continue
+		}
+		finalDuration := finalTimeline.Duration()
 
 		randSuffix := randomHex(4)
 		gcsObjectName := fmt.Sprintf("videos/%d/%s/hl_%s_%s.mp4", p.ProfileID, p.SessionID, group.Prefix, randSuffix)
@@ -299,11 +345,13 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			GCSURI:      gcsURI,
 			MusicGCSURI: musicGCSURI,
 			Segments:    string(segsJSON),
-			DurationSec: groupDuration,
-			Output:      fmt.Sprintf("Generated %d highlight segments (%.1fs total) for %s", len(groupSegments), groupDuration, group.Title),
+			DurationSec: finalDuration,
+			Output:      fmt.Sprintf("Generated %d highlight segments (%.1fs total) for %s", len(groupSegments), finalDuration, group.Title),
 			ProfileID:   p.ProfileID,
 		}
-		w.DB.Create(result)
+		if persistErr := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error { return tx.Create(result).Error }); persistErr != nil {
+			return persistErr
+		}
 		generatedCount++
 
 		w.logger.Info("Highlight video version generated",
@@ -312,7 +360,7 @@ func (w *Worker) HandleGenerateHighlightTask(ctx context.Context, t *asynq.Task)
 			zap.String("gcs_uri", gcsURI),
 			zap.String("music_gcs_uri", musicGCSURI),
 			zap.Int("segment_count", len(groupSegments)),
-			zap.Float64("duration", groupDuration))
+			zap.Float64("duration", finalDuration))
 	}
 
 	if generatedCount == 0 {
@@ -508,6 +556,9 @@ func tryGenerateMusic(ctx context.Context, log *zap.Logger, w *Worker, p Highlig
 
 // runFFmpegFinalPolish applies cinematic post-processing to a highlight video.
 func runFFmpegFinalPolish(ctx context.Context, log *zap.Logger, inputPath, musicPath, outputPath string, durationSecs float64) error {
+	if err := verifyMediaEndpoints(ctx, inputPath, durationSecs, 0.1); err != nil {
+		return fmt.Errorf("invalid highlight polish source: %w", err)
+	}
 	// Keep playback at the source rate so the selected reel stays within its
 	// duration budget. Frame interpolation is visual polish only.
 	fadeOutStart := durationSecs - 0.5
@@ -534,25 +585,33 @@ func runFFmpegFinalPolish(ctx context.Context, log *zap.Logger, inputPath, music
 			fadeOutStart,
 		)
 		args = []string{
+			"-nostdin", "-xerror",
 			"-i", inputPath,
 			"-i", musicPath,
 			"-filter_complex", afMusic,
 			"-vf", vf,
-			"-map", "0:v",
+			"-map", "0:v:0",
 			"-map", "[aout]",
 			"-c:v", "libx264", "-preset", "fast", "-crf", "23",
+			"-pix_fmt", "yuv420p", "-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale),
 			"-c:a", "aac", "-b:a", "128k",
+			"-ar", "44100", "-ac", "2",
+			"-t", fmt.Sprintf("%.6f", durationSecs),
 			"-movflags", "+faststart",
 			"-y", outputPath,
 		}
 	} else {
 		args = []string{
+			"-nostdin", "-xerror",
 			"-i", inputPath,
 			"-vf", vf,
-			"-map", "0:v",
-			"-map", "0:a?",
+			"-map", "0:v:0",
+			"-map", "0:a:0?",
 			"-c:v", "libx264", "-preset", "fast", "-crf", "23",
+			"-pix_fmt", "yuv420p", "-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale),
 			"-c:a", "aac", "-b:a", "128k",
+			"-ar", "44100", "-ac", "2",
+			"-t", fmt.Sprintf("%.6f", durationSecs),
 			"-movflags", "+faststart",
 			"-y", outputPath,
 		}
@@ -566,6 +625,9 @@ func runFFmpegFinalPolish(ctx context.Context, log *zap.Logger, inputPath, music
 		log.Error("FFmpeg polish failed", zap.Error(err), zap.String("output", string(out)))
 		return fmt.Errorf("ffmpeg polish: %s: %w", string(out), err)
 	}
+	if err := verifyMediaEndpoints(ctx, outputPath, durationSecs, 0.1); err != nil {
+		return fmt.Errorf("highlight polish changed video duration: %w", err)
+	}
 
 	log.Info("FFmpeg polish completed", zap.String("output_path", outputPath))
 	return nil
@@ -573,12 +635,20 @@ func runFFmpegFinalPolish(ctx context.Context, log *zap.Logger, inputPath, music
 
 // runFFmpegTrim extracts a clip from inputPath starting at startSecs for durationSecs.
 func runFFmpegTrim(ctx context.Context, log *zap.Logger, inputPath, outputPath string, startSecs, durationSecs float64) error {
+	if startSecs < 0 || durationSecs <= 0 || math.IsNaN(startSecs) || math.IsInf(startSecs, 0) || math.IsNaN(durationSecs) || math.IsInf(durationSecs, 0) {
+		return fmt.Errorf("invalid highlight interval start %.6f duration %.6f", startSecs, durationSecs)
+	}
 	args := []string{
-		"-ss", fmt.Sprintf("%.3f", startSecs),
+		"-nostdin", "-xerror",
+		"-ss", fmt.Sprintf("%.6f", startSecs),
 		"-i", inputPath,
-		"-t", fmt.Sprintf("%.3f", durationSecs),
-		"-c", "copy",
-		"-avoid_negative_ts", "make_zero",
+		"-t", fmt.Sprintf("%.6f", durationSecs),
+		"-map", "0:v:0", "-map", "0:a:0?",
+		"-vf", "fps=30:start_time=0,format=yuv420p",
+		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+		"-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale),
+		"-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+		"-movflags", "+faststart",
 		"-y",
 		outputPath,
 	}
@@ -590,6 +660,9 @@ func runFFmpegTrim(ctx context.Context, log *zap.Logger, inputPath, outputPath s
 	if err != nil {
 		log.Error("FFmpeg trim failed", zap.Error(err), zap.String("output", string(output)))
 		return fmt.Errorf("ffmpeg trim: %s: %w", string(output), err)
+	}
+	if err := verifyMediaEndpoints(ctx, outputPath, durationSecs, 0.1); err != nil {
+		return fmt.Errorf("highlight clip does not match requested duration: %w", err)
 	}
 
 	log.Info("FFmpeg trim completed", zap.String("output_path", outputPath))

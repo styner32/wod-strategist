@@ -11,9 +11,12 @@ import (
 )
 
 const (
-	defaultSourceSession      = "WOD-20260930-01M3QZH8TPXYMBGP9ER5W6SMBB"
-	defaultFixtureDir         = "tmp/live-replay/fixture"
-	targetProfileID      uint = 10
+	defaultSourceSession       = "WOD-20261028-01M602PXNAAZFKKNKXNSN2D61S"
+	defaultMediaStartSecs      = 290.0
+	defaultMediaEndSecs        = 714.7
+	defaultChunkSeconds        = 10.0
+	defaultFixtureDir          = "tmp/live-replay/fixture"
+	targetProfileID       uint = 10
 )
 
 type MappingSegment struct {
@@ -53,6 +56,7 @@ type ReplayChunk struct {
 
 type FixtureManifest struct {
 	Version         int              `json:"version"`
+	Name            string           `json:"name,omitempty"`
 	PreparedAt      time.Time        `json:"prepared_at"`
 	SourceSessionID string           `json:"source_session_id"`
 	SourceProfileID uint             `json:"source_profile_id"`

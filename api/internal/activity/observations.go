@@ -136,6 +136,9 @@ func UnitForMovement(name string) string {
 	case "Farmer's Carry", "Handstand Walk", "Row", "Echo Bike", "Bike Erg", "Skierg", "Run", "Surfing", "Paddle", "Yoga":
 		return "seconds"
 	}
+	if movement.IsWalkingLunge(name) {
+		return "seconds"
+	}
 	for _, group := range movement.MovementGroups {
 		if group.Category == "Yoga" {
 			for _, candidate := range group.Movements {

@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { TacticalTheme } from "@/constants/theme";
 import { t } from "@/features/i18n";
 import {
   ActivityIndicator,
@@ -86,7 +87,7 @@ export function HighlightVideoPlayer({ highlight, videoUrl, onClose }: Props) {
           disabled={saving}
         >
           {saving ? (
-            <ActivityIndicator size="small" color="#FFF" />
+            <ActivityIndicator size="small" color={TacticalTheme.light.voltInk} />
           ) : (
             <Text style={styles.saveBtnText}>{t("player.saveToGallery")}</Text>
           )}
@@ -99,9 +100,11 @@ export function HighlightVideoPlayer({ highlight, videoUrl, onClose }: Props) {
 const styles = StyleSheet.create({
   container: {
     marginTop: 10,
-    borderRadius: 12,
+    borderRadius: 14,
     overflow: "hidden",
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: TacticalTheme.light.surfaceInverse,
+    borderWidth: 1,
+    borderColor: TacticalTheme.light.borderStrong,
   },
   header: {
     flexDirection: "row",
@@ -112,26 +115,28 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 14,
-    fontWeight: "700",
-    color: "#FFF",
+    fontWeight: "800",
+    color: TacticalTheme.light.inkInverse,
     flex: 1,
+    flexShrink: 1,
   },
   duration: {
     fontSize: 12,
-    color: "#888",
+    fontWeight: "700",
+    color: "#94A3B8",
   },
   closeBtn: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    backgroundColor: "rgba(255,255,255,0.14)",
     alignItems: "center",
     justifyContent: "center",
   },
   closeBtnText: {
     fontSize: 14,
     color: "#FFF",
-    fontWeight: "600",
+    fontWeight: "700",
   },
   video: {
     width: "100%",
@@ -145,14 +150,18 @@ const styles = StyleSheet.create({
   },
   saveBtn: {
     flex: 1,
-    backgroundColor: "#BF5AF2",
-    borderRadius: 8,
-    paddingVertical: 10,
+    backgroundColor: TacticalTheme.light.volt,
+    borderWidth: 1,
+    borderColor: TacticalTheme.light.voltBorder,
+    borderRadius: 10,
+    paddingVertical: 11,
     alignItems: "center",
   },
   saveBtnText: {
     fontSize: 13,
-    fontWeight: "700",
-    color: "#FFF",
+    fontWeight: "900",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    color: TacticalTheme.light.voltInk,
   },
 });

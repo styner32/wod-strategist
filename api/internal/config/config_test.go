@@ -6,6 +6,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/config"
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 )
 
@@ -28,6 +29,18 @@ var _ = Describe("InitServer", func() {
 		setEnv("REDIS_URL", "localhost:6379")
 		setEnv("GCS_BUCKET_NAME", "uploads-bucket")
 		setEnv("JWT_SIGNING_SECRET", "test-jwt-siging-secret")
+	})
+
+	It("snapshots the deep-analysis model for manual recognition diagnoses", func() {
+		setEnv("GEMINI_MODEL", "")
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.GeminiModel).To(Equal(gemini.ModelArgon4))
+
+		setEnv("GEMINI_MODEL", "  gemini-3.8-flash  ")
+		cfg, err = config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.GeminiModel).To(Equal(gemini.ModelFlash38))
 	})
 
 	It("keeps Agentic highlights disabled by default and enables only an explicit true value", func() {
@@ -123,6 +136,29 @@ var _ = Describe("InitServer", func() {
 		Entry("non-numeric", "20x"),
 		Entry("zero", "0"),
 		Entry("negative", "-3"),
+	)
+
+	It("defaults server DB_MAX_OPEN_CONNS to 12 and accepts an explicit positive integer", func() {
+		setEnv("DB_MAX_OPEN_CONNS", "")
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.DBMaxOpenConns).To(Equal(db.DefaultServerMaxOpenConns))
+
+		setEnv("DB_MAX_OPEN_CONNS", " 14 ")
+		cfg, err = config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.DBMaxOpenConns).To(Equal(14))
+	})
+
+	DescribeTable("rejects invalid server DB_MAX_OPEN_CONNS values at startup",
+		func(value string) {
+			setEnv("DB_MAX_OPEN_CONNS", value)
+			_, err := config.InitServer()
+			Expect(err).To(MatchError(ContainSubstring("DB_MAX_OPEN_CONNS must be a positive integer")))
+		},
+		Entry("non-numeric", "abc"),
+		Entry("zero", "0"),
+		Entry("negative", "-1"),
 	)
 
 	It("returns an error listing all missing required variables", func() {
@@ -375,5 +411,63 @@ var _ = Describe("InitWorker", func() {
 			Expect(cfgDyn.GeminiThinkingBudget).NotTo(BeNil())
 			Expect(*cfgDyn.GeminiThinkingBudget).To(Equal(int32(-1)))
 		})
+
+		It("defaults GEMINI_CHUNK_FPS to 2.0 and accepts explicit 0 and fractional values within [1, 24]", func() {
+			setEnv("GEMINI_CHUNK_FPS", "")
+			cfgDefault, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgDefault.GeminiChunkFPS).To(Equal(2.0))
+
+			setEnv("GEMINI_CHUNK_FPS", "0")
+			cfgZero, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgZero.GeminiChunkFPS).To(Equal(0.0))
+
+			setEnv("GEMINI_CHUNK_FPS", " 3.5 ")
+			cfgCustom, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgCustom.GeminiChunkFPS).To(Equal(3.5))
+		})
+
+		DescribeTable("rejects invalid GEMINI_CHUNK_FPS values at startup",
+			func(value string) {
+				setEnv("GEMINI_CHUNK_FPS", value)
+				_, err := config.InitWorker()
+				Expect(err).To(MatchError(ContainSubstring("GEMINI_CHUNK_FPS must be 0 or between 1 and 24")))
+			},
+			Entry("negative", "-1"),
+			Entry("below 1", "0.5"),
+			Entry("above 24", "25"),
+			Entry("non-numeric", "bad"),
+		)
+
+		It("defaults WORKER_CONCURRENCY to 5 and DB_MAX_OPEN_CONNS to 8 (20 total with server)", func() {
+			setEnv("WORKER_CONCURRENCY", "")
+			setEnv("DB_MAX_OPEN_CONNS", "")
+			cfg, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Concurrency).To(Equal(5))
+			Expect(cfg.DBMaxOpenConns).To(Equal(db.DefaultWorkerMaxOpenConns))
+
+			setEnv("WORKER_CONCURRENCY", " 4 ")
+			setEnv("DB_MAX_OPEN_CONNS", " 6 ")
+			cfgCustom, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgCustom.Concurrency).To(Equal(4))
+			Expect(cfgCustom.DBMaxOpenConns).To(Equal(6))
+		})
+
+		DescribeTable("rejects invalid worker concurrency or DB pool values at startup",
+			func(envName, value string) {
+				setEnv(envName, value)
+				_, err := config.InitWorker()
+				Expect(err).To(MatchError(ContainSubstring(envName + " must be a positive integer")))
+			},
+			Entry("zero concurrency", "WORKER_CONCURRENCY", "0"),
+			Entry("negative concurrency", "WORKER_CONCURRENCY", "-2"),
+			Entry("non-numeric concurrency", "WORKER_CONCURRENCY", "five"),
+			Entry("zero db pool", "DB_MAX_OPEN_CONNS", "0"),
+			Entry("negative db pool", "DB_MAX_OPEN_CONNS", "-4"),
+		)
 	})
 })

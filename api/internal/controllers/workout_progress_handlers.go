@@ -29,7 +29,7 @@ type PerformanceBenchmarksResponse struct {
 }
 
 func performanceRecordResponse(row db.PerformanceRecord) workoutprogress.Record {
-	record := workoutprogress.Record{ID: row.ID, SessionID: row.SessionID, IntervalID: row.IntervalID, SourceVersion: row.SourceVersion, Status: row.Status, Movement: row.Movement, Start: row.StartSecs, End: row.EndSecs, Reps: row.Reps, LoadKG: row.LoadKG, Measurement: row.Measurement, Technique: row.Technique, WorkoutPrescription: row.WorkoutPrescription, RepsPerMinute: row.RepsPerMinute, RateBasis: row.RateBasis, MedianCycleSeconds: row.MedianCycleSeconds, PerformedAt: row.PerformedAt, ConfirmedAt: row.ConfirmedAt}
+	record := workoutprogress.Record{ID: row.ID, SessionID: row.SessionID, IntervalID: row.IntervalID, SourceVersion: row.SourceVersion, Status: row.Status, Outcome: workoutprogress.NormalizedOutcome(row.Outcome), Movement: row.Movement, Start: row.StartSecs, End: row.EndSecs, Reps: row.Reps, LoadKG: row.LoadKG, Measurement: row.Measurement, Technique: row.Technique, WorkoutPrescription: row.WorkoutPrescription, RepsPerMinute: row.RepsPerMinute, RateBasis: row.RateBasis, MedianCycleSeconds: row.MedianCycleSeconds, PerformedAt: row.PerformedAt, ConfirmedAt: row.ConfirmedAt}
 	record.ElapsedSeconds = row.ElapsedSeconds
 	record.PerformedAtSource = row.PerformedAtSource
 	record.RestComparisons = workoutprogress.RestComparisonsFromCandidate(row.OriginalCandidate, record)
@@ -162,10 +162,11 @@ func chunkHasExerciseInterval(intervals []workoutprogress.Interval, start, end f
 
 type PerformanceConfirmationInput struct {
 	IntervalID  string          `json:"interval_id"`
+	Outcome     string          `json:"outcome,omitempty"`
 	Movement    string          `json:"movement,omitempty"`
 	Start       float64         `json:"start_secs"`
 	End         float64         `json:"end_secs"`
-	Reps        int             `json:"reps"`
+	Reps        *int            `json:"reps"`
 	Load        json.RawMessage `json:"load" swaggertype:"object"`
 	Measurement string          `json:"measurement"`
 	Technique   string          `json:"technique"`
@@ -184,7 +185,7 @@ var errProgressSourceChanged = errors.New("workout observation source changed")
 // @Accept json
 // @Produce json
 // @Param session_id path string true "Owned session ID"
-// @Param request body PerformanceRecordsRequest true "Confirm interval, window, integer reps and actual load (or explicit null for no external load)"
+// @Param request body PerformanceRecordsRequest true "Confirm interval, window, outcome, optional integer reps and actual load (or explicit null for no external load)"
 // @Success 200 {object} WorkoutProgressResponse
 // @Failure 400 {object} map[string]string
 // @Failure 401 {object} map[string]string
@@ -205,7 +206,8 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 	confirmed := []workoutprogress.Confirmation{}
 	seen := map[string]bool{}
 	for _, input := range req.Records {
-		if input.IntervalID == "" || seen[input.IntervalID] || len(input.Load) == 0 {
+		outcome := workoutprogress.NormalizedOutcome(input.Outcome)
+		if input.IntervalID == "" || seen[input.IntervalID] || (outcome != "rest" && len(input.Load) == 0) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "confirm each interval once and specify actual load or null"})
 			return
 		}
@@ -217,11 +219,11 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 		}
 		seen[input.IntervalID] = true
 		var load *workoutprogress.Load
-		if json.Unmarshal(input.Load, &load) != nil {
+		if len(input.Load) > 0 && json.Unmarshal(input.Load, &load) != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid actual load"})
 			return
 		}
-		confirmed = append(confirmed, workoutprogress.Confirmation{IntervalID: input.IntervalID, Movement: input.Movement, Start: input.Start, End: input.End, Reps: input.Reps, Load: load, Measurement: input.Measurement, Technique: input.Technique})
+		confirmed = append(confirmed, workoutprogress.Confirmation{IntervalID: input.IntervalID, Outcome: input.Outcome, Movement: input.Movement, Start: input.Start, End: input.End, Reps: input.Reps, Load: load, Measurement: input.Measurement, Technique: input.Technique})
 	}
 	badRequest := false
 	err := ctl.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
@@ -281,11 +283,15 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 				}
 			}
 			if !foundCandidate {
+				activityName := "exercise"
+				if record.Outcome == "rest" {
+					activityName = "rest"
+				}
 				candidate = workoutprogress.Interval{
 					ID:               record.IntervalID,
 					Start:            record.Start,
 					End:              record.End,
-					Activity:         "exercise",
+					Activity:         activityName,
 					Movement:         record.Movement,
 					ObservationRefs:  []string{},
 					RepEvents:        []activity.Observation{},
@@ -310,7 +316,7 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 				}
 				raw, _ = json.Marshal(map[string]any{"version": progress.Version, "clock": progress.Clock, "interval_id": input.IntervalID, "start_secs": input.Start, "end_secs": input.End, "source_version": progress.SourceVersion, "intervals": observed, "unassessed": gaps})
 			}
-			row := db.PerformanceRecord{ProfileID: pid, AnalysisID: analysis.ID, SessionID: sid, IntervalID: record.IntervalID, SourceVersion: record.SourceVersion, Status: "confirmed", Movement: record.Movement, StartSecs: record.Start, EndSecs: record.End, Reps: record.Reps, LoadKG: record.LoadKG, Measurement: record.Measurement, Technique: record.Technique, WorkoutPrescription: prescription, RepsPerMinute: record.RepsPerMinute, RateBasis: record.RateBasis, MedianCycleSeconds: record.MedianCycleSeconds, OriginalCandidate: db.JSONDocument(raw), PerformedAt: analysis.WorkoutAt, ConfirmedAt: now, CreatedAt: now, UpdatedAt: now}
+			row := db.PerformanceRecord{ProfileID: pid, AnalysisID: analysis.ID, SessionID: sid, IntervalID: record.IntervalID, SourceVersion: record.SourceVersion, Status: "confirmed", Outcome: record.Outcome, Movement: record.Movement, StartSecs: record.Start, EndSecs: record.End, Reps: record.Reps, LoadKG: record.LoadKG, Measurement: record.Measurement, Technique: record.Technique, WorkoutPrescription: prescription, RepsPerMinute: record.RepsPerMinute, RateBasis: record.RateBasis, MedianCycleSeconds: record.MedianCycleSeconds, OriginalCandidate: db.JSONDocument(raw), PerformedAt: analysis.WorkoutAt, ConfirmedAt: now, CreatedAt: now, UpdatedAt: now}
 			row.ElapsedSeconds = record.ElapsedSeconds
 			row.PerformedAt, row.PerformedAtSource = performedAt, performedAtSource
 			if record.Load != nil {
@@ -318,7 +324,7 @@ func (ctl *Controller) UpdatePerformanceRecords(c *gin.Context) {
 				row.LoadUnit = &record.Load.Unit
 				row.LoadBasis = &record.Load.Basis
 			}
-			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "profile_id"}, {Name: "session_id"}, {Name: "interval_id"}}, DoUpdates: clause.AssignmentColumns([]string{"analysis_id", "source_version", "status", "movement", "start_secs", "end_secs", "elapsed_seconds", "reps", "load_value", "load_unit", "load_basis", "load_kg", "measurement", "technique", "workout_prescription", "reps_per_minute", "rate_basis", "median_cycle_seconds", "original_candidate", "performed_at", "performed_at_source", "confirmed_at", "updated_at"})}).Create(&row).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "profile_id"}, {Name: "session_id"}, {Name: "interval_id"}}, DoUpdates: clause.AssignmentColumns([]string{"analysis_id", "source_version", "status", "outcome", "movement", "start_secs", "end_secs", "elapsed_seconds", "reps", "load_value", "load_unit", "load_basis", "load_kg", "measurement", "technique", "workout_prescription", "reps_per_minute", "rate_basis", "median_cycle_seconds", "original_candidate", "performed_at", "performed_at_source", "confirmed_at", "updated_at"})}).Create(&row).Error; err != nil {
 				return err
 			}
 			coveredIDs := []string{}
@@ -386,7 +392,7 @@ func (ctl *Controller) GetPerformanceBenchmarks(c *gin.Context) {
 		return
 	}
 	rows := []db.PerformanceRecord{}
-	query := ctl.db.WithContext(c.Request.Context()).Table("performance_records AS r").Select("r.*").Joins("JOIN analysis_results a ON a.id = r.analysis_id AND a.session_id = r.session_id AND a.profile_id = r.profile_id").Joins("JOIN profiles p ON p.id = r.profile_id").Where("r.profile_id = ? AND p.user_id = ? AND r.status = ? AND r.reps > 0 AND a.status = ? AND a.archived_at IS NULL AND a.workout_progress->>'source_version' = r.source_version", pid, uid, "confirmed", "COMPLETED")
+	query := ctl.db.WithContext(c.Request.Context()).Table("performance_records AS r").Select("r.*").Joins("JOIN analysis_results a ON a.id = r.analysis_id AND a.session_id = r.session_id AND a.profile_id = r.profile_id").Joins("JOIN profiles p ON p.id = r.profile_id").Where("r.profile_id = ? AND p.user_id = ? AND r.status = ? AND a.status = ? AND a.archived_at IS NULL AND a.workout_progress->>'source_version' = r.source_version", pid, uid, "confirmed", "COMPLETED")
 	if err := query.Order("r.performed_at DESC NULLS LAST, r.id DESC").Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load performance benchmarks"})
 		return
@@ -404,6 +410,9 @@ func (ctl *Controller) GetPerformanceBenchmarks(c *gin.Context) {
 	}
 	records := []workoutprogress.Record{}
 	for _, r := range active {
+		if workoutprogress.NormalizedOutcome(r.Outcome) != "completed" {
+			continue
+		}
 		if name == "" || r.Movement == name {
 			records = append(records, r)
 		}

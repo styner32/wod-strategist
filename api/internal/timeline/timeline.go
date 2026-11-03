@@ -72,6 +72,7 @@ func NewSessionTimeline(sessionID string, chunks []Chunk) *SessionTimeline {
 
 // NewSessionTimelineFromAnalysisResults constructs a SessionTimeline from db.ChunkAnalysisResult slice.
 func NewSessionTimelineFromAnalysisResults(sessionID string, results []db.ChunkAnalysisResult) *SessionTimeline {
+	results = db.FilterRedundantSplitChunks(results)
 	chunks := make([]Chunk, len(results))
 	for i, r := range results {
 		chunks[i] = Chunk{

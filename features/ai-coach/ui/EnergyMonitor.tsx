@@ -1,6 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { AppState, type AppStateStatus, StyleSheet, Text, View } from 'react-native';
 import * as Battery from 'expo-battery';
+import { useIsFocused } from 'expo-router/react-navigation';
 
 interface EnergyMonitorProps {
   /** Label shown at the top, e.g. "Heavy Model · 15fps" */
@@ -24,52 +25,75 @@ interface BatterySnapshot {
  *   <EnergyMonitor label="Heavy · 15fps" />
  */
 export function EnergyMonitor({ label }: EnergyMonitorProps) {
+  // Both callers are navigation screens. Hidden or inactive screens need no battery polling.
+  const isFocused = useIsFocused();
+  const [appState, setAppState] = useState<AppStateStatus>(AppState.currentState);
+  const monitoringActive = isFocused && appState === 'active';
+  const activeRef = useRef(monitoringActive);
+  const focusedRef = useRef(isFocused);
+  useLayoutEffect(() => {
+    focusedRef.current = isFocused;
+    activeRef.current = monitoringActive;
+  }, [isFocused, monitoringActive]);
   const [currentLevel, setCurrentLevel] = useState<number | null>(null);
   const [drainRate, setDrainRate] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const startSnapshot = useRef<BatterySnapshot | null>(null);
-  const startTime = useRef(Date.now());
+  const inFlightRead = useRef<Promise<number> | null>(null);
 
-  // Initial battery read & start tracking
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
+    const subscription = AppState.addEventListener('change', next => {
+      activeRef.current = focusedRef.current && next === 'active';
+      setAppState(next);
+    });
+    return () => subscription.remove();
+  }, []);
 
-    const init = async () => {
-      // Enable battery monitoring on iOS
-      await Battery.getBatteryLevelAsync(); // triggers monitoring
+  // Wait for each native read before scheduling another, including across focus changes.
+  useEffect(() => {
+    if (!monitoringActive) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-      const level = await Battery.getBatteryLevelAsync();
-      setCurrentLevel(level);
-      startSnapshot.current = { level, time: Date.now() };
-      startTime.current = Date.now();
-
-      // Poll every 10 seconds for updated battery level
-      interval = setInterval(async () => {
+    const poll = async () => {
+      try {
+        // A native read cannot be cancelled. A returning screen waits for the old one.
+        if (inFlightRead.current) await inFlightRead.current.catch(() => {});
+        if (cancelled || !activeRef.current) return;
+        const request = Battery.getBatteryLevelAsync();
+        inFlightRead.current = request;
+        let level: number;
         try {
-          const now = Date.now();
-          const lvl = await Battery.getBatteryLevelAsync();
-          setCurrentLevel(lvl);
-
-          const elapsedSec = (now - startTime.current) / 1000;
-          setElapsed(elapsedSec);
-
-          const snap = startSnapshot.current;
-          if (snap && elapsedSec > 30) {
-            // Calculate drain rate in %/hour
-            const drainPct = (snap.level - lvl) * 100;
-            const elapsedHours = elapsedSec / 3600;
-            const rate = drainPct / elapsedHours;
-            setDrainRate(rate);
-          }
-        } catch (_) {
-          // Battery API might not be available on simulator
+          level = await request;
+        } finally {
+          if (inFlightRead.current === request) inFlightRead.current = null;
         }
-      }, 10_000);
+        if (cancelled || !activeRef.current) return;
+        const now = Date.now();
+        setCurrentLevel(level);
+        if (startSnapshot.current === null) startSnapshot.current = { level, time: now };
+        const snap = startSnapshot.current;
+        const elapsedSec = (now - snap.time) / 1000;
+        setElapsed(elapsedSec);
+        if (elapsedSec > 30) {
+          const drainPct = (snap.level - level) * 100;
+          setDrainRate(drainPct / (elapsedSec / 3600));
+        }
+      } catch {
+        // Battery API might not be available on simulator, including on the first read.
+      } finally {
+        if (!cancelled && activeRef.current) {
+          timer = setTimeout(() => { timer = null; void poll(); }, 10_000);
+        }
+      }
     };
 
-    init();
-    return () => clearInterval(interval);
-  }, []);
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [monitoringActive]);
 
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"time"
@@ -16,22 +15,23 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/sensor"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 type SensorProcessingRecord struct {
-	SchemaVersion    int        `json:"schema_version"`
-	RequestID        string     `json:"request_id"`
-	ObjectName       string     `json:"object_name"`
-	TargetGeneration string     `json:"target_generation"`
-	UploadExpiresAt  time.Time  `json:"upload_expires_at"`
-	SizeBytes        int64      `json:"size_bytes"`
-	SHA256           string     `json:"sha256"`
-	LeaseToken       *string    `json:"lease_token,omitempty"`
-	LeaseStartedAt   *time.Time `json:"lease_started_at,omitempty"`
-	Attempts         int        `json:"attempts"`
-	RetryNotBefore   *time.Time `json:"retry_not_before,omitempty"`
-	LastErrorCode    *string    `json:"last_error_code,omitempty"`
+	SchemaVersion     int        `json:"schema_version"`
+	RequestID         string     `json:"request_id"`
+	ObjectName        string     `json:"object_name"`
+	TargetGeneration  string     `json:"target_generation"`
+	UploadExpiresAt   time.Time  `json:"upload_expires_at"`
+	SizeBytes         int64      `json:"size_bytes"`
+	SHA256            string     `json:"sha256"`
+	LeaseToken        *string    `json:"lease_token,omitempty"`
+	LeaseStartedAt    *time.Time `json:"lease_started_at,omitempty"`
+	Attempts          int        `json:"attempts"`
+	RetryNotBefore    *time.Time `json:"retry_not_before,omitempty"`
+	LastErrorCode     *string    `json:"last_error_code,omitempty"`
 	CalculationInputs struct {
 		CalculationVersion int      `json:"calculation_version"`
 		Age                *int     `json:"age,omitempty"`
@@ -54,7 +54,7 @@ var retryBackoffs = []time.Duration{
 }
 
 // HandleSensorTelemetryTask handles a sensor processing task from the asynq queue.
-func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleSensorTelemetryTask(ctx context.Context, t *asynq.Task) error {
 	var payload SensorTelemetryPayload
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
 		w.logger.Error("failed to unmarshal sensor task payload", zap.Error(err))
@@ -79,7 +79,7 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 		defer tx.Rollback()
 
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ? AND archived_at IS NULL", payload.AnalysisResultID).
+			Where("id = ? AND archived_at IS NULL AND automatic_processing_cancelled_at IS NULL", payload.AnalysisResultID).
 			First(&row).Error; err != nil {
 			return err // disappeared, archived, or db error
 		}
@@ -153,7 +153,7 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 	}
 
 	// Step 2: Set execution context (max 120s) and heartbeat
-	execCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	execCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
 	heartbeatDone := make(chan struct{})
@@ -178,6 +178,7 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 					  AND sensor_version = ?
 					  AND sensor_state = 'RUNNING'
 					  AND archived_at IS NULL
+					  AND automatic_processing_cancelled_at IS NULL
 					  AND sensor_processing->>'lease_token' = ?
 					  AND sensor_next_attempt_at > NOW()
 				`, row.ID, row.SensorVersion, leaseToken)
@@ -300,6 +301,7 @@ func (w *Worker) HandleSensorTelemetryTask(ctx context.Context, t *asynq.Task) e
 		  AND sensor_version = ?
 		  AND sensor_state = 'RUNNING'
 		  AND archived_at IS NULL
+					  AND automatic_processing_cancelled_at IS NULL
 		  AND sensor_processing->>'request_id' = ?
 		  AND sensor_processing->>'target_generation' = ?
 		  AND sensor_processing->>'lease_token' = ?
@@ -355,79 +357,10 @@ func (w *Worker) maybePromoteProfileENMOCalibration(ctx context.Context, profile
 	if profileID == 0 || w.DB == nil {
 		return
 	}
-	var current db.Profile
-	if err := w.DB.WithContext(ctx).
-		Select("id, sensor_calibration_version").
-		Where("id = ? AND archived_at IS NULL", profileID).
-		First(&current).Error; err != nil {
-		return
-	}
-	if current.SensorCalibrationVersion != nil && *current.SensorCalibrationVersion != "" {
-		return
-	}
-
-	var rows []db.AnalysisResult
-	if err := w.DB.WithContext(ctx).
-		Select("id, sensor_version, sensor_summary").
-		Where("profile_id = ? AND sensor_state = ? AND archived_at IS NULL", profileID, db.SensorStateCompleted).
-		Order("id DESC").
-		Limit(25).
-		Find(&rows).Error; err != nil {
-		return
-	}
-
-	var p05List, p95List []float64
-	for _, r := range rows {
-		if len(r.SensorSummary) == 0 || string(r.SensorSummary) == "{}" {
-			continue
-		}
-		var sum sensor.SensorSummaryResult
-		if json.Unmarshal(r.SensorSummary, &sum) != nil {
-			continue
-		}
-		if sum.Version != r.SensorVersion || sum.CalculationVersion < 3 || !sum.Quality.IsComplete || sum.Metrics.Hybrid == nil {
-			continue
-		}
-		hy := sum.Metrics.Hybrid
-		// The parser sets both percentiles together (>= 60 valid ACC seconds).
-		if hy.ValidACCSeconds < 120 || hy.ENMOP05G == nil || hy.ENMOP95G == nil {
-			continue
-		}
-		if math.IsNaN(*hy.ENMOP05G) || math.IsInf(*hy.ENMOP05G, 0) || math.IsNaN(*hy.ENMOP95G) || math.IsInf(*hy.ENMOP95G, 0) {
-			continue
-		}
-		p05List = append(p05List, *hy.ENMOP05G)
-		p95List = append(p95List, *hy.ENMOP95G)
-		if len(p95List) >= 5 {
-			break
-		}
-	}
-
-	if len(p95List) < 3 {
-		return
-	}
-
-	restG := math.Round(math.Max(0.005, math.Min(0.05, medianFloat64(p05List)))*10000) / 10000
-	refG := math.Round(math.Max(math.Max(restG+0.08, 0.12), math.Min(1.50, medianFloat64(p95List)))*10000) / 10000
-
-	res := w.DB.WithContext(ctx).Exec(`
-		UPDATE profiles
-		SET sensor_enmo_rest_g = ?,
-		    sensor_enmo_ref_g = ?,
-		    sensor_calibration_version = ?,
-		    sensor_calibrated_at = NOW(),
-		    sensor_calibration_sessions = ?,
-		    updated_at = NOW()
-		WHERE id = ?
-		  AND archived_at IS NULL
-		  AND sensor_calibration_version IS NULL
-	`, restG, refG, sensor.PersonalCalibrationVersion, len(p95List), profileID)
-	if res.Error == nil && res.RowsAffected == 1 {
-		w.logger.Info("promoted profile sensor ENMO calibration to personal_chest_v1",
-			zap.Uint("profile_id", profileID),
-			zap.Float64("enmo_rest_g", restG),
-			zap.Float64("enmo_ref_g", refG),
-			zap.Int("sessions", len(p95List)))
+	if err := w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return db.RecomputeProfileENMOCalibrationTx(ctx, tx, profileID, true)
+	}); err != nil {
+		w.logger.Warn("failed to promote sensor calibration", zap.Error(err))
 	}
 }
 
@@ -460,6 +393,7 @@ func (w *Worker) recordSensorFailure(id, profileID uint, version int64, leaseTok
 			  AND sensor_version = ?
 			  AND sensor_state = 'RUNNING'
 			  AND archived_at IS NULL
+					  AND automatic_processing_cancelled_at IS NULL
 			  AND sensor_processing->>'lease_token' = ?
 		`, string(procJSON), nextAttempt, id, profileID, version, leaseToken)
 		w.logger.Info("sensor task rescheduled with backoff",
@@ -483,6 +417,7 @@ func (w *Worker) recordSensorFailure(id, profileID uint, version int64, leaseTok
 		  AND sensor_version = ?
 		  AND sensor_state = 'RUNNING'
 		  AND archived_at IS NULL
+					  AND automatic_processing_cancelled_at IS NULL
 		  AND sensor_processing->>'lease_token' = ?
 	`, string(procJSON), id, profileID, version, leaseToken)
 	w.logger.Warn("sensor task marked FAILED",

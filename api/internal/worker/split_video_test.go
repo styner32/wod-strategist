@@ -90,4 +90,42 @@ var _ = Describe("server-split media mapping", func() {
 		Expect(*result.MediaStartSecs).To(Equal(30.25))
 		Expect(*result.MediaEndSecs).To(Equal(60.5))
 	})
+
+	It("deduplicates repeated saveChunkResult writes and skips pause-shifted mobile intervals", func() {
+		database, err := testhelpers.InitDB()
+		Expect(err).NotTo(HaveOccurred())
+		testhelpers.CleanupDB(database)
+		profile := testhelpers.CreateProfile(database, &db.Profile{})
+		w := &Worker{DB: database, logger: zap.NewNop()}
+
+		sessionID := "split-idempotent-session"
+		capStart, capEnd := 118.5, 128.5
+		medStart, medEnd := 0.0, 10.0
+		testhelpers.CreateChunkAnalysisResult(database, &db.ChunkAnalysisResult{
+			SessionID:      sessionID,
+			ProfileID:      profile.ID,
+			FilePath:       "gs://test-bucket/videos/1/" + sessionID + "/mobile_000.mp4",
+			Status:         "COMPLETED",
+			HeartRateBPM:   154,
+			StartSecs:      &capStart,
+			EndSecs:        &capEnd,
+			MediaStartSecs: &medStart,
+			MediaEndSecs:   &medEnd,
+		})
+
+		Expect(w.chunkAlreadyAnalyzed(sessionID, 0.0)).To(BeTrue(), "media interval [0, 10) is already covered by mobile_000.mp4")
+		Expect(w.chunkAlreadyAnalyzed(sessionID, 10.0)).To(BeFalse(), "media interval [10, 20) is uncovered")
+
+		splitURI := "gs://test-bucket/videos/1/" + sessionID + "/split_chunk_001.mp4"
+		p := VideoAnalysisPayload{SessionID: sessionID, ProfileID: profile.ID}
+		w.saveChunkResult(p, splitURI, 10.0, 20.0, "FAILED", "", "An internal error occurred during chunk analysis.", "{}", nil, "")
+		w.saveChunkResult(p, splitURI, 10.0, 20.0, "COMPLETED", "Burpee", "steady pace", "{}", nil, "")
+		w.saveChunkResult(p, splitURI, 10.0, 20.0, "COMPLETED", "Burpee", "duplicate retry", "{}", nil, "")
+
+		var splitRows []db.ChunkAnalysisResult
+		Expect(database.Where("session_id = ? AND file_path = ?", sessionID, splitURI).Find(&splitRows).Error).To(Succeed())
+		Expect(splitRows).To(HaveLen(1))
+		Expect(splitRows[0].Status).To(Equal("COMPLETED"))
+		Expect(splitRows[0].Output).To(Equal("steady pace"))
+	})
 })

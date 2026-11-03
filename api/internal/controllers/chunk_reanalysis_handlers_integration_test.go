@@ -29,7 +29,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/chunks/:chunk_id/reanalyses"
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 
 		profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
 		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())

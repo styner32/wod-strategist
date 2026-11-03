@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"strconv"
@@ -9,10 +10,14 @@ import (
 	"sync"
 
 	"github.com/joho/godotenv"
+	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
 )
 
-const defaultPort = "8080"
+const (
+	defaultPort              = "8080"
+	defaultWorkerConcurrency = 5
+)
 
 var defaultDevAllowedOrigins = []string{
 	"http://localhost:3000",
@@ -23,6 +28,7 @@ type Common struct {
 	AgenticHighlightsEnabled bool
 	GeminiIncludeThoughts    bool // GEMINI_INCLUDE_THOUGHTS — optional; stores Gemini thought summaries in gemini_thought_logs
 	DatabaseURL              string
+	DBMaxOpenConns           int // DB_MAX_OPEN_CONNS — optional positive integer; defaults to 12 (server) / 8 (worker) = 20 total
 	RedisURL                 string
 	GCSBucketName            string
 	AppEnv                   string
@@ -32,6 +38,7 @@ type Server struct {
 	Common
 	JWTSigningSecret         string
 	GeminiAPIKey             string // GEMINI_API_KEY — optional; enables /parse-workout-image endpoint
+	GeminiModel              string // GEMINI_MODEL — model snapshotted by manual recognition diagnoses
 	Port                     string
 	DevAllowedOrigins        []string
 	WebOrigin                string // WEB_ORIGIN — production web app origin (e.g. https://app.wod-strategist.com)
@@ -52,11 +59,13 @@ type Worker struct {
 	// only). "true"/"false" override; unset defaults to on outside production.
 	TrackingContinuityEnabled bool
 	Common
+	Concurrency          int    // WORKER_CONCURRENCY — max concurrent video tasks; defaults to 5
 	GeminiAPIKey         string
-	GeminiModel          string // GEMINI_MODEL — default "gemini-4-argon" (deep video analysis)
-	GeminiThinkingLevel  string // GEMINI_THINKING_LEVEL — default "HIGH"
-	GeminiThinkingChunk  string // GEMINI_THINKING_CHUNK — default "LOW"
-	GeminiThinkingBudget *int32 // GEMINI_THINKING_BUDGET — optional token count
+	GeminiModel          string  // GEMINI_MODEL — default "gemini-4-argon" (deep video analysis)
+	GeminiThinkingLevel  string  // GEMINI_THINKING_LEVEL — default "HIGH"
+	GeminiThinkingChunk  string  // GEMINI_THINKING_CHUNK — default "LOW"
+	GeminiChunkFPS       float64 // GEMINI_CHUNK_FPS — default 2.0; 0 omits explicit FPS metadata
+	GeminiThinkingBudget *int32  // GEMINI_THINKING_BUDGET — optional token count
 	UseCache             bool   // GEMINI_USE_CACHE — enable context caching for long videos
 	PipelineMode         string // PIPELINE_MODE — legacy, optimized, compare
 }
@@ -82,6 +91,7 @@ func InitServer() (Server, error) {
 		},
 		JWTSigningSecret:         strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
 		GeminiAPIKey:             strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		GeminiModel:              strings.TrimSpace(os.Getenv("GEMINI_MODEL")),
 		Port:                     strings.TrimSpace(os.Getenv("PORT")),
 		DevAllowedOrigins:        parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
 		WebOrigin:                strings.TrimSpace(os.Getenv("WEB_ORIGIN")),
@@ -97,6 +107,9 @@ func InitServer() (Server, error) {
 	if cfg.Port == "" {
 		cfg.Port = defaultPort
 	}
+	if cfg.GeminiModel == "" {
+		cfg.GeminiModel = gemini.ModelArgon4
+	}
 
 	if err := validateRequired(
 		requiredEnv("DATABASE_URL", cfg.DatabaseURL),
@@ -109,12 +122,15 @@ func InitServer() (Server, error) {
 
 	quota, quotaErr := parseOptionalPositiveInt("SESSION_REANALYSIS_DAILY_QUOTA")
 	cfg.SessionReanalysisDailyQuota = quota
+	dbMaxOpenConns, dbMaxOpenConnsErr := parsePositiveIntWithDefault("DB_MAX_OPEN_CONNS", db.DefaultServerMaxOpenConns)
+	cfg.DBMaxOpenConns = dbMaxOpenConns
 
 	if err := validateValues(
 		validatePort(cfg.Port),
 		validateDatabaseURL(cfg.DatabaseURL),
 		validateRedisURL(cfg.RedisURL),
 		quotaErr,
+		dbMaxOpenConnsErr,
 	); err != nil {
 		return Server{}, err
 	}
@@ -164,6 +180,10 @@ func InitWorker() (Worker, error) {
 		}
 	}
 
+	chunkFPS, chunkFPSErr := parseChunkFPS("GEMINI_CHUNK_FPS")
+	concurrency, concurrencyErr := parsePositiveIntWithDefault("WORKER_CONCURRENCY", defaultWorkerConcurrency)
+	dbMaxOpenConns, dbMaxOpenConnsErr := parsePositiveIntWithDefault("DB_MAX_OPEN_CONNS", db.DefaultWorkerMaxOpenConns)
+
 	cfg := Worker{
 		CaptureFeedbackEnabled:    strings.EqualFold(os.Getenv("ENABLE_CAPTURE_FEEDBACK"), "true"),
 		ContextualCoachingEnabled: strings.EqualFold(os.Getenv("ENABLE_CONTEXTUAL_COACHING"), "true"),
@@ -173,14 +193,17 @@ func InitWorker() (Worker, error) {
 			AgenticHighlightsEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_AGENTIC_HIGHLIGHTS")), "true"),
 			GeminiIncludeThoughts:    strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_INCLUDE_THOUGHTS")), "true"),
 			DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
+			DBMaxOpenConns:           dbMaxOpenConns,
 			RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
 			GCSBucketName:            strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
 			AppEnv:                   appEnv,
 		},
+		Concurrency:          concurrency,
 		GeminiAPIKey:         strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
 		GeminiModel:          model,
 		GeminiThinkingLevel:  thinkingLevel,
 		GeminiThinkingChunk:  thinkingChunk,
+		GeminiChunkFPS:       chunkFPS,
 		GeminiThinkingBudget: thinkingBudget,
 		UseCache:             strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_USE_CACHE")), "true"),
 		PipelineMode:         pMode,
@@ -200,6 +223,9 @@ func InitWorker() (Worker, error) {
 		validateRedisURL(cfg.RedisURL),
 		validateThinkingLevel("GEMINI_THINKING_LEVEL", cfg.GeminiThinkingLevel),
 		validateThinkingLevel("GEMINI_THINKING_CHUNK", cfg.GeminiThinkingChunk),
+		chunkFPSErr,
+		concurrencyErr,
+		dbMaxOpenConnsErr,
 	); err != nil {
 		return Worker{}, err
 	}
@@ -291,6 +317,32 @@ func parseOptionalPositiveInt(name string) (int64, error) {
 	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || value <= 0 {
 		return 0, fmt.Errorf("%s must be a positive integer, got %q", name, raw)
+	}
+	return value, nil
+}
+
+func parsePositiveIntWithDefault(name string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer, got %q", name, raw)
+	}
+	return value, nil
+}
+
+// parseChunkFPS defaults to 2.0 FPS when unset and accepts 0 (omit explicit FPS)
+// or a number in [1, 24].
+func parseChunkFPS(name string) (float64, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 2.0, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || (value != 0 && (value < 1 || value > 24)) {
+		return 0, fmt.Errorf("%s must be 0 or between 1 and 24, got %q", name, raw)
 	}
 	return value, nil
 }

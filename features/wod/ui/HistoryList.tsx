@@ -1,5 +1,6 @@
 import { WODTrainingCard } from "./WODTrainingCard";
 import { WorkoutProgressCard } from "./WorkoutProgressCard";
+import { WorkoutShareSheet } from "./WorkoutShareSheet";
 import { withoutWorkoutEvidence } from "../../../shared/analysisEvidence";
 import { EnvironmentHistoryCard } from "../../environment/EnvironmentCard";
 import { ActivitySummaryCard } from "./ActivitySummaryCard";
@@ -19,6 +20,7 @@ import React, {
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   ScrollView,
   SectionList,
   StyleSheet,
@@ -28,23 +30,23 @@ import {
 } from "react-native";
 
 import { MarkdownText } from "@/components/ui/MarkdownText";
+import { TacticalTheme, getTacticalFatigueTone } from "@/constants/theme";
 import { normalizeStretchKey } from "@/features/stretch/normalize";
-import { useColorScheme } from "@/hooks/use-color-scheme";
 import { useHasPendingMerge, useMergeStatus } from "@/store/useMergeStatus";
 import { useProfileId } from "@/store/useProfileStore";
 import { useVideoQueue } from "@/store/useVideoQueue";
 import { useShallow } from "zustand/shallow";
+import { useHighlightResults } from "../useHighlightResults";
 import {
   archiveHistory,
   fetchHighlightDownloadURL,
-  fetchHighlightResults,
   fetchRelatedWods,
   fetchVideoDownloadURL,
   generateHardSub,
-  generateHighlight,
   mergeChunks,
   retryAnalysis,
 } from "../api";
+import { notifyHistoryChanged, subscribeHistoryChanges } from "../archiveStates";
 import { parseWorkoutType } from "../workoutType";
 import {
   AnalysisResult,
@@ -58,7 +60,9 @@ import {
   StretchRecommendationItem,
   StretchRecommendationsCard,
 } from "./StretchRecommendationsCard";
-import { WorkoutFatigueCard, getFatigueColor } from "./WorkoutFatigueCard";
+import { WorkoutFatigueCard } from "./WorkoutFatigueCard";
+
+const T = TacticalTheme.light;
 
 export { formatSessionLabel };
 
@@ -68,26 +72,32 @@ function getStatusConfig(status: string) {
     case "COMPLETED":
       return {
         label: t("historyList.statusComplete"),
-        color: "#30D158",
-        bgColor: "rgba(48,209,88,0.15)",
+        color: T.statusFresh,
+        bgColor: T.statusFreshBg,
+        borderColor: T.statusFreshBorder,
       };
+    case "CANCELLED":
+      return { label: t("historyList.statusCancelled"), color: T.inkMuted, bgColor: T.surfaceMuted };
     case "FAILED":
       return {
         label: t("historyList.statusFailed"),
-        color: "#FF453A",
-        bgColor: "rgba(255,69,58,0.15)",
+        color: T.statusExhausted,
+        bgColor: T.statusExhaustedBg,
+        borderColor: T.statusExhaustedBorder,
       };
     case "PENDING":
       return {
         label: t("historyList.statusPending"),
-        color: "#FFD60A",
-        bgColor: "rgba(255,214,10,0.15)",
+        color: T.statusWarning,
+        bgColor: T.statusWarningBg,
+        borderColor: T.statusWarningBorder,
       };
     default:
       return {
         label: status,
-        color: "#A0A0A0",
-        bgColor: "rgba(160,160,160,0.15)",
+        color: T.inkMuted,
+        bgColor: T.surfaceContainer,
+        borderColor: T.borderStrong,
       };
   }
 }
@@ -98,15 +108,17 @@ function getTypeBadge(type: string) {
     case "injury_supplement":
       return {
         label: t("historyList.typeInjury"),
-        color: "#FF6B6B",
-        bgColor: "rgba(255,107,107,0.12)",
+        color: T.heartRose,
+        bgColor: T.heartRoseBg,
+        borderColor: T.heartRoseBorder,
       };
     case "wod":
     default:
       return {
         label: t("historyList.typeWod"),
-        color: "#64D2FF",
-        bgColor: "rgba(100,210,255,0.12)",
+        color: T.electricBlue,
+        bgColor: T.electricBlueBg,
+        borderColor: T.electricBlueBorder,
       };
   }
 }
@@ -141,14 +153,11 @@ const HIGHLIGHT_VARIANT_CONFIG: Record<
   string,
   { emoji: string; color: string }
 > = {
-  "Highlight Reel": { emoji: "🎬", color: "#BF5AF2" },
-  "Best Forms": { emoji: "🏆", color: "#30D158" },
-  "Areas for Improvement": { emoji: "📈", color: "#FF9F0A" },
-  "Key Moments": { emoji: "⭐", color: "#64D2FF" },
+  "Highlight Reel": { emoji: "🎬", color: "#7C3AED" },
+  "Best Forms": { emoji: "🏆", color: T.statusFresh },
+  "Areas for Improvement": { emoji: "📈", color: T.statusFatigued },
+  "Key Moments": { emoji: "⭐", color: T.electricBlue },
 };
-
-const HIGHLIGHT_POLL_INTERVAL_MS = 5_000;
-const HIGHLIGHT_POLL_TIMEOUT_MS = 5 * 60 * 1_000;
 
 function HistoryCard({
   item,
@@ -203,9 +212,8 @@ function HistoryCard({
 
   const [downloading, setDownloading] = useState<string | null>(null); // 'merged' | 'hardsubbed' | 'encoded'
   const [retrying, setRetrying] = useState(false);
+  const [shareVisible, setShareVisible] = useState(false);
   const [generatingHardsub, setGeneratingHardsub] = useState(false);
-  const scheme = useColorScheme() ?? "light";
-  const isDark = scheme === "dark";
   const statusConfig = getStatusConfig(item.status);
   const typeBadge = getTypeBadge(item.analysis_type);
 
@@ -221,9 +229,9 @@ function HistoryCard({
   // ---------------------
   // Highlight state
   // ---------------------
-  const [highlights, setHighlights] = useState<HighlightResult[]>([]);
-  const [highlightLoading, setHighlightLoading] = useState(false);
-  const [highlightPolling, setHighlightPolling] = useState(false);
+  const { highlights, highlightLoading, highlightPolling, handleCreateHighlights } = useHighlightResults(
+    item.session_id, item.profile_id ?? 0, isCompleted && item.analysis_type === "wod",
+  );
   const [highlightDownloading, setHighlightDownloading] = useState<
     number | null
   >(null);
@@ -232,19 +240,6 @@ function HistoryCard({
     url: string;
   } | null>(null);
   const [loadingPlayId, setLoadingPlayId] = useState<number | null>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const pollStartRef = useRef<number>(0);
-
-  // On mount, fetch existing highlight results (if any)
-  useEffect(() => {
-    if (isCompleted && item.analysis_type === "wod") {
-      fetchHighlightResults(item.session_id)
-        .then((results) =>
-          setHighlights(results.filter((r) => r.status === "COMPLETED")),
-        )
-        .catch(() => {});
-    }
-  }, [item.session_id, isCompleted, item.analysis_type]);
 
   // Related WODs lazy fetch on first expansion
   const [relatedWods, setRelatedWods] = useState<any[]>([]);
@@ -292,70 +287,6 @@ function HistoryCard({
       return [];
     }
   }, [item.stretch_recommendations]);
-
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-    };
-  }, []);
-
-  const startPolling = useCallback(() => {
-    setHighlightPolling(true);
-    pollStartRef.current = Date.now();
-
-    pollTimerRef.current = setInterval(async () => {
-      try {
-        const results = await fetchHighlightResults(item.session_id);
-        const completed = results.filter((r) => r.status === "COMPLETED");
-        const failed = results.filter((r) => r.status === "FAILED");
-
-        if (completed.length > 0) {
-          setHighlights(completed);
-        }
-
-        // Stop polling if all results are terminal or timeout
-        const allTerminal =
-          results.length > 0 &&
-          results.every(
-            (r) => r.status === "COMPLETED" || r.status === "FAILED",
-          );
-        const timedOut =
-          Date.now() - pollStartRef.current > HIGHLIGHT_POLL_TIMEOUT_MS;
-
-        if (allTerminal || timedOut) {
-          if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-          setHighlightPolling(false);
-          if (timedOut && completed.length === 0) {
-            Alert.alert(t("historyList.timeout"), t("historyList.timeoutDesc"));
-          }
-          if (failed.length > 0 && completed.length === 0) {
-            Alert.alert(
-              t("historyList.generationFailed"),
-              t("historyList.generationFailedDesc"),
-            );
-          }
-        }
-      } catch {
-        // Keep polling on transient errors
-      }
-    }, HIGHLIGHT_POLL_INTERVAL_MS);
-  }, [item.session_id]);
-
-  const handleCreateHighlights = async () => {
-    try {
-      setHighlightLoading(true);
-      await generateHighlight(item.session_id, item.profile_id ?? 0);
-      startPolling();
-    } catch (e: any) {
-      Alert.alert(
-        t("common.error"),
-        e?.message || t("historyList.generationFailedDesc"),
-      );
-    } finally {
-      setHighlightLoading(false);
-    }
-  };
 
   const handleHighlightDownload = async (hl: HighlightResult) => {
     try {
@@ -545,18 +476,14 @@ function HistoryCard({
     }
   };
 
-  const cardBg = isDark ? "#2C2C2E" : "#F5F5F5";
-  const cardBorder = isDark ? "#48484A" : "rgba(0,0,0,0.08)";
-  const sessionColor = isDark ? "#FFFFFF" : "#1C1C1E";
-  const dateColor = isDark ? "#D4D4D4" : "#6B6B6B";
-  const previewColor = isDark ? "#FFFFFF" : "#333333";
-  const expandColor = isDark ? "#64D2FF" : "#0A84FF";
-  const hrDividerColor = isDark
-    ? "rgba(255,107,107,0.2)"
-    : "rgba(255,107,107,0.3)";
-  const highlightSectionBg = isDark
-    ? "rgba(191,90,242,0.08)"
-    : "rgba(191,90,242,0.05)";
+  const cardBg = T.surface;
+  const cardBorder = T.border;
+  const sessionColor = T.ink;
+  const dateColor = T.inkMuted;
+  const previewColor = T.inkSecondary;
+  const expandColor = T.electricBlue;
+  const hrDividerColor = T.heartRoseBorder;
+  const highlightSectionBg = T.surfaceMuted;
 
   const handleArchive = () => {
     Alert.alert(
@@ -571,14 +498,23 @@ function HistoryCard({
             try {
               await archiveHistory(item.id);
               onArchive?.(item.id);
-            } catch {
-              Alert.alert(t("common.error"), t("historyList.archiveFailed"));
+              if (item.profile_id) notifyHistoryChanged(item.profile_id);
+            } catch (err: any) {
+              const message =
+                err?.status === 409
+                  ? t("historyList.archiveInProgress")
+                  : t("historyList.archiveFailed");
+              Alert.alert(t("common.error"), message);
             }
           },
         },
       ],
     );
   };
+
+  const fatigueTone = item.session_fatigue
+    ? getTacticalFatigueTone(item.session_fatigue.overall_score ?? 0, "light")
+    : null;
 
   return (
     <View ref={cardRef} onLayout={handleCardLayout}>
@@ -599,7 +535,13 @@ function HistoryCard({
               {formatSessionLabel(item.session_id)}
             </Text>
             <View
-              style={[styles.badge, { backgroundColor: typeBadge.bgColor }]}
+              style={[
+                styles.badge,
+                {
+                  backgroundColor: typeBadge.bgColor,
+                  borderColor: typeBadge.borderColor,
+                },
+              ]}
             >
               <Text style={[styles.badgeText, { color: typeBadge.color }]}>
                 {typeBadge.label}
@@ -607,7 +549,13 @@ function HistoryCard({
             </View>
           </View>
           <View
-            style={[styles.badge, { backgroundColor: statusConfig.bgColor }]}
+            style={[
+              styles.badge,
+              {
+                backgroundColor: statusConfig.bgColor,
+                borderColor: statusConfig.borderColor,
+              },
+            ]}
           >
             <Text style={[styles.badgeText, { color: statusConfig.color }]}>
               {statusConfig.label}
@@ -620,20 +568,18 @@ function HistoryCard({
           <Text style={[styles.date, { color: dateColor }]}>
             {formatDate(item.created_at)}
           </Text>
-          {item.session_fatigue && (
+          {item.session_fatigue && fatigueTone && (
             <View
               style={[
                 styles.fatiguePill,
                 item.session_fatigue.status === "insufficient_evidence"
                   ? {
-                      backgroundColor: "rgba(142, 155, 174, 0.15)",
-                      borderColor: "rgba(142, 155, 174, 0.3)",
+                      backgroundColor: T.surfaceContainer,
+                      borderColor: T.borderStrong,
                     }
                   : {
-                      backgroundColor:
-                        getFatigueColor(item.session_fatigue.overall_score ?? 0) + "18",
-                      borderColor:
-                        getFatigueColor(item.session_fatigue.overall_score ?? 0) + "40",
+                      backgroundColor: fatigueTone.bg,
+                      borderColor: fatigueTone.border,
                     },
               ]}
             >
@@ -641,10 +587,8 @@ function HistoryCard({
                 style={[
                   styles.fatiguePillText,
                   item.session_fatigue.status === "insufficient_evidence"
-                    ? { color: "#8E9BAE" }
-                    : {
-                        color: getFatigueColor(item.session_fatigue.overall_score ?? 0),
-                      },
+                    ? { color: T.inkMuted }
+                    : { color: fatigueTone.fg },
                 ]}
               >
                 {item.session_fatigue.status === "insufficient_evidence" ? (
@@ -676,8 +620,8 @@ function HistoryCard({
             {expanded ? (
               <View style={styles.contentBody}>
                 <MarkdownText>{withoutWorkoutEvidence(item.output)}</MarkdownText>
-                <TouchableOpacity accessibilityRole="button" onPress={() => setShowOriginal(v => !v)}><Text style={{ color: "#64D2FF", paddingVertical: 8 }}>{t("workoutProgress.originalAnalysis")}</Text></TouchableOpacity>
-                {showOriginal && <Text selectable style={{ color: isDark ? "#ccc" : "#444", fontSize: 12 }}>{item.output}</Text>}
+                <TouchableOpacity accessibilityRole="button" onPress={() => setShowOriginal(v => !v)}><Text style={{ color: T.electricBlue, fontWeight: "700", fontSize: 13, paddingVertical: 8 }}>{t("workoutProgress.originalAnalysis")}</Text></TouchableOpacity>
+                {showOriginal && <Text selectable style={{ color: T.inkMuted, fontSize: 12 }}>{item.output}</Text>}
 
                 {/* Workout Fatigue Breakdown */}
                 {item.session_fatigue && (
@@ -697,7 +641,7 @@ function HistoryCard({
                         {t("historyList.injuryAnalysis")}
                       </Text>
                     </View>
-                    <MarkdownText color="#FFB4B4">
+                    <MarkdownText color={T.heartRose} accentColor={T.heartRose}>
                       {item.injury_output!}
                     </MarkdownText>
                   </View>
@@ -760,12 +704,18 @@ function HistoryCard({
             activeOpacity={0.8}
           >
             {retrying ? (
-              <ActivityIndicator size="small" color="#FF9F0A" />
+              <ActivityIndicator size="small" color={T.statusFatigued} />
             ) : (
               <Text style={styles.retryBtnText}>
                 {t("historyList.retryAnalysis")}
               </Text>
             )}
+          </TouchableOpacity>
+        )}
+
+        {isCompleted && item.analysis_type === "wod" && !item.archived_at && !!item.profile_id && (
+          <TouchableOpacity accessibilityRole="button" style={styles.watchBtn} onPress={() => setShareVisible(true)} activeOpacity={0.85}>
+            <Text style={styles.watchBtnText}>{t("workoutShare.askAI")}</Text>
           </TouchableOpacity>
         )}
 
@@ -793,7 +743,7 @@ function HistoryCard({
                   },
                 });
               }}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
             >
               <Text style={styles.watchBtnText}>
                 {t("historyList.watchWorkout")}
@@ -806,7 +756,7 @@ function HistoryCard({
           item.analysis_type !== "injury_supplement" &&
           availableVideos.length > 0 && (
             <>
-              <Text style={{ color: dateColor, fontSize: 12, marginBottom: 6 }}>
+              <Text style={{ color: dateColor, fontSize: 12, fontWeight: "700", marginTop: 12, marginBottom: 4 }}>
                 {t("originalVideos.serverVersions")}
               </Text>
             <View style={styles.downloadRow}>
@@ -817,7 +767,7 @@ function HistoryCard({
                   disabled={downloading !== null}
                 >
                   {downloading === "merged" ? (
-                    <ActivityIndicator size="small" color="#fff" />
+                    <ActivityIndicator size="small" color={T.electricBlue} />
                   ) : (
                     <Text style={styles.downloadBtnText}>
                       {t("historyList.videoBtn")}
@@ -832,7 +782,7 @@ function HistoryCard({
                   disabled={downloading !== null}
                 >
                   {downloading === "hardsubbed" ? (
-                    <ActivityIndicator size="small" color="#000" />
+                    <ActivityIndicator size="small" color={T.oliveAccent} />
                   ) : (
                     <Text
                       style={[
@@ -852,7 +802,7 @@ function HistoryCard({
                   disabled={downloading !== null}
                 >
                   {downloading === "encoded" ? (
-                    <ActivityIndicator size="small" color="#fff" />
+                    <ActivityIndicator size="small" color={T.inkSecondary} />
                   ) : (
                     <Text
                       style={[
@@ -897,7 +847,7 @@ function HistoryCard({
               activeOpacity={0.8}
             >
               {generatingHardsub ? (
-                <ActivityIndicator size="small" color="#FFD60A" />
+                <ActivityIndicator size="small" color={T.electricBlue} />
               ) : (
                 <Text style={styles.hardsubBtnText}>
                   {t("historyList.createHardsub")}
@@ -927,7 +877,7 @@ function HistoryCard({
                     {highlights.map((hl) => {
                       const variantCfg = HIGHLIGHT_VARIANT_CONFIG[hl.title] ?? {
                         emoji: "🎥",
-                        color: "#A0A0A0",
+                        color: T.inkSecondary,
                       };
                       const isLoadingPlay = loadingPlayId === hl.id;
                       const isPlaying = playingHighlight?.hl.id === hl.id;
@@ -936,10 +886,10 @@ function HistoryCard({
                           key={hl.id}
                           style={[
                             styles.highlightVariantBtn,
-                            { borderColor: variantCfg.color + "40" },
+                            { borderColor: variantCfg.color + "45" },
                             isPlaying && {
                               borderColor: variantCfg.color,
-                              backgroundColor: variantCfg.color + "20",
+                              backgroundColor: variantCfg.color + "18",
                             },
                           ]}
                           onPress={() => handlePlayHighlight(hl)}
@@ -993,7 +943,7 @@ function HistoryCard({
                       disabled={highlightDownloading !== null}
                     >
                       {highlightDownloading === -1 ? (
-                        <ActivityIndicator size="small" color="#BF5AF2" />
+                        <ActivityIndicator size="small" color={T.electricBlue} />
                       ) : (
                         <Text style={styles.saveAllBtnText}>
                           {t("historyList.saveAllGallery", {
@@ -1009,7 +959,7 @@ function HistoryCard({
               {/* Polling indicator */}
               {highlightPolling && highlights.length === 0 && (
                 <View style={styles.highlightPollingBanner}>
-                  <ActivityIndicator size="small" color="#BF5AF2" />
+                  <ActivityIndicator size="small" color={T.electricBlue} />
                   <Text style={styles.highlightPollingText}>
                     {t("historyList.generatingHighlights")}
                   </Text>
@@ -1041,7 +991,7 @@ function HistoryCard({
                   disabled={highlightLoading}
                 >
                   {highlightLoading ? (
-                    <ActivityIndicator size="small" color="#BF5AF2" />
+                    <ActivityIndicator size="small" color={T.electricBlue} />
                   ) : (
                     <Text style={styles.regenerateBtnText}>
                       {t("historyList.regenerate")}
@@ -1054,13 +1004,14 @@ function HistoryCard({
 
         {!hasOutput && item.status === "PENDING" && (
           <View style={styles.pendingBanner}>
-            <ActivityIndicator size="small" color="#FFD60A" />
+            <ActivityIndicator size="small" color={T.statusWarning} />
             <Text style={styles.pendingText}>
               {t("historyList.analysisInProgress")}
             </Text>
           </View>
         )}
       </TouchableOpacity>
+      {!!item.profile_id && <WorkoutShareSheet visible={shareVisible && isCompleted && item.analysis_type === "wod" && !item.archived_at} sessionId={item.session_id} profileId={item.profile_id} onClose={() => setShareVisible(false)} />}
     </View>
   );
 }
@@ -1089,12 +1040,16 @@ const PENDING_POLL_INTERVAL_MS = 10_000;
 
 export function useHistoryData(options?: { limit?: number }) {
   const profileId = useProfileId();
+  const currentHistoryProfile = useRef(profileId); currentHistoryProfile.current = profileId;
+  const historyRequest = useRef(0);
   const [data, setData] = useState<AnalysisResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadData = useCallback(async () => {
+    const request = ++historyRequest.current;
+    const current = () => request === historyRequest.current && profileId === currentHistoryProfile.current;
     if (!profileId) {
       setData([]);
       setLoading(false);
@@ -1103,14 +1058,20 @@ export function useHistoryData(options?: { limit?: number }) {
     }
     try {
       const history = await fetchAnalysisHistory(profileId, options?.limit);
-      setData(history);
+      if (current()) setData(history);
     } catch (e) {
       console.error(e);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (current()) { setLoading(false); setRefreshing(false); }
     }
   }, [profileId, options?.limit]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeHistoryChanges(pid => { if (pid === profileId) void loadData(); });
+    const app = AppState.addEventListener("change", state => { if (state === "active") void loadData(); });
+    return () => { unsubscribe(); app.remove(); ++historyRequest.current; };
+  }, [profileId, loadData]);
+
 
   useEffect(() => {
     setLoading(true);
@@ -1173,8 +1134,6 @@ export function ProcessingSection({
   items: AnalysisResult[];
   onRefresh?: () => void;
 }) {
-  const scheme = useColorScheme() ?? "light";
-  const isDark = scheme === "dark";
   const activeProfileId = useProfileId();
   const [remergingId, setRemergingId] = useState<string | null>(null);
   const [localRequestedIds, setLocalRequestedIds] = useState<Record<string, boolean>>({});
@@ -1321,14 +1280,8 @@ export function ProcessingSection({
 
   if (items.length === 0 && queueItems.length === 0) return null;
 
-  const processingBg = isDark
-    ? "rgba(255,214,10,0.06)"
-    : "rgba(255,214,10,0.08)";
-  const processingBorder = isDark
-    ? "rgba(255,214,10,0.15)"
-    : "rgba(255,214,10,0.2)";
-  const textColor = isDark ? "#FFD60A" : "#B8960A";
-  const subtextColor = isDark ? "#AAA" : "#777";
+  const textColor = T.electricBlue;
+  const subtextColor = T.inkMuted;
 
   return (
     <View style={processingStyles.container}>
@@ -1336,7 +1289,7 @@ export function ProcessingSection({
         <Text style={[processingStyles.sectionTitle, { color: textColor }]}>
           {t("historyList.processingSection")}
         </Text>
-        <ActivityIndicator size="small" color="#FFD60A" />
+        <ActivityIndicator size="small" color={T.electricBlue} />
       </View>
 
       {/* Server-side PENDING analysis results */}
@@ -1361,7 +1314,10 @@ export function ProcessingSection({
             key={item.id}
             style={[
               processingStyles.card,
-              { backgroundColor: processingBg, borderColor: processingBorder },
+              {
+                backgroundColor: stale ? T.statusWarningBg : T.surface,
+                borderColor: stale ? T.statusWarningBorder : T.electricBlueBorder,
+              },
             ]}
           >
             <View style={processingStyles.cardRow}>
@@ -1370,7 +1326,7 @@ export function ProcessingSection({
                 <Text
                   style={[
                     processingStyles.cardTitle,
-                    { color: isDark ? "#FFF" : "#1C1C1E" },
+                    { color: T.ink },
                   ]}
                 >
                   {formatSessionLabel(item.session_id)}
@@ -1384,7 +1340,7 @@ export function ProcessingSection({
               <View
                 style={[
                   processingStyles.statusDot,
-                  { backgroundColor: "#FFD60A" },
+                  { backgroundColor: stale ? T.statusWarning : T.electricBlue },
                 ]}
               />
             </View>
@@ -1404,7 +1360,7 @@ export function ProcessingSection({
                   accessibilityLabel={buttonLabel}
                 >
                   {isRemerging ? (
-                    <ActivityIndicator size="small" color="#FFD60A" />
+                    <ActivityIndicator size="small" color={T.voltInk} />
                   ) : (
                     <>
                       <Text style={processingStyles.remergeIcon}>
@@ -1431,27 +1387,27 @@ export function ProcessingSection({
         // Icon and label per status
         let icon = "📹";
         let subtitle = "";
-        let dotColor = "#A0A0A0";
+        let dotColor: string = T.inkMuted;
         switch (item.status) {
           case "RECORDED":
             icon = "🎬";
             subtitle = t("historyList.waitingToEncode");
-            dotColor = "#A0A0A0";
+            dotColor = T.inkMuted;
             break;
           case "ENCODING":
             icon = "⚙️";
             subtitle = t("historyList.encodingProgress", { percent: pct });
-            dotColor = "#FF9F0A";
+            dotColor = T.statusFatigued;
             break;
           case "ENCODED":
             icon = "✅";
             subtitle = t("historyList.readyToUpload");
-            dotColor = "#30D158";
+            dotColor = T.statusFresh;
             break;
           case "UPLOADING":
             icon = "☁️";
             subtitle = t("historyList.uploadingProgress", { percent: pct });
-            dotColor = "#64D2FF";
+            dotColor = T.electricBlue;
             break;
         }
 
@@ -1460,7 +1416,7 @@ export function ProcessingSection({
             key={item.id}
             style={[
               processingStyles.card,
-              { backgroundColor: processingBg, borderColor: processingBorder },
+              { backgroundColor: T.surface, borderColor: T.border },
             ]}
           >
             <View style={processingStyles.cardRow}>
@@ -1469,7 +1425,7 @@ export function ProcessingSection({
                 <Text
                   style={[
                     processingStyles.cardTitle,
-                    { color: isDark ? "#FFF" : "#1C1C1E" },
+                    { color: T.ink },
                   ]}
                 >
                   {formatSessionLabel(item.sessionId)}
@@ -1513,25 +1469,33 @@ export function ProcessingSection({
 
 const processingStyles = StyleSheet.create({
   container: {
-    gap: 8,
+    gap: 10,
     marginBottom: 16,
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 4,
+    marginBottom: 2,
+    paddingHorizontal: 2,
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    letterSpacing: 0.3,
+    fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    flexShrink: 1,
   },
   card: {
-    borderRadius: 14,
+    borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     gap: 8,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 1,
   },
   cardRow: {
     flexDirection: "row",
@@ -1547,10 +1511,13 @@ const processingStyles = StyleSheet.create({
   },
   cardTitle: {
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "800",
+    flexShrink: 1,
   },
   cardSubtitle: {
     fontSize: 12,
+    fontWeight: "600",
+    flexShrink: 1,
   },
   cardFooter: {
     flexDirection: "row",
@@ -1558,28 +1525,30 @@ const processingStyles = StyleSheet.create({
     justifyContent: "space-between",
     marginLeft: 30,
     marginTop: 2,
+    gap: 8,
   },
   cardDate: {
     fontSize: 11,
+    flexShrink: 1,
   },
   remergeBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    paddingVertical: 5,
-    paddingHorizontal: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
     borderRadius: 8,
-    backgroundColor: "rgba(255,214,10,0.15)",
+    backgroundColor: T.volt,
     borderWidth: 1,
-    borderColor: "rgba(255,214,10,0.3)",
+    borderColor: T.voltBorder,
   },
   remergeIcon: {
     fontSize: 11,
   },
   remergeBtnText: {
     fontSize: 12,
-    fontWeight: "600",
-    color: "#FFD60A",
+    fontWeight: "800",
+    color: T.voltInk,
   },
   statusDot: {
     width: 8,
@@ -1587,15 +1556,15 @@ const processingStyles = StyleSheet.create({
     borderRadius: 4,
   },
   progressBarBg: {
-    height: 3,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    borderRadius: 2,
+    height: 5,
+    backgroundColor: T.surfaceContainer,
+    borderRadius: 3,
     overflow: "hidden",
     marginLeft: 30,
   },
   progressBarFill: {
     height: "100%",
-    borderRadius: 2,
+    borderRadius: 3,
   },
 });
 
@@ -1609,7 +1578,7 @@ function MergeBanner() {
 
   return (
     <View style={mergeBannerStyles.container}>
-      <ActivityIndicator size="small" color="#64D2FF" />
+      <ActivityIndicator size="small" color={T.electricBlue} />
       <Text style={mergeBannerStyles.text}>
         {t("historyList.mergePreparing")}
       </Text>
@@ -1622,18 +1591,19 @@ const mergeBannerStyles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: "rgba(100,210,255,0.08)",
+    backgroundColor: T.electricBlueBg,
     borderWidth: 1,
-    borderColor: "rgba(100,210,255,0.2)",
+    borderColor: T.electricBlueBorder,
     borderRadius: 14,
     padding: 14,
     marginBottom: 12,
   },
   text: {
-    color: "#64D2FF",
+    color: T.electricBlue,
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
     flex: 1,
+    flexShrink: 1,
   },
 });
 
@@ -1781,7 +1751,7 @@ export function HistoryList({
       <>
         <OriginalVideosPending />
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#64D2FF" />
+          <ActivityIndicator size="large" color={T.electricBlue} />
           <Text style={styles.loadingText}>
             {t("historyList.loadingHistory")}
           </Text>
@@ -1830,15 +1800,15 @@ const styles = StyleSheet.create({
 
   // Section headers (date grouping)
   sectionHeaderContainer: {
-    paddingVertical: 10,
+    paddingVertical: 8,
     paddingHorizontal: 4,
     marginTop: 8,
   },
   sectionHeaderText: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#64D2FF",
-    letterSpacing: 0.5,
+    fontSize: 12,
+    fontWeight: "800",
+    color: T.inkMuted,
+    letterSpacing: 1.0,
     textTransform: "uppercase",
   },
 
@@ -1853,20 +1823,25 @@ const styles = StyleSheet.create({
   timeGapLine: {
     flex: 1,
     height: 1,
-    backgroundColor: "rgba(100,210,255,0.15)",
+    backgroundColor: T.borderStrong,
   },
   timeGapText: {
     fontSize: 11,
-    color: "#667",
-    fontWeight: "600",
+    color: T.inkMuted,
+    fontWeight: "700",
   },
   card: {
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   focusedCard: {
-    borderColor: "#64D2FF",
+    borderColor: T.electricBlue,
     borderWidth: 2,
   },
   cardHeader: {
@@ -1874,15 +1849,20 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 4,
+    gap: 8,
   },
   headerLeft: {
     flexDirection: "row",
     alignItems: "center",
+    flexWrap: "wrap",
     gap: 8,
+    flex: 1,
   },
   sessionLabel: {
     fontSize: 17,
-    fontWeight: "700",
+    fontWeight: "800",
+    letterSpacing: -0.3,
+    flexShrink: 1,
   },
 
   // Badges
@@ -1890,11 +1870,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
+    borderWidth: 1,
   },
   badgeText: {
     fontSize: 11,
-    fontWeight: "600",
-    letterSpacing: 0.3,
+    fontWeight: "800",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
   },
 
   // Date
@@ -1904,19 +1886,22 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 10,
     marginTop: 2,
+    gap: 8,
   },
   date: {
     fontSize: 12,
+    fontWeight: "600",
+    flexShrink: 1,
   },
   fatiguePill: {
     paddingHorizontal: 8,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderRadius: 6,
     borderWidth: 1,
   },
   fatiguePillText: {
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "800",
   },
 
   // Preview text (collapsed)
@@ -1934,9 +1919,10 @@ const styles = StyleSheet.create({
   // Expand toggle
   expandHint: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "800",
     marginTop: 10,
     textAlign: "center",
+    letterSpacing: 0.3,
   },
 
   // Injury supplement section
@@ -1950,133 +1936,147 @@ const styles = StyleSheet.create({
   },
   injurySectionLabel: {
     fontSize: 15,
-    fontWeight: "700",
-    color: "#FF6B6B",
+    fontWeight: "800",
+    color: T.heartRose,
   },
 
   // Failed/Pending banners
   failedBanner: {
-    backgroundColor: "rgba(255,69,58,0.1)",
-    borderRadius: 8,
+    backgroundColor: T.statusExhaustedBg,
+    borderWidth: 1,
+    borderColor: T.statusExhaustedBorder,
+    borderRadius: 10,
     padding: 12,
-    marginTop: 4,
+    marginTop: 6,
   },
   failedText: {
     fontSize: 13,
-    color: "#FF453A",
+    fontWeight: "600",
+    color: T.statusExhausted,
     lineHeight: 18,
   },
 
   // Retry button
   retryBtn: {
     marginTop: 10,
-    backgroundColor: "rgba(255,159,10,0.12)",
+    backgroundColor: T.statusFatiguedBg,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,159,10,0.3)",
+    borderColor: T.statusFatiguedBorder,
     paddingVertical: 12,
     alignItems: "center",
     justifyContent: "center",
   },
   retryBtnText: {
     fontSize: 14,
-    fontWeight: "700",
-    color: "#FF9F0A",
+    fontWeight: "800",
+    color: T.statusFatigued,
     letterSpacing: 0.3,
   },
 
   // Create Guided Video button
   hardsubBtn: {
     marginTop: 10,
-    backgroundColor: "rgba(255,214,10,0.12)",
+    backgroundColor: T.electricBlueBg,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,214,10,0.3)",
+    borderColor: T.electricBlueBorder,
     paddingVertical: 12,
     alignItems: "center",
     justifyContent: "center",
   },
   hardsubBtnText: {
     fontSize: 14,
-    fontWeight: "700",
-    color: "#FFD60A",
+    fontWeight: "800",
+    color: T.electricBlue,
     letterSpacing: 0.3,
   },
   pendingBanner: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: "rgba(255,214,10,0.08)",
-    borderRadius: 8,
+    backgroundColor: T.statusWarningBg,
+    borderWidth: 1,
+    borderColor: T.statusWarningBorder,
+    borderRadius: 10,
     padding: 12,
-    marginTop: 4,
+    marginTop: 6,
   },
   pendingText: {
     fontSize: 13,
-    color: "#FFD60A",
+    fontWeight: "600",
+    color: T.statusWarning,
     lineHeight: 18,
+    flexShrink: 1,
   },
 
   // Watch button
   watchBtn: {
     marginTop: 14,
-    backgroundColor: "rgba(100,210,255,0.12)",
+    backgroundColor: T.volt,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(100,210,255,0.3)",
+    borderColor: T.voltBorder,
     paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
   },
   watchBtnText: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "#64D2FF",
-    letterSpacing: 0.3,
+    fontSize: 14,
+    fontWeight: "900",
+    color: T.voltInk,
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
   },
 
   // Download buttons
   downloadRow: {
     flexDirection: "row",
-    gap: 10,
-    marginTop: 12,
+    gap: 8,
+    marginTop: 4,
   },
   downloadBtn: {
     flex: 1,
-    backgroundColor: "rgba(100,210,255,0.15)",
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
     borderRadius: 10,
     paddingVertical: 10,
     alignItems: "center",
     justifyContent: "center",
   },
   downloadBtnText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#64D2FF",
+    fontSize: 12,
+    fontWeight: "800",
+    color: T.electricBlue,
   },
   downloadBtnGuided: {
-    backgroundColor: "rgba(255,214,10,0.12)",
+    backgroundColor: T.surfaceMuted,
+    borderColor: T.voltBorder,
   },
   downloadBtnGuidedText: {
-    color: "#FFD60A",
+    color: T.oliveAccent,
   },
   downloadBtnEncoded: {
-    backgroundColor: "rgba(160,160,160,0.15)",
+    backgroundColor: T.surfaceContainer,
+    borderColor: T.borderStrong,
   },
   downloadBtnEncodedText: {
-    color: "#A0A0A0",
+    color: T.inkSecondary,
   },
 
   // Highlights
   highlightSection: {
     marginTop: 14,
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.border,
     padding: 14,
   },
   highlightSectionTitle: {
     fontSize: 14,
-    fontWeight: "700",
-    color: "#BF5AF2",
+    fontWeight: "800",
+    color: T.ink,
     marginBottom: 10,
   },
   highlightVariantList: {
@@ -2088,7 +2088,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "rgba(191,90,242,0.1)",
+    backgroundColor: T.surface,
     borderRadius: 10,
     borderWidth: 1,
     paddingHorizontal: 12,
@@ -2099,34 +2099,38 @@ const styles = StyleSheet.create({
   },
   highlightVariantLabel: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
+    flexShrink: 1,
   },
   highlightVariantDuration: {
     fontSize: 11,
-    color: "#888",
+    fontWeight: "700",
+    color: T.inkMuted,
     marginLeft: 2,
   },
   saveAllBtn: {
     marginTop: 10,
-    backgroundColor: "rgba(191,90,242,0.15)",
+    backgroundColor: T.electricBlueBg,
+    borderWidth: 1,
+    borderColor: T.electricBlueBorder,
     borderRadius: 10,
     paddingVertical: 10,
     alignItems: "center",
   },
   saveAllBtnText: {
     fontSize: 13,
-    fontWeight: "700",
-    color: "#BF5AF2",
+    fontWeight: "800",
+    color: T.electricBlue,
   },
   createHighlightBtn: {
-    backgroundColor: "#BF5AF2",
+    backgroundColor: T.electricBlue,
     borderRadius: 10,
     paddingVertical: 11,
     alignItems: "center",
   },
   createHighlightBtnText: {
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "800",
     color: "#FFF",
   },
   regenerateBtn: {
@@ -2136,8 +2140,8 @@ const styles = StyleSheet.create({
   },
   regenerateBtnText: {
     fontSize: 12,
-    fontWeight: "600",
-    color: "#BF5AF2",
+    fontWeight: "700",
+    color: T.electricBlue,
   },
   highlightPollingBanner: {
     flexDirection: "row",
@@ -2147,8 +2151,10 @@ const styles = StyleSheet.create({
   },
   highlightPollingText: {
     fontSize: 12,
-    color: "#BF5AF2",
+    fontWeight: "600",
+    color: T.electricBlue,
     flex: 1,
+    flexShrink: 1,
   },
 
   // Loading
@@ -2159,27 +2165,34 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     fontSize: 14,
-    color: "#888",
+    fontWeight: "600",
+    color: T.inkMuted,
   },
 
   // Empty state
   emptyContainer: {
     alignItems: "center",
-    paddingVertical: 60,
+    paddingVertical: 48,
+    paddingHorizontal: 24,
+    backgroundColor: T.surface,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: T.border,
     gap: 8,
   },
   emptyIcon: {
-    fontSize: 48,
-    marginBottom: 8,
+    fontSize: 44,
+    marginBottom: 4,
   },
   emptyTitle: {
     fontSize: 18,
-    fontWeight: "700",
-    color: "#FFF",
+    fontWeight: "800",
+    color: T.ink,
   },
   emptySubtitle: {
     fontSize: 14,
-    color: "#888",
+    color: T.inkMuted,
     textAlign: "center",
+    lineHeight: 20,
   },
 });

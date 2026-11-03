@@ -1,5 +1,6 @@
 import { IconSymbol } from "@/components/ui/icon-symbol";
-import { t } from "@/features/i18n";
+import { Fonts, TacticalTheme } from "@/constants/theme";
+import { t, useLocale } from "@/features/i18n";
 import {
   fetchMovementGroups,
   getUploadUrl,
@@ -11,6 +12,7 @@ import { buildWorkoutSessionId } from "@/features/wod/workoutType";
 import { useProfileId } from "@/store/useProfileStore";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
+import { StatusBar } from "expo-status-bar";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -25,9 +27,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+const T = TacticalTheme.light;
+const monoFont = Fonts?.mono ?? "monospace";
 const ALL_FILTER = "All";
 
-// Category icons (same as setup.tsx)
 const CATEGORY_ICONS: Record<string, string> = {
   Barbell: "dumbbell.fill",
   "Dumbbell & Kettlebell": "dumbbell.fill",
@@ -42,13 +45,13 @@ function getCategoryIcon(category: string): string {
 }
 
 export default function UploadScreen() {
+  useLocale();
   const profileId = useProfileId();
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
 
-  // Movement state (same pattern as setup.tsx)
   const [movementGroups, setMovementGroups] = useState<MovementGroup[]>([]);
   const [selectedMovements, setSelectedMovements] = useState<string[]>([]);
   const [customMovements, setCustomMovements] = useState<string[]>([]);
@@ -63,7 +66,6 @@ export default function UploadScreen() {
       .finally(() => setLoading(false));
   }, []);
 
-  // Derive category filter tabs
   const categoryTabs = useMemo(() => {
     const cats = movementGroups.map((g) => g.category);
     if (customMovements.length > 0 && !cats.includes("Custom")) {
@@ -72,7 +74,6 @@ export default function UploadScreen() {
     return [ALL_FILTER, ...cats];
   }, [movementGroups, customMovements]);
 
-  // Build flat set of all known movements (for custom dedup)
   const allKnownMovements = useMemo(() => {
     const set = new Set<string>();
     for (const g of movementGroups) {
@@ -81,7 +82,6 @@ export default function UploadScreen() {
     return set;
   }, [movementGroups]);
 
-  // Filter movements based on search + active category
   const filteredGroups = useMemo(() => {
     const query = searchText.toLowerCase().trim();
     let groups = movementGroups;
@@ -97,7 +97,7 @@ export default function UploadScreen() {
         .map((g) => ({
           ...g,
           movements: g.movements.filter((m) =>
-            m.toLowerCase().includes(query)
+            m.toLowerCase().includes(query),
           ),
         }))
         .filter((g) => g.movements.length > 0);
@@ -105,7 +105,6 @@ export default function UploadScreen() {
     return groups;
   }, [movementGroups, customMovements, activeFilter, searchText]);
 
-  // Check if search text can be added as custom
   const canAddCustom = useMemo(() => {
     const trimmed = searchText.trim();
     if (!trimmed) return false;
@@ -121,7 +120,7 @@ export default function UploadScreen() {
 
   const toggleMovement = (m: string) => {
     setSelectedMovements((prev) =>
-      prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]
+      prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m],
     );
   };
 
@@ -148,7 +147,7 @@ export default function UploadScreen() {
       setFileName(
         result.assets[0].fileName ??
           result.assets[0].uri.split("/").pop() ??
-          "video.mp4"
+          "video.mp4",
       );
     }
   };
@@ -168,26 +167,23 @@ export default function UploadScreen() {
       const sessionId = buildWorkoutSessionId("wod");
       const name = fileName ?? "video.mp4";
 
-      // Step 1: Get a signed GCS upload URL
       const { upload_url, gcs_uri } = await getUploadUrl(
         sessionId,
         name,
-        profileId
+        profileId,
       );
 
-      // Step 2: Upload directly to GCS (bypasses Cloud Run body limit)
       await uploadToGcs(upload_url, selectedVideo, "video/mp4", (p) =>
-        setProgress(p)
+        setProgress(p),
       );
 
-      // Step 3: Notify backend to start analysis
       await notifyUploadComplete(
         sessionId,
         gcs_uri,
         selectedMovements,
-        [], // no injuries from upload screen
+        [],
         "wod",
-        profileId
+        profileId,
       );
 
       Alert.alert(t("upload.success"), t("upload.analysisStarted"), [
@@ -214,21 +210,28 @@ export default function UploadScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar style="dark" />
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <IconSymbol name="chevron.left" size={28} color="#fff" />
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={styles.backBtn}
+          accessibilityRole="button"
+        >
+          <IconSymbol name="chevron.left" size={22} color={T.ink} />
         </TouchableOpacity>
-        <Text style={styles.title}>{t("upload.title")}</Text>
-        <View style={{ width: 28 }} />
+        <Text style={styles.title} numberOfLines={1}>
+          {t("upload.title")}
+        </Text>
+        <View style={{ width: 38 }} />
       </View>
 
       {/* Search bar */}
       <View style={styles.searchContainer}>
-        <IconSymbol name="magnifyingglass" size={18} color="#666" />
+        <IconSymbol name="magnifyingglass" size={18} color={T.inkMuted} />
         <TextInput
           style={styles.searchInput}
           placeholder={t("setup.searchMovements")}
-          placeholderTextColor="#555"
+          placeholderTextColor={T.inkMuted}
           value={searchText}
           onChangeText={setSearchText}
           autoCapitalize="none"
@@ -236,7 +239,7 @@ export default function UploadScreen() {
         />
         {searchText.length > 0 && (
           <TouchableOpacity onPress={() => setSearchText("")}>
-            <IconSymbol name="xmark.circle.fill" size={18} color="#555" />
+            <IconSymbol name="xmark.circle.fill" size={18} color={T.inkMuted} />
           </TouchableOpacity>
         )}
       </View>
@@ -273,6 +276,7 @@ export default function UploadScreen() {
       <ScrollView
         contentContainerStyle={styles.movementListContent}
         style={styles.movementList}
+        showsVerticalScrollIndicator={false}
       >
         {/* Video Picker */}
         <TouchableOpacity
@@ -303,10 +307,9 @@ export default function UploadScreen() {
         </TouchableOpacity>
 
         {loading ? (
-          <ActivityIndicator color="#00E5FF" style={{ marginTop: 40 }} />
+          <ActivityIndicator color={T.electricBlue} style={{ marginTop: 40 }} />
         ) : (
           <>
-            {/* Add custom movement button */}
             {canAddCustom && (
               <TouchableOpacity
                 style={styles.addCustomBtn}
@@ -315,7 +318,7 @@ export default function UploadScreen() {
                 <IconSymbol
                   name="plus.circle.fill"
                   size={20}
-                  color="#00E5FF"
+                  color={T.electricBlue}
                 />
                 <Text style={styles.addCustomText}>
                   {t("setup.addCustomMovement", { name: searchText.trim() })}
@@ -323,7 +326,6 @@ export default function UploadScreen() {
               </TouchableOpacity>
             )}
 
-            {/* Movement cards by group */}
             {filteredGroups.map((group) => (
               <View key={group.category} style={styles.groupSection}>
                 <Text style={styles.groupHeader}>
@@ -341,11 +343,16 @@ export default function UploadScreen() {
                       ]}
                       onPress={() => toggleMovement(movement)}
                     >
-                      <View style={styles.movementCardIcon}>
+                      <View
+                        style={[
+                          styles.movementCardIcon,
+                          isSelected && styles.movementCardIconSelected,
+                        ]}
+                      >
                         <IconSymbol
                           name={getCategoryIcon(group.category) as any}
                           size={20}
-                          color={isSelected ? "#00E5FF" : "#666"}
+                          color={isSelected ? T.electricBlue : T.inkMuted}
                         />
                       </View>
                       <View style={styles.movementCardInfo}>
@@ -377,7 +384,7 @@ export default function UploadScreen() {
                           <IconSymbol
                             name="xmark.circle"
                             size={22}
-                            color="#666"
+                            color={T.inkMuted}
                           />
                         </TouchableOpacity>
                       ) : (
@@ -391,7 +398,7 @@ export default function UploadScreen() {
                             <IconSymbol
                               name="checkmark"
                               size={14}
-                              color="#000"
+                              color="#FFF"
                             />
                           )}
                         </View>
@@ -430,7 +437,7 @@ export default function UploadScreen() {
                   <IconSymbol
                     name="xmark.circle.fill"
                     size={14}
-                    color="#00E5FF"
+                    color={T.electricBlue}
                   />
                 </TouchableOpacity>
               </View>
@@ -447,7 +454,7 @@ export default function UploadScreen() {
         >
           {uploading ? (
             <View style={styles.uploadingRow}>
-              <ActivityIndicator color="#000" size="small" />
+              <ActivityIndicator color={T.voltInk} size="small" />
               <Text style={styles.uploadBtnText}>
                 {t("upload.uploading", {
                   percent: Math.round(progress * 100),
@@ -464,43 +471,54 @@ export default function UploadScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#0A0E14" },
+  container: { flex: 1, backgroundColor: T.canvas },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1A1F28",
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    gap: 12,
   },
-  backBtn: { width: 28 },
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: T.surface,
+    borderWidth: 1,
+    borderColor: T.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   title: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#00E5FF",
-    letterSpacing: 1.5,
-    textTransform: "uppercase",
+    flex: 1,
+    textAlign: "center",
+    fontSize: 18,
+    fontWeight: "900",
+    color: T.ink,
+    letterSpacing: -0.3,
+    flexShrink: 1,
   },
 
   // Search bar
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
-    marginHorizontal: 16,
-    marginTop: 12,
+    marginHorizontal: 18,
+    marginTop: 4,
     marginBottom: 8,
-    backgroundColor: "#141A24",
+    backgroundColor: T.surface,
     borderRadius: 12,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 11,
     borderWidth: 1,
-    borderColor: "#1E2630",
+    borderColor: T.borderStrong,
   },
   searchInput: {
     flex: 1,
-    color: "#fff",
+    color: T.ink,
     fontSize: 15,
+    fontWeight: "600",
     marginLeft: 10,
     paddingVertical: 0,
   },
@@ -511,7 +529,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   filterTabsContent: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     gap: 8,
     alignItems: "center",
   },
@@ -519,36 +537,37 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 20,
-    backgroundColor: "#141A24",
+    backgroundColor: T.surface,
     borderWidth: 1,
-    borderColor: "#1E2630",
+    borderColor: T.border,
   },
   filterTabActive: {
-    backgroundColor: "#00303D",
-    borderColor: "#00E5FF",
+    backgroundColor: T.electricBlueBg,
+    borderColor: T.electricBlue,
   },
   filterTabText: {
-    color: "#667",
+    color: T.inkMuted,
     fontSize: 12,
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
   filterTabTextActive: {
-    color: "#00E5FF",
+    color: T.electricBlue,
+    fontWeight: "800",
   },
 
   // Movement list
   movementList: { flex: 1 },
-  movementListContent: { paddingHorizontal: 16, paddingBottom: 180 },
+  movementListContent: { paddingHorizontal: 18, paddingBottom: 180 },
 
   // Video picker
   pickerBox: {
     height: 140,
-    backgroundColor: "#141A24",
-    borderRadius: 14,
+    backgroundColor: T.surface,
+    borderRadius: 16,
     borderWidth: 2,
-    borderColor: "#1E2630",
+    borderColor: T.borderStrong,
     borderStyle: "dashed",
     justifyContent: "center",
     alignItems: "center",
@@ -556,12 +575,12 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   pickerBoxSelected: {
-    borderColor: "#00E5FF40",
+    borderColor: T.electricBlue,
     borderStyle: "solid",
-    backgroundColor: "#0D1A24",
+    backgroundColor: T.electricBlueBg,
   },
   pickerIcon: { fontSize: 36, marginBottom: 8 },
-  pickerText: { color: "#667", fontSize: 14 },
+  pickerText: { color: T.inkMuted, fontSize: 14, fontWeight: "700" },
   selectedVideoInfo: {
     alignItems: "center",
     gap: 8,
@@ -569,14 +588,15 @@ const styles = StyleSheet.create({
   },
   selectedIcon: { fontSize: 24 },
   selectedFileName: {
-    color: "#fff",
+    color: T.ink,
     fontSize: 13,
-    fontFamily: "monospace",
+    fontWeight: "700",
+    fontFamily: monoFont,
   },
   changeVideoText: {
-    color: "#00E5FF",
+    color: T.electricBlue,
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "800",
   },
 
   // Add custom movement
@@ -584,27 +604,28 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    backgroundColor: "#00303D",
+    backgroundColor: T.electricBlueBg,
     paddingVertical: 14,
     paddingHorizontal: 16,
     borderRadius: 12,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: "#00E5FF40",
+    borderColor: T.electricBlueBorder,
   },
   addCustomText: {
-    color: "#00E5FF",
+    color: T.electricBlue,
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "800",
+    flexShrink: 1,
   },
 
   // Group section
   groupSection: { marginBottom: 12 },
   groupHeader: {
-    color: "#4A5568",
+    color: T.inkMuted,
     fontSize: 11,
     fontWeight: "800",
-    letterSpacing: 1.5,
+    letterSpacing: 1.2,
     marginBottom: 8,
     marginTop: 8,
     paddingLeft: 4,
@@ -614,41 +635,45 @@ const styles = StyleSheet.create({
   movementCard: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#141A24",
-    borderRadius: 12,
-    padding: 14,
+    backgroundColor: T.surface,
+    borderRadius: 14,
+    padding: 13,
     marginBottom: 6,
     borderWidth: 1,
-    borderColor: "#1E2630",
+    borderColor: T.border,
   },
   movementCardSelected: {
-    borderColor: "#00E5FF40",
-    backgroundColor: "#0D1A24",
+    borderColor: T.electricBlue,
+    backgroundColor: T.electricBlueBg,
   },
   movementCardIcon: {
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: "#1A2332",
+    backgroundColor: T.surfaceMuted,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
   },
+  movementCardIconSelected: {
+    backgroundColor: T.surface,
+  },
   movementCardInfo: { flex: 1 },
   movementName: {
-    color: "#C8D0DA",
+    color: T.ink,
     fontSize: 14,
-    fontWeight: "700",
-    letterSpacing: 0.5,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    flexShrink: 1,
   },
   movementNameSelected: {
-    color: "#fff",
+    color: T.electricBlue,
   },
   movementCategory: {
-    color: "#4A5568",
+    color: T.inkMuted,
     fontSize: 11,
     fontWeight: "600",
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
     marginTop: 2,
   },
 
@@ -658,13 +683,13 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 12,
     borderWidth: 2,
-    borderColor: "#2D3748",
+    borderColor: T.borderStrong,
     justifyContent: "center",
     alignItems: "center",
   },
   checkboxSelected: {
-    backgroundColor: "#00E5FF",
-    borderColor: "#00E5FF",
+    backgroundColor: T.electricBlue,
+    borderColor: T.electricBlue,
   },
 
   // Empty state
@@ -673,8 +698,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   emptyText: {
-    color: "#4A5568",
+    color: T.inkMuted,
     fontSize: 14,
+    fontWeight: "600",
   },
 
   // Bottom bar
@@ -683,12 +709,12 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     paddingTop: 12,
     paddingBottom: 34,
-    backgroundColor: "rgba(10,14,20,0.95)",
+    backgroundColor: "rgba(241, 244, 249, 0.96)",
     borderTopWidth: 1,
-    borderTopColor: "#1A1F28",
+    borderTopColor: T.border,
   },
   stagedChipsScroll: {
     marginBottom: 10,
@@ -701,30 +727,33 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#00303D",
+    backgroundColor: T.electricBlueBg,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#00E5FF30",
+    borderColor: T.electricBlueBorder,
   },
   stagedChipText: {
-    color: "#00E5FF",
+    color: T.electricBlue,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   uploadBtn: {
-    backgroundColor: "#00E5FF",
+    backgroundColor: T.volt,
+    borderWidth: 1,
+    borderColor: T.voltBorder,
     padding: 16,
-    borderRadius: 12,
+    borderRadius: 14,
     alignItems: "center",
   },
-  uploadBtnDisabled: { opacity: 0.4 },
+  uploadBtnDisabled: { opacity: 0.45 },
   uploadBtnText: {
-    color: "#000",
+    color: T.voltInk,
     fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "900",
     letterSpacing: 0.5,
+    textTransform: "uppercase",
   },
   uploadingRow: {
     flexDirection: "row",

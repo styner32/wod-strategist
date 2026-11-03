@@ -15,6 +15,56 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/appearance-from-image": {
+            "post": {
+                "description": "Extracts person visual appearance cues from a photo",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workout"
+                ],
+                "summary": "Parse Appearance Image",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Person photo (JPEG/PNG, max 10MB)",
+                        "name": "image",
+                        "in": "formData",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.AppearanceInput"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.ErrorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/chunk-analysis/:session_id": {
             "get": {
                 "description": "Fetches the partial analysis chunks for a given session",
@@ -66,7 +116,7 @@ const docTemplate = `{
                     "202": {
                         "description": "Accepted",
                         "schema": {
-                            "$ref": "#/definitions/controllers.CompleteUploadResponse"
+                            "$ref": "#/definitions/controllers.RecordingMediaChunkReceipt"
                         }
                     }
                 }
@@ -233,101 +283,6 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/generate-hardsub": {
-            "post": {
-                "description": "Creates a hardsubbed version of the video with burned-in subtitles",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "video"
-                ],
-                "summary": "Generate Hardsubbed Video",
-                "parameters": [
-                    {
-                        "description": "Session and profile",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/controllers.GenerateHardSubRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "202": {
-                        "description": "Accepted",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.GenerateHardSubResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/generate-highlight": {
-            "post": {
-                "description": "Triggers short-form highlight video generation from WOD analysis for a session",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "highlight"
-                ],
-                "summary": "Generate Highlight",
-                "parameters": [
-                    {
-                        "description": "Session ID and options",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/controllers.GenerateHighlightRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "202": {
-                        "description": "Accepted",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
                         "schema": {
                             "$ref": "#/definitions/controllers.ErrorResponse"
                         }
@@ -591,35 +546,115 @@ const docTemplate = `{
                 }
             }
         },
-        "/retry-analysis": {
-            "post": {
-                "description": "Re-enqueues a video analysis task for a failed session using existing GCS files",
-                "consumes": [
-                    "application/json"
-                ],
+        "/performance-benchmarks": {
+            "get": {
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "analysis"
                 ],
-                "summary": "Retry Analysis",
+                "summary": "Get confirmed workout performance benchmarks",
                 "parameters": [
                     {
-                        "description": "Session and profile",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/controllers.RetryAnalysisRequest"
-                        }
+                        "type": "integer",
+                        "description": "Owned profile ID",
+                        "name": "profile_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Canonical movement or recognized alias",
+                        "name": "movement",
+                        "in": "query"
                     }
                 ],
                 "responses": {
-                    "202": {
-                        "description": "Accepted",
+                    "200": {
+                        "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/controllers.RetryAnalysisResponse"
+                            "$ref": "#/definitions/controllers.PerformanceBenchmarksResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/related-wods": {
+            "get": {
+                "description": "Returns nearest past WODs of the same profile containing the specified movement, ranked by recency, weight match, and main movement status.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "wod"
+                ],
+                "summary": "Get Related WODs",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Profile ID",
+                        "name": "profile_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Movement name (Mode A)",
+                        "name": "movement",
+                        "in": "query"
+                    },
+                    {
+                        "type": "number",
+                        "description": "Movement weight in kg (Mode A)",
+                        "name": "weight_kg",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Anchor session ID (Mode B)",
+                        "name": "session_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Max results (default 5, max 20)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.RelatedWODsResponse"
                         }
                     },
                     "400": {
@@ -628,8 +663,8 @@ const docTemplate = `{
                             "$ref": "#/definitions/controllers.ErrorResponse"
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "$ref": "#/definitions/controllers.ErrorResponse"
                         }
@@ -673,6 +708,485 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/activity.Summary"
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{session_id}/performance-records": {
+            "put": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Confirm workout performance records",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Confirm interval, window, outcome, optional integer reps and actual load (or explicit null for no external load)",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.PerformanceRecordsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.WorkoutProgressResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{session_id}/recognition-evaluation": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Compare confirmed performance with original video recognition",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/recognitionreview.Evaluation"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{session_id}/recognition-reviews": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "List recognition diagnoses",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.ListRecognitionReviewsResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Manually diagnose selected video recognition errors",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Confirmed records and review range",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.CreateRecognitionReviewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.CreateRecognitionReviewResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{session_id}/recognition-reviews/{run_id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get a recognition diagnosis",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Diagnosis ID",
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.RecognitionReviewRunResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{session_id}/share-context": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get a read-only workout context for explicit external sharing",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Owned profile ID",
+                        "name": "profile_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA timezone (default Asia/Seoul)",
+                        "name": "timezone",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.WorkoutShareContextResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/sessions/{session_id}/workout-progress": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get chronological workout observations",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.WorkoutProgressResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/strategies/pre-wod-advice": {
+            "post": {
+                "description": "Calculates 6-muscle group readiness from recent workouts and returns tailored coaching advice for today's WOD.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "strategy"
+                ],
+                "summary": "Get Pre-WOD Strategy \u0026 Scaling Advice",
+                "parameters": [
+                    {
+                        "description": "Pre-WOD Advice Request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.PreWODAdviceRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.PreWODAdviceResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.ErrorResponse"
                         }
                     }
                 }
@@ -805,58 +1319,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/verify-highlights": {
-            "post": {
-                "description": "Triggers verification of highlight segments to detect hallucinated movements",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "highlight"
-                ],
-                "summary": "Verify Highlights",
-                "parameters": [
-                    {
-                        "description": "Session ID",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/controllers.VerifyHighlightsRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "202": {
-                        "description": "Accepted",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/video-download/:session_id": {
             "get": {
-                "description": "Returns a time-limited signed URL for downloading the merged or hardsubbed video",
+                "description": "Returns a time-limited signed URL for one requested video kind",
                 "produces": [
                     "application/json"
                 ],
@@ -874,7 +1339,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Video kind: merged (default) or hardsubbed",
+                        "description": "Video kind: merged (default), hardsubbed, or encoded",
                         "name": "kind",
                         "in": "query"
                     }
@@ -906,198 +1371,6 @@ const docTemplate = `{
                     }
                 }
             }
-        },
-        "/sessions/{session_id}/workout-progress": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "analysis"
-                ],
-                "summary": "Get chronological workout observations",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Owned session ID",
-                        "name": "session_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.WorkoutProgressResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/sessions/{session_id}/performance-records": {
-            "put": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "analysis"
-                ],
-                "summary": "Confirm workout performance records",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Owned session ID",
-                        "name": "session_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Confirm interval, window, integer reps and actual load (or explicit null for no external load)",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/controllers.PerformanceRecordsRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.WorkoutProgressResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/performance-benchmarks": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "analysis"
-                ],
-                "summary": "Get confirmed workout performance benchmarks",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "Owned profile ID",
-                        "name": "profile_id",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Canonical movement or recognized alias",
-                        "name": "movement",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/controllers.PerformanceBenchmarksResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
         }
     },
     "definitions": {
@@ -1113,6 +1386,9 @@ const docTemplate = `{
                 "end_secs": {
                     "type": "number"
                 },
+                "movement": {
+                    "type": "string"
+                },
                 "reason": {
                     "type": "string"
                 },
@@ -1126,6 +1402,9 @@ const docTemplate = `{
             "properties": {
                 "end_secs": {
                     "type": "number"
+                },
+                "movement": {
+                    "type": "string"
                 },
                 "reason": {
                     "type": "string"
@@ -1265,6 +1544,14 @@ const docTemplate = `{
                 }
             }
         },
+        "controllers.AppearanceInput": {
+            "type": "object",
+            "properties": {
+                "appearance": {
+                    "type": "string"
+                }
+            }
+        },
         "controllers.ChunkAnalysisSummaryResponse": {
             "type": "object",
             "properties": {
@@ -1288,6 +1575,12 @@ const docTemplate = `{
                 "appearance_hints": {
                     "type": "string"
                 },
+                "capture_order": {
+                    "type": "integer"
+                },
+                "client_chunk_id": {
+                    "type": "string"
+                },
                 "end_secs": {
                     "type": "number"
                 },
@@ -1304,6 +1597,9 @@ const docTemplate = `{
                     }
                 },
                 "live_analysis_version": {
+                    "type": "integer"
+                },
+                "media_pipeline_version": {
                     "type": "integer"
                 },
                 "movements": {
@@ -1336,6 +1632,9 @@ const docTemplate = `{
         "controllers.CompleteUploadRequest": {
             "type": "object",
             "properties": {
+                "appearance_hints": {
+                    "type": "string"
+                },
                 "enable_tts": {
                     "type": "boolean"
                 },
@@ -1353,6 +1652,9 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "pipeline_mode": {
+                    "type": "string"
                 },
                 "profile_id": {
                     "type": "integer"
@@ -1379,6 +1681,43 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "task_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.CreateRecognitionReviewRequest": {
+            "type": "object",
+            "properties": {
+                "client_request_id": {
+                    "type": "string"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "evaluation_fingerprint": {
+                    "type": "string"
+                },
+                "record_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "source_version": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "controllers.CreateRecognitionReviewResponse": {
+            "type": "object",
+            "properties": {
+                "run_id": {
+                    "type": "integer"
+                },
+                "status": {
                     "type": "string"
                 }
             }
@@ -1486,54 +1825,37 @@ const docTemplate = `{
                 }
             }
         },
-        "controllers.GenerateHardSubRequest": {
+        "controllers.ListRecognitionReviewsResponse": {
             "type": "object",
             "properties": {
-                "enable_tts": {
-                    "type": "boolean"
-                },
-                "profile_id": {
+                "active_run_id": {
                     "type": "integer"
                 },
-                "session_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "controllers.GenerateHardSubResponse": {
-            "type": "object",
-            "properties": {
-                "message": {
-                    "type": "string"
-                },
-                "session_id": {
-                    "type": "string"
-                },
-                "task_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "controllers.GenerateHighlightRequest": {
-            "type": "object",
-            "properties": {
-                "max_duration": {
-                    "description": "seconds, default 60",
-                    "type": "integer"
-                },
-                "profile_id": {
-                    "type": "integer"
-                },
-                "session_id": {
-                    "type": "string"
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.RecognitionReviewRunResponse"
+                    }
                 }
             }
         },
         "controllers.MergeChunksRequest": {
             "type": "object",
             "properties": {
+                "appearance_hints": {
+                    "type": "string"
+                },
+                "chunks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.RecordingMediaReceiptInput"
+                    }
+                },
                 "enable_tts": {
                     "type": "boolean"
+                },
+                "expected_chunk_count": {
+                    "type": "integer"
                 },
                 "injuries": {
                     "type": "array",
@@ -1541,11 +1863,17 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "media_pipeline_version": {
+                    "type": "integer"
+                },
                 "movements": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
+                },
+                "pipeline_mode": {
+                    "type": "string"
                 },
                 "profile_id": {
                     "type": "integer"
@@ -1565,6 +1893,9 @@ const docTemplate = `{
         "controllers.MergeChunksResponse": {
             "type": "object",
             "properties": {
+                "media_run_id": {
+                    "type": "string"
+                },
                 "message": {
                     "type": "string"
                 },
@@ -1610,6 +1941,75 @@ const docTemplate = `{
                 }
             }
         },
+        "controllers.PerformanceBenchmarksResponse": {
+            "type": "object",
+            "properties": {
+                "best": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                },
+                "comparisons": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Comparison"
+                    }
+                },
+                "records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                }
+            }
+        },
+        "controllers.PerformanceConfirmationInput": {
+            "type": "object",
+            "properties": {
+                "end_secs": {
+                    "type": "number"
+                },
+                "interval_id": {
+                    "type": "string"
+                },
+                "load": {
+                    "type": "object"
+                },
+                "measurement": {
+                    "type": "string"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "outcome": {
+                    "type": "string"
+                },
+                "reps": {
+                    "type": "integer"
+                },
+                "start_secs": {
+                    "type": "number"
+                },
+                "technique": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.PerformanceRecordsRequest": {
+            "type": "object",
+            "properties": {
+                "records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.PerformanceConfirmationInput"
+                    }
+                },
+                "source_version": {
+                    "type": "string"
+                }
+            }
+        },
         "controllers.PlayURLResponse": {
             "type": "object",
             "properties": {
@@ -1639,28 +2039,311 @@ const docTemplate = `{
                 }
             }
         },
-        "controllers.RetryAnalysisRequest": {
+        "controllers.PreWODAdviceRequest": {
             "type": "object",
+            "required": [
+                "profile_id"
+            ],
             "properties": {
+                "movements": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "profile_id": {
                     "type": "integer"
                 },
-                "session_id": {
+                "wod_description": {
                     "type": "string"
                 }
             }
         },
-        "controllers.RetryAnalysisResponse": {
+        "controllers.PreWODAdviceResponse": {
             "type": "object",
             "properties": {
+                "advice_code": {
+                    "type": "string"
+                },
+                "as_of": {
+                    "type": "string"
+                },
+                "effort_reflection": {
+                    "$ref": "#/definitions/fatigue.EffortReflectionInfo"
+                },
+                "effort_reflection_reason": {
+                    "type": "string"
+                },
+                "evidence": {
+                    "$ref": "#/definitions/fatigue.EvidenceCounts"
+                },
+                "evidence_status": {
+                    "type": "string"
+                },
+                "history_revision": {
+                    "type": "string"
+                },
+                "last_workout_at": {
+                    "type": "string"
+                },
+                "mobility_warmup": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/fatigue.MobilityWarmupItem"
+                    }
+                },
+                "muscle_readiness": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/fatigue.MuscleReadinessItem"
+                    }
+                },
+                "overall_fatigue_score": {
+                    "type": "integer"
+                },
+                "overall_state": {
+                    "type": "string"
+                },
+                "overall_state_ko": {
+                    "type": "string"
+                },
+                "overall_summary": {
+                    "type": "string"
+                },
+                "profile_id": {
+                    "type": "integer"
+                },
+                "scaling_advice": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/fatigue.ScalingAdviceItem"
+                    }
+                },
+                "target_rpe": {
+                    "$ref": "#/definitions/fatigue.TargetRPEInfo"
+                }
+            }
+        },
+        "controllers.RecognitionReviewBatchResponse": {
+            "type": "object",
+            "properties": {
+                "core_end_secs": {
+                    "type": "number"
+                },
+                "core_start_secs": {
+                    "type": "number"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/recognitionreview.Finding"
+                    }
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "input_tokens": {
+                    "type": "integer"
+                },
+                "output_tokens": {
+                    "type": "integer"
+                },
+                "record_id": {
+                    "type": "integer"
+                },
+                "start_secs": {
+                    "type": "number"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "total_tokens": {
+                    "type": "integer"
+                }
+            }
+        },
+        "controllers.RecognitionReviewRunResponse": {
+            "type": "object",
+            "properties": {
+                "batches": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.RecognitionReviewBatchResponse"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "duration_ms": {
+                    "type": "integer"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "evaluation": {
+                    "$ref": "#/definitions/recognitionreview.Evaluation"
+                },
+                "evaluation_fingerprint": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "input_tokens": {
+                    "type": "integer"
+                },
+                "model": {
+                    "type": "string"
+                },
+                "outdated": {
+                    "type": "boolean"
+                },
+                "output_tokens": {
+                    "type": "integer"
+                },
+                "prompt_version": {
+                    "type": "string"
+                },
+                "record_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "schema_version": {
+                    "type": "string"
+                },
+                "source_version": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "total_tokens": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.RecordingMediaChunkReceipt": {
+            "type": "object",
+            "properties": {
+                "chunk_id": {
+                    "type": "string"
+                },
+                "gcs_uri": {
+                    "type": "string"
+                },
+                "media_run_id": {
+                    "type": "string"
+                },
                 "message": {
                     "type": "string"
                 },
                 "session_id": {
                     "type": "string"
                 },
+                "source_generation": {
+                    "type": "string"
+                },
                 "task_id": {
                     "type": "string"
+                }
+            }
+        },
+        "controllers.RecordingMediaReceiptInput": {
+            "type": "object",
+            "properties": {
+                "chunk_id": {
+                    "type": "string"
+                },
+                "source_generation": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.RelatedWODItem": {
+            "type": "object",
+            "properties": {
+                "analysis_id": {
+                    "type": "integer"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "movement": {
+                    "$ref": "#/definitions/db.NormalizedMovement"
+                },
+                "score": {
+                    "type": "number"
+                },
+                "score_parts": {
+                    "$ref": "#/definitions/controllers.ScoreParts"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "session_score": {
+                    "type": "string"
+                },
+                "wod_description": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.RelatedWODQuery": {
+            "type": "object",
+            "properties": {
+                "movement": {
+                    "type": "string"
+                },
+                "source_session_id": {
+                    "type": "string"
+                },
+                "weight_kg": {
+                    "type": "number"
+                }
+            }
+        },
+        "controllers.RelatedWODsResponse": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "$ref": "#/definitions/controllers.RelatedWODQuery"
+                },
+                "related": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.RelatedWODItem"
+                    }
+                }
+            }
+        },
+        "controllers.ScoreParts": {
+            "type": "object",
+            "properties": {
+                "main": {
+                    "type": "number"
+                },
+                "recency": {
+                    "type": "number"
+                },
+                "weight": {
+                    "type": "number"
                 }
             }
         },
@@ -1750,14 +2433,6 @@ const docTemplate = `{
                 }
             }
         },
-        "controllers.VerifyHighlightsRequest": {
-            "type": "object",
-            "properties": {
-                "session_id": {
-                    "type": "string"
-                }
-            }
-        },
         "controllers.VideoDownloadURLResponse": {
             "type": "object",
             "properties": {
@@ -1774,6 +2449,178 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "session_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.WorkoutProgressResponse": {
+            "type": "object",
+            "properties": {
+                "progress": {
+                    "$ref": "#/definitions/workoutprogress.Progress"
+                },
+                "records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                }
+            }
+        },
+        "controllers.WorkoutShareContextResponse": {
+            "type": "object",
+            "properties": {
+                "baseline_records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                },
+                "comparisons": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Comparison"
+                    }
+                },
+                "confirmed_records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                },
+                "effort": {
+                    "type": "integer"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.WorkoutShareObservation"
+                    }
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "sensor_summary": {
+                    "$ref": "#/definitions/controllers.WorkoutShareSensorSummary"
+                },
+                "session": {
+                    "$ref": "#/definitions/controllers.WorkoutShareSession"
+                },
+                "timezone": {
+                    "type": "string"
+                },
+                "unassessed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Gap"
+                    }
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "controllers.WorkoutShareObservation": {
+            "type": "object",
+            "properties": {
+                "activity": {
+                    "type": "string"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "form_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "load": {
+                    "$ref": "#/definitions/workoutprogress.Load"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "observed_reps": {
+                    "type": "integer"
+                },
+                "pace_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "rom_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "controllers.WorkoutShareSensorSummary": {
+            "type": "object",
+            "properties": {
+                "avg_bpm": {
+                    "type": "number"
+                },
+                "calculation_version": {
+                    "type": "integer"
+                },
+                "coverage": {
+                    "type": "number"
+                },
+                "excluded_seconds": {
+                    "type": "number"
+                },
+                "peak_bpm": {
+                    "type": "number"
+                },
+                "quality_status": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "unknown_seconds": {
+                    "type": "number"
+                },
+                "valid_seconds": {
+                    "type": "number"
+                }
+            }
+        },
+        "controllers.WorkoutShareSession": {
+            "type": "object",
+            "properties": {
+                "performed_at": {
+                    "type": "string"
+                },
+                "performed_at_source": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "source_version": {
+                    "type": "string"
+                },
+                "workout_prescription": {
+                    "type": "string"
+                },
+                "workout_type": {
                     "type": "string"
                 }
             }
@@ -1801,11 +2648,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "heart_rate_bpm": {
-                    "description": "BLE heart rate at chunk capture time (0 = unavailable)",
+                    "description": "BLE heart rate associated with the chunk; exact sample time is unavailable (0 = unavailable)",
                     "type": "integer"
                 },
                 "id": {
                     "type": "integer"
+                },
+                "media_end_secs": {
+                    "type": "number"
+                },
+                "media_start_secs": {
+                    "type": "number"
+                },
+                "motion_score": {
+                    "type": "number"
                 },
                 "movement_observations": {
                     "type": "object"
@@ -1823,11 +2679,20 @@ const docTemplate = `{
                 "session_id": {
                     "type": "string"
                 },
+                "skip_reason": {
+                    "type": "string"
+                },
                 "start_secs": {
                     "type": "number"
                 },
                 "status": {
                     "description": "PENDING, COMPLETED, FAILED",
+                    "type": "string"
+                },
+                "target_confidence": {
+                    "type": "number"
+                },
+                "target_cues": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -1887,54 +2752,452 @@ const docTemplate = `{
                 }
             }
         },
-        "controllers.WorkoutProgressResponse": {
+        "db.NormalizedMovement": {
             "type": "object",
             "properties": {
-                "progress": {
-                    "$ref": "#/definitions/workoutprogress.Progress"
+                "is_main": {
+                    "type": "boolean"
                 },
-                "records": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/workoutprogress.Record"
-                    }
-                }
-            }
-        },
-        "controllers.PerformanceRecordsRequest": {
-            "type": "object",
-            "properties": {
-                "records": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/controllers.PerformanceConfirmationInput"
-                    }
+                "movement": {
+                    "type": "string"
                 },
-                "source_version": {
+                "reps": {
+                    "type": "string"
+                },
+                "weight_kg": {
+                    "type": "number"
+                },
+                "weight_raw": {
                     "type": "string"
                 }
             }
         },
-        "controllers.PerformanceBenchmarksResponse": {
+        "fatigue.EffortReflectionInfo": {
             "type": "object",
             "properties": {
-                "best": {
+                "applied": {
+                    "type": "boolean"
+                },
+                "rated_count": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "recent_workouts": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/workoutprogress.Record"
+                        "$ref": "#/definitions/fatigue.RecentWorkoutSummary"
                     }
                 },
-                "comparisons": {
+                "sensor_count": {
+                    "type": "integer"
+                },
+                "total_recent": {
+                    "type": "integer"
+                }
+            }
+        },
+        "fatigue.EvidenceCounts": {
+            "type": "object",
+            "properties": {
+                "excluded_sessions": {
+                    "type": "integer"
+                },
+                "total_sessions": {
+                    "type": "integer"
+                },
+                "unresolved_time_sessions": {
+                    "type": "integer"
+                },
+                "valid_sessions": {
+                    "type": "integer"
+                }
+            }
+        },
+        "fatigue.HybridSensorBrief": {
+            "type": "object",
+            "properties": {
+                "calibration_version": {
+                    "type": "string"
+                },
+                "data_coverage": {
+                    "type": "number"
+                },
+                "heart_intensity": {
+                    "type": "number"
+                },
+                "hybrid_intensity": {
+                    "type": "number"
+                },
+                "hybrid_load_au": {
+                    "type": "number"
+                },
+                "motion_intensity": {
+                    "type": "number"
+                }
+            }
+        },
+        "fatigue.MobilityWarmupItem": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "target_area": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "fatigue.MuscleReadinessItem": {
+            "type": "object",
+            "properties": {
+                "fatigue_score": {
+                    "type": "integer"
+                },
+                "group": {
+                    "type": "string"
+                },
+                "name_ko": {
+                    "type": "string"
+                },
+                "note": {
+                    "type": "string"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "state_ko": {
+                    "type": "string"
+                }
+            }
+        },
+        "fatigue.RecentWorkoutSummary": {
+            "type": "object",
+            "properties": {
+                "duration_seconds": {
+                    "type": "integer"
+                },
+                "effort": {
+                    "type": "integer"
+                },
+                "hybrid_sensor": {
+                    "$ref": "#/definitions/fatigue.HybridSensorBrief"
+                },
+                "hybrid_sensor_excluded_reason": {
+                    "type": "string"
+                },
+                "movements": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/workoutprogress.Comparison"
+                        "type": "string"
                     }
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "workout_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "fatigue.ScalingAdviceItem": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "recommendation": {
+                    "type": "string"
+                }
+            }
+        },
+        "fatigue.TargetRPEInfo": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "pacing_strategy": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "integer"
+                }
+            }
+        },
+        "recognitionreview.Evaluation": {
+            "type": "object",
+            "properties": {
+                "fingerprint": {
+                    "type": "string"
                 },
                 "records": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/workoutprogress.Record"
+                        "$ref": "#/definitions/recognitionreview.RecordEvaluation"
                     }
+                },
+                "source_version": {
+                    "type": "string"
+                },
+                "summary": {
+                    "$ref": "#/definitions/recognitionreview.Summary"
+                }
+            }
+        },
+        "recognitionreview.Finding": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string"
+                },
+                "difference": {
+                    "type": "string"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "evidence_level": {
+                    "type": "string"
+                },
+                "limitations": {
+                    "type": "string"
+                },
+                "original_evidence": {
+                    "type": "string"
+                },
+                "possible_reason": {
+                    "type": "string"
+                },
+                "stage": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                },
+                "visual_evidence": {
+                    "type": "string"
+                }
+            }
+        },
+        "recognitionreview.MovementCount": {
+            "type": "object",
+            "properties": {
+                "movement": {
+                    "type": "string"
+                },
+                "reps": {
+                    "type": "integer"
+                }
+            }
+        },
+        "recognitionreview.RecordEvaluation": {
+            "type": "object",
+            "properties": {
+                "evidence_complete": {
+                    "type": "boolean"
+                },
+                "gaps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Gap"
+                    }
+                },
+                "movement_match": {
+                    "type": "boolean",
+                    "x-nullable": true
+                },
+                "observed_complete_reps": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "predicted_movements": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/recognitionreview.MovementCount"
+                    }
+                },
+                "record": {
+                    "$ref": "#/definitions/workoutprogress.Record"
+                },
+                "reps_delta": {
+                    "type": "integer",
+                    "x-nullable": true
+                },
+                "source_refs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "recognitionreview.Summary": {
+            "type": "object",
+            "properties": {
+                "insufficient_evidence": {
+                    "type": "integer"
+                },
+                "matched": {
+                    "type": "integer"
+                },
+                "mismatch": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "workoutprogress.Comparison": {
+            "type": "object",
+            "properties": {
+                "baseline_record_id": {
+                    "type": "integer"
+                },
+                "condition_differences": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "current_record_id": {
+                    "type": "integer"
+                },
+                "heavier_load_baseline_record_id": {
+                    "type": "integer"
+                },
+                "heavier_load_kg": {
+                    "type": "number"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "rate_change_percent": {
+                    "type": "number"
+                }
+            }
+        },
+        "workoutprogress.Gap": {
+            "type": "object",
+            "properties": {
+                "clock": {
+                    "type": "string"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "workoutprogress.Interval": {
+            "type": "object",
+            "properties": {
+                "activity": {
+                    "type": "string"
+                },
+                "capture_end_secs": {
+                    "type": "number"
+                },
+                "capture_start_secs": {
+                    "type": "number"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "form_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "load": {
+                    "$ref": "#/definitions/workoutprogress.Load"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "observation_refs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "pace_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "rep_events": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/activity.Observation"
+                    }
+                },
+                "rom_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "workoutprogress.Load": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "unit": {
+                    "type": "string"
+                },
+                "value": {
+                    "type": "number"
+                }
+            }
+        },
+        "workoutprogress.Observation": {
+            "type": "object",
+            "properties": {
+                "end_secs": {
+                    "type": "number"
+                },
+                "evidence": {
+                    "type": "string"
+                },
+                "start_secs": {
+                    "type": "number"
                 }
             }
         },
@@ -2000,6 +3263,9 @@ const docTemplate = `{
                 "movement": {
                     "type": "string"
                 },
+                "outcome": {
+                    "type": "string"
+                },
                 "performed_at": {
                     "type": "string"
                 },
@@ -2038,262 +3304,6 @@ const docTemplate = `{
                 },
                 "workout_prescription": {
                     "type": "string"
-                }
-            }
-        },
-        "controllers.PerformanceConfirmationInput": {
-            "type": "object",
-            "properties": {
-                "end_secs": {
-                    "type": "number"
-                },
-                "interval_id": {
-                    "type": "string"
-                },
-                "load": {
-                    "type": "object"
-                },
-                "measurement": {
-                    "type": "string"
-                },
-                "reps": {
-                    "type": "integer"
-                },
-                "start_secs": {
-                    "type": "number"
-                },
-                "technique": {
-                    "type": "string"
-                }
-            }
-        },
-        "workoutprogress.Comparison": {
-            "type": "object",
-            "properties": {
-                "baseline_record_id": {
-                    "type": "integer"
-                },
-                "condition_differences": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "current_record_id": {
-                    "type": "integer"
-                },
-                "heavier_load_baseline_record_id": {
-                    "type": "integer"
-                },
-                "heavier_load_kg": {
-                    "type": "number"
-                },
-                "kind": {
-                    "type": "string"
-                },
-                "rate_change_percent": {
-                    "type": "number"
-                }
-            }
-        },
-        "workoutprogress.Interval": {
-            "type": "object",
-            "properties": {
-                "activity": {
-                    "type": "string"
-                },
-                "capture_end_secs": {
-                    "type": "number"
-                },
-                "capture_start_secs": {
-                    "type": "number"
-                },
-                "end_secs": {
-                    "type": "number"
-                },
-                "form_observations": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/workoutprogress.Observation"
-                    }
-                },
-                "id": {
-                    "type": "string"
-                },
-                "load": {
-                    "$ref": "#/definitions/workoutprogress.Load"
-                },
-                "movement": {
-                    "type": "string"
-                },
-                "observation_refs": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "pace_observations": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/workoutprogress.Observation"
-                    }
-                },
-                "rep_events": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/activity.Observation"
-                    }
-                },
-                "rom_observations": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/workoutprogress.Observation"
-                    }
-                },
-                "start_secs": {
-                    "type": "number"
-                }
-            }
-        },
-        "workoutprogress.Gap": {
-            "type": "object",
-            "properties": {
-                "clock": {
-                    "type": "string"
-                },
-                "end_secs": {
-                    "type": "number"
-                },
-                "movement": {
-                    "type": "string"
-                },
-                "reason": {
-                    "type": "string"
-                },
-                "start_secs": {
-                    "type": "number"
-                }
-            }
-        },
-        "workoutprogress.Load": {
-            "type": "object",
-            "properties": {
-                "basis": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "unit": {
-                    "type": "string"
-                },
-                "value": {
-                    "type": "number"
-                }
-            }
-        },
-        "workoutprogress.Observation": {
-            "type": "object",
-            "properties": {
-                "end_secs": {
-                    "type": "number"
-                },
-                "evidence": {
-                    "type": "string"
-                },
-                "start_secs": {
-                    "type": "number"
-                }
-            }
-        },
-        "controllers.RelatedWODQuery": {
-            "type": "object",
-            "properties": {
-                "movement": {
-                    "type": "string"
-                },
-                "source_session_id": {
-                    "type": "string"
-                },
-                "weight_kg": {
-                    "type": "number"
-                }
-            }
-        },
-        "controllers.ScoreParts": {
-            "type": "object",
-            "properties": {
-                "main": {
-                    "type": "number"
-                },
-                "recency": {
-                    "type": "number"
-                },
-                "weight": {
-                    "type": "number"
-                }
-            }
-        },
-        "db.NormalizedMovement": {
-            "type": "object",
-            "properties": {
-                "is_main": {
-                    "type": "boolean"
-                },
-                "movement": {
-                    "type": "string"
-                },
-                "reps": {
-                    "type": "string"
-                },
-                "weight_kg": {
-                    "type": "number"
-                },
-                "weight_raw": {
-                    "type": "string"
-                }
-            }
-        },
-        "controllers.RelatedWODItem": {
-            "type": "object",
-            "properties": {
-                "analysis_id": {
-                    "type": "integer"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "movement": {
-                    "$ref": "#/definitions/db.NormalizedMovement"
-                },
-                "score": {
-                    "type": "number"
-                },
-                "score_parts": {
-                    "$ref": "#/definitions/controllers.ScoreParts"
-                },
-                "session_id": {
-                    "type": "string"
-                },
-                "session_score": {
-                    "type": "string"
-                },
-                "wod_description": {
-                    "type": "string"
-                }
-            }
-        },
-        "controllers.RelatedWODsResponse": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "$ref": "#/definitions/controllers.RelatedWODQuery"
-                },
-                "related": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/controllers.RelatedWODItem"
-                    }
                 }
             }
         },

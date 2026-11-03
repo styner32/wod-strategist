@@ -1,15 +1,26 @@
 import React, { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { TacticalTheme } from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
+
+const T = TacticalTheme.light;
 import { confirmPerformanceRecords, getPerformanceBenchmarks, getWorkoutProgress } from "../api";
 import {
-  confirmedPerformanceInput, findCoveringConfirmedRecord, isDisplayableProgressGap, observedReps, performanceDraft, performanceSelectionCovered, progressTime, rememberedMovementDefaults, timelineProgressIntervals,
-  type MovementDraftDefaults, type PerformanceBenchmarksResponse, type PerformanceDraft, type PerformanceRecord,
+  confirmedPerformanceInput, findCoveringConfirmedRecord, isDisplayableProgressGap, normalizePerformanceOutcome, observedReps, performanceDraft, performanceSelectionCovered, progressTime, rememberedMovementDefaults, restSelectionCovered, timelineProgressIntervals,
+  type MovementDraftDefaults, type PerformanceBenchmarksResponse, type PerformanceDraft, type PerformanceOutcome, type PerformanceRecord,
   type WorkoutProgress, type WorkoutProgressInterval, type WorkoutProgressResponse,
 } from "../../../shared/workoutProgress";
 
 const label = (key: string, values?: Record<string, unknown>) => t(`workoutProgress.${key}`, values);
 const loadLabel = (record: { load?: PerformanceRecord["load"] }) => record.load ? `${record.load.value} ${record.load.unit} · ${label(record.load.basis)}` : label("none");
+function formatRecordSummary(record: PerformanceRecord): string {
+  const outcome = normalizePerformanceOutcome(record.outcome);
+  const duration = (record.elapsed_seconds ?? (record.end_secs - record.start_secs)).toFixed(1);
+  if (outcome === "rest") return label("recordSummaryRest", { duration });
+  if (outcome === "incomplete") return label("recordSummaryIncomplete", { load: loadLabel(record), duration });
+  if (record.reps == null) return label("recordSummaryNoCount", { load: loadLabel(record), duration });
+  return label("recordSummary", { count: record.reps, load: loadLabel(record), duration });
+}
 
 function RestCycleComparisons({ record }: { record: PerformanceRecord }) {
   if (record.status !== "confirmed") return null;
@@ -43,23 +54,59 @@ function RecordEditor({ interval, progress, record, initialDraft, movementDefaul
       onDraftChange?.(next);
       return next;
     });
+  const outcome = normalizePerformanceOutcome(draft.outcome);
   const field = (key: "start" | "end" | "reps" | "weight", title: string) => <View style={styles.field}>
     <Text style={styles.text}>{label(title)}</Text>
-    <TextInput accessibilityLabel={label(title)} keyboardType="decimal-pad" value={draft[key]} editable={!saving} onChangeText={v => update(key, v)} style={styles.input} />
+    <TextInput accessibilityLabel={label(title)} keyboardType="decimal-pad" placeholder={key === "reps" ? label("repsOptionalPlaceholder") : undefined} placeholderTextColor={T.inkMuted} value={draft[key]} editable={!saving} onChangeText={v => update(key, v)} style={styles.input} />
   </View>;
   function choices<K extends keyof PerformanceDraft>(key: K, values: PerformanceDraft[K][], title: string) {
     return <View style={styles.gap}><Text style={styles.text}>{label(title)}</Text><View style={styles.row}>{values.map(v => <Pressable accessibilityRole="button" accessibilityState={{ selected: draft[key] === v }} disabled={saving} key={String(v)} onPress={() => update(key, v)} style={[styles.button, draft[key] === v && styles.selected]}><Text style={styles.text}>{key === "unit" ? String(v) : label(String(v))}</Text></Pressable>)}</View></View>;
   }
+  const outcomeChoices: { value: PerformanceOutcome; labelKey: string }[] = [
+    { value: "completed", labelKey: "completed" },
+    { value: "incomplete", labelKey: "incomplete" },
+    { value: "rest", labelKey: "reclassifyRest" },
+  ];
   const valid = confirmedPerformanceInput(interval, draft, progress) != null;
   const start = Number(draft.start), end = Number(draft.end);
-  const canReview = draft.start.trim() !== "" && draft.end.trim() !== "" && performanceSelectionCovered(interval, start, end, draft.measurement, progress);
+  const canReview = draft.start.trim() !== "" && draft.end.trim() !== "" && (outcome === "rest" ? restSelectionCovered(interval, start, end, progress) : performanceSelectionCovered(interval, start, end, draft.measurement, progress));
   return <View style={styles.editor}>
     <Text style={styles.text}>{label("reviewHelp")}</Text>
-    <View style={styles.row}>{field("start", "start")}{field("end", "end")}{field("reps", "reps")}</View>
-    {choices("loadMode", ["unresolved", "none", "weighted"], "loadMode")}
-    {draft.loadMode === "weighted" && <>{field("weight", "weight")}{choices("unit", ["lb", "kg"], "unit")}{choices("basis", ["total", "per_implement"], "basis")}</>}
-    {choices("measurement", ["set", "window"], "measurement")}
-    {choices("technique", ["singles", "touch_and_go"], "technique")}
+    <View accessibilityRole="radiogroup" style={styles.gap}>
+      <Text style={styles.text}>{label("outcome")}</Text>
+      <View style={styles.row}>
+        {outcomeChoices.map(opt => (
+          <Pressable
+            key={opt.value}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: outcome === opt.value }}
+            disabled={saving}
+            onPress={() =>
+              setDraft(d => {
+                const next = {
+                  ...d,
+                  outcome: opt.value,
+                  ...(opt.value !== "completed" ? { reps: "" } : {}),
+                  reviewed: false,
+                };
+                onDraftChange?.(next);
+                return next;
+              })
+            }
+            style={[styles.button, outcome === opt.value && styles.selected]}
+          >
+            <Text style={styles.text}>{label(opt.labelKey)}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
+    <View style={styles.row}>{field("start", "start")}{field("end", "end")}{outcome === "completed" && field("reps", "reps")}</View>
+    {outcome !== "rest" && <>
+      {choices("loadMode", ["unresolved", "none", "weighted"], "loadMode")}
+      {draft.loadMode === "weighted" && <>{field("weight", "weight")}{choices("unit", ["lb", "kg"], "unit")}{choices("basis", ["total", "per_implement"], "basis")}</>}
+      {choices("measurement", ["set", "window"], "measurement")}
+      {choices("technique", ["singles", "touch_and_go"], "technique")}
+    </>}
     {onReviewVideo && <Pressable accessibilityRole="button" disabled={!canReview} onPress={() => onReviewVideo(start, end)} style={[styles.button, !canReview && styles.disabled]}><Text style={styles.text}>{label("selectedPlay")}</Text></Pressable>}
     <Pressable accessibilityRole="checkbox" accessibilityLabel={label("reviewed")} accessibilityState={{ checked: draft.reviewed }} disabled={saving} onPress={() => update("reviewed", !draft.reviewed)} style={styles.button}><Text style={styles.text}>{draft.reviewed ? "☑" : "☐"} {label("reviewed")}</Text></Pressable>
     {draft.reviewed && !valid && <Text accessibilityRole="alert" style={styles.error}>{label("invalid")}</Text>}
@@ -78,20 +125,20 @@ function BenchmarkHistory({ data, sessionId }: { data: PerformanceBenchmarksResp
       const heavierBaseline = records.find(b => b.id === comparison?.heavier_load_baseline_record_id);
       return <View key={r.id} style={styles.editor}>
         <Text style={styles.text}>{r.movement} · {r.performed_at ? new Date(r.performed_at).toLocaleDateString() : label("unknown")}</Text>
-        <Text style={styles.text}>{label("recordSummary", { count: r.reps, load: loadLabel(r), duration: (r.elapsed_seconds ?? (r.end_secs - r.start_secs)).toFixed(1) })}</Text>
+        <Text style={styles.text}>{formatRecordSummary(r)}</Text>
         <Text style={styles.text}>{label(r.measurement)} · {label(r.technique)} · {r.workout_prescription || label("unknown")}</Text>
-        <Text style={styles.text}>{label("rate", { value: Number.isFinite(r.reps_per_minute) ? r.reps_per_minute.toFixed(1) : label("unknown") })} · {label(r.rate_basis)}</Text>
+        <Text style={styles.text}>{label("rate", { value: r.reps_per_minute != null && Number.isFinite(r.reps_per_minute) ? r.reps_per_minute.toFixed(1) : label("unknown") })} · {r.rate_basis ? label(r.rate_basis) : label("unknown")}</Text>
         <Text style={styles.text}>{label("cycle", { value: r.median_cycle_seconds == null ? label("unknown") : r.median_cycle_seconds.toFixed(2) })}</Text>
         <RestCycleComparisons record={r} />
         {comparison && r.session_id === sessionId && <>
-          <Text style={styles.text}>{label(comparison.kind)}{baseline ? ` · ${baseline.reps} · ${loadLabel(baseline)}` : ""}</Text>
+          <Text style={styles.text}>{label(comparison.kind)}{baseline ? ` · ${baseline.reps ?? label("noCount")} · ${loadLabel(baseline)}` : ""}</Text>
           {comparison.condition_differences.length > 0 && <Text style={styles.text}>{label("difference")}: {comparison.condition_differences.map(d => label(`differences.${d}`)).join(", ")}</Text>}
           {comparison.rate_change_percent != null && <Text style={styles.text}>{label("change", { value: `${comparison.rate_change_percent >= 0 ? "+" : ""}${comparison.rate_change_percent.toFixed(1)}` })}</Text>}
-          {comparison.heavier_load_kg != null && comparison.heavier_load_kg > 0 && <Text style={styles.text}>{label("heavier", { value: comparison.heavier_load_kg.toFixed(1) })}{heavierBaseline ? ` · ${heavierBaseline.reps} · ${loadLabel(heavierBaseline)}` : ""}</Text>}
+          {comparison.heavier_load_kg != null && comparison.heavier_load_kg > 0 && <Text style={styles.text}>{label("heavier", { value: comparison.heavier_load_kg.toFixed(1) })}{heavierBaseline ? ` · ${heavierBaseline.reps ?? label("noCount")} · ${loadLabel(heavierBaseline)}` : ""}</Text>}
         </>}
       </View>;
     })}
-    {(data.best ?? []).map(r => <Text key={r.id} style={styles.text}>{label("best")}: {label("recordSummary", { count: r.reps, load: loadLabel(r), duration: (r.elapsed_seconds ?? (r.end_secs - r.start_secs)).toFixed(1) })} · {label("rate", { value: r.reps_per_minute.toFixed(1) })} · {label(r.measurement)} · {label(r.technique)} · {r.workout_prescription || label("unknown")}</Text>)}
+    {(data.best ?? []).map(r => <Text key={r.id} style={styles.text}>{label("best")}: {formatRecordSummary(r)} · {label("rate", { value: r.reps_per_minute != null && Number.isFinite(r.reps_per_minute) ? r.reps_per_minute.toFixed(1) : label("unknown") })} · {label(r.measurement)} · {label(r.technique)} · {r.workout_prescription || label("unknown")}</Text>)}
     <Text style={styles.text}>{label("scope")}</Text>
   </View>;
 }
@@ -143,7 +190,8 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
       const result = await confirmPerformanceRecords(sessionId, { source_version: data.progress.source_version, records: [record] });
       if (number !== request.current || activeScope.current !== scope) return;
       delete draftsRef.current[interval.id];
-      if (interval.movement?.trim()) {
+      const outcome = normalizePerformanceOutcome(record.outcome);
+      if (outcome !== "rest" && interval.movement?.trim()) {
         movementDefaultsRef.current[interval.movement.trim().toLowerCase()] = {
           loadMode: draft.loadMode,
           weight: draft.weight,
@@ -152,7 +200,9 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
           technique: draft.technique,
         };
       }
-      setData(result); setSelected(undefined); setMovement(interval.movement ?? ""); setNotice(label("saved"));
+      setData(result); setSelected(undefined);
+      if (outcome !== "rest" && interval.movement?.trim()) setMovement(interval.movement);
+      setNotice(label("saved"));
     } catch (e) {
       if (number !== request.current || activeScope.current !== scope) return;
       if ((e as { status?: number })?.status === 409) {
@@ -168,7 +218,7 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
     <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded(v => !v)}><Text style={styles.title}>{label("title")} · {expanded ? "−" : "+"}</Text></Pressable>
     {expanded && <>
       <Text style={styles.text}>{label("boundary")}</Text>
-      {loading && <ActivityIndicator accessibilityLabel={label("loading")} />}
+      {loading && <ActivityIndicator accessibilityLabel={label("loading")} color={T.electricBlue} />}
       {!!error && <><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Pressable accessibilityRole="button" onPress={() => setRevision(v => v + 1)} style={styles.button}><Text style={styles.text}>{label("refresh")}</Text></Pressable></>}
       {!!notice && <Text style={styles.text}>{notice}</Text>}
       {data && !data.progress && <Text style={styles.text}>{label("unavailable")}</Text>}
@@ -190,7 +240,7 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
           {interval.activity === "exercise" && <>
             <Text style={styles.text}>{label("observedReps", { count: observedReps(interval) ?? label("unknown") })}</Text>
             <Text style={styles.text}>{interval.load ? `${loadLabel(interval)} · ${label("candidate")}` : label("unknown")}</Text>
-            {record && <><Text style={[styles.text, record.status === "confirmed" && styles.confirmedBadge]}>{label(record.status === "confirmed" ? "confirmed" : "needsConfirmation")} · {progressTime(record.start_secs)}–{progressTime(record.end_secs)} · {label("recordSummary", { count: record.reps, load: loadLabel(record), duration: (record.elapsed_seconds ?? (record.end_secs - record.start_secs)).toFixed(1) })}</Text><RestCycleComparisons record={record} /></>}
+            {record && <><Text style={[styles.text, record.status === "confirmed" && styles.confirmedBadge]}>{label(record.status === "confirmed" ? "confirmed" : "needsConfirmation")} · {progressTime(record.start_secs)}–{progressTime(record.end_secs)} · {formatRecordSummary(record)}</Text><RestCycleComparisons record={record} /></>}
           </>}
           <View style={styles.row}>
             {onReviewVideo && <Pressable accessibilityRole="button" onPress={() => onReviewVideo(interval.start_secs, interval.end_secs)} style={styles.button}><Text style={styles.text}>{label("play")}</Text></Pressable>}
@@ -202,24 +252,82 @@ export function WorkoutProgressCard({ sessionId, profileId, onReviewVideo }: {
         </View>;
       })}
       {data?.progress?.unassessed.filter(isDisplayableProgressGap).map((gap, i) => <Text key={i} style={styles.error}>{label("unassessed")} · {label(gap.clock === "capture" ? "captureClock" : "mediaClock")} {progressTime(gap.start_secs)}–{progressTime(gap.end_secs)} · {label("unknown")}</Text>)}
-      {data?.records.filter(r => r.status === "needs_confirmation" && !data.progress?.intervals.some(i => i.id === r.interval_id)).map(r => <Text key={`stale:${r.id}`} style={styles.error}>{label("needsConfirmation")} · {r.movement} · {label("recordSummary", { count: r.reps, load: loadLabel(r), duration: (r.elapsed_seconds ?? (r.end_secs - r.start_secs)).toFixed(1) })}</Text>)}
+      {data?.records.filter(r => r.status === "needs_confirmation" && !data.progress?.intervals.some(i => i.id === r.interval_id)).map(r => <Text key={`stale:${r.id}`} style={styles.error}>{label("needsConfirmation")}{r.movement ? ` · ${r.movement}` : ""} · {formatRecordSummary(r)}</Text>)}
       {benchmarkError && <><Text accessibilityRole="alert" style={styles.error}>{label("benchmarkFailed")}</Text><Pressable accessibilityRole="button" onPress={() => setData(d => d ? { ...d } : d)} style={styles.button}><Text style={styles.text}>{label("retry")}</Text></Pressable></>}
       {benchmarks && <BenchmarkHistory data={benchmarks} sessionId={sessionId} />}
     </>}
   </View>;
 }
 const styles = StyleSheet.create({
-  card: { backgroundColor: "#1C1C1E", borderRadius: 12, padding: 12, marginVertical: 8, gap: 10 },
-  editor: { padding: 10, borderWidth: 1, borderColor: "#555", borderRadius: 8, gap: 8 },
-  confirmedEditor: { borderColor: "#2ea043", backgroundColor: "rgba(46, 160, 67, 0.12)" },
-  restRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: "#3a3a3c", borderRadius: 8, backgroundColor: "rgba(255,255,255,0.03)", gap: 8 },
-  restText: { color: "#999", fontSize: 11 },
-  compactButton: { paddingVertical: 4, paddingHorizontal: 8, borderWidth: 1, borderColor: "#555", borderRadius: 6 },
+  card: {
+    backgroundColor: T.surfaceMuted,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 12,
+    marginVertical: 8,
+    gap: 10,
+  },
+  editor: {
+    padding: 10,
+    borderWidth: 1,
+    borderColor: T.border,
+    borderRadius: 10,
+    backgroundColor: T.surface,
+    gap: 8,
+  },
+  confirmedEditor: {
+    borderColor: T.statusFreshBorder,
+    backgroundColor: T.statusFreshBg,
+  },
+  restRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: T.border,
+    borderRadius: 8,
+    backgroundColor: T.surface,
+    gap: 8,
+  },
+  restText: { color: T.inkMuted, fontSize: 11, flexShrink: 1 },
+  compactButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+    borderRadius: 6,
+    backgroundColor: T.surfaceMuted,
+  },
   headerRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 6 },
-  confirmedBadge: { color: "#4ade80", fontSize: 12, fontWeight: "600" },
-  gap: { gap: 8 }, title: { color: "#f4f4f4", fontWeight: "600", fontSize: 14 }, text: { color: "#ddd", fontSize: 12 },
-  row: { flexDirection: "row", flexWrap: "wrap", gap: 8 }, field: { gap: 4, minWidth: 95 },
-  input: { padding: 10, borderWidth: 1, borderColor: "#777", borderRadius: 6, color: "#fff" },
-  button: { padding: 10, borderWidth: 1, borderColor: "#666", borderRadius: 8 }, selected: { backgroundColor: "#3868b0" },
-  error: { color: "#ffbe72" }, disabled: { opacity: 0.4 },
+  confirmedBadge: { color: T.statusFresh, fontSize: 12, fontWeight: "700" },
+  gap: { gap: 8 },
+  title: { color: T.ink, fontWeight: "800", fontSize: 14, flexShrink: 1 },
+  text: { color: T.inkSecondary, fontSize: 12, flexShrink: 1 },
+  row: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  field: { gap: 4, minWidth: 95 },
+  input: {
+    padding: 10,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+    borderRadius: 8,
+    color: T.ink,
+    backgroundColor: T.surfaceMuted,
+  },
+  button: {
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: T.borderStrong,
+    borderRadius: 8,
+    backgroundColor: T.surface,
+  },
+  selected: {
+    backgroundColor: T.electricBlueBg,
+    borderColor: T.electricBlue,
+  },
+  error: { color: T.statusWarning, fontWeight: "600", fontSize: 12 },
+  disabled: { opacity: 0.45 },
 });

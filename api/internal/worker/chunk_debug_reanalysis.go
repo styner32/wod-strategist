@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,7 +149,7 @@ func NewChunkDebugReanalysisTask(runID uint) (*asynq.Task, error) {
 
 // HandleChunkDebugReanalysisTask analyzes one exact media interval and stores a
 // debug candidate without touching production chunk or final-analysis rows.
-func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq.Task) error {
+func (w *Worker) handleChunkDebugReanalysisTask(ctx context.Context, task *asynq.Task) error {
 	started := time.Now()
 	var payload ChunkDebugReanalysisPayload
 	if err := json.Unmarshal(task.Payload(), &payload); err != nil || payload.RunID == 0 {
@@ -179,7 +180,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 	}
 
 	now := time.Now().UTC()
-	claim := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).
+	claim := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).
 		Where("id = ? AND status = ?", run.ID, db.ChunkReanalysisStatusQueued).
 		Updates(map[string]any{
 			"status":     db.ChunkReanalysisStatusRunning,
@@ -213,7 +214,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 			db.ChunkReanalysisStatusVideoUnavailable, "The session video could not be loaded.", err)
 	}
 
-	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", run.ID).Updates(map[string]any{
 		"source_kind":      media.Kind,
 		"source_gcs_uri":   media.GCSURI,
 		"media_start_secs": media.Start.Seconds(),
@@ -264,7 +265,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 	if reusePrevious && media.End > media.Start {
 		if cached, ok := w.findReusableChunkDebugCandidate(ctx, &run, selectedModel, reusableHashes, media); ok {
 			contextSnapshot := buildSnapshot(media)
-			if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+			if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", run.ID).Updates(map[string]any{
 				"source_context_snapshot": string(contextSnapshot),
 				"media_start_secs":        media.Start.Seconds(),
 				"media_end_secs":          media.End.Seconds(),
@@ -324,7 +325,7 @@ func (w *Worker) HandleChunkDebugReanalysisTask(ctx context.Context, task *asynq
 	plannedMode := chunkDebugAnalysisMode(file.LocalPath != "", media.End-media.Start)
 	promptHashHex := chunkDebugPromptHash(prompt, plannedMode)
 
-	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", run.ID).Updates(map[string]any{
 		"source_context_snapshot": string(contextSnapshot),
 		"media_start_secs":        media.Start.Seconds(),
 		"media_end_secs":          media.End.Seconds(),
@@ -668,7 +669,7 @@ func (w *Worker) prepareChunkDebugGeminiFile(ctx context.Context, run *db.ChunkR
 		return reusableGeminiFile{}, uploadBytes, fmt.Errorf("upload debug source: %w", err)
 	}
 	expires := time.Now().UTC().Add(geminiFileCacheTTL)
-	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", run.ID).Updates(map[string]any{
 		"gemini_file_uri":        upload.FileURI,
 		"gemini_file_name":       upload.FileName,
 		"gemini_mime_type":       upload.MIMEType,
@@ -788,7 +789,11 @@ func (w *Worker) buildChunkDebugReanalysisPrompt(target *chunkDebugTarget) strin
 	if wod := buildWODContext(target.WODDescription); wod != "" {
 		prompt += wod
 	}
-	prompt += buildMovementHintsContext(movementHintsFromDocument(target.MovementHints))
+	hints := normalizeMovementHintsForWOD(movementHintsFromDocument(target.MovementHints), target.WODDescription)
+	prompt += buildMovementHintsContext(hints)
+	if w.hasChunkTravelingPolicyContext(target.ProfileID, target.SessionID, hints, target.WODDescription) {
+		prompt += TravelingMovementPolicyPrompt
+	}
 	if target.ProfileInjuries != nil && strings.TrimSpace(*target.ProfileInjuries) != "" {
 		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(영상에서 해당 부위의 위험한 자세가 직접 보일 때만 경고하세요.)", *target.ProfileInjuries)
 	}
@@ -829,7 +834,7 @@ func parseChunkDebugCandidate(analysis string) chunkDebugCandidate {
 
 func (w *Worker) failChunkDebugRun(ctx context.Context, run *db.ChunkReanalysisRun, retryCount int, started time.Time, terminalStatus, safeError string, cause error) error {
 	if retryCount < chunkDebugMaxRetries {
-		_ = w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+		_ = w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", run.ID).Updates(map[string]any{
 			"status":      db.ChunkReanalysisStatusQueued,
 			"safe_error":  "",
 			"duration_ms": time.Since(started).Milliseconds(),
@@ -848,7 +853,7 @@ func (w *Worker) completeChunkDebugRun(ctx context.Context, runID uint, status s
 	values["status"] = status
 	values["duration_ms"] = time.Since(started).Milliseconds()
 	values["completed_at"] = now
-	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("id = ?", runID).Updates(values).Error; err != nil {
+	if err := w.DB.WithContext(ctx).Model(&db.ChunkReanalysisRun{}).Where("status IN ?", []string{"QUEUED", "RUNNING"}).Where("id = ?", runID).Updates(values).Error; err != nil {
 		w.logger.Error("failed to persist terminal chunk re-analysis state", zap.Uint("run_id", runID), zap.Error(err))
 		return fmt.Errorf("persist terminal chunk re-analysis state: %w", err)
 	}
@@ -857,7 +862,7 @@ func (w *Worker) completeChunkDebugRun(ctx context.Context, runID uint, status s
 
 func isChunkReanalysisTerminal(status string) bool {
 	switch status {
-	case db.ChunkReanalysisStatusCompleted,
+	case "CANCELLED", db.ChunkReanalysisStatusCompleted,
 		db.ChunkReanalysisStatusFailed,
 		db.ChunkReanalysisStatusVideoUnavailable,
 		db.ChunkReanalysisStatusIntervalUnavailable:
@@ -883,7 +888,7 @@ func debugMediaIntervalValid(start, end *float64) bool {
 }
 
 func secondsDuration(seconds float64) time.Duration {
-	return time.Duration(seconds * float64(time.Second))
+	return time.Duration(math.Round(seconds * float64(time.Second)))
 }
 
 func nullablePositiveDurationSeconds(duration time.Duration) any {

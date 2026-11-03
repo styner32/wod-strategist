@@ -29,7 +29,7 @@ var _ = Describe("Sensor Handlers", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 		transport = testhelpers.NewMockTransport()
 		storage, err := testhelpers.NewStorageClientWithSigning("test-bucket", transport)
 		Expect(err).NotTo(HaveOccurred())
@@ -380,7 +380,12 @@ var _ = Describe("Sensor Handlers", func() {
 })
 
 var _ = Describe("POST /api/v1/sessions/:session_id/sensor-upload calculation version", func() {
-	BeforeEach(func() { ensureTestDB(); testhelpers.CleanupDB(dbConn); testhelpers.CleanupQueue(inspector) })
+	BeforeEach(func() {
+		ensureTestDB()
+		testhelpers.CleanupDB(dbConn)
+		testhelpers.FlushRedis()
+	})
+
 	It("pins version two or three per request and defaults legacy requests to version one", func() {
 		storage, err := testhelpers.NewStorageClientWithSigning("test-bucket", testhelpers.NewMockTransport())
 		Expect(err).NotTo(HaveOccurred())
@@ -439,7 +444,7 @@ var _ = Describe("POST /api/v1/sessions/:session_id/sensor-reprocess", func() {
 	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
-		testhelpers.CleanupQueue(inspector)
+		testhelpers.FlushRedis()
 		storage, err := testhelpers.NewStorageClientWithSigning("test-bucket", testhelpers.NewMockTransport())
 		Expect(err).NotTo(HaveOccurred())
 		router = newTestRouterWithAuthService(controllers.Config{StorageClient: storage})
@@ -508,4 +513,3 @@ var _ = Describe("POST /api/v1/sessions/:session_id/sensor-reprocess", func() {
 		Expect(procAfter.LastErrorCode).To(BeNil())
 	})
 })
-

@@ -3,12 +3,18 @@ import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { EnvironmentHistoryCard, EnvironmentLiveCard } from '../EnvironmentCard';
 import { listSessions, readRecords } from '../store';
 import { reanalyzeObservation, reviewObservation } from '../review';
+import { readEligibleEnvironmentHistory } from '../eligibleHistory';
+jest.mock('expo-router', () => ({ useFocusEffect: (callback: () => unknown) => require('react').useEffect(callback, [callback]) }));
+jest.mock('../../auth/useAuthStore', () => ({ useAuthStore: Object.assign((selector: (s: any) => unknown) => selector({ userId: 1 }), { getState: () => ({ userId: 1, isLoggedIn: true }) }) }));
+jest.mock('../../wod/archiveStates', () => ({ subscribeHistoryChanges: () => () => {} }));
+jest.mock('../eligibleHistory', () => ({ readEligibleEnvironmentHistory: jest.fn(async () => []) }));
 jest.mock('../store', () => ({ listSessions: jest.fn(async () => []), readRecords: jest.fn(async () => []), evidencePath:jest.fn(), deleteEnvironmentSession:jest.fn() }));
 jest.mock('../review', () => ({ reanalyzeObservation:jest.fn(),reviewObservation:jest.fn(),summarizeHabits:jest.fn() }));
 jest.mock('../../i18n', () => ({ t:(key:string) => key,useLocale:() => 'ko' }));
-jest.mock('../../../store/useProfileStore', () => ({ useProfileId:() => 7 }));
+let mockActiveProfile = 7;
+jest.mock('../../../store/useProfileStore', () => ({ useProfileId:() => mockActiveProfile }));
 jest.mock('expo-video', () => ({ VideoView:() => null,useVideoPlayer:jest.fn() }));
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => { jest.clearAllMocks(); mockActiveProfile=7; });
 it('does not read historical files, mount evidence or invoke models merely by showing a history row', () => {
   const view=render(<EnvironmentHistoryCard sessionId="session" profileId={7} />);
   expect(listSessions).not.toHaveBeenCalled();expect(readRecords).not.toHaveBeenCalled();
@@ -23,7 +29,7 @@ it('loads local data only on demand and labels the lack of evidence', async () =
 });
 
 it('saves explicit target and behavior confirmation without modifying the AI response', async () => {
-  const session = {id:'bundle',sessionId:'session',profileId:7};
+  const session = {id:'bundle',sessionId:'session',profileId:7,ownerUserId:1};
   const r = {id:'record',sessionId:'session',kind:'behavior',source:'FoundationModels',outcome:'success',context:{appearanceHints:''},raw:'Sample 1: hand on bar.',evidence:[],startedAt:1,completedAt:2,promptVersion:2,responseFormat:'text',validation:'not_applicable'};
   jest.mocked(listSessions).mockResolvedValue([session as any]);
   jest.mocked(readRecords).mockResolvedValue([r as any]);
@@ -43,7 +49,7 @@ it('saves explicit target and behavior confirmation without modifying the AI res
 it('shows both original and reanalysis answers without starting another model request', async () => {
   const original = {id:'original',kind:'camera',source:'FoundationModels',outcome:'success',context:{appearanceHints:'black top'},raw:'Original answer',prompt:'Original question',evidence:[],startedAt:1,promptVersion:1};
   const child = {...original,id:'child',parentId:'original',startedAt:2,raw:'New answer',prompt:'New question',promptVersion:2,responseFormat:'text'};
-  jest.mocked(listSessions).mockResolvedValue([{id:'bundle',sessionId:'session',profileId:7} as any]);
+  jest.mocked(listSessions).mockResolvedValue([{id:'bundle',sessionId:'session',profileId:7,ownerUserId:1} as any]);
   jest.mocked(readRecords).mockResolvedValue([original as any,child as any]);
   const view=render(<EnvironmentHistoryCard sessionId="session" profileId={7} />);
   fireEvent.press(view.getByText('environment.history'));
@@ -60,4 +66,37 @@ it('renders EnvironmentLiveCard with title and status', () => {
   const view = render(<EnvironmentLiveCard status="waiting" />);
   expect(view.getByText('environment.title')).toBeTruthy();
   expect(view.getByText('environment.status.waiting')).toBeTruthy();
+});
+
+it('keeps raw observations available when archive verification is offline', async () => {
+  jest.mocked(listSessions).mockResolvedValue([{id:'bundle',sessionId:'session',profileId:7,ownerUserId:1} as any]);
+  jest.mocked(readRecords).mockResolvedValue([{id:'raw',kind:'camera',startedAt:1,completedAt:2,raw:'Raw stays available',evidence:[],context:{appearanceHints:''}} as any]);
+  jest.mocked(readEligibleEnvironmentHistory).mockRejectedValueOnce(new Error('offline'));
+  const view=render(<EnvironmentHistoryCard sessionId="session" profileId={7} />);
+  fireEvent.press(view.getByText('environment.history'));
+  await waitFor(() => expect(view.getByText('environment.archiveVerificationUnavailable')).toBeTruthy());
+  expect(view.getByText('Raw stays available')).toBeTruthy();
+  expect(view.queryByText('environment.summarize')).toBeNull();
+});
+
+it('ignores a previous profile action completion without reloading old-profile files', async () => {
+  const session = {id:'bundle',sessionId:'session',profileId:7,ownerUserId:1};
+  const record = {id:'original',kind:'camera',source:'FoundationModels',outcome:'success',context:{appearanceHints:'blue'},raw:'Original answer',evidence:[{filename:'photo',mime:'image/jpeg'}],startedAt:1,promptVersion:1};
+  jest.mocked(listSessions).mockResolvedValue([session as any]);
+  jest.mocked(readRecords).mockResolvedValue([record as any]);
+  let finish!: () => void;
+  jest.mocked(reanalyzeObservation).mockImplementationOnce(() => new Promise(resolve => { finish=()=>resolve({} as any); }));
+  const view=render(<EnvironmentHistoryCard sessionId="session" profileId={7} />);
+  fireEvent.press(view.getByText('environment.history'));
+  await waitFor(() => expect(view.getByText(/environment.kind.camera/)).toBeTruthy());
+  fireEvent.press(view.getByText(/environment.kind.camera/));
+  fireEvent.press(view.getByText('environment.reanalyze'));
+  expect(finish).toBeDefined();
+  const loads=jest.mocked(listSessions).mock.calls.length;
+  mockActiveProfile=8;
+  view.rerender(<EnvironmentHistoryCard sessionId="session" profileId={7} />);
+  finish();
+  await waitFor(() => expect(view.queryByText('Original answer')).toBeNull());
+  expect(listSessions).toHaveBeenCalledTimes(loads);
+  expect(view.queryByText('environment.actionError')).toBeNull();
 });

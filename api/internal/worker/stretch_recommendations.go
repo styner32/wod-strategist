@@ -11,6 +11,7 @@ import (
 
 	"github.com/wod-strategist/api/internal/db"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 var stretchCatalog = []string{
@@ -516,6 +517,12 @@ func (w *Worker) recommendStretches(ctx context.Context, profileID uint, session
 		return "[]"
 	}
 
+	var profile db.Profile
+	if err := w.DB.WithContext(ctx).Select("id, workout_history_revision").First(&profile, profileID).Error; err != nil {
+		return "[]"
+	}
+	revision := profile.WorkoutHistoryRevision
+	w.stretchHistoryRevision = &revision
 	history, err := db.BuildMobilityHistory(ctx, w.DB, profileID, sessionID)
 	if err != nil {
 		w.logger.Warn("Failed to build mobility history for stretch recommendations", zap.Error(err))
@@ -548,7 +555,23 @@ func (w *Worker) recommendStretches(ctx context.Context, profileID uint, session
 	}
 
 	parsed := parseStretchRecommendations(output)
-	sanitized := w.sanitizeAndPersistStretchRecommendations(ctx, parsed, assessableCurrent, history, resolver)
+	var sanitized []StretchRecommendation
+	err = w.withSessionPublication(ctx, profileID, sessionID, func(tx *gorm.DB) error {
+		var currentProfile db.Profile
+		if err := tx.Select("workout_history_revision").First(&currentProfile, profileID).Error; err != nil {
+			return err
+		}
+		if currentProfile.WorkoutHistoryRevision != revision {
+			return db.ErrSessionWorkCancelled
+		}
+		staged := *w
+		staged.DB = tx
+		sanitized = staged.sanitizeAndPersistStretchRecommendations(ctx, parsed, assessableCurrent, history, resolver)
+		return nil
+	})
+	if err != nil {
+		return "[]"
+	}
 	if len(sanitized) == 0 {
 		return "[]"
 	}

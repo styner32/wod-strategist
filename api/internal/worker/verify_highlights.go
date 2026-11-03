@@ -44,7 +44,7 @@ func NewVerifyHighlightsTask(sessionID string) (*asynq.Task, error) {
 	return asynq.NewTask(TypeVerifyHighlights, data), nil
 }
 
-func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) error {
+func (w *Worker) handleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) error {
 	started := time.Now()
 	var p VerifyHighlightsPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
@@ -198,7 +198,7 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 		w.logger.Info("Highlight verification completed with no segments remaining after low-confidence filtering",
 			zap.String("session_id", p.SessionID))
 		profileID := analysisResult.ProfileID
-		if err := w.DB.Transaction(func(tx *gorm.DB) error {
+		if err := w.withSessionPublication(ctx, analysisResult.ProfileID, p.SessionID, func(tx *gorm.DB) error {
 			if err := tx.Model(&db.AnalysisResult{}).
 				Where("id = ?", analysisResult.ID).
 				Updates(map[string]any{
@@ -274,7 +274,7 @@ func (w *Worker) HandleVerifyHighlightsTask(ctx context.Context, t *asynq.Task) 
 
 	// 8. Persist only verified observations and rebuild their parent events. The
 	// legacy flag remains false if any original observation was rejected or omitted.
-	if err := w.DB.Transaction(func(tx *gorm.DB) error {
+	if err := w.withSessionPublication(ctx, analysisResult.ProfileID, p.SessionID, func(tx *gorm.DB) error {
 		if err := tx.Model(&db.AnalysisResult{}).
 			Where("id = ?", analysisResult.ID).
 			Updates(map[string]any{

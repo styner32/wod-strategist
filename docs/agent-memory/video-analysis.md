@@ -35,17 +35,29 @@ media offsets; remaining manifest/coverage work must preserve this separation fo
 
 ### Original chunk failure recovery (2026-09-11)
 
-- Both original chunk handlers persist terminal results through
-  `persistChunkAnalysisResult`. A PostgreSQL transaction advisory lock keyed by
-  `(profile_id, session_id, file_path)` serializes insert/update, including an
-  absent row. A late success updates a failure while retaining its ID and verified
-  media offsets; terminal failure cannot overwrite success. No schema change is
-  required. Existing duplicate rows remain for feedback references, but merge
-  includes each GCS URI once. Other writers must use the same helper for original
-  chunks; this does not make server-split/full-analysis writes idempotent.
+- Both original chunk handlers and server-split chunk writers (`saveChunkResult`)
+  persist terminal results through `persistChunkAnalysisResult`. A PostgreSQL
+  transaction advisory lock keyed by `(profile_id, session_id, file_path)`
+  serializes insert/update, including an absent row. A late success updates a
+  failure while retaining its ID (and verified media offsets for original mobile
+  chunks); terminal failure cannot overwrite success. No schema change is
+  required. Existing duplicate rows remain for feedback references, while merge
+  includes each GCS URI once and read/subtitle/Pass-1 paths filter redundant
+  `split_chunk_*` rows via `db.FilterRedundantSplitChunks`.
+- `NewMergeChunksTask` truncates `merge_requested_at` to whole minutes and uses
+  `asynq.Timeout(mergeChunksTaskTimeout)` (`1h`) with
+  `asynq.Unique(15 * time.Minute)`; `NewVideoAnalysisTask` uses
+  `asynq.Timeout(videoAnalysisTaskTimeout)` and
+  `asynq.Unique(videoAnalysisTaskTimeout)` (`1h`); `enqueueHardSub` uses
+  `asynq.Unique(15 * time.Minute)`. HTTP/worker enqueue callers treat
+  `asynq.ErrDuplicateTask` as an idempotent `202 Accepted` / no-op.
 - Final status write failures return a retryable error, including after the
   analysis retry budget is exhausted. `SkipRetry` follows a successful failure
   write, not a failed DB write.
+- **Hard analysis duration guardrail (`maxAnalysisVideoDuration = 90 * time.Minute` / `5400s`, `api/internal/worker/video_analysis.go`)**:
+  - `HandleMergeChunksTask` still merges chunks, persists `media_start_secs`/`media_end_secs`, and uploads `videos/{profileId}/{sessionId}/merged.mp4` for playback, then when merged duration exceeds `90m` skips `runFFmpegAnalysisEncode` (`analysis.mp4`), marks opted-in `activity_summary` `ReviewState = "partial"` via `skipOverlongActivityReview` without enqueueing `activity:review`, skips `NewVideoAnalysisTask`, and writes a terminal `FAILED` `AnalysisResult` (`AvailableVideos: {"merged"}`, `Output: videoTooLongUserMessage`).
+  - `HandleVideoAnalysisTask` (`handleVideoAnalysisTwoPass` and `handleVideoAnalysisLegacy`) ensures `merged.mp4` playback availability first, then rejects `probeVideoDuration > 5400s` before FFmpeg re-encode or Gemini upload (plus a post-`UploadVideo` fallback check on `upload.VideoDuration > 90m` that deletes the uploaded Gemini file before Pass 1/2), returning `asynq.SkipRetry` only after `persistVideoAnalysisFailed` succeeds.
+  - `HandleActivityReviewTask` enforces `duration > 5400s` as defense-in-depth (e.g., late chunks), marking unreviewed batches failed and persisting `ReviewState = "partial"` without Gemini calls or retries.
 - The production worker wires a real `QueueInspector` to Redis DB 5. Missing
   chunk results trigger inspection of the default queue's archived, pending,
   scheduled, retry, and active tasks. Live matching tasks keep merge waiting,
@@ -73,17 +85,38 @@ Preferred source of truth is verified `media_start_secs` and
 used as merged-video offsets. Rows without verified media offsets are skipped,
 which causes model-based indexing to remain the safe fallback.
 
+Barbell/dumbbell set detection uses grip and visible set continuity, not floor
+contact: a pause between reps with the equipment gripped on the floor is still
+exercise. Equipment setup/cleanup is distinct; occluded hands do not prove
+release or rest. A pause alone adds no repetition event. Keep
+`ChunkAnalysisPrompt`, `MovementEvidenceRulesPrompt`, `movementObservationPrompt`,
+and the fallback indexing prompt in `buildIndexPrompt` aligned on this rule.
+
 For standard WODs, Pass 1 reads chunks as one continuous sequence of the same
 person (`chunk_continuity.go`, shared by `buildChunkSegments` and
 `buildSessionDebugSegments`; since 2026-10-26):
 
 - `classifyChunkActivity` combines tag, `observed_signals` and
-  `movement_observations`. Visible cycles (complete or `incomplete_cycle`) are
-  exercise even under a rest label. Explicit rest is walking/rest/setup signals,
-  a non-exercise movement, or `movement_observations` `target_state: identified`
-  + `activity_state: rest` (`[NO_EXERCISE]` chunks store `observed_signals: {}`,
-  so this is the only rest evidence they carry). An unlabelled chunk with
-  exercise/unknown activity is observed as `Unknown`. A chunk with no evidence
+  `movement_observations`. Visible cycles (complete or `incomplete_cycle`) and
+  any non-`target_not_visible` `unassessed` intervals are exercise (`chunkActive`,
+  using canonical/raw `gap.Movement` or `Unknown`) even under a `[NO_EXERCISE]`
+  or rest label. Explicit rest (`chunkExplicitRest`) requires walking/rest/setup
+  signals, a non-exercise movement, or `movement_observations`
+  `target_state: identified` + `activity_state: rest` with empty `events` and no
+  non-`target_not_visible` `unassessed` entries (`[NO_EXERCISE]` chunks store
+  `observed_signals: {}`, matching `isPass1ExplicitRest` in `activity_review.go`).
+  `ChunkAnalysisPrompt` and `movementObservationPrompt` also explicitly instruct
+  rear/low-angle barbell movements (Deadlift/Clean/Snatch where the torso occludes
+  the bar shaft) and wall-inverted Handstand Push-up / Wall Walk cycles to be
+  counted from torso-hip-plate or heel-elbow vertical displacement rather than
+  treated as rest/static holds, enforce purely kinematic takeoff classification
+  between two-foot jump takeoff (`Box Jump` / `Box Jump Over`) and single-foot
+  step ascent (`Box Step-up` / `Box Step-over`) regardless of WOD prescription,
+  and record partial cycles cut off at clip start/end as `activity_state: exercise`
+  with `unassessed` (`reason: incomplete_cycle`) rather than `[NO_EXERCISE]`/rest.
+  `selectTrackingReferenceBox` prefers boxes inside `incomplete_cycle` spans when
+  `events` is empty before falling back to the mid-chunk frame. An unlabelled chunk
+  with exercise/unknown activity is observed as `Unknown`. A chunk with no evidence
   at all is unclassified (neither exercise nor rest).
 - Hysteresis (`smoothChunkSequence`): state and label change only when the new
   state lasts two chunks. A **single** non-active chunk between two continuous
@@ -125,11 +158,21 @@ Fallback:
 Analyze each continuous bout with `VideoMetadata` offsets (frame grids in
 reanalysis). A bout up to `maxPass2WindowSecs = 150` is one call; a longer bout
 (e.g. an AMRAP without rest) is split into equal cores with
-`pass2OverlapSecs = 5` context on internal edges (`splitPass2Windows`).
-`ownWindowObservations` keeps a repetition in the core where it completes
-`(coreStart, coreEnd]`, clips timed events/observations/gaps to the core, and
-`workoutprogress.NormalizeContinuity` stitches the windows back into one
-interval. Internal edges use `HardGapBoundary: false` for highlights.
+`pass2OverlapSecs = 5` context on internal edges (`splitPass2Windows` /
+`splitPass2WindowsWithRestContext`). Outer bout edges touching continuous
+`skipped_non_exercise` media receive up to `pass2RestSpilloverSecs = 5.0`
+spillover context (bisected at the midpoint when `< 10.0` seconds separates
+adjacent bouts so spillover clips stay strictly disjoint, blocked across
+`captureDiscontinuityPoints`, and clamped to `minClipStart` when `wodStart` is
+confirmed), while core `Segment` bounds and non-split markdown headers
+(`win.core()`) stay unpadded. `ownWindowObservations` keeps internal-split
+repetitions in the core where they complete `(coreStart, coreEnd]`, allows outer
+rest-spillover `exercise` intervals to extend up to verified `complete: true`
+`reps` bounds while clipping spillover `rest`/`unassessed` to `[coreStart, coreEnd]`,
+and `workoutprogress.NormalizeContinuity` stitches split windows back into one
+interval. `secondsDuration` rounds fractional seconds (`math.Round`) so boundary
+timestamps like `7:55.41` never truncate into `invalid_unassessed_bounds`.
+Internal edges use `HardGapBoundary: false` for highlights.
 `wod_evidence` may be an array (one entry per movement span in a bout); a
 response without the block falls back to `wodEvidenceFromObservedIntervals` in
 both production and reanalysis.
@@ -362,12 +405,11 @@ Chunks are processed in parallel with bounded concurrency.
 ### Timeout risk
 - There is no measured supported video-length limit recorded here. A previous estimate of ~27 minutes incorrectly treated concurrency 10 as serial processing.
 - Illustrative split-only arithmetic: `ceil(chunk_count / 10) × per_chunk_seconds`; this excludes splitting, upload/poll variance, rate limits, and sequential deep calls. It cannot establish an end-to-end timeout guarantee.
-- The current completeness heuristic compares `MAX(end_secs)` with probed duration. It can miss earlier gaps and still uses legacy offsets; replacing it with successful media-interval union coverage remains REL-07.
+- Pass 1 completeness check (`shouldSplitVideoForPass1` + `queryMaxChunkEndSecs`) compares `db.MaxCompletedChunkMediaEndSecs` (verified `media_end_secs` on `COMPLETED` chunks, with legacy `end_secs` fallback only for `split_chunk_*` rows — never capture-clock mobile `end_secs`) against probed `videoDuration`, and treats verified non-exercise chunks (`len(skippedSegments) > 0`) as indexed chunk coverage so rest-only or `Pause`-shifted mobile sessions do not falsely trigger `splitAndAnalyzeChunks`.
 
-### Idempotent skip
-- `chunkAlreadyAnalyzed(sessionID, startSecs)` checks for existing `COMPLETED` records.
-- On retry after a partial run, already-analyzed chunks are skipped, so only the remaining chunks are processed.
-- This skips some repeated work after retries, but floating-point start equality and non-idempotent writes do not guarantee full resumability; REL-06/REL-07 remain open.
+### Idempotent skip & read-path filtering
+- `splitAndAnalyzeChunks` preloads completed session chunks (`loadCompletedSessionChunks`) and skips any split interval `[startSecs, endSecs)` where `db.IntervalCoveredByChunks` finds ≥50% union coverage on the merged media clock (covering both `Pause`-shifted mobile chunks via `media_start_secs`/`media_end_secs` and prior partial `split_chunk_*` runs).
+- `db.FilterRedundantSplitChunks` deduplicates per-file rows (`COMPLETED` first, then lowest ID) and omits `split_chunk_*` rows (`heart_rate_bpm = 0`) that overlap `COMPLETED` original mobile chunks (or exceed a fully mapped original concat timeline), while retaining uploaded-video-only `split_chunk_*` sessions and genuine gap-filling `split_chunk_*` rows where an original mobile chunk `FAILED`. Applied across `FindChunksBySessionID`, `GetSessionAnalysis`, `GetSensorTimeline`, `HandleGenerateHardSubTask`, `buildChunkSegments`, and `NewSessionTimelineFromAnalysisResults`.
 
 ## Gemini Model & Thinking Configuration
 - Worker and bare-client deep video analysis default: `gemini-4-argon` (2026-10-14). General session segments, chunk/session reanalysis, injury follow-ups, and legacy whole-video analysis inherit it.
@@ -375,6 +417,7 @@ Chunks are processed in parallel with bounded concurrency.
   - `GEMINI_MODEL`: Deep video model name (default `gemini-4-argon`). Set an explicit old model ID to roll back; existing Terraform variable overrides take precedence over defaults.
   - `GEMINI_THINKING_LEVEL`: Full video / deep segment analysis thinking level (default `HIGH`). Valid: `HIGH`, `MEDIUM`, `LOW`.
   - `GEMINI_THINKING_CHUNK`: Short video (~10s chunk) analysis thinking level (default `LOW`). Valid: `HIGH`, `MEDIUM`, `LOW`. Minimizes response latency and thinking token costs for real-time coaching feedback.
+  - `GEMINI_CHUNK_FPS`: Short chunk video sampling frame rate (default `2.0`; valid `0` or `[1, 24]`, validated at worker startup). When `> 0`, attaches `VideoMetadata.FPS` exclusively to `AnalyzeChunkVideo` and `AnalyzeChunkVideoWithImages` so ~2s cycles (`Box Step-up`, fast lifts) are sampled reliably; `0` omits `VideoMetadata.FPS`. Never attached to full-video `AnalyzeVideo` / `AnalyzeVideoWithModel` or frame-grid calls.
   - `GEMINI_THINKING_BUDGET`: Optional integer thinking budget in tokens; omitted from Argon requests even when set.
 - Stage-specific thinking levels:
   - Short video / chunk analysis: Uses `AnalyzeChunkVideo`, which resolves to `GEMINI_THINKING_CHUNK` (`LOW` by default). Note that `MINIMAL` is not supported on Gemini 3.8 / 3.7 Flash and will be rejected.
@@ -418,6 +461,13 @@ Deployment acceptance still requires matched, annotated-video comparison of Argo
   - `Decode` extracts the detected movement from events or unassessed entries.
   - `Build` falls back to `row.ExerciseType` if the observation's movement field is empty.
   - The UI (`ActivitySummaryPanel` and `ActivitySummaryCard`) displays the recognized movement next to the gap reason (e.g. `The athlete or movement is unclear (Clean and Jerk)`).
+- **Lunge variants, `Burpee Broad Jump`, distance normalization, and zero-impact isolation (2026-10-30)**:
+  - Stationary lunge variants (`Lunge`, `Reverse Lunge`, `Jumping Lunge`, `DB`/`KB` `Lunge`/`Overhead Lunge`/`Front Rack Lunge`/`Farmer's Lunge`/`Goblet Lunge` + `DB Reverse Lunge`, `Barbell Lunge`, `Front Rack Lunge`, `Back Rack Lunge`, `Overhead Lunge`, `Sandbag Lunge`) register `unit: "reps"` (`Traveling: false`).
+  - Walking lunge variants (`Walking Lunge`, `DB`/`KB` `Walking Lunge`/`Overhead Walking Lunge`/`Front Rack Walking Lunge`/`Farmer's Walking Lunge`/`Goblet Walking Lunge`, `Barbell Walking Lunge`, `Front Rack Walking Lunge`, `Back Rack Walking Lunge`, `Overhead Walking Lunge`, `Sandbag Walking Lunge`) register `unit: "seconds"` (`Traveling: true`). `Burpee Broad Jump` registers `unit: "reps"` (`Traveling: true`, with composite fallback upgrade from `Burpee` or `Broad Jump`).
+  - Distance-prescribed lunge normalization (`movement.SplitWorkoutClauses`, `movement.PromoteDistanceLunge`, `movement.PromoteDistanceLungeInWOD`, OCR `normalizeParsedWorkoutMovements`, worker `splitCombinedNormalizedMovements` / `promoteDistanceLungesInNormalizedMovements`, and shared TS `normalizeDistanceLungeClauses` in `shared/lungePrescription.ts`) associates a distance only with its adjacent full lunge name. A preceding/following rep prescription, another movement between the distance and lunge, or a quantity ambiguously shared with a neighboring movement blocks promotion (`Run (400m) 20 DB Lunges`, `Run 400m DB Lunge`, `DB Lunge 400m Run`). Reverse/jumping variants and stretches never fall through to generic `Lunge`.
+  - Clause separators remain `/`, `+`, `,`, `·`, `|`, `→`, `->` outside parentheses, preserving numeric ratios (`50/35lb`, `200/150ft`). A movement's colon prescription stays attached (`DB Lunge:20m`); header separators (`AMRAP 10m:`) stay distinct, and minute headers (`AMRAP:10m`, `EMOM 12m`, `Time Cap 15m`, `Every 2m`, `Rest 2m`) cannot supply lunge distance. Local parenthesized distances are preserved as `reps` prescription text; distance ratios never become `weight_raw`.
+  - `PromoteDistanceLungeInWOD(rawMovement, texts...)` treats texts in priority order: corrected WOD description first, raw OCR only when the earlier source has no explicit matching prescription. Bare movement-name lines are unknown, not rep evidence, so raw `200ft\nDB Lunge` cannot veto corrected `200ft DB Lunge`. Explicit rep and distance prescriptions for the same variant within one source suppress a global promotion. Structured normalized rows use their own non-empty `Reps` before WOD fallback; explicit counts never inherit another row's distance.
+  - **Strict zero-impact isolation on stationary movements**: Base shared prompts (`ChunkAnalysisPrompt`, `movementObservationPrompt`, `workoutObservationPrompt`, `MovementEvidenceRulesPrompt`, `ObservationOnlyRulesPrompt`) remain untouched. `buildTrackingHandoff` clears `FrameRegion` (`""`) and sets `Station = "moving"` **only** when `movement.IsTraveling` is true on the prior active chunk. `TravelingMovementPolicyPrompt` is injected **only** when `movement.IsTravelingPolicyMovement` / `movement.HasTravelingPolicyContext` / `hasSegmentTravelingPolicyContext` detects a `* Walking Lunge` or `Burpee Broad Jump` in that chunk or specific Pass-2 segment, keeping stationary prompts byte-for-byte identical.
 
 ## Analysis Value Reuse, Bounded Parallelism, and Batch API (2026-10-14)
 - **Previous-value & checkpoint reuse**:

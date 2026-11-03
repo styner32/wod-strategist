@@ -67,10 +67,12 @@ unit: reps 또는 seconds. complete: 시작과 완료를 모두 직접 관찰했
 정적 유지, 달리기, 로잉, 바이크, 스키에르그, 캐리, 핸드스탠드 워크는 seconds로 관찰 구간을 기록하세요.
 줄넘기(Double-under, Single-under)는 줄의 고속 회전수를 세려 하지 말고, 화면에 보이는 도약~착지 점프 1회를 1회 사이클(reps)로 세세요. 줄 궤적이 불명확해도 점프 사이클이 보이면 reps로 기록합니다.
 거리/칼로리처럼 화면에 보이지 않는 수치를 임의로 추정하지 마세요. 대상자 가림이나 화면 이탈로 동작 시작과 완료를 전혀 분간할 수 없을 때만 unassessed에 남기세요.
-판독 불가, 가림, 불명확한 대상, 중단된 사이클은 unassessed의 구간과 reason으로 남기세요.
+판독 불가, 가림, 불명확한 대상, 중단된 사이클은 unassessed의 구간과 reason으로 남기세요. 클립 시작 직후(이전 청크에서 이어진 바벨 락아웃·하강·박스 착지 마무리)나 클립 종료 직전(바벨이 바닥에서 떨어지거나 박스로 올라서기 시작하다 클립이 종료됨)에 대상 인물의 운동 일부가 보이면 [NO_EXERCISE]나 rest로 버리지 말고 activity_state를 exercise로 두고 해당 구간을 unassessed(reason: incomplete_cycle)에 기록하세요.
 휴식이 명확하면 events와 unassessed는 빈 배열입니다. 운동이 불명확한 경우를 휴식으로 대체하지 마세요.
-바벨이나 덤벨을 손에 쥐고 행(Hang) 위치(무릎 위/허벅지/골반)에 들고 있거나 세트 중 잠시 호흡을 고르는 구간은 휴식이 아닌 운동 세트(exercise) 진행 중입니다. 바벨을 바닥에 완전히 내려놓거나 기구를 놓았을 때만 휴식(rest)으로 판정하세요.
+바벨이나 덤벨을 손으로 쥐고 세트를 이어가는 구간은 기구의 바닥 접촉 여부와 관계없이 exercise입니다. 행(Hang) 위치(무릎 위/허벅지/골반)에서의 유지뿐 아니라 바닥에 둔 기구의 그립을 유지한 채 반복 사이에 잠시 멈추는 구간도 포함하세요. 잡고 멈춘 것만으로 새로운 반복 이벤트를 추가하지 마세요.
+장비 세팅·정리를 위한 단순 접촉이나 명확한 휴식은 세트 진행과 구분하세요. 바닥 접촉이나 순간적인 그립 해제만으로 rest로 판정하지 마세요. 손이 가려져 그립 여부를 확인할 수 없으면 기구를 놓았다고 추정하지 말고 현재 영상의 자세와 기구 움직임을 함께 확인하세요. 수행 여부가 불명확하면 rest가 아니라 unknown으로 기록하세요.
 로잉, 바이크 에르그, 에코 바이크, 스키에르그에서 핸들·페달과 접촉한 채 움직임이 이어지면 앉아 있어도 exercise입니다. 낮은 각도나 가림으로 수행 여부가 불명확하면 rest가 아니라 unknown으로 기록하세요.
+후방 촬영으로 몸통에 바벨 중앙이 가려지더라도 양쪽 원판의 바닥 이격과 고관절·어깨의 신전·굴곡 사이클이 보이면 Deadlift 등 exercise로 기록하세요. 벽 물구나무(Handstand Push-up)도 머리·발의 수직 이동으로 사이클을 기록하며, 가림으로 완료 여부가 불명확하면 rest가 아니라 unknown 또는 unassessed로 기록하세요.
 클린과 스내치는 'Clean', 'Hang Clean', 'Snatch', 'Hang Snatch' 같은 포괄적 명칭을 쓰지 마세요. 바닥/행 시작 위치와 캐치 깊이에 따라 다음 표준 영어 명칭 중 하나로 정확히 지정하세요:
 - 'Hang Power Clean' (무릎 위에서 시작, 평행 위 캐치) / 'Hang Squat Clean' (무릎 위에서 시작, 평행 이하 풀 스쿼트 캐치)
 - 'Power Clean' (바닥에서 시작, 평행 위 캐치) / 'Squat Clean' (바닥에서 시작, 평행 이하 풀 스쿼트 캐치)
@@ -78,6 +80,7 @@ unit: reps 또는 seconds. complete: 시작과 완료를 모두 직접 관찰했
 - 'Power Snatch' (바닥에서 시작, 평행 위 캐치) / 'Squat Snatch' (바닥에서 시작, 평행 이하 풀 스쿼트 캐치)
 - 'Push Jerk' (딥-드라이브 후 2차 딥 무릎 굽힘으로 캐치) / 'Split Jerk' (앞뒤 발 벌림 캐치) / 'Push Press' (1회 딥-드라이브 반동으로 밀어 올림) / 'Strict Press' (하체 반동 없음)
 - 'Deadlift' (바닥에서 골반까지 끌어올려 무릎/골반 펴기. 터치앤고 반복 포함)
+- 'Box Jump' / 'Box Jump Over' (두 발 동시 점프 도약) vs 'Box Step-up' / 'Box Step-over' (점프 없이 한 발을 먼저 박스에 딛고 올라섬; WOD 계획과 무관하게 실제 발 동작으로 구분)
 movement는 위 기존 종목의 영어 표준 이름을 쓰며 임의의 변형을 만들지 마세요.
 모든 시각은 별도 지시가 없으면 이 클립 시작 기준 초입니다. events와 unassessed 배열은 반드시 포함하세요.
 ` + "```movement_observations\n" + `{"version":1,"target_state":"identified","activity_state":"exercise","events":[{"movement":"Air Squat","unit":"reps","start_secs":1.0,"end_secs":3.0,"complete":true,"evidence":"descends and returns to standing"}],"unassessed":[]}` + "\n```\n"
@@ -274,7 +277,9 @@ JSON만 반환: {"text":{"ko":"...","en":"..."},"current_chunk_id":현재ID,"sou
 	reply.Sources = sources
 	encoded, _ := json.Marshal(reply)
 	// Only update the optional coaching field; evidence and basic output are immutable here.
-	if err := w.DB.WithContext(ctx).Model(&db.ChunkAnalysisResult{}).Where("id = ? AND profile_id = ? AND session_id = ? AND output = ? AND contextual_coaching IS NULL", current.ID, current.ProfileID, current.SessionID, current.Output).Update("contextual_coaching", db.JSONDocument(encoded)).Error; err != nil {
+	if err := w.withSessionPublication(ctx, current.ProfileID, current.SessionID, func(tx *gorm.DB) error {
+		return tx.Model(&db.ChunkAnalysisResult{}).Where("id = ? AND profile_id = ? AND session_id = ? AND output = ? AND contextual_coaching IS NULL", current.ID, current.ProfileID, current.SessionID, current.Output).Update("contextual_coaching", db.JSONDocument(encoded)).Error
+	}); err != nil {
 		w.logger.Warn("optional coaching not saved", zap.Error(err))
 	}
 }
@@ -305,7 +310,7 @@ func (w *Worker) refreshLiveActivity(ctx context.Context, p VideoAnalysisPayload
 	}
 	session := db.Session{SessionID: result.SessionID, ProfileID: result.ProfileID, IdempotencyKey: "live:" + result.SessionID, Status: db.SessionStatusStarted, WorkoutType: p.WorkoutType, WODDescription: p.WODDescription, MovementHints: db.JSONDocument(hints)}
 	reviewNeeded := false
-	err := w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "session_id"}}, DoNothing: true}).Create(&session).Error; err != nil {
 			return err
 		}

@@ -7,9 +7,10 @@ import { useLiveWorkoutFeedback } from "../../features/wod/useLiveWorkoutFeedbac
 import { useIsFocused } from "expo-router/react-navigation";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import * as MediaLibrary from "expo-media-library/legacy";
+import * as ExpoRouter from "expo-router";
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -20,6 +21,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
   useWindowDimensions,
@@ -27,7 +29,12 @@ import {
 } from "react-native";
 import { Video } from "react-native-compressor";
 import { getInfoAsync } from "expo-file-system/legacy";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { ulid } from "ulid";
+import {
+  initialWindowMetrics,
+  SafeAreaInsetsContext,
+  SafeAreaProvider,
+} from "react-native-safe-area-context";
 import {
   Camera,
   useCameraDevice,
@@ -54,6 +61,7 @@ import {
   formatWorkoutTypeLabel,
   parseWorkoutType,
 } from "@/features/wod/workoutType";
+import { saveRecordingSetup, validateRecordingSetup } from "@/features/wod/recentWorkoutSetup";
 import { usePoseDetection } from "../../features/ai-coach/frame-processors/usePoseDetection";
 import { EnergyMonitor } from "../../features/ai-coach/ui/EnergyMonitor";
 import { SkeletonOverlay } from "../../features/ai-coach/ui/SkeletonOverlay";
@@ -71,6 +79,9 @@ import {
   processWorkoutChunk,
   is4xxError,
   getErrorStatusCode,
+  type RecordingMediaChunkIdentity,
+  type RecordingMediaManifestChunk,
+  type UploadResult,
 } from "../../features/wod/api";
 import {
   prepareOriginalSession, beginOriginalChunk, addOriginalChunk,
@@ -96,18 +107,22 @@ type FailedChunkRecoveryItem = {
   startSecs: number;
   endSecs: number;
   heartRateBpm?: number;
-  workoutConfidence?: number;
+  mediaChunk?: RecordingMediaChunkIdentity;
   release: () => void;
 };
 type OriginalCapture = {
   ref: OriginalSessionRef;
   startedAt: number;
+  setupSnapshot?: string;
   order: number;
   complete: boolean;
   failure?: string;
   failedUploads: number;
   pendingUploads: number;
   completedUploads: number;
+  mediaPipelineVersion: 0 | 1;
+  mediaChunkCount: number;
+  mediaReceipts: Map<number, RecordingMediaManifestChunk>;
   failedChunks: FailedChunkRecoveryItem[];
   recoveringChunks?: Promise<void>;
   recoveryFinished?: boolean;
@@ -117,6 +132,17 @@ type OriginalCapture = {
   release: () => void;
 };
 const IS_ANDROID = Platform.OS === "android";
+
+function acceptMediaReceipt(capture: OriginalCapture, chunk: RecordingMediaChunkIdentity | undefined, result: UploadResult): void {
+  if (!chunk) return;
+  if (!result?.chunkId || !result.sourceGeneration) {
+    throw new Error("Cannot complete a media chunk without its approved source receipt");
+  }
+  capture.mediaReceipts.set(chunk.captureOrder, {
+    chunk_id: result.chunkId,
+    source_generation: result.sourceGeneration,
+  });
+}
 
 function localPath(uri: string): string {
   return decodeURIComponent(uri.replace(/^file:\/\//, ""));
@@ -196,8 +222,33 @@ function formatElapsed(ms: number): string {
   return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
 }
 
+const ZERO_SAFE_AREA_INSETS = { top: 0, right: 0, bottom: 0, left: 0 };
+const FALLBACK_SAFE_AREA_METRICS = {
+  frame: { x: 0, y: 0, width: 0, height: 0 },
+  insets: ZERO_SAFE_AREA_INSETS,
+};
+
 export default function VisionTestPage() {
+  const parentInsets = useContext(SafeAreaInsetsContext);
+  return (
+    <SafeAreaProvider
+      initialMetrics={
+        parentInsets
+          ? undefined
+          : (initialWindowMetrics ?? FALLBACK_SAFE_AREA_METRICS)
+      }
+    >
+      <VisionTestPageContent />
+    </SafeAreaProvider>
+  );
+}
+
+function VisionTestPageContent() {
   const locale = useLocale();
+  const navigation =
+    typeof ExpoRouter.useNavigation === "function"
+      ? ExpoRouter.useNavigation()
+      : null;
   const {
     resolution = "720p",
     movements = "",
@@ -221,6 +272,7 @@ export default function VisionTestPage() {
     aspectRatio: aspectRatioParam,
     wodDescription: wodDescriptionParam,
     appearanceHints: appearanceHintsParam,
+    recordingSetup: recordingSetupParam,
   } = useLocalSearchParams<{
     resolution?: string;
     movements?: string;
@@ -243,7 +295,9 @@ export default function VisionTestPage() {
     aspectRatio?: string;
     wodDescription?: string;
     appearanceHints?: string;
+    recordingSetup?: string | string[];
   }>();
+  const recordingSetup = Array.isArray(recordingSetupParam) ? recordingSetupParam[0] : recordingSetupParam;
 
   const landscapeMode = landscapeModeParam === "true";
   const previewOnly = previewOnlyParam === "true";
@@ -262,6 +316,7 @@ export default function VisionTestPage() {
     showSkeletonParam !== undefined
       ? showSkeletonParam === "true"
       : !IS_ANDROID;
+  const [previewSkeletonVisible, setPreviewSkeletonVisible] = useState(showSkeleton);
   const lowFps =
     lowFpsParam !== undefined ? lowFpsParam === "true" : IS_ANDROID;
   const skipCompression =
@@ -300,7 +355,8 @@ export default function VisionTestPage() {
   );
   // Keep AVCaptureSession running during transient iOS "inactive" states so
   // SegmentedRecordingSession can finish draining its stabilization buffer on pause/stop.
-  const isCameraActive = isFocused && appState !== "background";
+  const [isLeaving, setIsLeaving] = useState(false);
+  const isCameraActive = isFocused && appState !== "background" && !isLeaving;
   const [cameraPosition, setCameraPosition] = useState<"back" | "front">("back");
   const device = useCameraDevice(cameraPosition);
   const handleFlipCamera = useCallback(() => {
@@ -314,13 +370,36 @@ export default function VisionTestPage() {
   } = useMicrophonePermission();
   const { width, height } = useWindowDimensions();
   const isLandscapeLayout = width > height;
+  const contextInsets = useContext(SafeAreaInsetsContext);
+  const rawInsets =
+    contextInsets ?? initialWindowMetrics?.insets ?? ZERO_SAFE_AREA_INSETS;
+  const portraitWindowTop = initialWindowMetrics?.insets?.top ?? 0;
+  const safeTopInset =
+    Platform.OS === "ios" &&
+    !isLandscapeLayout &&
+    rawInsets.top === 0 &&
+    portraitWindowTop > 0
+      ? portraitWindowTop
+      : rawInsets.top;
+  const safeContainerStyle = {
+    paddingTop: safeTopInset + 8,
+    paddingBottom: rawInsets.bottom + 8,
+    paddingLeft: rawInsets.left,
+    paddingRight: rawInsets.right,
+  };
+  const safeCenterStyle = {
+    paddingTop: safeTopInset + 24,
+    paddingBottom: rawInsets.bottom + 24,
+    paddingLeft: rawInsets.left + 24,
+    paddingRight: rawInsets.right + 24,
+  };
   // On Android, landscape mode keeps portrait but user mounts phone sideways.
   // Apply landscape styles based on the toggle, not screen dimensions.
   const applyLandscapeStyles =
     isLandscapeLayout || (IS_ANDROID && landscapeMode);
 
-  // Telemetry visibility: collapsed by default, expanded via user toggle
-  const [isTelemetryExpanded, setIsTelemetryExpanded] = useState(false);
+  // Preview opens with diagnostics visible; recording keeps telemetry collapsed.
+  const [isTelemetryExpanded, setIsTelemetryExpanded] = useState(previewOnly);
 
   // Exact recording aspect ratio based on camera orientation and format:
   // Portrait (default): 9:16 (0.5625) or 3:4 (0.75 if is43)
@@ -383,16 +462,6 @@ export default function VisionTestPage() {
   // Track recording session start time for chunk timing
   const recordingStartTime = useRef<number>(0);
 
-  // Polar sensor live collection stats (polled at 1Hz during recording)
-  const [sensorLiveStatus, setSensorLiveStatus] = useState<{
-    accSamples: number;
-    dropped: number | null;
-  }>({ accSamples: 0, dropped: null });
-
-  // --- Upload monitoring ---
-  const [pendingUploads, setPendingUploads] = useState(0);
-  const [inflightUploads, setInflightUploads] = useState(0);
-
   // --- Upload banner & error notification ---
   type UploadBannerState = {
     type: "retry" | "error";
@@ -433,21 +502,17 @@ export default function VisionTestPage() {
     isUploading.current = true;
     while (uploadQueue.current.length > 0) {
       const task = uploadQueue.current.shift()!;
-      setPendingUploads(uploadQueue.current.length);
-      setInflightUploads((prev) => prev + 1);
       try {
         await task();
       } catch (err) {
         console.error("Upload queue task failed:", err);
       }
-      setInflightUploads((prev) => Math.max(0, prev - 1));
     }
     isUploading.current = false;
   };
 
   const enqueueUpload = (task: () => Promise<void>) => {
     uploadQueue.current.push(task);
-    setPendingUploads(uploadQueue.current.length);
     drainUploadQueue();
   };
 
@@ -465,12 +530,6 @@ export default function VisionTestPage() {
         `⚠️ Waiting ended with ${capture.pendingUploads} chunk upload(s) still in flight after ${timeoutMs}ms`,
       );
     }
-  };
-
-  // Track fire-and-forget (concurrent) uploads
-  const trackUpload = (task: () => Promise<void>) => {
-    setInflightUploads((prev) => prev + 1);
-    task().finally(() => setInflightUploads((prev) => Math.max(0, prev - 1)));
   };
 
   // 720p, 1080p, or 2160p (4K) format based on user selection; keep targetFps at 30 (or 24 for lowFps)
@@ -563,6 +622,7 @@ export default function VisionTestPage() {
   }, []);
 
   const profileId = useProfileStore((s) => s.activeProfileId);
+  const activeRecordingProfile = useRef(profileId); activeRecordingProfile.current = profileId;
   const liveFeedback = useLiveWorkoutFeedback(isRecording, profileId ?? 0, sessionIdRef, recordingStartTime);
   const chunkFeedback = liveFeedback.coaching;
   const [isFeedbackCollapsed, setIsFeedbackCollapsed] = useState(false);
@@ -630,6 +690,7 @@ export default function VisionTestPage() {
   //   landscape, so content is captured wide. UI shows a mounting hint.
   useFocusEffect(
     useCallback(() => {
+      setIsLeaving(false);
       if (!IS_ANDROID) {
         void ScreenOrientation.lockAsync(
           landscapeMode
@@ -647,17 +708,16 @@ export default function VisionTestPage() {
     }, [landscapeMode]),
   );
 
-  // Pass isRecording to the hook — inference always runs, but frame counting only during recording
+  // MoveNet belongs only to the focused camera preview, never the recording path.
+  const poseEnabled = previewOnly && isCameraActive && appState === "active" && hasPermission && device != null;
   const {
     frameProcessor,
     poseResult,
     monitorData,
     isModelLoaded,
-    getWorkoutConfidence,
-    getLatestMotion,
-    getCaptureConfidence,
-    resetCaptureObservations,
-  } = usePoseDetection(isRecording);
+    status: poseStatus,
+    hasInference,
+  } = usePoseDetection(poseEnabled);
 
   const safeConfidence = Number.isFinite(monitorData?.confidence)
     ? Math.max(0, Math.min(1, monitorData.confidence))
@@ -752,19 +812,6 @@ export default function VisionTestPage() {
     Alert.alert(t("overlay.recording.hrDeviceTitle"), lines.join("\n"), buttons);
   }, [connectedDevice, discoveredDevices, registerDevice, registeredDevice, rescanDevices]);
 
-  // Poll Polar sensor live status at 1Hz during recording (avoids 50Hz re-renders)
-  useEffect(() => {
-    if (!isRecording) return;
-    const interval = setInterval(() => {
-      const stats = PolarSensorRecorder.getLiveStatus();
-      setSensorLiveStatus({
-        accSamples: stats.accSamples,
-        dropped: stats.dropped,
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isRecording]);
-
   // --- Experimental H10 internal recording: status + live-pipeline watchdog ---
   const [h10MemoryStatus, setH10MemoryStatus] = useState<H10MemoryStatus | null>(null);
   const [h10MemoryStall, setH10MemoryStall] = useState<"hr" | "acc" | null>(null);
@@ -846,22 +893,25 @@ export default function VisionTestPage() {
   }, [chunkCount]);
 
   useEffect(() => {
-    if (!hasPermission) requestPermission();
-    if (!hasMicPermission) requestMicPermission();
+    if (!hasPermission) void requestPermission().catch((error) => console.warn("Camera permission request failed", error));
+    if (!previewOnly && !hasMicPermission) void requestMicPermission().catch((error) => console.warn("Microphone permission request failed", error));
   }, [
     hasPermission,
     hasMicPermission,
     requestMicPermission,
     requestPermission,
+    previewOnly,
   ]);
 
   // Auto-start recording when navigated from setup with autoRecord
   const hasAutoStarted = useRef(false);
   useEffect(() => {
     if (
+      !previewOnly &&
       autoRecord === "true" &&
       !hasAutoStarted.current &&
       hasPermission &&
+      hasMicPermission &&
       device &&
       isCameraReady &&
       camera.current &&
@@ -870,7 +920,7 @@ export default function VisionTestPage() {
       hasAutoStarted.current = true;
       handleStartRecording();
     }
-  }, [autoRecord, hasPermission, device, isCameraReady, isRecording]);
+  }, [autoRecord, previewOnly, hasPermission, hasMicPermission, device, isCameraReady, isRecording]);
 
   // --- Chunk Recording Logic (Raw Camera) ---
 
@@ -895,7 +945,7 @@ export default function VisionTestPage() {
       while (capture.failedChunks.length > 0) {
         const item = capture.failedChunks.shift()!;
         try {
-          await processWorkoutChunk(item.path, capture.ref.sessionId, {
+          const result = await processWorkoutChunk(item.path, capture.ref.sessionId, {
             movements: movements ? movements.split(", ") : [],
             injuries: injuries ? injuries.split(", ") : [],
             workoutType,
@@ -903,11 +953,12 @@ export default function VisionTestPage() {
             startSecs: item.startSecs,
             endSecs: item.endSecs,
             heartRateBpm: item.heartRateBpm,
-            workoutConfidence: item.workoutConfidence,
             appearanceHints,
+            ...(item.mediaChunk ? { mediaPipelineVersion: 1 as const, ...item.mediaChunk } : {}),
             maxRetries: 2,
             retryDelayMs: 2000,
           });
+          acceptMediaReceipt(capture, item.mediaChunk, result);
           capture.failedUploads = Math.max(0, capture.failedUploads - 1);
           capture.completedUploads += 1;
           clearRetryBanner();
@@ -944,11 +995,13 @@ export default function VisionTestPage() {
     return capture.consumersFinished;
   };
 
-  const queueAnalysis = (capture: OriginalCapture, path: string, start: number, end: number, nativeClockOffsetMs?: number) => {
+  const queueAnalysis = (capture: OriginalCapture, path: string, start: number, end: number) => {
     const startSecs = Math.max(0, (start - capture.startedAt) / 1000);
     const endSecs = Math.max(startSecs, (end - capture.startedAt) / 1000);
     const heartRateBpm = heartRateWindow.current.peak(start, end);
-    const workoutConfidence = getCaptureConfidence(start, end, nativeClockOffsetMs);
+    const mediaChunk = capture.mediaPipelineVersion === 1
+      ? { clientChunkId: ulid(), captureOrder: ++capture.mediaChunkCount }
+      : undefined;
     const rawRelease = holdOriginalFiles(capture.ref);
     let isReleased = false;
     const release = () => {
@@ -963,7 +1016,7 @@ export default function VisionTestPage() {
     setChunkCount((count) => count + 1);
     try {
       environment.event("existing_sensors", { hr: getReading().bpm ?? null, hrSource: "BLE",
-        moveNet: getLatestMotion(), sensorFiles: "existing_session_sensor_telemetry", source: "existing_enabled_providers" });
+        sensorFiles: "existing_session_sensor_telemetry", source: "existing_enabled_providers" });
       environment.offerChunk({ path, captureStart: start, captureEnd: end,
         durationMs: end - start, index: uploadedChunkCount.current });
     } catch (error) { console.warn("Environment observation unavailable; original capture continues", error); }
@@ -987,11 +1040,12 @@ export default function VisionTestPage() {
       const upload = async () => {
         let heldForRecovery = false;
         try {
-          await processWorkoutChunk(uri, capture.ref.sessionId, {
+          const result = await processWorkoutChunk(uri, capture.ref.sessionId, {
             movements: movements ? movements.split(", ") : [],
             injuries: injuries ? injuries.split(", ") : [],
             workoutType, profileId: capture.ref.profileId, startSecs, endSecs,
-            heartRateBpm, workoutConfidence, appearanceHints,
+            heartRateBpm, appearanceHints,
+            ...(mediaChunk ? { mediaPipelineVersion: 1 as const, ...mediaChunk } : {}),
             maxRetries: 5,
             retryDelayMs: 5000,
             onRetry: (attempt, maxRetries) => {
@@ -1004,6 +1058,7 @@ export default function VisionTestPage() {
               });
             },
           });
+          acceptMediaReceipt(capture, mediaChunk, result);
           capture.completedUploads += 1;
           clearRetryBanner();
           if (capture.failedChunks.length > 0 && !capture.recoveryFinished) {
@@ -1032,7 +1087,7 @@ export default function VisionTestPage() {
                 startSecs,
                 endSecs,
                 heartRateBpm,
-                workoutConfidence,
+                mediaChunk,
                 release,
               });
             }
@@ -1055,7 +1110,7 @@ export default function VisionTestPage() {
         }
       };
       if (serialUpload) enqueueUpload(upload);
-      else trackUpload(upload);
+      else void upload();
     }).catch((error) => {
       capture.failedUploads += 1;
       capture.pendingUploads = Math.max(0, capture.pendingUploads - 1);
@@ -1104,6 +1159,11 @@ export default function VisionTestPage() {
         finishPreparation();
         return;
       }
+      if (order === 1) {
+        await validateRecordingSetup(capture.setupSnapshot, { ownerUserId: capture.ref.ownerUserId, profileId: capture.ref.profileId });
+        if (!mounted.current || originalCapture.current !== capture || activeRecordingProfile.current !== capture.ref.profileId
+          || useAuthStore.getState().userId !== capture.ref.ownerUserId) throw new Error("recording_scope_changed_before_capture");
+      }
       const startedAt = Date.now();
       isChunkRecordingActive.current = true;
       let sourceRegistration: Promise<void> | undefined;
@@ -1115,6 +1175,10 @@ export default function VisionTestPage() {
           try {
             await addOriginalChunk(capture.ref, { order, path: video.path, durationSecs: video.duration });
             sourceAccepted = true;
+            // startRecording returns before native startup succeeds. Rebind only
+            // after accepting real original media; storage must not delay its finalization.
+            if (order === 1) void saveRecordingSetup(capture.setupSnapshot, { ownerUserId: capture.ref.ownerUserId, profileId: capture.ref.profileId }, capture.ref.sessionId)
+              .catch(error => console.warn("Recent recording setup was not saved", error));
             if (video.segmented) {
               if (video.droppedVideoFrames || video.droppedAudioBuffers || video.tailDrainTimedOut) {
                 console.warn(
@@ -1143,7 +1207,7 @@ export default function VisionTestPage() {
           onRecordingSourceFinalized: (video: VideoFile) => { void registerSource(video); },
           onRecordingSegment: (segment: VideoSegment) => {
             if (segment.status === "ready" && segment.path) {
-              try { queueAnalysis(capture, segment.path, segment.captureStartTimeMs, segment.captureEndTimeMs, segment.captureClockOffsetMs); }
+              try { queueAnalysis(capture, segment.path, segment.captureStartTimeMs, segment.captureEndTimeMs); }
               catch (error) { capture.failedUploads += 1; console.warn("Analysis unavailable; source retained", error); }
             } else {
               capture.failedUploads += 1;
@@ -1211,7 +1275,7 @@ export default function VisionTestPage() {
   // --- Main Recording Logic ---
 
   async function handleStartRecording() {
-    if (isRecording || isStartingRecording.current) return;
+    if (previewOnly || isRecording || isStartingRecording.current) return;
     isStartingRecording.current = true;
 
     if (!profileId) {
@@ -1236,17 +1300,33 @@ export default function VisionTestPage() {
       }
       await MediaLibrary.requestPermissionsAsync(true).catch(() => {});
       if (!mounted.current) return;
+      const recordingOwner = useAuthStore.getState().userId;
+      if (!recordingOwner) return;
       const sessionId = buildWorkoutSessionId(workoutType);
       const ref = await prepareOriginalSession({ profileId, sessionId, mode: continuousRecording ? "continuous" : "chunks" });
       if (!mounted.current) {
         await markOriginalRecordingStopped(ref, { complete: false, reason: "recording_screen_unmounted_before_capture" });
         return;
       }
+      try { await validateRecordingSetup(recordingSetup, { ownerUserId: recordingOwner, profileId }); }
+      catch {
+        await markOriginalRecordingStopped(ref, { complete: false, reason: "recording_source_unavailable" }).catch(() => {});
+        if (mounted.current) Alert.alert(t("common.error"), t("setup.archiveSourceUnavailable"));
+        return;
+      }
+      if (!mounted.current || activeRecordingProfile.current !== profileId || useAuthStore.getState().userId !== recordingOwner) {
+        await markOriginalRecordingStopped(ref, { complete: false, reason: "recording_scope_changed_before_capture" }).catch(() => {});
+        return;
+      }
       const startedAt = Date.now();
       preparationQueue.current = Promise.resolve();
-      originalCapture.current = { ref, startedAt, order: 0, complete: true, failedUploads: 0, pendingUploads: 0, completedUploads: 0, failedChunks: [], drains: [], release: holdOriginalFiles(ref) };
+      originalCapture.current = {
+        ref, startedAt, setupSnapshot: recordingSetup, order: 0, complete: true,
+        failedUploads: 0, pendingUploads: 0, completedUploads: 0, failedChunks: [], drains: [],
+        mediaPipelineVersion: process.env.EXPO_PUBLIC_MEDIA_PIPELINE_VERSION === "1" ? 1 : 0,
+        mediaChunkCount: 0, mediaReceipts: new Map(), release: holdOriginalFiles(ref),
+      };
       heartRateWindow.current.clear();
-      resetCaptureObservations();
       stoppingWorkout.current = false;
       resetQuality();
       bpmRef.current = 0;
@@ -1263,13 +1343,12 @@ export default function VisionTestPage() {
       sessionIdRef.current = sessionId;
       recordingStartTime.current = startedAt;
       capturedProfileIdRef.current = profileId!;
-      setSensorLiveStatus({ accSamples: 0, dropped: null });
       outstandingUploads.current = 0;
       uploadedChunkCount.current = 0;
 
       environment.start({ sessionId: sessionIdRef.current, profileId: profileId!, startedAt: recordingStartTime.current },
         { wodDescription, movements, appearanceHints: appearanceHints ?? "", language: locale },
-        { resolution, lowFps, showSkeleton, onDeviceAi, zoomMode, aspectRatio, landscapeMode,
+        { resolution, lowFps, showSkeleton: false, onDeviceAi, zoomMode, aspectRatio, landscapeMode,
           observationIntervalSeconds: Number(observationIntervalSeconds) || 300,
           environmentAnalysis: true,
           visualQuestions: environmentAnalysisParam === "true",
@@ -1285,12 +1364,6 @@ export default function VisionTestPage() {
       }));
       TelemetryRecorder.registerProvider("chunk", () => ({
         chunkIdx: chunkCountRef.current,
-      }));
-      TelemetryRecorder.registerProvider("workoutConf", () => ({
-        workoutConf: Math.round(getWorkoutConfidence() * 1000) / 1000,
-      }));
-      TelemetryRecorder.registerProvider("motion", () => ({
-        motion: getLatestMotion(),
       }));
 
       // Start Polar H10 time-series sensor recording.
@@ -1509,7 +1582,11 @@ export default function VisionTestPage() {
               console.warn("Server merge skipped because no chunks were uploaded");
               return;
             }
-            if (capture.pendingUploads > 0 || capture.failedUploads > 0) {
+            const missingMediaReceipts = capture.mediaPipelineVersion === 1 &&
+              (capture.mediaReceipts.size !== capture.mediaChunkCount ||
+                Array.from({ length: capture.mediaChunkCount }, (_, index) => index + 1)
+                  .some((order) => !capture.mediaReceipts.has(order)));
+            if (capture.pendingUploads > 0 || capture.failedUploads > 0 || missingMediaReceipts) {
               console.warn(
                 `⚠️ Server merge withheld: ${capture.completedUploads} uploaded, ${capture.failedUploads} failed, ${capture.pendingUploads} pending`,
               );
@@ -1523,6 +1600,13 @@ export default function VisionTestPage() {
               profileId: capturedProfileIdRef.current!,
               wodDescription: wodDescription || undefined,
               appearanceHints,
+              ...(capture.mediaPipelineVersion === 1 ? {
+                mediaPipelineVersion: 1 as const,
+                expectedChunkCount: capture.mediaChunkCount,
+                chunks: [...capture.mediaReceipts.entries()]
+                  .sort(([first], [second]) => first - second)
+                  .map(([, receipt]) => receipt),
+              } : {}),
             });
             console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
           } catch (e) {
@@ -1589,46 +1673,76 @@ export default function VisionTestPage() {
     };
   });
 
-  if (!hasPermission || !hasMicPermission) {
+  const handleBack = () => {
+    if (isRecording) {
+      Alert.alert(t("common.confirm"), t("workout.recordingExitConfirm"), [
+        { text: t("common.cancel"), style: "cancel" },
+        { text: t("common.ok"), style: "destructive", onPress: () => { void handleStopRecording(); } },
+      ]);
+      return;
+    }
+    setIsLeaving(true);
+    if (
+      navigation &&
+      typeof navigation.canGoBack === "function" &&
+      navigation.canGoBack() &&
+      typeof navigation.goBack === "function"
+    ) {
+      navigation.goBack();
+      return;
+    }
+    if (typeof router.canGoBack === "function" && router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace("/workout/setup" as any);
+  };
+
+  if (!hasPermission || (!previewOnly && !hasMicPermission)) {
     return (
-      <View style={styles.center}>
-        <Text style={{ color: "#fff", fontSize: 18, marginBottom: 16 }}>
-          Camera & Microphone Permission Required
+      <View testID="vision-permission-root" style={[styles.center, safeCenterStyle]}>
+        <TouchableOpacity
+          testID="vision-back-button"
+          onPress={handleBack}
+          style={styles.permissionBackButton}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel={t("common.back")}
+        >
+          <IconSymbol name="chevron.left" size={24} color="#FFFFFF" />
+          <Text style={styles.permissionButtonText}>{t("common.back")}</Text>
+        </TouchableOpacity>
+        <Text style={styles.permissionMessage}>
+          {t(`overlay.recording.${previewOnly ? "cameraPermissionRequired" : "cameraMicPermissionRequired"}`)}
         </Text>
         <TouchableOpacity
           onPress={async () => {
-            let cameraRes = hasPermission;
-            if (!hasPermission) {
-              cameraRes = await requestPermission();
+            try {
+              const cameraRes = hasPermission || await requestPermission();
+              const micRes = previewOnly || hasMicPermission || await requestMicPermission();
+              if (cameraRes && micRes) return;
+            } catch (error) {
+              console.warn("Camera access request failed", error);
             }
-            let micRes = hasMicPermission;
-            if (!hasMicPermission) {
-              micRes = await requestMicPermission();
-            }
-            if (!cameraRes || !micRes) {
-              // Permission permanently denied — direct to settings
-              Alert.alert(
-                "Permission Denied",
-                "Camera or Microphone permission was permanently denied. Please enable them in Settings.",
-                [
-                  { text: "Cancel", style: "cancel" },
-                  {
-                    text: "Open Settings",
-                    onPress: () => Linking.openSettings(),
-                  },
-                ],
-              );
-            }
+            // A denied permission must still leave an in-app exit available.
+            Alert.alert(
+              t("overlay.recording.permissionDenied"),
+              t(`overlay.recording.${previewOnly ? "cameraPermissionSettings" : "cameraMicPermissionSettings"}`),
+              [
+                { text: t("common.cancel"), style: "cancel" },
+                {
+                  text: t("overlay.recording.openSettings"),
+                  onPress: () => { void Linking.openSettings(); },
+                },
+              ],
+            );
           }}
-          style={{
-            backgroundColor: "#fff",
-            paddingVertical: 12,
-            paddingHorizontal: 32,
-            borderRadius: 10,
-          }}
+          style={styles.permissionGrantButton}
+          accessibilityRole="button"
+          accessibilityLabel={t(`overlay.recording.${previewOnly ? "grantCameraAccess" : "grantCameraMicAccess"}`)}
         >
-          <Text style={{ color: "#000", fontWeight: "bold", fontSize: 16 }}>
-            Grant Camera & Microphone Access
+          <Text style={styles.permissionGrantText}>
+            {t(`overlay.recording.${previewOnly ? "grantCameraAccess" : "grantCameraMicAccess"}`)}
           </Text>
         </TouchableOpacity>
       </View>
@@ -1637,48 +1751,44 @@ export default function VisionTestPage() {
 
   if (!device)
     return (
-      <View style={styles.center}>
-        <Text style={{ color: "#fff" }}>No Camera</Text>
+      <View testID="vision-no-camera-root" style={[styles.center, safeCenterStyle]}>
+        <Text style={styles.permissionMessage}>{t("overlay.recording.noCamera")}</Text>
+        <TouchableOpacity
+          testID="vision-back-button"
+          onPress={handleBack}
+          style={styles.permissionBackButton}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          accessibilityRole="button"
+          accessibilityLabel={t("common.back")}
+        >
+          <IconSymbol name="chevron.left" size={24} color="#FFFFFF" />
+          <Text style={styles.permissionButtonText}>{t("common.back")}</Text>
+        </TouchableOpacity>
       </View>
     );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View testID="vision-recording-root" style={[styles.container, safeContainerStyle]}>
       {/* Android: hint to mount phone sideways when landscape mode is on */}
       {IS_ANDROID && landscapeMode && !isRecording && (
-        <View style={styles.landscapeHint}>
+        <View pointerEvents="none" style={styles.landscapeHint}>
           <Text style={styles.landscapeHintText}>
             📱 Mount phone sideways for landscape view
           </Text>
         </View>
       )}
 
-      <View testID="recording-chrome" style={isLandscapeLayout && styles.chromeLandscape}>
+      <View
+        testID="recording-chrome"
+        style={[styles.recordingChrome, isLandscapeLayout && styles.chromeLandscape]}
+      >
         {/* Top Header: Back navigation & Mode badge */}
         <View style={[styles.topHeader, isLandscapeLayout && styles.topHeaderLandscape]}>
           <TouchableOpacity
+            testID="vision-back-button"
             style={styles.backButton}
-            onPress={() => {
-              if (isRecording) {
-                Alert.alert(
-                  t("common.confirm"),
-                  t("workout.recordingExitConfirm", { defaultValue: "Are you sure you want to stop recording and exit?" }),
-                  [
-                    { text: t("common.cancel"), style: "cancel" },
-                    {
-                      text: t("common.ok"),
-                      style: "destructive",
-                      onPress: () => {
-                        void handleStopRecording();
-                      },
-                    },
-                  ]
-                );
-              } else {
-                router.back();
-              }
-            }}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            onPress={handleBack}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             accessibilityRole="button"
             accessibilityLabel={t("common.back")}
           >
@@ -1688,7 +1798,7 @@ export default function VisionTestPage() {
           <View style={styles.modeBadge}>
             <View style={styles.modeDot} />
             <Text style={styles.modeText}>
-              {t("overlay.recording.mode", { type: workoutTypeLabel })}
+              {previewOnly ? t("setup.previewCamera") : t("overlay.recording.mode", { type: workoutTypeLabel })}
             </Text>
           </View>
         </View>
@@ -1832,6 +1942,7 @@ export default function VisionTestPage() {
             ]}
           >
             <Camera
+              testID="recording-camera"
               ref={camera}
               style={StyleSheet.absoluteFill}
               device={device}
@@ -1839,12 +1950,12 @@ export default function VisionTestPage() {
               format={format}
               fps={targetFps}
               resizeMode="cover"
-              frameProcessor={frameProcessor}
+              frameProcessor={poseEnabled ? frameProcessor : undefined}
               pixelFormat="yuv"
               videoHdr={false}
               enableBufferCompression={false}
               video={true}
-              audio={hasMicPermission}
+              audio={!previewOnly && hasMicPermission}
               videoStabilizationMode={videoStabilizationMode}
               zoom={zoomMode ? 0.1 : 0}
               onInitialized={() => setIsCameraReady(true)}
@@ -1858,8 +1969,8 @@ export default function VisionTestPage() {
             />
 
             {/* Skeleton overlay inside compact viewfinder */}
-            {showSkeleton && (
-              <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            {poseEnabled && previewSkeletonVisible && (
+              <View testID="preview-skeleton-overlay" style={StyleSheet.absoluteFill} pointerEvents="none">
                 <SkeletonOverlay
                   pose={poseResult}
                   width={viewfinderWidth}
@@ -1913,6 +2024,29 @@ export default function VisionTestPage() {
           ]}
         >
           {/* Controls remain outside the scrolling telemetry panel. */}
+          {previewOnly && (
+            <View style={[styles.controlBarContainer, isLandscapeLayout && styles.controlBarContainerLandscape]}>
+              <View style={[styles.controlRow, isLandscapeLayout && !isTelemetryExpanded && styles.controlColumn]}>
+                <TouchableOpacity
+                  onPress={handleFlipCamera}
+                  style={styles.controlIconBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("overlay.recording.flipCamera")}
+                >
+                  <IconSymbol name="camera.rotate" size={20} color="#FFFFFF" />
+                </TouchableOpacity>
+                <View style={styles.previewSkeletonControl}>
+                  <Text style={styles.permissionButtonText}>{t("setup.skeletonOverlay")}</Text>
+                  <Switch
+                    testID="preview-skeleton-toggle"
+                    value={previewSkeletonVisible}
+                    onValueChange={setPreviewSkeletonVisible}
+                    accessibilityLabel={t("setup.skeletonOverlay")}
+                  />
+                </View>
+              </View>
+            </View>
+          )}
           {!previewOnly && !isMerging && (
             <View
               style={[
@@ -2013,7 +2147,6 @@ export default function VisionTestPage() {
           )}
 
           {/* Telemetry Toggle Bar (Expands/Collapses Telemetry & Adjusts Video Viewfinder) */}
-          {!previewOnly && (
             <TouchableOpacity
               onPress={() => setIsTelemetryExpanded((prev) => !prev)}
               activeOpacity={0.8}
@@ -2036,7 +2169,6 @@ export default function VisionTestPage() {
                   : t(isTelemetryExpanded ? "overlay.recording.collapseTelemetry" : "overlay.recording.expandTelemetry")}
               </Text>
             </TouchableOpacity>
-          )}
 
           {/* Telemetry Section (Scrollable Cards - Visible only when expanded) */}
           {isTelemetryExpanded && (
@@ -2048,7 +2180,7 @@ export default function VisionTestPage() {
               showsVerticalScrollIndicator={false}
             >
               {/* Card 1: 실시간 피드백 (Live Coaching Feedback) */}
-              {(isRecording || chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
+              {!previewOnly && (isRecording || chunkFeedback || liveFeedback.captureAdvice || liveFeedback.summary?.available) && (
                 <View style={styles.feedbackCardWrapper}>
                   {isFeedbackCollapsed ? (
                     <TouchableOpacity
@@ -2179,23 +2311,23 @@ export default function VisionTestPage() {
                 </View>
               )}
 
-              {/* Card 3: AI 비전 실험 (AI EXPERIMENT & STATE) */}
-              {!previewOnly && (
+              {/* MoveNet diagnostics are available only in camera preview. */}
+              {previewOnly && (
                 <View style={styles.aiVisionCard}>
                   <View style={[styles.aiVisionHeader, isLandscapeLayout && styles.cardHeaderLandscape]}>
                     <View style={[styles.cardHeaderTitleRow, isLandscapeLayout && styles.cardTitleLandscape]}>
                       <IconSymbol name="eye" size={14} color="#00F0FF" />
                       <Text style={styles.aiVisionTitle} numberOfLines={1}>
-                        {t("overlay.recording.aiVisionTitle")}
+                        {t("poseDebug.title")}
                       </Text>
                     </View>
                     <View style={styles.aiVisionBadge}>
                       <Text style={styles.aiVisionBadgeText}>
-                        {t(`overlay.recording.${isModelLoaded ? "modelReady" : "modelLoading"}`)}
+                        {t(`poseDebug.status.${poseStatus === "loaded" && !hasInference ? "waiting" : poseStatus}`)}
                       </Text>
                     </View>
                   </View>
-                  {isModelLoaded && (
+                  {isModelLoaded && hasInference ? (
                     <View style={styles.jsonTerminalBox}>
                       <Text style={styles.jsonTerminalText}>
                         {t("overlay.recording.detectionConfidence", { value: (safeConfidence * 100).toFixed(0) })}
@@ -2207,6 +2339,8 @@ export default function VisionTestPage() {
                         {t(`overlay.recording.${monitorData.isWorkingOut ? "motionDetected" : "motionNotDetected"}`)}
                       </Text>
                     </View>
+                  ) : (
+                    <Text style={styles.coachingText}>{t("poseDebug.noInference")}</Text>
                   )}
                 </View>
               )}
@@ -2236,7 +2370,7 @@ export default function VisionTestPage() {
               )}
 
               {/* Apple On-Device AI Feedback Card (Experimental) */}
-              {onDeviceAi && (
+              {onDeviceAi && !previewOnly && (
                 <View style={styles.experimentalCardWrapper}>
                   <AppleAiFeedbackCard
                     status={appleAi.status}
@@ -2248,15 +2382,11 @@ export default function VisionTestPage() {
               )}
 
               {/* Energy Monitor (Compact bottom telemetry element) */}
-              {!previewOnly && (
                 <View style={styles.energyMonitorWrapper}>
                   <EnergyMonitor
-                    label={
-                      isRecording ? "Default Model (7MB) · 2fps" : "Preview · 1fps"
-                    }
+                    label={previewOnly ? t("poseDebug.title") : t("overlay.recording.recordingEnergyLabel")}
                   />
                 </View>
-              )}
             </ScrollView>
           )}
 
@@ -2292,7 +2422,7 @@ export default function VisionTestPage() {
           </View>
         </View>
       )}
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -2301,6 +2431,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#05080C",
     paddingVertical: 8,
+  },
+  recordingChrome: {
+    zIndex: 20,
   },
   chromeLandscape: {
     flexDirection: "row",
@@ -2333,6 +2466,42 @@ const styles = StyleSheet.create({
     alignItems: "center",
     backgroundColor: "#05080C",
     padding: 24,
+  },
+  permissionMessage: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  permissionBackButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  permissionButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    flexShrink: 1,
+  },
+  permissionGrantButton: {
+    backgroundColor: "#FFFFFF",
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 10,
+  },
+  permissionGrantText: {
+    color: "#000000",
+    fontWeight: "600",
+    fontSize: 16,
+  },
+  previewSkeletonControl: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 1,
+    minWidth: 0,
   },
   lapToastContainer: {
     position: "absolute",
@@ -2382,6 +2551,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 16,
     marginBottom: 8,
+    zIndex: 20,
   },
   topHeaderLandscape: {
     paddingHorizontal: 0,
@@ -2389,9 +2559,9 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   backButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: "rgba(255, 255, 255, 0.08)",
     borderWidth: 1,
     borderColor: "rgba(255, 255, 255, 0.12)",

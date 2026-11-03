@@ -28,9 +28,11 @@ import (
 
 type PrepareOptions struct {
 	DatabaseURL, Bucket, OutputDir, SourceSessionID string
+	Name, FixturesRoot                              string
 	FromFixtureDir                                  string
 	SourceProfileID                                 uint
 	MediaStartSecs, MediaEndSecs, ChunkSeconds      float64
+	AutoEnd                                         bool
 }
 
 type replaySource struct {
@@ -45,14 +47,32 @@ type replaySource struct {
 // prepareFixture only reads the source database and GCS objects. Publish the
 // completed directory in one rename so an interrupted extraction is never runnable.
 func prepareFixture(ctx context.Context, opts PrepareOptions) error {
+	root := opts.FixturesRoot
+	if root == "" {
+		root = defaultFixturesRoot
+	}
+	if strings.TrimSpace(opts.Name) != "" && strings.TrimSpace(opts.OutputDir) != "" {
+		return fmt.Errorf("specify either --wod (WOD=<name>) or --fixture, not both")
+	}
+	if strings.TrimSpace(opts.Name) != "" {
+		slug, err := normalizeFixtureName(opts.Name)
+		if err != nil {
+			return err
+		}
+		opts.Name = slug
+		opts.OutputDir = filepath.Join(root, slug)
+	}
 	if opts.FromFixtureDir != "" {
+		opts.FromFixtureDir = resolveFromFixtureDir(root, opts.FromFixtureDir)
 		return prepareFromFixture(ctx, opts)
 	}
 	if err := validatePrepareOptions(opts); err != nil {
 		return err
 	}
-	if err := fixtureDestinationAvailable(opts.OutputDir); err != nil {
-		return err
+	if opts.OutputDir != "" {
+		if err := fixtureDestinationAvailable(opts.OutputDir); err != nil {
+			return err
+		}
 	}
 	for _, binary := range []string{"ffmpeg", "ffprobe"} {
 		if _, err := exec.LookPath(binary); err != nil {
@@ -72,17 +92,32 @@ func prepareFixture(ctx context.Context, opts PrepareOptions) error {
 	if err != nil {
 		return err
 	}
-	startMs, endMs := opts.MediaStartSecs*1000, opts.MediaEndSecs*1000
-	if err := validateMapping(source.Mapping, startMs, endMs); err != nil {
-		return fmt.Errorf("source capture/media mapping: %w", err)
+	if opts.OutputDir == "" {
+		opts.Name = deriveFixtureName(source.WODDescription, opts.SourceSessionID)
+		opts.OutputDir = filepath.Join(root, opts.Name)
+		if err := fixtureDestinationAvailable(opts.OutputDir); err != nil {
+			return err
+		}
 	}
-	captureStart, err := captureAtMedia(source.Mapping, startMs)
-	if err != nil {
-		return err
-	}
-	captureEnd, err := prepareCaptureEnd(source.Mapping, endMs)
-	if err != nil {
-		return err
+	startMs := opts.MediaStartSecs * 1000
+	var captureStart, captureEnd float64
+	if opts.AutoEnd {
+		if _, err := contiguousMappedEndMs(source.Mapping, startMs); err != nil {
+			return fmt.Errorf("source capture/media mapping: %w", err)
+		}
+	} else {
+		endMs := opts.MediaEndSecs * 1000
+		if err := validateMapping(source.Mapping, startMs, endMs); err != nil {
+			return fmt.Errorf("source capture/media mapping: %w", err)
+		}
+		captureStart, err = captureAtMedia(source.Mapping, startMs)
+		if err != nil {
+			return err
+		}
+		captureEnd, err = prepareCaptureEnd(source.Mapping, endMs)
+		if err != nil {
+			return err
+		}
 	}
 	sensorObject, sensorGeneration, err := sourceSensorReference(source.SensorProcessing, source.ProfileID, opts.SourceSessionID)
 	if err != nil {
@@ -119,7 +154,7 @@ func prepareFixture(ctx context.Context, opts PrepareOptions) error {
 	if err != nil {
 		return err
 	}
-	if duration+0.001 < opts.MediaEndSecs {
+	if !opts.AutoEnd && duration+0.001 < opts.MediaEndSecs {
 		return fmt.Errorf("source video is %.3fs; requested end %.3fs is unavailable", duration, opts.MediaEndSecs)
 	}
 	sensorPath := filepath.Join(stage, "source-sensor.ndjson")
@@ -137,6 +172,25 @@ func prepareFixture(ctx context.Context, opts PrepareOptions) error {
 	baseEpoch, err := telemetryBaseEpoch(raw, source.ProfileID, opts.SourceSessionID)
 	if err != nil {
 		return err
+	}
+	if opts.AutoEnd {
+		footerMs, err := telemetryFooterDurationMs(raw)
+		if err != nil {
+			return err
+		}
+		resolvedEndSecs, err := resolveAutoMediaEndSecs(source.Mapping, opts.MediaStartSecs, duration, fps, footerMs)
+		if err != nil {
+			return err
+		}
+		opts.MediaEndSecs = resolvedEndSecs
+		captureStart, err = captureAtMedia(source.Mapping, startMs)
+		if err != nil {
+			return err
+		}
+		captureEnd, err = prepareCaptureEnd(source.Mapping, opts.MediaEndSecs*1000)
+		if err != nil {
+			return err
+		}
 	}
 	cropped, stats, err := cropTelemetry(raw, captureStart, captureEnd, opts.SourceSessionID, source.ProfileID, baseEpoch+int64(math.Round(captureStart)))
 	if err != nil {
@@ -156,7 +210,7 @@ func prepareFixture(ctx context.Context, opts PrepareOptions) error {
 		return err
 	}
 	manifest := FixtureManifest{
-		Version: 1, PreparedAt: time.Now().UTC(), SourceSessionID: opts.SourceSessionID,
+		Version: 1, Name: opts.Name, PreparedAt: time.Now().UTC(), SourceSessionID: opts.SourceSessionID,
 		SourceProfileID: source.ProfileID, Bucket: opts.Bucket, Video: videoRef, Sensor: sensorRef,
 		MediaStartSecs: opts.MediaStartSecs, MediaEndSecs: opts.MediaEndSecs, ChunkSeconds: opts.ChunkSeconds,
 		CaptureStartMs: captureStart, CaptureEndMs: captureEnd, FPS: fps, Mapping: source.Mapping,
@@ -181,7 +235,14 @@ func prepareFixture(ctx context.Context, opts PrepareOptions) error {
 	if err := os.Rename(stage, opts.OutputDir); err != nil {
 		return fmt.Errorf("publish prepared fixture: %w", err)
 	}
-	fmt.Printf("Prepared %d chunks, %d HR samples and %d ACC samples at %s\n", len(chunks), stats.HRSamples, stats.ACCSamples, opts.OutputDir)
+	fmt.Printf("Prepared %d chunks (%s..%s, %.1fs), %d HR samples and %d ACC samples at %s\n",
+		len(chunks), formatMediaTimestamp(opts.MediaStartSecs, false), formatMediaTimestamp(opts.MediaEndSecs, false),
+		opts.MediaEndSecs-opts.MediaStartSecs, stats.HRSamples, stats.ACCSamples, opts.OutputDir)
+	if opts.Name != "" {
+		fmt.Printf("Run: make live-test WOD=%s\n", opts.Name)
+	} else {
+		fmt.Printf("Run: make live-test ARGS='--fixture=%s'\n", opts.OutputDir)
+	}
 	return nil
 }
 
@@ -211,21 +272,130 @@ func validateSourceSensorIntegrity(raw, processing []byte) error {
 }
 
 func validatePrepareOptions(opts PrepareOptions) error {
-	if strings.TrimSpace(opts.DatabaseURL) == "" || strings.TrimSpace(opts.Bucket) == "" || strings.TrimSpace(opts.OutputDir) == "" || strings.TrimSpace(opts.SourceSessionID) == "" {
-		return fmt.Errorf("prepare requires source database URL, bucket, output directory and source session ID")
+	if strings.TrimSpace(opts.DatabaseURL) == "" || strings.TrimSpace(opts.Bucket) == "" || strings.TrimSpace(opts.SourceSessionID) == "" {
+		return fmt.Errorf("prepare requires source database URL, bucket, and source session ID (pass SESSION=<session_id> or --source-session)")
 	}
 	if strings.ContainsAny(opts.SourceSessionID, "/\\") || strings.Contains(opts.Bucket, "/") {
 		return fmt.Errorf("invalid source session ID or bucket name")
 	}
-	for _, value := range []float64{opts.MediaStartSecs, opts.MediaEndSecs, opts.ChunkSeconds} {
+	values := []float64{opts.MediaStartSecs, opts.ChunkSeconds}
+	if !opts.AutoEnd {
+		values = append(values, opts.MediaEndSecs)
+	}
+	for _, value := range values {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return fmt.Errorf("prepare time values must be finite")
 		}
 	}
-	if opts.MediaStartSecs < 0 || opts.MediaEndSecs <= opts.MediaStartSecs || opts.ChunkSeconds <= 0 {
+	if opts.MediaStartSecs < 0 || opts.ChunkSeconds <= 0 || (!opts.AutoEnd && opts.MediaEndSecs <= opts.MediaStartSecs) {
 		return fmt.Errorf("prepare requires 0 <= media start < media end and positive chunk seconds")
 	}
 	return nil
+}
+
+func telemetryFooterDurationMs(raw []byte) (float64, error) {
+	events, err := readTelemetry(raw)
+	if err != nil {
+		return 0, err
+	}
+	duration, err := telemetryNumber(events[len(events)-1], "t")
+	if err != nil || duration <= 0 {
+		return 0, fmt.Errorf("telemetry requires a positive footer duration")
+	}
+	return duration, nil
+}
+
+func contiguousMappedEndMs(segments []MappingSegment, startMs float64) (float64, error) {
+	if math.IsNaN(startMs) || math.IsInf(startMs, 0) || startMs < 0 {
+		return 0, fmt.Errorf("invalid media start timestamp")
+	}
+	ordered, err := sortedReplayMapping(segments)
+	if err != nil {
+		return 0, err
+	}
+	cursor := startMs
+	started := false
+	for _, segment := range ordered {
+		if segment.MediaEndMs <= cursor {
+			continue
+		}
+		if segment.MediaStartMs > cursor {
+			if !started {
+				return 0, fmt.Errorf("media interval has no verified mapping at %.6fms", cursor)
+			}
+			break
+		}
+		started = true
+		cursor = segment.MediaEndMs
+	}
+	if !started || cursor <= startMs {
+		return 0, fmt.Errorf("verified mapping ends before requested media start %.3fs", startMs/1000)
+	}
+	return cursor, nil
+}
+
+func resolveAutoMediaEndSecs(segments []MappingSegment, startSecs, videoDurationSecs, fps, sensorFooterMs float64) (float64, error) {
+	if !finite(startSecs) || startSecs < 0 || !finite(videoDurationSecs) || videoDurationSecs <= 0 || !finite(fps) || fps <= 0 || !finite(sensorFooterMs) || sensorFooterMs <= 0 {
+		return 0, fmt.Errorf("invalid inputs for automatic workout end calculation")
+	}
+	startMs := startSecs * 1000
+	ordered, err := sortedReplayMapping(segments)
+	if err != nil {
+		return 0, err
+	}
+	cursorMediaMs := startMs
+	sensorLimitMediaMs := startMs
+	started := false
+	sensorCapped := false
+	for _, segment := range ordered {
+		if segment.MediaEndMs <= cursorMediaMs {
+			continue
+		}
+		if segment.MediaStartMs > cursorMediaMs {
+			if !started {
+				return 0, fmt.Errorf("source capture/media mapping: media interval has no verified mapping at %.6fms", cursorMediaMs)
+			}
+			break
+		}
+		started = true
+		cursorMediaMs = segment.MediaEndMs
+		if !sensorCapped {
+			if sensorFooterMs <= segment.CaptureStartMs {
+				sensorCapped = true
+			} else if sensorFooterMs < segment.CaptureEndMs {
+				frac := (sensorFooterMs - segment.CaptureStartMs) / (segment.CaptureEndMs - segment.CaptureStartMs)
+				sensorLimitMediaMs = segment.MediaStartMs + frac*(segment.MediaEndMs-segment.MediaStartMs)
+				sensorCapped = true
+			} else {
+				sensorLimitMediaMs = segment.MediaEndMs
+			}
+		}
+	}
+	if !started {
+		return 0, fmt.Errorf("source capture/media mapping: verified mapping ends before %.3fs", startSecs)
+	}
+	limitSecs := math.Min(videoDurationSecs, math.Min(cursorMediaMs/1000, sensorLimitMediaMs/1000))
+	if limitSecs <= startSecs {
+		return 0, fmt.Errorf("no overlapping video/sensor data after %.3fs (video %.3fs, mapped %.3fs, sensor %.3fs)", startSecs, videoDurationSecs, cursorMediaMs/1000, sensorLimitMediaMs/1000)
+	}
+	frames := math.Floor((limitSecs-startSecs)*fps + 1e-9)
+	if frames < 1 {
+		return 0, fmt.Errorf("overlapping video/sensor interval after %.3fs is shorter than one frame", startSecs)
+	}
+	for frames >= 1 {
+		endSecs := math.Round((startSecs+frames/fps)*1e6) / 1e6
+		if endSecs > limitSecs {
+			endSecs = math.Floor((startSecs+frames/fps)*1e6) / 1e6
+		}
+		if endSecs > startSecs && endSecs <= videoDurationSecs+0.001 && validateMapping(ordered, startMs, endSecs*1000) == nil {
+			captureEnd, endErr := prepareCaptureEnd(ordered, endSecs*1000)
+			if endErr == nil && captureEnd <= sensorFooterMs {
+				return endSecs, nil
+			}
+		}
+		frames--
+	}
+	return 0, fmt.Errorf("unable to align automatic workout end after %.3fs within video and sensor bounds", startSecs)
 }
 
 func fixtureDestinationAvailable(dir string) error {
