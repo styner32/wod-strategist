@@ -944,62 +944,9 @@ func ActiveRecords(records []Record) []Record {
 func Comparisons(records []Record) []Comparison {
 	out := []Comparison{}
 	for _, current := range records {
-		if !comparableRecord(current) || current.PerformedAt == nil {
-			continue
+		if comparison, ok := ComparisonFor(current, records); ok {
+			out = append(out, comparison)
 		}
-		var direct, reference *Record
-		for i := range records {
-			prior := &records[i]
-			if prior.ID == current.ID || !comparableRecord(*prior) || prior.Movement != current.Movement || !recordBefore(*prior, current) {
-				continue
-			}
-			if reference == nil || recordBefore(*reference, *prior) {
-				reference = prior
-			}
-			if len(conditionDifferences(current, *prior)) == 0 && (direct == nil || recordBefore(*direct, *prior)) {
-				direct = prior
-			}
-		}
-		base := direct
-		kind := "direct"
-		if base == nil {
-			base = reference
-			kind = "reference"
-		}
-		if base == nil {
-			continue
-		}
-		comparison := Comparison{CurrentRecordID: current.ID, BaselineRecordID: base.ID, Kind: kind, ConditionDifferences: conditionDifferences(current, *base)}
-		if kind == "direct" && base.RepsPerMinute != nil && *base.RepsPerMinute > 0 {
-			change := (*current.RepsPerMinute / *base.RepsPerMinute - 1) * 100
-			comparison.RateChangePercent = &change
-		}
-		// The most recent comparable lower-load equal-rep record is independent
-		// of the same-load pace baseline. This is performed load, not force/1RM.
-		var heavierBaseline *Record
-		for i := range records {
-			prior := &records[i]
-			if !comparableRecord(*prior) || prior.Movement != current.Movement || !recordBefore(*prior, current) || !sameReps(current.Reps, prior.Reps) || current.LoadKG == nil || prior.LoadKG == nil || current.Load == nil || prior.Load == nil || current.Load.Basis != prior.Load.Basis || *current.LoadKG <= *prior.LoadKG {
-				continue
-			}
-			compatible := true
-			for _, d := range conditionDifferences(current, *prior) {
-				if d != "load" {
-					compatible = false
-					break
-				}
-			}
-			if compatible && (heavierBaseline == nil || recordBefore(*heavierBaseline, *prior)) {
-				heavierBaseline = prior
-			}
-		}
-		if heavierBaseline != nil {
-			gain := *current.LoadKG - *heavierBaseline.LoadKG
-			id := heavierBaseline.ID
-			comparison.HeavierLoadKG = &gain
-			comparison.HeavierLoadBaselineRecordID = &id
-		}
-		out = append(out, comparison)
 	}
 	return out
 }

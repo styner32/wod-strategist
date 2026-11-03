@@ -105,6 +105,7 @@ func SetupRouter(appEnv string, allowedOrigins []string,
 	protected.GET("/wod-training-load", ctl.GetWODTrainingLoad)
 	protected.GET("/performance-benchmarks", ctl.GetPerformanceBenchmarks)
 	protected.GET("/sessions/:session_id/workout-progress", ctl.GetWorkoutProgress)
+	protected.GET("/sessions/:session_id/share-context", ctl.GetWorkoutShareContext)
 	protected.PUT("/sessions/:session_id/performance-records", ctl.UpdatePerformanceRecords)
 	protected.GET("/sessions/:session_id/recognition-evaluation", ctl.GetRecognitionEvaluation)
 	protected.POST("/sessions/:session_id/recognition-reviews", ctl.CreateRecognitionReview)

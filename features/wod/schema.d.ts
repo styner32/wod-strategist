@@ -1311,6 +1311,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/sessions/{session_id}/share-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a read-only workout context for explicit external sharing */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Owned profile ID */
+                    profile_id: number;
+                    /** @description IANA timezone (default Asia/Seoul) */
+                    timezone?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Owned session ID */
+                    session_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["controllers.WorkoutShareContextResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Forbidden */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+                /** @description Conflict */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessions/{session_id}/workout-progress": {
         parameters: {
             query?: never;
@@ -2038,6 +2137,51 @@ export interface components {
         "controllers.WorkoutProgressResponse": {
             progress?: components["schemas"]["workoutprogress.Progress"];
             records?: components["schemas"]["workoutprogress.Record"][];
+        };
+        "controllers.WorkoutShareContextResponse": {
+            baseline_records?: components["schemas"]["workoutprogress.Record"][];
+            comparisons?: components["schemas"]["workoutprogress.Comparison"][];
+            confirmed_records?: components["schemas"]["workoutprogress.Record"][];
+            effort?: number;
+            generated_at?: string;
+            observations?: components["schemas"]["controllers.WorkoutShareObservation"][];
+            schema_version?: number;
+            sensor_summary?: components["schemas"]["controllers.WorkoutShareSensorSummary"];
+            session?: components["schemas"]["controllers.WorkoutShareSession"];
+            timezone?: string;
+            unassessed?: components["schemas"]["workoutprogress.Gap"][];
+            warnings?: string[];
+        };
+        "controllers.WorkoutShareObservation": {
+            activity?: string;
+            end_secs?: number;
+            form_observations?: components["schemas"]["workoutprogress.Observation"][];
+            id?: string;
+            load?: components["schemas"]["workoutprogress.Load"];
+            movement?: string;
+            observed_reps?: number;
+            pace_observations?: components["schemas"]["workoutprogress.Observation"][];
+            rom_observations?: components["schemas"]["workoutprogress.Observation"][];
+            start_secs?: number;
+        };
+        "controllers.WorkoutShareSensorSummary": {
+            avg_bpm?: number;
+            calculation_version?: number;
+            coverage?: number;
+            excluded_seconds?: number;
+            peak_bpm?: number;
+            quality_status?: string;
+            status?: string;
+            unknown_seconds?: number;
+            valid_seconds?: number;
+        };
+        "controllers.WorkoutShareSession": {
+            performed_at?: string;
+            performed_at_source?: string;
+            session_id?: string;
+            source_version?: string;
+            workout_prescription?: string;
+            workout_type?: string;
         };
         "db.ChunkAnalysisResult": {
             capture_assessment?: Record<string, never>;

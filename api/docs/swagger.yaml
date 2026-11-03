@@ -678,6 +678,110 @@ definitions:
           $ref: '#/definitions/workoutprogress.Record'
         type: array
     type: object
+  controllers.WorkoutShareContextResponse:
+    properties:
+      baseline_records:
+        items:
+          $ref: '#/definitions/workoutprogress.Record'
+        type: array
+      comparisons:
+        items:
+          $ref: '#/definitions/workoutprogress.Comparison'
+        type: array
+      confirmed_records:
+        items:
+          $ref: '#/definitions/workoutprogress.Record'
+        type: array
+      effort:
+        type: integer
+      generated_at:
+        type: string
+      observations:
+        items:
+          $ref: '#/definitions/controllers.WorkoutShareObservation'
+        type: array
+      schema_version:
+        type: integer
+      sensor_summary:
+        $ref: '#/definitions/controllers.WorkoutShareSensorSummary'
+      session:
+        $ref: '#/definitions/controllers.WorkoutShareSession'
+      timezone:
+        type: string
+      unassessed:
+        items:
+          $ref: '#/definitions/workoutprogress.Gap'
+        type: array
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  controllers.WorkoutShareObservation:
+    properties:
+      activity:
+        type: string
+      end_secs:
+        type: number
+      form_observations:
+        items:
+          $ref: '#/definitions/workoutprogress.Observation'
+        type: array
+      id:
+        type: string
+      load:
+        $ref: '#/definitions/workoutprogress.Load'
+      movement:
+        type: string
+      observed_reps:
+        type: integer
+      pace_observations:
+        items:
+          $ref: '#/definitions/workoutprogress.Observation'
+        type: array
+      rom_observations:
+        items:
+          $ref: '#/definitions/workoutprogress.Observation'
+        type: array
+      start_secs:
+        type: number
+    type: object
+  controllers.WorkoutShareSensorSummary:
+    properties:
+      avg_bpm:
+        type: number
+      calculation_version:
+        type: integer
+      coverage:
+        type: number
+      excluded_seconds:
+        type: number
+      peak_bpm:
+        type: number
+      quality_status:
+        type: string
+      status:
+        type: string
+      unknown_seconds:
+        type: number
+      valid_seconds:
+        type: number
+    type: object
+  controllers.WorkoutShareSession:
+    properties:
+      performed_at:
+        type: string
+      performed_at_source:
+        type: string
+      session_id:
+        type: string
+      source_version:
+        type: string
+      workout_prescription:
+        type: string
+      workout_type:
+        type: string
+    type: object
   db.ChunkAnalysisResult:
     properties:
       capture_assessment:
@@ -1804,6 +1908,63 @@ paths:
               type: string
             type: object
       summary: Get a recognition diagnosis
+      tags:
+      - analysis
+  /sessions/{session_id}/share-context:
+    get:
+      parameters:
+      - description: Owned session ID
+        in: path
+        name: session_id
+        required: true
+        type: string
+      - description: Owned profile ID
+        in: query
+        name: profile_id
+        required: true
+        type: integer
+      - description: IANA timezone (default Asia/Seoul)
+        in: query
+        name: timezone
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.WorkoutShareContextResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get a read-only workout context for explicit external sharing
       tags:
       - analysis
   /sessions/{session_id}/workout-progress:

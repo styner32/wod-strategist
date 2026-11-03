@@ -4,6 +4,7 @@ import { HistoryArchiveAction } from "./components/HistoryArchiveAction";
 import { historyLocation, historyStatusLabel } from "./historyArchive";
 import { WODTrainingPanel } from "./components/WODTrainingPanel";
 import { WorkoutProgressPanel } from "./components/WorkoutProgressPanel";
+import { WorkoutShareDialog } from "./components/WorkoutShareDialog";
 import { AnalysisOverview } from "./components/AnalysisOverview";
 import { OnDeviceAiPanel } from "./components/OnDeviceAiPanel";
 import { H10MemoryPanel } from "./components/H10MemoryPanel";
@@ -1054,7 +1055,10 @@ export function SessionDetailPage() {
           </svg>
         </Link>
         <h1 className="text-xl font-bold text-text-primary">Session Detail</h1>
-        {analysis && <div className="ml-auto"><HistoryArchiveAction result={analysis} /></div>}
+        {analysis && <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {!isArchived && analysis.status === "COMPLETED" && (analysis.analysis_type ?? "wod") === "wod" && sessionId && profileId && <WorkoutShareDialog sessionId={sessionId} profileId={profileId} />}
+          <HistoryArchiveAction result={analysis} />
+        </div>}
       </div>
 
       {isArchived && <p role="status" className="mb-5 rounded-xl border border-border bg-bg-secondary p-4 text-sm text-text-secondary">보관한 기록입니다. 피로도·훈련 부하·운동 비교에서 제외되며, 분석과 수정은 복원 후 사용할 수 있습니다. 영상과 저장된 결과, 스트레칭은 보존됩니다.</p>}

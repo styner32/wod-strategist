@@ -45,7 +45,8 @@ async function request<T>(
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path, { method: 'GET' }),
+  get: <T>(path: string, options: { signal?: AbortSignal } = {}) =>
+    request<T>(path, { ...options, method: 'GET' }),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, {
       method: 'POST',

@@ -1,5 +1,6 @@
 import type { WODTraining, WODTrainingLoad } from "../../../shared/wodTraining";
 import type { HeartRateSummary } from "../../../shared/heartRateSummary";
+import type { WorkoutShareContext } from "../../../shared/workoutShare";
 import { api } from "./client";
 import type { ConfirmPerformanceRecordsRequest, PerformanceBenchmarksResponse, PerformanceRecord, WorkoutProgressResponse } from "../../../shared/workoutProgress";
 
@@ -123,6 +124,7 @@ export interface SessionFatigue {
 }
 
 export interface AnalysisResult {
+  analysis_type?: string;
   analysis_summary?: import("./enrichment").AnalysisSummary;
   heart_rate?: HeartRateSummary;
   id: number;
@@ -419,6 +421,8 @@ export interface VideoDownloadResponse {
 export type VideoKind = "merged" | "hardsubbed" | "encoded";
 
 export const historyApi = {
+  getWorkoutShareContext: (sessionId: string, profileId: number, timezone: string, signal?: AbortSignal) =>
+    api.get<WorkoutShareContext>(`/sessions/${encodeURIComponent(sessionId)}/share-context?${new URLSearchParams({ profile_id: String(profileId), timezone })}`, { signal }),
   getRecognitionEvaluation: (sessionId: string) => api.get<RecognitionEvaluation>(`/sessions/${encodeURIComponent(sessionId)}/recognition-evaluation`),
   createRecognitionReview: (sessionId: string, body: CreateRecognitionReviewRequest) => api.post<{ run_id: number; status: RecognitionReviewStatus }>(`/sessions/${encodeURIComponent(sessionId)}/recognition-reviews`, body),
   listRecognitionReviews: (sessionId: string) => api.get<{ runs: RecognitionReviewRun[]; active_run_id?: number | null }>(`/sessions/${encodeURIComponent(sessionId)}/recognition-reviews`),

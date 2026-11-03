@@ -1,5 +1,6 @@
 import { WODTrainingCard } from "./WODTrainingCard";
 import { WorkoutProgressCard } from "./WorkoutProgressCard";
+import { WorkoutShareSheet } from "./WorkoutShareSheet";
 import { withoutWorkoutEvidence } from "../../../shared/analysisEvidence";
 import { EnvironmentHistoryCard } from "../../environment/EnvironmentCard";
 import { ActivitySummaryCard } from "./ActivitySummaryCard";
@@ -211,6 +212,7 @@ function HistoryCard({
 
   const [downloading, setDownloading] = useState<string | null>(null); // 'merged' | 'hardsubbed' | 'encoded'
   const [retrying, setRetrying] = useState(false);
+  const [shareVisible, setShareVisible] = useState(false);
   const [generatingHardsub, setGeneratingHardsub] = useState(false);
   const statusConfig = getStatusConfig(item.status);
   const typeBadge = getTypeBadge(item.analysis_type);
@@ -711,6 +713,12 @@ function HistoryCard({
           </TouchableOpacity>
         )}
 
+        {isCompleted && item.analysis_type === "wod" && !item.archived_at && !!item.profile_id && (
+          <TouchableOpacity accessibilityRole="button" style={styles.watchBtn} onPress={() => setShareVisible(true)} activeOpacity={0.85}>
+            <Text style={styles.watchBtnText}>{t("workoutShare.askAI")}</Text>
+          </TouchableOpacity>
+        )}
+
         {/* Watch button — opens full workout player */}
         {isCompleted &&
           item.analysis_type !== "injury_supplement" &&
@@ -1003,6 +1011,7 @@ function HistoryCard({
           </View>
         )}
       </TouchableOpacity>
+      {!!item.profile_id && <WorkoutShareSheet visible={shareVisible && isCompleted && item.analysis_type === "wod" && !item.archived_at} sessionId={item.session_id} profileId={item.profile_id} onClose={() => setShareVisible(false)} />}
     </View>
   );
 }

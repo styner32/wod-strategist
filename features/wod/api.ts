@@ -10,6 +10,7 @@ import {
 import { getToken } from "@/features/auth/storage";
 import type { components } from "./schema";
 import type { WorkoutType } from "./workoutType";
+import type { WorkoutShareContext } from "../../shared/workoutShare";
 import type { ConfirmPerformanceRecordsRequest, PerformanceBenchmarksResponse, WorkoutProgressResponse } from "../../shared/workoutProgress";
 
 const API_BASE_URL =
@@ -200,6 +201,10 @@ export async function fetchMovements(): Promise<string[]> {
 
 export function getWorkoutProgress(sessionId: string, signal?: AbortSignal): Promise<WorkoutProgressResponse> {
   return apiClient(`/sessions/${encodeURIComponent(sessionId)}/workout-progress`, { signal });
+}
+export function getWorkoutShareContext(sessionId: string, profileId: number, timezone: string, signal?: AbortSignal): Promise<WorkoutShareContext> {
+  const params = new URLSearchParams({ profile_id: String(profileId), timezone });
+  return apiClient(`/sessions/${encodeURIComponent(sessionId)}/share-context?${params}`, { signal });
 }
 export function confirmPerformanceRecords(sessionId: string, body: ConfirmPerformanceRecordsRequest): Promise<WorkoutProgressResponse> {
   return apiClient(`/sessions/${encodeURIComponent(sessionId)}/performance-records`, { method: "PUT", bodyPayload: body });

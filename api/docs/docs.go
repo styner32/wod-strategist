@@ -999,6 +999,92 @@ const docTemplate = `{
                 }
             }
         },
+        "/sessions/{session_id}/share-context": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "analysis"
+                ],
+                "summary": "Get a read-only workout context for explicit external sharing",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Owned session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Owned profile ID",
+                        "name": "profile_id",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "IANA timezone (default Asia/Seoul)",
+                        "name": "timezone",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/controllers.WorkoutShareContextResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/sessions/{session_id}/workout-progress": {
             "get": {
                 "produces": [
@@ -2317,6 +2403,164 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/workoutprogress.Record"
                     }
+                }
+            }
+        },
+        "controllers.WorkoutShareContextResponse": {
+            "type": "object",
+            "properties": {
+                "baseline_records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                },
+                "comparisons": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Comparison"
+                    }
+                },
+                "confirmed_records": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Record"
+                    }
+                },
+                "effort": {
+                    "type": "integer"
+                },
+                "generated_at": {
+                    "type": "string"
+                },
+                "observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.WorkoutShareObservation"
+                    }
+                },
+                "schema_version": {
+                    "type": "integer"
+                },
+                "sensor_summary": {
+                    "$ref": "#/definitions/controllers.WorkoutShareSensorSummary"
+                },
+                "session": {
+                    "$ref": "#/definitions/controllers.WorkoutShareSession"
+                },
+                "timezone": {
+                    "type": "string"
+                },
+                "unassessed": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Gap"
+                    }
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "controllers.WorkoutShareObservation": {
+            "type": "object",
+            "properties": {
+                "activity": {
+                    "type": "string"
+                },
+                "end_secs": {
+                    "type": "number"
+                },
+                "form_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "id": {
+                    "type": "string"
+                },
+                "load": {
+                    "$ref": "#/definitions/workoutprogress.Load"
+                },
+                "movement": {
+                    "type": "string"
+                },
+                "observed_reps": {
+                    "type": "integer"
+                },
+                "pace_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "rom_observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workoutprogress.Observation"
+                    }
+                },
+                "start_secs": {
+                    "type": "number"
+                }
+            }
+        },
+        "controllers.WorkoutShareSensorSummary": {
+            "type": "object",
+            "properties": {
+                "avg_bpm": {
+                    "type": "number"
+                },
+                "calculation_version": {
+                    "type": "integer"
+                },
+                "coverage": {
+                    "type": "number"
+                },
+                "excluded_seconds": {
+                    "type": "number"
+                },
+                "peak_bpm": {
+                    "type": "number"
+                },
+                "quality_status": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "unknown_seconds": {
+                    "type": "number"
+                },
+                "valid_seconds": {
+                    "type": "number"
+                }
+            }
+        },
+        "controllers.WorkoutShareSession": {
+            "type": "object",
+            "properties": {
+                "performed_at": {
+                    "type": "string"
+                },
+                "performed_at_source": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "source_version": {
+                    "type": "string"
+                },
+                "workout_prescription": {
+                    "type": "string"
+                },
+                "workout_type": {
+                    "type": "string"
                 }
             }
         },
