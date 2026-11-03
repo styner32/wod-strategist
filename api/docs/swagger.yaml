@@ -8,6 +8,8 @@ definitions:
         type: string
       end_secs:
         type: number
+      movement:
+        type: string
       reason:
         type: string
       start_secs:
@@ -17,6 +19,8 @@ definitions:
     properties:
       end_secs:
         type: number
+      movement:
+        type: string
       reason:
         type: string
       start_secs:
@@ -108,6 +112,11 @@ definitions:
       unit:
         type: string
     type: object
+  controllers.AppearanceInput:
+    properties:
+      appearance:
+        type: string
+    type: object
   controllers.ChunkAnalysisSummaryResponse:
     properties:
       completed:
@@ -155,6 +164,8 @@ definitions:
     type: object
   controllers.CompleteUploadRequest:
     properties:
+      appearance_hints:
+        type: string
       enable_tts:
         type: boolean
       gcs_uri:
@@ -167,6 +178,8 @@ definitions:
         items:
           type: string
         type: array
+      pipeline_mode:
+        type: string
       profile_id:
         type: integer
       session_id:
@@ -277,34 +290,6 @@ definitions:
       updated_at:
         type: string
     type: object
-  controllers.GenerateHardSubRequest:
-    properties:
-      enable_tts:
-        type: boolean
-      profile_id:
-        type: integer
-      session_id:
-        type: string
-    type: object
-  controllers.GenerateHardSubResponse:
-    properties:
-      message:
-        type: string
-      session_id:
-        type: string
-      task_id:
-        type: string
-    type: object
-  controllers.GenerateHighlightRequest:
-    properties:
-      max_duration:
-        description: seconds, default 60
-        type: integer
-      profile_id:
-        type: integer
-      session_id:
-        type: string
-    type: object
   controllers.ListRecognitionReviewsResponse:
     properties:
       active_run_id:
@@ -316,6 +301,8 @@ definitions:
     type: object
   controllers.MergeChunksRequest:
     properties:
+      appearance_hints:
+        type: string
       enable_tts:
         type: boolean
       injuries:
@@ -326,6 +313,8 @@ definitions:
         items:
           type: string
         type: array
+      pipeline_mode:
+        type: string
       profile_id:
         type: integer
       session_id:
@@ -394,6 +383,10 @@ definitions:
         type: object
       measurement:
         type: string
+      movement:
+        type: string
+      outcome:
+        type: string
       reps:
         type: integer
       start_secs:
@@ -428,6 +421,62 @@ definitions:
         type: string
       variant:
         type: string
+    type: object
+  controllers.PreWODAdviceRequest:
+    properties:
+      movements:
+        items:
+          type: string
+        type: array
+      profile_id:
+        type: integer
+      wod_description:
+        type: string
+    required:
+    - profile_id
+    type: object
+  controllers.PreWODAdviceResponse:
+    properties:
+      advice_code:
+        type: string
+      as_of:
+        type: string
+      effort_reflection:
+        $ref: '#/definitions/fatigue.EffortReflectionInfo'
+      effort_reflection_reason:
+        type: string
+      evidence:
+        $ref: '#/definitions/fatigue.EvidenceCounts'
+      evidence_status:
+        type: string
+      history_revision:
+        type: string
+      last_workout_at:
+        type: string
+      mobility_warmup:
+        items:
+          $ref: '#/definitions/fatigue.MobilityWarmupItem'
+        type: array
+      muscle_readiness:
+        items:
+          $ref: '#/definitions/fatigue.MuscleReadinessItem'
+        type: array
+      overall_fatigue_score:
+        type: integer
+      overall_state:
+        type: string
+      overall_state_ko:
+        type: string
+      overall_summary:
+        type: string
+      profile_id:
+        type: integer
+      scaling_advice:
+        items:
+          $ref: '#/definitions/fatigue.ScalingAdviceItem'
+        type: array
+      target_rpe:
+        $ref: '#/definitions/fatigue.TargetRPEInfo'
     type: object
   controllers.RecognitionReviewBatchResponse:
     properties:
@@ -506,7 +555,6 @@ definitions:
         type: string
     type: object
   controllers.RelatedWODItem:
-    type: object
     properties:
       analysis_id:
         type: integer
@@ -524,8 +572,8 @@ definitions:
         type: string
       wod_description:
         type: string
-  controllers.RelatedWODQuery:
     type: object
+  controllers.RelatedWODQuery:
     properties:
       movement:
         type: string
@@ -533,33 +581,17 @@ definitions:
         type: string
       weight_kg:
         type: number
-  controllers.RelatedWODsResponse:
     type: object
+  controllers.RelatedWODsResponse:
     properties:
       query:
         $ref: '#/definitions/controllers.RelatedWODQuery'
       related:
-        type: array
         items:
           $ref: '#/definitions/controllers.RelatedWODItem'
-  controllers.RetryAnalysisRequest:
-    properties:
-      profile_id:
-        type: integer
-      session_id:
-        type: string
-    type: object
-  controllers.RetryAnalysisResponse:
-    properties:
-      message:
-        type: string
-      session_id:
-        type: string
-      task_id:
-        type: string
+        type: array
     type: object
   controllers.ScoreParts:
-    type: object
     properties:
       main:
         type: number
@@ -567,6 +599,7 @@ definitions:
         type: number
       weight:
         type: number
+    type: object
   controllers.SessionAssetResponse:
     properties:
       cache_key:
@@ -623,11 +656,6 @@ definitions:
           $ref: '#/definitions/controllers.SessionCatalogItemResponse'
         type: array
     type: object
-  controllers.VerifyHighlightsRequest:
-    properties:
-      session_id:
-        type: string
-    type: object
   controllers.VideoDownloadURLResponse:
     properties:
       download_url:
@@ -666,10 +694,17 @@ definitions:
       file_path:
         type: string
       heart_rate_bpm:
-        description: BLE heart rate at chunk capture time (0 = unavailable)
+        description: BLE heart rate associated with the chunk; exact sample time is
+          unavailable (0 = unavailable)
         type: integer
       id:
         type: integer
+      media_end_secs:
+        type: number
+      media_start_secs:
+        type: number
+      motion_score:
+        type: number
       movement_observations:
         type: object
       observed_signals:
@@ -681,10 +716,16 @@ definitions:
         type: integer
       session_id:
         type: string
+      skip_reason:
+        type: string
       start_secs:
         type: number
       status:
         description: PENDING, COMPLETED, FAILED
+        type: string
+      target_confidence:
+        type: number
+      target_cues:
         type: string
       updated_at:
         type: string
@@ -727,7 +768,6 @@ definitions:
         type: string
     type: object
   db.NormalizedMovement:
-    type: object
     properties:
       is_main:
         type: boolean
@@ -739,6 +779,113 @@ definitions:
         type: number
       weight_raw:
         type: string
+    type: object
+  fatigue.EffortReflectionInfo:
+    properties:
+      applied:
+        type: boolean
+      rated_count:
+        type: integer
+      reason:
+        type: string
+      recent_workouts:
+        items:
+          $ref: '#/definitions/fatigue.RecentWorkoutSummary'
+        type: array
+      sensor_count:
+        type: integer
+      total_recent:
+        type: integer
+    type: object
+  fatigue.EvidenceCounts:
+    properties:
+      excluded_sessions:
+        type: integer
+      total_sessions:
+        type: integer
+      unresolved_time_sessions:
+        type: integer
+      valid_sessions:
+        type: integer
+    type: object
+  fatigue.HybridSensorBrief:
+    properties:
+      calibration_version:
+        type: string
+      data_coverage:
+        type: number
+      heart_intensity:
+        type: number
+      hybrid_intensity:
+        type: number
+      hybrid_load_au:
+        type: number
+      motion_intensity:
+        type: number
+    type: object
+  fatigue.MobilityWarmupItem:
+    properties:
+      duration:
+        type: string
+      reason:
+        type: string
+      target_area:
+        type: string
+      title:
+        type: string
+    type: object
+  fatigue.MuscleReadinessItem:
+    properties:
+      fatigue_score:
+        type: integer
+      group:
+        type: string
+      name_ko:
+        type: string
+      note:
+        type: string
+      state:
+        type: string
+      state_ko:
+        type: string
+    type: object
+  fatigue.RecentWorkoutSummary:
+    properties:
+      duration_seconds:
+        type: integer
+      effort:
+        type: integer
+      hybrid_sensor:
+        $ref: '#/definitions/fatigue.HybridSensorBrief'
+      hybrid_sensor_excluded_reason:
+        type: string
+      movements:
+        items:
+          type: string
+        type: array
+      session_id:
+        type: string
+      workout_at:
+        type: string
+    type: object
+  fatigue.ScalingAdviceItem:
+    properties:
+      detail:
+        type: string
+      movement:
+        type: string
+      recommendation:
+        type: string
+    type: object
+  fatigue.TargetRPEInfo:
+    properties:
+      label:
+        type: string
+      pacing_strategy:
+        type: string
+      score:
+        type: integer
+    type: object
   recognitionreview.Evaluation:
     properties:
       fingerprint:
@@ -934,7 +1081,6 @@ definitions:
         type: integer
     type: object
   workoutprogress.Record:
-    type: object
     properties:
       confirmed_at:
         type: string
@@ -956,6 +1102,8 @@ definitions:
         type: number
       movement:
         type: string
+      outcome:
+        type: string
       performed_at:
         type: string
       performed_at_source:
@@ -967,9 +1115,9 @@ definitions:
       reps_per_minute:
         type: number
       rest_comparisons:
-        type: array
         items:
           $ref: '#/definitions/workoutprogress.RestComparison'
+        type: array
       session_id:
         type: string
       source_version:
@@ -982,8 +1130,8 @@ definitions:
         type: string
       workout_prescription:
         type: string
-  workoutprogress.RestComparison:
     type: object
+  workoutprogress.RestComparison:
     properties:
       after_median_cycle_seconds:
         type: number
@@ -997,6 +1145,7 @@ definitions:
         type: number
       rest_start_secs:
         type: number
+    type: object
 host: localhost:8088
 info:
   contact: {}
@@ -1004,6 +1153,39 @@ info:
   title: WOD Strategist API
   version: "1.0"
 paths:
+  /appearance-from-image:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Extracts person visual appearance cues from a photo
+      parameters:
+      - description: Person photo (JPEG/PNG, max 10MB)
+        in: formData
+        name: image
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.AppearanceInput'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "422":
+          description: Unprocessable Entity
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Parse Appearance Image
+      tags:
+      - workout
   /chunk-analysis/:session_id:
     get:
       description: Fetches the partial analysis chunks for a given session
@@ -1158,69 +1340,6 @@ paths:
       summary: Get Session Play URL
       tags:
       - dev
-  /generate-hardsub:
-    post:
-      consumes:
-      - application/json
-      description: Creates a hardsubbed version of the video with burned-in subtitles
-      parameters:
-      - description: Session and profile
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/controllers.GenerateHardSubRequest'
-      produces:
-      - application/json
-      responses:
-        "202":
-          description: Accepted
-          schema:
-            $ref: '#/definitions/controllers.GenerateHardSubResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/controllers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/controllers.ErrorResponse'
-      summary: Generate Hardsubbed Video
-      tags:
-      - video
-  /generate-highlight:
-    post:
-      consumes:
-      - application/json
-      description: Triggers short-form highlight video generation from WOD analysis
-        for a session
-      parameters:
-      - description: Session ID and options
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/controllers.GenerateHighlightRequest'
-      produces:
-      - application/json
-      responses:
-        "202":
-          description: Accepted
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/controllers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/controllers.ErrorResponse'
-      summary: Generate Highlight
-      tags:
-      - highlight
   /highlight-download/:id:
     get:
       description: Returns a time-limited signed URL for downloading a specific highlight
@@ -1427,41 +1546,54 @@ paths:
       summary: Get confirmed workout performance benchmarks
       tags:
       - analysis
-  /retry-analysis:
-    post:
-      consumes:
-      - application/json
-      description: Re-enqueues a video analysis task for a failed session using existing
-        GCS files
+  /related-wods:
+    get:
+      description: Returns nearest past WODs of the same profile containing the specified
+        movement, ranked by recency, weight match, and main movement status.
       parameters:
-      - description: Session and profile
-        in: body
-        name: request
+      - description: Profile ID
+        in: query
+        name: profile_id
         required: true
-        schema:
-          $ref: '#/definitions/controllers.RetryAnalysisRequest'
+        type: integer
+      - description: Movement name (Mode A)
+        in: query
+        name: movement
+        type: string
+      - description: Movement weight in kg (Mode A)
+        in: query
+        name: weight_kg
+        type: number
+      - description: Anchor session ID (Mode B)
+        in: query
+        name: session_id
+        type: string
+      - description: Max results (default 5, max 20)
+        in: query
+        name: limit
+        type: integer
       produces:
       - application/json
       responses:
-        "202":
-          description: Accepted
+        "200":
+          description: OK
           schema:
-            $ref: '#/definitions/controllers.RetryAnalysisResponse'
+            $ref: '#/definitions/controllers.RelatedWODsResponse'
         "400":
           description: Bad Request
           schema:
             $ref: '#/definitions/controllers.ErrorResponse'
-        "404":
-          description: Not Found
+        "403":
+          description: Forbidden
           schema:
             $ref: '#/definitions/controllers.ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
             $ref: '#/definitions/controllers.ErrorResponse'
-      summary: Retry Analysis
+      summary: Get Related WODs
       tags:
-      - analysis
+      - wod
   /sessions/{session_id}/activity-summary:
     get:
       parameters:
@@ -1495,8 +1627,8 @@ paths:
         name: session_id
         required: true
         type: string
-      - description: Confirm interval, window, integer reps and actual load (or explicit
-          null for no external load)
+      - description: Confirm interval, window, outcome, optional integer reps and
+          actual load (or explicit null for no external load)
         in: body
         name: request
         required: true
@@ -1710,6 +1842,41 @@ paths:
       summary: Get chronological workout observations
       tags:
       - analysis
+  /strategies/pre-wod-advice:
+    post:
+      consumes:
+      - application/json
+      description: Calculates 6-muscle group readiness from recent workouts and returns
+        tailored coaching advice for today's WOD.
+      parameters:
+      - description: Pre-WOD Advice Request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.PreWODAdviceRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controllers.PreWODAdviceResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controllers.ErrorResponse'
+      summary: Get Pre-WOD Strategy & Scaling Advice
+      tags:
+      - strategy
   /subtitles/:session_id:
     get:
       description: Returns chunk analysis feedback as an SRT subtitle file for a given
@@ -1795,50 +1962,16 @@ paths:
       summary: Create Upload URL
       tags:
       - upload
-  /verify-highlights:
-    post:
-      consumes:
-      - application/json
-      description: Triggers verification of highlight segments to detect hallucinated
-        movements
-      parameters:
-      - description: Session ID
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/controllers.VerifyHighlightsRequest'
-      produces:
-      - application/json
-      responses:
-        "202":
-          description: Accepted
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/controllers.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/controllers.ErrorResponse'
-      summary: Verify Highlights
-      tags:
-      - highlight
   /video-download/:session_id:
     get:
-      description: Returns a time-limited signed URL for downloading the merged or
-        hardsubbed video
+      description: Returns a time-limited signed URL for one requested video kind
       parameters:
       - description: Session ID
         in: path
         name: session_id
         required: true
         type: string
-      - description: 'Video kind: merged (default) or hardsubbed'
+      - description: 'Video kind: merged (default), hardsubbed, or encoded'
         in: query
         name: kind
         type: string
