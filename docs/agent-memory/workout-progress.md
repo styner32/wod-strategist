@@ -100,6 +100,23 @@ merge and explicit target-movement selection for back-to-back movements.
 - `completed` (default when omitted on input): requires non-empty `movement` and resolved actual `load` (`null` means no external load, never "unknown"). `reps` is optional: `null`/omitted confirms elapsed time and load (`reps_per_minute = null`, `rate_basis = null`), while an integer `>= 1` derives `reps_per_minute` and `rate_basis`; `reps <= 0` is rejected.
 - `incomplete`: preserves attempted `movement` and resolved actual `load`, sets `reps = null`, `reps_per_minute = null`, `rate_basis = null`.
 - `rest`: reclassifies an exercise or unassessed interval to rest/transition (`movement = ""`, `load = null`, `reps = null`, `reps_per_minute = null`, `rate_basis = null`, `measurement = "set"`, `technique = "unspecified"`).
+
+Rest confirmations select timing independently of the original activity, movement,
+or load. Clip every selected source interval and reuse its own capture mapping;
+never extrapolate one anchor mapping over neighboring intervals. Explicit media
+unassessed ranges may fill otherwise uncovered time. Reject holes, unverified
+mapping, mixed mapped/unmapped spans, recording gaps and discontinuous capture
+timing. Use media duration only when all selected spans are unmapped and no
+capture-clock gap exists. Whole intervals with different media/capture durations
+are valid; partial intervals require an identity mapping. The shared
+`restSelectionCovered` validator mirrors these backend rules.
+
+Movement summaries subtract the union of active confirmed rest ranges from each
+source exercise interval without changing raw observations. A partially remaining
+source interval counts once. Reps are excluded only when their completion belongs
+to `(rest.start_secs, rest.end_secs]`; seconds events contribute only their
+remaining overlap. Direct record lookup still supports editing partial records.
+
 Migration `000062` backfills any legacy `reps = 0` rows to `outcome = 'incomplete'` with `reps = NULL`. Only `outcome = 'completed'` records with `reps >= 1` participate in benchmark reads (`FindConfirmedPerformanceRecordsForBenchmarks`), comparisons, best records, median cycle, and rest comparisons; `incomplete`, `rest`, and count-omitted (`reps = null`) records remain stored and displayed on the session timeline.
 
 The web performance editor focuses itself when opened. Enter in the editor or

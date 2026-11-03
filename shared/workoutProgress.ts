@@ -416,18 +416,57 @@ export function findCoveringConfirmedRecord(
   );
 }
 
+interface SummaryTimeRange {
+  start: number;
+  end: number;
+}
+
+function summaryRestRanges(records: PerformanceRecord[]): SummaryTimeRange[] {
+  const ranges = records
+    .filter(r => r.status === "confirmed" && normalizePerformanceOutcome(r.outcome) === "rest")
+    .map(r => ({ start: r.start_secs, end: r.end_secs }))
+    .filter(r => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start)
+    .sort((a, b) => a.start - b.start);
+  const merged: SummaryTimeRange[] = [];
+  for (const range of ranges) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
+function summaryExerciseRanges(interval: WorkoutProgressInterval, rests: SummaryTimeRange[]): SummaryTimeRange[] {
+  const remaining: SummaryTimeRange[] = [];
+  let cursor = interval.start_secs;
+  for (const rest of rests) {
+    if (rest.end <= cursor) continue;
+    if (rest.start >= interval.end_secs) break;
+    if (rest.start > cursor) remaining.push({ start: cursor, end: rest.start });
+    cursor = Math.max(cursor, rest.end);
+    if (cursor >= interval.end_secs) break;
+  }
+  if (cursor < interval.end_secs) remaining.push({ start: cursor, end: interval.end_secs });
+  return remaining;
+}
+
 export function summarizeWorkoutMovements(
   progress?: WorkoutProgress | null,
   records: PerformanceRecord[] = [],
 ): WorkoutMovementSummary[] {
   if (!progress) return [];
   const active = activePerformanceRecords(records);
+  const rests = summaryRestRanges(active);
   const map = new Map<string, WorkoutMovementSummary>();
 
   for (const interval of progress.intervals) {
     if (interval.activity !== "exercise" || !interval.movement?.trim()) continue;
+    const exerciseRanges = summaryExerciseRanges(interval, rests);
+    if (exerciseRanges.length === 0) continue;
     const covering = findCoveringConfirmedRecord(interval, active);
-    if (covering && normalizePerformanceOutcome(covering.outcome) === "rest") continue;
     const name = covering?.movement?.trim() || interval.movement.trim();
     const existing = map.get(name) ?? {
       movement: name,
@@ -442,9 +481,13 @@ export function summarizeWorkoutMovements(
     for (const ev of interval.rep_events ?? []) {
       if (!ev.complete) continue;
       if (ev.unit === "reps") {
+        // Completion belongs to (start, end], just as it does in record evaluation.
+        if (rests.some(rest => ev.end_secs > rest.start && ev.end_secs <= rest.end)) continue;
         existing.observedReps += 1;
       } else if (ev.unit === "seconds") {
-        existing.observedSeconds += Math.max(0, ev.end_secs - ev.start_secs);
+        for (const range of exerciseRanges) {
+          existing.observedSeconds += Math.max(0, Math.min(ev.end_secs, range.end) - Math.max(ev.start_secs, range.start));
+        }
       }
     }
     if (!existing.loadLabel && interval.load) {
@@ -1241,32 +1284,56 @@ export function restSelectionCovered(
   if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= interval.end_secs || end <= interval.start_secs || end <= start) {
     return false;
   }
-  if (!progress && (start < interval.start_secs || end > interval.end_secs)) return false;
-  if (
-    progress?.unassessed.some(
-      gap =>
-        gap.clock === "media" &&
-        gap.reason === "unverified_capture_mapping" &&
-        start < gap.end_secs &&
-        end > gap.start_secs,
-    )
-  ) {
-    return false;
+  const source = progress ?? { intervals: [interval], unassessed: [] };
+  const mediaGaps = source.unassessed
+    .filter(gap => gap.clock === "media" && gap.start_secs < end && gap.end_secs > start)
+    .sort((a, b) => a.start_secs - b.start_secs);
+  if (mediaGaps.some(gap => gap.reason === "unverified_capture_mapping")) return false;
+
+  const gapCovered = (from: number, to: number): boolean => {
+    let cursor = from;
+    for (const gap of mediaGaps) {
+      if (gap.end_secs <= cursor) continue;
+      if (gap.start_secs > cursor + 1e-6) return false;
+      cursor = Math.max(cursor, gap.end_secs);
+      if (cursor >= to - 1e-6) return true;
+    }
+    return cursor >= to - 1e-6;
+  };
+  const spans: { interval?: WorkoutProgressInterval; start: number; end: number }[] = [];
+  let cursor = start;
+  for (const row of source.intervals) {
+    if (row.end_secs <= cursor || row.start_secs >= end) continue;
+    if (row.start_secs > cursor + 1e-6) {
+      if (!gapCovered(cursor, row.start_secs)) return false;
+      spans.push({ start: cursor, end: row.start_secs });
+    }
+    const spanEnd = Math.min(row.end_secs, end);
+    spans.push({ interval: row, start: Math.max(cursor, row.start_secs), end: spanEnd });
+    cursor = spanEnd;
+    if (cursor >= end) break;
   }
-  if ((interval.capture_start_secs != null) !== (interval.capture_end_secs != null)) return false;
-  if (interval.capture_start_secs != null && interval.capture_end_secs != null) {
-    const captureStart = interval.capture_start_secs;
-    const captureEnd = interval.capture_end_secs;
-    if (!Number.isFinite(captureStart) || !Number.isFinite(captureEnd) || captureStart < 0 || captureEnd <= captureStart) {
-      return false;
-    }
-    let mappedStart = start === interval.start_secs ? captureStart : captureStart + (start - interval.start_secs);
-    let mappedEnd = end === interval.end_secs ? captureEnd : captureStart + (end - interval.start_secs);
-    if (mappedStart < 0 && start < interval.start_secs) {
-      mappedEnd -= mappedStart;
-      mappedStart = 0;
-    }
-    if (!Number.isFinite(mappedStart) || !Number.isFinite(mappedEnd) || mappedEnd <= mappedStart) return false;
+  if (cursor < end - 1e-6) {
+    if (!gapCovered(cursor, end)) return false;
+    spans.push({ start: cursor, end });
+  }
+  if (spans.length === 0) return false;
+  const mapped = spans.map(span => span.interval?.capture_start_secs != null || span.interval?.capture_end_secs != null);
+  if (!mapped.some(Boolean)) return !source.unassessed.some(gap => gap.clock === "capture");
+  if (!mapped.every(Boolean)) return false;
+  let previousEnd: number | undefined;
+  for (const span of spans) {
+    const row = span.interval!;
+    const captureStart = row.capture_start_secs, captureEnd = row.capture_end_secs;
+    if (captureStart == null || captureEnd == null || !Number.isFinite(captureStart) || !Number.isFinite(captureEnd) || captureStart < 0 || captureEnd <= captureStart) return false;
+    const whole = span.start === row.start_secs && span.end === row.end_secs;
+    if (!whole && Math.abs(captureEnd - captureStart - (row.end_secs - row.start_secs)) > 0.01) return false;
+    const mappedStart = span.start === row.start_secs ? captureStart : captureStart + span.start - row.start_secs;
+    const mappedEnd = span.end === row.end_secs ? captureEnd : captureStart + span.end - row.start_secs;
+    if (!Number.isFinite(mappedStart) || !Number.isFinite(mappedEnd) || mappedStart < 0 || mappedEnd <= mappedStart) return false;
+    if (source.unassessed.some(gap => gap.clock === "capture" && captureStart < gap.end_secs && captureEnd > gap.start_secs)) return false;
+    if (previousEnd != null && Math.abs(mappedStart - previousEnd) > 0.01) return false;
+    previousEnd = mappedEnd;
   }
   return true;
 }
@@ -1311,7 +1378,7 @@ export function diagnosePerformanceDraft(
       return `시작~종료 범위가 현재 선택한 구간(${progressTime(interval.start_secs)}–${progressTime(interval.end_secs)})과 겹쳐야 합니다.`;
     }
     if (!restSelectionCovered(interval, start, end, progress)) {
-      return "선택한 시작~종료 범위에 원본 영상 매핑 미검증 구간이 포함되어 있습니다.";
+      return "선택한 시작~종료 범위의 원본 영상 범위나 촬영 시간 매핑을 확인할 수 없습니다.";
     }
     return null;
   }

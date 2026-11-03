@@ -339,34 +339,13 @@ func confirmRest(progress Progress, input Confirmation) (Record, error) {
 	if interval != nil && (input.Start >= interval.End || input.End <= interval.Start) {
 		return Record{}, errors.New("window must overlap its selected exercise interval")
 	}
-	for _, gap := range progress.Unassessed {
-		if gap.Clock == "media" && input.Start < gap.End && input.End > gap.Start && gap.Reason == "unverified_capture_mapping" {
-			return Record{}, errors.New("selected window contains unavailable video evidence")
-		}
+	spans, err := selectRestSpans(progress, input.Start, input.End)
+	if err != nil {
+		return Record{}, err
 	}
-	var elapsed float64
-	if interval != nil && (interval.CaptureStart != nil || interval.CaptureEnd != nil) {
-		if interval.CaptureStart == nil || interval.CaptureEnd == nil || !activity.ValidInterval(*interval.CaptureStart, *interval.CaptureEnd) {
-			return Record{}, errors.New("capture mapping is invalid")
-		}
-		start := *interval.CaptureStart + (input.Start - interval.Start)
-		end := *interval.CaptureStart + (input.End - interval.Start)
-		if input.Start == interval.Start {
-			start = *interval.CaptureStart
-		}
-		if input.End == interval.End {
-			end = *interval.CaptureEnd
-		}
-		if start < 0 && input.Start < interval.Start {
-			end -= start
-			start = 0
-		}
-		if !activity.ValidInterval(start, end) {
-			return Record{}, errors.New("selected subwindow capture timing cannot be verified")
-		}
-		elapsed = end - start
-	} else {
-		elapsed = input.End - input.Start
+	elapsed, _, err := selectedElapsed(progress, spans)
+	if err != nil {
+		return Record{}, err
 	}
 	if elapsed <= 0 || math.IsInf(elapsed, 0) || math.IsNaN(elapsed) {
 		return Record{}, errors.New("selected window cannot produce a finite performance rate")
@@ -384,6 +363,70 @@ func confirmRest(progress Progress, input Confirmation) (Record, error) {
 		Technique:       "unspecified",
 		RestComparisons: []RestComparison{},
 	}, nil
+}
+
+// Rest corrections may replace any observed activity or explicit unassessed
+// media, but classification changes cannot supply missing clock mappings.
+func selectRestSpans(progress Progress, start, end float64) ([]observedSpan, error) {
+	mediaGaps := []Gap{}
+	for _, gap := range progress.Unassessed {
+		if gap.Clock != "media" || gap.End <= start || gap.Start >= end {
+			continue
+		}
+		if gap.Reason == "unverified_capture_mapping" {
+			return nil, errors.New("selected window contains unavailable video evidence")
+		}
+		mediaGaps = append(mediaGaps, gap)
+	}
+	sort.SliceStable(mediaGaps, func(i, j int) bool { return mediaGaps[i].Start < mediaGaps[j].Start })
+	gapCovered := func(from, to float64) bool {
+		cursor := from
+		for _, gap := range mediaGaps {
+			if gap.End <= cursor {
+				continue
+			}
+			if gap.Start > cursor+1e-6 {
+				return false
+			}
+			cursor = math.Max(cursor, gap.End)
+			if cursor >= to-1e-6 {
+				return true
+			}
+		}
+		return cursor >= to-1e-6
+	}
+	spans := []observedSpan{}
+	cursor := start
+	appendGap := func(to float64) error {
+		if !gapCovered(cursor, to) {
+			return errors.New("selected window contains an observation coverage gap")
+		}
+		spans = append(spans, observedSpan{Interval: Interval{Start: cursor, End: to}, Start: cursor, End: to})
+		cursor = to
+		return nil
+	}
+	for _, in := range progress.Intervals {
+		if in.End <= cursor || in.Start >= end {
+			continue
+		}
+		if in.Start > cursor+1e-6 {
+			if err := appendGap(in.Start); err != nil {
+				return nil, err
+			}
+		}
+		spanEnd := math.Min(in.End, end)
+		spans = append(spans, observedSpan{Interval: in, Start: math.Max(cursor, in.Start), End: spanEnd})
+		cursor = spanEnd
+		if cursor >= end {
+			break
+		}
+	}
+	if cursor < end-1e-6 {
+		if err := appendGap(end); err != nil {
+			return nil, err
+		}
+	}
+	return spans, nil
 }
 
 // RestComparisons describes observed before/after cycle duration. It does not
