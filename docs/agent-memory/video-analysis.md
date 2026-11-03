@@ -45,7 +45,9 @@ media offsets; remaining manifest/coverage work must preserve this separation fo
   includes each GCS URI once and read/subtitle/Pass-1 paths filter redundant
   `split_chunk_*` rows via `db.FilterRedundantSplitChunks`.
 - `NewMergeChunksTask` truncates `merge_requested_at` to whole minutes and uses
+  `asynq.Timeout(mergeChunksTaskTimeout)` (`1h`) with
   `asynq.Unique(15 * time.Minute)`; `NewVideoAnalysisTask` uses
+  `asynq.Timeout(videoAnalysisTaskTimeout)` and
   `asynq.Unique(videoAnalysisTaskTimeout)` (`1h`); `enqueueHardSub` uses
   `asynq.Unique(15 * time.Minute)`. HTTP/worker enqueue callers treat
   `asynq.ErrDuplicateTask` as an idempotent `202 Accepted` / no-op.

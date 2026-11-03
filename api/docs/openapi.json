@@ -126,7 +126,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/controllers.CompleteUploadResponse"
+                                    "$ref": "#/components/schemas/controllers.RecordingMediaChunkReceipt"
                                 }
                             }
                         }
@@ -1886,6 +1886,12 @@
                     "appearance_hints": {
                         "type": "string"
                     },
+                    "capture_order": {
+                        "type": "integer"
+                    },
+                    "client_chunk_id": {
+                        "type": "string"
+                    },
                     "end_secs": {
                         "type": "number"
                     },
@@ -1902,6 +1908,9 @@
                         }
                     },
                     "live_analysis_version": {
+                        "type": "integer"
+                    },
+                    "media_pipeline_version": {
                         "type": "integer"
                     },
                     "movements": {
@@ -2147,14 +2156,26 @@
                     "appearance_hints": {
                         "type": "string"
                     },
+                    "chunks": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/controllers.RecordingMediaReceiptInput"
+                        }
+                    },
                     "enable_tts": {
                         "type": "boolean"
+                    },
+                    "expected_chunk_count": {
+                        "type": "integer"
                     },
                     "injuries": {
                         "type": "array",
                         "items": {
                             "type": "string"
                         }
+                    },
+                    "media_pipeline_version": {
+                        "type": "integer"
                     },
                     "movements": {
                         "type": "array",
@@ -2183,6 +2204,9 @@
             "controllers.MergeChunksResponse": {
                 "type": "object",
                 "properties": {
+                    "media_run_id": {
+                        "type": "string"
+                    },
                     "message": {
                         "type": "string"
                     },
@@ -2522,6 +2546,43 @@
                         "type": "integer"
                     },
                     "updated_at": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.RecordingMediaChunkReceipt": {
+                "type": "object",
+                "properties": {
+                    "chunk_id": {
+                        "type": "string"
+                    },
+                    "gcs_uri": {
+                        "type": "string"
+                    },
+                    "media_run_id": {
+                        "type": "string"
+                    },
+                    "message": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "source_generation": {
+                        "type": "string"
+                    },
+                    "task_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "controllers.RecordingMediaReceiptInput": {
+                "type": "object",
+                "properties": {
+                    "chunk_id": {
+                        "type": "string"
+                    },
+                    "source_generation": {
                         "type": "string"
                     }
                 }

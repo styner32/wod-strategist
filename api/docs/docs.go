@@ -116,7 +116,7 @@ const docTemplate = `{
                     "202": {
                         "description": "Accepted",
                         "schema": {
-                            "$ref": "#/definitions/controllers.CompleteUploadResponse"
+                            "$ref": "#/definitions/controllers.RecordingMediaChunkReceipt"
                         }
                     }
                 }
@@ -1575,6 +1575,12 @@ const docTemplate = `{
                 "appearance_hints": {
                     "type": "string"
                 },
+                "capture_order": {
+                    "type": "integer"
+                },
+                "client_chunk_id": {
+                    "type": "string"
+                },
                 "end_secs": {
                     "type": "number"
                 },
@@ -1591,6 +1597,9 @@ const docTemplate = `{
                     }
                 },
                 "live_analysis_version": {
+                    "type": "integer"
+                },
+                "media_pipeline_version": {
                     "type": "integer"
                 },
                 "movements": {
@@ -1836,14 +1845,26 @@ const docTemplate = `{
                 "appearance_hints": {
                     "type": "string"
                 },
+                "chunks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/controllers.RecordingMediaReceiptInput"
+                    }
+                },
                 "enable_tts": {
                     "type": "boolean"
+                },
+                "expected_chunk_count": {
+                    "type": "integer"
                 },
                 "injuries": {
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
+                },
+                "media_pipeline_version": {
+                    "type": "integer"
                 },
                 "movements": {
                     "type": "array",
@@ -1872,6 +1893,9 @@ const docTemplate = `{
         "controllers.MergeChunksResponse": {
             "type": "object",
             "properties": {
+                "media_run_id": {
+                    "type": "string"
+                },
                 "message": {
                     "type": "string"
                 },
@@ -2211,6 +2235,43 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.RecordingMediaChunkReceipt": {
+            "type": "object",
+            "properties": {
+                "chunk_id": {
+                    "type": "string"
+                },
+                "gcs_uri": {
+                    "type": "string"
+                },
+                "media_run_id": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "source_generation": {
+                    "type": "string"
+                },
+                "task_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "controllers.RecordingMediaReceiptInput": {
+            "type": "object",
+            "properties": {
+                "chunk_id": {
+                    "type": "string"
+                },
+                "source_generation": {
                     "type": "string"
                 }
             }

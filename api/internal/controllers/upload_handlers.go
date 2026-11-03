@@ -197,6 +197,9 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 	if !ctl.requireSessionProcessing(c, req.SessionID, req.ProfileID, true) {
 		return
 	}
+	if ctl.handleRecordingMediaMerge(c, req) {
+		return
+	}
 
 	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
 

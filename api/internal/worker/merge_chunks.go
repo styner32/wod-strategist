@@ -11,9 +11,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -24,7 +26,9 @@ import (
 )
 
 const (
+	mergeChunksTaskTimeout        = time.Hour
 	mergeChunksUniqueTTL          = 15 * time.Minute
+	maxMergeChunkPrepConcurrency  = 4
 	leadingBlackProbeWindowSecs   = 0.35
 	minLeadingBlackTrimSecs       = 0.015
 	maxLeadingBlackTrimSecs       = 0.20
@@ -80,7 +84,7 @@ func NewMergeChunksTask(sessionID, filePath, workoutType string, movements []str
 	if err != nil {
 		return nil, err
 	}
-	return asynq.NewTask(TypeMergeChunks, data, asynq.Unique(mergeChunksUniqueTTL)), nil
+	return asynq.NewTask(TypeMergeChunks, data, asynq.Timeout(mergeChunksTaskTimeout), asynq.Unique(mergeChunksUniqueTTL)), nil
 }
 
 func (w *Worker) handleMergeChunksTask(ctx context.Context, t *asynq.Task) error {
@@ -357,6 +361,21 @@ func (w *Worker) handleMergeChunksTask(ctx context.Context, t *asynq.Task) error
 	return activityReviewErr
 }
 
+type preparedConcatChunk struct {
+	normPath  string
+	duration  float64
+	signature videoFrameSignature
+}
+
+func mergeChunkPrepConcurrency(totalChunks int) int {
+	if totalChunks <= 1 {
+		return 1
+	}
+	workers := max(2, runtime.GOMAXPROCS(0))
+	workers = min(workers, maxMergeChunkPrepConcurrency)
+	return min(workers, totalChunks)
+}
+
 // mergeDownloadedChunks prepares every input once on its presented-video timeline.
 // Only verified canonical video is copied into the merge; audio is encoded once
 // more at the final boundary to reconcile per-file AAC priming safely.
@@ -369,59 +388,21 @@ func mergeDownloadedChunks(ctx context.Context, log *zap.Logger, tmpDir string, 
 		return nil, nil, fmt.Errorf("probe concat source profiles: %w", err)
 	}
 	targetW, targetH, includeAudio := concatPreparationSettings(profiles)
+	prepared, err := prepareAllChunksForConcat(ctx, log, tmpDir, localChunkPaths, profiles, targetW, targetH, includeAudio)
+	if err != nil {
+		return nil, nil, err
+	}
 	intervals := make([]concatMediaInterval, 0, len(objects))
 	signatures := make([]videoFrameSignature, 0, len(objects))
 	concatEntries := make([]string, 0, len(objects)*2)
 	cumulative := 0.0
-	for i, srcPath := range localChunkPaths {
-		timeline, err := probeVideoTimeline(ctx, srcPath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("probe original chunk %d timeline: %w", i, err)
-		}
-		trimSecs, err := probeLeadingBlackTrimSecs(ctx, srcPath, profiles[i], timeline)
-		if err != nil {
-			return nil, nil, fmt.Errorf("probe leading black on chunk %d: %w", i, err)
-		}
-		if trimSecs > 0 {
-			log.Info("Removing leading black from chunk", zap.Int("chunk_index", i), zap.Float64("trim_start_secs", trimSecs))
-		}
-		normPath := filepath.Join(tmpDir, fmt.Sprintf("norm_chunk_%03d.mp4", i))
-		if err := normalizeChunkForConcat(ctx, log, srcPath, normPath, profiles[i], targetW, targetH, includeAudio, timeline, trimSecs); err != nil {
-			return nil, nil, fmt.Errorf("normalize chunk %d: %w", i, err)
-		}
-		preparedProfile, err := probeChunkStreamProfile(ctx, normPath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("probe prepared chunk %d: %w", i, err)
-		}
-		if preparedProfile.VideoCodec != "h264" || preparedProfile.PixFmt != "yuv420p" ||
-			preparedProfile.VideoTimeBase != "1/30000" || preparedProfile.Width != targetW || preparedProfile.Height != targetH ||
-			preparedProfile.Rotation != 0 || preparedProfile.VideoIndex != 0 || preparedProfile.HasAudio != includeAudio ||
-			includeAudio && (preparedProfile.AudioIndex != 1 || preparedProfile.AudioCodec != "aac" || preparedProfile.AudioTimeBase != "1/44100" || preparedProfile.SampleRate != 44100 || preparedProfile.Channels != 2) {
-			return nil, nil, fmt.Errorf("prepared chunk %d does not match the canonical concat profile", i)
-		}
-		expectedDuration := timeline.Duration() - trimSecs
-		if err := verifyVideoDuration(ctx, normPath, expectedDuration, 1.0/30+timeline.Tick); err != nil {
-			return nil, nil, fmt.Errorf("verify original-to-prepared chunk %d: %w", i, err)
-		}
-		signature, err := readVideoFrameSignature(ctx, normPath)
-		if err != nil {
-			return nil, nil, fmt.Errorf("verify prepared chunk %d frames: %w", i, err)
-		}
-		duration := signature.End - signature.Start
-		if signature.FrameCount <= 0 || signature.Start < -1.0/canonicalConcatVideoTimescale || math.Abs(signature.Start) > 1.0/canonicalConcatVideoTimescale || duration <= 0 {
-			return nil, nil, fmt.Errorf("prepared chunk %d has invalid zero-based video timeline", i)
-		}
-		if err := verifyMediaEndpoints(ctx, normPath, duration, 2.0/30+1.0/canonicalConcatVideoTimescale); err != nil {
-			return nil, nil, fmt.Errorf("verify prepared chunk %d endpoints: %w", i, err)
-		}
-		signatures = append(signatures, signature)
-		intervals = append(intervals, concatMediaInterval{FilePath: objects[i], Start: cumulative, End: cumulative + duration})
-		cumulative += duration
+	for i, prep := range prepared {
+		signatures = append(signatures, prep.signature)
+		intervals = append(intervals, concatMediaInterval{FilePath: objects[i], Start: cumulative, End: cumulative + prep.duration})
+		cumulative += prep.duration
 		concatEntries = append(concatEntries,
-			fmt.Sprintf("file '%s'", strings.ReplaceAll(normPath, "'", "'\\''")),
-			fmt.Sprintf("duration %.9f", duration))
-		_ = os.Remove(srcPath)
-		localChunkPaths[i] = normPath
+			fmt.Sprintf("file '%s'", strings.ReplaceAll(prep.normPath, "'", "'\\''")),
+			fmt.Sprintf("duration %.9f", prep.duration))
 	}
 	concatListPath := filepath.Join(tmpDir, "concat_list.txt")
 	defer os.Remove(concatListPath)
@@ -440,6 +421,133 @@ func mergeDownloadedChunks(ctx context.Context, log *zap.Logger, tmpDir string, 
 	return intervals, nil, nil
 }
 
+func prepareAllChunksForConcat(ctx context.Context, log *zap.Logger, tmpDir string, localChunkPaths []string, profiles []chunkStreamProfile, targetW, targetH int, includeAudio bool) ([]preparedConcatChunk, error) {
+	prepared := make([]preparedConcatChunk, len(localChunkPaths))
+	workers := mergeChunkPrepConcurrency(len(localChunkPaths))
+	if workers <= 1 {
+		for i, srcPath := range localChunkPaths {
+			prep, err := prepareChunkForConcat(ctx, log, tmpDir, i, srcPath, profiles[i], targetW, targetH, includeAudio)
+			if err != nil {
+				return nil, err
+			}
+			prepared[i] = prep
+			localChunkPaths[i] = prep.normPath
+		}
+		return prepared, nil
+	}
+
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	jobs := make(chan int, len(localChunkPaths))
+	for i := range localChunkPaths {
+		jobs <- i
+	}
+	close(jobs)
+
+	var (
+		wg       sync.WaitGroup
+		errOnce  sync.Once
+		firstErr error
+	)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				if workCtx.Err() != nil {
+					return
+				}
+				prep, err := prepareChunkForConcat(workCtx, log, tmpDir, i, localChunkPaths[i], profiles[i], targetW, targetH, includeAudio)
+				if err != nil {
+					errOnce.Do(func() {
+						firstErr = err
+						cancel()
+					})
+					return
+				}
+				prepared[i] = prep
+				localChunkPaths[i] = prep.normPath
+			}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return prepared, nil
+}
+
+func prepareChunkForConcat(ctx context.Context, log *zap.Logger, tmpDir string, index int, srcPath string, profile chunkStreamProfile, targetW, targetH int, includeAudio bool) (preparedConcatChunk, error) {
+	timeline, err := probeVideoTimeline(ctx, srcPath)
+	if err != nil {
+		return preparedConcatChunk{}, fmt.Errorf("probe original chunk %d timeline: %w", index, err)
+	}
+	trimSecs, err := probeLeadingBlackTrimSecs(ctx, srcPath, profile, timeline)
+	if err != nil {
+		return preparedConcatChunk{}, fmt.Errorf("probe leading black on chunk %d: %w", index, err)
+	}
+	return prepareChunkForConcatWithEvidence(ctx, log, tmpDir, index, srcPath, profile, targetW, targetH, includeAudio, timeline, trimSecs)
+}
+
+func prepareChunkForConcatWithEvidence(ctx context.Context, log *zap.Logger, tmpDir string, index int, srcPath string, profile chunkStreamProfile, targetW, targetH int, includeAudio bool, timeline videoTimeline, trimSecs float64) (preparedConcatChunk, error) {
+	if trimSecs > 0 {
+		log.Info("Removing leading black from chunk", zap.Int("chunk_index", index), zap.Float64("trim_start_secs", trimSecs))
+	}
+	normPath := filepath.Join(tmpDir, fmt.Sprintf("norm_chunk_%03d.mp4", index))
+	if err := normalizeChunkForConcat(ctx, log, srcPath, normPath, profile, targetW, targetH, includeAudio, timeline, trimSecs); err != nil {
+		_ = os.Remove(normPath)
+		return preparedConcatChunk{}, fmt.Errorf("normalize chunk %d: %w", index, err)
+	}
+	preparedProfile, err := probeChunkStreamProfile(ctx, normPath)
+	if err != nil {
+		_ = os.Remove(normPath)
+		return preparedConcatChunk{}, fmt.Errorf("probe prepared chunk %d: %w", index, err)
+	}
+	if preparedProfile.VideoCodec != "h264" || preparedProfile.PixFmt != "yuv420p" ||
+		preparedProfile.VideoTimeBase != "1/30000" || preparedProfile.Width != targetW || preparedProfile.Height != targetH ||
+		preparedProfile.Rotation != 0 || preparedProfile.VideoIndex != 0 || preparedProfile.HasAudio != includeAudio ||
+		includeAudio && (preparedProfile.AudioIndex != 1 || preparedProfile.AudioCodec != "aac" || preparedProfile.AudioTimeBase != "1/44100" || preparedProfile.SampleRate != 44100 || preparedProfile.Channels != 2) {
+		_ = os.Remove(normPath)
+		return preparedConcatChunk{}, fmt.Errorf("prepared chunk %d does not match the canonical concat profile", index)
+	}
+	expectedDuration := timeline.Duration() - trimSecs
+	expectedTolerance := 1.0/30 + timeline.Tick
+	if err := validateDurationExpectation(expectedDuration, expectedTolerance); err != nil {
+		_ = os.Remove(normPath)
+		return preparedConcatChunk{}, fmt.Errorf("verify original-to-prepared chunk %d: %w", index, err)
+	}
+	preparedTimeline, err := probeVideoTimeline(ctx, normPath)
+	if err != nil {
+		_ = os.Remove(normPath)
+		return preparedConcatChunk{}, fmt.Errorf("verify original-to-prepared chunk %d: %w", index, err)
+	}
+	if err := verifyTimelineDuration(preparedTimeline, expectedDuration, expectedTolerance); err != nil {
+		_ = os.Remove(normPath)
+		return preparedConcatChunk{}, fmt.Errorf("verify original-to-prepared chunk %d: %w", index, err)
+	}
+	signature, err := readVideoFrameSignature(ctx, normPath)
+	if err != nil {
+		_ = os.Remove(normPath)
+		return preparedConcatChunk{}, fmt.Errorf("verify prepared chunk %d frames: %w", index, err)
+	}
+	duration := signature.End - signature.Start
+	if signature.FrameCount <= 0 || signature.Start < -1.0/canonicalConcatVideoTimescale || math.Abs(signature.Start) > 1.0/canonicalConcatVideoTimescale || duration <= 0 {
+		_ = os.Remove(normPath)
+		return preparedConcatChunk{}, fmt.Errorf("prepared chunk %d has invalid zero-based video timeline", index)
+	}
+	if err := verifyMediaEndpointsWithTimeline(ctx, normPath, preparedTimeline, duration, 2.0/30+1.0/canonicalConcatVideoTimescale); err != nil {
+		_ = os.Remove(normPath)
+		return preparedConcatChunk{}, fmt.Errorf("verify prepared chunk %d endpoints: %w", index, err)
+	}
+	_ = os.Remove(srcPath)
+	return preparedConcatChunk{
+		normPath:  normPath,
+		duration:  duration,
+		signature: signature,
+	}, nil
+}
+
 func verifyMergedDurationMatchesIntervals(ctx context.Context, mergedPath string, intervals []concatMediaInterval) error {
 	if len(intervals) == 0 {
 		return errors.New("no verified concat intervals")
@@ -451,13 +559,56 @@ func verifyMergedDurationMatchesIntervals(ctx context.Context, mergedPath string
 }
 
 func probeAllChunkStreamProfiles(ctx context.Context, localPaths []string) ([]chunkStreamProfile, error) {
-	profiles := make([]chunkStreamProfile, 0, len(localPaths))
-	for i, lp := range localPaths {
-		profile, err := probeChunkStreamProfile(ctx, lp)
-		if err != nil {
-			return nil, fmt.Errorf("chunk %d: %w", i, err)
+	profiles := make([]chunkStreamProfile, len(localPaths))
+	workers := mergeChunkPrepConcurrency(len(localPaths))
+	if workers <= 1 {
+		for i, lp := range localPaths {
+			profile, err := probeChunkStreamProfile(ctx, lp)
+			if err != nil {
+				return nil, fmt.Errorf("chunk %d: %w", i, err)
+			}
+			profiles[i] = profile
 		}
-		profiles = append(profiles, profile)
+		return profiles, nil
+	}
+
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	jobs := make(chan int, len(localPaths))
+	for i := range localPaths {
+		jobs <- i
+	}
+	close(jobs)
+
+	var (
+		wg       sync.WaitGroup
+		errOnce  sync.Once
+		firstErr error
+	)
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				if workCtx.Err() != nil {
+					return
+				}
+				profile, err := probeChunkStreamProfile(workCtx, localPaths[i])
+				if err != nil {
+					errOnce.Do(func() {
+						firstErr = fmt.Errorf("chunk %d: %w", i, err)
+						cancel()
+					})
+					return
+				}
+				profiles[i] = profile
+			}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return profiles, nil
 }
@@ -717,7 +868,7 @@ func probeLeadingBlackTrimSecs(ctx context.Context, inputPath string, profile ch
 		return 0, nil
 	}
 	output, err := exec.CommandContext(ctx, "ffmpeg",
-		"-nostdin", "-xerror", "-v", "info",
+		"-nostdin", "-xerror", "-v", "info", "-threads", mediaDecoderThreads(ctx),
 		"-i", inputPath,
 		"-map", fmt.Sprintf("0:%d", profile.VideoIndex),
 		"-t", fmt.Sprintf("%.3f", leadingBlackProbeWindowSecs),
@@ -758,7 +909,11 @@ func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, ou
 	} else {
 		args = append(args, "-an")
 	}
+	if mediaThreadsLimited(ctx) {
+		args = append(args, "-threads", "1")
+	}
 	args = append(args, "-sn", "-dn", "-map_metadata", "-1", "-movflags", "+faststart", "-y", outputPath)
+	args = limitMediaCommandThreads(ctx, args)
 	err := consumeMediaOutput(exec.CommandContext(ctx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
 	if err != nil {
 		log.Error("FFmpeg chunk normalization failed", zap.String("input_path", inputPath), zap.Error(err))
@@ -776,7 +931,11 @@ func runFFmpegStreamCopyConcat(ctx context.Context, log *zap.Logger, concatListP
 	} else {
 		args = append(args, "-an")
 	}
+	if mediaThreadsLimited(ctx) {
+		args = append(args, "-threads", "1")
+	}
 	args = append(args, "-sn", "-dn", "-movflags", "+faststart", "-y", outputPath)
+	args = limitMediaCommandThreads(ctx, args)
 	log.Info("Running FFmpeg concat (copy video, reconcile AAC boundaries)", zap.Strings("args", args))
 	err := consumeMediaOutput(exec.CommandContext(ctx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
 	if err != nil {
@@ -888,6 +1047,9 @@ func (w *Worker) listOriginalChunks(ctx context.Context, filePath string) ([]str
 
 	var chunks []string
 	for _, obj := range listed {
+		if strings.HasPrefix(strings.TrimPrefix(obj, prefix), "derived/") {
+			continue
+		}
 		base := filepath.Base(obj)
 		// Exclude non-video session artifacts (e.g. sensor telemetry).
 		switch strings.ToLower(filepath.Ext(base)) {

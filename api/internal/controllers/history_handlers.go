@@ -13,6 +13,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -142,6 +143,14 @@ func (ctl *Controller) setHistoryArchived(c *gin.Context, archive bool) {
 			if err := tx.Model(&db.AnalysisResult{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 				return err
 			}
+			if err := tx.Model(&db.RecordingMediaRun{}).Where("profile_id = ? AND session_id = ? AND version = ? AND state NOT IN ('COMPLETED','CANCELLED')", row.ProfileID, row.SessionID, db.RecordingMediaVersion).Updates(map[string]any{"state": "CANCELLED", "next_attempt_at": nil, "lease_token": "", "lease_expires_at": nil, "safe_error": "SESSION_ARCHIVED"}).Error; err != nil {
+				return err
+			}
+			for _, model := range []any{&db.ChunkMediaPreparation{}, &db.AnalysisVideoPreparation{}} {
+				if err := tx.Model(model).Where("run_id IN (?) AND state IN ('PENDING','RUNNING')", tx.Model(&db.RecordingMediaRun{}).Select("id").Where("profile_id = ? AND session_id = ? AND version = ?", row.ProfileID, row.SessionID, db.RecordingMediaVersion)).Updates(map[string]any{"state": "CANCELLED", "next_attempt_at": nil, "lease_token": "", "lease_expires_at": nil, "safe_error": "SESSION_ARCHIVED"}).Error; err != nil {
+					return err
+				}
+			}
 			if err := tx.Exec(`UPDATE sessions SET activity_summary = jsonb_set(activity_summary, '{review_state}', '"unavailable"'::jsonb), updated_at = ? WHERE session_id = ? AND profile_id = ? AND activity_summary->>'review_state' = 'provisional'`, now, row.SessionID, row.ProfileID).Error; err != nil {
 				return err
 			}
@@ -210,6 +219,21 @@ func hasActiveSessionProcessing(tx *gorm.DB, row *db.AnalysisResult) (bool, erro
 	}
 	if hasActiveEnrichmentWork(row.AnalysisSummary) || hasActiveEnrichmentWork(row.AgenticHighlightAnalysis) {
 		return true, nil
+	}
+	var activeMedia int64
+	if err := tx.Model(&db.RecordingMediaRun{}).Where("profile_id = ? AND session_id = ? AND version = ? AND state NOT IN ('COMPLETED','FAILED','CANCELLED')", row.ProfileID, row.SessionID, db.RecordingMediaVersion).Limit(1).Count(&activeMedia).Error; err != nil {
+		return false, err
+	}
+	if activeMedia > 0 {
+		return true, nil
+	}
+	for _, table := range []string{"chunk_media_preparations", "analysis_video_preparations"} {
+		if err := tx.Table(table+" p").Joins("JOIN recording_media_runs r ON r.id = p.run_id").Where("r.profile_id = ? AND r.session_id = ? AND r.version = ? AND p.state IN ('PENDING','RUNNING')", row.ProfileID, row.SessionID, db.RecordingMediaVersion).Limit(1).Count(&activeMedia).Error; err != nil {
+			return false, err
+		}
+		if activeMedia > 0 {
+			return true, nil
+		}
 	}
 	for _, table := range []string{"chunk_analysis_results", "highlight_results", "chunk_reanalysis_runs", "session_reanalysis_runs", "recognition_review_runs"} {
 		var count int64
@@ -306,6 +330,12 @@ func (ctl *Controller) enqueueSessionAutomaticTaskWithMetadata(c *gin.Context, s
 	}
 	var info *asynq.TaskInfo
 	err := db.WithSessionAutomaticWork(ctx, ctl.db, profileID, sessionID, func(tx *gorm.DB) error {
+		switch task.Type() {
+		case worker.TypeChunkAnalysis, worker.TypeChunkAnalysisWithSession, worker.TypeMergeChunks, worker.TypeVideoAnalysis:
+			if err := markLegacyRecordingMediaTx(tx, profileID, sessionID); err != nil {
+				return err
+			}
+		}
 		// Metadata is source evidence too: serialize it with archive and roll it
 		// back when this request cannot enqueue its processing task.
 		if metadata != nil {
@@ -327,6 +357,10 @@ func (ctl *Controller) enqueueSessionAutomaticTaskWithMetadata(c *gin.Context, s
 }
 
 func writeSessionProcessingConflict(c *gin.Context, err error) bool {
+	if errors.Is(err, errRecordingMediaConflict) {
+		c.JSON(http.StatusConflict, gin.H{"error": "recording media pipeline cannot change", "error_code": "RECORDING_MEDIA_CONFLICT"})
+		return true
+	}
 	if !errors.Is(err, db.ErrSessionWorkCancelled) {
 		return false
 	}

@@ -606,7 +606,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	w.logger.Info("Downloading file from GCS for two-pass analysis",
 		zap.String("uri", p.FilePath),
 		zap.String("dest", localFilePath))
-	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+	if err := w.downloadAnalysisInput(ctx, p, localFilePath); err != nil {
 		_ = os.Remove(localFilePath)
 		return fmt.Errorf("failed to download file from GCS: %w", err)
 	}
@@ -650,7 +650,7 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	// Path used for Gemini upload — may be replaced by re-encoded copy below
 	geminiInputPath := localFilePath
 
-	if fileSizeBytes > maxAnalysisVideoSizeBytes {
+	if p.AnalysisPreparationID == 0 && fileSizeBytes > maxAnalysisVideoSizeBytes {
 		w.logger.Info("Video exceeds analysis threshold, creating analysis-grade re-encode",
 			zap.String("session_id", p.SessionID),
 			zap.Int64("file_size_bytes", fileSizeBytes),
@@ -1664,7 +1664,7 @@ func (w *Worker) handleVideoAnalysisLegacy(ctx context.Context, p VideoAnalysisP
 	}()
 
 	w.logger.Info("Downloading file from GCS", zap.String("uri", p.FilePath), zap.String("dest", localFilePath))
-	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+	if err := w.downloadAnalysisInput(ctx, p, localFilePath); err != nil {
 		return fmt.Errorf("failed to download file from GCS: %w", err)
 	}
 

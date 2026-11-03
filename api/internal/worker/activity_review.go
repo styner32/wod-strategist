@@ -75,6 +75,16 @@ func (w *Worker) enqueueActivityReview(ctx context.Context, p VideoAnalysisPaylo
 	if !w.ActivityCountingEnabled {
 		return nil
 	}
+	// refreshLiveActivity reconstructs its payload without MediaRunID. Check the
+	// durable session fence so late chunk observations cannot bypass the limit.
+	var overlongRecording int64
+	if err := w.DB.WithContext(ctx).Model(&db.RecordingMediaRun{}).
+		Where("profile_id = ? AND session_id = ? AND version = ? AND failed_stage = ?", p.ProfileID, p.SessionID, db.RecordingMediaVersion, "duration").Count(&overlongRecording).Error; err != nil {
+		return err
+	}
+	if overlongRecording > 0 {
+		return nil
+	}
 	rows, err := w.activityRows(ctx, p.ProfileID, p.SessionID)
 	if err != nil {
 		return err
@@ -114,7 +124,22 @@ func (w *Worker) enqueueActivityReview(ctx context.Context, p VideoAnalysisPaylo
 	}
 	data, _ := json.Marshal(payload)
 	task := asynq.NewTask(TypeActivityReview, data, asynq.MaxRetry(2), asynq.Timeout(20*time.Minute), asynq.Retention(24*time.Hour))
-	_, err = w.QueueClient.Enqueue(task, asynq.TaskID(fmt.Sprintf("activity:%d:%s:%s:%d", p.ProfileID, p.SessionID, payload.SourceVersion, payload.Generation)))
+	skippedForDuration := false
+	err = w.withSessionPublication(ctx, p.ProfileID, p.SessionID, func(tx *gorm.DB) error {
+		var blocked int64
+		if err := tx.Model(&db.RecordingMediaRun{}).Where("profile_id = ? AND session_id = ? AND version = ? AND failed_stage = ?", p.ProfileID, p.SessionID, db.RecordingMediaVersion, "duration").Count(&blocked).Error; err != nil {
+			return err
+		}
+		if blocked > 0 {
+			skippedForDuration = true
+			return nil
+		}
+		_, enqueueErr := recordingBaseQueue(w.QueueClient).Enqueue(task, asynq.TaskID(fmt.Sprintf("activity:%d:%s:%s:%d", p.ProfileID, p.SessionID, payload.SourceVersion, payload.Generation)))
+		return enqueueErr
+	})
+	if skippedForDuration {
+		return nil
+	}
 	if errors.Is(err, asynq.ErrTaskIDConflict) {
 		if previous.SourceVersion == summary.SourceVersion && previous.MediaGeneration == strconv.FormatInt(payload.Generation, 10) && previous.ReviewState == "failed" {
 			summary.ReviewState = "failed"

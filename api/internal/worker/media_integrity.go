@@ -107,7 +107,7 @@ func mediaTimeBase(raw string) (float64, error) {
 }
 
 func probeVideoTimeline(ctx context.Context, path string) (videoTimeline, error) {
-	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "V:0",
+	cmd := exec.CommandContext(ctx, "ffprobe", "-threads", mediaDecoderThreads(ctx), "-v", "error", "-select_streams", "V:0",
 		"-show_frames", "-show_entries", "frame=pts_time,best_effort_timestamp_time,duration_time,pkt_duration_time:stream=time_base,start_time,duration",
 		"-of", "json", path)
 	var result videoTimeline
@@ -232,12 +232,15 @@ func probeVideoTimeline(ctx context.Context, path string) (videoTimeline, error)
 	return result, nil
 }
 
-func verifyVideoDuration(ctx context.Context, path string, expected, tolerance float64) error {
+func validateDurationExpectation(expected, tolerance float64) error {
 	if expected <= 0 || tolerance < 0 || math.IsNaN(expected) || math.IsInf(expected, 0) || math.IsNaN(tolerance) || math.IsInf(tolerance, 0) {
 		return fmt.Errorf("invalid expected video duration or tolerance")
 	}
-	timeline, err := probeVideoTimeline(ctx, path)
-	if err != nil {
+	return nil
+}
+
+func verifyTimelineDuration(timeline videoTimeline, expected, tolerance float64) error {
+	if err := validateDurationExpectation(expected, tolerance); err != nil {
 		return err
 	}
 	if math.Abs(timeline.Duration()-expected) > tolerance+1e-6 {
@@ -246,10 +249,21 @@ func verifyVideoDuration(ctx context.Context, path string, expected, tolerance f
 	return nil
 }
 
+func verifyVideoDuration(ctx context.Context, path string, expected, tolerance float64) error {
+	if err := validateDurationExpectation(expected, tolerance); err != nil {
+		return err
+	}
+	timeline, err := probeVideoTimeline(ctx, path)
+	if err != nil {
+		return err
+	}
+	return verifyTimelineDuration(timeline, expected, tolerance)
+}
+
 func scanVideoFrames(ctx context.Context, path string, visit func(frameTiming, []byte) error) error {
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-xerror", "-copyts", "-noautorotate", "-i", path,
-		"-map", "0:V:0", "-an", "-sn", "-dn", "-c:v", "rawvideo", "-pix_fmt", "yuv420p",
-		"-fps_mode:v", "passthrough", "-enc_time_base:v", "1:30000", "-f", "framemd5", "-")
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-threads", mediaDecoderThreads(ctx), "-v", "error", "-nostdin", "-xerror", "-copyts", "-noautorotate", "-i", path,
+		"-map", "0:V:0", "-an", "-sn", "-dn", "-c:v", "rawvideo", "-threads", mediaDecoderThreads(ctx), "-pix_fmt", "yuv420p",
+		"-fps_mode:v", "passthrough", "-enc_time_base:v", "1:30000", "-f", "framehash", "-hash", "MURMUR3", "-")
 	return consumeMediaOutput(cmd, func(r io.Reader) error {
 		scanner := bufio.NewScanner(r)
 		for scanner.Scan() {
@@ -352,7 +366,18 @@ func verifyVideoFrameSequence(ctx context.Context, path string, expected []video
 }
 
 func verifyMediaEndpoints(ctx context.Context, path string, expected, tolerance float64) error {
-	if err := verifyVideoDuration(ctx, path, expected, tolerance); err != nil {
+	if err := validateDurationExpectation(expected, tolerance); err != nil {
+		return err
+	}
+	timeline, err := probeVideoTimeline(ctx, path)
+	if err != nil {
+		return err
+	}
+	return verifyMediaEndpointsWithTimeline(ctx, path, timeline, expected, tolerance)
+}
+
+func verifyMediaEndpointsWithTimeline(ctx context.Context, path string, timeline videoTimeline, expected, tolerance float64) error {
+	if err := verifyTimelineDuration(timeline, expected, tolerance); err != nil {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries",

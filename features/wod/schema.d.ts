@@ -152,7 +152,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["controllers.CompleteUploadResponse"];
+                        "application/json": components["schemas"]["controllers.RecordingMediaChunkReceipt"];
                     };
                 };
             };
@@ -1871,11 +1871,14 @@ export interface components {
         };
         "controllers.ChunkCompleteRequest": {
             appearance_hints?: string;
+            capture_order?: number;
+            client_chunk_id?: string;
             end_secs?: number;
             gcs_uri?: string;
             heart_rate_bpm?: number;
             injuries?: string[];
             live_analysis_version?: number;
+            media_pipeline_version?: number;
             movements?: string[];
             profile_id?: number;
             session_id?: string;
@@ -1958,8 +1961,11 @@ export interface components {
         };
         "controllers.MergeChunksRequest": {
             appearance_hints?: string;
+            chunks?: components["schemas"]["controllers.RecordingMediaReceiptInput"][];
             enable_tts?: boolean;
+            expected_chunk_count?: number;
             injuries?: string[];
+            media_pipeline_version?: number;
             movements?: string[];
             pipeline_mode?: string;
             profile_id?: number;
@@ -1969,6 +1975,7 @@ export interface components {
             workout_type?: string;
         };
         "controllers.MergeChunksResponse": {
+            media_run_id?: string;
             message?: string;
             session_id?: string;
             task_id?: string;
@@ -2074,6 +2081,19 @@ export interface components {
             status?: string;
             total_tokens?: number;
             updated_at?: string;
+        };
+        "controllers.RecordingMediaChunkReceipt": {
+            chunk_id?: string;
+            gcs_uri?: string;
+            media_run_id?: string;
+            message?: string;
+            session_id?: string;
+            source_generation?: string;
+            task_id?: string;
+        };
+        "controllers.RecordingMediaReceiptInput": {
+            chunk_id?: string;
+            source_generation?: string;
         };
         "controllers.RelatedWODItem": {
             analysis_id?: number;

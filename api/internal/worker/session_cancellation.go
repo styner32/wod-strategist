@@ -19,6 +19,7 @@ import (
 // durable fence; separately identified manual runs can still be requested.
 
 type sessionWorkContextKey struct{}
+type sessionPublicationTransactionKey struct{}
 type sessionWorkGuard struct {
 	database     *gorm.DB
 	sessionID    string
@@ -179,6 +180,26 @@ func (s *sessionWorkStorage) NewReaderWithGeneration(ctx context.Context, object
 	return &sessionWorkReader{ReadCloser: reader, ctx: ctx}, nil
 }
 
+func (s *sessionWorkStorage) CopyObjectGeneration(ctx context.Context, source string, sourceGeneration int64, destination string, expectedGeneration int64, metadata map[string]string) (*gcs.ObjectAttrs, error) {
+	if err := checkSessionWork(ctx); err != nil {
+		return nil, err
+	}
+	publisher, ok := s.StorageClient.(mediaObjectPublisher)
+	if !ok {
+		return nil, errors.New("storage does not support generation-conditional publication")
+	}
+	return publisher.CopyObjectGeneration(ctx, source, sourceGeneration, destination, expectedGeneration, metadata)
+}
+
+func (s *sessionWorkStorage) DeleteObject(ctx context.Context, object string) error {
+	cleaner, ok := s.StorageClient.(mediaObjectCleaner)
+	if !ok {
+		return errors.New("storage does not support artifact cleanup")
+	}
+	// Cleanup may finish after archive; it cannot publish or schedule work.
+	return cleaner.DeleteObject(ctx, object)
+}
+
 type sessionWorkReader struct {
 	io.ReadCloser
 	ctx context.Context
@@ -319,6 +340,9 @@ func (w *Worker) HandleVideoAnalysisTask(ctx context.Context, t *asynq.Task) err
 	var p VideoAnalysisPayload
 	if t == nil || json.Unmarshal(t.Payload(), &p) != nil {
 		return asynq.SkipRetry
+	}
+	if p.MediaRunID > 0 {
+		return w.handleRecordingVideoAnalysisTask(ctx, t, p)
 	}
 
 	workCtx, done, err := w.withSessionWorkContext(ctx, p.SessionID, p.ProfileID, false, nil)
@@ -572,7 +596,21 @@ func (w *Worker) HandleRecognitionReviewTask(ctx context.Context, t *asynq.Task)
 func (w *Worker) withSessionPublication(ctx context.Context, profileID uint, sessionID string, fn func(*gorm.DB) error) error {
 	guard, manual := ctx.Value(sessionWorkContextKey{}).(*sessionWorkGuard)
 	if !manual || guard.automatic {
-		return db.WithSessionAutomaticWork(ctx, w.DB, profileID, sessionID, fn)
+		return db.WithSessionAutomaticWork(ctx, w.DB, profileID, sessionID, func(tx *gorm.DB) error {
+			// A leased automatic stage can be superseded independently of archive.
+			// Recheck its token while the session fence prevents another claimant
+			// from replacing it between this check and the publication.
+			if guard != nil && guard.stillCurrent != nil {
+				current, err := guard.stillCurrent(context.WithValue(ctx, sessionPublicationTransactionKey{}, tx))
+				if err != nil {
+					return err
+				}
+				if !current {
+					return db.ErrSessionWorkCancelled
+				}
+			}
+			return fn(tx)
+		})
 	}
 	return w.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var parent db.AnalysisResult

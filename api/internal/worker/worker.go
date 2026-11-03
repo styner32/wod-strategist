@@ -83,7 +83,12 @@ func NewSensorTelemetryTask(analysisResultID, profileID uint, requestID string, 
 
 // VideoAnalysisPayload is reused by video analysis, chunk analysis, and merge chunks tasks.
 type VideoAnalysisPayload struct {
-	LiveAnalysisVersion int `json:"live_analysis_version,omitempty"`
+	LiveAnalysisVersion   int   `json:"live_analysis_version,omitempty"`
+	MediaRunID            uint  `json:"media_run_id,omitempty"`
+	MediaDispatchVersion  int64 `json:"media_dispatch_version,omitempty"`
+	RecordingChunkID      uint  `json:"recording_chunk_id,omitempty"`
+	SourceGeneration      int64 `json:"source_generation,omitempty"`
+	AnalysisPreparationID uint  `json:"analysis_preparation_id,omitempty"`
 
 	SessionID         string
 	FilePath          string
@@ -103,7 +108,9 @@ type VideoAnalysisPayload struct {
 
 // VideoAnalysisWithSessionPayload is used when session_id is available (when user has selected a session to upload)
 type VideoAnalysisWithSessionPayload struct {
-	LiveAnalysisVersion int `json:"live_analysis_version,omitempty"`
+	LiveAnalysisVersion int   `json:"live_analysis_version,omitempty"`
+	RecordingChunkID    uint  `json:"recording_chunk_id,omitempty"`
+	SourceGeneration    int64 `json:"source_generation,omitempty"`
 
 	SessionID         string
 	FilePath          string
@@ -455,7 +462,7 @@ func probeVideoDuration(ctx context.Context, filePath string) float64 {
 // maxAnalysisVideoSizeBytes is the threshold above which the merge worker
 // creates an analysis-grade re-encode before sending to Gemini.
 // Set lower than maxAnalysisFileSizeBytes to give the re-encode room to shrink.
-const maxAnalysisVideoSizeBytes = 1000 << 20 // 500 MB
+const maxAnalysisVideoSizeBytes = 1000 << 20 // 1000 MiB
 
 // formatFileSizeWorker returns a human-readable file size string.
 func formatFileSizeWorker(bytes int64) string {
@@ -490,6 +497,11 @@ func runFFmpegAnalysisEncode(ctx context.Context, log *zap.Logger, inputPath, ou
 		outputPath,
 	}
 
+	if mediaThreadsLimited(ctx) {
+		args = append(args[:len(args)-1], "-threads", "1", outputPath)
+		args = append([]string{"-v", "error", "-nostdin", "-xerror"}, limitMediaCommandThreads(ctx, args)...)
+		return consumeMediaOutput(exec.CommandContext(ctx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
+	}
 	log.Info("Running FFmpeg analysis re-encode", zap.Strings("args", args))
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)

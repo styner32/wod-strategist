@@ -272,6 +272,9 @@ func (ctl *Controller) RetryAnalysis(c *gin.Context) {
 	if !ctl.requireSessionProcessing(c, req.SessionID, req.ProfileID, true) {
 		return
 	}
+	if ctl.handleRecordingMediaRetry(c, req.SessionID, req.ProfileID) {
+		return
+	}
 
 	// Find a video file in GCS for this session. Prefer merged.mp4.
 	prefix := fmt.Sprintf("videos/%d/%s/", req.ProfileID, req.SessionID)

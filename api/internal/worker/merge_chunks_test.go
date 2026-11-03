@@ -26,7 +26,9 @@ import (
 
 var _ = Describe("NewMergeChunksTask", func() {
 
-	It("creates a task with the correct payload fields and minute-truncated MergeRequestedAt", func() {
+	It("creates a task with the correct payload fields, minute-truncated MergeRequestedAt, and a 1-hour timeout", func() {
+		Expect(mergeChunksTaskTimeout).To(Equal(time.Hour))
+
 		task, err := NewMergeChunksTask(
 			"session-1",
 			"gs://bucket/videos/session-1",
@@ -701,6 +703,108 @@ var _ = Describe("chunksNeedNormalization and mergeDownloadedChunks", func() {
 		})
 		Expect(err).To(MatchError(ContainSubstring("diverges from cumulative chunk duration")))
 	})
+
+	It("prepares multiple distinct chunks concurrently while preserving exact chunk order, cumulative intervals, and source cleanup", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg not installed, skipping")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+
+		tmpDir := GinkgoT().TempDir()
+		specs := []struct {
+			color    string
+			duration float64
+			freq     int
+		}{
+			{"red", 0.8, 330},
+			{"green", 1.2, 440},
+			{"blue", 0.9, 550},
+			{"yellow", 1.4, 660},
+			{"cyan", 1.0, 770},
+			{"magenta", 1.1, 880},
+		}
+
+		objects := make([]string, len(specs))
+		rawPaths := make([]string, len(specs))
+		localPaths := make([]string, len(specs))
+		for i, sp := range specs {
+			chunkPath := filepath.Join(tmpDir, fmt.Sprintf("chunk_%03d.mp4", i))
+			out, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin",
+				"-f", "lavfi", "-i", fmt.Sprintf("color=c=%s:size=160x120:rate=30:d=%.1f", sp.color, sp.duration),
+				"-f", "lavfi", "-i", fmt.Sprintf("sine=frequency=%d:sample_rate=44100:d=%.1f", sp.freq, sp.duration),
+				"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+				"-c:a", "aac", "-ar", "44100", "-ac", "2",
+				"-y", chunkPath,
+			).CombinedOutput()
+			Expect(err).NotTo(HaveOccurred(), string(out))
+			objects[i] = fmt.Sprintf("gs://b/videos/1/s/chunk_%03d.mp4", i)
+			rawPaths[i] = chunkPath
+			localPaths[i] = chunkPath
+		}
+
+		mergedPath := filepath.Join(tmpDir, "merged.mp4")
+		intervals, intervalErr, mergeErr := mergeDownloadedChunks(ctx, zap.NewNop(), tmpDir, objects, localPaths, mergedPath)
+		Expect(mergeErr).NotTo(HaveOccurred())
+		Expect(intervalErr).NotTo(HaveOccurred())
+		Expect(intervals).To(HaveLen(len(specs)))
+
+		expectedSignatures := make([]videoFrameSignature, len(specs))
+		cursor := 0.0
+		for i, sp := range specs {
+			Expect(intervals[i].FilePath).To(Equal(objects[i]))
+			Expect(intervals[i].Start).To(Equal(cursor))
+			Expect(intervals[i].End - intervals[i].Start).To(BeNumerically("~", sp.duration, 2.0/30))
+			cursor = intervals[i].End
+
+			_, rawStatErr := os.Stat(rawPaths[i])
+			Expect(os.IsNotExist(rawStatErr)).To(BeTrue(), "raw source chunk %d should be removed after normalization", i)
+			Expect(filepath.Base(localPaths[i])).To(Equal(fmt.Sprintf("norm_chunk_%03d.mp4", i)))
+
+			sig, sigErr := readVideoFrameSignature(ctx, localPaths[i])
+			Expect(sigErr).NotTo(HaveOccurred())
+			expectedSignatures[i] = sig
+		}
+
+		Expect(verifyVideoFrameSequence(ctx, mergedPath, expectedSignatures)).To(Succeed())
+
+		swapped := append([]videoFrameSignature(nil), expectedSignatures...)
+		swapped[0], swapped[len(swapped)-1] = swapped[len(swapped)-1], swapped[0]
+		Expect(verifyVideoFrameSequence(ctx, mergedPath, swapped)).To(HaveOccurred())
+	})
+
+	It("stops before writing merged output when one chunk in a multi-chunk batch cannot be probed", func() {
+		if !hasFfmpeg() {
+			Skip("ffmpeg unavailable")
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		tmpDir := GinkgoT().TempDir()
+		good0 := createMergeAuditChunk(ctx, tmpDir, "chunk_000.mp4", "1.0", "1.0", 0, false)
+		corrupt := filepath.Join(tmpDir, "chunk_001.mp4")
+		Expect(os.WriteFile(corrupt, []byte("not an MP4"), 0600)).To(Succeed())
+		good2 := createMergeAuditChunk(ctx, tmpDir, "chunk_002.mp4", "1.0", "1.0", 0, false)
+
+		output := filepath.Join(tmpDir, "merged.mp4")
+		_, _, err := mergeDownloadedChunks(
+			ctx,
+			zap.NewNop(),
+			tmpDir,
+			[]string{"chunk_000", "chunk_001", "chunk_002"},
+			[]string{good0, corrupt, good2},
+			output,
+		)
+		Expect(err).To(MatchError(ContainSubstring("chunk 1:")))
+		_, statErr := os.Stat(output)
+		Expect(os.IsNotExist(statErr)).To(BeTrue())
+		for _, src := range []string{good0, corrupt, good2} {
+			_, srcErr := os.Stat(src)
+			Expect(srcErr).NotTo(HaveOccurred())
+		}
+	})
 })
 
 var _ = Describe("listOriginalChunks", func() {
@@ -818,6 +922,26 @@ var _ = Describe("HandleMergeChunksTask", func() {
 			BucketName:     "test-bucket",
 			logger:         zap.NewNop(),
 		}
+	})
+
+	It("enqueues merge:chunks tasks with a 1-hour execution timeout", func() {
+		task, err := NewMergeChunksTask(
+			"sess-merge-timeout",
+			"gs://test-bucket/videos/sess-merge-timeout",
+			WorkoutTypeWOD, nil, nil, profileID,
+			false,
+			"",
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = w.QueueClient.Enqueue(task)
+		Expect(err).NotTo(HaveOccurred())
+
+		pending, err := inspector.ListPendingTasks("default")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(pending).To(HaveLen(1))
+		Expect(pending[0].Type).To(Equal(TypeMergeChunks))
+		Expect(pending[0].Timeout).To(Equal(time.Hour))
 	})
 
 	It("returns SkipRetry immediately when the GCS URI is invalid", func() {

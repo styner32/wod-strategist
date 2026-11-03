@@ -67,6 +67,17 @@ func main() {
 		},
 	)
 
+	// Media CPU work has its own bounded queues; network-bound AI work retains
+	// the existing concurrency without multiplying per-recording FFmpeg jobs.
+	chunkMediaSrv := asynq.NewServer(redisOpt, asynq.Config{
+		Concurrency: 1,
+		Queues:      map[string]int{worker.RecordingChunkQueueName: 1},
+	})
+	sessionMediaSrv := asynq.NewServer(redisOpt, asynq.Config{
+		Concurrency: 1,
+		Queues:      map[string]int{worker.RecordingSessionQueueName: 1},
+	})
+
 	storageClient, err := storage.NewClient(context.Background(), cfg.GCSBucketName)
 	if err != nil {
 		logger.Log.Fatal("Failed to create storage client", zap.Error(err))
@@ -114,6 +125,13 @@ func main() {
 	mux.HandleFunc(worker.TypeChunkDebugReanalysis, w.HandleChunkDebugReanalysisTask)
 	mux.HandleFunc(worker.TypeSessionDebugReanalysis, w.HandleSessionDebugReanalysisTask)
 	mux.HandleFunc(worker.TypeRecognitionReview, w.HandleRecognitionReviewTask)
+	mux.HandleFunc(worker.TypeCoordinateRecordingMedia, w.HandleCoordinateRecordingMediaTask)
+
+	chunkMediaMux := asynq.NewServeMux()
+	chunkMediaMux.HandleFunc(worker.TypePrepareRecordingChunk, w.HandlePrepareRecordingChunkTask)
+	sessionMediaMux := asynq.NewServeMux()
+	sessionMediaMux.HandleFunc(worker.TypeMergeRecordingMedia, w.HandleMergeRecordingMediaTask)
+	sessionMediaMux.HandleFunc(worker.TypePrepareAnalysisVideo, w.HandlePrepareAnalysisVideoTask)
 
 	sensorMux := asynq.NewServeMux()
 	sensorMux.HandleFunc(worker.TypeSensorTelemetry, w.HandleSensorTelemetryTask)
@@ -124,6 +142,7 @@ func main() {
 	recoveryMgr := worker.NewSensorRecoveryManager(dbConn, queueClient, logger.Log)
 	go recoveryMgr.Start(recoveryCtx, 10*time.Second)
 	go w.RunEnrichmentRecovery(recoveryCtx)
+	go w.RunRecordingMediaRecovery(recoveryCtx)
 
 	// Run blocks and handles signals
 	logger.Log.Info("Starting worker server",
@@ -148,12 +167,24 @@ func main() {
 			logger.Log.Fatal("could not run asynq sensor server", zap.Error(err))
 		}
 	}()
+	go func() {
+		if err := chunkMediaSrv.Run(chunkMediaMux); err != nil {
+			logger.Log.Fatal("could not run recording chunk media server", zap.Error(err))
+		}
+	}()
+	go func() {
+		if err := sessionMediaSrv.Run(sessionMediaMux); err != nil {
+			logger.Log.Fatal("could not run recording session media server", zap.Error(err))
+		}
+	}()
 
 	// Wait for signal
 	<-quit
 	logger.Log.Info("Shutting down worker...")
 
 	cancelRecovery()
+	chunkMediaSrv.Shutdown()
+	sessionMediaSrv.Shutdown()
 	sensorSrv.Shutdown()
 	srv.Shutdown()
 

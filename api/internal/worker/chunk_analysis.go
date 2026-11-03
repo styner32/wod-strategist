@@ -395,7 +395,7 @@ func (w *Worker) handleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 		return err
 	}
 
-	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+	if err := w.downloadAnalysisInput(ctx, VideoAnalysisPayload{FilePath: p.FilePath, SourceGeneration: p.SourceGeneration}, localFilePath); err != nil {
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
 	}
 
@@ -576,7 +576,7 @@ func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		return err
 	}
 
-	if err := w.StorageClient.DownloadFile(ctx, p.FilePath, localFilePath); err != nil {
+	if err := w.downloadAnalysisInput(ctx, VideoAnalysisPayload{FilePath: p.FilePath, SourceGeneration: p.SourceGeneration}, localFilePath); err != nil {
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
 	}
 

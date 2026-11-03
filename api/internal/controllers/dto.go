@@ -81,25 +81,32 @@ type ProfileResponse struct {
 }
 
 type MergeChunksRequest struct {
-	SessionID       string   `json:"session_id"`
-	WorkoutType     string   `json:"workout_type"`
-	Movements       []string `json:"movements"`
-	Injuries        []string `json:"injuries"`
-	ProfileID       uint     `json:"profile_id"`
-	EnableTTS       bool     `json:"enable_tts,omitempty"`
-	WODDescription  string   `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
-	PipelineMode    string   `json:"pipeline_mode,omitempty"`
-	AppearanceHints string   `json:"appearance_hints,omitempty"`
+	MediaPipelineVersion int                          `json:"media_pipeline_version,omitempty"`
+	ExpectedChunkCount   int                          `json:"expected_chunk_count,omitempty"`
+	Chunks               []RecordingMediaReceiptInput `json:"chunks,omitempty"`
+	SessionID            string                       `json:"session_id"`
+	WorkoutType          string                       `json:"workout_type"`
+	Movements            []string                     `json:"movements"`
+	Injuries             []string                     `json:"injuries"`
+	ProfileID            uint                         `json:"profile_id"`
+	EnableTTS            bool                         `json:"enable_tts,omitempty"`
+	WODDescription       string                       `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
+	PipelineMode         string                       `json:"pipeline_mode,omitempty"`
+	AppearanceHints      string                       `json:"appearance_hints,omitempty"`
 }
 
 type MergeChunksResponse struct {
-	Message   string `json:"message"`
-	TaskID    string `json:"task_id"`
-	SessionID string `json:"session_id"`
+	MediaRunID string `json:"media_run_id,omitempty"`
+	Message    string `json:"message"`
+	TaskID     string `json:"task_id"`
+	SessionID  string `json:"session_id"`
 }
 
 type ChunkCompleteRequest struct {
-	LiveAnalysisVersion int `json:"live_analysis_version,omitempty"`
+	MediaPipelineVersion int    `json:"media_pipeline_version,omitempty"`
+	ClientChunkID        string `json:"client_chunk_id,omitempty"`
+	CaptureOrder         int    `json:"capture_order,omitempty"`
+	LiveAnalysisVersion  int    `json:"live_analysis_version,omitempty"`
 
 	SessionID         string   `json:"session_id"`
 	GCSURI            string   `json:"gcs_uri"`

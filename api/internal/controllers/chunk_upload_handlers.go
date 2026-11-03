@@ -20,7 +20,7 @@ import (
 // @Accept       json
 // @Produce      json
 // @Param        request body ChunkCompleteRequest true "Upload metadata"
-// @Success      202 {object} CompleteUploadResponse
+// @Success      202 {object} RecordingMediaChunkReceipt
 // @Router       /chunk-complete [post]
 func (ctl *Controller) ChunkComplete(c *gin.Context) {
 	var req ChunkCompleteRequest
@@ -77,6 +77,9 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		return
 	}
 	if !ctl.requireSessionProcessing(c, req.SessionID, req.ProfileID, true) {
+		return
+	}
+	if ctl.handleRecordingMediaChunk(c, req) {
 		return
 	}
 
