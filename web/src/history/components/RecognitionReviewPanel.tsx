@@ -170,7 +170,7 @@ function RecognitionReviewContent({ sessionId, profileId, sourceUpdatedAt, curre
             <td className="whitespace-nowrap p-2"><button className="text-accent disabled:text-text-muted" disabled={!isOriginal} onClick={() => seek(row.record.start_secs)}>{formatStartTimestamp(row.record.start_secs)}–{formatStartTimestamp(row.record.end_secs)}</button></td>
             <td className="min-w-32 p-2">{row.predicted_movements.length ? row.predicted_movements.map(item => {
               const movement = item.movement || "운동명 확인 불가";
-              return row.evidence_complete ? `${movement} ${item.reps}회` : item.reps === 0 ? `${movement} · 횟수 확인 불가` : `${movement} · 확인된 ${item.reps}회`;
+              return row.observed_complete_reps != null ? `${movement} ${item.reps}회` : item.reps === 0 ? `${movement} · 횟수 확인 불가` : `${movement} · 확인된 ${item.reps}회`;
             }).join(" / ") : row.observed_complete_reps === 0 ? "완료 반복 0회" : "확인 불가"}{!row.evidence_complete && row.predicted_movements.length > 0 && <span className="block text-warning">일부 관찰만 확인됨</span>}</td>
             <td className="min-w-28 p-2">{formatConfirmedRecordLabel(row.record)}</td>
             <td className="p-2">{row.movement_match == null ? "확인 불가" : row.movement_match ? "일치" : "불일치"}</td>

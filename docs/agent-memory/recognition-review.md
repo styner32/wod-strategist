@@ -18,12 +18,16 @@ automatic correction, or model training. It never updates observations,
   media-clock gaps. Use canonical movements and complete `unit=reps` events with
   completion ownership `(record.start_secs, record.end_secs]`; do not double count
   merged records or repeated references. Missing count evidence remains null.
-  `RecordComparison` preserves `Outcome` (`completed`, `incomplete`, `rest`): `rest`
-  compares as `ConfirmedActivity: "rest"` (`ConfirmedMovement: ""`), `incomplete`
-  keeps `ConfirmedActivity: "exercise"` and `ConfirmedMovement` with
-  `ConfirmedReps: nil` (`CountComparable: false`), and `completed` with omitted
-  `reps` (`nil`) keeps `CountComparable: false` while evaluating activity/movement
-  alignment. `EvaluationFingerprint` includes `Outcome` and nullable `Reps`.
+  `RecordEvaluation.Record` preserves `outcome` (`completed`, `incomplete`,
+  `rest`): `rest` compares activity, `incomplete` expects no completed repetition,
+  and `completed` with omitted `reps` still evaluates activity/movement alignment.
+  The fingerprint includes `outcome` and nullable `reps`.
+- Count display uses `observed_complete_reps != null`, independently of the
+  user's `record.reps` and activity-level `evidence_complete`. Fully observed
+  duration movements can have `evidence_complete: true` while
+  `observed_complete_reps: null`; their zero placeholder in `predicted_movements`
+  means unavailable count, never an observed zero. Positive partial counts remain
+  labeled as confirmed observations; an explicit numeric zero remains visible.
 - Overall comparison covers current confirmed records only. It is not a metric
   for unconfirmed portions of the video.
 - Review times are original merged-media seconds. Both bounds filter complete

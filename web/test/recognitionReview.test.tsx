@@ -71,6 +71,37 @@ it("keeps known movement with missing count unknown and labels positive partial 
   await cleanup();
 });
 
+it("keeps a fully observed duration movement's missing count unknown", async () => {
+  const durationRow: RecognitionRecordEvaluation = {
+    ...row,
+    record: { ...record, outcome: "completed", movement: "DB Overhead Walking Lunge", reps: null },
+    predicted_movements: [{ movement: "DB Overhead Walking Lunge", reps: 0 }],
+    observed_complete_reps: null, movement_match: true, reps_delta: null, evidence_complete: true, status: "matched",
+  };
+  (historyApi.getRecognitionEvaluation as jest.Mock).mockResolvedValue({ ...evaluation, records: [durationRow], summary: { total: 1, matched: 1, mismatch: 0, insufficient_evidence: 0 } });
+  const { tree, cleanup } = await mount();
+  expect(text(tree)).toContain("DB Overhead Walking Lunge · 횟수 확인 불가");
+  expect(text(tree)).toContain("DB Overhead Walking Lunge (횟수 미지정)");
+  expect(text(tree)).not.toContain("DB Overhead Walking Lunge 0회");
+  expect(text(tree)).not.toContain("일부 관찰만 확인됨");
+  expect(text(tree)).toContain("확정 1구간 · 일치 1");
+  await cleanup();
+});
+
+it("preserves observed numeric zero independently of the user's omitted count", async () => {
+  const observedZero: RecognitionRecordEvaluation = {
+    ...row, record: { ...record, outcome: "completed", reps: null },
+    predicted_movements: [{ movement: "Power Clean", reps: 0 }], observed_complete_reps: 0,
+    movement_match: true, reps_delta: null, evidence_complete: true, status: "matched",
+  };
+  (historyApi.getRecognitionEvaluation as jest.Mock).mockResolvedValue({ ...evaluation, records: [observedZero] });
+  const { tree, cleanup } = await mount();
+  expect(text(tree)).toContain("Power Clean 0회");
+  expect(text(tree)).toContain("Power Clean (횟수 미지정)");
+  expect(text(tree)).not.toContain("Power Clean · 횟수 확인 불가");
+  await cleanup();
+});
+
 it("prevents duplicate clicks while a request is pending", async () => {
   let finish!: (value: unknown) => void;
   (historyApi.createRecognitionReview as jest.Mock).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
