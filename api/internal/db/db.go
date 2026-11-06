@@ -145,7 +145,20 @@ type AnalysisResult struct {
 	CreatedAt              time.Time        `json:"created_at"`
 	UpdatedAt              time.Time        `json:"updated_at"`
 
-	HeartRate *HeartRateSummaryDTO `gorm:"-" json:"heart_rate,omitempty"`
+	HeartRate       *HeartRateSummaryDTO `gorm:"-" json:"heart_rate,omitempty"`
+	InputStatus     *HistoryInputStatus  `gorm:"-" json:"input_status,omitempty"`
+	Highlights      *[]HighlightResult   `gorm:"-" json:"highlights,omitempty"`
+	ActivitySummary any                  `gorm:"-" json:"activity_summary,omitempty" swaggertype:"object"`
+}
+
+type HistoryInputStatus struct {
+	EffortEligible         bool `json:"effort_eligible"`
+	Effort                 *int `json:"effort"`
+	EffortMissing          bool `json:"effort_missing"`
+	ExerciseIntervalCount  int  `json:"exercise_interval_count"`
+	ConfirmedIntervalCount int  `json:"confirmed_interval_count"`
+	NeedsConfirmationCount int  `json:"needs_confirmation_count"`
+	PerformanceMissing     bool `json:"performance_missing"`
 }
 
 type FatigueGuidance struct {
@@ -287,13 +300,15 @@ type SessionAppearanceHint struct {
 }
 
 const (
-	// DefaultMaxOpenConns keeps total client connections within 20 so shared
-	// minimal PostgreSQL tiers (e.g. db-f1-micro: 25 max_connections, ~22 usable)
-	// retain headroom. Server (12) + Worker (8) split this budget to 20 total.
-	DefaultMaxOpenConns       = 20
-	DefaultServerMaxOpenConns = 12
-	DefaultWorkerMaxOpenConns = 8
-	DefaultConnMaxIdleTime    = 5 * time.Minute
+	// DefaultMaxOpenConns budgets total client connections within 18 across
+	// max 2 API instances (2 * 6 = 12) + 1 Worker instance (6) so minimal
+	// PostgreSQL tiers (e.g. db-f1-micro: 25 max_connections, ~22 usable)
+	// retain headroom.
+	DefaultMaxOpenConns       = 18
+	DefaultServerMaxOpenConns = 6
+	DefaultWorkerMaxOpenConns = 6
+	DefaultMaxIdleConns       = 2
+	DefaultConnMaxIdleTime    = 30 * time.Second
 	DefaultConnMaxLifetime    = 30 * time.Minute
 )
 
@@ -308,9 +323,10 @@ func normalizePoolConfig(pool PoolConfig) PoolConfig {
 	if pool.MaxOpenConns <= 0 {
 		pool.MaxOpenConns = DefaultMaxOpenConns
 	}
-	// Match MaxIdleConns to MaxOpenConns by default so database/sql retains warm
-	// connections for reuse instead of closing down to Go's default of 2 after bursts.
-	if pool.MaxIdleConns <= 0 || pool.MaxIdleConns > pool.MaxOpenConns {
+	if pool.MaxIdleConns <= 0 {
+		pool.MaxIdleConns = DefaultMaxIdleConns
+	}
+	if pool.MaxIdleConns > pool.MaxOpenConns {
 		pool.MaxIdleConns = pool.MaxOpenConns
 	}
 	if pool.ConnMaxIdleTime <= 0 {

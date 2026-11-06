@@ -701,6 +701,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
         setMovement(nextInterval?.movement?.trim() || confirmedMovement);
       }
       void client.invalidateQueries({ queryKey: ["performance-benchmarks", profileId] });
+      void client.invalidateQueries({ queryKey: ["history-infinite"] });
       void client.invalidateQueries({ queryKey: ["recognition-evaluation", sessionId, profileId] });
       void client.invalidateQueries({ queryKey: ["recognition-reviews", sessionId, profileId] });
       void client.invalidateQueries({ queryKey: ["recognition-review", sessionId, profileId] });

@@ -46,11 +46,20 @@ export function ActivitySummaryContent({ summary, compact = false }: { summary: 
   </View>;
 }
 
-export function ActivitySummaryCard({ sessionId, profileId }: { sessionId: string; profileId?: number }) {
-  const [summary, setSummary] = useState<ActivitySummary | null>(null);
+export function ActivitySummaryCard({
+  sessionId,
+  profileId,
+  initialSummary,
+}: {
+  sessionId: string;
+  profileId?: number;
+  initialSummary?: ActivitySummary;
+}) {
+  const [summary, setSummary] = useState<ActivitySummary | null>(initialSummary ?? null);
   useEffect(() => {
-    setSummary(null);
+    setSummary(initialSummary ?? null);
     if (!profileId) return;
+    if (initialSummary !== undefined && !activityReviewPending(initialSummary)) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
@@ -65,8 +74,12 @@ export function ActivitySummaryCard({ sessionId, profileId }: { sessionId: strin
         if (active && Date.now() - started < 30 * 60 * 1000) timer = setTimeout(() => void load(), 15000);
       }
     };
-    void load();
+    if (initialSummary !== undefined) {
+      timer = setTimeout(() => void load(), 5000);
+    } else {
+      void load();
+    }
     return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [sessionId, profileId]);
+  }, [sessionId, profileId, initialSummary]);
   return <ActivitySummaryContent summary={summary} />;
 }

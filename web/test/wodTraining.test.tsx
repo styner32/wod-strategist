@@ -6,7 +6,7 @@ import { createElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WODTrainingPanel } from "../src/history/components/WODTrainingPanel";
 import { SessionReanalysisPanel } from "../src/history/components/SessionReanalysisPanel";
-import { formatStartTimestamp, isWodWorkout, parseStartTimestamp } from "../../shared/wodTraining";
+import { formatStartTimestamp, isWodWorkout, parseStartTimestamp, suggestWODEffort } from "../../shared/wodTraining";
 import { historyApi } from "../src/api/history";
 jest.mock("../src/api/history", () => ({
   historyApi: {
@@ -143,6 +143,97 @@ it("allows specifying start timestamp in SessionReanalysisPanel even when initia
     undefined,
     142.3,
   );
+
+  await act(() => tree.unmount());
+  client.clear();
+});
+
+it("suggests Effort from verified sensor hybrid intensity first and falls back to v1 AI intensity", () => {
+  const validSensor: any = {
+    status: "completed",
+    processing_state: "COMPLETED",
+    quality_status: "adequate",
+    calculation_version: 3,
+    applied: true,
+    application_reason: "applied",
+    hybrid: {
+      hybrid_intensity: 86,
+      valid_hybrid_seconds: 240,
+      data_coverage: 0.9,
+      quality_flags: [],
+      calibration_version: "personal_chest_v1",
+      algorithm_version: "v1",
+    },
+  };
+  expect(suggestWODEffort(validSensor, JSON.stringify(score))).toEqual({
+    effort: 9,
+    source: "sensor",
+    rawIntensity: 86,
+  });
+
+  // Low sensor coverage falls back to v1 AI intensity (80 -> 8)
+  const lowCoverageSensor = {
+    ...validSensor,
+    hybrid: { ...validSensor.hybrid, data_coverage: 0.3 },
+  };
+  expect(suggestWODEffort(lowCoverageSensor, JSON.stringify(score))).toEqual({
+    effort: 8,
+    source: "ai",
+    rawIntensity: 80,
+  });
+
+  // Clamps near-zero intensity to 1 and ignores non-v1 legacy score JSON
+  expect(
+    suggestWODEffort(undefined, JSON.stringify({ ...score, intensity: 2 })),
+  ).toEqual({
+    effort: 1,
+    source: "ai",
+    rawIntensity: 2,
+  });
+  expect(suggestWODEffort(undefined, '{"intensity":80}')).toBeNull();
+});
+
+it("renders non-binding suggested Effort in WODTrainingPanel when effort is null", async () => {
+  (historyApi.getWODTraining as jest.Mock).mockResolvedValue({
+    ...training,
+    effort: null,
+    session_load: null,
+  });
+  (historyApi.updateWODEffort as jest.Mock).mockResolvedValue({
+    ...training,
+    effort: 8,
+    session_load: 160,
+  });
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: Infinity },
+      mutations: { retry: false, gcTime: Infinity },
+    },
+  });
+  let tree: any;
+  await act(async () => {
+    tree = create(
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(WODTrainingPanel, {
+          sessionId: "new",
+          profileId: 1,
+          scoreJSON: JSON.stringify(score),
+          currentTime: 135,
+          isOriginal: true,
+          seek: jest.fn(),
+        }),
+      ),
+    );
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+
+  await click(tree, "추천값 선택");
+  await click(tree, "Effort 저장");
+  expect(historyApi.updateWODEffort).toHaveBeenCalledWith("new", 8);
 
   await act(() => tree.unmount());
   client.clear();

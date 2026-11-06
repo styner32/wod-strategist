@@ -115,6 +115,22 @@ func DispatchRecordingMedia(ctx context.Context, database *gorm.DB, queue QueueC
 	if run.State == "CANCELLED" || run.State == "COMPLETED" {
 		return nil
 	}
+	if run.State == "RECORDING" {
+		now := time.Now().UTC()
+		var hasPending bool
+		if err := database.WithContext(ctx).Raw(`
+			SELECT EXISTS (
+				SELECT 1 FROM recording_chunks WHERE run_id = ? AND ai_dispatched = false
+			) OR EXISTS (
+				SELECT 1 FROM chunk_media_preparations WHERE run_id = ? AND state = 'PENDING' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+			)
+		`, run.ID, run.ID, now).Scan(&hasPending).Error; err != nil {
+			return err
+		}
+		if !hasPending {
+			return nil
+		}
+	}
 	return db.WithSessionAutomaticWork(ctx, database, run.ProfileID, run.SessionID, func(tx *gorm.DB) error {
 		if run.State != "FAILED" {
 			var chunks []db.RecordingChunk

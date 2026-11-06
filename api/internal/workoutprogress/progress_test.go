@@ -732,5 +732,71 @@ var _ = Describe("Confirmed performance benchmark math", func() {
 		Expect(customConfirmed.Movement).To(Equal("Sandbag Clean"))
 		Expect(*customConfirmed.Reps).To(Equal(3))
 	})
+
+	Describe("SummarizeConfirmation", func() {
+		It("marks performance missing until all displayable exercise intervals are confirmed", func() {
+			p := Build([]Interval{
+				exercise(0, 10, cleanCycle(1, 3)),
+				{ID: "rest-1", Start: 10, End: 20, Activity: "rest", ObservationRefs: []string{"s-1"}},
+				exercise(20, 30, cleanCycle(21, 23)),
+				{ID: "short-1", Start: 35, End: 35.4, Activity: "exercise", Movement: "Power Clean", ObservationRefs: []string{"s-1"}},
+			}, []Gap{{Start: 40, End: 50, Clock: "media", Reason: "camera_gap"}}, "video-summary")
+
+			empty := SummarizeConfirmation(p, nil)
+			Expect(empty).To(Equal(ConfirmationSummary{
+				ExerciseIntervalCount:  2,
+				ConfirmedIntervalCount: 0,
+				NeedsConfirmationCount: 0,
+				PerformanceMissing:     true,
+			}))
+
+			partial := SummarizeConfirmation(p, []Record{
+				{ID: 1, SessionID: "s1", IntervalID: p.Intervals[0].ID, SourceVersion: p.SourceVersion, Status: "confirmed", Outcome: "completed", Movement: "Power Clean", Start: 0, End: 10},
+			})
+			Expect(partial).To(Equal(ConfirmationSummary{
+				ExerciseIntervalCount:  2,
+				ConfirmedIntervalCount: 1,
+				NeedsConfirmationCount: 0,
+				PerformanceMissing:     true,
+			}))
+
+			// Merged window covering 0..30 confirms both exercise intervals; unassessed gap does not block completion.
+			merged := SummarizeConfirmation(p, []Record{
+				{ID: 2, SessionID: "s1", IntervalID: p.Intervals[0].ID, SourceVersion: p.SourceVersion, Status: "confirmed", Outcome: "completed", Movement: "Power Clean", Start: 0, End: 30},
+			})
+			Expect(merged).To(Equal(ConfirmationSummary{
+				ExerciseIntervalCount:  2,
+				ConfirmedIntervalCount: 2,
+				NeedsConfirmationCount: 0,
+				PerformanceMissing:     false,
+			}))
+		})
+
+		It("flags stale source_version records as needs_confirmation and completes sessions with zero exercise intervals", func() {
+			p := Build([]Interval{
+				exercise(0, 10, cleanCycle(1, 3)),
+			}, nil, "video-v2")
+
+			stale := SummarizeConfirmation(p, []Record{
+				{ID: 10, SessionID: "s1", IntervalID: p.Intervals[0].ID, SourceVersion: "old-source-v1", Status: "confirmed", Outcome: "completed", Movement: "Power Clean", Start: 0, End: 10},
+			})
+			Expect(stale).To(Equal(ConfirmationSummary{
+				ExerciseIntervalCount:  1,
+				ConfirmedIntervalCount: 0,
+				NeedsConfirmationCount: 1,
+				PerformanceMissing:     true,
+			}))
+
+			restOnly := Build([]Interval{
+				{ID: "rest-only", Start: 0, End: 15, Activity: "rest", ObservationRefs: []string{"s-1"}},
+			}, []Gap{{Start: 15, End: 25, Clock: "media", Reason: "not_analyzed"}}, "video-rest")
+			Expect(SummarizeConfirmation(restOnly, nil)).To(Equal(ConfirmationSummary{
+				ExerciseIntervalCount:  0,
+				ConfirmedIntervalCount: 0,
+				NeedsConfirmationCount: 0,
+				PerformanceMissing:     false,
+			}))
+		})
+	})
 })
 

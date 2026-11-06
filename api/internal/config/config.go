@@ -28,7 +28,8 @@ type Common struct {
 	AgenticHighlightsEnabled bool
 	GeminiIncludeThoughts    bool // GEMINI_INCLUDE_THOUGHTS — optional; stores Gemini thought summaries in gemini_thought_logs
 	DatabaseURL              string
-	DBMaxOpenConns           int // DB_MAX_OPEN_CONNS — optional positive integer; defaults to 12 (server) / 8 (worker) = 20 total
+	DBMaxOpenConns           int // DB_MAX_OPEN_CONNS — optional positive integer; defaults to 6 (server) / 6 (worker) within 18 budget (2*server + worker)
+	DBMaxIdleConns           int // DB_MAX_IDLE_CONNS — optional positive integer; defaults to 2
 	RedisURL                 string
 	GCSBucketName            string
 	AppEnv                   string
@@ -124,6 +125,8 @@ func InitServer() (Server, error) {
 	cfg.SessionReanalysisDailyQuota = quota
 	dbMaxOpenConns, dbMaxOpenConnsErr := parsePositiveIntWithDefault("DB_MAX_OPEN_CONNS", db.DefaultServerMaxOpenConns)
 	cfg.DBMaxOpenConns = dbMaxOpenConns
+	dbMaxIdleConns, dbMaxIdleConnsErr := parsePositiveIntWithDefault("DB_MAX_IDLE_CONNS", db.DefaultMaxIdleConns)
+	cfg.DBMaxIdleConns = dbMaxIdleConns
 
 	if err := validateValues(
 		validatePort(cfg.Port),
@@ -131,6 +134,7 @@ func InitServer() (Server, error) {
 		validateRedisURL(cfg.RedisURL),
 		quotaErr,
 		dbMaxOpenConnsErr,
+		dbMaxIdleConnsErr,
 	); err != nil {
 		return Server{}, err
 	}
@@ -183,6 +187,7 @@ func InitWorker() (Worker, error) {
 	chunkFPS, chunkFPSErr := parseChunkFPS("GEMINI_CHUNK_FPS")
 	concurrency, concurrencyErr := parsePositiveIntWithDefault("WORKER_CONCURRENCY", defaultWorkerConcurrency)
 	dbMaxOpenConns, dbMaxOpenConnsErr := parsePositiveIntWithDefault("DB_MAX_OPEN_CONNS", db.DefaultWorkerMaxOpenConns)
+	dbMaxIdleConns, dbMaxIdleConnsErr := parsePositiveIntWithDefault("DB_MAX_IDLE_CONNS", db.DefaultMaxIdleConns)
 
 	cfg := Worker{
 		CaptureFeedbackEnabled:    strings.EqualFold(os.Getenv("ENABLE_CAPTURE_FEEDBACK"), "true"),
@@ -194,6 +199,7 @@ func InitWorker() (Worker, error) {
 			GeminiIncludeThoughts:    strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_INCLUDE_THOUGHTS")), "true"),
 			DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 			DBMaxOpenConns:           dbMaxOpenConns,
+			DBMaxIdleConns:           dbMaxIdleConns,
 			RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
 			GCSBucketName:            strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
 			AppEnv:                   appEnv,
@@ -226,6 +232,7 @@ func InitWorker() (Worker, error) {
 		chunkFPSErr,
 		concurrencyErr,
 		dbMaxOpenConnsErr,
+		dbMaxIdleConnsErr,
 	); err != nil {
 		return Worker{}, err
 	}

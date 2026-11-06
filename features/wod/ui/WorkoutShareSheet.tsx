@@ -10,7 +10,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { TacticalTheme } from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
 import {
@@ -28,7 +28,9 @@ export function WorkoutShareSheet({ visible, sessionId, profileId, onClose }: {
   onClose: () => void;
 }) {
   return <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-    {visible && <WorkoutShareContent key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} onClose={onClose} />}
+    {visible && <SafeAreaProvider>
+      <WorkoutShareContent key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} onClose={onClose} />
+    </SafeAreaProvider>}
   </Modal>;
 }
 
@@ -104,7 +106,7 @@ function WorkoutShareContent({ sessionId, profileId, onClose }: {
   return <SafeAreaView style={styles.screen}>
       <View style={styles.header}>
         <Text accessibilityRole="header" style={styles.title}>{t("workoutShare.title")}</Text>
-        <Pressable accessibilityRole="button" onPress={onClose} style={styles.button}>
+        <Pressable accessibilityRole="button" onPress={onClose} hitSlop={8} style={[styles.button, styles.closeButton]}>
           <Text style={styles.buttonText}>{t("workoutShare.close")}</Text>
         </Pressable>
       </View>
@@ -146,6 +148,7 @@ const styles = StyleSheet.create({
   text: { color: T.ink, fontSize: 14 },
   loading: { flexDirection: "row", gap: 10, paddingVertical: 20 },
   button: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: T.borderStrong },
+  closeButton: { minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center", flexShrink: 0 },
   buttonText: { color: T.electricBlue, fontWeight: "700", fontSize: 14 },
   errorBlock: { gap: 12, alignItems: "flex-start" },
   error: { color: T.statusExhausted, fontSize: 14 },

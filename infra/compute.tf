@@ -35,6 +35,10 @@ resource "google_cloud_run_v2_service" "api" {
   template {
     service_account = google_service_account.run_sa.email
 
+    scaling {
+      max_instance_count = 2
+    }
+
     vpc_access {
       connector = google_vpc_access_connector.connector.id
       egress    = "PRIVATE_RANGES_ONLY"
@@ -131,6 +135,10 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
   name         = "${var.app_name}-worker-${var.environment}"
   location     = var.region
   launch_stage = "BETA"
+
+  scaling {
+    manual_instance_count = 1
+  }
 
   template {
     service_account = google_service_account.run_sa.email

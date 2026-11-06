@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { historyApi } from "../../api/history";
-import { newWODScore, parseStartTimestamp, wodSeconds } from "../../../../shared/wodTraining";
+import type { HeartRateSummary } from "../../../../shared/heartRateSummary";
+import { newWODScore, parseStartTimestamp, suggestWODEffort, wodSeconds } from "../../../../shared/wodTraining";
 import { historyPollInterval, historyPollingStopped, resetHistoryPolling } from "../historyPolling";
 
-export function WODTrainingPanel({ sessionId, profileId, scoreJSON, currentTime, isOriginal, seek }: {
-  sessionId: string; profileId: number; scoreJSON?: string; currentTime: number; isOriginal: boolean; seek: (seconds: number) => void;
+export function WODTrainingPanel({ sessionId, profileId, scoreJSON, heartRate, currentTime, isOriginal, seek }: {
+  sessionId: string; profileId: number; scoreJSON?: string; heartRate?: HeartRateSummary | null; currentTime: number; isOriginal: boolean; seek: (seconds: number) => void;
 }) {
   const client = useQueryClient();
   const key = `wod-start-run:${profileId}:${sessionId}`;
@@ -18,7 +19,7 @@ export function WODTrainingPanel({ sessionId, profileId, scoreJSON, currentTime,
   const run = useQuery({ queryKey: ["session-reanalysis", sessionId, runId], queryFn: () => historyApi.getSessionReanalysis(sessionId, runId!), enabled: eligible && runId != null, retry: false,
     refetchInterval: q => historyPollInterval(q, q.state.data?.status === "QUEUED" || q.state.data?.status === "RUNNING" ? String(runId) : undefined) });
   const stopped = historyPollingStopped(client, ["session-reanalysis", sessionId, runId], run.dataUpdatedAt);
-  const refresh = async () => { await Promise.all(["wod-training", "wod-training-load", "session-analysis", "analysis", "analysis-enrichment", "session-reanalyses"].map(k => client.invalidateQueries({ queryKey: [k] }))); };
+  const refresh = async () => { await Promise.all(["wod-training", "wod-training-load", "history-infinite", "session-analysis", "analysis", "analysis-enrichment", "session-reanalyses"].map(k => client.invalidateQueries({ queryKey: [k] }))); };
   const save = useMutation({ mutationFn: (value: number) => historyApi.updateWODEffort(sessionId, value), onSuccess: async () => { setEffort(undefined); await refresh(); } });
   const create = useMutation({ mutationFn: (seconds: number | null) => historyApi.createSessionReanalysis(sessionId, crypto.randomUUID(), undefined, undefined, undefined, seconds), onSuccess: r => { localStorage.setItem(key, String(r.run_id)); resetHistoryPolling(client, ["session-reanalysis", sessionId]); setRunId(r.run_id); } });
   const apply = useMutation({ mutationFn: (id: number) => historyApi.applySessionReanalysis(sessionId, id), onSuccess: async () => { localStorage.removeItem(key); setRunId(undefined); await refresh(); } });
@@ -30,6 +31,7 @@ export function WODTrainingPanel({ sessionId, profileId, scoreJSON, currentTime,
   const waiting = runId != null && (!run.data || run.data.status === "RUNNING" || run.data.status === "QUEUED" || run.data.status === "COMPLETED");
   const error = training.error || loads.error || save.error || create.error || apply.error || run.error;
   const parsedStart = parseStartTimestamp(startInput);
+  const suggested = data?.effort == null ? suggestWODEffort(heartRate, scoreJSON, data?.score) : null;
   const button = "rounded border border-border px-3 py-2 text-sm disabled:opacity-40";
   return <section className="space-y-3 rounded-xl border border-border bg-bg-elevated p-4">
     <h3 className="font-semibold">WOD 훈련 부하</h3>
@@ -51,7 +53,17 @@ export function WODTrainingPanel({ sessionId, profileId, scoreJSON, currentTime,
     {run.data && ["FAILED", "VIDEO_UNAVAILABLE", "CONTEXT_UNAVAILABLE"].includes(run.data.status) && <p role="alert">재평가 실패: {run.data.error}</p>}
     <p>Intensity: {data?.score?.intensity ?? "판단 불가"} · 종합 점수: {data?.score?.overall ?? "판단 불가"}</p>
     <p>Effort는 운동이 본인에게 얼마나 힘들었는지 나타냅니다. 1(매우 쉬움)~10(최대 노력)</p>
-    <div className="flex flex-wrap gap-2">{Array.from({ length: 10 }, (_, i) => i + 1).map(n => <button key={n} className={`${button} ${(effort ?? data?.effort) === n ? "bg-accent text-white" : ""}`} aria-pressed={(effort ?? data?.effort) === n} disabled={save.isPending} onClick={() => setEffort(n)}>{n}</button>)}</div>
+    {suggested && (
+      <p className="text-xs text-accent">
+        추천 Effort: {suggested.effort}/10 ({suggested.source === "sensor" ? "심박·움직임 센서" : "AI 분석 강도"} {suggested.rawIntensity}/100 기준) ·{" "}
+        <button type="button" className="underline font-medium" disabled={save.isPending} onClick={() => setEffort(suggested.effort)}>추천값 선택</button>
+      </p>
+    )}
+    <div className="flex flex-wrap gap-2">{Array.from({ length: 10 }, (_, i) => i + 1).map(n => {
+      const selected = (effort ?? data?.effort) === n;
+      const isSuggested = !selected && suggested?.effort === n;
+      return <button key={n} className={`${button} ${selected ? "bg-accent text-white" : isSuggested ? "border-accent text-accent font-medium" : ""}`} aria-pressed={selected} disabled={save.isPending} onClick={() => setEffort(n)}>{n}</button>;
+    })}</div>
     <button className={button} disabled={effort == null || save.isPending} onClick={() => save.mutate(effort!)}>Effort 저장</button>
     <p>운동별 부하: {data?.session_load == null ? "시간·Effort 확인 필요" : `${data.session_load.toFixed(1)} AU`}</p>
     {comparison && <><p>7일 일평균: {comparison.seven.daily_average.toFixed(1)} AU · 28일 일평균: {comparison.twenty_eight.daily_average.toFixed(1)} AU</p>

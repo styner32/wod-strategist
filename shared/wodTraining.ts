@@ -1,3 +1,5 @@
+import type { HeartRateSummary } from "./heartRateSummary";
+
 export interface WODStart {
   elapsed_seconds?: number;
   seconds: number | null;
@@ -46,6 +48,54 @@ export interface WODTrainingLoad {
 export function newWODScore(raw?: string): WODScore | undefined {
   try { const s = JSON.parse(raw || "{}"); return s.evaluation_version === 1 ? s : undefined; }
   catch { return undefined; }
+}
+
+export interface SuggestedWODEffort {
+  effort: number;
+  source: "sensor" | "ai";
+  rawIntensity: number;
+}
+
+function clampEffortScore(rawZeroToHundred: number): number {
+  return Math.min(10, Math.max(1, Math.round(rawZeroToHundred / 10)));
+}
+
+/**
+ * Computes a UI-only suggested RPE (1..10) from objective intensity signals
+ * without modifying or substituting for stored `sessions.effort`.
+ */
+export function suggestWODEffort(
+  heartRate?: HeartRateSummary | null,
+  sessionScoreRaw?: string | null,
+  parsedScore?: WODScore | null,
+): SuggestedWODEffort | null {
+  const hybrid = heartRate?.hybrid;
+  if (
+    heartRate &&
+    (heartRate.calculation_version ?? 0) >= 3 &&
+    hybrid &&
+    hybrid.hybrid_intensity != null &&
+    Number.isFinite(hybrid.hybrid_intensity) &&
+    hybrid.data_coverage >= 0.5 &&
+    hybrid.valid_hybrid_seconds >= 60
+  ) {
+    return {
+      effort: clampEffortScore(hybrid.hybrid_intensity),
+      source: "sensor",
+      rawIntensity: Math.round(hybrid.hybrid_intensity),
+    };
+  }
+
+  const score = parsedScore ?? newWODScore(sessionScoreRaw ?? undefined);
+  if (score?.intensity != null && Number.isFinite(score.intensity)) {
+    return {
+      effort: clampEffortScore(score.intensity),
+      source: "ai",
+      rawIntensity: Math.round(score.intensity),
+    };
+  }
+
+  return null;
 }
 /**
  * A session is a WOD unless its stored workout type, or the type prefix of a

@@ -48,6 +48,7 @@ func main() {
 	// Initialize Database
 	dbConn, err := db.ConnectWithPool(cfg.DatabaseURL, db.PoolConfig{
 		MaxOpenConns: cfg.DBMaxOpenConns,
+		MaxIdleConns: cfg.DBMaxIdleConns,
 	})
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))

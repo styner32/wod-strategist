@@ -230,7 +230,10 @@ function HistoryCard({
   // Highlight state
   // ---------------------
   const { highlights, highlightLoading, highlightPolling, handleCreateHighlights } = useHighlightResults(
-    item.session_id, item.profile_id ?? 0, isCompleted && item.analysis_type === "wod",
+    item.session_id,
+    item.profile_id ?? 0,
+    isCompleted && item.analysis_type === "wod" && hasHighlightSegments,
+    item.highlights,
   );
   const [highlightDownloading, setHighlightDownloading] = useState<
     number | null
@@ -609,7 +612,7 @@ function HistoryCard({
         {isCompleted && <WorkoutProgressCard key={`progress:${item.profile_id}:${item.session_id}`} sessionId={item.session_id} profileId={item.profile_id} onReviewVideo={availableVideos.includes("merged") ? (start, end) => router.push({ pathname: "/workout/player", params: { sessionId: item.session_id, profileId: String(item.profile_id), videoKind: "merged", startSecs: String(start), endSecs: String(end) } }) : undefined} />}
         <HeartRateSummaryCard summary={item.heart_rate} />
         <EnvironmentHistoryCard sessionId={item.session_id} profileId={item.profile_id} />
-        <ActivitySummaryCard sessionId={item.session_id} profileId={item.profile_id} />
+        <ActivitySummaryCard sessionId={item.session_id} profileId={item.profile_id} initialSummary={item.activity_summary} />
 
         {/* Content */}
         {hasOutput && (
@@ -1042,40 +1045,70 @@ export function useHistoryData(options?: { limit?: number }) {
   const profileId = useProfileId();
   const currentHistoryProfile = useRef(profileId); currentHistoryProfile.current = profileId;
   const historyRequest = useRef(0);
+  const inFlightRef = useRef<{ request: number; profileId: number; limit?: number; promise: Promise<void> } | null>(null);
+  const queuedReloadRef = useRef(false);
   const [data, setData] = useState<AnalysisResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const loadData = useCallback(async () => {
-    const request = ++historyRequest.current;
-    const current = () => request === historyRequest.current && profileId === currentHistoryProfile.current;
+  const loadData = useCallback(async (opts?: { forceAfterInFlight?: boolean }) => {
     if (!profileId) {
+      ++historyRequest.current;
+      inFlightRef.current = null;
+      queuedReloadRef.current = false;
       setData([]);
       setLoading(false);
       setRefreshing(false);
       return;
     }
-    try {
-      const history = await fetchAnalysisHistory(profileId, options?.limit);
-      if (current()) setData(history);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      if (current()) { setLoading(false); setRefreshing(false); }
+    if (
+      inFlightRef.current &&
+      inFlightRef.current.profileId === profileId &&
+      inFlightRef.current.limit === options?.limit
+    ) {
+      if (opts?.forceAfterInFlight) {
+        queuedReloadRef.current = true;
+      }
+      return inFlightRef.current.promise;
     }
+
+    const request = ++historyRequest.current;
+    const current = () => request === historyRequest.current && profileId === currentHistoryProfile.current;
+    const promise = (async () => {
+      try {
+        const history = await fetchAnalysisHistory(profileId, options?.limit);
+        if (current()) setData(history);
+      } catch (e) {
+        console.error(e);
+      } finally {
+        if (inFlightRef.current?.request === request) {
+          inFlightRef.current = null;
+        }
+        const shouldReload = queuedReloadRef.current && profileId === currentHistoryProfile.current;
+        queuedReloadRef.current = false;
+        if (shouldReload) {
+          void loadData();
+        } else if (current()) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    })();
+    inFlightRef.current = { request, profileId, limit: options?.limit, promise };
+    return promise;
   }, [profileId, options?.limit]);
 
   useEffect(() => {
-    const unsubscribe = subscribeHistoryChanges(pid => { if (pid === profileId) void loadData(); });
+    const unsubscribe = subscribeHistoryChanges(pid => { if (pid === profileId) void loadData({ forceAfterInFlight: true }); });
     const app = AppState.addEventListener("change", state => { if (state === "active") void loadData(); });
-    return () => { unsubscribe(); app.remove(); ++historyRequest.current; };
+    return () => { unsubscribe(); app.remove(); ++historyRequest.current; inFlightRef.current = null; queuedReloadRef.current = false; };
   }, [profileId, loadData]);
 
 
   useEffect(() => {
     setLoading(true);
-    loadData();
+    void loadData();
   }, [loadData]);
 
   // Auto-poll while PENDING items exist
@@ -1084,7 +1117,7 @@ export function useHistoryData(options?: { limit?: number }) {
   useEffect(() => {
     if (hasPending) {
       pollTimerRef.current = setInterval(() => {
-        loadData();
+        void loadData();
       }, PENDING_POLL_INTERVAL_MS);
     } else {
       if (pollTimerRef.current) {
@@ -1103,7 +1136,7 @@ export function useHistoryData(options?: { limit?: number }) {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadData();
+    void loadData({ forceAfterInFlight: true });
   }, [loadData]);
 
   const onArchive = useCallback((id: number) => {

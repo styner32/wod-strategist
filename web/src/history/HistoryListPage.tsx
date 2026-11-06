@@ -1,8 +1,9 @@
 import { HeartRateBadge } from "./components/HeartRateSummaryPanel";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { historyApi, type AnalysisResult } from "../api/history";
+import { suggestWODEffort } from "../../../shared/wodTraining";
+import { historyApi, type AnalysisResult, type HistoryMissingFilter } from "../api/history";
 import { useAuth } from "../auth/useAuth";
 import { HistoryArchiveAction } from "./components/HistoryArchiveAction";
 import { historyStatusLabel } from "./historyArchive";
@@ -75,6 +76,125 @@ function parseAnalysisOutput(output: string): {
   }
 }
 
+function HistoryMissingInputActions({ result }: { result: AnalysisResult }) {
+  const queryClient = useQueryClient();
+  const inputStatus = result.input_status;
+  const effortMissing = Boolean(inputStatus?.effort_missing);
+  const performanceMissing = Boolean(inputStatus?.performance_missing);
+  const suggested = useMemo(
+    () => (effortMissing ? suggestWODEffort(result.heart_rate, result.session_score) : null),
+    [effortMissing, result.heart_rate, result.session_score],
+  );
+  const [selectedEffort, setSelectedEffort] = useState<number>();
+  const effectiveEffort = selectedEffort ?? suggested?.effort;
+
+  const saveEffort = useMutation({
+    mutationFn: (effort: number) => historyApi.updateWODEffort(result.session_id, effort),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["history-infinite"] }),
+        queryClient.invalidateQueries({ queryKey: ["wod-training"] }),
+        queryClient.invalidateQueries({ queryKey: ["wod-training-load"] }),
+      ]);
+    },
+  });
+
+  if (!effortMissing && !performanceMissing) return null;
+
+  const baseSessionPath = `/sessions/${encodeURIComponent(result.session_id)}?profile_id=${result.profile_id}`;
+
+  return (
+    <div className="border-t border-border bg-bg-secondary/40 px-5 py-3 space-y-3">
+      {performanceMissing && inputStatus && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-text-secondary">
+            {inputStatus.needs_confirmation_count > 0
+              ? `재분석 후 수행구간 재확인 필요 (${inputStatus.confirmed_interval_count}/${inputStatus.exercise_interval_count} 확정)`
+              : `수행구간 확정 필요 (${inputStatus.confirmed_interval_count}/${inputStatus.exercise_interval_count} 확정)`}
+          </span>
+          <Link
+            to={`${baseSessionPath}&tab=performance`}
+            className="text-xs font-semibold text-accent hover:underline"
+          >
+            수행구간 확정하기 →
+          </Link>
+        </div>
+      )}
+
+      {effortMissing && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs text-text-secondary">
+              <span className="font-medium text-text-primary">Effort 입력</span>
+              {suggested ? (
+                <span className="ml-1.5 text-accent">
+                  · 추천 {suggested.effort}/10 (
+                  {suggested.source === "sensor" ? "심박·움직임 센서" : "AI 분석 강도"}{" "}
+                  {suggested.rawIntensity}/100 기준)
+                </span>
+              ) : (
+                <span className="ml-1.5 text-text-muted">· 체감 난이도 1~10</span>
+              )}
+            </div>
+            <Link
+              to={`${baseSessionPath}&tab=details`}
+              className="text-xs text-text-secondary hover:text-accent hover:underline"
+            >
+              상세·부하 보기 →
+            </Link>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => {
+              const isSelected = effectiveEffort === n;
+              const isSuggested = suggested?.effort === n;
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  aria-label={`Effort ${n}`}
+                  aria-pressed={isSelected}
+                  disabled={saveEffort.isPending}
+                  onClick={() => setSelectedEffort(n)}
+                  className={`h-7 min-w-7 rounded border px-1.5 text-xs font-medium transition-colors disabled:opacity-40 ${
+                    isSelected
+                      ? "border-accent bg-accent text-white"
+                      : isSuggested
+                        ? "border-accent/60 text-accent hover:bg-accent/10"
+                        : "border-border bg-bg-elevated text-text-secondary hover:bg-bg-tertiary hover:text-text-primary"
+                  }`}
+                >
+                  {n}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              disabled={effectiveEffort == null || saveEffort.isPending}
+              onClick={() => {
+                if (effectiveEffort != null) {
+                  saveEffort.mutate(effectiveEffort);
+                }
+              }}
+              className="ml-auto rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-white hover:bg-accent-hover disabled:opacity-40 transition-colors"
+            >
+              {saveEffort.isPending ? "저장 중..." : "Effort 저장"}
+            </button>
+          </div>
+
+          {saveEffort.isError && (
+            <p role="alert" className="text-xs text-error">
+              {saveEffort.error instanceof Error
+                ? saveEffort.error.message
+                : "Effort를 저장하지 못했습니다."}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const HistoryCard = memo(function HistoryCard({ result, archiveView }: { result: AnalysisResult; archiveView: boolean }) {
   const parsed = parseAnalysisOutput(result.output || "{}");
   // `||`, not `??`: an empty overview must fall back to the legacy summary.
@@ -91,6 +211,8 @@ const HistoryCard = memo(function HistoryCard({ result, archiveView }: { result:
       return 0;
     }
   }, [result.stretch_recommendations]);
+  const inputStatus = !archiveView ? result.input_status : undefined;
+  const isCompleted = result.status.toUpperCase() === "COMPLETED";
 
   return (
     <article className="bg-bg-elevated border border-border rounded-xl hover:border-accent/40 transition-all duration-200 group">
@@ -136,6 +258,30 @@ const HistoryCard = memo(function HistoryCard({ result, archiveView }: { result:
             {parsed.workoutType}
           </span>
         )}
+        {isCompleted && inputStatus?.effort_eligible && (
+          inputStatus.effort_missing ? (
+            <span className="inline-flex items-center gap-1 text-xs bg-warning/15 text-warning border border-warning/30 px-2 py-0.5 rounded-md font-medium">
+              Effort 미입력
+            </span>
+          ) : inputStatus.effort != null ? (
+            <span className="inline-flex items-center gap-1 text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-md font-medium">
+              Effort {inputStatus.effort}/10
+            </span>
+          ) : null
+        )}
+        {isCompleted && inputStatus && inputStatus.exercise_interval_count > 0 && (
+          inputStatus.performance_missing ? (
+            <span className="inline-flex items-center gap-1 text-xs bg-warning/15 text-warning border border-warning/30 px-2 py-0.5 rounded-md font-medium">
+              {inputStatus.needs_confirmation_count > 0
+                ? `수행 재확인 필요 (${inputStatus.confirmed_interval_count}/${inputStatus.exercise_interval_count})`
+                : `수행구간 미확정 (${inputStatus.confirmed_interval_count}/${inputStatus.exercise_interval_count})`}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-md font-medium">
+              수행 확정 ({inputStatus.confirmed_interval_count}/{inputStatus.exercise_interval_count})
+            </span>
+          )
+        )}
         <HeartRateBadge summary={result.heart_rate} />
         {result.session_fatigue && (
           result.session_fatigue.status === "insufficient_evidence" ? (
@@ -176,6 +322,7 @@ const HistoryCard = memo(function HistoryCard({ result, archiveView }: { result:
         </p>
       )}
     </Link>
+    {!archiveView && isCompleted && <HistoryMissingInputActions result={result} />}
     <div className="flex justify-end border-t border-border px-5 py-3">
       <HistoryArchiveAction result={result} />
     </div>
@@ -188,14 +335,36 @@ export function HistoryListPage() {
   const profiles = user?.profiles || [];
   const [searchParams, setSearchParams] = useSearchParams();
   const archiveView = searchParams.get("archived") === "true";
+  const rawMissing = searchParams.get("missing");
+  const missingFilter: HistoryMissingFilter | undefined =
+    !archiveView && (rawMissing === "any" || rawMissing === "effort" || rawMissing === "performance")
+      ? rawMissing
+      : undefined;
   const requestedProfileId = Number(searchParams.get("profile_id"));
   const selectedProfileId = profiles.find(profile => profile.id === requestedProfileId)?.id ?? profiles[0]?.id ?? null;
   const selectView = (profileId: number | null, archived: boolean) => {
     const next = new URLSearchParams(searchParams);
     if (profileId) next.set("profile_id", String(profileId));
-    if (archived) next.set("archived", "true"); else next.delete("archived");
+    if (archived) {
+      next.set("archived", "true");
+      next.delete("missing");
+    } else {
+      next.delete("archived");
+    }
     setSearchParams(next);
   };
+  const selectMissingFilter = (nextMissing?: HistoryMissingFilter) => {
+    const next = new URLSearchParams(searchParams);
+    if (selectedProfileId) next.set("profile_id", String(selectedProfileId));
+    next.delete("archived");
+    if (nextMissing) next.set("missing", nextMissing);
+    else next.delete("missing");
+    setSearchParams(next);
+  };
+
+  const historyQueryKey = missingFilter
+    ? ["history-infinite", selectedProfileId, "active", missingFilter]
+    : ["history-infinite", selectedProfileId, archiveView ? "archived" : "active"];
 
   const {
     data,
@@ -207,8 +376,11 @@ export function HistoryListPage() {
     isFetching,
     isFetchingNextPage,
   } = useInfiniteQuery({
-    queryKey: ["history-infinite", selectedProfileId, archiveView ? "archived" : "active"],
-    queryFn: ({ pageParam }) => historyApi.list(selectedProfileId!, pageParam, undefined, archiveView),
+    queryKey: historyQueryKey,
+    queryFn: ({ pageParam }) =>
+      missingFilter
+        ? historyApi.list(selectedProfileId!, pageParam, undefined, archiveView, missingFilter)
+        : historyApi.list(selectedProfileId!, pageParam, undefined, archiveView),
     initialPageParam: undefined as number | undefined,
     getNextPageParam: (lastPage) => {
       if (!lastPage || lastPage.length < 20) return undefined;
@@ -280,10 +452,37 @@ export function HistoryListPage() {
         )}
       </div>
 
-      <div className="mb-6 flex gap-2" role="group" aria-label="운동 기록 보기">
+      <div className="mb-4 flex gap-2" role="group" aria-label="운동 기록 보기">
         <button type="button" aria-pressed={!archiveView} onClick={() => selectView(selectedProfileId, false)} className={`rounded-lg border px-4 py-2 text-sm ${!archiveView ? "border-accent text-accent" : "border-border text-text-secondary"}`}>운동 기록</button>
         <button type="button" aria-pressed={archiveView} onClick={() => selectView(selectedProfileId, true)} className={`rounded-lg border px-4 py-2 text-sm ${archiveView ? "border-accent text-accent" : "border-border text-text-secondary"}`}>보관함</button>
       </div>
+      {!archiveView && (
+        <div className="mb-6 flex flex-wrap gap-2" role="group" aria-label="미입력 항목 필터">
+          {([
+            { value: undefined, label: "전체" },
+            { value: "any", label: "입력 필요" },
+            { value: "effort", label: "Effort 미입력" },
+            { value: "performance", label: "수행구간 미확정" },
+          ] as const).map((chip) => {
+            const active = missingFilter === chip.value;
+            return (
+              <button
+                key={chip.label}
+                type="button"
+                aria-pressed={active}
+                onClick={() => selectMissingFilter(chip.value)}
+                className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                  active
+                    ? "border-accent bg-accent/10 text-accent"
+                    : "border-border bg-bg-elevated text-text-secondary hover:text-text-primary"
+                }`}
+              >
+                {chip.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {archiveView && <p className="mb-6 text-sm text-text-secondary">보관한 기록은 피로도·훈련 부하·운동 비교에서 제외됩니다. 복원해도 중단된 분석은 자동 재개되지 않습니다.</p>}
 
       {totalCost && (totalCost.total_tokens > 0 || !!totalCost.unmeasured_calls || !!totalCost.unpriced_calls) && (
@@ -362,17 +561,41 @@ export function HistoryListPage() {
             </svg>
           </div>
           <h3 className="text-lg font-medium text-text-primary mb-1">
-            {archiveView ? "보관한 기록이 없습니다" : "No workouts yet"}
+            {archiveView
+              ? "보관한 기록이 없습니다"
+              : missingFilter
+                ? "입력이 필요한 운동 기록이 없습니다"
+                : "No workouts yet"}
           </h3>
           <p className="text-text-secondary text-sm">
-            {archiveView ? "운동 기록에서 보관한 항목을 여기서 확인하고 복원할 수 있습니다." : "Upload a workout video to get started."}
+            {archiveView
+              ? "운동 기록에서 보관한 항목을 여기서 확인하고 복원할 수 있습니다."
+              : missingFilter === "effort"
+                ? "모든 대상 WOD에 Effort가 입력되어 있습니다."
+                : missingFilter === "performance"
+                  ? "모든 완료된 운동 구간이 확정되었습니다."
+                  : missingFilter === "any"
+                    ? "Effort 미입력 또는 수행구간 미확정 기록이 없습니다."
+                    : "Upload a workout video to get started."}
           </p>
-          {!archiveView && <Link
-            to="/upload"
-            className="inline-flex items-center gap-2 mt-4 bg-accent hover:bg-accent-hover text-white font-medium rounded-lg px-4 py-2.5 transition-all duration-200"
-          >
-            Upload Video
-          </Link>}
+          {!archiveView && (
+            missingFilter ? (
+              <button
+                type="button"
+                onClick={() => selectMissingFilter(undefined)}
+                className="inline-flex items-center gap-2 mt-4 bg-bg-secondary hover:bg-bg-tertiary text-text-primary border border-border font-medium rounded-lg px-4 py-2.5 transition-all duration-200"
+              >
+                전체 기록 보기
+              </button>
+            ) : (
+              <Link
+                to="/upload"
+                className="inline-flex items-center gap-2 mt-4 bg-accent hover:bg-accent-hover text-white font-medium rounded-lg px-4 py-2.5 transition-all duration-200"
+              >
+                Upload Video
+              </Link>
+            )
+          )}
         </div>
       )}
 
