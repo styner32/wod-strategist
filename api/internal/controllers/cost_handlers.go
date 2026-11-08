@@ -30,6 +30,7 @@ func (ctl *Controller) GetSessionCost(c *gin.Context) {
 
 	var usages []db.TokenUsage
 	if err := ctl.db.WithContext(c.Request.Context()).
+		Omit("usage_metadata").
 		Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 		Order("id ASC").
 		Find(&usages).Error; err != nil {
@@ -82,17 +83,26 @@ func (ctl *Controller) GetTotalCost(c *gin.Context) {
 		}
 	}
 
-	// Keep introductory and standard Argon usage in separate groups. A single
-	// model-only sum loses the dates needed to price historical calls correctly.
+	// Keep introductory and standard Argon usage (plus batch 50% discount) in separate groups.
+	// Uses scalar columns synced at write/migration time instead of scanning usage_metadata JSONB.
+	groupExpr := fmt.Sprintf(
+		"model, (lower(trim(task_type)) LIKE '%%:batch'), CASE WHEN lower(trim(model)) = '%s' AND created_at < TIMESTAMPTZ '%s' THEN 1 ELSE 0 END",
+		gemini.ModelArgon4,
+		cost.ArgonStandardPricingStartsAt.Format(time.RFC3339),
+	)
 	query := ctl.db.WithContext(c.Request.Context()).Model(&db.TokenUsage{}).
-		Select(`model, MIN(created_at) as pricing_at, SUM(prompt_tokens) as prompt_tokens, SUM(candidate_tokens) as candidate_tokens, SUM(total_tokens) as total_tokens,
-   SUM(COALESCE((usage_metadata->>'thoughtsTokenCount')::bigint,0)) as thinking_tokens,
-   SUM(COALESCE((usage_metadata->>'toolUsePromptTokenCount')::bigint,0)) as tool_use_tokens,
-   SUM(COALESCE((usage_metadata->>'cachedContentTokenCount')::bigint,0)) as cached_tokens,
-   COUNT(*) FILTER (WHERE usage_metadata IS NOT NULL AND (usage_metadata->>'promptTokenCount' IS NULL OR usage_metadata->>'candidatesTokenCount' IS NULL OR usage_metadata->>'totalTokenCount' IS NULL)) as unmeasured_calls,
- COUNT(*) FILTER (WHERE lower(trim(model)) LIKE 'lyria-%') as unpriced_calls`).
-		Group(fmt.Sprintf("model, CASE WHEN lower(trim(model)) = '%s' AND created_at < TIMESTAMPTZ '%s' THEN 1 ELSE 0 END",
-			gemini.ModelArgon4, cost.ArgonStandardPricingStartsAt.Format(time.RFC3339)))
+		Select(`model,
+   (lower(trim(task_type)) LIKE '%:batch') as is_batch,
+   MIN(created_at) as pricing_at,
+   COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+   COALESCE(SUM(candidate_tokens), 0) as candidate_tokens,
+   COALESCE(SUM(total_tokens), 0) as total_tokens,
+   COALESCE(SUM(thinking_tokens), 0) as thinking_tokens,
+   COALESCE(SUM(tool_use_tokens), 0) as tool_use_tokens,
+   COALESCE(SUM(cached_tokens), 0) as cached_tokens,
+   COALESCE(SUM(unmeasured_calls), 0) as unmeasured_calls,
+   COUNT(*) FILTER (WHERE lower(trim(model)) LIKE 'lyria-%') as unpriced_calls`).
+		Group(groupExpr)
 	if pidStr != "" {
 		query = query.Where("profile_id IN ?", profileIDs)
 	} else {

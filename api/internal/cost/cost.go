@@ -156,6 +156,7 @@ type TotalCostResponse struct {
 
 type ModelTokenAggregate struct {
 	PricingAt       time.Time `json:"-"` // representative date within one model/pricing period
+	IsBatch         bool      `json:"-"`
 	UnpricedCalls   int64     `json:"unpriced_calls"`
 	ThinkingTokens  int64     `json:"thinking_tokens"`
 	ToolUseTokens   int64     `json:"tool_use_tokens"`
@@ -353,6 +354,9 @@ func CalculateTotalCostFromAggregates(aggregates []ModelTokenAggregate) TotalCos
 		unmeasured += a.UnmeasuredCalls
 		unpriced += a.UnpricedCalls
 		usd, _ := CalculateTokensCostAt(a.Model, a.PromptTokens+a.ToolUseTokens, a.CandidateTokens+a.ThinkingTokens, a.PricingAt)
+		if a.IsBatch {
+			usd = RoundUSD(usd * 0.5)
+		}
 		totalPrompt += a.PromptTokens
 		totalCandidate += a.CandidateTokens
 		totalTokens += a.TotalTokens
@@ -376,8 +380,8 @@ func CalculateTotalCostFromAggregates(aggregates []ModelTokenAggregate) TotalCos
 // in the ledger; unmeasured calls flag that these sums are incomplete.
 func UsageExtras(u db.TokenUsage) (thinking, tool, cached, unmeasured int64) {
 	if len(u.UsageMetadata) == 0 {
-		return
-	} // legacy row, no finer metadata retained
+		return u.ThinkingTokens, u.ToolUseTokens, u.CachedTokens, int64(u.UnmeasuredCalls)
+	} // legacy or omitted-JSONB row falls back to scalar columns
 	var d gemini.ComparisonUsage
 	if json.Unmarshal(u.UsageMetadata, &d) != nil {
 		return 0, 0, 0, 1
@@ -426,4 +430,3 @@ func ApplyStageMetrics(resp *SessionCostResponse, metrics []db.PipelineStageMetr
 	resp.TotalDurationMs = totalDurationMs
 	resp.ByStage = items
 }
-

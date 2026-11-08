@@ -49,6 +49,7 @@ func RecordUsage(conn *gorm.DB, sessionID string, profileID, userID uint, taskTy
 	if requestKey != "" {
 		record.RequestKey = &requestKey
 	}
+	record.SyncUsageExtras()
 	if err := conn.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "request_key"}}, DoNothing: true}).Create(&record).Error; err != nil {
 		return err
 	}

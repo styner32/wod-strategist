@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -241,10 +242,71 @@ type TokenUsage struct {
 	PromptTokens    int64                `gorm:"not null;default:0" json:"prompt_tokens"`
 	CandidateTokens int64                `gorm:"not null;default:0" json:"candidate_tokens"`
 	TotalTokens     int64                `gorm:"not null;default:0" json:"total_tokens"`
+	ThinkingTokens  int64                `json:"-"`
+	ToolUseTokens   int64                `json:"-"`
+	CachedTokens    int64                `json:"-"`
+	UnmeasuredCalls int16                `json:"-"`
 	CreatedAt       time.Time            `json:"created_at"`
 	UsageMetadata   NullableJSONDocument `json:"usage_metadata"`
 	RequestKey      *string              `json:"request_key,omitempty"`
 	UserID          *uint                `json:"user_id,omitempty"`
+}
+
+// SyncUsageExtras derives scalar token subtotals and unmeasured-call flag from
+// UsageMetadata using the exact same rules as cost.UsageExtras.
+func (u *TokenUsage) SyncUsageExtras() {
+	if u == nil || len(u.UsageMetadata) == 0 {
+		return
+	}
+	var parsed struct {
+		Input    *int64 `json:"promptTokenCount"`
+		Output   *int64 `json:"candidatesTokenCount"`
+		Thinking *int64 `json:"thoughtsTokenCount"`
+		ToolUse  *int64 `json:"toolUsePromptTokenCount"`
+		Cached   *int64 `json:"cachedContentTokenCount"`
+		Total    *int64 `json:"totalTokenCount"`
+	}
+	if json.Unmarshal(u.UsageMetadata, &parsed) != nil {
+		u.ThinkingTokens = 0
+		u.ToolUseTokens = 0
+		u.CachedTokens = 0
+		u.UnmeasuredCalls = 1
+		return
+	}
+	var rawMap map[string]any
+	if json.Unmarshal(u.UsageMetadata, &rawMap) != nil || rawMap == nil {
+		u.ThinkingTokens = 0
+		u.ToolUseTokens = 0
+		u.CachedTokens = 0
+		if string(u.UsageMetadata) != "null" {
+			u.UnmeasuredCalls = 1
+		} else {
+			u.UnmeasuredCalls = 0
+		}
+		return
+	}
+	u.ThinkingTokens = 0
+	if parsed.Thinking != nil {
+		u.ThinkingTokens = *parsed.Thinking
+	}
+	u.ToolUseTokens = 0
+	if parsed.ToolUse != nil {
+		u.ToolUseTokens = *parsed.ToolUse
+	}
+	u.CachedTokens = 0
+	if parsed.Cached != nil {
+		u.CachedTokens = *parsed.Cached
+	}
+	if parsed.Input == nil || parsed.Output == nil || parsed.Total == nil {
+		u.UnmeasuredCalls = 1
+	} else {
+		u.UnmeasuredCalls = 0
+	}
+}
+
+func (u *TokenUsage) BeforeSave(_ *gorm.DB) error {
+	u.SyncUsageExtras()
+	return nil
 }
 
 type GeminiThoughtLog struct {
