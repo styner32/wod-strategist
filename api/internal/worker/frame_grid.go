@@ -36,13 +36,12 @@ const (
 	// Below this rate a contact sheet no longer shows individual repetitions.
 	// Longer reanalysis intervals use VideoMetadata video analysis instead.
 	minReanalysisFrameGridFPS = 2.0
-	// Each extraction holds up to MaxSheets*Cols*Rows decoded frames in memory.
-	maxConcurrentFrameGridExtractions = 2
+	// Pure frame extraction timeout (excludes CPU slot wait time).
+	frameGridExtractTimeout = 60 * time.Second
 )
 
 var (
 	errFrameGridIntervalTooLong = errors.New("frame grid interval exceeds the sheet budget at the minimum reanalysis FPS")
-	frameGridExtractionSlots    = make(chan struct{}, maxConcurrentFrameGridExtractions)
 )
 
 // FrameGridOptions configures how a video interval is sampled and tiled into
@@ -210,19 +209,26 @@ func GenerateFrameGrids(ctx context.Context, videoPath string, start, end time.D
 	defer os.RemoveAll(tmpDir)
 
 	framePattern := filepath.Join(tmpDir, "frame_%05d.jpg")
-	args := []string{
-		"-v", "error",
-		"-ss", formatFFmpegSeconds(start),
-		"-t", formatFFmpegSeconds(duration),
-		"-i", videoPath,
-		"-vf", fmt.Sprintf("fps=%.4f,scale=%d:-2", opts.FPS, opts.TileWidth),
-		"-q:v", "2",
-		framePattern,
-	}
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("ffmpeg frame extraction failed: %s: %w", strings.TrimSpace(string(output)), err)
+	if _, err := runMediaExec(ctx, "frame_grid_ffmpeg", func(execCtx context.Context) error {
+		args := []string{
+			"-ss", formatFFmpegSeconds(start),
+			"-t", formatFFmpegSeconds(duration),
+			"-i", videoPath,
+			"-vf", fmt.Sprintf("fps=%.4f,scale=%d:-2", opts.FPS, opts.TileWidth),
+			"-q:v", "2",
+		}
+		if mediaThreadsLimited(execCtx) {
+			args = append(args, "-threads", "1")
+		}
+		args = append(args, framePattern)
+		args = append([]string{"-v", "error"}, limitMediaCommandThreads(execCtx, args)...)
+		cmd := exec.CommandContext(execCtx, "ffmpeg", args...)
+		if output, runErr := cmd.CombinedOutput(); runErr != nil {
+			return fmt.Errorf("ffmpeg frame extraction failed: %s: %w", strings.TrimSpace(string(output)), runErr)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	entries, err := os.ReadDir(tmpDir)
@@ -417,6 +423,63 @@ func buildFrameGridPromptContext(sheets []FrameGridSheet, opts FrameGridOptions)
 	)
 }
 
+// ExtractFrameGridsForInterval acquires the shared media CPU slot, then starts
+// the 60s extraction timeout only after slot wait completes so capacity contention
+// never triggers false frame-extraction timeouts.
+func ExtractFrameGridsForInterval(
+	ctx context.Context,
+	videoPath string,
+	start, end time.Duration,
+	opts FrameGridOptions,
+) ([]FrameGridSheet, time.Duration, time.Duration, error) {
+	if !frameGridEligible(end-start, opts) {
+		return nil, 0, 0, errFrameGridIntervalTooLong
+	}
+	opts = resolveFrameGridOptionsForDuration(end-start, opts)
+	var (
+		sheets     []FrameGridSheet
+		extractDur time.Duration
+	)
+	slotWait, err := runMediaExec(ctx, "frame_grid_extract", func(execCtx context.Context) error {
+		extractStart := time.Now()
+		extractCtx, cancel := context.WithTimeout(execCtx, frameGridExtractTimeout)
+		defer cancel()
+		var runErr error
+		sheets, runErr = GenerateFrameGrids(extractCtx, videoPath, start, end, opts)
+		extractDur = time.Since(extractStart)
+		return runErr
+	})
+	if err != nil {
+		return nil, slotWait, extractDur, err
+	}
+	return sheets, slotWait, extractDur, nil
+}
+
+// AnalyzePreparedFrameGrids runs Gemini inference on pre-extracted contact sheets
+// and optional tracking reference images without touching FFmpeg or disk.
+func (w *Worker) AnalyzePreparedFrameGrids(
+	ctx context.Context,
+	sheets []FrameGridSheet,
+	prompt, model string,
+	opts FrameGridOptions,
+) (string, *gemini.TokenUsage, error) {
+	if w == nil || w.GeminiClient == nil {
+		return "", nil, errors.New("gemini client is not configured")
+	}
+	opts = normalizeFrameGridOptions(opts)
+	images := FrameGridImageBytes(sheets)
+	fullPrompt := prompt + buildFrameGridPromptContext(sheets, opts)
+	if len(opts.ReferenceImages) > 0 {
+		images = append(images, opts.ReferenceImages...)
+		fullPrompt += fmt.Sprintf("\n- 이어지는 마지막 %d장은 프레임 그리드가 아니라 대상 인물 추적 기준 이미지입니다(초록 박스, TARGET 표시).", len(opts.ReferenceImages))
+	}
+	callCtx := ctx
+	if strings.TrimSpace(opts.ThinkingLevel) != "" {
+		callCtx = gemini.WithThinkingLevel(ctx, opts.ThinkingLevel)
+	}
+	return w.GeminiClient.AnalyzeFrameGridsWithModel(callCtx, images, "image/jpeg", fullPrompt, model)
+}
+
 // AnalyzeVideoIntervalWithFrameGrids extracts contact-sheet frame grids from a
 // local video file over [start, end] and runs reanalysis via GeminiClient.AnalyzeFrameGridsWithModel.
 func (w *Worker) AnalyzeVideoIntervalWithFrameGrids(
@@ -429,31 +492,12 @@ func (w *Worker) AnalyzeVideoIntervalWithFrameGrids(
 	if w == nil || w.GeminiClient == nil {
 		return "", nil, nil, errors.New("gemini client is not configured")
 	}
-	if !frameGridEligible(end-start, opts) {
-		return "", nil, nil, errFrameGridIntervalTooLong
-	}
-	opts = resolveFrameGridOptionsForDuration(end-start, opts)
-	select {
-	case frameGridExtractionSlots <- struct{}{}:
-	case <-ctx.Done():
-		return "", nil, nil, ctx.Err()
-	}
-	sheets, err := GenerateFrameGrids(ctx, videoPath, start, end, opts)
-	<-frameGridExtractionSlots
+	resolvedOpts := resolveFrameGridOptionsForDuration(end-start, opts)
+	sheets, _, _, err := ExtractFrameGridsForInterval(withWorkerMediaRuntime(ctx, w), videoPath, start, end, resolvedOpts)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	images := FrameGridImageBytes(sheets)
-	fullPrompt := prompt + buildFrameGridPromptContext(sheets, opts)
-	if len(opts.ReferenceImages) > 0 {
-		images = append(images, opts.ReferenceImages...)
-		fullPrompt += fmt.Sprintf("\n- 이어지는 마지막 %d장은 프레임 그리드가 아니라 대상 인물 추적 기준 이미지입니다(초록 박스, TARGET 표시).", len(opts.ReferenceImages))
-	}
-	callCtx := ctx
-	if strings.TrimSpace(opts.ThinkingLevel) != "" {
-		callCtx = gemini.WithThinkingLevel(ctx, opts.ThinkingLevel)
-	}
-	analysis, usage, err := w.GeminiClient.AnalyzeFrameGridsWithModel(callCtx, images, "image/jpeg", fullPrompt, model)
+	analysis, usage, err := w.AnalyzePreparedFrameGrids(ctx, sheets, prompt, model, resolvedOpts)
 	if err != nil {
 		return "", sheets, usage, err
 	}

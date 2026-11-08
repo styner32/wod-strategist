@@ -87,7 +87,7 @@ func (w *Worker) withSessionWorkContext(ctx context.Context, sessionID string, p
 	} else if err := guard.allowed(ctx); err != nil {
 		return ctx, func() {}, err
 	}
-	workCtx, cancel := context.WithCancelCause(context.WithValue(ctx, sessionWorkContextKey{}, guard))
+	workCtx, cancel := context.WithCancelCause(context.WithValue(withWorkerMediaRuntime(ctx, w), sessionWorkContextKey{}, guard))
 	return workCtx, func() { cancel(context.Canceled) }, nil
 }
 

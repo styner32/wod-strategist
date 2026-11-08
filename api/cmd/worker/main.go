@@ -111,6 +111,9 @@ func main() {
 	w.ContextualCoachingEnabled = cfg.ContextualCoachingEnabled
 	w.ActivityCountingEnabled = cfg.ActivityCountingEnabled
 	w.TrackingContinuityEnabled = cfg.TrackingContinuityEnabled
+	w.ActivityReviewWindowRetryEnabled = worker.BoolPtr(cfg.ActivityReviewWindowRetryEnabled)
+	w.Pass2RestFallbackSplitEnabled = worker.BoolPtr(cfg.Pass2RestFallbackSplitEnabled)
+	w.MediaCPUSlotsEnabled = worker.BoolPtr(cfg.MediaCPUSlotsEnabled)
 	w.AgenticHighlightsEnabled = cfg.AgenticHighlightsEnabled
 	w.UseCache = cfg.UseCache
 	w.PipelineMode = worker.PipelineMode(cfg.PipelineMode)

@@ -190,19 +190,28 @@ func trackingReferenceObject(profileID uint, sessionID string, chunkID uint) str
 
 // renderTrackingReference extracts the frame at box.T and marks the target.
 func renderTrackingReference(ctx context.Context, videoPath string, box trackingBox) ([]byte, error) {
-	args := []string{
-		"-v", "error",
-		"-ss", fmt.Sprintf("%.3f", box.T),
-		"-i", videoPath,
-		"-frames:v", "1",
-		"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", trackingReferenceMaxWidth),
-		"-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3", "-",
-	}
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("extract tracking frame: %s: %w", strings.TrimSpace(stderr.String()), err)
+	if _, err := runMediaExec(ctx, "render_tracking_reference", func(execCtx context.Context) error {
+		args := []string{
+			"-ss", fmt.Sprintf("%.3f", box.T),
+			"-i", videoPath,
+			"-frames:v", "1",
+			"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", trackingReferenceMaxWidth),
+			"-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3",
+		}
+		if mediaThreadsLimited(execCtx) {
+			args = append(args, "-threads", "1")
+		}
+		args = append(args, "-")
+		args = append([]string{"-v", "error"}, limitMediaCommandThreads(execCtx, args)...)
+		cmd := exec.CommandContext(execCtx, "ffmpeg", args...)
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if runErr := cmd.Run(); runErr != nil {
+			return fmt.Errorf("extract tracking frame: %s: %w", strings.TrimSpace(stderr.String()), runErr)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	frame, err := jpeg.Decode(bytes.NewReader(stdout.Bytes()))
 	if err != nil {

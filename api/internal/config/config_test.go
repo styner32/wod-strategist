@@ -115,6 +115,18 @@ var _ = Describe("InitServer", func() {
 		Expect(cfg.SessionReanalysisEnabled).To(BeTrue())
 	})
 
+	It("defaults HISTORY_SUMMARY_CACHE_ENABLED to true and disables only on explicit false", func() {
+		setEnv("HISTORY_SUMMARY_CACHE_ENABLED", "")
+		cfg, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.HistorySummaryCacheEnabled).To(BeTrue())
+
+		setEnv("HISTORY_SUMMARY_CACHE_ENABLED", " FaLsE ")
+		cfgDisabled, err := config.InitServer()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfgDisabled.HistorySummaryCacheEnabled).To(BeFalse())
+	})
+
 	It("leaves the session re-analysis quota to the controller default when unset and parses an explicit value", func() {
 		setEnv("SESSION_REANALYSIS_DAILY_QUOTA", "")
 		cfg, err := config.InitServer()
@@ -482,5 +494,25 @@ var _ = Describe("InitWorker", func() {
 			Entry("zero db idle pool", "DB_MAX_IDLE_CONNS", "0"),
 			Entry("negative db idle pool", "DB_MAX_IDLE_CONNS", "-2"),
 		)
+
+		It("defaults worker rollback switches to true and disables each only on explicit false", func() {
+			setEnv("ACTIVITY_REVIEW_WINDOW_RETRY_ENABLED", "")
+			setEnv("PASS2_REST_FALLBACK_SPLIT_ENABLED", "")
+			setEnv("WORKER_MEDIA_CPU_SLOTS_ENABLED", "")
+			cfg, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ActivityReviewWindowRetryEnabled).To(BeTrue())
+			Expect(cfg.Pass2RestFallbackSplitEnabled).To(BeTrue())
+			Expect(cfg.MediaCPUSlotsEnabled).To(BeTrue())
+
+			setEnv("ACTIVITY_REVIEW_WINDOW_RETRY_ENABLED", "false")
+			setEnv("PASS2_REST_FALLBACK_SPLIT_ENABLED", " FALSE ")
+			setEnv("WORKER_MEDIA_CPU_SLOTS_ENABLED", "False")
+			cfgDisabled, err := config.InitWorker()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfgDisabled.ActivityReviewWindowRetryEnabled).To(BeFalse())
+			Expect(cfgDisabled.Pass2RestFallbackSplitEnabled).To(BeFalse())
+			Expect(cfgDisabled.MediaCPUSlotsEnabled).To(BeFalse())
+		})
 	})
 })

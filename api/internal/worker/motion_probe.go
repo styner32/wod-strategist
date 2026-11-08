@@ -14,11 +14,17 @@ var sceneScoreRegex = regexp.MustCompile(`lavfi\.scene_score=([\d.]+)`)
 // Downscaled to 160px @ 2fps so the probe costs ~100ms CPU per 10s chunk.
 // Score ~0.0 = static frame, higher = more motion.
 func probeMotionScore(ctx context.Context, chunkPath string) (float64, error) {
-	cmd := exec.CommandContext(ctx, "ffmpeg",
-		"-i", chunkPath,
-		"-vf", "scale=160:-2,fps=2,select='gte(scene,0)',metadata=print",
-		"-an", "-f", "null", "-")
-	out, err := cmd.CombinedOutput() // metadata=print writes to stderr
+	var out []byte
+	_, err := runMediaExec(ctx, "motion_probe", func(execCtx context.Context) error {
+		args := limitMediaCommandThreads(execCtx, []string{
+			"-i", chunkPath,
+			"-vf", "scale=160:-2,fps=2,select='gte(scene,0)',metadata=print",
+			"-an", "-f", "null", "-",
+		})
+		var runErr error
+		out, runErr = exec.CommandContext(execCtx, "ffmpeg", args...).CombinedOutput() // metadata=print writes to stderr
+		return runErr
+	})
 	if err != nil {
 		return 0, fmt.Errorf("ffmpeg motion probe: %w", err)
 	}

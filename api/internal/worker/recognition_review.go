@@ -267,10 +267,24 @@ func encodeRecognitionClip(ctx context.Context, source, target string, start, en
 	if start < 0 || end <= start || math.IsNaN(start) || math.IsNaN(end) || math.IsInf(start, 0) || math.IsInf(end, 0) {
 		return 0, errors.New("invalid diagnostic clip interval")
 	}
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-ss", fmt.Sprintf("%.9f", start), "-i", source,
-		"-t", fmt.Sprintf("%.9f", end-start), "-map", "0:v:0", "-an", "-vf", "setpts=PTS-STARTPTS", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-y", target)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return 0, fmt.Errorf("encode diagnostic clip: %w (%s)", err, strings.TrimSpace(string(output)))
+	if _, err := runMediaExec(ctx, "encode_recognition_clip", func(execCtx context.Context) error {
+		args := []string{
+			"-ss", fmt.Sprintf("%.9f", start), "-i", source,
+			"-t", fmt.Sprintf("%.9f", end-start), "-map", "0:v:0", "-an",
+			"-vf", "setpts=PTS-STARTPTS", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+		}
+		if mediaThreadsLimited(execCtx) {
+			args = append(args, "-threads", "1")
+		}
+		args = append(args, "-y", target)
+		args = append([]string{"-v", "error", "-nostdin"}, limitMediaCommandThreads(execCtx, args)...)
+		output, runErr := exec.CommandContext(execCtx, "ffmpeg", args...).CombinedOutput()
+		if runErr != nil {
+			return fmt.Errorf("encode diagnostic clip: %w (%s)", runErr, strings.TrimSpace(string(output)))
+		}
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 	duration := probeVideoDuration(ctx, target)
 	if duration <= 0 || duration+0.1 < end-start {
