@@ -642,6 +642,13 @@ func buildActivityReviewBatches(rows []db.ChunkAnalysisResult, completedIDs map[
 }
 
 func (w *Worker) handleActivityReviewTask(ctx context.Context, t *asynq.Task) (taskErr error) {
+	if w.activityReviewWindowRetryEnabled() {
+		return w.handleActivityReviewTaskWindowRetry(ctx, t)
+	}
+	return w.handleActivityReviewTaskLegacy(ctx, t)
+}
+
+func (w *Worker) handleActivityReviewTaskLegacy(ctx context.Context, t *asynq.Task) (taskErr error) {
 
 	var p activityReviewPayload
 	if json.Unmarshal(t.Payload(), &p) != nil || p.ProfileID == 0 || validateSessionID(p.SessionID) != nil || p.Generation <= 0 || p.Object != fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID) {
