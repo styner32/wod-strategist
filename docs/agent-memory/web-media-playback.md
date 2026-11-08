@@ -102,6 +102,12 @@ paused, never-played video.
   the document away from the selected evidence (`scrollIntoView` is reserved solely for the
   explicit "원래 위치로" button on the docked mini-player). `seeked`, `pause`, `loadedmetadata`,
   `play`, and `ratechange` only read media state without writing a new seek from those events.
+- Keep `relative` (`position: relative`) on `SessionReviewWorkspace`'s `lg:overflow-y-auto` tab
+  content container and on any `<label>` wrapping `sr-only` (`position: absolute`) form controls
+  (such as `PerformanceEditor`'s outcome radios with `left-1/2 top-1/2`). Without a positioned
+  ancestor inside the scroller, `sr-only` controls resolve their containing block to the outer
+  `lg:sticky` `<section>`, escape `content.scrollTop`, and scroll `window` downward when native
+  `<label>` activation focuses the hidden input.
 
 ## Diagnosing a suspected loop in production
 

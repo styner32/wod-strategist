@@ -175,7 +175,7 @@ export function SessionReviewWorkspace({
         </div>
         <div
           ref={content}
-          className="rounded-b-xl border border-t-0 border-border bg-bg-secondary/30 p-3 lg:max-h-[calc(100dvh-12rem)] lg:overflow-y-auto lg:overscroll-contain lg:p-4"
+          className="relative rounded-b-xl border border-t-0 border-border bg-bg-secondary/30 p-3 lg:max-h-[calc(100dvh-12rem)] lg:overflow-y-auto lg:overscroll-contain lg:p-4"
         >
           {panels.map((panel) => (
             <div
