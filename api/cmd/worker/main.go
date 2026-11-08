@@ -38,8 +38,11 @@ func main() {
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
 	}
+	poolCtx, cancelPoolReporter := context.WithCancel(context.Background())
+	defer cancelPoolReporter()
 	if sqlDB, sqlErr := dbConn.DB(); sqlErr == nil {
 		defer sqlDB.Close()
+		db.StartPoolStatsReporter(poolCtx, sqlDB, logger.Log, "worker", db.PoolStatsReportInterval)
 	}
 	// db.Migrate() // Migration can be done in API server or a separate job, but usually safe to run here too if idempotent
 

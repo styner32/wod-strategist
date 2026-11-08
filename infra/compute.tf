@@ -33,7 +33,8 @@ resource "google_cloud_run_v2_service" "api" {
   ingress  = "INGRESS_TRAFFIC_ALL"
 
   template {
-    service_account = google_service_account.run_sa.email
+    service_account                  = google_service_account.run_sa.email
+    max_instance_request_concurrency = 20
 
     scaling {
       max_instance_count = 2
@@ -48,6 +49,13 @@ resource "google_cloud_run_v2_service" "api" {
       # Use a placeholder image initially so `terraform apply` works.
       # User must build/push the real image later.
       image = "${var.region}-docker.pkg.dev/${var.project_id}/${var.app_name}-repo-${var.environment}/api:latest"
+
+      resources {
+        limits = {
+          memory = "512Mi"
+          cpu    = "1"
+        }
+      }
 
       ports {
         container_port = 8080

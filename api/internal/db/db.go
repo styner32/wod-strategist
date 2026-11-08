@@ -362,7 +362,9 @@ func ConnectWithPool(databaseURL string, pool PoolConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("DATABASE_URL is not set")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: NewGormLogger(logger.Log, SlowSQLThreshold),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}

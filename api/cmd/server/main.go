@@ -53,8 +53,11 @@ func main() {
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
 	}
+	poolCtx, cancelPoolReporter := context.WithCancel(context.Background())
+	defer cancelPoolReporter()
 	if sqlDB, sqlErr := dbConn.DB(); sqlErr == nil {
 		defer sqlDB.Close()
+		db.StartPoolStatsReporter(poolCtx, sqlDB, logger.Log, "api", db.PoolStatsReportInterval)
 	}
 
 	// Initialize Redis Connection for Asynq Client

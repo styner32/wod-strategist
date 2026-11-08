@@ -243,7 +243,8 @@ func (ctl *Controller) loadProfileReadinessAndRecentWorkouts(
 		}
 
 		// Fetch all sessions with reliable workout_at in [asOf-7d, asOf] without arbitrary limit
-		if err := tx.Where("profile_id = ? AND status = 'COMPLETED' AND archived_at IS NULL", profileID).
+		if err := tx.Select("id", "session_id", "workout_at", "session_score").
+			Where("profile_id = ? AND status = 'COMPLETED' AND archived_at IS NULL", profileID).
 			Where("workout_at >= ? AND workout_at <= ?", sevenDaysAgo, asOf).
 			Where("workout_at_source IN ('session_ulid', 'legacy_local_time')").
 			Order("workout_at DESC").
