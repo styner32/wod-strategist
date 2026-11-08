@@ -98,32 +98,36 @@ type Config struct {
 	NewGenerateHardSub      HardSubTaskFactory
 	EnableChunkReanalysis   bool
 	EnableSessionReanalysis bool
-	RecognitionReviewModel  string // validated deep-analysis model selected at startup
+	// HistorySummaryCacheEnabled controls whether GET /history reuses valid stored
+	// sessions.activity_summary; nil defaults to true.
+	HistorySummaryCacheEnabled *bool
+	RecognitionReviewModel     string // validated deep-analysis model selected at startup
 	// SessionReanalysisDailyQuota is the rolling 24h run limit per profile; 0 uses the default.
 	SessionReanalysisDailyQuota int64
 }
 
 type Controller struct {
-	enableAgenticHighlights bool
-	db                      *gorm.DB
-	queueClient             QueueClient
-	analysisResults         AnalysisResultRepository
-	profiles                ProfileRepository
-	highlightResults        HighlightResultRepository
-	storageClient           ObjectStorage
-	imageParser             ImageParser
-	textParser              TextParser
-	bucketName              string
-	gitCommit               string
-	newVideoAnalysisTask    VideoAnalysisTaskFactory
-	newChunkAnalysisTask    ChunkAnalysisTaskFactory
-	newMergeChunksTask      VideoAnalysisTaskFactory
-	newGenerateHighlight    HighlightTaskFactory
-	newVerifyHighlightsTask VerifyHighlightsTaskFactory
-	newGenerateHardSub      HardSubTaskFactory
-	enableChunkReanalysis   bool
-	enableSessionReanalysis bool
-	recognitionReviewModel  string
+	enableAgenticHighlights    bool
+	historySummaryCacheEnabled bool
+	db                         *gorm.DB
+	queueClient                QueueClient
+	analysisResults            AnalysisResultRepository
+	profiles                   ProfileRepository
+	highlightResults           HighlightResultRepository
+	storageClient              ObjectStorage
+	imageParser                ImageParser
+	textParser                 TextParser
+	bucketName                 string
+	gitCommit                  string
+	newVideoAnalysisTask       VideoAnalysisTaskFactory
+	newChunkAnalysisTask       ChunkAnalysisTaskFactory
+	newMergeChunksTask         VideoAnalysisTaskFactory
+	newGenerateHighlight       HighlightTaskFactory
+	newVerifyHighlightsTask    VerifyHighlightsTaskFactory
+	newGenerateHardSub         HardSubTaskFactory
+	enableChunkReanalysis      bool
+	enableSessionReanalysis    bool
+	recognitionReviewModel     string
 	// sessionReanalysisDailyQuota is the startup-validated rolling 24h limit; 0 uses the default.
 	sessionReanalysisDailyQuota int64
 }
@@ -169,27 +173,33 @@ func New(config Config) (*Controller, error) {
 		}
 	}
 
+	historyCacheEnabled := true
+	if config.HistorySummaryCacheEnabled != nil {
+		historyCacheEnabled = *config.HistorySummaryCacheEnabled
+	}
+
 	return &Controller{
-		db:                      config.DB,
-		queueClient:             config.QueueClient,
-		analysisResults:         config.AnalysisResults,
-		profiles:                config.Profiles,
-		highlightResults:        config.HighlightResults,
-		storageClient:           config.StorageClient,
-		imageParser:             config.ImageParser,
-		textParser:              config.TextParser,
-		bucketName:              config.BucketName,
-		gitCommit:               commit,
-		newVideoAnalysisTask:    taskFactory,
-		newChunkAnalysisTask:    chunkTaskFactory,
-		newMergeChunksTask:      mergeTaskFactory,
-		newGenerateHighlight:    highlightTaskFactory,
-		newVerifyHighlightsTask: verifyTaskFactory,
-		newGenerateHardSub:      hardSubFactory,
-		enableChunkReanalysis:   config.EnableChunkReanalysis,
-		enableSessionReanalysis: config.EnableSessionReanalysis,
-		recognitionReviewModel:  config.RecognitionReviewModel,
-		enableAgenticHighlights: config.EnableAgenticHighlights,
+		historySummaryCacheEnabled: historyCacheEnabled,
+		db:                         config.DB,
+		queueClient:                config.QueueClient,
+		analysisResults:            config.AnalysisResults,
+		profiles:                   config.Profiles,
+		highlightResults:           config.HighlightResults,
+		storageClient:              config.StorageClient,
+		imageParser:                config.ImageParser,
+		textParser:                 config.TextParser,
+		bucketName:                 config.BucketName,
+		gitCommit:                  commit,
+		newVideoAnalysisTask:       taskFactory,
+		newChunkAnalysisTask:       chunkTaskFactory,
+		newMergeChunksTask:         mergeTaskFactory,
+		newGenerateHighlight:       highlightTaskFactory,
+		newVerifyHighlightsTask:    verifyTaskFactory,
+		newGenerateHardSub:         hardSubFactory,
+		enableChunkReanalysis:      config.EnableChunkReanalysis,
+		enableSessionReanalysis:    config.EnableSessionReanalysis,
+		recognitionReviewModel:     config.RecognitionReviewModel,
+		enableAgenticHighlights:    config.EnableAgenticHighlights,
 
 		sessionReanalysisDailyQuota: config.SessionReanalysisDailyQuota,
 	}, nil

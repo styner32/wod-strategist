@@ -326,7 +326,10 @@ func (w *Worker) refreshLiveActivity(ctx context.Context, p VideoAnalysisPayload
 		summary := activity.Build(rows, &stored)
 		reviewNeeded = stored.MediaGeneration != "" && stored.SourceVersion != summary.SourceVersion
 		data, _ := json.Marshal(summary)
-		return tx.Model(&session).Update("activity_summary", db.JSONDocument(data)).Error
+		return tx.Model(&session).Updates(map[string]any{
+			"activity_summary":               db.JSONDocument(data),
+			"activity_summary_cache_version": activity.SummaryCacheVersion,
+		}).Error
 	})
 	if err != nil {
 		return err

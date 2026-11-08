@@ -274,9 +274,11 @@ func (s SessionStatus) String() string {
 }
 
 type Session struct {
-	WODEvaluationVersion int                  `json:"wod_evaluation_version"`
-	Effort               *int                 `json:"effort"`
-	ActivitySummary      NullableJSONDocument `json:"activity_summary,omitempty" swaggertype:"object"`
+	WODEvaluationVersion        int                  `json:"wod_evaluation_version"`
+	Effort                      *int                 `json:"effort"`
+	ActivitySummary             NullableJSONDocument `json:"activity_summary,omitempty" swaggertype:"object"`
+	ActivityReviewAttempts      NullableJSONDocument `gorm:"column:activity_review_attempts;type:jsonb" json:"-"`
+	ActivitySummaryCacheVersion int                  `gorm:"column:activity_summary_cache_version" json:"-"`
 
 	ID             uint          `gorm:"primaryKey" json:"id"`
 	SessionID      string        `gorm:"uniqueIndex;not null" json:"session_id"`

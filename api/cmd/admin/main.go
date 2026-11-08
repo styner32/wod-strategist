@@ -1,5 +1,4 @@
-// cmd/admin is a local CLI tool for one-off maintenance tasks against the
-// production database. It only requires DATABASE_URL (reads from .env).
+// cmd/admin is a local CLI tool for one-off maintenance tasks.
 //
 // Usage:
 //
@@ -7,16 +6,20 @@
 //
 // Commands:
 //
-//	reparse-highlights   Re-parse highlight_segments from analysis output text
+//	reparse-highlights            Re-parse highlight_segments from analysis output text
+//	backfill-activity-summaries   Recompute stored sessions.activity_summary in small sequential batches
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
+	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/worker"
@@ -36,6 +39,8 @@ func main() {
 	switch command {
 	case "reparse-highlights":
 		cmdReparseHighlights(os.Args[2:])
+	case "backfill-activity-summaries":
+		cmdBackfillActivitySummaries(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", command)
 		printUsage()
@@ -47,12 +52,71 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage: admin <command> [flags]")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Commands:")
-	fmt.Fprintln(os.Stderr, "  reparse-highlights   Re-parse highlight_segments from analysis output text")
+	fmt.Fprintln(os.Stderr, "  reparse-highlights            Re-parse highlight_segments from analysis output text")
+	fmt.Fprintln(os.Stderr, "  backfill-activity-summaries   Recompute stored sessions.activity_summary in small sequential batches")
 	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Flags for reparse-highlights:")
-	fmt.Fprintln(os.Stderr, "  --session-id=ID      Target a specific session (default: all)")
+	fmt.Fprintln(os.Stderr, "Flags for backfill-activity-summaries:")
+	fmt.Fprintln(os.Stderr, "  --batch-size=N       Sessions per batch (default: 25, max: 100)")
+	fmt.Fprintln(os.Stderr, "  --profile-id=ID      Target a specific profile")
+	fmt.Fprintln(os.Stderr, "  --session-id=ID      Target a specific session")
 	fmt.Fprintln(os.Stderr, "  --dry-run            Preview changes without writing (default)")
-	fmt.Fprintln(os.Stderr, "  --apply              Actually write changes to the database")
+	fmt.Fprintln(os.Stderr, "  --apply              Write sessions.activity_summary and cache version")
+}
+
+func cmdBackfillActivitySummaries(args []string) {
+	opts := activity.BackfillOptions{
+		BatchSize: activity.DefaultBackfillBatchSize,
+	}
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "--batch-size="):
+			n, err := strconv.Atoi(strings.TrimPrefix(arg, "--batch-size="))
+			if err != nil || n <= 0 {
+				log.Fatalf("invalid --batch-size: %s", arg)
+			}
+			opts.BatchSize = n
+		case strings.HasPrefix(arg, "--profile-id="):
+			pid, err := strconv.ParseUint(strings.TrimPrefix(arg, "--profile-id="), 10, 32)
+			if err != nil || pid == 0 {
+				log.Fatalf("invalid --profile-id: %s", arg)
+			}
+			opts.ProfileID = uint(pid)
+		case strings.HasPrefix(arg, "--session-id="):
+			opts.SessionID = strings.TrimPrefix(arg, "--session-id=")
+		case arg == "--apply":
+			opts.Apply = true
+		case arg == "--dry-run":
+			opts.Apply = false
+		default:
+			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", arg)
+			os.Exit(1)
+		}
+	}
+
+	dbURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if dbURL == "" {
+		log.Fatal("DATABASE_URL is required. Set it in .env or environment.")
+	}
+	if err := logger.Init("development"); err != nil {
+		log.Fatalf("failed to init logger: %v", err)
+	}
+	conn, err := db.ConnectWithPool(dbURL, db.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1})
+	if err != nil {
+		log.Fatalf("failed to connect to database: %v", err)
+	}
+
+	stats, err := activity.BackfillSummaries(context.Background(), conn, opts, logger.Log)
+	if err != nil {
+		log.Fatalf("backfill-activity-summaries failed: %v", err)
+	}
+	logger.Log.Info("backfill-activity-summaries completed",
+		zap.Bool("apply", opts.Apply),
+		zap.Int("scanned_sessions", stats.ScannedSessions),
+		zap.Int("already_valid", stats.AlreadyValid),
+		zap.Int("updated", stats.Updated),
+		zap.Int("would_update", stats.WouldUpdate),
+		zap.Int("chunks_loaded", stats.ChunksLoaded),
+	)
 }
 
 func cmdReparseHighlights(args []string) {

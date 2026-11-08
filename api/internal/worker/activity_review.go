@@ -67,7 +67,10 @@ func (w *Worker) saveActivityReview(ctx context.Context, p activityReviewPayload
 		if err != nil {
 			return err
 		}
-		return tx.Model(&session).Update("activity_summary", db.JSONDocument(encoded)).Error
+		return tx.Model(&session).Updates(map[string]any{
+			"activity_summary":               db.JSONDocument(encoded),
+			"activity_summary_cache_version": activity.SummaryCacheVersion,
+		}).Error
 	})
 }
 
