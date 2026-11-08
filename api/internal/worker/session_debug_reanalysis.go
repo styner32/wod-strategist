@@ -58,6 +58,7 @@ type sessionDebugContext struct {
 	// rebuild failed in this run; the run snapshot records it.
 	TimelineRebuildFailed string
 	Corrections           []sessionDebugCorrection
+	TimelineChunks        []timelineChunk
 }
 
 type sessionDebugCorrection struct {
@@ -287,7 +288,13 @@ func (w *Worker) handleSessionDebugReanalysisTask(ctx context.Context, task *asy
 	if wodStart.Status == "confirmed" && wodStart.Seconds != nil {
 		minClipStart = *wodStart.Seconds
 	}
-	windows := splitPass2WindowsWithRestContext(segments, progressGaps, w.sessionCaptureDiscontinuities(ctx, run.SessionID, run.ProfileID), minClipStart)
+	windows := splitPass2WindowsWithNaturalBoundaries(
+		segments,
+		progressGaps,
+		w.sessionCaptureDiscontinuities(ctx, run.SessionID, run.ProfileID),
+		minClipStart,
+		target.TimelineChunks,
+	)
 	trackingRefs := w.loadTrackingReferences(ctx, run.SessionID, run.ProfileID)
 	segOutcomes := make([]sessionDebugSegmentOutcome, len(windows))
 	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
@@ -659,7 +666,7 @@ func (w *Worker) loadSessionDebugContext(ctx context.Context, sessionID string, 
 		return nil, err
 	}
 	target.Corrections = corrections
-	target.Segments, target.SkippedSegments, target.ChunkTimelineAvailable, target.TimelineRebuildFailed, err = w.buildSessionDebugSegments(ctx, sessionID, profileID, corrections, target.WorkoutType)
+	target.Segments, target.SkippedSegments, target.TimelineChunks, target.ChunkTimelineAvailable, target.TimelineRebuildFailed, err = w.buildSessionDebugSegmentsWithTimeline(ctx, sessionID, profileID, corrections, target.WorkoutType)
 	if err != nil {
 		return nil, err
 	}
@@ -704,10 +711,15 @@ func (w *Worker) loadActiveSessionDebugCorrections(ctx context.Context, sessionI
 // correction), whether any chunk carries a verified merged-media interval, and
 // the fingerprint of the chunk rows when their legacy timeline rebuild failed.
 func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection, workoutType string) ([]Segment, []Segment, bool, string, error) {
+	segments, skipped, _, timelineAvailable, rebuildFailed, err := w.buildSessionDebugSegmentsWithTimeline(ctx, sessionID, profileID, corrections, workoutType)
+	return segments, skipped, timelineAvailable, rebuildFailed, err
+}
+
+func (w *Worker) buildSessionDebugSegmentsWithTimeline(ctx context.Context, sessionID string, profileID uint, corrections []sessionDebugCorrection, workoutType string) ([]Segment, []Segment, []timelineChunk, bool, string, error) {
 	var chunks []db.ChunkAnalysisResult
 	if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 		Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error; err != nil {
-		return nil, nil, false, "", err
+		return nil, nil, nil, false, "", err
 	}
 	rebuildFailed := ""
 	if sessionDebugTimelineIncomplete(chunks) {
@@ -720,7 +732,7 @@ func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string
 		} else if err := w.reconstructSessionDebugMediaIntervals(ctx, sessionID, profileID, chunks); err == nil {
 			if err := w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", sessionID, profileID).
 				Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error; err != nil {
-				return nil, nil, false, "", err
+				return nil, nil, nil, false, "", err
 			}
 		} else {
 			rebuildFailed = fingerprint
@@ -814,7 +826,7 @@ func (w *Worker) buildSessionDebugSegments(ctx context.Context, sessionID string
 		timeline = append(timeline, tc)
 	}
 	segments, skipped := buildContinuousSegments(timeline)
-	return segments, skipped, timelineAvailable, rebuildFailed, nil
+	return segments, skipped, timeline, timelineAvailable, rebuildFailed, nil
 }
 
 // sessionDebugTimelineRebuildRetryAfter lets a failed legacy timeline rebuild

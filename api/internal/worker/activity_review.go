@@ -504,7 +504,8 @@ func isNotVisibleRunInterior(rows []db.ChunkAnalysisResult, idx int) bool {
 }
 
 func (w *Worker) cachedPass2TrackingInputs(ctx context.Context, refs []trackingReferenceRef, cache map[string][]byte, start, end float64) (string, [][]byte) {
-	if len(refs) == 0 {
+	objects := selectPass2TrackingObjects(refs, start, end)
+	if len(objects) == 0 {
 		return "", nil
 	}
 	load := func(object string) []byte {
@@ -518,20 +519,9 @@ func (w *Worker) cachedPass2TrackingInputs(ctx context.Context, refs []trackingR
 		cache[object] = img
 		return img
 	}
-	near := ""
-	for _, ref := range refs {
-		if ref.End > start && ref.Start < end {
-			near = ref.Object
-			break
-		}
-	}
-	anchor := refs[0].Object
 	var images [][]byte
-	if img := load(near); img != nil {
-		images = append(images, img)
-	}
-	if anchor != near {
-		if img := load(anchor); img != nil {
+	for _, obj := range objects {
+		if img := load(obj); img != nil {
 			images = append(images, img)
 		}
 	}

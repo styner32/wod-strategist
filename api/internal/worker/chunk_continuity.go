@@ -41,6 +41,7 @@ type timelineChunk struct {
 	Candidates               []string
 	completeCycles           map[string]int
 	UserFixed                bool // a saved correction decided the class; never smoothed
+	BridgedRest              bool // originally non-active, bridged between active neighbours
 	Description              string
 }
 
@@ -242,6 +243,7 @@ func smoothChunkSequence(chunks []timelineChunk) []timelineChunk {
 				movement = prev.Movement
 			}
 			out[i].Class, out[i].Movement = chunkActive, movement
+			out[i].BridgedRest = true
 			out[i].Candidates = addCandidate(addCandidate(nil, prev.Movement), next.Movement)
 			continue
 		}
@@ -263,21 +265,29 @@ func smoothChunkSequence(chunks []timelineChunk) []timelineChunk {
 	return out
 }
 
-// buildContinuousSegments groups continuous active chunks into bouts that are
-// never cut at 10-second chunk edges or by movement-label changes, and returns
-// explicitly non-exercise chunks as skipped media. Unclassified chunks that are
-// not bridged are neither (they remain not_analyzed).
-func buildContinuousSegments(chunks []timelineChunk) ([]Segment, []Segment) {
-	sort.SliceStable(chunks, func(i, j int) bool { return chunks[i].Start < chunks[j].Start })
+func prepareSmoothedTimelineChunks(chunks []timelineChunk) []timelineChunk {
+	if len(chunks) == 0 {
+		return nil
+	}
+	ordered := append([]timelineChunk(nil), chunks...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Start < ordered[j].Start })
 	// Rows of one retained object share an interval; keep the first.
-	deduped := make([]timelineChunk, 0, len(chunks))
-	for _, c := range chunks {
+	deduped := make([]timelineChunk, 0, len(ordered))
+	for _, c := range ordered {
 		if n := len(deduped); n > 0 && math.Abs(deduped[n-1].Start-c.Start) < 0.01 && math.Abs(deduped[n-1].End-c.End) < 0.01 {
 			continue
 		}
 		deduped = append(deduped, c)
 	}
-	smoothed := smoothChunkSequence(deduped)
+	return smoothChunkSequence(deduped)
+}
+
+// buildContinuousSegments groups continuous active chunks into bouts that are
+// never cut at 10-second chunk edges or by movement-label changes, and returns
+// explicitly non-exercise chunks as skipped media. Unclassified chunks that are
+// not bridged are neither (they remain not_analyzed).
+func buildContinuousSegments(chunks []timelineChunk) ([]Segment, []Segment) {
+	smoothed := prepareSmoothedTimelineChunks(chunks)
 
 	var segments, skipped []Segment
 	for i := 0; i < len(smoothed); {
