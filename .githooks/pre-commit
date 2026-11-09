@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+if ! command -v node >/dev/null 2>&1; then
+  echo 'Commit blocked: Node.js is required to check private files. Make node available on PATH.' >&2
+  exit 1
+fi
+
+repo_root=$(git rev-parse --show-toplevel)
+exec node "$repo_root/scripts/check-private-files.cjs"
