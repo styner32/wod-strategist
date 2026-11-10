@@ -72,7 +72,7 @@ update-image-backfill: ## Build and push Backfill CLI image
 	docker push $(IMAGE_REPO)/backfill:$(GIT_SHA)
 
 deploy-api: ## Deploy API to Cloud Run
-	gcloud run deploy $(API_SERVICE_NAME) --image $(IMAGE_REPO)/api:latest --region $(REGION) --project $(PROJECT_ID)
+	gcloud run deploy $(API_SERVICE_NAME) --image $(IMAGE_REPO)/api:latest --max-instances=2 --concurrency=20 --memory=512Mi --region $(REGION) --project $(PROJECT_ID)
 
 deploy-worker: ## Deploy Worker to Cloud Run Worker Pools
 	gcloud beta run worker-pools deploy $(WORKER_SERVICE_NAME) --image $(IMAGE_REPO)/worker:latest --region $(REGION) --project $(PROJECT_ID)

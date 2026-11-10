@@ -1,4 +1,4 @@
-.PHONY: live-test live-test-prepare live-test-list test-live test-live-prepare test-live-list
+.PHONY: install-hooks live-test live-test-prepare live-test-list test-live test-live-prepare test-live-list
 
 live-test:
 	@$(MAKE) --no-print-directory -C api test-live
@@ -17,3 +17,6 @@ test-live-prepare:
 
 test-live-list:
 	@$(MAKE) --no-print-directory -C api test-live-list
+
+install-hooks:
+	@sh .githooks/install.sh

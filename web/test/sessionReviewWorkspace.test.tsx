@@ -47,7 +47,11 @@ it("keeps the player and edited performance record mounted when changing panels"
   expect(tree.root.findAllByType("video")).toHaveLength(1);
   expect(mounted).toHaveBeenCalledTimes(1);
   expect(unmounted).not.toHaveBeenCalled();
-  expect(tree.root.findAllByProps({ role: "tabpanel" }).map((panel: { props: { hidden: boolean } }) => panel.props.hidden)).toEqual([true, false]);
+  const panels = tree.root.findAllByProps({ role: "tabpanel" });
+  expect(panels.map((panel: { props: { hidden: boolean } }) => panel.props.hidden)).toEqual([true, false]);
+  // Scroll container must establish a containing block so sr-only inputs inside panels cannot escape to lg:sticky
+  expect(panels[0].parent?.props.className.split(/\s+/)).toContain("relative");
+  expect(panels[0].parent?.props.className).toContain("lg:overflow-y-auto");
   await act(async () => tree.unmount());
 });
 

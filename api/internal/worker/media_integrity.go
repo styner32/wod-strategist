@@ -107,107 +107,109 @@ func mediaTimeBase(raw string) (float64, error) {
 }
 
 func probeVideoTimeline(ctx context.Context, path string) (videoTimeline, error) {
-	cmd := exec.CommandContext(ctx, "ffprobe", "-threads", mediaDecoderThreads(ctx), "-v", "error", "-select_streams", "V:0",
-		"-show_frames", "-show_entries", "frame=pts_time,best_effort_timestamp_time,duration_time,pkt_duration_time:stream=time_base,start_time,duration",
-		"-of", "json", path)
 	var result videoTimeline
 	lastPTS, lastDuration := 0.0, 0.0
 	var streamEnd float64
 	hasStreamEnd := false
-	err := consumeMediaOutput(cmd, func(r io.Reader) error {
-		dec := json.NewDecoder(r)
-		if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
-			return fmt.Errorf("invalid frame document: %v", err)
-		}
-		for dec.More() {
-			tok, err := dec.Token()
-			if err != nil {
-				return err
+	_, err := runMediaExec(ctx, "probe_video_timeline", func(execCtx context.Context) error {
+		cmd := exec.CommandContext(execCtx, "ffprobe", "-threads", mediaDecoderThreads(execCtx), "-v", "error", "-select_streams", "V:0",
+			"-show_frames", "-show_entries", "frame=pts_time,best_effort_timestamp_time,duration_time,pkt_duration_time:stream=time_base,start_time,duration",
+			"-of", "json", path)
+		return consumeMediaOutput(cmd, func(r io.Reader) error {
+			dec := json.NewDecoder(r)
+			if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+				return fmt.Errorf("invalid frame document: %v", err)
 			}
-			switch tok {
-			case "frames":
-				if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
-					return fmt.Errorf("invalid frames: %v", err)
-				}
-				for dec.More() {
-					var frame struct {
-						PTS      string `json:"pts_time"`
-						BestPTS  string `json:"best_effort_timestamp_time"`
-						Duration string `json:"duration_time"`
-						Packet   string `json:"pkt_duration_time"`
-					}
-					if err := dec.Decode(&frame); err != nil {
-						return err
-					}
-					rawPTS := frame.PTS
-					if rawPTS == "" {
-						rawPTS = frame.BestPTS
-					}
-					pts, err := mediaSeconds(rawPTS)
-					if err != nil {
-						return err
-					}
-					if result.FrameCount > 0 && pts <= lastPTS {
-						return fmt.Errorf("video presentation times are not increasing at frame %d", result.FrameCount)
-					}
-					if result.FrameCount == 0 {
-						result.Start = pts
-					}
-					rawDuration := frame.Duration
-					if rawDuration == "" {
-						rawDuration = frame.Packet
-					}
-					lastDuration = 0
-					if rawDuration != "" {
-						lastDuration, err = mediaSeconds(rawDuration)
-						if err != nil || lastDuration < 0 {
-							return fmt.Errorf("invalid frame duration %q", rawDuration)
-						}
-					}
-					lastPTS = pts
-					result.FrameCount++
-				}
-				if _, err := dec.Token(); err != nil {
-					return err
-				}
-			case "streams":
-				var streams []struct {
-					TimeBase string `json:"time_base"`
-					Start    string `json:"start_time"`
-					Duration string `json:"duration"`
-				}
-				if err := dec.Decode(&streams); err != nil {
-					return err
-				}
-				if len(streams) != 1 {
-					return fmt.Errorf("expected one displayed video stream")
-				}
-				result.Tick, err = mediaTimeBase(streams[0].TimeBase)
+			for dec.More() {
+				tok, err := dec.Token()
 				if err != nil {
 					return err
 				}
-				if streams[0].Start != "" && streams[0].Duration != "" {
-					start, err := mediaSeconds(streams[0].Start)
+				switch tok {
+				case "frames":
+					if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
+						return fmt.Errorf("invalid frames: %v", err)
+					}
+					for dec.More() {
+						var frame struct {
+							PTS      string `json:"pts_time"`
+							BestPTS  string `json:"best_effort_timestamp_time"`
+							Duration string `json:"duration_time"`
+							Packet   string `json:"pkt_duration_time"`
+						}
+						if err := dec.Decode(&frame); err != nil {
+							return err
+						}
+						rawPTS := frame.PTS
+						if rawPTS == "" {
+							rawPTS = frame.BestPTS
+						}
+						pts, err := mediaSeconds(rawPTS)
+						if err != nil {
+							return err
+						}
+						if result.FrameCount > 0 && pts <= lastPTS {
+							return fmt.Errorf("video presentation times are not increasing at frame %d", result.FrameCount)
+						}
+						if result.FrameCount == 0 {
+							result.Start = pts
+						}
+						rawDuration := frame.Duration
+						if rawDuration == "" {
+							rawDuration = frame.Packet
+						}
+						lastDuration = 0
+						if rawDuration != "" {
+							lastDuration, err = mediaSeconds(rawDuration)
+							if err != nil || lastDuration < 0 {
+								return fmt.Errorf("invalid frame duration %q", rawDuration)
+							}
+						}
+						lastPTS = pts
+						result.FrameCount++
+					}
+					if _, err := dec.Token(); err != nil {
+						return err
+					}
+				case "streams":
+					var streams []struct {
+						TimeBase string `json:"time_base"`
+						Start    string `json:"start_time"`
+						Duration string `json:"duration"`
+					}
+					if err := dec.Decode(&streams); err != nil {
+						return err
+					}
+					if len(streams) != 1 {
+						return fmt.Errorf("expected one displayed video stream")
+					}
+					result.Tick, err = mediaTimeBase(streams[0].TimeBase)
 					if err != nil {
 						return err
 					}
-					duration, err := mediaSeconds(streams[0].Duration)
-					if err != nil || duration <= 0 {
-						return fmt.Errorf("invalid video stream duration %q", streams[0].Duration)
+					if streams[0].Start != "" && streams[0].Duration != "" {
+						start, err := mediaSeconds(streams[0].Start)
+						if err != nil {
+							return err
+						}
+						duration, err := mediaSeconds(streams[0].Duration)
+						if err != nil || duration <= 0 {
+							return fmt.Errorf("invalid video stream duration %q", streams[0].Duration)
+						}
+						streamEnd, hasStreamEnd = start+duration, true
 					}
-					streamEnd, hasStreamEnd = start+duration, true
-				}
-			default:
-				var ignored json.RawMessage
-				if err := dec.Decode(&ignored); err != nil {
-					return err
+				default:
+					var ignored json.RawMessage
+					if err := dec.Decode(&ignored); err != nil {
+						return err
+					}
 				}
 			}
-		}
-		if _, err := dec.Token(); err != nil {
-			return err
-		}
-		return nil
+			if _, err := dec.Token(); err != nil {
+				return err
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		return videoTimeline{}, fmt.Errorf("probe displayed video %s: %w", path, err)
@@ -261,38 +263,41 @@ func verifyVideoDuration(ctx context.Context, path string, expected, tolerance f
 }
 
 func scanVideoFrames(ctx context.Context, path string, visit func(frameTiming, []byte) error) error {
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-threads", mediaDecoderThreads(ctx), "-v", "error", "-nostdin", "-xerror", "-copyts", "-noautorotate", "-i", path,
-		"-map", "0:V:0", "-an", "-sn", "-dn", "-c:v", "rawvideo", "-threads", mediaDecoderThreads(ctx), "-pix_fmt", "yuv420p",
-		"-fps_mode:v", "passthrough", "-enc_time_base:v", "1:30000", "-f", "framehash", "-hash", "MURMUR3", "-")
-	return consumeMediaOutput(cmd, func(r io.Reader) error {
-		scanner := bufio.NewScanner(r)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
+	_, err := runMediaExec(ctx, "scan_video_frames", func(execCtx context.Context) error {
+		cmd := exec.CommandContext(execCtx, "ffmpeg", "-threads", mediaDecoderThreads(execCtx), "-v", "error", "-nostdin", "-xerror", "-copyts", "-noautorotate", "-i", path,
+			"-map", "0:V:0", "-an", "-sn", "-dn", "-c:v", "rawvideo", "-threads", mediaDecoderThreads(execCtx), "-pix_fmt", "yuv420p",
+			"-fps_mode:v", "passthrough", "-enc_time_base:v", "1:30000", "-f", "framehash", "-hash", "MURMUR3", "-")
+		return consumeMediaOutput(cmd, func(r io.Reader) error {
+			scanner := bufio.NewScanner(r)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				fields := strings.Split(line, ",")
+				if len(fields) != 6 {
+					return fmt.Errorf("invalid decoded frame record %q", line)
+				}
+				pts, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64)
+				if err != nil {
+					return err
+				}
+				duration, err := strconv.ParseInt(strings.TrimSpace(fields[3]), 10, 64)
+				if err != nil || duration <= 0 {
+					return fmt.Errorf("invalid decoded frame duration %q", fields[3])
+				}
+				digest, err := hex.DecodeString(strings.TrimSpace(fields[5]))
+				if err != nil || len(digest) != 16 {
+					return fmt.Errorf("invalid decoded frame digest")
+				}
+				if err := visit(frameTiming{pts, duration}, digest); err != nil {
+					return err
+				}
 			}
-			fields := strings.Split(line, ",")
-			if len(fields) != 6 {
-				return fmt.Errorf("invalid decoded frame record %q", line)
-			}
-			pts, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64)
-			if err != nil {
-				return err
-			}
-			duration, err := strconv.ParseInt(strings.TrimSpace(fields[3]), 10, 64)
-			if err != nil || duration <= 0 {
-				return fmt.Errorf("invalid decoded frame duration %q", fields[3])
-			}
-			digest, err := hex.DecodeString(strings.TrimSpace(fields[5]))
-			if err != nil || len(digest) != 16 {
-				return fmt.Errorf("invalid decoded frame digest")
-			}
-			if err := visit(frameTiming{pts, duration}, digest); err != nil {
-				return err
-			}
-		}
-		return scanner.Err()
+			return scanner.Err()
+		})
 	})
+	return err
 }
 
 func readVideoFrameSignature(ctx context.Context, path string) (videoFrameSignature, error) {
@@ -380,8 +385,6 @@ func verifyMediaEndpointsWithTimeline(ctx context.Context, path string, timeline
 	if err := verifyTimelineDuration(timeline, expected, tolerance); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-show_entries",
-		"stream=codec_type,start_time,duration:format=start_time,duration", "-of", "json", path)
 	var doc struct {
 		Streams []struct {
 			Type     string `json:"codec_type"`
@@ -393,7 +396,11 @@ func verifyMediaEndpointsWithTimeline(ctx context.Context, path string, timeline
 			Duration string `json:"duration"`
 		} `json:"format"`
 	}
-	if err := consumeMediaOutput(cmd, func(r io.Reader) error { return json.NewDecoder(r).Decode(&doc) }); err != nil {
+	if _, err := runMediaExec(ctx, "verify_media_endpoints", func(execCtx context.Context) error {
+		cmd := exec.CommandContext(execCtx, "ffprobe", "-threads", mediaDecoderThreads(execCtx), "-v", "error", "-show_entries",
+			"stream=codec_type,start_time,duration:format=start_time,duration", "-of", "json", path)
+		return consumeMediaOutput(cmd, func(r io.Reader) error { return json.NewDecoder(r).Decode(&doc) })
+	}); err != nil {
 		return err
 	}
 	check := func(label, rawStart, rawDuration string) error {

@@ -14,7 +14,12 @@ interface HighlightRun {
   deadline: number;
 }
 
-export function useHighlightResults(sessionId: string, profileId: number, enabled: boolean) {
+export function useHighlightResults(
+  sessionId: string,
+  profileId: number,
+  enabled: boolean,
+  initialHighlights?: HighlightResult[],
+) {
   const focused = useIsFocused();
   const [appState, setAppState] = useState(AppState.currentState);
   useEffect(() => {
@@ -35,9 +40,20 @@ export function useHighlightResults(sessionId: string, profileId: number, enable
     scope: typeof scope; run: HighlightRun; value: "loading" | "polling";
   } | null>(null);
 
+  useEffect(() => {
+    if (initialHighlights === undefined) return;
+    if (pending.current?.sessionId === sessionId && pending.current.profileId === profileId) return;
+    setResults({
+      sessionId,
+      profileId,
+      values: initialHighlights.filter(r => r.status === "COMPLETED"),
+    });
+  }, [sessionId, profileId, initialHighlights]);
+
   // Initial reads have their own lifetime; finishing a generation must not
   // accidentally trigger another request after polling has stopped.
   useEffect(() => {
+    if (initialHighlights !== undefined) return;
     if (!scope.active || (pending.current?.sessionId === sessionId && pending.current.profileId === profileId)) return;
     const controller = new AbortController();
     initialRequest.current = controller;
@@ -50,7 +66,7 @@ export function useHighlightResults(sessionId: string, profileId: number, enable
       controller.abort();
       if (initialRequest.current === controller) initialRequest.current = null;
     };
-  }, [scope, sessionId, profileId]);
+  }, [scope, sessionId, profileId, initialHighlights]);
 
   useEffect(() => {
     if (!scope.active || !run || run.sessionId !== sessionId || run.profileId !== profileId) return;
@@ -140,8 +156,14 @@ export function useHighlightResults(sessionId: string, profileId: number, enable
   }, [scope, sessionId, profileId]);
   const currentRun = run?.sessionId === sessionId && run.profileId === profileId ? run : null;
   const currentPhase = phase?.scope === scope && phase.run === currentRun ? phase.value : "loading";
+  const resolvedHighlights =
+    results?.sessionId === sessionId && results.profileId === profileId
+      ? results.values
+      : initialHighlights !== undefined
+        ? initialHighlights.filter(r => r.status === "COMPLETED")
+        : [];
   return {
-    highlights: results?.sessionId === sessionId && results.profileId === profileId ? results.values : [],
+    highlights: resolvedHighlights,
     highlightLoading: scope.active && currentRun !== null && currentPhase === "loading",
     highlightPolling: scope.active && currentRun !== null && currentPhase === "polling",
     handleCreateHighlights,

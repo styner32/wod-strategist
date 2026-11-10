@@ -82,6 +82,22 @@ var _ = Describe("Recording media durable orchestration", Ordered, func() {
 		Expect(payload.SourceGeneration).To(Equal(chunk.SourceGeneration))
 	})
 
+	It("skips profile FOR UPDATE locks during RECORDING when no chunk AI or media preparation is pending", func() {
+		run := newRun("RECORDING")
+		chunk := testhelpers.CreateRecordingChunk(database, &db.RecordingChunk{RunID: run.ID, AIDispatched: true})
+		testhelpers.CreateChunkMediaPreparation(database, &db.ChunkMediaPreparation{RunID: run.ID, ChunkID: chunk.ID, State: "RUNNING"})
+
+		tx := database.Begin()
+		Expect(tx.Error).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = tx.Rollback().Error })
+		var lockedID uint
+		Expect(tx.Raw("SELECT id FROM profiles WHERE id = ? FOR UPDATE", run.ProfileID).Scan(&lockedID).Error).To(Succeed())
+
+		shortCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		defer cancel()
+		Expect(DispatchRecordingMedia(shortCtx, database, queue, run.ID)).To(Succeed())
+	})
+
 	It("reuses native canonical chunks without changing homogeneous resolution", func() {
 		run := newRun("WAITING_PREPARATION")
 		profile := chunkStreamProfile{Width: 2160, Height: 3840, DisplayWidth: 2160, DisplayHeight: 3840, VideoCodec: "hevc", PixFmt: "yuv420p", VideoTimeBase: "1/600", VideoTimescale: 600}

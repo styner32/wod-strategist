@@ -441,10 +441,18 @@ it("supports explicit incomplete and rest radio outcomes plus optional-count wal
   await act(async () => openButtons()[0].props.onClick());
   await flush();
 
-  // Select "미완료·노렙" radio inside accessible fieldset
+  // Select "미완료·노렙" radio inside accessible fieldset without letting sr-only escape its pill label
   const radio = (label: string) => tree.root.findAllByType("input").find((i: any) => i.props.type === "radio" && i.props["aria-label"] === label);
   expect(tree.root.findAllByType("fieldset")).toHaveLength(1);
-  await act(async () => { radio("미완료·노렙").props.onChange({ target: { checked: true } }); });
+  const incompleteRadio = radio("미완료·노렙");
+  expect(incompleteRadio.props.id).toBeTruthy();
+  expect(incompleteRadio.props.className).toEqual(expect.stringContaining("sr-only"));
+  expect(incompleteRadio.props.className).toEqual(expect.stringContaining("left-1/2"));
+  expect(incompleteRadio.props.className).toEqual(expect.stringContaining("top-1/2"));
+  expect(incompleteRadio.parent?.type).toBe("label");
+  expect(incompleteRadio.parent?.props.htmlFor).toBe(incompleteRadio.props.id);
+  expect(incompleteRadio.parent?.props.className.split(/\s+/)).toContain("relative");
+  await act(async () => { incompleteRadio.props.onChange({ target: { checked: true } }); });
 
   const loadSelect = () => tree.root.findAllByType("select").find((s: any) => ["unresolved", "none", "weighted"].includes(s.props.value));
   await act(async () => {

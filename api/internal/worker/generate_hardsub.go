@@ -83,6 +83,8 @@ func (w *Worker) handleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 		return err
 	}
 
+	ctx, slotWait := withMediaSlotWaitTracker(withWorkerMediaRuntime(ctx, w))
+
 	w.logger.Info("Processing hardsub generation",
 		zap.String("session_id", p.SessionID),
 		zap.Uint("profile_id", p.ProfileID))
@@ -90,8 +92,10 @@ func (w *Worker) handleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 	// 1. Fetch the final analysis result from DB (may be absent).
 	var analysisOutput string
 	var result db.AnalysisResult
-	if err := w.DB.Where("session_id = ? AND status = ? AND analysis_type = ?",
-		p.SessionID, "COMPLETED", db.AnalysisTypeWOD).
+	if err := w.DB.WithContext(ctx).
+		Select("id, output").
+		Where("session_id = ? AND status = ? AND analysis_type = ?",
+			p.SessionID, "COMPLETED", db.AnalysisTypeWOD).
 		Order("created_at DESC").
 		First(&result).Error; err != nil {
 		w.logger.Warn("No completed analysis found, will use chunk-only subtitles",
@@ -103,7 +107,9 @@ func (w *Worker) handleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 
 	// 2. Fetch chunk analysis results (real-time per-10s feedback).
 	var chunks []db.ChunkAnalysisResult
-	if err := w.DB.Where("session_id = ? AND status = ?", p.SessionID, "COMPLETED").
+	if err := w.DB.WithContext(ctx).
+		Select("id, profile_id, session_id, file_path, status, output, heart_rate_bpm, start_secs, end_secs, media_start_secs, media_end_secs").
+		Where("session_id = ? AND status = ?", p.SessionID, "COMPLETED").
 		Order("start_secs ASC").
 		Find(&chunks).Error; err != nil {
 		w.logger.Warn("Failed to query chunk analysis",
@@ -166,6 +172,8 @@ func (w *Worker) handleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 			zap.Error(err))
 		return fmt.Errorf("hardsub ffmpeg: %w", err)
 	}
+	// Free local merged.mp4 from tmpfs immediately after hardsub encode completes.
+	_ = os.Remove(mergedPath)
 
 	// 7. Generate TTS narration for chunk (realtime) feedback entries.
 	//    This is best-effort: if TTS fails, we still upload the subtitle-only video.
@@ -210,7 +218,7 @@ func (w *Worker) handleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 
 	// 8.5. Update AnalysisResult in database to append "hardsubbed" to available_videos.
 	var analysis db.AnalysisResult
-	if err := w.DB.WithContext(ctx).Where("session_id = ? AND analysis_type = ?", p.SessionID, db.AnalysisTypeWOD).First(&analysis).Error; err == nil {
+	if err := w.DB.WithContext(ctx).Select("id, available_videos").Where("session_id = ? AND analysis_type = ?", p.SessionID, db.AnalysisTypeWOD).First(&analysis).Error; err == nil {
 		hasHardsubbed := false
 		for _, v := range analysis.AvailableVideos {
 			if v == "hardsubbed" {
@@ -233,7 +241,8 @@ func (w *Worker) handleGenerateHardSubTask(ctx context.Context, t *asynq.Task) e
 	w.logger.Info("Hardsub generation completed",
 		zap.String("session_id", p.SessionID),
 		zap.String("gcs_uri", hardSubGCSURI),
-		zap.Bool("has_tts_narration", hasNarration))
+		zap.Bool("has_tts_narration", hasNarration),
+		zap.Int64("media_cpu_slot_wait_ms", slotWait.WaitDuration().Milliseconds()))
 
 	return nil
 }
@@ -472,14 +481,19 @@ func (w *Worker) runFFmpegMixAudio(ctx context.Context, videoPath, audioPath, ou
 
 // videoHasAudioStream probes a video file to check if it contains an audio stream.
 func videoHasAudioStream(ctx context.Context, videoPath string) bool {
-	cmd := exec.CommandContext(ctx, "ffprobe",
-		"-v", "error",
-		"-select_streams", "a",
-		"-show_entries", "stream=codec_type",
-		"-of", "csv=p=0",
-		videoPath,
-	)
-	output, err := cmd.Output()
+	var output []byte
+	_, err := runMediaExec(ctx, "probe_has_audio", func(execCtx context.Context) error {
+		var runErr error
+		output, runErr = exec.CommandContext(execCtx, "ffprobe",
+			"-threads", mediaDecoderThreads(execCtx),
+			"-v", "error",
+			"-select_streams", "a",
+			"-show_entries", "stream=codec_type",
+			"-of", "csv=p=0",
+			videoPath,
+		).Output()
+		return runErr
+	})
 	if err != nil {
 		return false
 	}
@@ -488,21 +502,26 @@ func videoHasAudioStream(ctx context.Context, videoPath string) bool {
 
 // runFFmpegCmd is a generic FFmpeg runner with logging.
 func (w *Worker) runFFmpegCmd(ctx context.Context, label string, args []string) error {
-	w.logger.Info("Running FFmpeg "+label, zap.Strings("args", args))
+	_, err := runMediaExec(ctx, "ffmpeg_"+label, func(execCtx context.Context) error {
+		cmdArgs := append([]string(nil), args...)
+		if mediaThreadsLimited(execCtx) && len(cmdArgs) >= 1 {
+			outPath := cmdArgs[len(cmdArgs)-1]
+			cmdArgs = append(cmdArgs[:len(cmdArgs)-1], "-threads", "1", outPath)
+			cmdArgs = limitMediaCommandThreads(execCtx, cmdArgs)
+		}
+		w.logger.Info("Running FFmpeg "+label, zap.Strings("args", cmdArgs))
 
-	// TODO: CombinedOutput buffers all of stderr+stdout in memory. For long
-	// workouts (60+ min) FFmpeg can produce substantial output that risks OOM.
-	// Replace with streaming stderr (cmd.StderrPipe) and tail the last N lines
-	// for error reporting.
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		w.logger.Error("FFmpeg "+label+" failed", zap.Error(err), zap.String("output", string(output)))
-		return fmt.Errorf("ffmpeg %s: %s: %w", label, string(output), err)
-	}
+		cmd := exec.CommandContext(execCtx, "ffmpeg", cmdArgs...)
+		output, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			w.logger.Error("FFmpeg "+label+" failed", zap.Error(runErr), zap.String("output", string(output)))
+			return fmt.Errorf("ffmpeg %s: %s: %w", label, string(output), runErr)
+		}
 
-	w.logger.Info("FFmpeg " + label + " completed")
-	return nil
+		w.logger.Info("FFmpeg " + label + " completed")
+		return nil
+	})
+	return err
 }
 
 // enqueueHardSub is a best-effort helper that enqueues a hardsub generation task.

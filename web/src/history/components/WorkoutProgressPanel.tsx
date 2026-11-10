@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { historyApi } from "../../api/history";
 import { RecognitionReviewPanel } from "./RecognitionReviewPanel";
@@ -113,6 +113,7 @@ function PerformanceEditor({
   const [draft, setDraft] = useState(() =>
     initialDraft ?? performanceDraft(interval, record, defaultFallbackLoad, movementDefaults),
   );
+  const outcomeGroupId = useId();
   const editorRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     editorRef.current?.focus({ preventScroll: true });
@@ -267,23 +268,26 @@ function PerformanceEditor({
         <div className="flex flex-wrap gap-2">
           {outcomeOptions.map(opt => {
             const checked = outcome === opt.value;
+            const inputId = `${outcomeGroupId}-${opt.value}`;
             return (
               <label
                 key={opt.value}
-                className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
+                htmlFor={inputId}
+                className={`relative flex cursor-pointer items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent ${
                   checked
                     ? "border-accent bg-accent/20 text-accent ring-1 ring-accent/40"
                     : "border-border bg-bg-secondary/60 text-text-secondary hover:bg-bg-tertiary"
                 } ${saving ? "opacity-40" : ""}`}
               >
                 <input
+                  id={inputId}
                   type="radio"
                   name={`outcome-${interval.id}`}
                   value={opt.value}
                   aria-label={opt.label}
                   checked={checked}
                   disabled={saving}
-                  className="sr-only"
+                  className="sr-only left-1/2 top-1/2"
                   onChange={() =>
                     updateDraft(d => ({
                       ...d,
@@ -701,6 +705,7 @@ export function WorkoutProgressPanel({ sessionId, profileId, isOriginal, seek, s
         setMovement(nextInterval?.movement?.trim() || confirmedMovement);
       }
       void client.invalidateQueries({ queryKey: ["performance-benchmarks", profileId] });
+      void client.invalidateQueries({ queryKey: ["history-infinite"] });
       void client.invalidateQueries({ queryKey: ["recognition-evaluation", sessionId, profileId] });
       void client.invalidateQueries({ queryKey: ["recognition-reviews", sessionId, profileId] });
       void client.invalidateQueries({ queryKey: ["recognition-review", sessionId, profileId] });

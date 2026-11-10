@@ -614,9 +614,6 @@ func probeAllChunkStreamProfiles(ctx context.Context, localPaths []string) ([]ch
 }
 
 func probeChunkStreamProfile(ctx context.Context, filePath string) (chunkStreamProfile, error) {
-	cmd := exec.CommandContext(ctx, "ffprobe",
-		"-v", "error", "-show_streams", "-of", "json", filePath)
-
 	var doc struct {
 		Streams []struct {
 			Index         int    `json:"index"`
@@ -638,7 +635,11 @@ func probeChunkStreamProfile(ctx context.Context, filePath string) (chunkStreamP
 			} `json:"side_data_list"`
 		} `json:"streams"`
 	}
-	if err := consumeMediaOutput(cmd, func(r io.Reader) error { return json.NewDecoder(r).Decode(&doc) }); err != nil {
+	if _, err := runMediaExec(ctx, "probe_chunk_stream_profile", func(execCtx context.Context) error {
+		cmd := exec.CommandContext(execCtx, "ffprobe",
+			"-threads", mediaDecoderThreads(execCtx), "-v", "error", "-show_streams", "-of", "json", filePath)
+		return consumeMediaOutput(cmd, func(r io.Reader) error { return json.NewDecoder(r).Decode(&doc) })
+	}); err != nil {
 		return chunkStreamProfile{}, fmt.Errorf("probe chunk streams: %w", err)
 	}
 
@@ -867,14 +868,19 @@ func probeLeadingBlackTrimSecs(ctx context.Context, inputPath string, profile ch
 	if timeline.Duration() < minChunkDurationForTrimSecs {
 		return 0, nil
 	}
-	output, err := exec.CommandContext(ctx, "ffmpeg",
-		"-nostdin", "-xerror", "-v", "info", "-threads", mediaDecoderThreads(ctx),
-		"-i", inputPath,
-		"-map", fmt.Sprintf("0:%d", profile.VideoIndex),
-		"-t", fmt.Sprintf("%.3f", leadingBlackProbeWindowSecs),
-		"-vf", "setpts=PTS-STARTPTS,blackdetect=d=0.015:pix_th=0.05:pic_th=0.98",
-		"-an", "-sn", "-dn", "-f", "null", "-",
-	).CombinedOutput()
+	var output []byte
+	_, err := runMediaExec(ctx, "probe_leading_black", func(execCtx context.Context) error {
+		var runErr error
+		output, runErr = exec.CommandContext(execCtx, "ffmpeg",
+			"-nostdin", "-xerror", "-v", "info", "-threads", mediaDecoderThreads(execCtx),
+			"-i", inputPath,
+			"-map", fmt.Sprintf("0:%d", profile.VideoIndex),
+			"-t", fmt.Sprintf("%.3f", leadingBlackProbeWindowSecs),
+			"-vf", "setpts=PTS-STARTPTS,blackdetect=d=0.015:pix_th=0.05:pic_th=0.98",
+			"-an", "-sn", "-dn", "-f", "null", "-",
+		).CombinedOutput()
+		return runErr
+	})
 	if err != nil {
 		return 0, fmt.Errorf("ffmpeg leading black probe: %s: %w", string(output), err)
 	}
@@ -889,32 +895,34 @@ func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, ou
 	}
 	vf := fmt.Sprintf("trim=start=%.9f:end=%.9f,setpts=PTS-%.9f/TB,fps=30:start_time=0,scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p",
 		anchor, timeline.End, anchor, targetW, targetH, targetW, targetH)
-	args := []string{"-v", "error", "-nostdin", "-xerror", "-copyts", "-i", inputPath}
-	if includeAudio && !profile.HasAudio {
-		args = append(args, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100")
-	}
-	args = append(args, "-map", fmt.Sprintf("0:%d", profile.VideoIndex),
-		"-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
-		"-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale),
-		"-metadata:s:v:0", "rotate=0")
-	if includeAudio {
-		af := fmt.Sprintf("atrim=start=%.9f:end=%.9f,asetpts=PTS-%.9f/TB,aresample=44100:async=1:first_pts=0,apad,atrim=duration=%.9f", anchor, timeline.End, anchor, duration)
-		if profile.HasAudio {
-			args = append(args, "-map", fmt.Sprintf("0:%d", profile.AudioIndex))
-		} else {
-			args = append(args, "-map", "1:a:0")
-			af = fmt.Sprintf("atrim=duration=%.9f,asetpts=PTS-STARTPTS", duration)
+	_, err := runMediaExec(ctx, "normalize_chunk_concat", func(execCtx context.Context) error {
+		args := []string{"-v", "error", "-nostdin", "-xerror", "-copyts", "-i", inputPath}
+		if includeAudio && !profile.HasAudio {
+			args = append(args, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100")
 		}
-		args = append(args, "-af", af, "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k")
-	} else {
-		args = append(args, "-an")
-	}
-	if mediaThreadsLimited(ctx) {
-		args = append(args, "-threads", "1")
-	}
-	args = append(args, "-sn", "-dn", "-map_metadata", "-1", "-movflags", "+faststart", "-y", outputPath)
-	args = limitMediaCommandThreads(ctx, args)
-	err := consumeMediaOutput(exec.CommandContext(ctx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
+		args = append(args, "-map", fmt.Sprintf("0:%d", profile.VideoIndex),
+			"-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+			"-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale),
+			"-metadata:s:v:0", "rotate=0")
+		if includeAudio {
+			af := fmt.Sprintf("atrim=start=%.9f:end=%.9f,asetpts=PTS-%.9f/TB,aresample=44100:async=1:first_pts=0,apad,atrim=duration=%.9f", anchor, timeline.End, anchor, duration)
+			if profile.HasAudio {
+				args = append(args, "-map", fmt.Sprintf("0:%d", profile.AudioIndex))
+			} else {
+				args = append(args, "-map", "1:a:0")
+				af = fmt.Sprintf("atrim=duration=%.9f,asetpts=PTS-STARTPTS", duration)
+			}
+			args = append(args, "-af", af, "-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k")
+		} else {
+			args = append(args, "-an")
+		}
+		if mediaThreadsLimited(execCtx) {
+			args = append(args, "-threads", "1")
+		}
+		args = append(args, "-sn", "-dn", "-map_metadata", "-1", "-movflags", "+faststart", "-y", outputPath)
+		args = limitMediaCommandThreads(execCtx, args)
+		return consumeMediaOutput(exec.CommandContext(execCtx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
+	})
 	if err != nil {
 		log.Error("FFmpeg chunk normalization failed", zap.String("input_path", inputPath), zap.Error(err))
 		return fmt.Errorf("ffmpeg normalize: %w", err)
@@ -923,21 +931,23 @@ func normalizeChunkForConcat(ctx context.Context, log *zap.Logger, inputPath, ou
 }
 
 func runFFmpegStreamCopyConcat(ctx context.Context, log *zap.Logger, concatListPath, outputPath string, expectedDuration float64, includeAudio bool) error {
-	args := []string{"-v", "error", "-nostdin", "-xerror", "-copyts", "-f", "concat", "-safe", "0", "-i", concatListPath,
-		"-map", "0:v:0", "-c:v", "copy", "-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale)}
-	if includeAudio {
-		args = append(args, "-map", "0:a:0", "-af", fmt.Sprintf("aresample=44100:async=1:first_pts=0,apad,atrim=duration=%.9f", expectedDuration),
-			"-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k")
-	} else {
-		args = append(args, "-an")
-	}
-	if mediaThreadsLimited(ctx) {
-		args = append(args, "-threads", "1")
-	}
-	args = append(args, "-sn", "-dn", "-movflags", "+faststart", "-y", outputPath)
-	args = limitMediaCommandThreads(ctx, args)
-	log.Info("Running FFmpeg concat (copy video, reconcile AAC boundaries)", zap.Strings("args", args))
-	err := consumeMediaOutput(exec.CommandContext(ctx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
+	_, err := runMediaExec(ctx, "stream_copy_concat", func(execCtx context.Context) error {
+		args := []string{"-v", "error", "-nostdin", "-xerror", "-copyts", "-f", "concat", "-safe", "0", "-i", concatListPath,
+			"-map", "0:v:0", "-c:v", "copy", "-video_track_timescale", strconv.Itoa(canonicalConcatVideoTimescale)}
+		if includeAudio {
+			args = append(args, "-map", "0:a:0", "-af", fmt.Sprintf("aresample=44100:async=1:first_pts=0,apad,atrim=duration=%.9f", expectedDuration),
+				"-c:a", "aac", "-ar", "44100", "-ac", "2", "-b:a", "128k")
+		} else {
+			args = append(args, "-an")
+		}
+		if mediaThreadsLimited(execCtx) {
+			args = append(args, "-threads", "1")
+		}
+		args = append(args, "-sn", "-dn", "-movflags", "+faststart", "-y", outputPath)
+		args = limitMediaCommandThreads(execCtx, args)
+		log.Info("Running FFmpeg concat (copy video, reconcile AAC boundaries)", zap.Strings("args", args))
+		return consumeMediaOutput(exec.CommandContext(execCtx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
+	})
 	if err != nil {
 		log.Error("FFmpeg concat failed", zap.Error(err))
 		return fmt.Errorf("ffmpeg concat: %w", err)
@@ -999,22 +1009,24 @@ func runFFmpegHardSub(ctx context.Context, log *zap.Logger, inputPath, srtPath, 
 		"OutlineColour=&H80000000,BackColour=&HB0000000," +
 		"BorderStyle=4,Outline=1,Shadow=0,MarginV=30,Alignment=2"
 
-	args := []string{
-		"-v", "error", "-nostdin", "-xerror",
-		"-i", inputPath,
-		"-map", "0:V:0", "-map", "0:a:0?",
-		"-vf", fmt.Sprintf("subtitles=%s:force_style='%s'", srtPath, forceStyle),
-		"-preset", "ultrafast",
-		"-c:a", "copy",
-		"-movflags", "+faststart",
-		"-y",
-		outputPath,
-	}
-
-	log.Info("Running FFmpeg hard-sub", zap.Strings("args", args))
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	err = consumeMediaOutput(cmd, func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
+	_, err = runMediaExec(ctx, "hardsub_encode", func(execCtx context.Context) error {
+		args := []string{
+			"-i", inputPath,
+			"-map", "0:V:0", "-map", "0:a:0?",
+			"-vf", fmt.Sprintf("subtitles=%s:force_style='%s'", srtPath, forceStyle),
+			"-preset", "ultrafast",
+			"-c:a", "copy",
+			"-movflags", "+faststart",
+		}
+		if mediaThreadsLimited(execCtx) {
+			args = append(args, "-threads", "1")
+		}
+		args = append(args, "-y", outputPath)
+		args = append([]string{"-v", "error", "-nostdin", "-xerror"}, limitMediaCommandThreads(execCtx, args)...)
+		log.Info("Running FFmpeg hard-sub", zap.Strings("args", args))
+		cmd := exec.CommandContext(execCtx, "ffmpeg", args...)
+		return consumeMediaOutput(cmd, func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
+	})
 	if err != nil {
 		log.Error("FFmpeg hard-sub failed", zap.Error(err))
 		return fmt.Errorf("ffmpeg hardsub: %w", err)

@@ -67,7 +67,10 @@ func (w *Worker) saveActivityReview(ctx context.Context, p activityReviewPayload
 		if err != nil {
 			return err
 		}
-		return tx.Model(&session).Update("activity_summary", db.JSONDocument(encoded)).Error
+		return tx.Model(&session).Updates(map[string]any{
+			"activity_summary":               db.JSONDocument(encoded),
+			"activity_summary_cache_version": activity.SummaryCacheVersion,
+		}).Error
 	})
 }
 
@@ -504,7 +507,8 @@ func isNotVisibleRunInterior(rows []db.ChunkAnalysisResult, idx int) bool {
 }
 
 func (w *Worker) cachedPass2TrackingInputs(ctx context.Context, refs []trackingReferenceRef, cache map[string][]byte, start, end float64) (string, [][]byte) {
-	if len(refs) == 0 {
+	objects := selectPass2TrackingObjects(refs, start, end)
+	if len(objects) == 0 {
 		return "", nil
 	}
 	load := func(object string) []byte {
@@ -518,20 +522,9 @@ func (w *Worker) cachedPass2TrackingInputs(ctx context.Context, refs []trackingR
 		cache[object] = img
 		return img
 	}
-	near := ""
-	for _, ref := range refs {
-		if ref.End > start && ref.Start < end {
-			near = ref.Object
-			break
-		}
-	}
-	anchor := refs[0].Object
 	var images [][]byte
-	if img := load(near); img != nil {
-		images = append(images, img)
-	}
-	if anchor != near {
-		if img := load(anchor); img != nil {
+	for _, obj := range objects {
+		if img := load(obj); img != nil {
 			images = append(images, img)
 		}
 	}
@@ -649,6 +642,13 @@ func buildActivityReviewBatches(rows []db.ChunkAnalysisResult, completedIDs map[
 }
 
 func (w *Worker) handleActivityReviewTask(ctx context.Context, t *asynq.Task) (taskErr error) {
+	if w.activityReviewWindowRetryEnabled() {
+		return w.handleActivityReviewTaskWindowRetry(ctx, t)
+	}
+	return w.handleActivityReviewTaskLegacy(ctx, t)
+}
+
+func (w *Worker) handleActivityReviewTaskLegacy(ctx context.Context, t *asynq.Task) (taskErr error) {
 
 	var p activityReviewPayload
 	if json.Unmarshal(t.Payload(), &p) != nil || p.ProfileID == 0 || validateSessionID(p.SessionID) != nil || p.Generation <= 0 || p.Object != fmt.Sprintf("videos/%d/%s/merged.mp4", p.ProfileID, p.SessionID) {

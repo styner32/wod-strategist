@@ -31,6 +31,7 @@ func SetupRouter(appEnv string, allowedOrigins []string,
 	r.Use(gin.Recovery())
 	r.Use(RequestLogger())
 	r.Use(DevelopmentCORS(allowedOrigins))
+	r.Use(GzipMiddleware())
 
 	// Public routes (no auth)
 	r.GET("/health", ctl.Health)

@@ -214,6 +214,11 @@ type Worker struct {
 	// TrackingContinuityEnabled hands the tracked person (marked reference
 	// images, location, activity hint) to the next chunk. Tracking channel only.
 	TrackingContinuityEnabled bool
+	// Rollback feature switches (nil defaults to true so struct-literal unit tests
+	// and NewWorker both enable improved paths unless explicitly set to false).
+	ActivityReviewWindowRetryEnabled *bool
+	Pass2RestFallbackSplitEnabled    *bool
+	MediaCPUSlotsEnabled             *bool
 
 	DB                     *gorm.DB
 	StorageClient          StorageClient
@@ -225,6 +230,33 @@ type Worker struct {
 	PipelineMode           PipelineMode
 	logger                 *zap.Logger
 	stretchHistoryRevision *int64
+	mediaLimiter           *mediaCPULimiter
+	activityReviewSleep    func(context.Context, time.Duration) error
+}
+
+func BoolPtr(v bool) *bool {
+	return &v
+}
+
+func (w *Worker) activityReviewWindowRetryEnabled() bool {
+	if w == nil || w.ActivityReviewWindowRetryEnabled == nil {
+		return true
+	}
+	return *w.ActivityReviewWindowRetryEnabled
+}
+
+func (w *Worker) pass2RestFallbackSplitEnabled() bool {
+	if w == nil || w.Pass2RestFallbackSplitEnabled == nil {
+		return true
+	}
+	return *w.Pass2RestFallbackSplitEnabled
+}
+
+func (w *Worker) mediaCPUSlotsEnabled() bool {
+	if w == nil || w.MediaCPUSlotsEnabled == nil {
+		return true
+	}
+	return *w.MediaCPUSlotsEnabled
 }
 
 func NewWorker(db *gorm.DB, storageClient StorageClient, bucketName string, geminiClient GeminiClient, queueClient QueueClient, log *zap.Logger) *Worker {
@@ -232,12 +264,16 @@ func NewWorker(db *gorm.DB, storageClient StorageClient, bucketName string, gemi
 		log = zap.NewNop()
 	}
 	return &Worker{
-		DB:            db,
-		StorageClient: storageClient,
-		BucketName:    bucketName,
-		GeminiClient:  geminiClient,
-		QueueClient:   queueClient,
-		logger:        log,
+		ActivityReviewWindowRetryEnabled: BoolPtr(true),
+		Pass2RestFallbackSplitEnabled:    BoolPtr(true),
+		MediaCPUSlotsEnabled:             BoolPtr(true),
+		DB:                               db,
+		StorageClient:                    storageClient,
+		BucketName:                       bucketName,
+		GeminiClient:                     geminiClient,
+		QueueClient:                      queueClient,
+		logger:                           log,
+		mediaLimiter:                     newMediaCPULimiter(),
 	}
 }
 
@@ -443,12 +479,17 @@ func randomHex(n int) string {
 // probeVideoDuration uses ffprobe to determine the duration of a video file in seconds.
 // Returns 0 if ffprobe is unavailable or the probe fails. Best-effort only.
 func probeVideoDuration(ctx context.Context, filePath string) float64 {
-	cmd := exec.CommandContext(ctx, "ffprobe",
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		filePath)
-	output, err := cmd.Output()
+	var output []byte
+	_, err := runMediaExec(ctx, "probe_video_duration", func(execCtx context.Context) error {
+		var runErr error
+		output, runErr = exec.CommandContext(execCtx, "ffprobe",
+			"-threads", mediaDecoderThreads(execCtx),
+			"-v", "error",
+			"-show_entries", "format=duration",
+			"-of", "default=noprint_wrappers=1:nokey=1",
+			filePath).Output()
+		return runErr
+	})
 	if err != nil {
 		return 0
 	}
@@ -487,32 +528,34 @@ func formatFileSizeWorker(bytes int64) string {
 // Uses CRF 28 (vs 23 for user-facing) and scales to 720p to reduce file size
 // while preserving enough visual quality for Gemini pose analysis.
 func runFFmpegAnalysisEncode(ctx context.Context, log *zap.Logger, inputPath, outputPath string) error {
-	args := []string{
-		"-i", inputPath,
-		"-vf", "scale=720:-2,fps=30",
-		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-		"-c:a", "aac", "-b:a", "64k",
-		"-movflags", "+faststart",
-		"-y",
-		outputPath,
-	}
+	_, err := runMediaExec(ctx, "analysis_encode", func(execCtx context.Context) error {
+		args := []string{
+			"-i", inputPath,
+			"-vf", "scale=720:-2,fps=30",
+			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+			"-c:a", "aac", "-b:a", "64k",
+			"-movflags", "+faststart",
+			"-y",
+			outputPath,
+		}
 
-	if mediaThreadsLimited(ctx) {
-		args = append(args[:len(args)-1], "-threads", "1", outputPath)
-		args = append([]string{"-v", "error", "-nostdin", "-xerror"}, limitMediaCommandThreads(ctx, args)...)
-		return consumeMediaOutput(exec.CommandContext(ctx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
-	}
-	log.Info("Running FFmpeg analysis re-encode", zap.Strings("args", args))
+		if mediaThreadsLimited(execCtx) {
+			args = append(args[:len(args)-1], "-threads", "1", outputPath)
+			args = append([]string{"-v", "error", "-nostdin", "-xerror"}, limitMediaCommandThreads(execCtx, args)...)
+			return consumeMediaOutput(exec.CommandContext(execCtx, "ffmpeg", args...), func(r io.Reader) error { _, err := io.Copy(io.Discard, r); return err })
+		}
+		log.Info("Running FFmpeg analysis re-encode", zap.Strings("args", args))
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Error("FFmpeg analysis re-encode failed", zap.Error(err), zap.String("output", string(output)))
-		return fmt.Errorf("ffmpeg analysis encode: %s: %w", string(output), err)
-	}
-
-	log.Info("FFmpeg analysis re-encode completed", zap.String("output_path", outputPath))
-	return nil
+		cmd := exec.CommandContext(execCtx, "ffmpeg", args...)
+		output, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			log.Error("FFmpeg analysis re-encode failed", zap.Error(runErr), zap.String("output", string(output)))
+			return fmt.Errorf("ffmpeg analysis encode: %s: %w", string(output), runErr)
+		}
+		log.Info("FFmpeg analysis re-encode completed", zap.String("output_path", outputPath))
+		return nil
+	})
+	return err
 }
 
 // recordStageMetrics persists per-stage pipeline metrics for variant comparison.

@@ -28,6 +28,13 @@ type ObjectInfo struct {
 	Created time.Time
 }
 
+type SizedObjectInfo struct {
+	Name       string
+	Size       int64
+	Generation int64
+	Created    time.Time
+}
+
 func NewClient(ctx context.Context, bucketName string, opts ...option.ClientOption) (*Client, error) {
 	client, err := gcs.NewClient(ctx, opts...)
 	if err != nil {
@@ -145,6 +152,37 @@ func (c *Client) DownloadFile(ctx context.Context, gcsURI, destPath string) erro
 		return fmt.Errorf("io.Copy: %v", err)
 	}
 	return nil
+}
+
+func (c *Client) BucketName() string {
+	if c == nil {
+		return ""
+	}
+	return c.bucketName
+}
+
+func (c *Client) ListSizedObjectInfos(ctx context.Context, prefix string) ([]SizedObjectInfo, error) {
+	it := c.client.Bucket(c.bucketName).Objects(ctx, &gcs.Query{Prefix: prefix})
+	var objects []SizedObjectInfo
+	for {
+		attrs, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Bucket(%q).Objects(%q): %w", c.bucketName, prefix, err)
+		}
+		objects = append(objects, SizedObjectInfo{
+			Name:       attrs.Name,
+			Size:       attrs.Size,
+			Generation: attrs.Generation,
+			Created:    attrs.Created,
+		})
+	}
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Created.Before(objects[j].Created)
+	})
+	return objects, nil
 }
 
 func (c *Client) ListObjectInfos(ctx context.Context, prefix string) ([]ObjectInfo, error) {

@@ -1,7 +1,9 @@
 import React from "react";
-import { Alert, AppState, type AppStateStatus } from "react-native";
+import { Alert, AppState, Text, type AppStateStatus } from "react-native";
 import { act, cleanup, fireEvent, render } from "@testing-library/react-native";
-import { HistoryList } from "../ui/HistoryList";
+import { HistoryList, useHistoryData } from "../ui/HistoryList";
+import { notifyHistoryChanged } from "../archiveStates";
+import * as historyModule from "../history";
 import type { AnalysisResult, HighlightResult } from "../history";
 
 const mockFetchHighlightResults = jest.fn();
@@ -409,5 +411,83 @@ describe("HistoryList highlight request lifecycle", () => {
     await advance(POLL_MS);
     expect(view.getByText("Current highlight")).toBeTruthy();
     expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it("renders batched item.highlights without initial per-card HTTP calls", async () => {
+    const embeddedReady: AnalysisResult = {
+      ...item,
+      highlights: [highlight("COMPLETED", "Embedded Reel")],
+    };
+    const readyView = render(<HistoryList data={[embeddedReady]} loading={false} />);
+    await act(async () => {});
+    expect(mockFetchHighlightResults).not.toHaveBeenCalled();
+    expect(readyView.getByText("Embedded Reel")).toBeTruthy();
+  });
+
+  it("supports highlight creation from empty batched item.highlights and preserves generated reel across app state transitions", async () => {
+    const embeddedEmpty: AnalysisResult = {
+      ...item,
+      highlights: [],
+    };
+    const emptyView = render(<HistoryList data={[embeddedEmpty]} loading={false} />);
+    await act(async () => {});
+    expect(mockFetchHighlightResults).not.toHaveBeenCalled();
+
+    mockFetchHighlightResults.mockResolvedValue([highlight("COMPLETED", "Generated Reel")]);
+    await createHighlights(emptyView);
+    expect(mockGenerateHighlight).toHaveBeenCalledTimes(1);
+    await advance(POLL_MS);
+    expect(mockFetchHighlightResults).toHaveBeenCalledTimes(1);
+    expect(emptyView.getByText("Generated Reel")).toBeTruthy();
+
+    // Backgrounding and foregrounding must keep the newly generated highlight without resetting to initial []
+    changeAppState("background");
+    changeAppState("active");
+    expect(emptyView.getByText("Generated Reel")).toBeTruthy();
+    expect(mockFetchHighlightResults).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces overlapping AppState active reloads and queues one trailing reload on notifyHistoryChanged", async () => {
+    function UseHistoryDataHarness() {
+      const state = useHistoryData();
+      return <Text>{`${state.loading}:${state.data[0]?.output ?? ""}`}</Text>;
+    }
+
+    const firstLoad = deferred<AnalysisResult[]>();
+    const secondLoad = deferred<AnalysisResult[]>();
+    const fetchSpy = jest
+      .spyOn(historyModule, "fetchAnalysisHistory")
+      .mockReturnValueOnce(firstLoad.promise)
+      .mockReturnValueOnce(secondLoad.promise);
+
+    const view = render(<UseHistoryDataHarness />);
+    await act(async () => {});
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(view.getByText("true:")).toBeTruthy();
+
+    // Simultaneous AppState active events while firstLoad is in flight must not start extra requests
+    changeAppState("active");
+    changeAppState("active");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // Explicit history revision invalidation queues a single trailing refresh after firstLoad finishes
+    act(() => {
+      notifyHistoryChanged(1);
+      notifyHistoryChanged(1);
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      firstLoad.resolve([item]);
+      await Promise.resolve();
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    const updatedItem: AnalysisResult = { ...item, output: "Updated analysis" };
+    await act(async () => {
+      secondLoad.resolve([updatedItem]);
+      await Promise.resolve();
+    });
+    expect(view.getByText("false:Updated analysis")).toBeTruthy();
   });
 });

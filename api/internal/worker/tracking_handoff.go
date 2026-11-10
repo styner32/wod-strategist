@@ -190,19 +190,28 @@ func trackingReferenceObject(profileID uint, sessionID string, chunkID uint) str
 
 // renderTrackingReference extracts the frame at box.T and marks the target.
 func renderTrackingReference(ctx context.Context, videoPath string, box trackingBox) ([]byte, error) {
-	args := []string{
-		"-v", "error",
-		"-ss", fmt.Sprintf("%.3f", box.T),
-		"-i", videoPath,
-		"-frames:v", "1",
-		"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", trackingReferenceMaxWidth),
-		"-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3", "-",
-	}
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("extract tracking frame: %s: %w", strings.TrimSpace(stderr.String()), err)
+	if _, err := runMediaExec(ctx, "render_tracking_reference", func(execCtx context.Context) error {
+		args := []string{
+			"-ss", fmt.Sprintf("%.3f", box.T),
+			"-i", videoPath,
+			"-frames:v", "1",
+			"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", trackingReferenceMaxWidth),
+			"-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "3",
+		}
+		if mediaThreadsLimited(execCtx) {
+			args = append(args, "-threads", "1")
+		}
+		args = append(args, "-")
+		args = append([]string{"-v", "error"}, limitMediaCommandThreads(execCtx, args)...)
+		cmd := exec.CommandContext(execCtx, "ffmpeg", args...)
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if runErr := cmd.Run(); runErr != nil {
+			return fmt.Errorf("extract tracking frame: %s: %w", strings.TrimSpace(stderr.String()), runErr)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	frame, err := jpeg.Decode(bytes.NewReader(stdout.Bytes()))
 	if err != nil {
@@ -452,9 +461,13 @@ func (w *Worker) analyzeChunkVideo(ctx context.Context, localPath, prompt, model
 }
 
 type trackingReferenceRef struct {
-	Start, End float64 // verified merged-media seconds of the source chunk
-	Object     string
-	Active     bool
+	Start, End   float64 // verified merged-media seconds of the source chunk
+	Object       string
+	Active       bool
+	NonAmbiguous bool
+	FrameRegion  string
+	Station      string
+	MovementKey  string
 }
 
 // loadTrackingReferences lists chunk reference images on the merged-media
@@ -474,12 +487,26 @@ func (w *Worker) loadTrackingReferences(ctx context.Context, sessionID string, p
 			continue
 		}
 		if tp, ok := parseStoredTargetPerson(row.TargetCues); ok && tp.ReferenceImage != "" {
-			class, _ := classifyChunkActivity(row, WorkoutTypeWOD)
+			class, detectedMovement := classifyChunkActivity(row, WorkoutTypeWOD)
+			nonAmbiguous := !tp.Ambiguous &&
+				row.TargetConfidence >= trackingMinConfidence &&
+				(tp.Confidence == 0 || tp.Confidence >= trackingMinConfidence)
+			movKey := ""
+			if class == chunkActive && isConcreteMovement(detectedMovement) {
+				movKey = strings.ToLower(activity.CanonicalMovement(detectedMovement))
+				if movKey == "" {
+					movKey = strings.ToLower(strings.TrimSpace(detectedMovement))
+				}
+			}
 			refs = append(refs, trackingReferenceRef{
-				Start:  *row.MediaStartSecs,
-				End:    *row.MediaEndSecs,
-				Object: tp.ReferenceImage,
-				Active: class == chunkActive,
+				Start:        *row.MediaStartSecs,
+				End:          *row.MediaEndSecs,
+				Object:       tp.ReferenceImage,
+				Active:       class == chunkActive,
+				NonAmbiguous: nonAmbiguous,
+				FrameRegion:  strings.ToLower(sanitizeTrackingLabel(tp.FrameRegion)),
+				Station:      strings.ToLower(sanitizeTrackingLabel(tp.Station)),
+				MovementKey:  movKey,
 			})
 		}
 	}
@@ -494,42 +521,104 @@ const pass2TrackingPrompt = `
 - 기준 이미지는 대상 식별용 정지 스냅샷이며 현재 구간의 운동·휴식 판정이나 자세·가동범위·템포 평가의 근거가 아닙니다.
 `
 
-// pass2TrackingInputs returns the reference nearest the window start plus the
-// session anchor (preferring active-exercise references over rest chunks), and
-// the prompt that explains them.
-func (w *Worker) pass2TrackingInputs(ctx context.Context, refs []trackingReferenceRef, start, end float64) (string, [][]byte) {
-	if len(refs) == 0 {
-		return "", nil
+const maxPass2TransitionTrackingRefs = 2
+
+func trackingRefDiffersFromChosen(cand, prev trackingReferenceRef) bool {
+	if cand.Station != "" && cand.Station != prev.Station {
+		return true
 	}
-	nearActive, nearFallback := "", ""
+	if cand.FrameRegion != "" && cand.FrameRegion != prev.FrameRegion {
+		return true
+	}
+	if cand.MovementKey != "" && prev.MovementKey != "" && cand.MovementKey != prev.MovementKey {
+		return true
+	}
+	return false
+}
+
+func selectPass2TrackingObjects(refs []trackingReferenceRef, start, end float64) []string {
+	if len(refs) == 0 {
+		return nil
+	}
+	nearActiveIdx, nearFallbackIdx := -1, -1
 	anchorActive := ""
-	for _, ref := range refs {
+	for i, ref := range refs {
 		if ref.Active && anchorActive == "" {
 			anchorActive = ref.Object
 		}
 		if ref.End > start && ref.Start < end {
-			if nearFallback == "" {
-				nearFallback = ref.Object
+			if nearFallbackIdx < 0 {
+				nearFallbackIdx = i
 			}
-			if ref.Active && nearActive == "" {
-				nearActive = ref.Object
+			if ref.Active && nearActiveIdx < 0 {
+				nearActiveIdx = i
 			}
 		}
 	}
-	near := nearActive
-	if near == "" {
-		near = nearFallback
+	nearIdx := nearActiveIdx
+	if nearIdx < 0 {
+		nearIdx = nearFallbackIdx
+	}
+	near := ""
+	if nearIdx >= 0 {
+		near = refs[nearIdx].Object
 	}
 	anchor := anchorActive
 	if anchor == "" {
 		anchor = refs[0].Object
 	}
-	var images [][]byte
-	if img := w.downloadTrackingReference(ctx, near); img != nil {
-		images = append(images, img)
+
+	seenObj := map[string]bool{}
+	var objects []string
+	addObj := func(obj string) {
+		if obj == "" || seenObj[obj] {
+			return
+		}
+		seenObj[obj] = true
+		objects = append(objects, obj)
 	}
-	if anchor != near {
-		if img := w.downloadTrackingReference(ctx, anchor); img != nil {
+	addObj(near)
+
+	if nearIdx >= 0 {
+		chosenSegRefs := []trackingReferenceRef{refs[nearIdx]}
+		transitionsAdded := 0
+		for i := nearIdx + 1; i < len(refs) && transitionsAdded < maxPass2TransitionTrackingRefs; i++ {
+			cand := refs[i]
+			if !(cand.End > start && cand.Start < end) || !cand.Active || !cand.NonAmbiguous || cand.Object == "" || seenObj[cand.Object] {
+				continue
+			}
+			distinctFromAll := true
+			for _, prev := range chosenSegRefs {
+				if !trackingRefDiffersFromChosen(cand, prev) {
+					distinctFromAll = false
+					break
+				}
+			}
+			if !distinctFromAll {
+				continue
+			}
+			chosenSegRefs = append(chosenSegRefs, cand)
+			addObj(cand.Object)
+			transitionsAdded++
+		}
+	}
+
+	addObj(anchor)
+	return objects
+}
+
+// pass2TrackingInputs returns the reference nearest the window start, up to 2
+// mid-segment station/region/movement transition references, plus the session
+// anchor (preferring active-exercise references over rest chunks), and the
+// prompt that explains them.
+func (w *Worker) pass2TrackingInputs(ctx context.Context, refs []trackingReferenceRef, start, end float64) (string, [][]byte) {
+	objects := selectPass2TrackingObjects(refs, start, end)
+	if len(objects) == 0 {
+		return "", nil
+	}
+	var images [][]byte
+	for _, obj := range objects {
+		if img := w.downloadTrackingReference(ctx, obj); img != nil {
 			images = append(images, img)
 		}
 	}

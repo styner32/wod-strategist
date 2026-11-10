@@ -40,6 +40,7 @@ func BuildMobilityHistory(ctx context.Context, database *gorm.DB, profileID uint
 
 	var results []AnalysisResult
 	err := database.WithContext(ctx).
+		Select("id", "session_id", "created_at", "mobility_observations").
 		Where("profile_id = ? AND session_id <> ? AND status = ? AND archived_at IS NULL AND mobility_observations != '' AND mobility_observations != '[]'",
 			profileID, excludeSessionID, "COMPLETED").
 		Order("created_at DESC").

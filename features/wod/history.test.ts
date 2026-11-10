@@ -117,4 +117,28 @@ describe("fetchAnalysisHistory", () => {
       /API Error \[404\]/
     );
   });
+
+  it("coalesces concurrent identical history requests and releases after completion", async () => {
+    let requestCount = 0;
+    server.use(
+      http.get(`${API_BASE_URL}/history`, async () => {
+        requestCount++;
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        return HttpResponse.json(mockData);
+      })
+    );
+
+    const [first, second, third] = await Promise.all([
+      fetchAnalysisHistory(1),
+      fetchAnalysisHistory(1),
+      fetchAnalysisHistory(1),
+    ]);
+    expect(requestCount).toBe(1);
+    expect(first).toHaveLength(2);
+    expect(second).toEqual(first);
+    expect(third).toEqual(first);
+
+    await fetchAnalysisHistory(1);
+    expect(requestCount).toBe(2);
+  });
 });

@@ -884,7 +884,13 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 	if wodStart.Status == "confirmed" && wodStart.Seconds != nil {
 		minClipStart = *wodStart.Seconds
 	}
-	windows := splitPass2WindowsWithRestContext(segments, progressGaps, w.sessionCaptureDiscontinuities(ctx, p.SessionID, p.ProfileID), minClipStart)
+	windows := splitPass2WindowsWithNaturalBoundaries(
+		segments,
+		progressGaps,
+		w.sessionCaptureDiscontinuities(ctx, p.SessionID, p.ProfileID),
+		minClipStart,
+		w.loadSessionTimelineChunks(p.SessionID, p.WorkoutType),
+	)
 	trackingRefs := w.loadTrackingReferences(ctx, p.SessionID, p.ProfileID)
 	segResults := make([]segmentAnalysisResult, len(windows))
 	sem := make(chan struct{}, maxConcurrentSegmentAnalyses)
@@ -899,6 +905,8 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 		segPrompt += trackingPrompt
 		if newWOD {
 			segPrompt += wodSegmentEvidencePrompt
+			segPrompt += ObservationOnlyOutputCheckPrompt
+		} else if trackingPrompt != "" {
 			segPrompt += ObservationOnlyOutputCheckPrompt
 		}
 		useFlash := isUnknownSegment(seg)
@@ -1362,12 +1370,9 @@ func (w *Worker) buildSegmentsFromChunks(sessionID string, workoutType string) [
 	return segments
 }
 
-// buildChunkSegments also returns the verified media of chunks that chunk
-// analysis explicitly classified as non-exercise, so their omission is recorded
-// as skipped_non_exercise instead of unobserved media.
-func (w *Worker) buildChunkSegments(sessionID string, workoutType string) ([]Segment, []Segment) {
+func (w *Worker) loadSessionTimelineChunks(sessionID string, workoutType string) []timelineChunk {
 	if w.DB == nil {
-		return nil, nil
+		return nil
 	}
 
 	var chunks []db.ChunkAnalysisResult
@@ -1375,7 +1380,7 @@ func (w *Worker) buildChunkSegments(sessionID string, workoutType string) ([]Seg
 		Order("media_start_secs ASC NULLS LAST, id ASC").
 		Find(&chunks).Error
 	if err != nil || len(chunks) == 0 {
-		return nil, nil
+		return nil
 	}
 	chunks = db.FilterRedundantSplitChunks(chunks)
 
@@ -1385,6 +1390,17 @@ func (w *Worker) buildChunkSegments(sessionID string, workoutType string) ([]Seg
 			continue
 		}
 		timeline = append(timeline, newTimelineChunk(chunk, workoutType))
+	}
+	return timeline
+}
+
+// buildChunkSegments also returns the verified media of chunks that chunk
+// analysis explicitly classified as non-exercise, so their omission is recorded
+// as skipped_non_exercise instead of unobserved media.
+func (w *Worker) buildChunkSegments(sessionID string, workoutType string) ([]Segment, []Segment) {
+	timeline := w.loadSessionTimelineChunks(sessionID, workoutType)
+	if len(timeline) == 0 {
+		return nil, nil
 	}
 	// Continuous active chunks form one bout regardless of chunk edges or
 	// label jitter; a single non-active chunk between active ones is bridged.

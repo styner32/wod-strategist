@@ -617,13 +617,23 @@ func runFFmpegFinalPolish(ctx context.Context, log *zap.Logger, inputPath, music
 		}
 	}
 
-	log.Info("Running FFmpeg final polish", zap.Strings("args", args))
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Error("FFmpeg polish failed", zap.Error(err), zap.String("output", string(out)))
-		return fmt.Errorf("ffmpeg polish: %s: %w", string(out), err)
+	if _, err := runMediaExec(ctx, "highlight_polish", func(execCtx context.Context) error {
+		cmdArgs := append([]string(nil), args...)
+		if mediaThreadsLimited(execCtx) && len(cmdArgs) >= 1 {
+			outPath := cmdArgs[len(cmdArgs)-1]
+			cmdArgs = append(cmdArgs[:len(cmdArgs)-1], "-threads", "1", outPath)
+			cmdArgs = limitMediaCommandThreads(execCtx, cmdArgs)
+		}
+		log.Info("Running FFmpeg final polish", zap.Strings("args", cmdArgs))
+		cmd := exec.CommandContext(execCtx, "ffmpeg", cmdArgs...)
+		out, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			log.Error("FFmpeg polish failed", zap.Error(runErr), zap.String("output", string(out)))
+			return fmt.Errorf("ffmpeg polish: %s: %w", string(out), runErr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	if err := verifyMediaEndpoints(ctx, outputPath, durationSecs, 0.1); err != nil {
 		return fmt.Errorf("highlight polish changed video duration: %w", err)
@@ -653,13 +663,22 @@ func runFFmpegTrim(ctx context.Context, log *zap.Logger, inputPath, outputPath s
 		outputPath,
 	}
 
-	log.Info("Running FFmpeg trim", zap.Strings("args", args))
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Error("FFmpeg trim failed", zap.Error(err), zap.String("output", string(output)))
-		return fmt.Errorf("ffmpeg trim: %s: %w", string(output), err)
+	if _, err := runMediaExec(ctx, "highlight_trim", func(execCtx context.Context) error {
+		cmdArgs := append([]string(nil), args...)
+		if mediaThreadsLimited(execCtx) {
+			cmdArgs = append(cmdArgs[:len(cmdArgs)-1], "-threads", "1", outputPath)
+			cmdArgs = limitMediaCommandThreads(execCtx, cmdArgs)
+		}
+		log.Info("Running FFmpeg trim", zap.Strings("args", cmdArgs))
+		cmd := exec.CommandContext(execCtx, "ffmpeg", cmdArgs...)
+		output, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			log.Error("FFmpeg trim failed", zap.Error(runErr), zap.String("output", string(output)))
+			return fmt.Errorf("ffmpeg trim: %s: %w", string(output), runErr)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	if err := verifyMediaEndpoints(ctx, outputPath, durationSecs, 0.1); err != nil {
 		return fmt.Errorf("highlight clip does not match requested duration: %w", err)

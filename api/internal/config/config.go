@@ -28,7 +28,8 @@ type Common struct {
 	AgenticHighlightsEnabled bool
 	GeminiIncludeThoughts    bool // GEMINI_INCLUDE_THOUGHTS — optional; stores Gemini thought summaries in gemini_thought_logs
 	DatabaseURL              string
-	DBMaxOpenConns           int // DB_MAX_OPEN_CONNS — optional positive integer; defaults to 12 (server) / 8 (worker) = 20 total
+	DBMaxOpenConns           int // DB_MAX_OPEN_CONNS — optional positive integer; defaults to 6 (server) / 6 (worker) within 18 budget (2*server + worker)
+	DBMaxIdleConns           int // DB_MAX_IDLE_CONNS — optional positive integer; defaults to 2
 	RedisURL                 string
 	GCSBucketName            string
 	AppEnv                   string
@@ -46,6 +47,8 @@ type Server struct {
 	CookieSecure             bool   // COOKIE_SECURE — set Secure flag on cookie; default true in prod, false for local dev
 	ChunkReanalysisEnabled   bool   // ENABLE_CHUNK_REANALYSIS — owner-only web debugging; default false
 	SessionReanalysisEnabled bool   // ENABLE_SESSION_REANALYSIS — owner-only whole-workout debugging; default false
+	// HISTORY_SUMMARY_CACHE_ENABLED — reuse stored sessions.activity_summary in GET /history; default true, "false" disables
+	HistorySummaryCacheEnabled bool
 	// SESSION_REANALYSIS_DAILY_QUOTA — optional positive integer runs per profile per rolling 24h; 0 (unset) uses the controller default
 	SessionReanalysisDailyQuota int64
 }
@@ -58,16 +61,22 @@ type Worker struct {
 	// receives the tracked person marked in previous frames (Tracking channel
 	// only). "true"/"false" override; unset defaults to on outside production.
 	TrackingContinuityEnabled bool
+	// ACTIVITY_REVIEW_WINDOW_RETRY_ENABLED — durable per-window retry & media reuse; default true, "false" disables
+	ActivityReviewWindowRetryEnabled bool
+	// PASS2_REST_FALLBACK_SPLIT_ENABLED — guarded rest-interval splitting in mergeChunkFallbackObservations; default true, "false" disables
+	Pass2RestFallbackSplitEnabled bool
+	// WORKER_MEDIA_CPU_SLOTS_ENABLED — 1 live chunk + 1 shared FFmpeg CPU slot isolation; default true, "false" disables
+	MediaCPUSlotsEnabled bool
 	Common
-	Concurrency          int    // WORKER_CONCURRENCY — max concurrent video tasks; defaults to 5
+	Concurrency          int // WORKER_CONCURRENCY — max concurrent video tasks; defaults to 5
 	GeminiAPIKey         string
 	GeminiModel          string  // GEMINI_MODEL — default "gemini-4-argon" (deep video analysis)
 	GeminiThinkingLevel  string  // GEMINI_THINKING_LEVEL — default "HIGH"
 	GeminiThinkingChunk  string  // GEMINI_THINKING_CHUNK — default "LOW"
 	GeminiChunkFPS       float64 // GEMINI_CHUNK_FPS — default 2.0; 0 omits explicit FPS metadata
 	GeminiThinkingBudget *int32  // GEMINI_THINKING_BUDGET — optional token count
-	UseCache             bool   // GEMINI_USE_CACHE — enable context caching for long videos
-	PipelineMode         string // PIPELINE_MODE — legacy, optimized, compare
+	UseCache             bool    // GEMINI_USE_CACHE — enable context caching for long videos
+	PipelineMode         string  // PIPELINE_MODE — legacy, optimized, compare
 }
 
 var loadEnvOnce sync.Once
@@ -89,16 +98,17 @@ func InitServer() (Server, error) {
 			GCSBucketName:            strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
 			AppEnv:                   appEnv,
 		},
-		JWTSigningSecret:         strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
-		GeminiAPIKey:             strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
-		GeminiModel:              strings.TrimSpace(os.Getenv("GEMINI_MODEL")),
-		Port:                     strings.TrimSpace(os.Getenv("PORT")),
-		DevAllowedOrigins:        parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
-		WebOrigin:                strings.TrimSpace(os.Getenv("WEB_ORIGIN")),
-		CookieDomain:             strings.TrimSpace(os.Getenv("COOKIE_DOMAIN")),
-		CookieSecure:             !strings.EqualFold(strings.TrimSpace(os.Getenv("COOKIE_SECURE")), "false"),
-		ChunkReanalysisEnabled:   strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_CHUNK_REANALYSIS")), "true"),
-		SessionReanalysisEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_SESSION_REANALYSIS")), "true"),
+		JWTSigningSecret:           strings.TrimSpace(os.Getenv("JWT_SIGNING_SECRET")),
+		GeminiAPIKey:               strings.TrimSpace(os.Getenv("GEMINI_API_KEY")),
+		GeminiModel:                strings.TrimSpace(os.Getenv("GEMINI_MODEL")),
+		Port:                       strings.TrimSpace(os.Getenv("PORT")),
+		DevAllowedOrigins:          parseListEnv("DEV_ALLOWED_ORIGINS", defaultDevAllowedOrigins),
+		WebOrigin:                  strings.TrimSpace(os.Getenv("WEB_ORIGIN")),
+		CookieDomain:               strings.TrimSpace(os.Getenv("COOKIE_DOMAIN")),
+		CookieSecure:               !strings.EqualFold(strings.TrimSpace(os.Getenv("COOKIE_SECURE")), "false"),
+		ChunkReanalysisEnabled:     strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_CHUNK_REANALYSIS")), "true"),
+		SessionReanalysisEnabled:   strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_SESSION_REANALYSIS")), "true"),
+		HistorySummaryCacheEnabled: defaultTrueFlag(os.Getenv("HISTORY_SUMMARY_CACHE_ENABLED")),
 	}
 	// Merge web origin into the CORS allowlist so the web SPA is always permitted.
 	if cfg.WebOrigin != "" {
@@ -124,6 +134,8 @@ func InitServer() (Server, error) {
 	cfg.SessionReanalysisDailyQuota = quota
 	dbMaxOpenConns, dbMaxOpenConnsErr := parsePositiveIntWithDefault("DB_MAX_OPEN_CONNS", db.DefaultServerMaxOpenConns)
 	cfg.DBMaxOpenConns = dbMaxOpenConns
+	dbMaxIdleConns, dbMaxIdleConnsErr := parsePositiveIntWithDefault("DB_MAX_IDLE_CONNS", db.DefaultMaxIdleConns)
+	cfg.DBMaxIdleConns = dbMaxIdleConns
 
 	if err := validateValues(
 		validatePort(cfg.Port),
@@ -131,6 +143,7 @@ func InitServer() (Server, error) {
 		validateRedisURL(cfg.RedisURL),
 		quotaErr,
 		dbMaxOpenConnsErr,
+		dbMaxIdleConnsErr,
 	); err != nil {
 		return Server{}, err
 	}
@@ -183,17 +196,22 @@ func InitWorker() (Worker, error) {
 	chunkFPS, chunkFPSErr := parseChunkFPS("GEMINI_CHUNK_FPS")
 	concurrency, concurrencyErr := parsePositiveIntWithDefault("WORKER_CONCURRENCY", defaultWorkerConcurrency)
 	dbMaxOpenConns, dbMaxOpenConnsErr := parsePositiveIntWithDefault("DB_MAX_OPEN_CONNS", db.DefaultWorkerMaxOpenConns)
+	dbMaxIdleConns, dbMaxIdleConnsErr := parsePositiveIntWithDefault("DB_MAX_IDLE_CONNS", db.DefaultMaxIdleConns)
 
 	cfg := Worker{
-		CaptureFeedbackEnabled:    strings.EqualFold(os.Getenv("ENABLE_CAPTURE_FEEDBACK"), "true"),
-		ContextualCoachingEnabled: strings.EqualFold(os.Getenv("ENABLE_CONTEXTUAL_COACHING"), "true"),
-		ActivityCountingEnabled:   strings.EqualFold(os.Getenv("ENABLE_ACTIVITY_COUNTING"), "true"),
-		TrackingContinuityEnabled: trackingContinuityEnabled(os.Getenv("ENABLE_TRACKING_CONTINUITY")),
+		CaptureFeedbackEnabled:           strings.EqualFold(os.Getenv("ENABLE_CAPTURE_FEEDBACK"), "true"),
+		ContextualCoachingEnabled:        strings.EqualFold(os.Getenv("ENABLE_CONTEXTUAL_COACHING"), "true"),
+		ActivityCountingEnabled:          strings.EqualFold(os.Getenv("ENABLE_ACTIVITY_COUNTING"), "true"),
+		TrackingContinuityEnabled:        trackingContinuityEnabled(os.Getenv("ENABLE_TRACKING_CONTINUITY")),
+		ActivityReviewWindowRetryEnabled: defaultTrueFlag(os.Getenv("ACTIVITY_REVIEW_WINDOW_RETRY_ENABLED")),
+		Pass2RestFallbackSplitEnabled:    defaultTrueFlag(os.Getenv("PASS2_REST_FALLBACK_SPLIT_ENABLED")),
+		MediaCPUSlotsEnabled:             defaultTrueFlag(os.Getenv("WORKER_MEDIA_CPU_SLOTS_ENABLED")),
 		Common: Common{
 			AgenticHighlightsEnabled: strings.EqualFold(strings.TrimSpace(os.Getenv("ENABLE_AGENTIC_HIGHLIGHTS")), "true"),
 			GeminiIncludeThoughts:    strings.EqualFold(strings.TrimSpace(os.Getenv("GEMINI_INCLUDE_THOUGHTS")), "true"),
 			DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
 			DBMaxOpenConns:           dbMaxOpenConns,
+			DBMaxIdleConns:           dbMaxIdleConns,
 			RedisURL:                 strings.TrimSpace(os.Getenv("REDIS_URL")),
 			GCSBucketName:            strings.TrimSpace(os.Getenv("GCS_BUCKET_NAME")),
 			AppEnv:                   appEnv,
@@ -226,6 +244,7 @@ func InitWorker() (Worker, error) {
 		chunkFPSErr,
 		concurrencyErr,
 		dbMaxOpenConnsErr,
+		dbMaxIdleConnsErr,
 	); err != nil {
 		return Worker{}, err
 	}
@@ -392,5 +411,10 @@ func parseListEnv(name string, fallback []string) []string {
 // kill-switch so chunk analysis records target boxes and reference frames unless
 // disabled via environment configuration.
 func trackingContinuityEnabled(raw string) bool {
+	return defaultTrueFlag(raw)
+}
+
+// defaultTrueFlag defaults to true and honours an explicit "false" rollback switch.
+func defaultTrueFlag(raw string) bool {
 	return !strings.EqualFold(strings.TrimSpace(raw), "false")
 }

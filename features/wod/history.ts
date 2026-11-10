@@ -1,3 +1,4 @@
+import type { ActivitySummary } from "../../shared/activity";
 import type { HeartRateSummary } from "../../shared/heartRateSummary";
 import { apiClient } from "./api";
 
@@ -82,9 +83,13 @@ export interface AnalysisResult {
   mobility_observations?: string;
   stretch_recommendations?: string;
   available_videos?: string[]; // ["merged", "hardsubbed", "encoded"]
+  highlights?: HighlightResult[];
+  activity_summary?: ActivitySummary;
   created_at: string;
   updated_at: string;
 }
+
+const inFlightHistoryRequests = new Map<string, Promise<AnalysisResult[]>>();
 
 export async function fetchAnalysisHistory(
   profileId: number,
@@ -94,9 +99,20 @@ export async function fetchAnalysisHistory(
   if (limit) {
     params.set("limit", String(limit));
   }
-  return apiClient<AnalysisResult[]>(`/history?${params.toString()}`, {
+  const key = params.toString();
+  const existing = inFlightHistoryRequests.get(key);
+  if (existing) {
+    return existing;
+  }
+  const request = apiClient<AnalysisResult[]>(`/history?${key}`, {
     headers: { "X-Workout-Load-Schema": "1" },
+  }).finally(() => {
+    if (inFlightHistoryRequests.get(key) === request) {
+      inFlightHistoryRequests.delete(key);
+    }
   });
+  inFlightHistoryRequests.set(key, request);
+  return request;
 }
 
 export interface HighlightResult {

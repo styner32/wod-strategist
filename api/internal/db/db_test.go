@@ -36,30 +36,38 @@ var _ = Describe("normalizeDatabaseURL", func() {
 })
 
 var _ = Describe("PoolConfig", func() {
-	It("keeps server and worker default budgets within the 20-connection total", func() {
-		Expect(DefaultMaxOpenConns).To(Equal(20))
-		Expect(DefaultServerMaxOpenConns + DefaultWorkerMaxOpenConns).To(Equal(DefaultMaxOpenConns))
+	It("keeps max 2 server instances and 1 worker within the 18-connection budget", func() {
+		Expect(DefaultMaxOpenConns).To(Equal(18))
+		Expect(DefaultServerMaxOpenConns).To(Equal(6))
+		Expect(DefaultWorkerMaxOpenConns).To(Equal(6))
+		Expect(DefaultMaxIdleConns).To(Equal(2))
+		Expect(DefaultConnMaxIdleTime).To(Equal(30 * time.Second))
+		Expect(2*DefaultServerMaxOpenConns + DefaultWorkerMaxOpenConns).To(Equal(DefaultMaxOpenConns))
 	})
 
-	It("matches MaxIdleConns to MaxOpenConns for connection reuse and clamps oversized idle limits", func() {
+	It("uses bounded idle defaults to release burst connections and clamps oversized idle limits", func() {
 		defaults := normalizePoolConfig(PoolConfig{})
 		Expect(defaults.MaxOpenConns).To(Equal(DefaultMaxOpenConns))
-		Expect(defaults.MaxIdleConns).To(Equal(DefaultMaxOpenConns))
+		Expect(defaults.MaxIdleConns).To(Equal(DefaultMaxIdleConns))
 		Expect(defaults.ConnMaxIdleTime).To(Equal(DefaultConnMaxIdleTime))
 		Expect(defaults.ConnMaxLifetime).To(Equal(DefaultConnMaxLifetime))
 
+		tinyPool := normalizePoolConfig(PoolConfig{MaxOpenConns: 1})
+		Expect(tinyPool.MaxOpenConns).To(Equal(1))
+		Expect(tinyPool.MaxIdleConns).To(Equal(1))
+
 		workerPool := normalizePoolConfig(PoolConfig{MaxOpenConns: DefaultWorkerMaxOpenConns, MaxIdleConns: 99})
-		Expect(workerPool.MaxOpenConns).To(Equal(8))
-		Expect(workerPool.MaxIdleConns).To(Equal(8))
+		Expect(workerPool.MaxOpenConns).To(Equal(6))
+		Expect(workerPool.MaxIdleConns).To(Equal(6))
 
 		custom := normalizePoolConfig(PoolConfig{
 			MaxOpenConns:    10,
-			MaxIdleConns:    6,
+			MaxIdleConns:    4,
 			ConnMaxIdleTime: 2 * time.Minute,
 			ConnMaxLifetime: 15 * time.Minute,
 		})
 		Expect(custom.MaxOpenConns).To(Equal(10))
-		Expect(custom.MaxIdleConns).To(Equal(6))
+		Expect(custom.MaxIdleConns).To(Equal(4))
 		Expect(custom.ConnMaxIdleTime).To(Equal(2 * time.Minute))
 		Expect(custom.ConnMaxLifetime).To(Equal(15 * time.Minute))
 	})
@@ -71,7 +79,7 @@ var _ = Describe("PoolConfig", func() {
 
 		resolved := applyPoolConfig(sqlDB, PoolConfig{MaxOpenConns: DefaultWorkerMaxOpenConns})
 		Expect(resolved.MaxOpenConns).To(Equal(DefaultWorkerMaxOpenConns))
-		Expect(resolved.MaxIdleConns).To(Equal(DefaultWorkerMaxOpenConns))
+		Expect(resolved.MaxIdleConns).To(Equal(DefaultMaxIdleConns))
 		Expect(sqlDB.Stats().MaxOpenConnections).To(Equal(DefaultWorkerMaxOpenConns))
 	})
 })

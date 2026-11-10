@@ -10,6 +10,10 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 )
 
+// SummaryCacheVersion identifies the stored sessions.activity_summary wire/cache
+// schema verified by GET /api/v1/history and summary writers.
+const SummaryCacheVersion = Version
+
 type Total struct {
 	Movement string  `json:"movement"`
 	Unit     string  `json:"unit"`

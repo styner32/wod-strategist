@@ -152,6 +152,7 @@ func (ctl *Controller) GetRelatedWODs(c *gin.Context) {
 		sourceSessionID = sessionIDParam
 		var anchor db.AnalysisResult
 		err := ctl.db.WithContext(c.Request.Context()).
+			Select("id", "session_id", "normalized_workout").
 			Where("profile_id = ? AND session_id = ? AND analysis_type = ? AND status = 'COMPLETED' AND archived_at IS NULL",
 				uint(profileID), sourceSessionID, db.AnalysisTypeWOD).
 			First(&anchor).Error
@@ -210,6 +211,7 @@ func (ctl *Controller) GetRelatedWODs(c *gin.Context) {
 
 	var candidates []db.AnalysisResult
 	queryDB := ctl.db.WithContext(c.Request.Context()).
+		Select("id", "session_id", "created_at", "wod_description", "normalized_workout", "session_score").
 		Where("profile_id = ? AND analysis_type = ? AND status = 'COMPLETED' AND archived_at IS NULL AND normalized_workout != ''",
 			uint(profileID), db.AnalysisTypeWOD).
 		Where("normalized_workout ILIKE ?", likePattern)

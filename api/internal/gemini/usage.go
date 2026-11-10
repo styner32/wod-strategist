@@ -56,7 +56,16 @@ func (c *Client) generateContent(ctx context.Context, model string, contents []*
 		config = &cfgCopy
 	}
 	captured := &VideoModeResult{}
-	resp, err := c.client.Models.GenerateContent(context.WithValue(ctx, comparisonKey{}, captured), model, contents, config)
+	retryCapture := &retryAfterCapture{}
+	reqCtx := context.WithValue(context.WithValue(ctx, comparisonKey{}, captured), retryAfterContextKey{}, retryCapture)
+	resp, err := c.client.Models.GenerateContent(reqCtx, model, contents, config)
+	if err != nil && (retryCapture.retryAfter > 0 || retryCapture.statusCode > 0) {
+		err = &RetryAfterError{
+			Err:        err,
+			RetryAfter: retryCapture.retryAfter,
+			StatusCode: retryCapture.statusCode,
+		}
+	}
 	var envelope struct {
 		Usage             *ComparisonUsage `json:"usageMetadata"`
 		ContinuationToken string           `json:"continuationToken"`

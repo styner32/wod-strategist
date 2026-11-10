@@ -154,16 +154,18 @@ func CreateProfile(dbConn *gorm.DB, profileAttr *db.Profile) db.Profile {
 
 func CreateSession(dbConn *gorm.DB, sessionAttr *db.Session) db.Session {
 	s := db.Session{
-		ActivitySummary:      sessionAttr.ActivitySummary,
-		WODEvaluationVersion: sessionAttr.WODEvaluationVersion,
-		Effort:               sessionAttr.Effort,
-		SessionID:            sessionAttr.SessionID,
-		ProfileID:            sessionAttr.ProfileID,
-		Status:               sessionAttr.Status,
-		IdempotencyKey:       sessionAttr.IdempotencyKey,
-		WODDescription:       sessionAttr.WODDescription,
-		MovementHints:        sessionAttr.MovementHints,
-		WorkoutType:          sessionAttr.WorkoutType,
+		ActivitySummary:             sessionAttr.ActivitySummary,
+		ActivityReviewAttempts:      sessionAttr.ActivityReviewAttempts,
+		ActivitySummaryCacheVersion: sessionAttr.ActivitySummaryCacheVersion,
+		WODEvaluationVersion:        sessionAttr.WODEvaluationVersion,
+		Effort:                      sessionAttr.Effort,
+		SessionID:                   sessionAttr.SessionID,
+		ProfileID:                   sessionAttr.ProfileID,
+		Status:                      sessionAttr.Status,
+		IdempotencyKey:              sessionAttr.IdempotencyKey,
+		WODDescription:              sessionAttr.WODDescription,
+		MovementHints:               sessionAttr.MovementHints,
+		WorkoutType:                 sessionAttr.WorkoutType,
 	}
 
 	if s.IdempotencyKey == "" {
@@ -195,6 +197,7 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 		NormalizedWorkout:              resultAttr.NormalizedWorkout,
 		MobilityObservations:           resultAttr.MobilityObservations,
 		StretchRecommendations:         resultAttr.StretchRecommendations,
+		AvailableVideos:                resultAttr.AvailableVideos,
 		SensorVersion:                  resultAttr.SensorVersion,
 		SensorState:                    resultAttr.SensorState,
 		SensorProcessing:               resultAttr.SensorProcessing,
@@ -208,6 +211,11 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 	result.AnalysisSummary = resultAttr.AnalysisSummary
 	result.WorkoutProgress = resultAttr.WorkoutProgress
 	result.AgenticHighlightAnalysis = resultAttr.AgenticHighlightAnalysis
+	if len(resultAttr.AvailableVideos) > 0 {
+		result.AvailableVideos = resultAttr.AvailableVideos
+	} else {
+		result.AvailableVideos = db.CommaStringArray{"merged"}
+	}
 	if result.AnalysisType == "" {
 		result.AnalysisType = db.AnalysisTypeWOD
 	}
@@ -253,6 +261,35 @@ func CreateChunkAnalysisResult(dbConn *gorm.DB, resultAttr *db.ChunkAnalysisResu
 	}
 
 	g.Expect(dbConn.Create(&result).Error).NotTo(g.HaveOccurred())
+	return result
+}
+
+func CreateHighlightResult(dbConn *gorm.DB, attr *db.HighlightResult) db.HighlightResult {
+	result := db.HighlightResult{
+		SessionID:   attr.SessionID,
+		ProfileID:   attr.ProfileID,
+		Title:       attr.Title,
+		Status:      attr.Status,
+		GCSURI:      attr.GCSURI,
+		MusicGCSURI: attr.MusicGCSURI,
+		Segments:    attr.Segments,
+		DurationSec: attr.DurationSec,
+		Output:      attr.Output,
+	}
+	if result.Title == "" {
+		result.Title = "Highlight Reel"
+	}
+	if result.Status == "" {
+		result.Status = "COMPLETED"
+	}
+	if result.Segments == "" {
+		result.Segments = "[]"
+	}
+	g.Expect(dbConn.Create(&result).Error).NotTo(g.HaveOccurred())
+	if !attr.CreatedAt.IsZero() {
+		g.Expect(dbConn.Model(&result).UpdateColumn("created_at", attr.CreatedAt).Error).NotTo(g.HaveOccurred())
+		result.CreatedAt = attr.CreatedAt
+	}
 	return result
 }
 

@@ -272,7 +272,7 @@ func (w *Worker) buildWorkoutProgress(ctx context.Context, p VideoAnalysisPayloa
 		}
 		var chunks []db.ChunkAnalysisResult
 		if w.DB.WithContext(ctx).Where("session_id = ? AND profile_id = ?", p.SessionID, p.ProfileID).Order("media_start_secs ASC NULLS LAST, id ASC").Find(&chunks).Error == nil {
-			intervals, gaps = mergeChunkFallbackObservations(intervals, gaps, chunks, p.WorkoutType)
+			intervals, gaps = mergeChunkFallbackObservationsWithOptions(intervals, gaps, chunks, p.WorkoutType, w.pass2RestFallbackSplitEnabled())
 			intervals, gaps = mapProgressCaptureTimes(intervals, gaps, chunks)
 			hardBoundaries = captureDiscontinuityPoints(chunks)
 		}
@@ -361,10 +361,191 @@ func subtractSkippedNonExerciseByIntervals(intervals []workoutprogress.Interval,
 	return out
 }
 
+type chunkRestSplitCandidate struct {
+	eligible bool
+	movement string
+	repCount int
+}
+
+func chunkPassingRestSplitTargetGuard(chunk db.ChunkAnalysisResult) bool {
+	if chunk.Status != "COMPLETED" || chunk.MediaStartSecs == nil || chunk.MediaEndSecs == nil || !activity.ValidInterval(*chunk.MediaStartSecs, *chunk.MediaEndSecs) {
+		return false
+	}
+	if chunk.TargetConfidence > 0 && chunk.TargetConfidence < trackingMinConfidence {
+		return false
+	}
+	if strings.TrimSpace(chunk.TargetCues) != "" {
+		tp, ok := parseStoredTargetPerson(chunk.TargetCues)
+		if !ok || tp.Ambiguous || (tp.Confidence > 0 && tp.Confidence < trackingMinConfidence) {
+			return false
+		}
+	}
+	return true
+}
+
+func decodeVerifiedChunkCompleteEvents(chunk db.ChunkAnalysisResult) ([]activity.Observation, bool) {
+	if chunk.Status != "COMPLETED" || chunk.MediaStartSecs == nil || chunk.MediaEndSecs == nil || !activity.ValidInterval(*chunk.MediaStartSecs, *chunk.MediaEndSecs) || len(chunk.MovementObservations) == 0 {
+		return nil, false
+	}
+	cStart, cEnd := *chunk.MediaStartSecs, *chunk.MediaEndSecs
+	var local activity.Observations
+	if json.Unmarshal(chunk.MovementObservations, &local) != nil {
+		return nil, false
+	}
+	dur := local.DurationSecs
+	if dur <= 0 {
+		dur = cEnd - cStart
+	}
+	doc, err := activity.Decode(chunk.MovementObservations, 0, dur)
+	if err != nil || doc.TargetState != "identified" || doc.ActivityState != "exercise" || len(doc.Events) == 0 {
+		return nil, false
+	}
+	scale := 1.0
+	if dur > 0 && math.Abs((cEnd-cStart)-dur) > 0.01 {
+		scale = (cEnd - cStart) / dur
+	}
+	mapped := make([]activity.Observation, 0, len(doc.Events))
+	for _, ev := range doc.Events {
+		if !ev.Complete {
+			continue
+		}
+		evStart := math.Max(cStart, cStart+ev.Start*scale)
+		evEnd := math.Min(cEnd, cStart+ev.End*scale)
+		if !activity.ValidInterval(evStart, evEnd) {
+			continue
+		}
+		ev.Start = evStart
+		ev.End = evEnd
+		mapped = append(mapped, ev)
+	}
+	if len(mapped) == 0 {
+		return nil, false
+	}
+	return mapped, true
+}
+
+func primaryConcreteFallbackMovement(events []activity.Observation) (string, []activity.Observation) {
+	counts := map[string]int{}
+	order := []string{}
+	labelByKey := map[string]string{}
+	for _, ev := range events {
+		mov := strings.TrimSpace(ev.Movement)
+		if mov == "" || isNonExerciseMovement(mov) || strings.EqualFold(mov, "Unknown") {
+			continue
+		}
+		key := strings.ToLower(activity.CanonicalMovement(mov))
+		if key == "" {
+			key = strings.ToLower(mov)
+		}
+		if counts[key] == 0 {
+			order = append(order, key)
+			labelByKey[key] = mov
+		}
+		counts[key]++
+	}
+	if len(order) == 0 {
+		return "", nil
+	}
+	bestKey := order[0]
+	for _, k := range order[1:] {
+		if counts[k] > counts[bestKey] {
+			bestKey = k
+		}
+	}
+	chosen := labelByKey[bestKey]
+	filtered := make([]activity.Observation, 0, counts[bestKey])
+	for _, ev := range events {
+		if sameCanonicalMovement(ev.Movement, chosen) {
+			filtered = append(filtered, ev)
+		}
+	}
+	return chosen, filtered
+}
+
+func buildChunkRestSplitCandidates(canonical []db.ChunkAnalysisResult) []chunkRestSplitCandidate {
+	out := make([]chunkRestSplitCandidate, len(canonical))
+	for i, chunk := range canonical {
+		if !chunkPassingRestSplitTargetGuard(chunk) {
+			continue
+		}
+		mapped, ok := decodeVerifiedChunkCompleteEvents(chunk)
+		if !ok {
+			continue
+		}
+		mov, concrete := primaryConcreteFallbackMovement(mapped)
+		if mov == "" || len(concrete) == 0 {
+			continue
+		}
+		out[i] = chunkRestSplitCandidate{
+			eligible: true,
+			movement: mov,
+			repCount: len(concrete),
+		}
+	}
+	return out
+}
+
+func chunksContinuousForRestSplit(a, b db.ChunkAnalysisResult) bool {
+	if a.MediaEndSecs == nil || b.MediaStartSecs == nil {
+		return false
+	}
+	if math.Abs(*b.MediaStartSecs-*a.MediaEndSecs) > timelineTouchToleranceSecs {
+		return false
+	}
+	if a.EndSecs != nil && b.StartSecs != nil {
+		return (*b.StartSecs-*a.EndSecs)-(*b.MediaStartSecs-*a.MediaEndSecs) <= 0.01
+	}
+	return true
+}
+
+func canSplitRestIntervalForChunkFallback(
+	canonical []db.ChunkAnalysisResult,
+	candidates []chunkRestSplitCandidate,
+	chunkIdx int,
+	movement string,
+	pass2Intervals []workoutprogress.Interval,
+	restIn workoutprogress.Interval,
+) bool {
+	if chunkIdx < 0 || chunkIdx >= len(candidates) || !candidates[chunkIdx].eligible || !isConcreteMovement(movement) || isNonExerciseMovement(movement) {
+		return false
+	}
+	for _, adj := range pass2Intervals {
+		if adj.Activity != "exercise" || !isConcreteMovement(adj.Movement) || isNonExerciseMovement(adj.Movement) {
+			continue
+		}
+		touchesLeft := math.Abs(adj.End-restIn.Start) <= 1.05
+		touchesRight := math.Abs(adj.Start-restIn.End) <= 1.05
+		if (touchesLeft || touchesRight) &&
+			(sameCanonicalMovement(adj.Movement, movement) ||
+				isCompositeMovementUpgrade(adj.Movement, movement) ||
+				isCompositeMovementUpgrade(movement, adj.Movement)) {
+			return true
+		}
+	}
+	totalReps := candidates[chunkIdx].repCount
+	for l := chunkIdx - 1; l >= 0; l-- {
+		if !candidates[l].eligible || !sameCanonicalMovement(candidates[l].movement, movement) || !chunksContinuousForRestSplit(canonical[l], canonical[l+1]) {
+			break
+		}
+		totalReps += candidates[l].repCount
+	}
+	for r := chunkIdx + 1; r < len(canonical); r++ {
+		if !candidates[r].eligible || !sameCanonicalMovement(candidates[r].movement, movement) || !chunksContinuousForRestSplit(canonical[r-1], canonical[r]) {
+			break
+		}
+		totalReps += candidates[r].repCount
+	}
+	return totalReps >= 2
+}
+
 // mergeChunkFallbackObservations restores verified chunk-level repetition events
 // (target_state == "identified", activity_state == "exercise", complete == true)
 // when Pass 2 segment observation omitted or rejected the chunk window.
 func mergeChunkFallbackObservations(intervals []workoutprogress.Interval, gaps []workoutprogress.Gap, chunks []db.ChunkAnalysisResult, workoutType string) ([]workoutprogress.Interval, []workoutprogress.Gap) {
+	return mergeChunkFallbackObservationsWithOptions(intervals, gaps, chunks, workoutType, true)
+}
+
+func mergeChunkFallbackObservationsWithOptions(intervals []workoutprogress.Interval, gaps []workoutprogress.Gap, chunks []db.ChunkAnalysisResult, workoutType string, allowRestSplit bool) ([]workoutprogress.Interval, []workoutprogress.Gap) {
 	if len(chunks) == 0 {
 		return intervals, gaps
 	}
@@ -378,47 +559,17 @@ func mergeChunkFallbackObservations(intervals []workoutprogress.Interval, gaps [
 			minOnset = 0.0
 		}
 	}
+	canonical := activity.CanonicalChunks(chunks)
+	restSplitCandidates := buildChunkRestSplitCandidates(canonical)
 	outIntervals := append([]workoutprogress.Interval(nil), intervals...)
 	outGaps := append([]workoutprogress.Gap(nil), gaps...)
-	for _, chunk := range activity.CanonicalChunks(chunks) {
-		if chunk.Status != "COMPLETED" || chunk.MediaStartSecs == nil || chunk.MediaEndSecs == nil || !activity.ValidInterval(*chunk.MediaStartSecs, *chunk.MediaEndSecs) || len(chunk.MovementObservations) == 0 {
+	for chunkIdx, chunk := range canonical {
+		mapped, ok := decodeVerifiedChunkCompleteEvents(chunk)
+		if !ok {
 			continue
 		}
 		cStart, cEnd := *chunk.MediaStartSecs, *chunk.MediaEndSecs
 		if cEnd <= minOnset+1e-6 {
-			continue
-		}
-		var local activity.Observations
-		if json.Unmarshal(chunk.MovementObservations, &local) != nil {
-			continue
-		}
-		dur := local.DurationSecs
-		if dur <= 0 {
-			dur = cEnd - cStart
-		}
-		doc, err := activity.Decode(chunk.MovementObservations, 0, dur)
-		if err != nil || doc.TargetState != "identified" || doc.ActivityState != "exercise" || len(doc.Events) == 0 {
-			continue
-		}
-		scale := 1.0
-		if dur > 0 && math.Abs((cEnd-cStart)-dur) > 0.01 {
-			scale = (cEnd - cStart) / dur
-		}
-		mapped := make([]activity.Observation, 0, len(doc.Events))
-		for _, ev := range doc.Events {
-			if !ev.Complete {
-				continue
-			}
-			evStart := math.Max(cStart, cStart+ev.Start*scale)
-			evEnd := math.Min(cEnd, cStart+ev.End*scale)
-			if !activity.ValidInterval(evStart, evEnd) {
-				continue
-			}
-			ev.Start = evStart
-			ev.End = evEnd
-			mapped = append(mapped, ev)
-		}
-		if len(mapped) == 0 {
 			continue
 		}
 		missing := make([]activity.Observation, 0, len(mapped))
@@ -462,6 +613,97 @@ func mergeChunkFallbackObservations(intervals []workoutprogress.Interval, gaps [
 		if targetIdx >= 0 {
 			in := &outIntervals[targetIdx]
 			if in.Activity == "rest" {
+				if !allowRestSplit {
+					continue
+				}
+				mov, concreteMissing := primaryConcreteFallbackMovement(missing)
+				if mov == "" || len(concreteMissing) == 0 {
+					continue
+				}
+				// Find the original Pass 2 rest interval covering this sub-span so adjacent
+				// Pass 2 exercise context remains observable even after an earlier chunk split.
+				enclosingRest := *in
+				for _, orig := range intervals {
+					if orig.Activity == "rest" && orig.Start <= in.Start+1e-6 && orig.End >= in.End-1e-6 {
+						enclosingRest = orig
+						break
+					}
+				}
+				if !canSplitRestIntervalForChunkFallback(canonical, restSplitCandidates, chunkIdx, mov, intervals, enclosingRest) {
+					continue
+				}
+				restCopy := *in
+				spanStart := math.Max(restCopy.Start, concreteMissing[0].Start)
+				spanEnd := math.Min(restCopy.End, concreteMissing[len(concreteMissing)-1].End)
+				if spanEnd <= spanStart+1e-6 {
+					continue
+				}
+				// When an immediately preceding chunk of the same set already split the left
+				// side of this rest interval across a continuous chunk boundary, bridge intra-set
+				// inter-rep cadence (<= 3.0s) so a single continuous set is not broken in two.
+				if chunkIdx > 0 && chunksContinuousForRestSplit(canonical[chunkIdx-1], chunk) && targetIdx > 0 {
+					prevIn := outIntervals[targetIdx-1]
+					if prevIn.ID == fmt.Sprintf("chunk-%d", canonical[chunkIdx-1].ID) &&
+						prevIn.Activity == "exercise" &&
+						sameCanonicalMovement(prevIn.Movement, mov) &&
+						math.Abs(prevIn.End-restCopy.Start) <= 1e-6 &&
+						spanStart-prevIn.End <= 3.0 {
+						spanStart = restCopy.Start
+					}
+				}
+				if spanEnd-spanStart < workoutprogress.MinIntervalDurationSecs {
+					minBound := math.Max(restCopy.Start, cStart)
+					maxBound := math.Min(restCopy.End, cEnd)
+					mid := (spanStart + spanEnd) / 2.0
+					half := workoutprogress.MinIntervalDurationSecs / 2.0
+					candStart := math.Max(minBound, mid-half)
+					candEnd := math.Min(maxBound, candStart+workoutprogress.MinIntervalDurationSecs)
+					if candEnd-candStart < workoutprogress.MinIntervalDurationSecs {
+						candStart = math.Max(minBound, candEnd-workoutprogress.MinIntervalDurationSecs)
+					}
+					spanStart = math.Min(spanStart, candStart)
+					spanEnd = math.Max(spanEnd, candEnd)
+				}
+				for i := range concreteMissing {
+					if activity.UnitForMovement(concreteMissing[i].Movement) == activity.UnitForMovement(mov) {
+						concreteMissing[i].Movement = mov
+					}
+				}
+				refs := make([]string, 0, len(concreteMissing)+1)
+				refs = append(refs, ref)
+				for i := range concreteMissing {
+					refs = append(refs, fmt.Sprintf("%s:event-%d", ref, i))
+				}
+				replacements := make([]workoutprogress.Interval, 0, 3)
+				if spanStart-restCopy.Start > 1e-6 {
+					pre := restCopy
+					pre.End = spanStart
+					replacements = append(replacements, pre)
+				}
+				replacements = append(replacements, workoutprogress.Interval{
+					ID:               ref,
+					Start:            spanStart,
+					End:              spanEnd,
+					Activity:         "exercise",
+					Movement:         mov,
+					ObservationRefs:  refs,
+					RepEvents:        concreteMissing,
+					FormObservations: []workoutprogress.Observation{},
+					ROMObservations:  []workoutprogress.Observation{},
+					PaceObservations: []workoutprogress.Observation{},
+				})
+				if restCopy.End-spanEnd > 1e-6 {
+					post := restCopy
+					post.ID = restCopy.ID + ":post"
+					post.Start = spanEnd
+					replacements = append(replacements, post)
+				}
+				updated := make([]workoutprogress.Interval, 0, len(outIntervals)-1+len(replacements))
+				updated = append(updated, outIntervals[:targetIdx]...)
+				updated = append(updated, replacements...)
+				updated = append(updated, outIntervals[targetIdx+1:]...)
+				outIntervals = updated
+				outGaps = subtractMediaSpanFromGaps(outGaps, spanStart, spanEnd)
 				continue
 			}
 			if in.Activity == "unknown" || strings.TrimSpace(in.Movement) == "" || strings.EqualFold(in.Movement, "Unknown") {

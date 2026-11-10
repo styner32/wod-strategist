@@ -68,12 +68,12 @@ type Options struct {
 	BaseURL            string
 	APIVersion         string
 	HTTPClient         *http.Client
-	Model              string // e.g. "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.8-flash"
+	Model              string  // e.g. "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.8-flash"
 	ThinkingLevel      string  // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL" (default / full video analysis)
 	ThinkingLevelChunk string  // e.g. "LOW", "MEDIUM" (for short chunk analysis)
 	ChunkFPS           float64 // Optional explicit FPS for AnalyzeChunkVideo*; 0 uses Gemini default
 	ThinkingBudget     *int32  // Optional token budget for thinking
-	IncludeThoughts    bool   // Optional: request Gemini thought summaries in responses
+	IncludeThoughts    bool    // Optional: request Gemini thought summaries in responses
 	PollInterval       time.Duration
 	Sleep              func(time.Duration)
 }
@@ -86,6 +86,94 @@ type exactSegmentOffsets struct {
 type exactSegmentOffsetsContextKey struct{}
 type exactBatchSegmentOffsetsContextKey struct{}
 type thinkingLevelContextKey struct{}
+type retryAfterContextKey struct{}
+
+type retryAfterCapture struct {
+	statusCode int
+	retryAfter time.Duration
+}
+
+// RetryAfterError wraps an upstream Gemini HTTP error with any parsed Retry-After
+// delay and HTTP status code while preserving Unwrap() for errors.As/errors.Is.
+type RetryAfterError struct {
+	Err        error
+	RetryAfter time.Duration
+	StatusCode int
+}
+
+func (e *RetryAfterError) Error() string {
+	if e == nil || e.Err == nil {
+		return ""
+	}
+	return e.Err.Error()
+}
+
+func (e *RetryAfterError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// RetryAfterDuration extracts a positive Retry-After backoff duration from err.
+func RetryAfterDuration(err error) (time.Duration, bool) {
+	var ra *RetryAfterError
+	if errors.As(err, &ra) && ra.RetryAfter > 0 {
+		return ra.RetryAfter, true
+	}
+	return 0, false
+}
+
+// HTTPStatusCode extracts the upstream HTTP status code from genai.APIError or RetryAfterError.
+func HTTPStatusCode(err error) (int, bool) {
+	var apiErr genai.APIError
+	if errors.As(err, &apiErr) && apiErr.Code > 0 {
+		return apiErr.Code, true
+	}
+	var ra *RetryAfterError
+	if errors.As(err, &ra) && ra.StatusCode > 0 {
+		return ra.StatusCode, true
+	}
+	return 0, false
+}
+
+// ParseRetryAfterHeader parses an HTTP Retry-After header value (either delay-seconds
+// or an HTTP-date) relative to now.
+func ParseRetryAfterHeader(raw string, now time.Time) (time.Duration, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return 0, false
+	}
+	if secs, err := strconv.ParseFloat(trimmed, 64); err == nil {
+		if secs > 0 {
+			return time.Duration(secs * float64(time.Second)), true
+		}
+		return 0, false
+	}
+	if parsed, err := http.ParseTime(trimmed); err == nil {
+		if delay := parsed.Sub(now); delay > 0 {
+			return delay, true
+		}
+	}
+	return 0, false
+}
+
+type retryAfterCaptureTransport struct {
+	base http.RoundTripper
+}
+
+func (t retryAfterCaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err == nil && resp != nil && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError) {
+		if holder, ok := req.Context().Value(retryAfterContextKey{}).(*retryAfterCapture); ok && holder != nil {
+			holder.statusCode = resp.StatusCode
+			if d, parsedOK := ParseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()); parsedOK {
+				holder.retryAfter = d
+			}
+		}
+	}
+	return resp, err
+}
 
 // WithThinkingLevel returns a context that overrides the client's default
 // ThinkingLevel for a single GenerateContent call (such as AnalyzeFrameGridsWithModel).
@@ -236,7 +324,7 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 	if baseTransport == nil {
 		baseTransport = http.DefaultTransport
 	}
-	wrappedHTTPClient.Transport = exactSegmentOffsetsTransport{base: streamComparisonTransport{base: comparisonTransport{base: baseTransport}}}
+	wrappedHTTPClient.Transport = exactSegmentOffsetsTransport{base: streamComparisonTransport{base: comparisonTransport{base: retryAfterCaptureTransport{base: baseTransport}}}}
 
 	config := &genai.ClientConfig{
 		APIKey:     apiKey,
@@ -1386,4 +1474,3 @@ func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, request
 	}
 	return results, nil
 }
-

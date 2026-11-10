@@ -241,7 +241,12 @@ func verifiedSplitMediaIntervals(ctx context.Context, sourcePath, directory stri
 }
 
 func readSplitVideoPackets(ctx context.Context, path string) ([]splitVideoPacket, error) {
-	output, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_data_hash", "sha256", "-show_entries", "packet=pts_time,data_hash", "-of", "json", path).Output()
+	var output []byte
+	_, err := runMediaExec(ctx, "probe_split_packets", func(execCtx context.Context) error {
+		var runErr error
+		output, runErr = exec.CommandContext(execCtx, "ffprobe", "-threads", mediaDecoderThreads(execCtx), "-v", "error", "-select_streams", "v:0", "-show_packets", "-show_data_hash", "sha256", "-show_entries", "packet=pts_time,data_hash", "-of", "json", path).Output()
+		return runErr
+	})
 	if err != nil {
 		return nil, fmt.Errorf("probe split video packets: %w", err)
 	}
@@ -390,29 +395,31 @@ func (w *Worker) chunkAlreadyAnalyzed(sessionID string, startSecs float64) bool 
 // runFFmpegSplit uses FFmpeg's segment muxer to split a video into chunks
 // at keyframe boundaries. Uses -c copy for fast, lossless splitting.
 func runFFmpegSplit(ctx context.Context, log *zap.Logger, inputPath, outputPattern string, segmentDuration int) error {
-	args := []string{
-		"-i", inputPath,
-		"-c", "copy",
-		"-f", "segment",
-		"-segment_time", fmt.Sprintf("%d", segmentDuration),
-		"-reset_timestamps", "1",
-		"-y",
-		outputPattern,
-	}
+	_, err := runMediaExec(ctx, "segment_split", func(execCtx context.Context) error {
+		args := []string{
+			"-i", inputPath,
+			"-c", "copy",
+			"-f", "segment",
+			"-segment_time", fmt.Sprintf("%d", segmentDuration),
+			"-reset_timestamps", "1",
+			"-y",
+			outputPattern,
+		}
+		args = limitMediaCommandThreads(execCtx, args)
+		log.Info("Running FFmpeg segment split", zap.Strings("args", args))
 
-	log.Info("Running FFmpeg segment split", zap.Strings("args", args))
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Error("FFmpeg segment split failed",
-			zap.Error(err),
-			zap.String("output", string(output)))
-		return fmt.Errorf("ffmpeg segment: %s: %w", string(output), err)
-	}
-
-	log.Info("FFmpeg segment split completed")
-	return nil
+		cmd := exec.CommandContext(execCtx, "ffmpeg", args...)
+		output, runErr := cmd.CombinedOutput()
+		if runErr != nil {
+			log.Error("FFmpeg segment split failed",
+				zap.Error(runErr),
+				zap.String("output", string(output)))
+			return fmt.Errorf("ffmpeg segment: %s: %w", string(output), runErr)
+		}
+		log.Info("FFmpeg segment split completed")
+		return nil
+	})
+	return err
 }
 
 // discoverChunkFiles returns sorted chunk filenames from the given directory.

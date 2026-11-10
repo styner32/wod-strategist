@@ -9,6 +9,7 @@ import { WorkoutShareSheet } from "./WorkoutShareSheet";
 
 jest.mock("../api", () => ({ getWorkoutShareContext: jest.fn() }));
 jest.mock("expo-localization", () => ({ getLocales: () => [{ languageCode: "en" }] }));
+jest.mock("react-native-safe-area-context", () => require("react-native-safe-area-context/jest/mock").default);
 jest.mock("../../../shared/workoutShare", () => ({
   buildWorkoutShareText: jest.fn((context, options, locale) => [
     `${locale}: ${context.session.session_id}`,

@@ -941,6 +941,69 @@ func ActiveRecords(records []Record) []Record {
 	return out
 }
 
+type ConfirmationSummary struct {
+	ExerciseIntervalCount  int
+	ConfirmedIntervalCount int
+	NeedsConfirmationCount int
+	PerformanceMissing     bool
+}
+
+func isIntervalConfirmed(interval Interval, active []Record) bool {
+	for _, r := range active {
+		if r.IntervalID == interval.ID && r.Status == "confirmed" {
+			return true
+		}
+	}
+	if interval.Activity != "exercise" || strings.TrimSpace(interval.Movement) == "" {
+		return false
+	}
+	for _, r := range active {
+		if r.Status == "confirmed" && r.Start <= interval.Start+1e-6 && r.End >= interval.End-1e-6 {
+			return true
+		}
+	}
+	return false
+}
+
+// SummarizeConfirmation counts displayable exercise intervals in progress and
+// checks how many are covered by active confirmed records matching SourceVersion.
+func SummarizeConfirmation(progress Progress, records []Record) ConfirmationSummary {
+	normalized := make([]Record, len(records))
+	for i, r := range records {
+		if r.SourceVersion != progress.SourceVersion {
+			r.Status = "needs_confirmation"
+		}
+		normalized[i] = r
+	}
+	active := ActiveRecords(normalized)
+
+	referencedByActive := make(map[string]bool, len(active))
+	needsConfirmation := 0
+	for _, r := range active {
+		if r.IntervalID != "" {
+			referencedByActive[r.IntervalID] = true
+		}
+		if r.Status == "needs_confirmation" {
+			needsConfirmation++
+		}
+	}
+
+	var out ConfirmationSummary
+	out.NeedsConfirmationCount = needsConfirmation
+	for _, in := range progress.Intervals {
+		displayable := in.End-in.Start >= MinIntervalDurationSecs-1e-6 || referencedByActive[in.ID]
+		if !displayable || in.Activity != "exercise" {
+			continue
+		}
+		out.ExerciseIntervalCount++
+		if isIntervalConfirmed(in, active) {
+			out.ConfirmedIntervalCount++
+		}
+	}
+	out.PerformanceMissing = out.ExerciseIntervalCount > 0 && out.ConfirmedIntervalCount < out.ExerciseIntervalCount
+	return out
+}
+
 func Comparisons(records []Record) []Comparison {
 	out := []Comparison{}
 	for _, current := range records {

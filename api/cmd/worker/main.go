@@ -33,12 +33,16 @@ func main() {
 	// Initialize Database
 	dbConn, err := db.ConnectWithPool(cfg.DatabaseURL, db.PoolConfig{
 		MaxOpenConns: cfg.DBMaxOpenConns,
+		MaxIdleConns: cfg.DBMaxIdleConns,
 	})
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
 	}
+	poolCtx, cancelPoolReporter := context.WithCancel(context.Background())
+	defer cancelPoolReporter()
 	if sqlDB, sqlErr := dbConn.DB(); sqlErr == nil {
 		defer sqlDB.Close()
+		db.StartPoolStatsReporter(poolCtx, sqlDB, logger.Log, "worker", db.PoolStatsReportInterval)
 	}
 	// db.Migrate() // Migration can be done in API server or a separate job, but usually safe to run here too if idempotent
 
@@ -107,6 +111,9 @@ func main() {
 	w.ContextualCoachingEnabled = cfg.ContextualCoachingEnabled
 	w.ActivityCountingEnabled = cfg.ActivityCountingEnabled
 	w.TrackingContinuityEnabled = cfg.TrackingContinuityEnabled
+	w.ActivityReviewWindowRetryEnabled = worker.BoolPtr(cfg.ActivityReviewWindowRetryEnabled)
+	w.Pass2RestFallbackSplitEnabled = worker.BoolPtr(cfg.Pass2RestFallbackSplitEnabled)
+	w.MediaCPUSlotsEnabled = worker.BoolPtr(cfg.MediaCPUSlotsEnabled)
 	w.AgenticHighlightsEnabled = cfg.AgenticHighlightsEnabled
 	w.UseCache = cfg.UseCache
 	w.PipelineMode = worker.PipelineMode(cfg.PipelineMode)

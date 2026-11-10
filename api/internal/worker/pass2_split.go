@@ -26,6 +26,9 @@ const (
 	// candidateMovementsPrefix marks the bout's chunk movement candidates in
 	// Segment.Description (set by buildContinuousSegments).
 	candidateMovementsPrefix = "청크 후보 종목: "
+	// minPass2NaturalSubwindowSecs prevents natural-boundary splits from creating
+	// tiny sub-windows while keeping every split window <= maxPass2WindowSecs.
+	minPass2NaturalSubwindowSecs = 30.0
 )
 
 // pass2Window is one Pass 2 call. Seg carries the clip bounds sent to the
@@ -97,7 +100,174 @@ func continuousSkippedSpans(gaps []workoutprogress.Gap, hardBoundaries []float64
 	return merged
 }
 
+type naturalSplitCandidate struct {
+	at       float64
+	priority int // 1 = movement transition, 2 = bridged rest boundary
+}
+
+func collectNaturalSplitCandidates(smoothed []timelineChunk, segStart, segEnd float64) []naturalSplitCandidate {
+	if len(smoothed) == 0 {
+		return nil
+	}
+	var cands []naturalSplitCandidate
+	add := func(at float64, prio int) {
+		if at <= segStart+1e-3 || at >= segEnd-1e-3 {
+			return
+		}
+		for i := range cands {
+			if math.Abs(cands[i].at-at) <= 0.05 {
+				if prio < cands[i].priority {
+					cands[i].priority = prio
+				}
+				return
+			}
+		}
+		cands = append(cands, naturalSplitCandidate{at: at, priority: prio})
+	}
+	for i := range smoothed {
+		cur := smoothed[i]
+		if cur.End <= segStart+0.05 || cur.Start >= segEnd-0.05 || cur.Class != chunkActive {
+			continue
+		}
+		if cur.BridgedRest {
+			prevMov, nextMov := "", ""
+			if i > 0 && smoothed[i-1].Class == chunkActive && !smoothed[i-1].BridgedRest {
+				prevMov = smoothed[i-1].Movement
+			}
+			if i+1 < len(smoothed) && smoothed[i+1].Class == chunkActive && !smoothed[i+1].BridgedRest {
+				nextMov = smoothed[i+1].Movement
+			}
+			if isConcreteMovement(prevMov) && isConcreteMovement(nextMov) && !sameMovementLabel(prevMov, nextMov) {
+				add(cur.End, 1)
+				add(cur.Start, 1)
+			} else {
+				add(cur.End, 2)
+				add(cur.Start, 2)
+			}
+			continue
+		}
+		if i+1 < len(smoothed) {
+			next := smoothed[i+1]
+			if next.Class == chunkActive && !next.BridgedRest &&
+				isConcreteMovement(cur.Movement) && isConcreteMovement(next.Movement) &&
+				!sameMovementLabel(cur.Movement, next.Movement) &&
+				timelineContinuous(cur, next) {
+				add(cur.End, 1)
+			}
+		}
+	}
+	return cands
+}
+
+func choosePass2SubwindowBounds(start, end float64, n int, smoothed []timelineChunk) []float64 {
+	bounds := make([]float64, 0, n+1)
+	bounds = append(bounds, start)
+	if n <= 1 {
+		return append(bounds, end)
+	}
+	cands := collectNaturalSplitCandidates(smoothed, start, end)
+	curStart := start
+	for k := 0; k < n-1; k++ {
+		remAfter := n - 1 - k
+		ideal := curStart + (end-curStart)/float64(remAfter+1)
+		lo := math.Max(curStart+minPass2NaturalSubwindowSecs, end-float64(remAfter)*maxPass2WindowSecs)
+		hi := math.Min(curStart+maxPass2WindowSecs, end-float64(remAfter)*minPass2NaturalSubwindowSecs)
+		chosen := start + float64(k+1)*(end-start)/float64(n)
+		if lo <= hi+1e-6 {
+			chosen = math.Min(math.Max(ideal, lo), hi)
+			bestPrio := 99
+			bestDist := math.Inf(1)
+			for _, c := range cands {
+				if c.at < lo-1e-6 || c.at > hi+1e-6 {
+					continue
+				}
+				dist := math.Abs(c.at - ideal)
+				if c.priority < bestPrio || (c.priority == bestPrio && (dist < bestDist-1e-6 || (math.Abs(dist-bestDist) <= 1e-6 && c.at > chosen))) {
+					bestPrio = c.priority
+					bestDist = dist
+					chosen = c.at
+				}
+			}
+		}
+		bounds = append(bounds, chosen)
+		curStart = chosen
+	}
+	bounds = append(bounds, end)
+	return bounds
+}
+
+func subwindowSegmentFromChunks(baseSeg Segment, coreStart, coreEnd float64, smoothed []timelineChunk) Segment {
+	out := baseSeg
+	if len(smoothed) == 0 {
+		return out
+	}
+	counts := map[string]int{}
+	order := []string{}
+	var candidates []string
+	var descriptions []string
+	matched := 0
+	for _, c := range smoothed {
+		if c.Class != chunkActive || c.End <= coreStart+0.05 || c.Start >= coreEnd-0.05 {
+			continue
+		}
+		matched++
+		if !c.BridgedRest && isConcreteMovement(c.Movement) {
+			key := strings.ToLower(activity.CanonicalMovement(c.Movement))
+			if key == "" {
+				key = strings.ToLower(strings.TrimSpace(c.Movement))
+			}
+			if counts[key] == 0 {
+				order = append(order, c.Movement)
+			}
+			counts[key]++
+			candidates = addCandidate(candidates, c.Movement)
+		}
+		if !c.BridgedRest {
+			for _, m := range c.Candidates {
+				candidates = addCandidate(candidates, m)
+			}
+		}
+		if c.Description != "" {
+			descriptions = append(descriptions, c.Description)
+		}
+	}
+	if matched == 0 {
+		return out
+	}
+	movement, best := "Unknown", 0
+	for _, m := range order {
+		key := strings.ToLower(activity.CanonicalMovement(m))
+		if key == "" {
+			key = strings.ToLower(strings.TrimSpace(m))
+		}
+		if counts[key] > best {
+			movement, best = m, counts[key]
+		}
+	}
+	if best == 0 && isConcreteMovement(baseSeg.Type) {
+		movement = baseSeg.Type
+	}
+	desc := strings.Join(descriptions, " | ")
+	if len(candidates) > 1 {
+		desc = candidateMovementsPrefix + strings.Join(candidates, ", ") + " | " + desc
+	}
+	out.Type = movement
+	out.Description = desc
+	return out
+}
+
 func splitPass2WindowsWithRestContext(segments []Segment, gaps []workoutprogress.Gap, hardBoundaries []float64, minClipStart float64) []pass2Window {
+	return splitPass2WindowsWithNaturalBoundaries(segments, gaps, hardBoundaries, minClipStart, nil)
+}
+
+func splitPass2WindowsWithNaturalBoundaries(
+	segments []Segment,
+	gaps []workoutprogress.Gap,
+	hardBoundaries []float64,
+	minClipStart float64,
+	timeline []timelineChunk,
+) []pass2Window {
+	smoothed := prepareSmoothedTimelineChunks(timeline)
 	skipped := continuousSkippedSpans(gaps, hardBoundaries)
 	out := make([]pass2Window, 0, len(segments))
 	for bIdx, seg := range segments {
@@ -158,14 +328,11 @@ func splitPass2WindowsWithRestContext(segments []Segment, gaps []workoutprogress
 			continue
 		}
 		n := int(math.Ceil(duration / maxPass2WindowSecs))
-		step := duration / float64(n)
+		bounds := choosePass2SubwindowBounds(start, end, n, smoothed)
 		for i := 0; i < n; i++ {
-			coreStart := start + float64(i)*step
-			coreEnd := start + float64(i+1)*step
-			if i == n-1 {
-				coreEnd = end
-			}
-			clip := seg
+			coreStart := bounds[i]
+			coreEnd := bounds[i+1]
+			clip := subwindowSegmentFromChunks(seg, coreStart, coreEnd, smoothed)
 			splitLeft := i > 0
 			splitRight := i < n-1
 			winLead, winTrail := 0.0, 0.0

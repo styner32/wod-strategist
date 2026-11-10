@@ -170,9 +170,26 @@ function orderChunksForTimeline(chunks: ChunkAnalysisResult[]) {
   });
 }
 
+const SESSION_REVIEW_PANEL_IDS = new Set([
+  "summary",
+  "performance",
+  "timeline",
+  "guidance",
+  "details",
+  "device",
+]);
+
+export function resolveInitialSessionTab(tabParam?: string | null): string {
+  const normalized = tabParam?.trim().toLowerCase();
+  return normalized && SESSION_REVIEW_PANEL_IDS.has(normalized)
+    ? normalized
+    : "summary";
+}
+
 export function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
   const searchProfileId = searchParams.get("profile_id")
     ? Number(searchParams.get("profile_id"))
     : undefined;
@@ -187,7 +204,14 @@ export function SessionDetailPage() {
   const [duration, setDuration] = useState<number>();
   const [isPaused, setIsPaused] = useState(true);
   const [playbackRate, setPlaybackRate] = useState(1);
-  const [activePanelId, setActivePanelId] = useState("summary");
+  const [activePanelId, setActivePanelId] = useState(() =>
+    resolveInitialSessionTab(requestedTab),
+  );
+  useEffect(() => {
+    if (requestedTab) {
+      setActivePanelId(resolveInitialSessionTab(requestedTab));
+    }
+  }, [sessionId, requestedTab]);
   const [selectedKind, setSelectedKind] = useState<VideoKind>();
 
 
@@ -1665,7 +1689,7 @@ export function SessionDetailPage() {
             )}
           </> },
           { id: "details", label: "세션 정보·재분석", content: <>
-          {analysis && profileId && sessionId && <WODTrainingPanel key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} scoreJSON={analysis.session_score} currentTime={currentTime} isOriginal={effectiveVideoKind === "merged"} seek={handleTimelineSeek} />}
+          {analysis && profileId && sessionId && <WODTrainingPanel key={`${profileId}:${sessionId}`} sessionId={sessionId} profileId={profileId} scoreJSON={analysis.session_score} heartRate={analysis.heart_rate} currentTime={currentTime} isOriginal={effectiveVideoKind === "merged"} seek={handleTimelineSeek} />}
           {/* Session metadata */}
           {analysis && (
             <div className="bg-bg-elevated border border-border rounded-xl p-4">

@@ -48,12 +48,16 @@ func main() {
 	// Initialize Database
 	dbConn, err := db.ConnectWithPool(cfg.DatabaseURL, db.PoolConfig{
 		MaxOpenConns: cfg.DBMaxOpenConns,
+		MaxIdleConns: cfg.DBMaxIdleConns,
 	})
 	if err != nil {
 		logger.Log.Fatal("Failed to connect to database", zap.Error(err))
 	}
+	poolCtx, cancelPoolReporter := context.WithCancel(context.Background())
+	defer cancelPoolReporter()
 	if sqlDB, sqlErr := dbConn.DB(); sqlErr == nil {
 		defer sqlDB.Close()
+		db.StartPoolStatsReporter(poolCtx, sqlDB, logger.Log, "api", db.PoolStatsReportInterval)
 	}
 
 	// Initialize Redis Connection for Asynq Client
@@ -91,20 +95,21 @@ func main() {
 	}
 
 	handlers, err := controllers.New(controllers.Config{
-		DB:                      dbConn,
-		QueueClient:             client,
-		AnalysisResults:         controllers.NewGormAnalysisResultRepository(dbConn),
-		Profiles:                controllers.NewGormProfileRepository(dbConn),
-		HighlightResults:        controllers.NewGormHighlightResultRepository(dbConn),
-		StorageClient:           storageClient,
-		ImageParser:             imageParser,
-		TextParser:              textParser,
-		BucketName:              cfg.GCSBucketName,
-		GitCommit:               GitCommit,
-		EnableChunkReanalysis:   cfg.ChunkReanalysisEnabled,
-		EnableSessionReanalysis: cfg.SessionReanalysisEnabled,
-		RecognitionReviewModel:  cfg.GeminiModel,
-		EnableAgenticHighlights: cfg.AgenticHighlightsEnabled,
+		DB:                         dbConn,
+		QueueClient:                client,
+		AnalysisResults:            controllers.NewGormAnalysisResultRepository(dbConn),
+		Profiles:                   controllers.NewGormProfileRepository(dbConn),
+		HighlightResults:           controllers.NewGormHighlightResultRepository(dbConn),
+		StorageClient:              storageClient,
+		ImageParser:                imageParser,
+		TextParser:                 textParser,
+		BucketName:                 cfg.GCSBucketName,
+		GitCommit:                  GitCommit,
+		EnableChunkReanalysis:      cfg.ChunkReanalysisEnabled,
+		EnableSessionReanalysis:    cfg.SessionReanalysisEnabled,
+		HistorySummaryCacheEnabled: &cfg.HistorySummaryCacheEnabled,
+		RecognitionReviewModel:     cfg.GeminiModel,
+		EnableAgenticHighlights:    cfg.AgenticHighlightsEnabled,
 
 		SessionReanalysisDailyQuota: cfg.SessionReanalysisDailyQuota,
 	})

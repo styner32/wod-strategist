@@ -123,10 +123,23 @@ export interface SessionFatigue {
   guidance?: SessionFatigueGuidance;
 }
 
+export type HistoryMissingFilter = "any" | "effort" | "performance";
+
+export interface HistoryInputStatus {
+  effort_eligible: boolean;
+  effort: number | null;
+  effort_missing: boolean;
+  exercise_interval_count: number;
+  confirmed_interval_count: number;
+  needs_confirmation_count: number;
+  performance_missing: boolean;
+}
+
 export interface AnalysisResult {
   analysis_type?: string;
   analysis_summary?: import("./enrichment").AnalysisSummary;
   heart_rate?: HeartRateSummary;
+  input_status?: HistoryInputStatus;
   id: number;
   session_id: string;
   profile_id: number;
@@ -432,10 +445,11 @@ export const historyApi = {
   getPerformanceBenchmarks: (profileId: number, movement: string) => api.get<PerformanceBenchmarksResponse>(`/performance-benchmarks?${new URLSearchParams({ profile_id: String(profileId), movement })}`),
   archive: (id: number) => api.post<{ message: string }>(`/history/${id}/archive`),
   unarchive: (id: number) => api.post<{ message: string }>(`/history/${id}/unarchive`),
-  list: (profileId: number, beforeId?: number, limit?: number, archived = false) => {
+  list: (profileId: number, beforeId?: number, limit?: number, archived = false, missing?: HistoryMissingFilter) => {
     const params = new URLSearchParams();
     params.append("profile_id", String(profileId));
     if (archived) params.append("archived", "true");
+    if (missing) params.append("missing", missing);
     if (beforeId !== undefined) {
       params.append("before_id", String(beforeId));
     }

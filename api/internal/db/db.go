@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -145,7 +146,20 @@ type AnalysisResult struct {
 	CreatedAt              time.Time        `json:"created_at"`
 	UpdatedAt              time.Time        `json:"updated_at"`
 
-	HeartRate *HeartRateSummaryDTO `gorm:"-" json:"heart_rate,omitempty"`
+	HeartRate       *HeartRateSummaryDTO `gorm:"-" json:"heart_rate,omitempty"`
+	InputStatus     *HistoryInputStatus  `gorm:"-" json:"input_status,omitempty"`
+	Highlights      *[]HighlightResult   `gorm:"-" json:"highlights,omitempty"`
+	ActivitySummary any                  `gorm:"-" json:"activity_summary,omitempty" swaggertype:"object"`
+}
+
+type HistoryInputStatus struct {
+	EffortEligible         bool `json:"effort_eligible"`
+	Effort                 *int `json:"effort"`
+	EffortMissing          bool `json:"effort_missing"`
+	ExerciseIntervalCount  int  `json:"exercise_interval_count"`
+	ConfirmedIntervalCount int  `json:"confirmed_interval_count"`
+	NeedsConfirmationCount int  `json:"needs_confirmation_count"`
+	PerformanceMissing     bool `json:"performance_missing"`
 }
 
 type FatigueGuidance struct {
@@ -228,10 +242,71 @@ type TokenUsage struct {
 	PromptTokens    int64                `gorm:"not null;default:0" json:"prompt_tokens"`
 	CandidateTokens int64                `gorm:"not null;default:0" json:"candidate_tokens"`
 	TotalTokens     int64                `gorm:"not null;default:0" json:"total_tokens"`
+	ThinkingTokens  int64                `json:"-"`
+	ToolUseTokens   int64                `json:"-"`
+	CachedTokens    int64                `json:"-"`
+	UnmeasuredCalls int16                `json:"-"`
 	CreatedAt       time.Time            `json:"created_at"`
 	UsageMetadata   NullableJSONDocument `json:"usage_metadata"`
 	RequestKey      *string              `json:"request_key,omitempty"`
 	UserID          *uint                `json:"user_id,omitempty"`
+}
+
+// SyncUsageExtras derives scalar token subtotals and unmeasured-call flag from
+// UsageMetadata using the exact same rules as cost.UsageExtras.
+func (u *TokenUsage) SyncUsageExtras() {
+	if u == nil || len(u.UsageMetadata) == 0 {
+		return
+	}
+	var parsed struct {
+		Input    *int64 `json:"promptTokenCount"`
+		Output   *int64 `json:"candidatesTokenCount"`
+		Thinking *int64 `json:"thoughtsTokenCount"`
+		ToolUse  *int64 `json:"toolUsePromptTokenCount"`
+		Cached   *int64 `json:"cachedContentTokenCount"`
+		Total    *int64 `json:"totalTokenCount"`
+	}
+	if json.Unmarshal(u.UsageMetadata, &parsed) != nil {
+		u.ThinkingTokens = 0
+		u.ToolUseTokens = 0
+		u.CachedTokens = 0
+		u.UnmeasuredCalls = 1
+		return
+	}
+	var rawMap map[string]any
+	if json.Unmarshal(u.UsageMetadata, &rawMap) != nil || rawMap == nil {
+		u.ThinkingTokens = 0
+		u.ToolUseTokens = 0
+		u.CachedTokens = 0
+		if string(u.UsageMetadata) != "null" {
+			u.UnmeasuredCalls = 1
+		} else {
+			u.UnmeasuredCalls = 0
+		}
+		return
+	}
+	u.ThinkingTokens = 0
+	if parsed.Thinking != nil {
+		u.ThinkingTokens = *parsed.Thinking
+	}
+	u.ToolUseTokens = 0
+	if parsed.ToolUse != nil {
+		u.ToolUseTokens = *parsed.ToolUse
+	}
+	u.CachedTokens = 0
+	if parsed.Cached != nil {
+		u.CachedTokens = *parsed.Cached
+	}
+	if parsed.Input == nil || parsed.Output == nil || parsed.Total == nil {
+		u.UnmeasuredCalls = 1
+	} else {
+		u.UnmeasuredCalls = 0
+	}
+}
+
+func (u *TokenUsage) BeforeSave(_ *gorm.DB) error {
+	u.SyncUsageExtras()
+	return nil
 }
 
 type GeminiThoughtLog struct {
@@ -261,9 +336,11 @@ func (s SessionStatus) String() string {
 }
 
 type Session struct {
-	WODEvaluationVersion int                  `json:"wod_evaluation_version"`
-	Effort               *int                 `json:"effort"`
-	ActivitySummary      NullableJSONDocument `json:"activity_summary,omitempty" swaggertype:"object"`
+	WODEvaluationVersion        int                  `json:"wod_evaluation_version"`
+	Effort                      *int                 `json:"effort"`
+	ActivitySummary             NullableJSONDocument `json:"activity_summary,omitempty" swaggertype:"object"`
+	ActivityReviewAttempts      NullableJSONDocument `gorm:"column:activity_review_attempts;type:jsonb" json:"-"`
+	ActivitySummaryCacheVersion int                  `gorm:"column:activity_summary_cache_version" json:"-"`
 
 	ID             uint          `gorm:"primaryKey" json:"id"`
 	SessionID      string        `gorm:"uniqueIndex;not null" json:"session_id"`
@@ -287,13 +364,15 @@ type SessionAppearanceHint struct {
 }
 
 const (
-	// DefaultMaxOpenConns keeps total client connections within 20 so shared
-	// minimal PostgreSQL tiers (e.g. db-f1-micro: 25 max_connections, ~22 usable)
-	// retain headroom. Server (12) + Worker (8) split this budget to 20 total.
-	DefaultMaxOpenConns       = 20
-	DefaultServerMaxOpenConns = 12
-	DefaultWorkerMaxOpenConns = 8
-	DefaultConnMaxIdleTime    = 5 * time.Minute
+	// DefaultMaxOpenConns budgets total client connections within 18 across
+	// max 2 API instances (2 * 6 = 12) + 1 Worker instance (6) so minimal
+	// PostgreSQL tiers (e.g. db-f1-micro: 25 max_connections, ~22 usable)
+	// retain headroom.
+	DefaultMaxOpenConns       = 18
+	DefaultServerMaxOpenConns = 6
+	DefaultWorkerMaxOpenConns = 6
+	DefaultMaxIdleConns       = 2
+	DefaultConnMaxIdleTime    = 30 * time.Second
 	DefaultConnMaxLifetime    = 30 * time.Minute
 )
 
@@ -308,9 +387,10 @@ func normalizePoolConfig(pool PoolConfig) PoolConfig {
 	if pool.MaxOpenConns <= 0 {
 		pool.MaxOpenConns = DefaultMaxOpenConns
 	}
-	// Match MaxIdleConns to MaxOpenConns by default so database/sql retains warm
-	// connections for reuse instead of closing down to Go's default of 2 after bursts.
-	if pool.MaxIdleConns <= 0 || pool.MaxIdleConns > pool.MaxOpenConns {
+	if pool.MaxIdleConns <= 0 {
+		pool.MaxIdleConns = DefaultMaxIdleConns
+	}
+	if pool.MaxIdleConns > pool.MaxOpenConns {
 		pool.MaxIdleConns = pool.MaxOpenConns
 	}
 	if pool.ConnMaxIdleTime <= 0 {
@@ -346,7 +426,9 @@ func ConnectWithPool(databaseURL string, pool PoolConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("DATABASE_URL is not set")
 	}
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+		Logger: NewGormLogger(logger.Log, SlowSQLThreshold),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}

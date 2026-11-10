@@ -11,13 +11,303 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
+	"github.com/wod-strategist/api/internal/activity"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
+	"github.com/wod-strategist/api/internal/wodeval"
 	"github.com/wod-strategist/api/internal/worker"
+	"github.com/wod-strategist/api/internal/workoutprogress"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+func matchesHistoryMissingFilter(status *db.HistoryInputStatus, missing string) bool {
+	if status == nil {
+		return false
+	}
+	switch missing {
+	case "effort":
+		return status.EffortMissing
+	case "performance":
+		return status.PerformanceMissing
+	case "any":
+		return status.EffortMissing || status.PerformanceMissing
+	default:
+		return true
+	}
+}
+
+func computeHistoryInputStatus(
+	row db.AnalysisResult,
+	session *db.Session,
+	progress *workoutprogress.Progress,
+	records []workoutprogress.Record,
+) *db.HistoryInputStatus {
+	if row.ArchivedAt != nil {
+		return nil
+	}
+	completed := strings.EqualFold(strings.TrimSpace(row.Status), "COMPLETED")
+	effortEligible := session != nil && session.WorkoutType == "wod" && session.WODEvaluationVersion == wodeval.Version
+	var effort *int
+	if effortEligible && session.Effort != nil {
+		val := *session.Effort
+		effort = &val
+	}
+	status := &db.HistoryInputStatus{
+		EffortEligible: effortEligible,
+		Effort:         effort,
+		EffortMissing:  completed && effortEligible && effort == nil,
+	}
+	if completed && progress != nil {
+		summary := workoutprogress.SummarizeConfirmation(*progress, records)
+		status.ExerciseIntervalCount = summary.ExerciseIntervalCount
+		status.ConfirmedIntervalCount = summary.ConfirmedIntervalCount
+		status.NeedsConfirmationCount = summary.NeedsConfirmationCount
+		status.PerformanceMissing = summary.PerformanceMissing
+	}
+	return status
+}
+
+// historyOmittedAnalysisColumns excludes unused JSON/TOAST columns from GET /history
+// while retaining sensor_processing and sensor_summary for freshness verification.
+var historyOmittedAnalysisColumns = []string{
+	"sensor_timeline",
+	"agentic_highlight_analysis",
+	"injury_output_alt",
+}
+
+func populateHistoryInputStatus(ctx context.Context, database *gorm.DB, profileID uint, results []db.AnalysisResult) (map[string]db.Session, error) {
+	if database == nil || len(results) == 0 {
+		for i := range results {
+			results[i].WorkoutProgress = nil
+		}
+		return nil, nil
+	}
+	sessionIDs := make([]string, 0, len(results))
+	seenSessions := make(map[string]struct{}, len(results))
+	decodedProgress := make(map[int]workoutprogress.Progress)
+	progressSessionIDs := make([]string, 0, len(results))
+	seenProgressSessions := make(map[string]struct{}, len(results))
+
+	for i := range results {
+		if results[i].ArchivedAt != nil {
+			results[i].WorkoutProgress = nil
+			continue
+		}
+		sid := strings.TrimSpace(results[i].SessionID)
+		if sid == "" {
+			results[i].WorkoutProgress = nil
+			continue
+		}
+		if _, ok := seenSessions[sid]; !ok {
+			seenSessions[sid] = struct{}{}
+			sessionIDs = append(sessionIDs, sid)
+		}
+		if strings.EqualFold(strings.TrimSpace(results[i].Status), "COMPLETED") && len(results[i].WorkoutProgress) > 0 {
+			if progress, err := workoutprogress.Decode(results[i].WorkoutProgress); err == nil {
+				decodedProgress[i] = progress
+				if _, ok := seenProgressSessions[sid]; !ok {
+					seenProgressSessions[sid] = struct{}{}
+					progressSessionIDs = append(progressSessionIDs, sid)
+				}
+			}
+		}
+	}
+	if len(sessionIDs) == 0 {
+		for i := range results {
+			results[i].WorkoutProgress = nil
+		}
+		return nil, nil
+	}
+
+	var sessions []db.Session
+	if err := database.WithContext(ctx).
+		Select("session_id", "profile_id", "workout_type", "wod_evaluation_version", "effort", "wod_description", "activity_summary", "activity_summary_cache_version").
+		Where("profile_id = ? AND session_id IN ?", profileID, sessionIDs).
+		Find(&sessions).Error; err != nil {
+		return nil, err
+	}
+	sessionByID := make(map[string]db.Session, len(sessions))
+	for _, s := range sessions {
+		sessionByID[strings.TrimSpace(s.SessionID)] = s
+	}
+
+	recordsBySession := make(map[string][]workoutprogress.Record, len(progressSessionIDs))
+	if len(progressSessionIDs) > 0 {
+		var recordRows []db.PerformanceRecord
+		if err := database.WithContext(ctx).
+			Where("profile_id = ? AND session_id IN ?", profileID, progressSessionIDs).
+			Order("start_secs ASC, id ASC").
+			Find(&recordRows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range recordRows {
+			sid := strings.TrimSpace(row.SessionID)
+			recordsBySession[sid] = append(recordsBySession[sid], performanceRecordResponse(row))
+		}
+	}
+
+	for i := range results {
+		if results[i].ArchivedAt != nil {
+			results[i].WorkoutProgress = nil
+			continue
+		}
+		sid := strings.TrimSpace(results[i].SessionID)
+		var sessPtr *db.Session
+		if s, ok := sessionByID[sid]; ok {
+			if strings.TrimSpace(results[i].WODDescription) == "" && strings.TrimSpace(s.WODDescription) != "" {
+				results[i].WODDescription = s.WODDescription
+			}
+			sessCopy := s
+			sessPtr = &sessCopy
+		}
+		var progPtr *workoutprogress.Progress
+		if progress, ok := decodedProgress[i]; ok {
+			progCopy := progress
+			progPtr = &progCopy
+		}
+		results[i].InputStatus = computeHistoryInputStatus(results[i], sessPtr, progPtr, recordsBySession[sid])
+		results[i].WorkoutProgress = nil
+	}
+	return sessionByID, nil
+}
+
+type historySummaryMetrics struct {
+	SessionsTotal    int
+	SummaryCacheHits int
+	SummaryRebuilt   int
+	ChunkRowsLoaded  int
+	SummaryMs        int64
+}
+
+func populateHistorySummariesAndHighlights(
+	ctx context.Context,
+	database *gorm.DB,
+	profileID uint,
+	results []db.AnalysisResult,
+	sessionByID map[string]db.Session,
+	useSummaryCache bool,
+) (historySummaryMetrics, error) {
+	var metrics historySummaryMetrics
+	if database == nil || len(results) == 0 {
+		return metrics, nil
+	}
+	activeSessionIDs := make([]string, 0, len(results))
+	seenActive := make(map[string]struct{}, len(results))
+	highlightSessionIDs := make([]string, 0, len(results))
+	seenHighlight := make(map[string]struct{}, len(results))
+
+	for i := range results {
+		if results[i].ArchivedAt != nil {
+			continue
+		}
+		sid := strings.TrimSpace(results[i].SessionID)
+		if sid == "" {
+			continue
+		}
+		if _, ok := seenActive[sid]; !ok {
+			seenActive[sid] = struct{}{}
+			activeSessionIDs = append(activeSessionIDs, sid)
+		}
+		if strings.EqualFold(strings.TrimSpace(results[i].Status), "COMPLETED") && results[i].AnalysisType == db.AnalysisTypeWOD {
+			if _, ok := seenHighlight[sid]; !ok {
+				seenHighlight[sid] = struct{}{}
+				highlightSessionIDs = append(highlightSessionIDs, sid)
+			}
+		}
+	}
+	metrics.SessionsTotal = len(activeSessionIDs)
+	if len(activeSessionIDs) == 0 {
+		return metrics, nil
+	}
+
+	var summaryElapsed time.Duration
+	summaryStart := time.Now()
+	summaryBySession := make(map[string]activity.Summary, len(activeSessionIDs))
+	uncachedSessionIDs := make([]string, 0, len(activeSessionIDs))
+	for _, sid := range activeSessionIDs {
+		if useSummaryCache {
+			if sess, ok := sessionByID[sid]; ok && sess.ActivitySummaryCacheVersion == activity.SummaryCacheVersion {
+				if cached, valid := activity.DecodeValidCachedSummary(sess.ActivitySummary); valid {
+					summaryBySession[sid] = cached
+					metrics.SummaryCacheHits++
+					continue
+				}
+			}
+		}
+		uncachedSessionIDs = append(uncachedSessionIDs, sid)
+	}
+	summaryElapsed += time.Since(summaryStart)
+
+	if len(uncachedSessionIDs) > 0 {
+		var chunkRows []db.ChunkAnalysisResult
+		if err := database.WithContext(ctx).
+			Select("id", "profile_id", "session_id", "file_path", "exercise_type", "status", "start_secs", "end_secs", "media_start_secs", "media_end_secs", "movement_observations").
+			Where("profile_id = ? AND session_id IN ?", profileID, uncachedSessionIDs).
+			Find(&chunkRows).Error; err != nil {
+			return metrics, err
+		}
+		metrics.ChunkRowsLoaded = len(chunkRows)
+		rebuildStart := time.Now()
+		chunksBySession := make(map[string][]db.ChunkAnalysisResult, len(uncachedSessionIDs))
+		for _, row := range chunkRows {
+			sid := strings.TrimSpace(row.SessionID)
+			chunksBySession[sid] = append(chunksBySession[sid], row)
+		}
+		for _, sid := range uncachedSessionIDs {
+			var stored activity.Summary
+			if sess, ok := sessionByID[sid]; ok && len(sess.ActivitySummary) > 0 {
+				_ = json.Unmarshal(sess.ActivitySummary, &stored)
+			}
+			summary := activity.Build(chunksBySession[sid], &stored)
+			summary.Reviews = []activity.ReviewedChunk{}
+			summaryBySession[sid] = summary
+			metrics.SummaryRebuilt++
+		}
+		summaryElapsed += time.Since(rebuildStart)
+	}
+	metrics.SummaryMs = summaryElapsed.Milliseconds()
+
+	highlightsBySession := make(map[string][]db.HighlightResult, len(highlightSessionIDs))
+	if len(highlightSessionIDs) > 0 {
+		var highlightRows []db.HighlightResult
+		if err := database.WithContext(ctx).
+			Where("profile_id = ? AND session_id IN ? AND status = ?", profileID, highlightSessionIDs, "COMPLETED").
+			Order("created_at desc, id desc").
+			Find(&highlightRows).Error; err != nil {
+			return metrics, err
+		}
+		for _, row := range highlightRows {
+			sid := strings.TrimSpace(row.SessionID)
+			highlightsBySession[sid] = append(highlightsBySession[sid], row)
+		}
+	}
+
+	for i := range results {
+		if results[i].ArchivedAt != nil {
+			continue
+		}
+		sid := strings.TrimSpace(results[i].SessionID)
+		if sid == "" {
+			continue
+		}
+		if summary, ok := summaryBySession[sid]; ok {
+			summaryCopy := summary
+			results[i].ActivitySummary = &summaryCopy
+		}
+		if _, ok := seenHighlight[sid]; ok && strings.EqualFold(strings.TrimSpace(results[i].Status), "COMPLETED") && results[i].AnalysisType == db.AnalysisTypeWOD {
+			list := highlightsBySession[sid]
+			if list == nil {
+				list = []db.HighlightResult{}
+			} else {
+				list = append([]db.HighlightResult(nil), list...)
+			}
+			results[i].Highlights = &list
+		}
+	}
+	return metrics, nil
+}
 
 func (ctl *Controller) GetHistory(c *gin.Context) {
 	if c.Query("profile_id") == "" {
@@ -37,12 +327,24 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "archived must be true or false"})
 		return
 	}
-	query := ctl.db.WithContext(c.Request.Context()).Where("profile_id = ?", pid)
-	if archived == "true" {
-		query = query.Where("archived_at IS NOT NULL")
-	} else {
-		query = query.Where("archived_at IS NULL")
+	missing := strings.TrimSpace(c.Query("missing"))
+	switch missing {
+	case "", "any", "effort", "performance":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing must be any, effort, or performance"})
+		return
 	}
+	if missing != "" && archived == "true" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing filter cannot be combined with archived=true"})
+		return
+	}
+
+	ctx, qStats := db.WithQueryStats(c.Request.Context())
+	c.Request = c.Request.WithContext(ctx)
+	qBefore := qStats.Snapshot().Duration
+
+	results := []db.AnalysisResult{}
+	var sessionByID map[string]db.Session
 	from, to := c.Query("from"), c.Query("to")
 	if from != "" && to != "" {
 		start, e1 := time.Parse("2006-01-02", from)
@@ -55,7 +357,36 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date, expected YYYY-MM-DD"})
 			return
 		}
-		query = query.Where("created_at >= ? AND created_at < ?", start, end.AddDate(0, 0, 1)).Order("created_at desc")
+		query := ctl.db.WithContext(ctx).Omit(historyOmittedAnalysisColumns...).Where("profile_id = ?", pid)
+		if archived == "true" {
+			query = query.Where("archived_at IS NOT NULL")
+		} else {
+			query = query.Where("archived_at IS NULL")
+		}
+		if missing != "" {
+			query = query.Where("UPPER(status) = ?", "COMPLETED")
+		}
+		if err := query.Where("created_at >= ? AND created_at < ?", start, end.AddDate(0, 0, 1)).Order("created_at desc").Find(&results).Error; err != nil {
+			logger.Log.Error("failed to fetch history", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+			return
+		}
+		sessionsMap, err := populateHistoryInputStatus(ctx, ctl.db, uint(pid), results)
+		if err != nil {
+			logger.Log.Error("failed to populate history input status", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+			return
+		}
+		sessionByID = sessionsMap
+		if missing != "" {
+			filtered := results[:0]
+			for i := range results {
+				if matchesHistoryMissingFilter(results[i].InputStatus, missing) {
+					filtered = append(filtered, results[i])
+				}
+			}
+			results = filtered
+		}
 	} else {
 		limit, e := strconv.Atoi(c.Query("limit"))
 		if e != nil || limit <= 0 {
@@ -64,19 +395,110 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		if limit > 100 {
 			limit = 100
 		}
+		var beforeID uint64
 		if before, e := strconv.ParseUint(c.Query("before_id"), 10, 32); e == nil && before > 0 {
-			query = query.Where("id < ?", before)
+			beforeID = before
 		}
-		query = query.Order("id desc").Limit(limit)
+		if missing == "" {
+			query := ctl.db.WithContext(ctx).Omit(historyOmittedAnalysisColumns...).Where("profile_id = ?", pid)
+			if archived == "true" {
+				query = query.Where("archived_at IS NOT NULL")
+			} else {
+				query = query.Where("archived_at IS NULL")
+			}
+			if beforeID > 0 {
+				query = query.Where("id < ?", beforeID)
+			}
+			if err := query.Order("id desc").Limit(limit).Find(&results).Error; err != nil {
+				logger.Log.Error("failed to fetch history", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+				return
+			}
+			sessionsMap, err := populateHistoryInputStatus(ctx, ctl.db, uint(pid), results)
+			if err != nil {
+				logger.Log.Error("failed to populate history input status", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+				return
+			}
+			sessionByID = sessionsMap
+		} else {
+			scanLimit := limit * 3
+			if scanLimit < 60 {
+				scanLimit = 60
+			}
+			if scanLimit > 200 {
+				scanLimit = 200
+			}
+			cursor := beforeID
+			results = make([]db.AnalysisResult, 0, limit)
+			sessionByID = make(map[string]db.Session, limit)
+			for len(results) < limit {
+				batchQuery := ctl.db.WithContext(ctx).
+					Omit(historyOmittedAnalysisColumns...).
+					Where("profile_id = ? AND archived_at IS NULL AND UPPER(status) = ?", pid, "COMPLETED")
+				if cursor > 0 {
+					batchQuery = batchQuery.Where("id < ?", cursor)
+				}
+				var batch []db.AnalysisResult
+				if err := batchQuery.Order("id desc").Limit(scanLimit).Find(&batch).Error; err != nil {
+					logger.Log.Error("failed to fetch history", zap.Error(err))
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+					return
+				}
+				if len(batch) == 0 {
+					break
+				}
+				batchSessions, err := populateHistoryInputStatus(ctx, ctl.db, uint(pid), batch)
+				if err != nil {
+					logger.Log.Error("failed to populate history input status", zap.Error(err))
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+					return
+				}
+				for i := range batch {
+					if matchesHistoryMissingFilter(batch[i].InputStatus, missing) {
+						sid := strings.TrimSpace(batch[i].SessionID)
+						if sess, ok := batchSessions[sid]; ok {
+							sessionByID[sid] = sess
+						}
+						results = append(results, batch[i])
+						if len(results) == limit {
+							break
+						}
+					}
+				}
+				cursor = uint64(batch[len(batch)-1].ID)
+				if len(batch) < scanLimit {
+					break
+				}
+			}
+		}
 	}
-	results := []db.AnalysisResult{}
-	if err := query.Find(&results).Error; err != nil {
-		logger.Log.Error("failed to fetch history", zap.Error(err))
+	summaryMetrics, err := populateHistorySummariesAndHighlights(ctx, ctl.db, uint(pid), results, sessionByID, ctl.historySummaryCacheEnabled)
+	if err != nil {
+		logger.Log.Error("failed to populate history summaries and highlights", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
 		return
 	}
-	populateMissingWODDescriptions(c.Request.Context(), ctl.db, results)
-	c.JSON(http.StatusOK, compactAnalysisSummaries(normalizeHighlightResultsForResponseWithSchema(results, workoutLoadSchemaVersion(c))))
+	populateMissingWODDescriptions(ctx, ctl.db, results)
+	respPayload := compactAnalysisSummaries(normalizeHighlightResultsForResponseWithSchema(results, workoutLoadSchemaVersion(c)))
+	encoded, err := json.Marshal(respPayload)
+	if err != nil {
+		logger.Log.Error("failed to marshal history response", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+		return
+	}
+	dbQueryMs := (qStats.Snapshot().Duration - qBefore).Milliseconds()
+	logger.Log.Info("history fetched",
+		zap.Uint64("profile_id", pid),
+		zap.Int("sessions_total", summaryMetrics.SessionsTotal),
+		zap.Int("summary_cache_hits", summaryMetrics.SummaryCacheHits),
+		zap.Int("summary_rebuilt", summaryMetrics.SummaryRebuilt),
+		zap.Int("chunk_rows_loaded", summaryMetrics.ChunkRowsLoaded),
+		zap.Int64("db_query_ms", dbQueryMs),
+		zap.Int64("summary_ms", summaryMetrics.SummaryMs),
+		zap.Int("response_bytes", len(encoded)),
+	)
+	c.Data(http.StatusOK, "application/json; charset=utf-8", encoded)
 }
 
 var errSessionProcessingActive = errors.New("session processing is active")
@@ -151,8 +573,25 @@ func (ctl *Controller) setHistoryArchived(c *gin.Context, archive bool) {
 					return err
 				}
 			}
-			if err := tx.Exec(`UPDATE sessions SET activity_summary = jsonb_set(activity_summary, '{review_state}', '"unavailable"'::jsonb), updated_at = ? WHERE session_id = ? AND profile_id = ? AND activity_summary->>'review_state' = 'provisional'`, now, row.SessionID, row.ProfileID).Error; err != nil {
-				return err
+			var sess db.Session
+			sessErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Select("id", "activity_summary", "activity_summary_cache_version").
+				Where("session_id = ? AND profile_id = ?", row.SessionID, row.ProfileID).
+				First(&sess).Error
+			if sessErr != nil && !errors.Is(sessErr, gorm.ErrRecordNotFound) {
+				return sessErr
+			}
+			if sessErr == nil {
+				if err := tx.Exec(
+					`UPDATE sessions
+					 SET activity_summary = jsonb_set(activity_summary, '{review_state}', '"unavailable"'::jsonb),
+					     activity_summary_cache_version = CASE WHEN activity_summary_cache_version = ? THEN ? ELSE 0 END,
+					     updated_at = ?
+					 WHERE id = ? AND activity_summary->>'review_state' = 'provisional'`,
+					activity.SummaryCacheVersion, activity.SummaryCacheVersion, now, sess.ID,
+				).Error; err != nil {
+					return err
+				}
 			}
 		} else if err := tx.Model(&db.AnalysisResult{}).Where("id = ?", id).Updates(map[string]any{"archived_at": nil, "updated_at": now}).Error; err != nil {
 			return err

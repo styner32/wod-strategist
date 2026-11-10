@@ -9,6 +9,11 @@
 - Do not rename unrelated symbols or reformat unrelated files.
 - Reuse existing helpers, clients, and package boundaries.
 
+## Commit protection
+- Run `make install-hooks` once per clone to enable `.githooks/pre-commit` (requires Node.js). The Git config is shared with linked worktrees; each checkout needs these hook files.
+- The hook blocks known private agent settings, MCP configs, credentials, and history paths in the commit index. The path list is in `scripts/check-private-files.cjs`; shared rules and templates remain allowed.
+- This is a local path check, not secret-content scanning; hooks can be bypassed. Installation refuses to hide existing hooks.
+
 ## Output requirements
 - When running `gcloud` commands (via MCP or otherwise), always show the exact command in the response.
 - When finishing a task, report:
