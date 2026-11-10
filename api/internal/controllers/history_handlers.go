@@ -309,6 +309,8 @@ func populateHistorySummariesAndHighlights(
 	return metrics, nil
 }
 
+// Main Handler for GetHistory
+// /api/v1/history
 func (ctl *Controller) GetHistory(c *gin.Context) {
 	if c.Query("profile_id") == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})

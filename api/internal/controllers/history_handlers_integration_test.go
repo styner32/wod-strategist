@@ -22,6 +22,7 @@ var _ = Describe("GET /api/v1/history", func() {
 	var router *gin.Engine
 	var profileID uint
 	var user db.User
+
 	BeforeEach(func() {
 		profile, owner, testRouter := historyArchiveOwner()
 		profileID, user, router = profile.ID, owner, testRouter
