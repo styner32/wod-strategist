@@ -18,8 +18,9 @@ const (
 // generateContent retains only usage metadata for accounting, including empty or
 // rejected responses. The recorder is per request; headers and keys never persist.
 func (c *Client) generateContent(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) (*genai.GenerateContentResponse, *TokenUsage, error) {
-	argon := strings.EqualFold(strings.TrimSpace(model), ModelArgon4)
-	if argon {
+	frontier4 := isGemini4FrontierModel(model)
+	gemini4 := isGemini4Model(model)
+	if frontier4 {
 		// v1.71 does not support long-decode continuation. Bound one request and
 		// reject truncated output rather than passing it to downstream parsers.
 		bounded := genai.GenerateContentConfig{}
@@ -41,19 +42,31 @@ func (c *Client) generateContent(ctx context.Context, model string, contents []*
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, argonRequestTimeout)
 		defer cancel()
-	} else if c != nil && c.includeThoughts && supportsThinking(model) {
-		cfgCopy := genai.GenerateContentConfig{}
-		if config != nil {
-			cfgCopy = *config
+	} else {
+		needStripBudget := gemini4 && config != nil && config.ThinkingConfig != nil && config.ThinkingConfig.ThinkingBudget != nil
+		needThoughts := c != nil && c.includeThoughts && supportsThinking(model) && (config == nil || config.ThinkingConfig == nil || !config.ThinkingConfig.IncludeThoughts)
+		if needStripBudget || needThoughts {
+			cfgCopy := genai.GenerateContentConfig{}
+			if config != nil {
+				cfgCopy = *config
+			}
+			var thinking genai.ThinkingConfig
+			if cfgCopy.ThinkingConfig != nil {
+				thinking = *cfgCopy.ThinkingConfig
+			}
+			if gemini4 {
+				thinking.ThinkingBudget = nil
+			}
+			if c != nil && c.includeThoughts && supportsThinking(model) {
+				thinking.IncludeThoughts = true
+			}
+			if thinking.ThinkingLevel == "" && thinking.ThinkingBudget == nil && !thinking.IncludeThoughts {
+				cfgCopy.ThinkingConfig = nil
+			} else {
+				cfgCopy.ThinkingConfig = &thinking
+			}
+			config = &cfgCopy
 		}
-		if cfgCopy.ThinkingConfig == nil {
-			cfgCopy.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true}
-		} else if !cfgCopy.ThinkingConfig.IncludeThoughts {
-			thinking := *cfgCopy.ThinkingConfig
-			thinking.IncludeThoughts = true
-			cfgCopy.ThinkingConfig = &thinking
-		}
-		config = &cfgCopy
 	}
 	captured := &VideoModeResult{}
 	retryCapture := &retryAfterCapture{}
@@ -88,14 +101,14 @@ func (c *Client) generateContent(ctx context.Context, model string, contents []*
 		}
 	}
 	usage := UsageFromComparisonWithThoughts(envelope.Usage, model, thoughts.String())
-	if argon && err == nil {
+	if frontier4 && err == nil {
 		if envelope.ContinuationToken != "" {
-			return nil, usage, fmt.Errorf("Argon output is incomplete: continuation is required")
+			return nil, usage, fmt.Errorf("%s output is incomplete: continuation is required", model)
 		}
 		if resp != nil {
 			for _, candidate := range resp.Candidates {
 				if candidate != nil && candidate.FinishReason == genai.FinishReasonMaxTokens {
-					return nil, usage, fmt.Errorf("Argon output is incomplete: MAX_TOKENS")
+					return nil, usage, fmt.Errorf("%s output is incomplete: MAX_TOKENS", model)
 				}
 			}
 		}

@@ -49,6 +49,64 @@ var _ = Describe("Argon dated pricing", func() {
 	})
 })
 
+var _ = Describe("Carbon and Hydrogen pricing", func() {
+	DescribeTable("prices gemini-4-carbon by the recorded UTC date, not the query date", func(at time.Time, inputRate, outputRate float64) {
+		rate := cost.GetModelRateAt(" GEMINI-4-CARBON ", at)
+		Expect(rate.PromptPerMillion).To(Equal(inputRate))
+		Expect(rate.CandidatePerMillion).To(Equal(outputRate))
+	},
+		Entry("last promotional instant", cost.ArgonStandardPricingStartsAt.Add(-time.Nanosecond), 2.0, 10.0),
+		Entry("first standard instant", cost.ArgonStandardPricingStartsAt, 4.0, 20.0),
+		Entry("KST representation of the same boundary", time.Date(2026, 12, 1, 9, 0, 0, 0, time.FixedZone("KST", 9*60*60)), 4.0, 20.0),
+		Entry("missing date uses standard rate", time.Time{}, 4.0, 20.0),
+	)
+
+	It("returns $1.50/$7.50 for gemini-4-hydrogen", func() {
+		rate := cost.GetModelRate("gemini-4-hydrogen")
+		Expect(rate.PromptPerMillion).To(Equal(1.50))
+		Expect(rate.CandidatePerMillion).To(Equal(7.50))
+
+		usd, krw := cost.CalculateTokensCost("gemini-4-hydrogen", 1000000, 1000000)
+		Expect(usd).To(Equal(9.00))
+		Expect(krw).To(Equal(9.00 * cost.KRWPerUSD))
+	})
+
+	It("combines Carbon dated periods, Batch 50% discount, and Hydrogen rows", func() {
+		intro := cost.ArgonStandardPricingStartsAt.Add(-time.Second)
+		standard := cost.ArgonStandardPricingStartsAt
+		rows := []db.TokenUsage{
+			{Model: "gemini-4-carbon", TaskType: "video:segment", CreatedAt: intro, PromptTokens: 1000000, CandidateTokens: 500000, TotalTokens: 2000000,
+				UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":1000000,"candidatesTokenCount":500000,"thoughtsTokenCount":500000,"toolUsePromptTokenCount":250000,"cachedContentTokenCount":100000,"totalTokenCount":2250000}`)},
+			{Model: "gemini-4-carbon", TaskType: "video:segment", CreatedAt: standard, PromptTokens: 1000000, CandidateTokens: 1000000, TotalTokens: 2000000},
+			{Model: "gemini-4-carbon", TaskType: "video:segment:batch", CreatedAt: standard, PromptTokens: 1000000, CandidateTokens: 1000000, TotalTokens: 2000000},
+			{Model: "gemini-4-hydrogen", TaskType: "video:index", CreatedAt: intro, PromptTokens: 1000000, CandidateTokens: 500000, TotalTokens: 2000000,
+				UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":1000000,"candidatesTokenCount":500000,"thoughtsTokenCount":500000,"totalTokenCount":2000000}`)},
+		}
+		// Carbon intro: 1.25M*$2 + 1M*$10 = $12.50
+		// Carbon standard: $4 + $20 = $24.00
+		// Carbon standard batch: 50% of $24 = $12.00
+		// Hydrogen: 1M*$1.50 + 1M*$7.50 = $9.00
+		// Total = $57.50
+		session := cost.CalculateSessionCost("carbon-hydrogen", rows)
+		Expect(session.CostUSD).To(Equal(57.50))
+		Expect(session.ByModel).To(HaveLen(2))
+		Expect(session.ByModel[0].Key).To(Equal("gemini-4-carbon"))
+		Expect(session.ByModel[0].CostUSD).To(Equal(48.50))
+		Expect(session.ByModel[1].Key).To(Equal("gemini-4-hydrogen"))
+		Expect(session.ByModel[1].CostUSD).To(Equal(9.00))
+
+		total := cost.CalculateTotalCost(rows)
+		Expect(total.CostUSD).To(Equal(57.50))
+		aggregate := cost.CalculateTotalCostFromAggregates([]cost.ModelTokenAggregate{
+			{Model: "gemini-4-carbon", PricingAt: intro, PromptTokens: 1000000, CandidateTokens: 500000, TotalTokens: 2000000, ThinkingTokens: 500000, ToolUseTokens: 250000, CachedTokens: 100000},
+			{Model: "gemini-4-carbon", PricingAt: standard, PromptTokens: 1000000, CandidateTokens: 1000000, TotalTokens: 2000000},
+			{Model: "gemini-4-carbon", PricingAt: standard, IsBatch: true, PromptTokens: 1000000, CandidateTokens: 1000000, TotalTokens: 2000000},
+			{Model: "gemini-4-hydrogen", PricingAt: intro, PromptTokens: 1000000, CandidateTokens: 500000, TotalTokens: 2000000, ThinkingTokens: 500000},
+		})
+		Expect(aggregate).To(Equal(total))
+	})
+})
+
 var _ = Describe("Cost calculation", func() {
 	Describe("GetModelRate", func() {
 		It("returns correct pricing for gemini-3.8-flash", func() {

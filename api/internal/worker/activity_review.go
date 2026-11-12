@@ -912,7 +912,7 @@ func (w *Worker) handleActivityReviewTaskLegacy(ctx context.Context, t *asynq.Ta
 				useFrameGrid := localProbed && frameGridEligible(segEnd-segStart, gridOpts)
 				if useFrameGrid {
 					raw, sheets, usage, callErr = w.AnalyzeVideoIntervalWithFrameGrids(
-						callCtx, local.Name(), segStart, segEnd, prompt, gemini.ModelFlash38, gridOpts,
+						callCtx, local.Name(), segStart, segEnd, prompt, gemini.ModelHydrogen4, gridOpts,
 					)
 				}
 				if !useFrameGrid || (callErr != nil && len(sheets) == 0) {
@@ -930,11 +930,11 @@ func (w *Worker) handleActivityReviewTaskLegacy(ctx context.Context, t *asynq.Ta
 						segCtx := gemini.WithThinkingLevel(callCtx, "MEDIUM")
 						if len(batchTrackingImages) > 0 {
 							raw, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModelAndImages(
-								segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38, batchTrackingImages,
+								segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelHydrogen4, batchTrackingImages,
 							)
 						} else {
 							raw, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModel(
-								segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38,
+								segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelHydrogen4,
 							)
 						}
 					}

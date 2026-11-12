@@ -82,7 +82,7 @@ func main() {
 	if cfg.GeminiAPIKey != "" {
 		geminiClient, geminiErr := gemini.NewClientWithOptions(context.Background(), logger.Log, gemini.Options{
 			APIKey:          cfg.GeminiAPIKey,
-			Model:           gemini.ModelFlash38,
+			Model:           gemini.ModelHydrogen4,
 			IncludeThoughts: cfg.GeminiIncludeThoughts,
 		})
 		if geminiErr != nil {
@@ -90,7 +90,7 @@ func main() {
 		} else {
 			imageParser = geminiClient
 			textParser = geminiClient
-			logger.Log.Info("Gemini image/text parser initialized (" + gemini.ModelFlash38 + ")")
+			logger.Log.Info("Gemini image/text parser initialized (" + gemini.ModelHydrogen4 + ")")
 		}
 	}
 

@@ -936,14 +936,14 @@ func (w *Worker) handleVideoAnalysisTwoPass(ctx context.Context, p VideoAnalysis
 			case len(images) > 0:
 				model := ""
 				if flash {
-					model = gemini.ModelFlash38
+					model = gemini.ModelHydrogen4
 				}
 				segAnalysis, segUsage, err = w.GeminiClient.AnalyzeSegmentWithModelAndImages(
 					ctx, upload.FileURI, upload.MIMEType, segStart, segEnd, prompt, model, images,
 				)
 			case flash:
 				segAnalysis, segUsage, err = w.GeminiClient.AnalyzeSegmentWithModel(
-					ctx, upload.FileURI, upload.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38,
+					ctx, upload.FileURI, upload.MIMEType, segStart, segEnd, prompt, gemini.ModelHydrogen4,
 				)
 			default:
 				segAnalysis, segUsage, err = w.GeminiClient.AnalyzeSegment(

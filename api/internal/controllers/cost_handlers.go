@@ -83,11 +83,12 @@ func (ctl *Controller) GetTotalCost(c *gin.Context) {
 		}
 	}
 
-	// Keep introductory and standard Argon usage (plus batch 50% discount) in separate groups.
+	// Keep introductory and standard Carbon/Argon usage (plus batch 50% discount) in separate groups.
 	// Uses scalar columns synced at write/migration time instead of scanning usage_metadata JSONB.
 	groupExpr := fmt.Sprintf(
-		"model, (lower(trim(task_type)) LIKE '%%:batch'), CASE WHEN lower(trim(model)) = '%s' AND created_at < TIMESTAMPTZ '%s' THEN 1 ELSE 0 END",
+		"model, (lower(trim(task_type)) LIKE '%%:batch'), CASE WHEN lower(trim(model)) IN ('%s', '%s') AND created_at < TIMESTAMPTZ '%s' THEN 1 ELSE 0 END",
 		gemini.ModelArgon4,
+		gemini.ModelCarbon4,
 		cost.ArgonStandardPricingStartsAt.Format(time.RFC3339),
 	)
 	query := ctl.db.WithContext(c.Request.Context()).Model(&db.TokenUsage{}).

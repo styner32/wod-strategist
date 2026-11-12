@@ -325,7 +325,7 @@ var _ = Describe("Independent workout progress helpers", func() {
 		transport := testhelpers.NewMockTransport()
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
 		Expect(err).NotTo(HaveOccurred())
-		transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("late catch").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overall":99,"form":80,"intensity":99,"consistency":90,"movements":{"Power Clean":{"form":80},"Background Athlete":{"form":100}},"summary":"점진적 가동범위 확장"}`}}}}}})
+		transport.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("late catch").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overall":99,"form":80,"intensity":99,"consistency":90,"movements":{"Power Clean":{"form":80},"Background Athlete":{"form":100}},"summary":"점진적 가동범위 확장"}`}}}}}})
 		in := interval()
 		in.FormObservations[1].Evidence = "late catch"
 		progress := workoutprogress.Build([]workoutprogress.Interval{in}, nil, "source")

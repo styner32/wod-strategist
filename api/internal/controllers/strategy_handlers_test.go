@@ -125,7 +125,7 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 		transport := testhelpers.NewMockTransport()
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
 		Expect(err).NotTo(HaveOccurred())
-		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).Body([]byte(`{"usageMetadata":{"promptTokenCount":15,"thoughtsTokenCount":8,"totalTokenCount":23}}`))
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(200).Body([]byte(`{"usageMetadata":{"promptTokenCount":15,"thoughtsTokenCount":8,"totalTokenCount":23}}`))
 		router = newTestRouterWithAuthService(controllers.Config{TextParser: client})
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/strategies/pre-wod-advice", fmt.Sprintf(`{"profile_id":%d,"wod_description":"Fran"}`, profile.ID), &user)
 		resp := httptest.NewRecorder()
@@ -342,7 +342,7 @@ var _ = Describe("POST /api/v1/strategies/pre-wod-advice", func() {
 
 		geminiPayload := `{"candidates":[{"content":{"parts":[{"text":"{\"target_rpe\":{\"score\":7,\"label\":\"RPE 7 (조절된 페이스)\",\"pacing_strategy\":\"초반 세트를 나누어 호흡을 안정시키세요.\"},\"effort_reflection_reason\":\"직전 Pull-up·Thruster WOD(8분 15초)를 Effort 9/10으로 소화했으므로 초반 오버페이스를 막기 위해 목표 RPE를 7로 낮췄습니다.\",\"scaling_advice\":[],\"mobility_warmup\":[],\"overall_summary\":\"최근 고강도 수행을 반영해 템포를 조절하세요.\"}"}]}}],"usageMetadata":{"promptTokenCount":50,"totalTokenCount":90}}`
 		transport.New("https://generativelanguage.googleapis.com").
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("자기보고 Effort 9/10").
 			MatchBodyContains("수행시간 8분 15초").
 			MatchBodyContains("하이브리드 활동강도 82/100").

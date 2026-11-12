@@ -25,7 +25,7 @@ var _ = Describe("Generation usage accounting", func() {
 	})
 	AfterEach(func() { Expect(transport.Verify()).To(Succeed()) })
 	It("preserves usage for empty responses, with explicit zero distinct from missing", func() {
-		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + ModelFlash38 + ":generateContent").Reply(200).Body([]byte(`{"usageMetadata":{"promptTokenCount":0,"thoughtsTokenCount":37,"toolUsePromptTokenCount":400,"cachedContentTokenCount":0,"totalTokenCount":437}}`))
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").Reply(200).Body([]byte(`{"usageMetadata":{"promptTokenCount":0,"thoughtsTokenCount":37,"toolUsePromptTokenCount":400,"cachedContentTokenCount":0,"totalTokenCount":437}}`))
 		_, usage, err := client.ParseText(context.Background(), "prompt")
 		Expect(err).To(HaveOccurred())
 		Expect(usage.Details.Input).To(HaveValue(Equal(int64(0))))
@@ -35,10 +35,10 @@ var _ = Describe("Generation usage accounting", func() {
 		Expect(usage.Details.Cached).To(HaveValue(Equal(int64(0))))
 	})
 	It("records an unmeasured request on HTTP error without retrying", func() {
-		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + ModelFlash38 + ":generateContent").Reply(503).Body([]byte(`{"error":{"code":503,"message":"unavailable"}}`))
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").Reply(503).Body([]byte(`{"error":{"code":503,"message":"unavailable"}}`))
 		_, usage, err := client.ParseText(context.Background(), "prompt")
 		Expect(err).To(HaveOccurred())
-		Expect(usage.Model).To(Equal(ModelFlash38))
+		Expect(usage.Model).To(Equal(ModelHydrogen4))
 		Expect(usage.Details).To(BeNil())
 	})
 	It("keeps music generation usage even when the response has no audio", func() {
@@ -61,7 +61,7 @@ var _ = Describe("Generation usage accounting", func() {
 
 		replyBody := []byte(`{"candidates":[{"content":{"parts":[{"thought":true,"text":"checking frame 12.50s"},{"text":"clean answer"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":12,"thoughtsTokenCount":250,"totalTokenCount":362}}`)
 		transport.New("https://generativelanguage.googleapis.com").
-			Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").
 			MatchBodyContains(`"includeThoughts":true`).
 			Reply(200).
 			Body(replyBody)
@@ -75,24 +75,24 @@ var _ = Describe("Generation usage accounting", func() {
 		Expect(string(encodedUsage)).NotTo(ContainSubstring("checking frame 12.50s"))
 
 		transport.New("https://generativelanguage.googleapis.com").
-			Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").
 			MatchBodyContains(`"includeThoughts":true`).
 			Reply(200).
 			Body(replyBody)
 		gridText, gridUsage, err := thoughtClient.AnalyzeFrameGridsWithModel(
-			context.Background(), [][]byte{[]byte("fake-jpeg")}, "grid prompt", "MEDIUM", ModelFlash38,
+			context.Background(), [][]byte{[]byte("fake-jpeg")}, "grid prompt", "MEDIUM", ModelHydrogen4,
 		)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(gridText).To(Equal("clean answer"))
 		Expect(gridUsage.ThoughtSummary).To(Equal("checking frame 12.50s"))
 
 		transport.New("https://generativelanguage.googleapis.com").
-			Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").
 			MatchBodyContains(`"includeThoughts":true`).
 			Reply(200).
 			Body(replyBody)
 		segText, segUsage, err := thoughtClient.AnalyzeSegmentWithModel(
-			context.Background(), "https://generativelanguage.googleapis.com/files/f1", "video/mp4", 0, 10*time.Second, "seg prompt", ModelFlash38,
+			context.Background(), "https://generativelanguage.googleapis.com/files/f1", "video/mp4", 0, 10*time.Second, "seg prompt", ModelHydrogen4,
 		)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(segText).To(Equal("clean answer"))

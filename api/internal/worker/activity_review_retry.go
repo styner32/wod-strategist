@@ -880,7 +880,7 @@ func (w *Worker) executeActivityReviewWindowWithRetry(
 			callErr error
 		)
 		if framesReady {
-			raw, usage, callErr = w.AnalyzePreparedFrameGrids(callCtx, preparedSheets, prompt, gemini.ModelFlash38, gridOpts)
+			raw, usage, callErr = w.AnalyzePreparedFrameGrids(callCtx, preparedSheets, prompt, gemini.ModelHydrogen4, gridOpts)
 		} else {
 			up, upErr := ensureUploaded(callCtx)
 			if upErr != nil {
@@ -889,11 +889,11 @@ func (w *Worker) executeActivityReviewWindowWithRetry(
 				segCtx := gemini.WithThinkingLevel(callCtx, "MEDIUM")
 				if len(trackingImages) > 0 {
 					raw, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModelAndImages(
-						segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38, trackingImages,
+						segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelHydrogen4, trackingImages,
 					)
 				} else {
 					raw, usage, callErr = w.GeminiClient.AnalyzeSegmentWithModel(
-						segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelFlash38,
+						segCtx, up.FileURI, up.MIMEType, segStart, segEnd, prompt, gemini.ModelHydrogen4,
 					)
 				}
 			}

@@ -113,7 +113,7 @@ var _ = Describe("frame_grid", func() {
 			Expect(frameGridEligible(0, FrameGridOptions{})).To(BeFalse())
 
 			w := &Worker{GeminiClient: &gemini.Client{}}
-			_, sheets, usage, err := w.AnalyzeVideoIntervalWithFrameGrids(context.Background(), "unused.mp4", 0, 5*time.Minute, "prompt", gemini.ModelArgon4, FrameGridOptions{})
+			_, sheets, usage, err := w.AnalyzeVideoIntervalWithFrameGrids(context.Background(), "unused.mp4", 0, 5*time.Minute, "prompt", gemini.ModelCarbon4, FrameGridOptions{})
 			Expect(err).To(MatchError(errFrameGridIntervalTooLong))
 			Expect(sheets).To(BeEmpty(), "no sheets lets callers fall back to VideoMetadata analysis")
 			Expect(usage).To(BeNil())
@@ -164,7 +164,7 @@ var _ = Describe("frame_grid", func() {
 			)
 			transport := testhelpers.NewMockTransport()
 			transport.New(baseURL).
-				Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+				Post("/v1beta/models/"+gemini.ModelCarbon4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -185,7 +185,7 @@ var _ = Describe("frame_grid", func() {
 			client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
 				APIKey:     apiKey,
 				BaseURL:    baseURL,
-				Model:      gemini.ModelArgon4,
+				Model:      gemini.ModelCarbon4,
 				HTTPClient: &http.Client{Transport: transport},
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -202,7 +202,7 @@ var _ = Describe("frame_grid", func() {
 				500*time.Millisecond,
 				10*time.Second,
 				"Analyze the workout interval.",
-				gemini.ModelArgon4,
+				gemini.ModelCarbon4,
 				FrameGridOptions{},
 			)
 			Expect(err).NotTo(HaveOccurred())
@@ -242,7 +242,7 @@ var _ = Describe("frame_grid", func() {
 			)
 			transport := testhelpers.NewMockTransport()
 			transport.New(baseURL).
-				Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+				Post("/v1beta/models/"+gemini.ModelHydrogen4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -263,7 +263,7 @@ var _ = Describe("frame_grid", func() {
 			client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{
 				APIKey:        apiKey,
 				BaseURL:       baseURL,
-				Model:         gemini.ModelArgon4,
+				Model:         gemini.ModelCarbon4,
 				ThinkingLevel: "HIGH",
 				HTTPClient:    &http.Client{Transport: transport},
 			})
@@ -280,7 +280,7 @@ var _ = Describe("frame_grid", func() {
 				2*time.Second,
 				10*time.Second,
 				"Review interval.",
-				gemini.ModelFlash38,
+				gemini.ModelHydrogen4,
 				FrameGridOptions{
 					FormatSecondsBadge: true,
 					ThinkingLevel:      "MEDIUM",

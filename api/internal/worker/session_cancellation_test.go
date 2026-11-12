@@ -287,7 +287,7 @@ var _ = Describe("Archived session processing fence", Ordered, func() {
 		stop()
 		done()
 		scoped := w.scopedSessionWorker(ctx)
-		scoped.saveTokenUsage(sid, profile.ID, "chunk:analysis", &gemini.TokenUsage{Model: gemini.ModelFlash38, PromptTokens: 3, CandidateTokens: 2, TotalTokens: 5})
+		scoped.saveTokenUsage(sid, profile.ID, "chunk:analysis", &gemini.TokenUsage{Model: gemini.ModelHydrogen4, PromptTokens: 3, CandidateTokens: 2, TotalTokens: 5})
 		var count int64
 		Expect(conn.Table("token_usages").Where("session_id = ?", sid).Count(&count).Error).To(Succeed())
 		Expect(count).To(Equal(int64(1)))

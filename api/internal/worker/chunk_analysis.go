@@ -414,7 +414,7 @@ func (w *Worker) handleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	trackingPrompt, trackingImages := w.trackingInputs(ctx, p.ProfileID, p.SessionID, p.WorkoutType, p.FilePath, p.StartSecs)
 	prompt += trackingPrompt
 
-	analysis, geminiFile, usage, err := w.analyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38, trackingImages)
+	analysis, geminiFile, usage, err := w.analyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelHydrogen4, trackingImages)
 
 	// Wait for motion probe to finish
 	var motionScore *float64
@@ -595,7 +595,7 @@ func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	trackingPrompt, trackingImages := w.trackingInputs(ctx, p.ProfileID, p.SessionID, session.WorkoutType, p.FilePath, p.StartSecs)
 	prompt += trackingPrompt
 
-	analysis, geminiFile, usage, err := w.analyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelFlash38, trackingImages)
+	analysis, geminiFile, usage, err := w.analyzeChunkVideo(ctx, localFilePath, prompt, gemini.ModelHydrogen4, trackingImages)
 
 	// Wait for motion probe to finish
 	var motionScoreWithSession *float64

@@ -113,7 +113,7 @@ func (w *Worker) handleRecognitionReview(ctx context.Context, runID uint) (retEr
 		}
 	}()
 	if strings.TrimSpace(run.Model) == "" {
-		run.Model = gemini.ModelArgon4
+		run.Model = gemini.ModelCarbon4
 		if client, ok := w.GeminiClient.(interface{ Model() string }); ok && client.Model() != "" {
 			run.Model = client.Model()
 		}

@@ -25,7 +25,7 @@ var _ = Describe("WOD full-session evaluation", func() {
 		transport := testhelpers.NewMockTransport()
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
 		Expect(err).To(Succeed())
-		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":70,"consistency":75,"movements":{},"summary":"관찰된 수행을 비교했습니다."}`}}}}}})
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":70,"consistency":75,"movements":{},"summary":"관찰된 수행을 비교했습니다."}`}}}}}})
 		start, captureEnd := 120.0, 180.0
 		progress := workoutprogress.Build([]workoutprogress.Interval{{ID: "set", Start: 120, End: 180, Activity: "exercise", Movement: "Power Clean", CaptureStart: &start, CaptureEnd: &captureEnd, RepEvents: []activity.Observation{{Movement: "Power Clean", Unit: "reps", Start: 130, End: 132, Complete: true, Evidence: "complete catch and return"}}, FormObservations: []workoutprogress.Observation{{Start: 130, End: 132, Evidence: "visible neutral trunk"}}}}, nil, "source")
 		before, err := json.Marshal(progress)
@@ -76,7 +76,7 @@ var _ = Describe("WOD full-session evaluation", func() {
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
 		Expect(err).To(Succeed())
 		result := `{"seconds":0,"target_confirmed":true,"preceding_activity":"unknown","evidence":"The target begins the first burpee on the first frame"}`
-		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": result}}}}}})
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": result}}}}}})
 		w := &Worker{GeminiClient: client, logger: zap.NewNop()}
 		got := w.detectWODStart(context.Background(), VideoAnalysisPayload{}, &gemini.UploadResult{FileURI: "https://example.com/video", MIMEType: "video/mp4", VideoDuration: time.Minute}, []Segment{{Start: "00:00", End: "00:30", Type: "Burpee"}}, nil)
 		Expect(got.Status).To(Equal("confirmed"))
@@ -102,7 +102,7 @@ var _ = Describe("WOD full-session evaluation", func() {
 		transport := testhelpers.NewMockTransport()
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
 		Expect(err).NotTo(HaveOccurred())
-		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":60,"consistency":90,"movements":{"Burpee":{"form":80,"intensity":60},"Walking":{"form":10}},"summary":"좋습니다."}`}}}}}})
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":60,"consistency":90,"movements":{"Burpee":{"form":80,"intensity":60},"Walking":{"form":10}},"summary":"좋습니다."}`}}}}}})
 		w := &Worker{GeminiClient: client, logger: zap.NewNop()}
 		start := 120.0
 		end := 180.0
@@ -127,7 +127,7 @@ var _ = Describe("WOD full-session evaluation", func() {
 		transport := testhelpers.NewMockTransport()
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
 		Expect(err).NotTo(HaveOccurred())
-		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":60,"consistency":90,"movements":{"power clean":{"form":80,"intensity":60}},"summary":"좋습니다."}`}}}}}})
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":60,"consistency":90,"movements":{"power clean":{"form":80,"intensity":60}},"summary":"좋습니다."}`}}}}}})
 		set := func(id string, from, to float64) workoutprogress.Interval {
 			return workoutprogress.Interval{ID: id, Start: from, End: to, Activity: "exercise", Movement: "Power Clean", FormObservations: []workoutprogress.Observation{{Start: from, End: from + 2, Evidence: "stable catch"}}}
 		}

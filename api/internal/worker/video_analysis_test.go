@@ -499,7 +499,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		// The generateContent body must reference the file URI returned by the
 		// upload chain — a client that drops or mangles it fails here, not in prod.
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelCarbon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			MatchBodyContains(`"fileUri":"` + geminiBaseURL + `/files/mock-file"`).
 			Reply(http.StatusOK).
@@ -518,7 +518,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 			JSON(map[string]any{})
 
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelHydrogen4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			SetOptional().
 			Reply(http.StatusOK).
@@ -640,7 +640,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		// RoundTrip, so no exact request-count assertion is needed.
 		var genBody string
 		for _, r := range transport.Requests() {
-			if strings.Contains(r.URL, gemini.ModelArgon4+":generateContent") {
+			if strings.Contains(r.URL, gemini.ModelCarbon4+":generateContent") {
 				genBody = string(r.Body)
 			}
 		}
@@ -797,7 +797,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 
 		// ...but generateContent returns no candidates
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/" + gemini.ModelArgon4 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelCarbon4 + ":generateContent").
 			Reply(http.StatusOK).
 			JSON(map[string]any{"candidates": []map[string]any{}})
 
@@ -839,7 +839,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 				expectation.MatchBodyContains("분석 대상 WOD")
 			}
 		}
-		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"form":"invalid score"}`}}}}}})
+		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").MatchBodyContains("workout_progress").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"form":"invalid score"}`}}}}}})
 		task := makeVideoAnalysisTask(VideoAnalysisPayload{SessionID: sessionID, ProfileID: profileID, FilePath: source, WorkoutType: WorkoutTypeCooldown})
 		Expect(w.HandleVideoAnalysisTask(context.Background(), task)).To(Succeed())
 		Expect(transport.Verify()).To(Succeed())
@@ -854,7 +854,7 @@ var _ = Describe("HandleVideoAnalysisTask", func() {
 		Expect(progress.Intervals[0].FormObservations).To(HaveLen(2))
 		Expect(progress.MediaSourceID).To(HavePrefix("media-sha256:"))
 		for _, request := range transport.Requests() {
-			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelCarbon4+":generateContent") {
 				Expect(string(request.Body)).To(ContainSubstring("workout_observations"))
 				Expect(string(request.Body)).NotTo(ContainSubstring("개인 종목 혼동 참고"))
 				Expect(string(request.Body)).NotTo(ContainSubstring("세션 전체 구조화 피로 근거"))
@@ -994,12 +994,12 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 			return "\n```wod_evidence\n" + string(raw) + "\n```"
 		}
 		if len(newWOD) > 0 && newWOD[0] {
-			transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("Locate the earliest actual WOD exercise onset").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"seconds":0,"target_confirmed":true,"preceding_activity":"rest_setup","evidence":"target begins the first visible exercise at video time zero"}`}}}}}})
+			transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").MatchBodyContains("Locate the earliest actual WOD exercise onset").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"seconds":0,"target_confirmed":true,"preceding_activity":"rest_setup","evidence":"target begins the first visible exercise at video time zero"}`}}}}}})
 		}
 
 		// Segment 1 (Snatch) analysis — 45..50s walking gap is bisected at 47.5s for rest-boundary spillover context.
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelCarbon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			MatchBodyContains(`"startOffset":"0s"`).MatchBodyContains(`"endOffset":"47.500s"`).
 			Reply(http.StatusOK).
@@ -1013,7 +1013,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 
 		// Segment 2 (Pull-up) analysis — leading rest-boundary spillover starts at 47.5s.
 		transport.New(geminiBaseURL).
-			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelCarbon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", geminiAPIKey).
 			MatchBodyContains(`"startOffset":"47.500s"`).MatchBodyContains(`"endOffset":"90s"`).
 			Reply(http.StatusOK).
@@ -1024,7 +1024,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 					},
 				}},
 			})
-		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("controlled early position").MatchBodyContains("controlled late position").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overall":100,"form":80,"intensity":80,"consistency":80,"movements":{"Power Snatch":{"form":80,"intensity":80},"Pull-up":{"form":80,"intensity":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`}}}}}})
+		transport.New(geminiBaseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("controlled early position").MatchBodyContains("controlled late position").Reply(http.StatusOK).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overall":100,"form":80,"intensity":80,"consistency":80,"movements":{"Power Snatch":{"form":80,"intensity":80},"Pull-up":{"form":80,"intensity":80}},"summary":"모든 관찰 구간의 진행 평가입니다."}`}}}}}})
 
 		return transport
 	}
@@ -1214,11 +1214,11 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(progress.Unassessed).To(Equal([]workoutprogress.Gap{{Start: 45, End: 50, Clock: "media", Reason: skippedNonExerciseReason}}))
 		for _, request := range transport.Requests() {
 			Expect(request.Method).NotTo(Equal(http.MethodDelete))
-			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelCarbon4+":generateContent") {
 				Expect(string(request.Body)).NotTo(ContainSubstring("모든 수신 청크 집계"))
 				Expect(string(request.Body)).NotTo(ContainSubstring("```score"))
 				Expect(string(request.Body)).To(ContainSubstring("workout_observations"))
-			} else if strings.Contains(request.URL, gemini.ModelFlash38+":generateContent") {
+			} else if strings.Contains(request.URL, gemini.ModelHydrogen4+":generateContent") {
 				body := string(request.Body)
 				Expect(body).To(ContainSubstring("workout_progress"))
 				Expect(body).NotTo(ContainSubstring("fileUri"))
@@ -1295,7 +1295,7 @@ var _ = Describe("HandleVideoAnalysisTask (UseCache / TwoPass)", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(progress.Intervals).To(HaveLen(2))
 		for _, request := range transport.Requests() {
-			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelCarbon4+":generateContent") {
 				Expect(string(request.Body)).NotTo(ContainSubstring("```score"))
 				Expect(string(request.Body)).NotTo(ContainSubstring("모든 수신 청크 집계"))
 			}

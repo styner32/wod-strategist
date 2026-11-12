@@ -70,7 +70,7 @@ func RunVideoComparison(ctx context.Context, conn *gorm.DB, sc *storage.Client, 
 	if err := os.Mkdir(opts.OutputDir, 0700); err != nil {
 		return fmt.Errorf("create fresh output directory: %w", err)
 	}
-	report := videoComparisonReport{Version: 1, Model: gemini.ModelFlash38, SDK: "v1.71.0", Cleanup: "not_uploaded", Results: []gemini.VideoModeResult{}}
+	report := videoComparisonReport{Version: 1, Model: gemini.ModelHydrogen4, SDK: "v1.71.0", Cleanup: "not_uploaded", Results: []gemini.VideoModeResult{}}
 	redact := func(s string) string {
 		if opts.APIKey != "" {
 			return strings.ReplaceAll(s, opts.APIKey, "[REDACTED]")

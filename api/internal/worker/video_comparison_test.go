@@ -79,8 +79,8 @@ var _ = Describe("Local video comparison", Ordered, func() {
 				status = 503
 				body = `{"error":{"code":503,"message":"temporary","status":"UNAVAILABLE"}}`
 			}
-			gt.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains(`"mediaProcessing":"STATIC"`).Reply(status).Body([]byte(body))
-			gt.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains(`"mediaProcessing":"AGENTIC"`).Reply(200).Body([]byte(`{"candidates":[{"content":{"parts":[{"toolCall":{"toolType":"MEDIA_PROCESSING"}},{"toolResponse":{"toolType":"MEDIA_PROCESSING"}},{"text":"[]"}]},"finishReason":"STOP"}]}`))
+			gt.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").MatchBodyContains(`"mediaProcessing":"STATIC"`).Reply(status).Body([]byte(body))
+			gt.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").MatchBodyContains(`"mediaProcessing":"AGENTIC"`).Reply(200).Body([]byte(`{"candidates":[{"content":{"parts":[{"toolCall":{"toolType":"MEDIA_PROCESSING"}},{"toolResponse":{"toolType":"MEDIA_PROCESSING"}},{"text":"[]"}]},"finishReason":"STOP"}]}`))
 		}
 		gc, err := gemini.NewComparisonClient(context.Background(), gemini.Options{APIKey: "test-key", BaseURL: base, HTTPClient: &http.Client{Transport: gt}, PollInterval: time.Millisecond, Sleep: func(time.Duration) {}})
 		Expect(err).NotTo(HaveOccurred())

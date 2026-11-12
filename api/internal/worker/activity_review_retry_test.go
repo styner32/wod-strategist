@@ -308,7 +308,7 @@ var _ = Describe("Activity review per-window retry and media CPU slots", Ordered
 
 		// Window 1 succeeds on attempt 1 (never re-called).
 		transport.New(base).
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("(10.000000, 40.000000]").
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -319,20 +319,20 @@ var _ = Describe("Activity review per-window retry and media CPU slots", Ordered
 
 		// Window 2 fails with 429 (Retry-After: 7) then 503 (default 15s), then succeeds on attempt 3.
 		transport.New(base).
-			Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelHydrogen4+":generateContent").
 			MatchBodyContains("(40.000000, 50.000000]").
 			Reply(http.StatusTooManyRequests).
 			Header("Retry-After", "7").
 			JSON(map[string]any{"error": map[string]any{"code": 429, "message": "quota burst"}})
 
 		transport.New(base).
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("(40.000000, 50.000000]").
 			Reply(http.StatusServiceUnavailable).
 			JSON(map[string]any{"error": map[string]any{"code": 503, "message": "backend overloaded"}})
 
 		transport.New(base).
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("(40.000000, 50.000000]").
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -457,7 +457,7 @@ var _ = Describe("Activity review per-window retry and media CPU slots", Ordered
 			"name": "files/retry-active", "uri": base + "/files/retry-active", "state": "ACTIVE",
 			"videoMetadata": map[string]any{"videoDuration": "10s"},
 		})
-		transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		transport.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains(base + "/files/retry-active").Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{
 				map[string]any{"text": "```movement_observations\n" + string(obs) + "\n```"},
@@ -515,7 +515,7 @@ var _ = Describe("Activity review per-window retry and media CPU slots", Ordered
 		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+mergedObject, mp4Bytes)
 		testhelpers.MockGCSDownloadWithBody(storageTransport, refURI, refBytes)
 		transport.New(base).
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("(10.000000, 40.000000]").
 			Reply(http.StatusOK).
 			JSON(map[string]any{
@@ -524,7 +524,7 @@ var _ = Describe("Activity review per-window retry and media CPU slots", Ordered
 				}}}},
 			})
 		transport.New(base).
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("(40.000000, 50.000000]").
 			Reply(http.StatusServiceUnavailable).
 			JSON(map[string]any{"error": map[string]any{"code": 503, "message": "transient outage 1"}})
@@ -557,7 +557,7 @@ var _ = Describe("Activity review per-window retry and media CPU slots", Ordered
 		testhelpers.MockGCSDownloadWithBody(storageTransport, refURI, refBytes)
 		for attempt := 2; attempt <= 3; attempt++ {
 			transport.New(base).
-				Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+				Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 				MatchBodyContains("(40.000000, 50.000000]").
 				Reply(http.StatusServiceUnavailable).
 				JSON(map[string]any{"error": map[string]any{"code": 503, "message": fmt.Sprintf("transient outage %d", attempt)}})

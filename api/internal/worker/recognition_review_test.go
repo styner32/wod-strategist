@@ -279,7 +279,7 @@ var _ = Describe("HandleRecognitionReviewTask", func() {
 	seedRun := func(batches []recognitionreview.Batch) db.RecognitionReviewRun {
 		snapshotRaw, _ := json.Marshal(snapshot)
 		batchesRaw, _ := json.Marshal(batches)
-		return testhelpers.CreateRecognitionReviewRun(conn, &db.RecognitionReviewRun{SessionID: session.SessionID, ProfileID: profile.ID, SourceVersion: "test-source", SourceGeneration: 7, StartSecs: 0.2, EndSecs: 0.8, Model: gemini.ModelArgon4, Snapshot: snapshotRaw, Batches: batchesRaw})
+		return testhelpers.CreateRecognitionReviewRun(conn, &db.RecognitionReviewRun{SessionID: session.SessionID, ProfileID: profile.ID, SourceVersion: "test-source", SourceGeneration: 7, StartSecs: 0.2, EndSecs: 0.8, Model: gemini.ModelCarbon4, Snapshot: snapshotRaw, Batches: batchesRaw})
 	}
 	seedVideoAndCall := func(run db.RecognitionReviewRun, text string, deleteStatus int) {
 		if !hasFfmpeg() {
@@ -291,7 +291,7 @@ var _ = Describe("HandleRecognitionReviewTask", func() {
 		geminiTransport.New(base).Post("/upload/v1beta/files").Reply(http.StatusOK).Header("X-Goog-Upload-Url", base+"/upload-session").JSON(map[string]any{})
 		geminiTransport.New(base).Post("/upload-session").Reply(http.StatusOK).Header("X-Goog-Upload-Status", "final").JSON(map[string]any{"file": map[string]any{"name": "files/diagnostic", "uri": base + "/files/diagnostic"}})
 		geminiTransport.New(base).Get("/v1beta/files/diagnostic").Reply(http.StatusOK).JSON(map[string]any{"name": "files/diagnostic", "uri": base + "/files/diagnostic", "state": "ACTIVE", "videoMetadata": map[string]any{"videoDuration": "0.6s"}})
-		geminiTransport.New(base).Post("/v1beta/models/" + gemini.ModelArgon4 + ":generateContent").MatchBodyContains(`"fileUri":"` + base + `/files/diagnostic"`).Reply(http.StatusOK).JSON(map[string]any{"candidates": []map[string]any{{"content": map[string]any{"parts": []map[string]any{{"text": text}}}}}, "usageMetadata": map[string]any{"promptTokenCount": 11, "candidatesTokenCount": 7, "totalTokenCount": 18}})
+		geminiTransport.New(base).Post("/v1beta/models/" + gemini.ModelCarbon4 + ":generateContent").MatchBodyContains(`"fileUri":"` + base + `/files/diagnostic"`).Reply(http.StatusOK).JSON(map[string]any{"candidates": []map[string]any{{"content": map[string]any{"parts": []map[string]any{{"text": text}}}}}, "usageMetadata": map[string]any{"promptTokenCount": 11, "candidatesTokenCount": 7, "totalTokenCount": 18}})
 		geminiTransport.New(base).Delete("/v1beta/files/diagnostic").Reply(deleteStatus).JSON(map[string]any{})
 	}
 	newBatches := func() []recognitionreview.Batch {

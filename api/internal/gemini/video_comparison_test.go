@@ -51,7 +51,7 @@ func (b *comparisonDelayedBody) Read(p []byte) (int, error) {
 
 var _ = Describe("Video mode comparison", func() {
 	const base = "https://example.test"
-	const path = "/v1beta/models/" + ModelFlash38 + ":generateContent"
+	const path = "/v1beta/models/" + ModelHydrogen4 + ":generateContent"
 	var transport *testhelpers.MockTransport
 	newClient := func(rt http.RoundTripper) *Client {
 		c, err := NewComparisonClient(context.Background(), Options{APIKey: "secret-key", BaseURL: base, HTTPClient: &http.Client{Transport: rt}, ThinkingLevel: "HIGH"})

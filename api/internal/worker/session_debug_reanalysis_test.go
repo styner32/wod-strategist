@@ -42,7 +42,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 	)
 
 	expectAnalysis := func(fileURI string, finalCalls ...bool) {
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("Locate the earliest actual WOD exercise onset").
 			MatchBodyContains(`"fileUri":"` + fileURI + `"`).
 			Reply(http.StatusOK).JSON(map[string]any{
@@ -55,7 +55,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			"```wod_evidence\n" + `{"target_confirmed":true,"movement":"Pull-up","start_secs":0,"end_secs":0.75,"form_observations":["visible aligned pull"],"pace_observations":["steady"]}` + "\n```\n" +
 			"```workout_observations\n" + `{"intervals":[{"start_secs":0,"end_secs":0.75,"activity":"exercise","movement":"Pull-up","target_confirmed":true,"rep_events":[{"movement":"Pull-up","unit":"reps","start_secs":0.1,"end_secs":0.5,"complete":true,"evidence":"complete pull and return"}],"form_observations":[{"start_secs":0.1,"end_secs":0.5,"evidence":"visible aligned pull"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
 		geminiTransport.New(baseURL).
-			Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+			Post("/v1beta/models/"+gemini.ModelCarbon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
 			MatchBodyContains(`"inlineData"`).
 			MatchBodyContains("프레임 그리드(Contact Sheet) 입력 안내").
@@ -70,9 +70,9 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		if len(finalCalls) > 0 && !finalCalls[0] {
 			return
 		}
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("weight_raw").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "```movements\n{\"movements\":[]}\n```"}}}}}})
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": `{"form":80,"intensity":80,"consistency":80,"movements":{"Pull-up":{"form":80,"intensity":80}},"summary":"good"}`}}}}}})
 	}
 
@@ -177,7 +177,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 
 		var prompt string
 		for _, request := range geminiTransport.Requests() {
-			if strings.Contains(request.URL, gemini.ModelArgon4+":generateContent") {
+			if strings.Contains(request.URL, gemini.ModelCarbon4+":generateContent") {
 				prompt = string(request.Body)
 			}
 		}
@@ -270,7 +270,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		testhelpers.MockGCSDownloadWithBody(storageTransport, sourceURI, videoBytes)
 		geminiTransport.New(baseURL).Get("/v1beta/files/truncated-cache").Reply(http.StatusOK).
 			JSON(map[string]any{"name": "files/truncated-cache", "state": "ACTIVE"})
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("Locate the earliest actual WOD exercise onset").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -316,7 +316,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		geminiTransport.New(baseURL).Get("/v1beta/files/partial-cache").MatchHeader("X-Goog-Api-Key", apiKey).
 			Reply(http.StatusOK).JSON(map[string]any{"name": "files/partial-cache", "state": "ACTIVE"})
 		expectAnalysis(baseURL+"/files/partial-cache", false)
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelCarbon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).MatchBodyContains("Burpee").
 			Reply(http.StatusInternalServerError).JSON(map[string]any{"error": map[string]any{"message": "temporary"}})
 
@@ -388,7 +388,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			Reply(http.StatusOK).JSON(map[string]any{"name": "files/wod-usage-cache", "state": "ACTIVE"})
 
 		// 1. video:wod-start (QueryVideoFlash)
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("Locate the earliest actual WOD exercise onset").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -402,7 +402,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			"```highlights\n" + `[{"start":"0:00","end":"0:00.5","type":"key_moment","movement":"Pull-up","reason":"visible movement"}]` + "\n```\n" +
 			"```wod_evidence\n" + `{"target_confirmed":true,"movement":"Pull-up","start_secs":0,"end_secs":0.75,"form_observations":["aligned pull"],"pace_observations":["steady"]}` + "\n```\n" +
 			"```workout_observations\n" + `{"intervals":[{"start_secs":0,"end_secs":0.75,"activity":"exercise","movement":"Pull-up","target_confirmed":true,"rep_events":[{"movement":"Pull-up","unit":"reps","start_secs":0.1,"end_secs":0.5,"complete":true,"evidence":"complete pull"}],"form_observations":[{"start_secs":0.1,"end_secs":0.5,"evidence":"aligned pull"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelCarbon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
 			MatchBodyContains(`"inlineData"`).
 			Reply(http.StatusOK).JSON(map[string]any{
@@ -413,7 +413,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		})
 
 		// 3. session:normalize-workout (ParseText)
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("weight_raw").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -423,7 +423,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		})
 
 		// 4. video:wod-synthesis (ParseText)
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -483,7 +483,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		burpeeOutput := "버피 동작이 확인됩니다.\n" +
 			"```highlights\n" + `[{"start":"0:00.8","end":"0:00.9","type":"key_moment","movement":"Burpee","reason":"burpee rep"}]` + "\n```\n" +
 			"```workout_observations\n" + `{"intervals":[{"start_secs":0.81,"end_secs":0.95,"activity":"exercise","movement":"Burpee","target_confirmed":true,"rep_events":[{"movement":"Burpee","unit":"reps","start_secs":0.82,"end_secs":0.9,"complete":true,"evidence":"burpee"}],"form_observations":[{"start_secs":0.82,"end_secs":0.9,"evidence":"steady burpee"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelCarbon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
 			MatchBodyContains("Burpee").
 			Reply(http.StatusOK).JSON(map[string]any{
@@ -493,14 +493,14 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			"usageMetadata": map[string]any{"promptTokenCount": 14, "candidatesTokenCount": 6, "totalTokenCount": 20},
 		})
 		expectAnalysis(baseURL+"/files/segment-reuse-cache", false)
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("weight_raw").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
 				"content": map[string]any{"parts": []map[string]any{{"text": "```movements\n{\"movements\":[]}\n```"}}},
 			}},
 		})
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
@@ -514,7 +514,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		Expect(geminiTransport.Verify()).To(Succeed())
 
 		// Second run: same firstChunk (0.0-0.75), plus a new correction on secondChunk (0.81-0.95 -> Box Jump).
-		// Only the second segment (0.81-0.95) should invoke Gemini ModelArgon4; the first segment (0.0-0.75) should be reused!
+		// Only the second segment (0.81-0.95) should invoke Gemini ModelCarbon4; the first segment (0.0-0.75) should be reused!
 		_ = firstChunk
 		testhelpers.CreateAnalysisFeedback(database, &db.AnalysisFeedback{
 			ProfileID:             profile.ID,
@@ -532,7 +532,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		geminiTransport.New(baseURL).Get("/v1beta/files/segment-reuse-cache").MatchHeader("X-Goog-Api-Key", apiKey).
 			Reply(http.StatusOK).JSON(map[string]any{"name": "files/segment-reuse-cache", "state": "ACTIVE"})
 
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelHydrogen4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
 			MatchBodyContains("Locate the earliest actual WOD exercise onset").
 			Reply(http.StatusOK).JSON(map[string]any{
@@ -543,7 +543,7 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 		boxJumpOutput := "박스 점프가 확인됩니다.\n" +
 			"```highlights\n" + `[{"start":"0:00.8","end":"0:00.9","type":"key_moment","movement":"Box Jump","reason":"box jump rep"}]` + "\n```\n" +
 			"```workout_observations\n" + `{"intervals":[{"start_secs":0.81,"end_secs":0.95,"activity":"exercise","movement":"Box Jump","target_confirmed":true,"rep_events":[{"movement":"Box Jump","unit":"reps","start_secs":0.82,"end_secs":0.9,"complete":true,"evidence":"box jump"}],"form_observations":[{"start_secs":0.82,"end_secs":0.9,"evidence":"soft landing"}],"rom_observations":[],"pace_observations":[]}],"unassessed":[]}` + "\n```"
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelArgon4+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelCarbon4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
 			MatchBodyContains("Box Jump").
 			Reply(http.StatusOK).JSON(map[string]any{
@@ -552,14 +552,14 @@ var _ = Describe("HandleSessionDebugReanalysisTask", func() {
 			}},
 			"usageMetadata": map[string]any{"promptTokenCount": 14, "candidatesTokenCount": 6, "totalTokenCount": 20},
 		})
-		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("weight_raw").
 			Reply(http.StatusOK).JSON(map[string]any{
 			"candidates": []map[string]any{{
 				"content": map[string]any{"parts": []map[string]any{{"text": "```movements\n{\"movements\":[]}\n```"}}},
 			}},
 		})
-		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelFlash38+":generateContent").
+		geminiTransport.New(baseURL).Post("/v1beta/models/"+gemini.ModelHydrogen4+":generateContent").
 			MatchHeader("X-Goog-Api-Key", apiKey).
 			MatchBodyContains("Evaluate this WOD using ONLY the supplied validated observations").
 			Reply(http.StatusOK).JSON(map[string]any{
@@ -766,8 +766,8 @@ var _ = Describe("session debug re-analysis helpers", func() {
 	})
 
 	It("keys reusable segments by analysis mode", func() {
-		grid := sessionDebugSegmentCacheKey(gemini.ModelArgon4, debugAnalysisModeFrameGrid, "0:00", "0:10", "prompt")
-		video := sessionDebugSegmentCacheKey(gemini.ModelArgon4, debugAnalysisModeVideo, "0:00", "0:10", "prompt")
+		grid := sessionDebugSegmentCacheKey(gemini.ModelCarbon4, debugAnalysisModeFrameGrid, "0:00", "0:10", "prompt")
+		video := sessionDebugSegmentCacheKey(gemini.ModelCarbon4, debugAnalysisModeVideo, "0:00", "0:10", "prompt")
 		Expect(grid).NotTo(Equal(video))
 		Expect(chunkDebugAnalysisMode(true, 30*time.Second)).To(Equal(debugAnalysisModeFrameGrid))
 		Expect(chunkDebugAnalysisMode(false, 30*time.Second)).To(Equal(debugAnalysisModeVideo))

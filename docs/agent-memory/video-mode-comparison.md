@@ -30,7 +30,7 @@ go run ./cmd/compare-video --session-id WOD-YYYYMMDD-ULID --output-dir /private/
 
 - SDK is pinned to `google.golang.org/genai v1.71.0`.
 - Use `GenerateContent` and native `Part.MediaProcessing`: `STATIC` then `AGENTIC`,
-  one request each, model `gemini-3.8-flash`, HIGH media resolution and HIGH thinking.
+  one request each, model `gemini-4-hydrogen`, HIGH media resolution and HIGH thinking.
 - Both calls share one freshly uploaded Files URI and the same production
   indexing prompt snapshot. This experiment inherits that prompt's existing
   limitations; it is not a new coaching or counting accuracy evaluation.

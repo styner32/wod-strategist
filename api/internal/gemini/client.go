@@ -29,8 +29,10 @@ type TokenUsage struct {
 }
 
 const (
+	ModelCarbon4           = "gemini-4-carbon"
 	ModelArgon4            = "gemini-4-argon"
 	ModelPro31Preview      = "gemini-3.1-pro-preview"
+	ModelHydrogen4         = "gemini-4-hydrogen"
 	ModelFlash35Lite       = "gemini-3.5-flash-lite"
 	ModelFlash37           = "gemini-3.7-flash"
 	ModelFlash38           = "gemini-3.8-flash"
@@ -40,7 +42,7 @@ const (
 	ModelFlash30Preview = ModelFlash35Lite
 )
 
-const defaultModel = ModelArgon4
+const defaultModel = ModelCarbon4
 
 type Client struct {
 	client             *genai.Client
@@ -68,7 +70,7 @@ type Options struct {
 	BaseURL            string
 	APIVersion         string
 	HTTPClient         *http.Client
-	Model              string  // e.g. "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.8-flash"
+	Model              string  // e.g. "gemini-4-carbon", "gemini-4-argon", "gemini-4-hydrogen"
 	ThinkingLevel      string  // e.g. "HIGH", "MEDIUM", "LOW", "MINIMAL" (default / full video analysis)
 	ThinkingLevelChunk string  // e.g. "LOW", "MEDIUM" (for short chunk analysis)
 	ChunkFPS           float64 // Optional explicit FPS for AnalyzeChunkVideo*; 0 uses Gemini default
@@ -383,9 +385,19 @@ func NewClientWithOptions(ctx context.Context, logger *zap.Logger, options Optio
 	}, nil
 }
 
+func isGemini4FrontierModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return m == ModelCarbon4 || m == ModelArgon4
+}
+
+func isGemini4Model(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return isGemini4FrontierModel(m) || m == ModelHydrogen4 || strings.HasPrefix(m, "gemini-4-")
+}
+
 func supportsThinking(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
-	return m == ModelArgon4 || strings.Contains(m, "3.8") || strings.Contains(m, "3.7") || strings.Contains(m, "2.5")
+	return isGemini4Model(m) || strings.Contains(m, "3.8") || strings.Contains(m, "3.7") || strings.Contains(m, "2.5")
 }
 
 func (c *Client) thinkingConfigForModel(model string) *genai.ThinkingConfig {
@@ -399,17 +411,18 @@ func (c *Client) thinkingConfigForModelAndLevel(model string, level string) *gen
 	if c == nil || !supportsThinking(model) {
 		return nil
 	}
-	argon := strings.EqualFold(strings.TrimSpace(model), ModelArgon4)
-	if argon && strings.TrimSpace(level) == "" {
+	gemini4 := isGemini4Model(model)
+	if isGemini4FrontierModel(model) && strings.TrimSpace(level) == "" {
 		level = "HIGH"
 	}
-	if level == "" && c.thinkingBudget == nil && !c.includeThoughts {
+	hasBudget := c.thinkingBudget != nil && !gemini4
+	if strings.TrimSpace(level) == "" && !hasBudget && !c.includeThoughts {
 		return nil
 	}
 	tc := &genai.ThinkingConfig{
 		IncludeThoughts: c.includeThoughts,
 	}
-	if c.thinkingBudget != nil && !argon {
+	if hasBudget {
 		tc.ThinkingBudget = c.thinkingBudget
 	}
 	switch strings.ToUpper(strings.TrimSpace(level)) {
@@ -792,7 +805,7 @@ func (c *Client) GenerateWorkoutMusic(ctx context.Context, model, prompt, output
 	return usage, nil
 }
 
-const flashModel = ModelFlash38
+const flashModel = ModelHydrogen4
 
 // UploadResult holds info about an uploaded file for use across multiple passes.
 type UploadResult struct {
@@ -930,7 +943,7 @@ func (c *Client) AnalyzeSegment(ctx context.Context, fileURI, mimeType string, s
 }
 
 // AnalyzeSegmentWithModel performs deep biomechanical analysis on a specific time range
-// of the video using a specified model (e.g. ModelArgon4 or ModelPro31Preview).
+// of the video using a specified model (e.g. ModelCarbon4, ModelArgon4, or ModelPro31Preview).
 func (c *Client) AnalyzeSegmentWithModel(ctx context.Context, fileURI, mimeType string, start, end time.Duration, prompt, model string) (string, *TokenUsage, error) {
 	return c.AnalyzeSegmentWithModelAndImages(ctx, fileURI, mimeType, start, end, prompt, model, nil)
 }
@@ -1019,7 +1032,7 @@ func (c *Client) AnalyzeFrameGrids(ctx context.Context, images [][]byte, mimeTyp
 }
 
 // AnalyzeFrameGridsWithModel performs deep analysis on one or more stitched
-// frame-grid images using a specified model (e.g. ModelArgon4 or ModelFlash38)
+// frame-grid images using a specified model (e.g. ModelCarbon4 or ModelHydrogen4)
 // with MediaResolutionHigh so burned-in timestamps and pose details remain legible.
 func (c *Client) AnalyzeFrameGridsWithModel(ctx context.Context, images [][]byte, mimeType, prompt, model string) (string, *TokenUsage, error) {
 	if model == "" {
@@ -1326,13 +1339,17 @@ func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, request
 	if tc := c.thinkingConfigForModelAndLevel(model, thinkingLevel); tc != nil {
 		genConfig.ThinkingConfig = tc
 	}
-	if strings.EqualFold(strings.TrimSpace(model), ModelArgon4) {
+	if isGemini4FrontierModel(model) {
 		genConfig.MaxOutputTokens = argonMaxOutputTokens
 		if genConfig.ThinkingConfig != nil {
 			thinking := *genConfig.ThinkingConfig
 			thinking.ThinkingBudget = nil
 			genConfig.ThinkingConfig = &thinking
 		}
+	} else if isGemini4Model(model) && genConfig.ThinkingConfig != nil && genConfig.ThinkingConfig.ThinkingBudget != nil {
+		thinking := *genConfig.ThinkingConfig
+		thinking.ThinkingBudget = nil
+		genConfig.ThinkingConfig = &thinking
 	}
 
 	inlined := make([]*genai.InlinedRequest, 0, len(requests))
@@ -1463,8 +1480,8 @@ func (c *Client) AnalyzeSegmentsBatch(ctx context.Context, model string, request
 			results[i] = BatchSegmentResult{Usage: usage, Err: errors.New("no content from batch segment analysis")}
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(model), ModelArgon4) && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
-			results[i] = BatchSegmentResult{Usage: usage, Err: errors.New("Argon output is incomplete: MAX_TOKENS")}
+		if isGemini4FrontierModel(model) && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
+			results[i] = BatchSegmentResult{Usage: usage, Err: fmt.Errorf("%s output is incomplete: MAX_TOKENS", model)}
 			continue
 		}
 		results[i] = BatchSegmentResult{
