@@ -8,8 +8,9 @@ import (
 	"time"
 
 	"github.com/wod-strategist/api/internal/db"
-	"github.com/wod-strategist/api/internal/wodeval"
+	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/workoutprogress"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -70,8 +71,8 @@ func (f HistoryFilter) matchesInputStatus(status *db.HistoryInputStatus) bool {
 	}
 }
 
-func ListByDateRange(ctx context.Context, database *gorm.DB, q HistoryListQuery) ([]db.AnalysisResult, error) {
-	scope := database.WithContext(ctx).
+func List(ctx context.Context, dbConn *gorm.DB, q HistoryListQuery) ([]db.AnalysisResult, error) {
+	scope := dbConn.WithContext(ctx).
 		Omit(OmittedAnalysisColumns...).
 		Where("profile_id = ?", q.ProfileID)
 
@@ -87,9 +88,10 @@ func ListByDateRange(ctx context.Context, database *gorm.DB, q HistoryListQuery)
 	}
 
 	results := []db.AnalysisResult{}
-	scope = scope.Order("created_at desc")
 	if q.Start != nil && q.End != nil {
-		scope = scope.Where("created_at >= ? AND created_at < ?", q.Start, q.End.AddDate(0, 0, 1))
+		scope = scope.Where("created_at >= ? AND created_at < ?", q.Start, q.End.AddDate(0, 0, 1)).Order("created_at desc, id desc")
+	} else {
+		scope = scope.Order("id desc")
 	}
 
 	if q.BeforeID > 0 {
@@ -104,8 +106,13 @@ func ListByDateRange(ctx context.Context, database *gorm.DB, q HistoryListQuery)
 		return nil, err
 	}
 
+	if len(results) == 0 {
+		// no results to process
+		return results, nil
+	}
+
 	// fill in the InputStatus for each result
-	sessionByID, err := populateHistoryInputStatus(ctx, database, q.ProfileID, results)
+	err := populateHistoryInputStatus(ctx, dbConn, q.ProfileID, results)
 	if err != nil {
 		return nil, err
 	}
@@ -124,19 +131,10 @@ func ListByDateRange(ctx context.Context, database *gorm.DB, q HistoryListQuery)
 		results = filtered
 	}
 
-	// TODO: use sessionByID to get the session details
-	_ = sessionByID
-
 	return results, nil
 }
 
-func populateHistoryInputStatus(ctx context.Context, database *gorm.DB, profileID uint, results []db.AnalysisResult) (map[string]db.Session, error) {
-	if database == nil || len(results) == 0 {
-		for i := range results {
-			results[i].WorkoutProgress = nil
-		}
-		return nil, nil
-	}
+func populateHistoryInputStatus(ctx context.Context, dbConn *gorm.DB, profileID uint, results []db.AnalysisResult) error {
 	sessionIDs := make([]string, 0, len(results))
 	seenSessions := make(map[string]struct{}, len(results))
 	decodedProgress := make(map[int]workoutprogress.Progress)
@@ -144,42 +142,54 @@ func populateHistoryInputStatus(ctx context.Context, database *gorm.DB, profileI
 	seenProgressSessions := make(map[string]struct{}, len(results))
 
 	for i := range results {
+		// filter archived sessions
 		if results[i].ArchivedAt != nil {
 			results[i].WorkoutProgress = nil
 			continue
 		}
-		sid := strings.TrimSpace(results[i].SessionID)
-		if sid == "" {
+
+		// filter sessions with no session ID
+		sessionID := results[i].TrimmedSessionID()
+		if sessionID == "" {
 			results[i].WorkoutProgress = nil
 			continue
 		}
-		if _, ok := seenSessions[sid]; !ok {
-			seenSessions[sid] = struct{}{}
-			sessionIDs = append(sessionIDs, sid)
+
+		// dedup session IDs
+		if _, ok := seenSessions[sessionID]; !ok {
+			seenSessions[sessionID] = struct{}{}
+			sessionIDs = append(sessionIDs, sessionID)
+		} else {
+			// TODO: duplicate session IDs can't happen, needs to debug if happens
+			logger.Log.Warn("duplicate session ID found", zap.String("session_id", sessionID), zap.Time("created_at", results[i].CreatedAt))
 		}
-		if strings.EqualFold(strings.TrimSpace(results[i].Status), "COMPLETED") && len(results[i].WorkoutProgress) > 0 {
+
+		// filter completed sessions with workout progress
+		if results[i].IsCompleted() && results[i].WorkoutProgress != nil {
 			if progress, err := workoutprogress.Decode(results[i].WorkoutProgress); err == nil {
 				decodedProgress[i] = progress
-				if _, ok := seenProgressSessions[sid]; !ok {
-					seenProgressSessions[sid] = struct{}{}
-					progressSessionIDs = append(progressSessionIDs, sid)
+				if _, ok := seenProgressSessions[sessionID]; !ok {
+					seenProgressSessions[sessionID] = struct{}{}
+					progressSessionIDs = append(progressSessionIDs, sessionID)
 				}
 			}
 		}
 	}
+
+	// no active session found for the profile
 	if len(sessionIDs) == 0 {
 		for i := range results {
 			results[i].WorkoutProgress = nil
 		}
-		return nil, nil
+		return nil
 	}
 
 	var sessions []db.Session
-	if err := database.WithContext(ctx).
+	if err := dbConn.WithContext(ctx).
 		Select("session_id", "profile_id", "workout_type", "wod_evaluation_version", "effort", "wod_description", "activity_summary", "activity_summary_cache_version").
 		Where("profile_id = ? AND session_id IN ?", profileID, sessionIDs).
 		Find(&sessions).Error; err != nil {
-		return nil, err
+		return err
 	}
 	sessionByID := make(map[string]db.Session, len(sessions))
 	for _, s := range sessions {
@@ -189,41 +199,48 @@ func populateHistoryInputStatus(ctx context.Context, database *gorm.DB, profileI
 	recordsBySession := make(map[string][]workoutprogress.Record, len(progressSessionIDs))
 	if len(progressSessionIDs) > 0 {
 		var recordRows []db.PerformanceRecord
-		if err := database.WithContext(ctx).
+		if err := dbConn.WithContext(ctx).
 			Where("profile_id = ? AND session_id IN ?", profileID, progressSessionIDs).
 			Order("start_secs ASC, id ASC").
 			Find(&recordRows).Error; err != nil {
-			return nil, err
+			return err
 		}
+
 		for _, row := range recordRows {
-			sid := strings.TrimSpace(row.SessionID)
-			recordsBySession[sid] = append(recordsBySession[sid], performanceRecordResponse(row))
+			sessionID := strings.TrimSpace(row.SessionID)
+			recordsBySession[sessionID] = append(recordsBySession[sessionID], performanceRecordResponse(row))
 		}
 	}
 
+	// merge wod description from session and analysis result
 	for i := range results {
+		sessionID := results[i].TrimmedSessionID()
+		var sessPtr *db.Session
+
+		s, ok := sessionByID[sessionID]
+		if ok {
+			sessPtr = &s
+			results[i].SetSession(&s)
+
+			if results[i].IsWODDescriptionEmpty() && !s.IsWODDescriptionEmpty() {
+				results[i].WODDescription = s.WODDescription
+			}
+		}
+
 		if results[i].ArchivedAt != nil {
 			results[i].WorkoutProgress = nil
 			continue
 		}
-		sid := strings.TrimSpace(results[i].SessionID)
-		var sessPtr *db.Session
-		if s, ok := sessionByID[sid]; ok {
-			if strings.TrimSpace(results[i].WODDescription) == "" && strings.TrimSpace(s.WODDescription) != "" {
-				results[i].WODDescription = s.WODDescription
-			}
-			sessCopy := s
-			sessPtr = &sessCopy
-		}
+
 		var progPtr *workoutprogress.Progress
 		if progress, ok := decodedProgress[i]; ok {
 			progCopy := progress
 			progPtr = &progCopy
 		}
-		results[i].InputStatus = computeHistoryInputStatus(results[i], sessPtr, progPtr, recordsBySession[sid])
+		results[i].InputStatus = computeHistoryInputStatus(results[i], sessPtr, progPtr, recordsBySession[sessionID])
 		results[i].WorkoutProgress = nil
 	}
-	return sessionByID, nil
+	return nil
 }
 
 func performanceRecordResponse(row db.PerformanceRecord) workoutprogress.Record {
@@ -246,8 +263,8 @@ func computeHistoryInputStatus(
 	if row.ArchivedAt != nil {
 		return nil
 	}
-	completed := strings.EqualFold(strings.TrimSpace(row.Status), "COMPLETED")
-	effortEligible := session != nil && session.WorkoutType == "wod" && session.WODEvaluationVersion == wodeval.Version
+	completed := row.IsCompleted()
+	effortEligible := session.IsEffortEligible()
 	var effort *int
 	if effortEligible && session.Effort != nil {
 		val := *session.Effort
