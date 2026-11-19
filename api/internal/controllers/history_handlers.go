@@ -171,23 +171,18 @@ func populateHistorySummariesAndHighlights(
 // Main Handler for GetHistory
 // /api/v1/history
 func (ctl *Controller) GetHistory(c *gin.Context) {
-	if c.Query("profile_id") == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+	pid, ok := ctl.validateProfileID(c)
+	if !ok {
 		return
 	}
-	pid, err := strconv.ParseUint(c.Query("profile_id"), 10, 32)
-	if err != nil || pid == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile_id"})
-		return
-	}
-	if !ctl.assertOwnsProfile(c, uint(pid)) {
-		return
-	}
+
+	var err error
 	archived := c.Query("archived")
 	if archived != "" && archived != "true" && archived != "false" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "archived must be true or false"})
 		return
 	}
+
 	missing := strings.TrimSpace(c.Query("missing"))
 	switch missing {
 	case "", "any", "effort", "performance":
@@ -222,13 +217,14 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 	}
 
 	if from != "" && to != "" {
-		start, e1 := time.Parse("2006-01-02", from)
-		end, e2 := time.Parse("2006-01-02", to)
-		if e1 != nil {
+		start, err := time.Parse("2006-01-02", from)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid from date, expected YYYY-MM-DD"})
 			return
 		}
-		if e2 != nil {
+
+		end, err := time.Parse("2006-01-02", to)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid to date, expected YYYY-MM-DD"})
 			return
 		}
@@ -287,7 +283,7 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 	}
 	dbQueryMs := (qStats.Snapshot().Duration - qBefore).Milliseconds()
 	logger.Log.Info("history fetched",
-		zap.Uint64("profile_id", pid),
+		zap.Uint64("profile_id", uint64(pid)),
 		zap.Int("sessions_total", summaryMetrics.SessionsTotal),
 		zap.Int("summary_cache_hits", summaryMetrics.SummaryCacheHits),
 		zap.Int("summary_rebuilt", summaryMetrics.SummaryRebuilt),
@@ -297,6 +293,25 @@ func (ctl *Controller) GetHistory(c *gin.Context) {
 		zap.Int("response_bytes", len(encoded)),
 	)
 	c.Data(http.StatusOK, "application/json; charset=utf-8", encoded)
+}
+
+func (ctl *Controller) validateProfileID(c *gin.Context) (uint, bool) {
+	if c.Query("profile_id") == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "profile_id is required"})
+		return 0, false
+	}
+
+	pid, err := strconv.ParseUint(c.Query("profile_id"), 10, 32)
+	if err != nil || pid == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile_id"})
+		return 0, false
+	}
+
+	if !ctl.assertOwnsProfile(c, uint(pid)) {
+		return 0, false
+	}
+
+	return uint(pid), true
 }
 
 var errSessionProcessingActive = errors.New("session processing is active")

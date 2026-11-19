@@ -87,11 +87,13 @@ func List(ctx context.Context, dbConn *gorm.DB, q HistoryListQuery) ([]db.Analys
 		return nil, fmt.Errorf("%w: %q", ErrInvalidFilter, q.Filter)
 	}
 
-	results := []db.AnalysisResult{}
 	if q.Start != nil && q.End != nil {
 		scope = scope.Where("created_at >= ? AND created_at < ?", q.Start, q.End.AddDate(0, 0, 1)).Order("created_at desc, id desc")
 	} else {
 		scope = scope.Order("id desc")
+		if q.Limit > 0 && q.Filter.requiresInputCheck() {
+			return listMissingInputPage(ctx, dbConn, scope, q)
+		}
 	}
 
 	if q.BeforeID > 0 {
@@ -102,6 +104,7 @@ func List(ctx context.Context, dbConn *gorm.DB, q HistoryListQuery) ([]db.Analys
 		scope = scope.Limit(int(q.Limit))
 	}
 
+	results := []db.AnalysisResult{}
 	if err := scope.Find(&results).Error; err != nil {
 		return nil, err
 	}
@@ -132,6 +135,44 @@ func List(ctx context.Context, dbConn *gorm.DB, q HistoryListQuery) ([]db.Analys
 	}
 
 	return results, nil
+}
+
+func listMissingInputPage(ctx context.Context, dbConn, scope *gorm.DB, q HistoryListQuery) ([]db.AnalysisResult, error) {
+	const maxBatchSize = 200
+	pageSize := int(min(q.Limit, maxBatchSize))
+	batchSize := min(maxBatchSize, max(60, 3*pageSize))
+	page := make([]db.AnalysisResult, 0, pageSize)
+	cursor := q.BeforeID
+
+	for {
+		query := scope.Session(&gorm.Session{}).Limit(batchSize)
+		if cursor > 0 {
+			query = query.Where("id < ?", cursor)
+		}
+		var batch []db.AnalysisResult
+		if err := query.Find(&batch).Error; err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			return page, nil
+		}
+		if err := populateHistoryInputStatus(ctx, dbConn, q.ProfileID, batch); err != nil {
+			return nil, err
+		}
+		for i := range batch {
+			if !q.Filter.matchesInputStatus(batch[i].InputStatus) {
+				continue
+			}
+			page = append(page, batch[i])
+			if uint(len(page)) == q.Limit {
+				return page, nil
+			}
+		}
+		if len(batch) < batchSize {
+			return page, nil
+		}
+		cursor = batch[len(batch)-1].ID
+	}
 }
 
 func populateHistoryInputStatus(ctx context.Context, dbConn *gorm.DB, profileID uint, results []db.AnalysisResult) error {
