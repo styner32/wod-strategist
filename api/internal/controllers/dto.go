@@ -228,6 +228,7 @@ type ParseWorkoutImageResponse struct {
 }
 
 type CreateSessionRequest struct {
+	SessionID      string   `json:"session_id,omitempty"`
 	ProfileID      uint     `json:"profile_id"`
 	IdempotencyKey string   `json:"idempotency_key"`
 	Movements      []string `json:"movements,omitempty"`

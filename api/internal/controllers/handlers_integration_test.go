@@ -1054,8 +1054,8 @@ var _ = Describe("Controller handlers", func() {
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusBadRequest))
-			Expect(w.Body.String()).To(ContainSubstring("profile not found"))
+			Expect(w.Code).To(Equal(http.StatusForbidden))
+			Expect(w.Body.String()).To(ContainSubstring("not authorized for this profile"))
 
 			var newSession db.Session
 			Expect(dbConn.First(&newSession).Error).To(Equal(gorm.ErrRecordNotFound))
@@ -1276,7 +1276,6 @@ var _ = Describe("Controller handlers", func() {
 			Expect(count).To(Equal(int64(1)))
 		})
 	})
-
 })
 
 func repeatedJSONString(value string, count int) string {
