@@ -12,6 +12,7 @@ import (
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/wodeval"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type CreateSessionAttr struct {
@@ -54,26 +55,13 @@ func Create(ctx context.Context, dbConn *gorm.DB, input CreateSessionAttr) (*db.
 	idempotencyKey := strings.TrimSpace(strings.ToLower(input.IdempotencyKey))
 
 	// check if session ID already exists
+	existingSessionByID := &db.Session{}
 	if sessionID != "" {
-		existingSessionByID := &db.Session{}
 		err := dbConn.Where("session_id = ?", sessionID).First(&existingSessionByID).Error
 		if err == nil {
 			if existingSessionByID.ProfileID != input.ProfileID {
 				return nil, ErrSessionProfileConflict
 			}
-
-			// allow to update idempotency key from empty to non-empty
-			if idempotencyKey != "" && existingSessionByID.IdempotencyKey == "" {
-				return existingSessionByID, nil
-			}
-
-			existingIdempotencyKey := strings.TrimSpace(strings.ToLower(existingSessionByID.IdempotencyKey))
-
-			if existingIdempotencyKey != idempotencyKey {
-				return nil, ErrIdempotencyConflict
-			}
-
-			return existingSessionByID, nil
 		}
 
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -82,8 +70,8 @@ func Create(ctx context.Context, dbConn *gorm.DB, input CreateSessionAttr) (*db.
 	}
 
 	// check if idempotency key already exists
+	existingSessionByKey := &db.Session{}
 	if idempotencyKey != "" {
-		existingSessionByKey := &db.Session{}
 		err := dbConn.Where("idempotency_key = ? AND profile_id = ?", idempotencyKey, input.ProfileID).First(&existingSessionByKey).Error
 		if err == nil {
 			if sessionID != "" && existingSessionByKey.SessionID != sessionID {
@@ -95,6 +83,46 @@ func Create(ctx context.Context, dbConn *gorm.DB, input CreateSessionAttr) (*db.
 
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
+		}
+	}
+
+	if existingSessionByID.ID > 0 {
+		existingIdempotencyKey := strings.TrimSpace(strings.ToLower(existingSessionByID.IdempotencyKey))
+		if idempotencyKey == "" && existingIdempotencyKey == "" {
+			return existingSessionByID, nil
+		}
+
+		if idempotencyKey != "" && existingIdempotencyKey != "" {
+			if idempotencyKey == existingIdempotencyKey {
+				return existingSessionByID, nil
+			}
+
+			return nil, ErrIdempotencyConflict
+		}
+
+		// don't allow to update idempotency key from non-empty to empty
+		if idempotencyKey == "" && existingIdempotencyKey != "" {
+			return nil, ErrIdempotencyConflict
+		}
+
+		// check if idempotency key is already bound to a different session
+		if existingSessionByKey.ID > 0 {
+			if existingSessionByID.ID != existingSessionByKey.ID {
+				return nil, ErrIdempotencyConflict
+			}
+		}
+
+		// update idempotency key to the new value if it was empty
+		result := dbConn.WithContext(ctx).Model(&db.Session{}).
+			Where("id = ? AND idempotency_key = ''", existingSessionByID.ID).
+			Update("idempotency_key", idempotencyKey)
+
+		if result.Error != nil {
+			return nil, result.Error
+		}
+
+		if result.RowsAffected > 0 {
+			return existingSessionByID, nil
 		}
 	}
 
@@ -147,11 +175,27 @@ func Create(ctx context.Context, dbConn *gorm.DB, input CreateSessionAttr) (*db.
 		IdempotencyKey:       idempotencyKey,
 	}
 
-	if err := dbConn.Create(&newSession).Error; err != nil {
+	result := dbConn.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(newSession)
+	if err := result.Error; err != nil {
 		return nil, err
 	}
 
-	return newSession, nil
+	if result.RowsAffected > 0 {
+		return newSession, nil
+	}
+
+	existingSession := &db.Session{}
+	if idempotencyKey != "" {
+		err = dbConn.Where("idempotency_key = ? AND profile_id = ?", idempotencyKey, input.ProfileID).First(&existingSession).Error
+	} else if sessionID != "" {
+		err = dbConn.Where("session_id = ? AND profile_id = ?", sessionID, input.ProfileID).First(&existingSession).Error
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return existingSession, nil
 }
 
 func validateCanonicalSessionID(sessionID string, workoutType string) (string, error) {
