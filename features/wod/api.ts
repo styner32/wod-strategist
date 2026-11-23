@@ -351,6 +351,64 @@ export async function unarchiveProfile(id: number): Promise<void> {
   });
 }
 
+export interface CreateSessionOptions {
+  profileId: number;
+  sessionId?: string;
+  idempotencyKey: string;
+  workoutType?: WorkoutType;
+  movements?: string[];
+  wodDescription?: string;
+  signal?: AbortSignal;
+  stepTimeoutMs?: number;
+}
+
+export interface CreateSessionResponse {
+  session_id: string;
+  status: string;
+  workout_type: string;
+}
+
+/** Step 0: Register a workout session before uploading video or chunks */
+export async function createSession(
+  options: CreateSessionOptions,
+): Promise<CreateSessionResponse> {
+  const {
+    profileId,
+    sessionId,
+    idempotencyKey,
+    workoutType = "wod",
+    movements = [],
+    wodDescription,
+    signal,
+    stepTimeoutMs = 15000,
+  } = options;
+  const trimmedWod = wodDescription?.trim();
+  const payload = {
+    profile_id: profileId,
+    idempotency_key: idempotencyKey,
+    workout_type: workoutType,
+    ...(sessionId ? { session_id: sessionId } : {}),
+    ...(movements.length > 0 ? { movements } : {}),
+    ...(trimmedWod ? { wod_description: trimmedWod } : {}),
+  };
+
+  const request = (requestSignal?: AbortSignal) =>
+    apiClient<CreateSessionResponse>("/sessions", {
+      method: "POST",
+      bodyPayload: payload,
+      signal: requestSignal,
+    });
+
+  const result = signal
+    ? await request(signal)
+    : await withStepTimeout(request, stepTimeoutMs, "createSession");
+
+  if (!result?.session_id) {
+    throw new Error("createSession did not return a session_id");
+  }
+  return result;
+}
+
 /** Step 1: Request a signed upload URL from our API */
 export async function getUploadUrl(
   sessionId: string,

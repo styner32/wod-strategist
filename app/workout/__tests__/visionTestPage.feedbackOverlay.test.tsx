@@ -165,6 +165,11 @@ jest.mock("@/features/ai-coach/appleAiUpload", () => ({ saveAppleAiObservation: 
 jest.mock("@/features/debug/telemetryRecorder", () => ({ TelemetryRecorder: { start: () => {}, registerProvider: () => {}, stop: async () => null } }));
 jest.mock("@/features/debug/telemetryUpload", () => ({ enqueueUpload: async () => {}, flushPendingUploads: async () => {} }));
 jest.mock("@/features/wod/api", () => ({
+  createSession: jest.fn(async (opts: any) => ({
+    session_id: opts?.sessionId || "WOD-20260929-TEST",
+    status: "started",
+    workout_type: opts?.workoutType || "wod",
+  })),
   mergeChunks: async () => {},
   processWorkoutChunk: jest.fn(),
   is4xxError: (err: any) => Boolean(err?.status >= 400 && err?.status < 500),

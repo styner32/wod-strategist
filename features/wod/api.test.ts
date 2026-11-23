@@ -1,6 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import {
+  createSession,
   fetchMovements,
   fetchInjuries,
   getUploadUrl,
@@ -746,5 +747,93 @@ describe("performance evidence endpoints", () => {
   it("encodes the movement query and supplies the owned profile", async () => {
     server.use(http.get(`${API_BASE_URL}/performance-benchmarks`, ({ request }) => { const url = new URL(request.url); expect(url.searchParams.get("profile_id")).toBe("7"); expect(url.searchParams.get("movement")).toBe("Clean & Jerk"); return HttpResponse.json({ records: [], comparisons: [], best: [] }); }));
     await expect(getPerformanceBenchmarks(7, "Clean & Jerk")).resolves.toEqual({ records: [], comparisons: [], best: [] });
+  });
+});
+
+describe("createSession", () => {
+  it("POSTs to /sessions without session_id for server-generated creation and trims optional fields", async () => {
+    let capturedBody: any;
+    server.use(
+      http.post(`${API_BASE_URL}/sessions`, async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({
+          session_id: "WOD-20261123-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          status: "started",
+          workout_type: "wod",
+        });
+      }),
+    );
+
+    const res = await createSession({
+      profileId: 7,
+      idempotencyKey: "upload-key-1",
+      workoutType: "wod",
+      wodDescription: "   ",
+      movements: [],
+    });
+
+    expect(capturedBody).toEqual({
+      profile_id: 7,
+      idempotency_key: "upload-key-1",
+      workout_type: "wod",
+    });
+    expect(capturedBody).not.toHaveProperty("session_id");
+    expect(res).toEqual({
+      session_id: "WOD-20261123-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      status: "started",
+      workout_type: "wod",
+    });
+  });
+
+  it("includes explicit session_id, movements, and trimmed wod_description when provided", async () => {
+    let capturedBody: any;
+    server.use(
+      http.post(`${API_BASE_URL}/sessions`, async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({
+          session_id: "WARMUP-20261123-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          status: "started",
+          workout_type: "warmup",
+        });
+      }),
+    );
+
+    await createSession({
+      profileId: 3,
+      sessionId: "WARMUP-20261123-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      idempotencyKey: "rec-key-1",
+      workoutType: "warmup",
+      movements: ["Air Squat", "Push-up"],
+      wodDescription: "  3 rounds mobility  ",
+    });
+
+    expect(capturedBody).toEqual({
+      profile_id: 3,
+      session_id: "WARMUP-20261123-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      idempotency_key: "rec-key-1",
+      workout_type: "warmup",
+      movements: ["Air Squat", "Push-up"],
+      wod_description: "3 rounds mobility",
+    });
+  });
+
+  it("preserves HTTP status on 4xx rejection and validates session_id in response", async () => {
+    server.use(
+      http.post(`${API_BASE_URL}/sessions`, () =>
+        HttpResponse.json({ error: "session conflict" }, { status: 409 }),
+      ),
+    );
+    await expect(
+      createSession({ profileId: 3, idempotencyKey: "conflict-key" }),
+    ).rejects.toMatchObject({ status: 409 });
+
+    server.use(
+      http.post(`${API_BASE_URL}/sessions`, () =>
+        HttpResponse.json({ status: "started", workout_type: "wod" }),
+      ),
+    );
+    await expect(
+      createSession({ profileId: 3, idempotencyKey: "missing-id-key" }),
+    ).rejects.toThrow("createSession did not return a session_id");
   });
 });

@@ -18,10 +18,12 @@ const mockReleases: jest.Mock[] = [];
 const mockStartCamera = jest.fn();
 const mockStopCamera = jest.fn();
 const mockReplace = jest.fn();
+const mockCreateSession = jest.fn();
 const mockProcessChunk = jest.fn();
 const mockCompress = jest.fn();
 const mockCancelCompression = jest.fn();
 const mockMergeChunks = jest.fn();
+let capturedLiveSessionRef: { current: string } | undefined;
 let mockContinuousRecording = true;
 let mockSkipCompression = true;
 let mockRecordingSetupParam: string | string[] | undefined = "launch-snapshot";
@@ -90,7 +92,12 @@ jest.mock("@/modules/apple-on-device-ai", () => ({ environmentNativeAvailable: f
 jest.mock("@/features/environment/store", () => ({ flushEnvironmentUploads: async () => {} }));
 jest.mock("@/features/environment/useEnvironmentRecorder", () => ({ useEnvironmentRecorder: () => mockEnvironment }));
 jest.mock("@/features/environment/EnvironmentCard", () => ({ EnvironmentLiveCard: () => null }));
-jest.mock("@/features/wod/useLiveWorkoutFeedback", () => ({ useLiveWorkoutFeedback: () => ({}) }));
+jest.mock("@/features/wod/useLiveWorkoutFeedback", () => ({
+  useLiveWorkoutFeedback: (_recording: boolean, _profileId: number, sessionRef: { current: string }) => {
+    capturedLiveSessionRef = sessionRef;
+    return {};
+  },
+}));
 jest.mock("@/features/wod/ui/ActivitySummaryCard", () => ({ ActivitySummaryContent: () => null }));
 jest.mock("expo-keep-awake", () => ({ activateKeepAwakeAsync: async () => {}, deactivateKeepAwake: () => {} }));
 jest.mock("expo-media-library/legacy", () => ({ requestPermissionsAsync: async () => ({ granted: true }) }));
@@ -123,6 +130,7 @@ jest.mock("@/features/ai-coach/appleAiUpload", () => ({ saveAppleAiObservation: 
 jest.mock("@/features/debug/telemetryRecorder", () => ({ TelemetryRecorder: { start: () => {}, registerProvider: () => {}, stop: async () => null } }));
 jest.mock("@/features/debug/telemetryUpload", () => ({ enqueueUpload: async () => {}, flushPendingUploads: async () => {} }));
 jest.mock("@/features/wod/api", () => ({
+  createSession: (...args: unknown[]) => mockCreateSession(...args),
   mergeChunks: (...args: unknown[]) => mockMergeChunks(...args),
   processWorkoutChunk: (...args: unknown[]) => mockProcessChunk(...args),
   is4xxError: (err: any) => Boolean(err?.status >= 400 && err?.status < 500),
@@ -158,6 +166,12 @@ beforeEach(() => {
   mockAdd.mockResolvedValue(undefined);
   mockStopped.mockResolvedValue(undefined);
   mockSave.mockResolvedValue({ status: "saved" });
+  capturedLiveSessionRef = undefined;
+  mockCreateSession.mockReset().mockImplementation(async (opts: any) => ({
+    session_id: opts?.sessionId ?? mockRef.sessionId,
+    status: "started",
+    workout_type: opts?.workoutType ?? "wod",
+  }));
   mockProcessChunk.mockResolvedValue(undefined);
   mockCompress.mockImplementation(async (path: string) => path);
   mockMergeChunks.mockResolvedValue(undefined);
@@ -933,5 +947,248 @@ describe("recording setup validation at camera start", () => {
       if (scenario === "archived inherited") expect(mockFetchArchiveStates).toHaveBeenCalledWith(3, [inheritedSessionId], undefined);
       else expect(mockFetchArchiveStates).not.toHaveBeenCalled();
     } finally { view.unmount(); alert.mockRestore(); }
+  });
+});
+
+describe("session registration and offline gating", () => {
+  it("registers the session after setup validation and gates live feedback until created", async () => {
+    const createDeferred = deferred<{ session_id: string; status: string; workout_type: string }>();
+    mockCreateSession.mockReturnValueOnce(createDeferred.promise);
+
+    const view = render(<VisionTestPage />);
+    await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
+
+    expect(mockCreateSession).toHaveBeenCalledWith({
+      profileId: 3,
+      sessionId: mockRef.sessionId,
+      idempotencyKey: expect.any(String),
+      workoutType: "WOD",
+      movements: [],
+      wodDescription: undefined,
+    });
+    expect(capturedLiveSessionRef?.current).toBe("");
+
+    await act(async () => {
+      createDeferred.resolve({ session_id: mockRef.sessionId, status: "started", workout_type: "wod" });
+    });
+    expect(capturedLiveSessionRef?.current).toBe(mockRef.sessionId);
+    view.unmount();
+  });
+
+  it("never calls createSession when recording setup validation blocks capture", async () => {
+    mockValidateRecordingSetup.mockRejectedValueOnce(new Error("archived_source"));
+    const alert = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    try {
+      const view = render(<VisionTestPage />);
+      await waitFor(() => expect(mockStopped).toHaveBeenCalledWith(mockRef, {
+        complete: false,
+        reason: "recording_source_unavailable",
+      }));
+      expect(mockCreateSession).not.toHaveBeenCalled();
+      view.unmount();
+    } finally {
+      alert.mockRestore();
+    }
+  });
+
+  it("buffers chunks when offline during initial session creation and drains them sequentially once reconnected", async () => {
+    mockCreateSession
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ session_id: mockRef.sessionId, status: "started", workout_type: "wod" });
+
+    const view = render(<VisionTestPage />);
+    await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
+    const callbacks = mockStartCamera.mock.calls[0][0];
+    const start = Date.now();
+
+    await act(async () => {
+      callbacks.onRecordingSegment({
+        status: "ready",
+        path: "file:///documents/run-1/analysis/part-1.mp4",
+        captureStartTimeMs: start,
+        captureEndTimeMs: start + 10000,
+      });
+    });
+
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(view.getByText("overlay.recording.sessionCreateDeferred")).toBeTruthy());
+    expect(mockProcessChunk).not.toHaveBeenCalled();
+    expect(capturedLiveSessionRef?.current).toBe("");
+
+    const firstKey = mockCreateSession.mock.calls[0][0].idempotencyKey;
+    expect(mockCreateSession.mock.calls[1][0]).toMatchObject({
+      sessionId: mockRef.sessionId,
+      idempotencyKey: firstKey,
+    });
+
+    await act(async () => {
+      callbacks.onRecordingSegment({
+        status: "ready",
+        path: "file:///documents/run-1/analysis/part-2.mp4",
+        captureStartTimeMs: start + 10000,
+        captureEndTimeMs: start + 20000,
+      });
+    });
+
+    await waitFor(() => expect(mockProcessChunk).toHaveBeenCalledTimes(2));
+    expect(mockCreateSession.mock.calls[2][0]).toMatchObject({
+      sessionId: mockRef.sessionId,
+      idempotencyKey: firstKey,
+    });
+    expect(mockProcessChunk.mock.calls.map((call) => call[0])).toEqual([
+      "file:///documents/run-1/analysis/part-1.mp4",
+      "file:///documents/run-1/analysis/part-2.mp4",
+    ]);
+    expect(capturedLiveSessionRef?.current).toBe(mockRef.sessionId);
+
+    fireEvent.press(view.getByText("square.fill"));
+    await act(async () => {
+      callbacks.onRecordingSourceFinalized(source());
+      await callbacks.onRecordingFinished(source());
+    });
+    await waitFor(() => expect(mockMergeChunks).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockReleases.every((release) => release.mock.calls.length === 1)).toBe(true));
+    view.unmount();
+  });
+
+  it("registers the session and drains all buffered chunks in order when stopping after offline capture", async () => {
+    mockCreateSession
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ session_id: mockRef.sessionId, status: "started", workout_type: "wod" });
+
+    const view = render(<VisionTestPage />);
+    await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
+    const callbacks = mockStartCamera.mock.calls[0][0];
+    const start = Date.now();
+
+    await act(async () => {
+      callbacks.onRecordingSegment({
+        status: "ready",
+        path: "file:///documents/run-1/analysis/part-1.mp4",
+        captureStartTimeMs: start,
+        captureEndTimeMs: start + 10000,
+      });
+    });
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      callbacks.onRecordingSegment({
+        status: "ready",
+        path: "file:///documents/run-1/analysis/part-2.mp4",
+        captureStartTimeMs: start + 10000,
+        captureEndTimeMs: start + 20000,
+      });
+    });
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(3));
+    expect(mockProcessChunk).not.toHaveBeenCalled();
+
+    fireEvent.press(view.getByText("square.fill"));
+    await act(async () => {
+      callbacks.onRecordingSourceFinalized(source());
+      await callbacks.onRecordingFinished(source());
+    });
+
+    await waitFor(() => expect(mockProcessChunk).toHaveBeenCalledTimes(2));
+    const expectedKey = mockCreateSession.mock.calls[0][0].idempotencyKey;
+    expect(mockCreateSession.mock.calls[3][0].idempotencyKey).toBe(expectedKey);
+    expect(mockProcessChunk.mock.calls.map((call) => call[0])).toEqual([
+      "file:///documents/run-1/analysis/part-1.mp4",
+      "file:///documents/run-1/analysis/part-2.mp4",
+    ]);
+    await waitFor(() => expect(mockMergeChunks).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockReleases.every((release) => release.mock.calls.length === 1)).toBe(true));
+    view.unmount();
+  });
+
+  it("retains the local archive and withholds merge when session creation stays offline through stop", async () => {
+    jest.useFakeTimers();
+    mockCreateSession.mockRejectedValue(new Error("offline"));
+    const alert = jest.spyOn(Alert, "alert").mockImplementation(() => {});
+    const view = render(<VisionTestPage />);
+    try {
+      await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
+      const callbacks = mockStartCamera.mock.calls[0][0];
+      const start = Date.now();
+
+      await act(async () => {
+        callbacks.onRecordingSegment({
+          status: "ready",
+          path: "file:///documents/run-1/analysis/part-1.mp4",
+          captureStartTimeMs: start,
+          captureEndTimeMs: start + 10000,
+        });
+      });
+      await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(2));
+
+      fireEvent.press(view.getByText("square.fill"));
+      await act(async () => {
+        callbacks.onRecordingSourceFinalized(source());
+        await callbacks.onRecordingFinished(source());
+      });
+      await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(5000);
+      });
+
+      await waitFor(() => expect(alert).toHaveBeenCalledWith(
+        "overlay.recording.analysisIncompleteTitle",
+        "overlay.recording.analysisIncompleteBody",
+      ));
+      expect(mockProcessChunk).not.toHaveBeenCalled();
+      expect(mockMergeChunks).not.toHaveBeenCalled();
+      await waitFor(() => expect(mockReleases.every((release) => release.mock.calls.length === 1)).toBe(true));
+    } finally {
+      view.unmount();
+      alert.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it("does not retry session creation or upload chunks after a permanent 4xx error", async () => {
+    const err409: any = new Error("API Error [409]: Conflict");
+    err409.status = 409;
+    mockCreateSession.mockRejectedValueOnce(err409);
+
+    const view = render(<VisionTestPage />);
+    await waitFor(() => expect(mockStartCamera).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockCreateSession).toHaveBeenCalledTimes(1));
+    const callbacks = mockStartCamera.mock.calls[0][0];
+    const start = Date.now();
+
+    await act(async () => {
+      callbacks.onRecordingSegment({
+        status: "ready",
+        path: "file:///documents/run-1/analysis/part-1.mp4",
+        captureStartTimeMs: start,
+        captureEndTimeMs: start + 10000,
+      });
+      callbacks.onRecordingSegment({
+        status: "ready",
+        path: "file:///documents/run-1/analysis/part-2.mp4",
+        captureStartTimeMs: start + 10000,
+        captureEndTimeMs: start + 20000,
+      });
+    });
+
+    await waitFor(() => expect(view.getByText("overlay.recording.chunk4xxError")).toBeTruthy());
+    expect(mockCreateSession).toHaveBeenCalledTimes(1);
+    expect(mockProcessChunk).not.toHaveBeenCalled();
+
+    fireEvent.press(view.getByText("square.fill"));
+    await act(async () => {
+      callbacks.onRecordingSourceFinalized(source());
+      await callbacks.onRecordingFinished(source());
+    });
+    expect(mockMergeChunks).not.toHaveBeenCalled();
+    await waitFor(() => expect(mockReleases.every((release) => release.mock.calls.length === 1)).toBe(true));
+    view.unmount();
   });
 });
