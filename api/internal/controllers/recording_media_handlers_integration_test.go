@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/oklog/ulid/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/controllers"
@@ -198,6 +199,153 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 			Expect(f.post("/api/v1/chunk-complete", f.chunkBody(1)).Code).To(Equal(http.StatusConflict))
 			Expect(dbConn.Model(&db.AnalysisResult{}).Where("session_id = ?", f.sessionID).Update("archived_at", nil).Error).To(Succeed())
 			Expect(f.post("/api/v1/chunk-complete", f.chunkBody(1)).Code).To(Equal(http.StatusConflict))
+			Expect(f.transport.Requests()).To(BeEmpty())
+		})
+
+		It("admits v1 chunks and merge for a session pre-created via POST /api/v1/sessions", func() {
+			f := newRecordingMediaFixture()
+			f.sessionID = "WARMUP-20261124-01M85EDQRN1YKDV7V2KXVE6HWC"
+			createResp := f.post("/api/v1/sessions", map[string]any{
+				"profile_id":      f.profile.ID,
+				"session_id":      f.sessionID,
+				"idempotency_key": ulid.Make().String(),
+				"workout_type":    "warmup",
+				"movements":       []string{"Air Squat"},
+			})
+			Expect(createResp.Code).To(Equal(http.StatusOK), createResp.Body.String())
+
+			first := f.admit(1, "9007199254740993", true)
+			second := f.admit(2, "9007199254740994", false)
+
+			var chunks []db.RecordingChunk
+			Expect(dbConn.Where("session_id = ?", f.sessionID).Order("capture_order ASC").Find(&chunks).Error).To(Succeed())
+			Expect(chunks).To(HaveLen(2))
+			byChunkID := make(map[uint]db.RecordingChunk, len(chunks))
+			for _, ch := range chunks {
+				Expect(ch.AIType).To(Equal(worker.TypeChunkAnalysisWithSession))
+				Expect(ch.AIDispatched).To(BeTrue())
+				byChunkID[ch.ID] = ch
+			}
+
+			pending, err := inspector.ListPendingTasks("default")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pending).To(HaveLen(2))
+			seenChunkIDs := make(map[uint]bool, len(pending))
+			for _, task := range pending {
+				Expect(task.Type).To(Equal(worker.TypeChunkAnalysisWithSession))
+				var payload worker.VideoAnalysisWithSessionPayload
+				Expect(json.Unmarshal(task.Payload, &payload)).To(Succeed())
+				chunk, ok := byChunkID[payload.RecordingChunkID]
+				Expect(ok).To(BeTrue())
+				Expect(payload.SessionID).To(Equal(f.sessionID))
+				Expect(payload.ProfileID).To(Equal(f.profile.ID))
+				Expect(payload.FilePath).To(Equal(chunk.SourceURI))
+				Expect(payload.SourceGeneration).To(Equal(chunk.SourceGeneration))
+				Expect(payload.LiveAnalysisVersion).To(Equal(1))
+				seenChunkIDs[payload.RecordingChunkID] = true
+			}
+			Expect(seenChunkIDs).To(HaveLen(2))
+
+			mergeResp := f.post("/api/v1/merge-chunks", f.mergeBody(first, second))
+			Expect(mergeResp.Code).To(Equal(http.StatusAccepted), mergeResp.Body.String())
+			Expect(f.transport.Verify()).To(Succeed())
+		})
+
+		It("rejects pre-created sessions owned by another profile or non-fresh legacy sessions", func() {
+			f := newRecordingMediaFixture()
+			other := testhelpers.CreateProfile(dbConn, &db.Profile{UserID: f.owner.ID})
+
+			f.sessionID = "WOD-20261124-" + ulid.Make().String()
+			testhelpers.CreateSession(dbConn, &db.Session{
+				ProfileID:   other.ID,
+				SessionID:   f.sessionID,
+				Status:      db.SessionStatusStarted,
+				WorkoutType: "wod",
+			})
+			crossResp := f.post("/api/v1/chunk-complete", f.chunkBody(1))
+			Expect(crossResp.Code).To(Equal(http.StatusConflict), crossResp.Body.String())
+			crossBody := decodeMapBody(crossResp)
+			Expect(crossBody["error_code"]).To(Equal("RECORDING_MEDIA_CONFLICT"))
+			Expect(crossBody["error"]).To(ContainSubstring("another profile"))
+			Expect(f.transport.Requests()).To(BeEmpty())
+
+			effort := 7
+			nonFreshCases := []struct {
+				name  string
+				build func(sid string) db.Session
+			}{
+				{
+					name: "completed session",
+					build: func(sid string) db.Session {
+						return db.Session{ProfileID: f.profile.ID, SessionID: sid, Status: db.SessionStatusCompleted, WorkoutType: "wod"}
+					},
+				},
+				{
+					name: "failed session",
+					build: func(sid string) db.Session {
+						return db.Session{ProfileID: f.profile.ID, SessionID: sid, Status: db.SessionStatusFailed, WorkoutType: "wod"}
+					},
+				},
+				{
+					name: "backfill idempotency key",
+					build: func(sid string) db.Session {
+						return db.Session{ProfileID: f.profile.ID, SessionID: sid, Status: db.SessionStatusStarted, IdempotencyKey: "backfill:" + sid, WorkoutType: "wod"}
+					},
+				},
+				{
+					name: "live idempotency key",
+					build: func(sid string) db.Session {
+						return db.Session{ProfileID: f.profile.ID, SessionID: sid, Status: db.SessionStatusStarted, IdempotencyKey: "live:" + sid, WorkoutType: "wod"}
+					},
+				},
+				{
+					name: "wod idempotency key",
+					build: func(sid string) db.Session {
+						return db.Session{ProfileID: f.profile.ID, SessionID: sid, Status: db.SessionStatusStarted, IdempotencyKey: "wod:" + sid, WorkoutType: "wod"}
+					},
+				},
+				{
+					name: "session with effort",
+					build: func(sid string) db.Session {
+						return db.Session{ProfileID: f.profile.ID, SessionID: sid, Status: db.SessionStatusStarted, Effort: &effort, WorkoutType: "wod"}
+					},
+				},
+				{
+					name: "session with activity_summary",
+					build: func(sid string) db.Session {
+						return db.Session{ProfileID: f.profile.ID, SessionID: sid, Status: db.SessionStatusStarted, ActivitySummary: db.NullableJSONDocument(`{"events":[]}`), WorkoutType: "wod"}
+					},
+				},
+			}
+
+			for _, tc := range nonFreshCases {
+				f.sessionID = "WOD-20261124-" + ulid.Make().String()
+				attr := tc.build(f.sessionID)
+				testhelpers.CreateSession(dbConn, &attr)
+				resp := f.post("/api/v1/chunk-complete", f.chunkBody(1))
+				Expect(resp.Code).To(Equal(http.StatusConflict), "%s: %s", tc.name, resp.Body.String())
+				body := decodeMapBody(resp)
+				Expect(body["error_code"]).To(Equal("RECORDING_MEDIA_CONFLICT"), tc.name)
+				Expect(body["error"]).To(ContainSubstring("only new recordings"), tc.name)
+				Expect(f.transport.Requests()).To(BeEmpty(), tc.name)
+			}
+
+			f.sessionID = "WOD-20261124-" + ulid.Make().String()
+			testhelpers.CreateSession(dbConn, &db.Session{
+				ProfileID:   f.profile.ID,
+				SessionID:   f.sessionID,
+				Status:      db.SessionStatusStarted,
+				WorkoutType: "wod",
+			})
+			legacyBody := f.chunkBody(1)
+			delete(legacyBody, "media_pipeline_version")
+			delete(legacyBody, "client_chunk_id")
+			delete(legacyBody, "capture_order")
+			Expect(f.post("/api/v1/chunk-complete", legacyBody).Code).To(Equal(http.StatusAccepted))
+
+			v1AfterLegacy := f.post("/api/v1/chunk-complete", f.chunkBody(2))
+			Expect(v1AfterLegacy.Code).To(Equal(http.StatusConflict), v1AfterLegacy.Body.String())
+			Expect(decodeMapBody(v1AfterLegacy)["error_code"]).To(Equal("RECORDING_MEDIA_CONFLICT"))
 			Expect(f.transport.Requests()).To(BeEmpty())
 		})
 	})

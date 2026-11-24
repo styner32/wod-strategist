@@ -73,20 +73,23 @@ func markLegacyRecordingMediaTx(tx *gorm.DB, profileID uint, sessionID string) e
 }
 
 func (ctl *Controller) recordingMediaError(c *gin.Context, err error) {
-	if writeSessionProcessingConflict(c, err) {
-		return
-	}
 	var pgError *pgconn.PgError
 	if errors.As(err, &pgError) && pgError.Code == "23505" {
+		logger.Log.Warn("recording media conflict", zap.Error(err))
 		c.JSON(http.StatusConflict, gin.H{"error": "recording media identity is already registered", "error_code": "RECORDING_MEDIA_CONFLICT"})
 		return
 	}
 	switch {
 	case errors.Is(err, errRecordingMediaConflict):
+		logger.Log.Warn("recording media conflict", zap.Error(err))
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "error_code": "RECORDING_MEDIA_CONFLICT"})
 	case errors.Is(err, errRecordingMediaSource):
+		logger.Log.Warn("recording media source unavailable", zap.Error(err))
 		c.JSON(http.StatusConflict, gin.H{"error": "uploaded chunk is unavailable or empty", "error_code": "RECORDING_MEDIA_SOURCE_UNAVAILABLE"})
 	default:
+		if writeSessionProcessingConflict(c, err) {
+			return
+		}
 		logger.Log.Error("recording media admission failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "unable to accept recording media"})
 	}
@@ -124,7 +127,7 @@ func (ctl *Controller) precheckRecordingMediaChunk(ctx context.Context, req Chun
 	var preRun db.RecordingMediaRun
 	err = conn.Where("profile_id = ? AND session_id = ?", req.ProfileID, req.SessionID).First(&preRun).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		if err := ensureNewRecordingMediaDB(conn, req.SessionID); err != nil {
+		if err := ensureNewRecordingMediaDB(conn, req.ProfileID, req.SessionID); err != nil {
 			return "", false, 0, nil, err
 		}
 		bucket, parsedObject, parseErr := storage.ParseGCSURI(req.GCSURI)
@@ -231,7 +234,7 @@ func (ctl *Controller) handleRecordingMediaChunk(c *gin.Context, req ChunkComple
 	err = db.WithSessionAutomaticWork(ctx, ctl.db, req.ProfileID, req.SessionID, func(tx *gorm.DB) error {
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("profile_id = ? AND session_id = ?", req.ProfileID, req.SessionID).First(&run).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if err := ensureNewRecordingMediaDB(tx, req.SessionID); err != nil {
+			if err := ensureNewRecordingMediaDB(tx, req.ProfileID, req.SessionID); err != nil {
 				return err
 			}
 			now := time.Now().UTC()
@@ -343,7 +346,7 @@ func isRecordingMediaOutput(name string) bool {
 	return base == "merged.mp4" || base == "analysis.mp4" || base == "hardsubbed.mp4" || strings.HasPrefix(base, "split_chunk_") || strings.HasPrefix(base, "hl_") || strings.Contains(base, "_merged_") || strings.Contains(base, "_encoded_") || strings.Contains(base, "_hardsubbed_")
 }
 
-func ensureNewRecordingMediaDB(conn *gorm.DB, sessionID string) error {
+func ensureNewRecordingMediaDB(conn *gorm.DB, profileID uint, sessionID string) error {
 	var existingRuns int64
 	if err := conn.Model(&db.RecordingMediaRun{}).Where("session_id = ?", sessionID).Count(&existingRuns).Error; err != nil {
 		return err
@@ -351,7 +354,22 @@ func ensureNewRecordingMediaDB(conn *gorm.DB, sessionID string) error {
 	if existingRuns != 0 {
 		return fmt.Errorf("%w: this session is already registered to another profile", errRecordingMediaConflict)
 	}
-	for _, table := range []string{"sessions", "analysis_results", "chunk_analysis_results"} {
+	var existingSession db.Session
+	err := conn.Select("id, profile_id, status, idempotency_key, effort, activity_summary").
+		Where("session_id = ?", sessionID).
+		First(&existingSession).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	if err == nil {
+		if existingSession.ProfileID != profileID {
+			return fmt.Errorf("%w: this session is already registered to another profile", errRecordingMediaConflict)
+		}
+		if !isFreshRecordingSession(existingSession) {
+			return fmt.Errorf("%w: only new recordings can use this media pipeline", errRecordingMediaConflict)
+		}
+	}
+	for _, table := range []string{"analysis_results", "chunk_analysis_results"} {
 		var count int64
 		if err := conn.Table(table).Where("session_id = ?", sessionID).Limit(1).Count(&count).Error; err != nil {
 			return err
@@ -361,6 +379,19 @@ func ensureNewRecordingMediaDB(conn *gorm.DB, sessionID string) error {
 		}
 	}
 	return nil
+}
+
+func isFreshRecordingSession(sess db.Session) bool {
+	if sess.Status != db.SessionStatusStarted || sess.Effort != nil || hasSessionActivitySummary(sess.ActivitySummary) {
+		return false
+	}
+	key := strings.ToLower(strings.TrimSpace(sess.IdempotencyKey))
+	return !strings.HasPrefix(key, "backfill:") && !strings.HasPrefix(key, "live:") && !strings.HasPrefix(key, "wod:")
+}
+
+func hasSessionActivitySummary(doc db.NullableJSONDocument) bool {
+	trimmed := strings.TrimSpace(string(doc))
+	return trimmed != "" && trimmed != "null"
 }
 
 func (ctl *Controller) ensureNoRecordingMediaOutputs(ctx context.Context, profileID uint, sessionID string) error {
