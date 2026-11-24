@@ -392,6 +392,9 @@ func (w *Worker) handleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	}
 
 	localFilePath, err := createTempFile("chunk", ".mp4")
+	defer func() {
+		os.Remove(localFilePath)
+	}()
 	if err != nil {
 		return err
 	}
@@ -425,10 +428,6 @@ func (w *Worker) handleChunkAnalysisTask(ctx context.Context, t *asynq.Task) err
 	} else {
 		w.logger.Warn("motion probe failed for chunk analysis", zap.Error(pRes.err))
 	}
-
-	defer func() {
-		os.Remove(localFilePath)
-	}()
 
 	if geminiFile != "" {
 		defer func() {
@@ -510,16 +509,45 @@ func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		return fmt.Errorf("json.Unmarshal failed: %v: %w", err, asynq.SkipRetry)
 	}
 
-	if handled, err := w.resumeLiveChunk(ctx, p.LiveAnalysisVersion, VideoAnalysisPayload{ProfileID: p.ProfileID, SessionID: p.SessionID, FilePath: p.FilePath}); handled {
-		return err
-	}
-
-	retryCount := getRetryCount(ctx)
-
 	if _, err := session.ValidateCanonicalSessionID(p.SessionID, ""); err != nil {
 		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID), zap.Error(err))
 		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
 	}
+
+	if handled, err := w.resumeLiveChunk(ctx, p.LiveAnalysisVersion, VideoAnalysisPayload{ProfileID: p.ProfileID, SessionID: p.SessionID, FilePath: p.FilePath}); handled {
+		return err
+	}
+
+	if !strings.HasPrefix(p.FilePath, "gs://") {
+		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
+	}
+
+	var profile db.Profile
+	if err := w.DB.WithContext(ctx).Where("id = ?", p.ProfileID).First(&profile).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			w.logger.Error("No profile found", zap.Uint("profile_id", p.ProfileID))
+			return fmt.Errorf("profile not found: %w", asynq.SkipRetry)
+		}
+		w.logger.Error("Failed to load profile", zap.Uint("profile_id", p.ProfileID))
+		return fmt.Errorf("failed to load profile: %w", err)
+	}
+
+	var session db.Session
+	if err := w.DB.WithContext(ctx).Where("session_id = ?", p.SessionID).First(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			w.logger.Error("No session found", zap.String("session_id", p.SessionID))
+			return fmt.Errorf("session not found: %w", asynq.SkipRetry)
+		}
+		w.logger.Error("Failed to load session", zap.String("session_id", p.SessionID))
+		return fmt.Errorf("failed to load session: %w", err)
+	}
+
+	if session.ProfileID != p.ProfileID {
+		w.logger.Error("Session belongs to another profile", zap.String("session_id", p.SessionID), zap.Uint("profile_id", p.ProfileID))
+		return fmt.Errorf("session belongs to another profile: %w", asynq.SkipRetry)
+	}
+
+	retryCount := getRetryCount(ctx)
 
 	w.logger.Info("Processing chunk analysis",
 		zap.String("session_id", p.SessionID),
@@ -553,45 +581,15 @@ func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		return asynq.SkipRetry
 	}
 
-	if !strings.HasPrefix(p.FilePath, "gs://") {
-		return fmt.Errorf("invalid file path: %w", asynq.SkipRetry)
-	}
-
-	var profile db.Profile
-	if err := w.DB.WithContext(ctx).Where("id = ?", p.ProfileID).First(&profile).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			w.logger.Error("No profile found", zap.Uint("profile_id", p.ProfileID))
-			return fmt.Errorf("profile not found: %w", asynq.SkipRetry)
-		}
-		w.logger.Error("Failed to load profile", zap.Uint("profile_id", p.ProfileID))
-		return fmt.Errorf("failed to load profile: %w", err)
-	}
-
-	var session db.Session
-	if err := w.DB.WithContext(ctx).Where("session_id = ?", p.SessionID).First(&session).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			w.logger.Error("No session found", zap.String("session_id", p.SessionID))
-			return fmt.Errorf("session not found: %w", asynq.SkipRetry)
-		}
-		w.logger.Error("Failed to load session", zap.String("session_id", p.SessionID))
-		return fmt.Errorf("failed to load session: %w", err)
-	}
-
-	if session.ProfileID != p.ProfileID {
-		w.logger.Error("Session belongs to another profile", zap.String("session_id", p.SessionID), zap.Uint("profile_id", p.ProfileID))
-		return fmt.Errorf("session belongs to another profile: %w", asynq.SkipRetry)
-	}
-
 	localFilePath, err := createTempFile("chunk", ".mp4")
+	defer func() {
+		os.Remove(localFilePath)
+	}()
 	if err != nil {
 		return err
 	}
 
 	err = w.downloadAnalysisInput(ctx, VideoAnalysisPayload{FilePath: p.FilePath, SourceGeneration: p.SourceGeneration}, localFilePath)
-	defer func() {
-		os.Remove(localFilePath)
-	}()
-
 	if err != nil {
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
 	}
@@ -745,6 +743,8 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 		prompt += RecoveryChunkPolicyPrompt
 	} else if profile != nil {
 		prompt += levelPolicyForFitnessLevel(profile.FitnessLevel)
+	} else {
+		prompt += levelPolicyForFitnessLevel("")
 	}
 
 	var wodDesc string
@@ -772,8 +772,6 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 		prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
 		prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
 		prompt += buildHeartRateContext(p.HeartRateBPM)
-	} else {
-
 	}
 
 	// Add observed signals & target person requirement (tracking continuity supplies its own unified target_person block).

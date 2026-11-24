@@ -306,7 +306,7 @@ var _ = Describe("HandleChunkAnalysisWithSessionTask", func() {
 
 	It("returns SkipRetry without storage access when session belongs to another profile", func() {
 		otherProfile := testhelpers.CreateProfile(dbConn, &db.Profile{})
-		otherSessionID := "WOD-20261124-01JOTHERPROFILE000000000000"
+		otherSessionID := "WOD-20261124-" + ulid.Make().String()
 		testhelpers.CreateSession(dbConn, &db.Session{
 			SessionID:   otherSessionID,
 			ProfileID:   otherProfile.ID,
@@ -325,7 +325,7 @@ var _ = Describe("HandleChunkAnalysisWithSessionTask", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		err = w.HandleChunkAnalysisWithSessionTask(context.Background(), task)
-		Expect(err).To(HaveOccurred())
+		Expect(err).To(MatchError(ContainSubstring("another profile")))
 		Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
 		Expect(storageTransport.Requests()).To(BeEmpty())
 
@@ -449,6 +449,91 @@ var _ = Describe("HandleChunkAnalysisWithSessionTask", func() {
 		Expect(strings.TrimSpace(string(reloaded.ActivitySummary))).NotTo(BeEmpty())
 		Expect(strings.TrimSpace(string(reloaded.ActivitySummary))).NotTo(Equal("null"))
 	})
+
+	It("downloads the pinned GCS generation when SourceGeneration is set", func() {
+		storageTransport.New(testhelpers.GCSBaseURL).
+			Get("/test-bucket/chunks/sess-gen-ws/chunk_001.mp4?generation=77").
+			Reply(http.StatusOK).
+			Body([]byte{0x00})
+		transport := setupGeminiTransport(chunkAnalysis)
+
+		raw, err := json.Marshal(VideoAnalysisWithSessionPayload{
+			SessionID:        sessionID,
+			FilePath:         "gs://test-bucket/chunks/sess-gen-ws/chunk_001.mp4",
+			ProfileID:        profile.ID,
+			StartSecs:        0,
+			EndSecs:          10,
+			SourceGeneration: 77,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(w.HandleChunkAnalysisWithSessionTask(context.Background(), asynq.NewTask(TypeChunkAnalysisWithSession, raw))).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+		Expect(transport.Verify()).To(Succeed())
+	})
+
+	It("resumes a completed live chunk without re-invoking GCS or Gemini", func() {
+		w.ActivityCountingEnabled = true
+		const chunkURI = "gs://test-bucket/chunks/sess-resume-ws/chunk_001.mp4"
+		start, end := 0.0, 10.0
+		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID:            sessionID,
+			ProfileID:            profile.ID,
+			FilePath:             chunkURI,
+			Status:               "COMPLETED",
+			StartSecs:            &start,
+			EndSecs:              &end,
+			MovementObservations: liveTestObservations(1, 3),
+		})
+
+		raw, err := json.Marshal(VideoAnalysisWithSessionPayload{
+			SessionID:           sessionID,
+			FilePath:            chunkURI,
+			ProfileID:           profile.ID,
+			StartSecs:           start,
+			EndSecs:             end,
+			LiveAnalysisVersion: 1,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(w.HandleChunkAnalysisWithSessionTask(context.Background(), asynq.NewTask(TypeChunkAnalysisWithSession, raw))).To(Succeed())
+		Expect(storageTransport.Requests()).To(BeEmpty())
+
+		var reloaded db.Session
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", sessionID, profile.ID).First(&reloaded).Error).To(Succeed())
+		Expect(strings.TrimSpace(string(reloaded.ActivitySummary))).NotTo(BeEmpty())
+		Expect(strings.TrimSpace(string(reloaded.ActivitySummary))).NotTo(Equal("null"))
+	})
+
+	It("rejects cross-profile session with SkipRetry even when retry count reaches 3", func() {
+		otherProfile := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		otherSessionID := "WOD-20261124-" + ulid.Make().String()
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:   otherSessionID,
+			ProfileID:   otherProfile.ID,
+			Status:      db.SessionStatusStarted,
+			WorkoutType: WorkoutTypeWOD,
+		})
+
+		task, err := NewChunkAnalysisWithSessionTask(
+			otherSessionID,
+			"gs://test-bucket/chunks/other-retry/chunk_001.mp4",
+			profile.ID,
+			0.0, 10.0,
+			110,
+			0.3,
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = w.HandleChunkAnalysisWithSessionTask(WithRetryCount(context.Background(), 3), task)
+		Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
+		Expect(err).To(MatchError(ContainSubstring("another profile")))
+		Expect(storageTransport.Requests()).To(BeEmpty())
+
+		var count int64
+		Expect(dbConn.Model(&db.ChunkAnalysisResult{}).Where("session_id = ?", otherSessionID).Count(&count).Error).To(Succeed())
+		Expect(count).To(BeZero())
+	})
 })
 
 var _ = Describe("buildChunkAnalysisWithSessionPrompt", func() {
@@ -494,5 +579,20 @@ var _ = Describe("buildChunkAnalysisWithSessionPrompt", func() {
 		}).NotTo(Panic())
 		Expect(prompt).NotTo(ContainSubstring("## 개인 프로필"))
 		Expect(prompt).NotTo(ContainSubstring("## 알려진 부상 사항"))
+	})
+
+	It("applies recovery policy without level policy for warmup and cooldown sessions", func() {
+		w := &Worker{DB: nil, logger: zap.NewNop()}
+		for _, wt := range []string{WorkoutTypeWarmup, WorkoutTypeCooldown} {
+			prompt := w.buildChunkAnalysisWithSessionPrompt(
+				VideoAnalysisWithSessionPayload{},
+				&db.Profile{FitnessLevel: "advanced"},
+				&db.Session{WorkoutType: wt},
+			)
+			Expect(prompt).To(ContainSubstring(RecoveryChunkPolicyPrompt))
+			Expect(prompt).NotTo(ContainSubstring(LevelPolicyAdvanced))
+			Expect(prompt).NotTo(ContainSubstring(LevelPolicyIntermediate))
+			Expect(prompt).NotTo(ContainSubstring(LevelPolicyBeginner))
+		}
 	})
 })

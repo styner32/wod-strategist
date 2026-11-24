@@ -375,7 +375,9 @@ func ensureNewRecordingMediaDB(conn *gorm.DB, profileID uint, sessionID string) 
 	}
 
 	analysisResults := &db.AnalysisResult{}
-	err = conn.Where("session_id = ?", sessionID).First(analysisResults).Error
+	err = conn.Select("profile_id, status, output, sensor_state, sensor_version, archived_at, automatic_processing_cancelled_at").
+		Where("session_id = ?", sessionID).
+		First(analysisResults).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}

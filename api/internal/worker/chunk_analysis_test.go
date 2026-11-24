@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -79,6 +81,73 @@ var _ = Describe("buildChunkAnalysisPrompt", func() {
 		Expect(prompt).To(ContainSubstring("## 개인 프로필"))
 		Expect(prompt).NotTo(ContainSubstring("## 운동 후보 힌트"))
 		Expect(prompt).NotTo(ContainSubstring("## 알려진 부상 사항"))
+	})
+
+	It("applies recovery policy without level policy for warmup and cooldown workouts", func() {
+		for _, wt := range []string{WorkoutTypeWarmup, WorkoutTypeCooldown} {
+			prompt := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{WorkoutType: wt})
+			Expect(prompt).To(ContainSubstring(RecoveryChunkPolicyPrompt))
+			Expect(prompt).NotTo(ContainSubstring(LevelPolicyBeginner))
+			Expect(prompt).NotTo(ContainSubstring(LevelPolicyIntermediate))
+			Expect(prompt).NotTo(ContainSubstring(LevelPolicyAdvanced))
+		}
+	})
+
+	It("includes traveling policy, heart rate, and intermediate level policy when ProfileID is 0", func() {
+		prompt := w.buildChunkAnalysisPrompt(VideoAnalysisPayload{
+			WorkoutType:  WorkoutTypeWOD,
+			Movements:    []string{"Walking Lunge"},
+			HeartRateBPM: 168,
+		})
+		Expect(prompt).To(ContainSubstring(LevelPolicyIntermediate))
+		Expect(prompt).To(ContainSubstring(TravelingMovementPolicyPrompt))
+		Expect(prompt).To(ContainSubstring("168 bpm"))
+	})
+
+	It("matches buildChunkAnalysisWithSessionPrompt output for equivalent profile and session inputs", func() {
+		dbConn, err := testhelpers.InitDB()
+		Expect(err).NotTo(HaveOccurred())
+		testhelpers.CleanupDB(dbConn)
+
+		profile := testhelpers.CreateProfile(dbConn, &db.Profile{
+			BirthYear:    ptr(1995),
+			BirthMonth:   ptr(3),
+			BirthDay:     ptr(15),
+			Gender:       ptr("female"),
+			HeightCm:     ptr(168),
+			WeightKg:     ptr(58.5),
+			FitnessLevel: "advanced",
+			Injuries:     ptr("Left Shoulder, Right Knee"),
+		})
+		withDB := &Worker{DB: dbConn, logger: zap.NewNop()}
+		const sid = "WOD-20261124-01JQXYZ3K4M5N6P7Q8R9ABCDEF"
+
+		legacyPrompt := withDB.buildChunkAnalysisPrompt(VideoAnalysisPayload{
+			SessionID:      sid,
+			ProfileID:      profile.ID,
+			WorkoutType:    WorkoutTypeWOD,
+			WODDescription: "Fran",
+			Movements:      []string{"Thruster", "Pull-up"},
+			Injuries:       []string{"Left Shoulder", "Right Knee"},
+			HeartRateBPM:   168,
+		})
+		sessionPrompt := withDB.buildChunkAnalysisWithSessionPrompt(
+			VideoAnalysisWithSessionPayload{
+				SessionID:    sid,
+				ProfileID:    profile.ID,
+				HeartRateBPM: 168,
+			},
+			&profile,
+			&db.Session{
+				ProfileID:      profile.ID,
+				SessionID:      sid,
+				WorkoutType:    WorkoutTypeWOD,
+				WODDescription: "Fran",
+				MovementHints:  db.JSONDocument(`["Thruster","Pull-up"]`),
+			},
+		)
+
+		Expect(sessionPrompt).To(Equal(legacyPrompt))
 	})
 })
 
@@ -476,5 +545,100 @@ var _ = Describe("HandleChunkAnalysisTask", func() {
 		Expect(dbConn.Model(&db.ChunkAnalysisResult{}).Where("session_id = ? AND file_path = ?", result.SessionID, result.FilePath).Count(&count).Error).To(Succeed())
 		Expect(count).To(Equal(int64(1)))
 
+	})
+
+	It("removes the temporary chunk file when GCS download fails", func() {
+		tmpDir := GinkgoT().TempDir()
+		GinkgoT().Setenv("TMPDIR", tmpDir)
+
+		storageTransport.New(testhelpers.GCSBaseURL).
+			Get("/test-bucket/chunks/sess-download-fail/chunk_001.mp4").
+			Reply(http.StatusNotFound).
+			BodyString("not found")
+
+		task, err := NewChunkAnalysisTask(
+			"sess-download-fail",
+			"gs://test-bucket/chunks/sess-download-fail/chunk_001.mp4",
+			WorkoutTypeWOD,
+			nil, nil,
+			profileID,
+			0.0, 10.0,
+			0,
+			"",
+			0.0,
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = w.HandleChunkAnalysisTask(context.Background(), task)
+		Expect(err).To(MatchError(ContainSubstring("failed to download chunk file from GCS")))
+		Expect(storageTransport.Verify()).To(Succeed())
+
+		matches, globErr := filepath.Glob(filepath.Join(tmpDir, "chunk-*.mp4"))
+		Expect(globErr).NotTo(HaveOccurred())
+		Expect(matches).To(BeEmpty())
+	})
+
+	It("downloads the pinned GCS generation when SourceGeneration is set", func() {
+		storageTransport.New(testhelpers.GCSBaseURL).
+			Get("/test-bucket/chunks/sess-gen-001/chunk_001.mp4?generation=42").
+			Reply(http.StatusOK).
+			Body([]byte{0x00})
+		transport := setupGeminiTransport(chunkAnalysis)
+
+		raw, err := json.Marshal(VideoAnalysisPayload{
+			SessionID:        "sess-gen-001",
+			FilePath:         "gs://test-bucket/chunks/sess-gen-001/chunk_001.mp4",
+			WorkoutType:      WorkoutTypeWOD,
+			ProfileID:        profileID,
+			StartSecs:        0,
+			EndSecs:          10,
+			SourceGeneration: 42,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(w.HandleChunkAnalysisTask(context.Background(), asynq.NewTask(TypeChunkAnalysis, raw))).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
+		Expect(transport.Verify()).To(Succeed())
+	})
+
+	It("resumes a completed live chunk without re-invoking GCS or Gemini", func() {
+		w.ActivityCountingEnabled = true
+		const resumeSID = "sess-resume-001"
+		const chunkURI = "gs://test-bucket/chunks/sess-resume-001/chunk_001.mp4"
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:   resumeSID,
+			ProfileID:   profileID,
+			Status:      db.SessionStatusStarted,
+			WorkoutType: WorkoutTypeWOD,
+		})
+		start, end := 0.0, 10.0
+		testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+			SessionID:            resumeSID,
+			ProfileID:            profileID,
+			FilePath:             chunkURI,
+			Status:               "COMPLETED",
+			StartSecs:            &start,
+			EndSecs:              &end,
+			MovementObservations: liveTestObservations(1, 3),
+		})
+
+		raw, err := json.Marshal(VideoAnalysisPayload{
+			SessionID:           resumeSID,
+			FilePath:            chunkURI,
+			WorkoutType:         WorkoutTypeWOD,
+			ProfileID:           profileID,
+			StartSecs:           start,
+			EndSecs:             end,
+			LiveAnalysisVersion: 1,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(w.HandleChunkAnalysisTask(context.Background(), asynq.NewTask(TypeChunkAnalysis, raw))).To(Succeed())
+		Expect(storageTransport.Requests()).To(BeEmpty())
+
+		var reloaded db.Session
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", resumeSID, profileID).First(&reloaded).Error).To(Succeed())
+		Expect(strings.TrimSpace(string(reloaded.ActivitySummary))).NotTo(BeEmpty())
+		Expect(strings.TrimSpace(string(reloaded.ActivitySummary))).NotTo(Equal("null"))
 	})
 })

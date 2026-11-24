@@ -427,6 +427,9 @@ func (w *Worker) lookupProfileString(profileID uint) string {
 }
 
 func (w *Worker) getDetailFromProfile(profile *db.Profile) string {
+	if profile == nil {
+		return ""
+	}
 	genderKo := "기타"
 	if profile.Gender != nil {
 		switch *profile.Gender {

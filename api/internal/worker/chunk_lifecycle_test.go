@@ -99,12 +99,14 @@ var _ = Describe("Chunk lifecycle recovery", Ordered, func() {
 
 	DescribeTable("retries final status persistence after a real database write failure",
 		func(kind string) {
-			p := VideoAnalysisPayload{SessionID: sid, ProfileID: profile.ID, FilePath: uri, StartSecs: 0, EndSecs: 10}
+			sessionID := "WOD-20260916-" + ulid.Make().String()
+			p := VideoAnalysisPayload{SessionID: sessionID, ProfileID: profile.ID, FilePath: uri, StartSecs: 0, EndSecs: 10}
 			body, err := json.Marshal(p)
 			Expect(err).NotTo(HaveOccurred())
 			task := asynq.NewTask(kind, body)
 			handler := w.HandleChunkAnalysisTask
 			if kind == TypeChunkAnalysisWithSession {
+				testhelpers.CreateSession(database, &db.Session{SessionID: sessionID, ProfileID: profile.ID})
 				handler = w.HandleChunkAnalysisWithSessionTask
 			} else if kind == TypeVideoAnalysis {
 				handler = w.HandleVideoAnalysisTask
