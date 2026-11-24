@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/oklog/ulid/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/db"
@@ -23,8 +24,8 @@ var _ = Describe("Chunk lifecycle recovery", Ordered, func() {
 	var queue *asynq.Client
 	var inspector *asynq.Inspector
 	var transport *testhelpers.MockTransport
-	const sid = "sess-chunk-lifecycle"
-	const uri = "gs://test-bucket/videos/sess-chunk-lifecycle/chunk_001.mp4"
+	var sid string
+	var uri string
 
 	BeforeAll(func() {
 		var err error
@@ -38,6 +39,7 @@ var _ = Describe("Chunk lifecycle recovery", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(sqlDB.Close)
 	})
+
 	BeforeEach(func() {
 		testhelpers.CleanupDB(database)
 		testhelpers.FlushRedis()
@@ -47,6 +49,9 @@ var _ = Describe("Chunk lifecycle recovery", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		w = &Worker{DB: database, QueueClient: queue, QueueInspector: inspector,
 			StorageClient: storageClient, BucketName: "test-bucket", logger: zap.NewNop()}
+
+		sid = "WOD-20260916-" + ulid.Make().String()
+		uri = "gs://test-bucket/videos/" + sid + "/chunk_001.mp4"
 	})
 
 	DescribeTable("serializes concurrent terminal writes and preserves success", func(seedFailure bool) {

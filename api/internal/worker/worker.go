@@ -418,33 +418,40 @@ func (w *Worker) lookupProfileString(profileID uint) string {
 	if profileID > 0 && w.DB != nil {
 		var profile db.Profile
 		if err := w.DB.First(&profile, profileID).Error; err == nil {
-			genderKo := "기타"
-			if profile.Gender != nil {
-				switch *profile.Gender {
-				case "male":
-					genderKo = "남"
-				case "female":
-					genderKo = "여"
-				}
-			}
-			levelKo := "중급"
-			switch profile.FitnessLevel {
-			case "beginner":
-				levelKo = "초급"
-			case "advanced":
-				levelKo = "고급"
-			}
-			if profile.BirthYear != nil && profile.BirthMonth != nil && profile.BirthDay != nil &&
-				profile.HeightCm != nil && profile.WeightKg != nil {
-				personalProfile = fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg, 피트니스 레벨: %s",
-					*profile.BirthYear, *profile.BirthMonth, *profile.BirthDay,
-					genderKo, *profile.HeightCm, *profile.WeightKg, levelKo)
-			}
+			personalProfile = w.getDetailFromProfile(&profile)
 		} else {
 			w.logger.Warn("Profile not found, using default", zap.Uint("profile_id", profileID), zap.Error(err))
 		}
 	}
 	return personalProfile
+}
+
+func (w *Worker) getDetailFromProfile(profile *db.Profile) string {
+	genderKo := "기타"
+	if profile.Gender != nil {
+		switch *profile.Gender {
+		case "male":
+			genderKo = "남"
+		case "female":
+			genderKo = "여"
+		}
+	}
+
+	levelKo := "중급"
+	switch profile.FitnessLevel {
+	case "beginner":
+		levelKo = "초급"
+	case "advanced":
+		levelKo = "고급"
+	}
+	if profile.BirthYear != nil && profile.BirthMonth != nil && profile.BirthDay != nil &&
+		profile.HeightCm != nil && profile.WeightKg != nil {
+		return fmt.Sprintf("생년월일: %d년 %d월 %d일, 성별: %s, 키: %dcm, 몸무게: %.1fkg, 피트니스 레벨: %s",
+			*profile.BirthYear, *profile.BirthMonth, *profile.BirthDay,
+			genderKo, *profile.HeightCm, *profile.WeightKg, levelKo)
+	}
+
+	return fmt.Sprintf("성별: %s, 피트니스 레벨: %s", genderKo, levelKo)
 }
 
 // lookupFitnessLevel returns the fitness level for the given profile ID.

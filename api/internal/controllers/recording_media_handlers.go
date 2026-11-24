@@ -351,9 +351,11 @@ func ensureNewRecordingMediaDB(conn *gorm.DB, profileID uint, sessionID string) 
 	if err := conn.Model(&db.RecordingMediaRun{}).Where("session_id = ?", sessionID).Count(&existingRuns).Error; err != nil {
 		return err
 	}
+
 	if existingRuns != 0 {
 		return fmt.Errorf("%w: this session is already registered to another profile", errRecordingMediaConflict)
 	}
+
 	var existingSession db.Session
 	err := conn.Select("id, profile_id, status, idempotency_key, effort, activity_summary").
 		Where("session_id = ?", sessionID).
@@ -361,24 +363,52 @@ func ensureNewRecordingMediaDB(conn *gorm.DB, profileID uint, sessionID string) 
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
+
 	if err == nil {
 		if existingSession.ProfileID != profileID {
 			return fmt.Errorf("%w: this session is already registered to another profile", errRecordingMediaConflict)
 		}
+
 		if !isFreshRecordingSession(existingSession) {
 			return fmt.Errorf("%w: only new recordings can use this media pipeline", errRecordingMediaConflict)
 		}
 	}
-	for _, table := range []string{"analysis_results", "chunk_analysis_results"} {
-		var count int64
-		if err := conn.Table(table).Where("session_id = ?", sessionID).Limit(1).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 0 {
+
+	analysisResults := &db.AnalysisResult{}
+	err = conn.Where("session_id = ?", sessionID).First(analysisResults).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	if err == nil {
+		// allow pending analysis results to be reused for new recordings due to sensor upload
+		if !isSensorPlaceholderAnalysis(analysisResults, profileID) {
 			return fmt.Errorf("%w: only new recordings can use this media pipeline", errRecordingMediaConflict)
 		}
 	}
+
+	var count int64
+	if err := conn.Table("chunk_analysis_results").Where("session_id = ?", sessionID).Limit(1).Count(&count).Error; err != nil {
+		return err
+	}
+
+	if count != 0 {
+		return fmt.Errorf("%w: only new recordings can use this media pipeline", errRecordingMediaConflict)
+	}
 	return nil
+}
+
+func isSensorPlaceholderAnalysis(analysisResult *db.AnalysisResult, profileID uint) bool {
+	if analysisResult == nil || analysisResult.ProfileID != profileID {
+		return false
+	}
+	if analysisResult.Status != "PENDING" || strings.TrimSpace(analysisResult.Output) != "" {
+		return false
+	}
+	if analysisResult.ArchivedAt != nil || analysisResult.AutomaticProcessingCancelledAt != nil {
+		return false
+	}
+	return analysisResult.SensorVersion > 0 && analysisResult.SensorState != "" && analysisResult.SensorState != db.SensorStateNone
 }
 
 func isFreshRecordingSession(sess db.Session) bool {

@@ -132,7 +132,7 @@ func Create(ctx context.Context, dbConn *gorm.DB, input CreateSessionAttr) (*db.
 		sessionID = strings.ToUpper(string(wodType)) + "-" + time.Now().Format("20060102") + "-" + ulid.Make().String()
 	} else {
 		wodType = strings.TrimSpace(strings.ToLower(wodType))
-		matchedWodType, err := validateCanonicalSessionID(sessionID, wodType)
+		matchedWodType, err := ValidateCanonicalSessionID(sessionID, wodType)
 		if err != nil {
 			return nil, err
 		}
@@ -198,7 +198,7 @@ func Create(ctx context.Context, dbConn *gorm.DB, input CreateSessionAttr) (*db.
 	return existingSession, nil
 }
 
-func validateCanonicalSessionID(sessionID string, workoutType string) (string, error) {
+func ValidateCanonicalSessionID(sessionID string, workoutType string) (string, error) {
 	matches := canonicalSessionIDPattern.FindStringSubmatch(sessionID)
 	if len(matches) != 4 {
 		return "", ErrInvalidSessionID

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/oklog/ulid/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/activity"
@@ -31,7 +32,8 @@ func liveTestObservations(start, end float64) db.NullableJSONDocument {
 	return raw
 }
 func liveTestRow(id uint, start, end float64) db.ChunkAnalysisResult {
-	return db.ChunkAnalysisResult{ID: id, ProfileID: 1, SessionID: "s", FilePath: fmt.Sprintf("chunk%d.mp4", id), Status: "COMPLETED", ExerciseType: "Air Squat", Output: "current cue", ObservedSignals: `{"form_issues_seen":["knee position"]}`, TargetConfidence: 0.9, StartSecs: &start, EndSecs: &end, MediaStartSecs: &start, MediaEndSecs: &end, MovementObservations: liveTestObservations(1, 3)}
+	sessionID := "WOD-20260916-01JACTIVITYTEST0000000000"
+	return db.ChunkAnalysisResult{ID: id, ProfileID: 1, SessionID: sessionID, FilePath: fmt.Sprintf("chunk%d.mp4", id), Status: "COMPLETED", ExerciseType: "Air Squat", Output: "current cue", ObservedSignals: `{"form_issues_seen":["knee position"]}`, TargetConfidence: 0.9, StartSecs: &start, EndSecs: &end, MediaStartSecs: &start, MediaEndSecs: &end, MovementObservations: liveTestObservations(1, 3)}
 }
 
 var _ = Describe("Live coaching evidence window", func() {
@@ -43,6 +45,7 @@ var _ = Describe("Live coaching evidence window", func() {
 		Expect(string(row.CaptureAssessment)).To(ContainSubstring("Improve lighting"))
 		Expect(strings.TrimSpace(liveBlocks.ReplaceAllString(raw, ""))).To(Equal("[NO_EXERCISE]"))
 	})
+
 	It("uses at most six previous chunks inside sixty seconds in capture order", func() {
 		current := liveTestRow(99, 80, 90)
 		rows := []db.ChunkAnalysisResult{}
@@ -61,7 +64,7 @@ var _ = Describe("Live coaching evidence window", func() {
 		prior.ProfileID = 2
 		Expect(recentCoachingSources(current, []db.ChunkAnalysisResult{prior})).To(BeEmpty())
 		prior = liveTestRow(3, 20, 30)
-		prior.SessionID = "other"
+		prior.SessionID = "WOD-20260917-" + ulid.Make().String()
 		Expect(recentCoachingSources(current, []db.ChunkAnalysisResult{prior})).To(BeEmpty())
 		prior = liveTestRow(3, 10, 20)
 		sources := recentCoachingSources(current, []db.ChunkAnalysisResult{prior})
@@ -274,7 +277,8 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 	BeforeEach(func() {
 		testhelpers.CleanupDB(conn)
 		profile = testhelpers.CreateProfile(conn, &db.Profile{})
-		session = testhelpers.CreateSession(conn, &db.Session{SessionID: "WOD-20260916-01JACTIVITYTEST0000000000", ProfileID: profile.ID, WorkoutType: "wod"})
+		sessionID := "WOD-20260916-" + ulid.Make().String()
+		session = testhelpers.CreateSession(conn, &db.Session{SessionID: sessionID, ProfileID: profile.ID, WorkoutType: "wod"})
 		transport = testhelpers.NewMockTransport()
 		storageTransport = testhelpers.NewMockTransport()
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", BaseURL: base, HTTPClient: &http.Client{Transport: transport}, PollInterval: time.Millisecond, Sleep: func(time.Duration) {}})

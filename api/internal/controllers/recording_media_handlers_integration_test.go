@@ -70,9 +70,9 @@ func (f recordingMediaFixture) mockUpload(order int, generation string, initial 
 func (f recordingMediaFixture) admit(order int, generation string, initial bool) controllers.RecordingMediaChunkReceipt {
 	f.mockUpload(order, generation, initial)
 	response := f.post("/api/v1/chunk-complete", f.chunkBody(order))
-	Expect(response.Code).To(Equal(http.StatusAccepted), response.Body.String())
+	ExpectWithOffset(1, response.Code).To(Equal(http.StatusAccepted), response.Body.String())
 	var receipt controllers.RecordingMediaChunkReceipt
-	Expect(json.Unmarshal(response.Body.Bytes(), &receipt)).To(Succeed())
+	ExpectWithOffset(1, json.Unmarshal(response.Body.Bytes(), &receipt)).To(Succeed())
 	return receipt
 }
 
@@ -346,6 +346,229 @@ var _ = Describe("POST /api/v1/chunk-complete", func() {
 			v1AfterLegacy := f.post("/api/v1/chunk-complete", f.chunkBody(2))
 			Expect(v1AfterLegacy.Code).To(Equal(http.StatusConflict), v1AfterLegacy.Body.String())
 			Expect(decodeMapBody(v1AfterLegacy)["error_code"]).To(Equal("RECORDING_MEDIA_CONFLICT"))
+			Expect(f.transport.Requests()).To(BeEmpty())
+		})
+
+		It("admits v1 chunks and merge when sensor-upload already created a pending placeholder analysis row", func() {
+			f := newRecordingMediaFixture()
+			signingStorage, err := testhelpers.NewStorageClientWithSigning("test-bucket", f.transport)
+			Expect(err).NotTo(HaveOccurred())
+			queue := testhelpers.NewQueueClient()
+			DeferCleanup(queue.Close)
+			f.router = newTestRouterWithAuthService(controllers.Config{StorageClient: signingStorage, BucketName: "test-bucket", QueueClient: queue})
+
+			f.sessionID = "WOD-20261124-" + ulid.Make().String()
+			createResp := f.post("/api/v1/sessions", map[string]any{
+				"profile_id":      f.profile.ID,
+				"session_id":      f.sessionID,
+				"idempotency_key": ulid.Make().String(),
+				"workout_type":    "wod",
+				"movements":       []string{"Air Squat"},
+			})
+			Expect(createResp.Code).To(Equal(http.StatusOK), createResp.Body.String())
+
+			sensorResp := f.post("/api/v1/sessions/"+f.sessionID+"/sensor-upload", controllers.PrepareSensorUploadRequest{
+				ProfileID:       f.profile.ID,
+				RequestID:       uuid.NewString(),
+				ExpectedVersion: "0",
+				SizeBytes:       1024,
+				SHA256:          strings.Repeat("a", 64),
+			})
+			Expect(sensorResp.Code).To(Equal(http.StatusOK), sensorResp.Body.String())
+
+			var analysis db.AnalysisResult
+			Expect(dbConn.Where("session_id = ?", f.sessionID).First(&analysis).Error).To(Succeed())
+			Expect(analysis.Status).To(Equal("PENDING"))
+			Expect(analysis.SensorState).To(Equal(db.SensorStateUploading))
+			Expect(analysis.SensorVersion).To(Equal(int64(1)))
+
+			first := f.admit(1, "9007199254740995", true)
+
+			var run db.RecordingMediaRun
+			Expect(dbConn.Where("profile_id = ? AND session_id = ?", f.profile.ID, f.sessionID).First(&run).Error).To(Succeed())
+			Expect(run.Version).To(Equal(db.RecordingMediaVersion))
+			Expect(run.State).To(Equal("RECORDING"))
+
+			var chunk db.RecordingChunk
+			Expect(dbConn.First(&chunk, first.ChunkID).Error).To(Succeed())
+			Expect(chunk.RunID).To(Equal(run.ID))
+
+			mergeResp := f.post("/api/v1/merge-chunks", f.mergeBody(first))
+			Expect(mergeResp.Code).To(Equal(http.StatusAccepted), mergeResp.Body.String())
+			Expect(f.transport.Verify()).To(Succeed())
+
+			for _, state := range []string{db.SensorStatePending, db.SensorStateRunning, db.SensorStateCompleted} {
+				f.sessionID = "WOD-20261124-" + ulid.Make().String()
+				testhelpers.CreateSession(dbConn, &db.Session{
+					ProfileID:   f.profile.ID,
+					SessionID:   f.sessionID,
+					Status:      db.SessionStatusStarted,
+					WorkoutType: "wod",
+				})
+				testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+					ProfileID:     f.profile.ID,
+					SessionID:     f.sessionID,
+					Status:        "PENDING",
+					Output:        "",
+					SensorState:   state,
+					SensorVersion: 1,
+				})
+				f.admit(1, "9007199254740996", true)
+				Expect(f.transport.Verify()).To(Succeed())
+			}
+		})
+
+		It("rejects non-placeholder analysis rows, cross-profile sensor placeholders, and existing chunk results", func() {
+			f := newRecordingMediaFixture()
+			other := testhelpers.CreateProfile(dbConn, &db.Profile{UserID: f.owner.ID})
+			now := time.Now().UTC()
+
+			// 1. Cross-profile sensor placeholder
+			f.sessionID = "WOD-20261124-" + ulid.Make().String()
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				ProfileID:     other.ID,
+				SessionID:     f.sessionID,
+				Status:        "PENDING",
+				SensorState:   db.SensorStateUploading,
+				SensorVersion: 1,
+			})
+			crossResp := f.post("/api/v1/chunk-complete", f.chunkBody(1))
+			Expect(crossResp.Code).To(Equal(http.StatusForbidden), crossResp.Body.String())
+			Expect(f.transport.Requests()).To(BeEmpty())
+
+			// Cases 2-5: same-profile non-placeholder analysis_results rows
+			nonPlaceholderCases := []struct {
+				name  string
+				build func(sid string) db.AnalysisResult
+			}{
+				{
+					name: "non-sensor PENDING analysis",
+					build: func(sid string) db.AnalysisResult {
+						return db.AnalysisResult{
+							ProfileID:     f.profile.ID,
+							SessionID:     sid,
+							Status:        "PENDING",
+							SensorState:   db.SensorStateNone,
+							SensorVersion: 0,
+						}
+					},
+				},
+				{
+					name: "PENDING sensor row with non-empty output",
+					build: func(sid string) db.AnalysisResult {
+						return db.AnalysisResult{
+							ProfileID:     f.profile.ID,
+							SessionID:     sid,
+							Status:        "PENDING",
+							Output:        "partial analysis",
+							SensorState:   db.SensorStateUploading,
+							SensorVersion: 1,
+						}
+					},
+				},
+				{
+					name: "COMPLETED analysis with sensor completed",
+					build: func(sid string) db.AnalysisResult {
+						return db.AnalysisResult{
+							ProfileID:     f.profile.ID,
+							SessionID:     sid,
+							Status:        "COMPLETED",
+							Output:        "done",
+							SensorState:   db.SensorStateCompleted,
+							SensorVersion: 1,
+						}
+					},
+				},
+				{
+					name: "FAILED analysis with sensor completed",
+					build: func(sid string) db.AnalysisResult {
+						return db.AnalysisResult{
+							ProfileID:     f.profile.ID,
+							SessionID:     sid,
+							Status:        "FAILED",
+							Output:        "err",
+							SensorState:   db.SensorStateCompleted,
+							SensorVersion: 1,
+						}
+					},
+				},
+			}
+
+			for _, tc := range nonPlaceholderCases {
+				f.sessionID = "WOD-20261124-" + ulid.Make().String()
+				testhelpers.CreateSession(dbConn, &db.Session{
+					ProfileID:   f.profile.ID,
+					SessionID:   f.sessionID,
+					Status:      db.SessionStatusStarted,
+					WorkoutType: "wod",
+				})
+				attr := tc.build(f.sessionID)
+				testhelpers.CreateAnalysisResult(dbConn, &attr)
+				resp := f.post("/api/v1/chunk-complete", f.chunkBody(1))
+				Expect(resp.Code).To(Equal(http.StatusConflict), "%s: %s", tc.name, resp.Body.String())
+				body := decodeMapBody(resp)
+				Expect(body["error_code"]).To(Equal("RECORDING_MEDIA_CONFLICT"), tc.name)
+				Expect(body["error"]).To(ContainSubstring("only new recordings"), tc.name)
+				Expect(f.transport.Requests()).To(BeEmpty(), tc.name)
+			}
+
+			// 6. Archived sensor placeholder
+			f.sessionID = "WOD-20261124-" + ulid.Make().String()
+			testhelpers.CreateSession(dbConn, &db.Session{
+				ProfileID:   f.profile.ID,
+				SessionID:   f.sessionID,
+				Status:      db.SessionStatusStarted,
+				WorkoutType: "wod",
+			})
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				ProfileID:     f.profile.ID,
+				SessionID:     f.sessionID,
+				Status:        "PENDING",
+				SensorState:   db.SensorStateUploading,
+				SensorVersion: 1,
+				ArchivedAt:    &now,
+			})
+			Expect(f.post("/api/v1/chunk-complete", f.chunkBody(1)).Code).To(Equal(http.StatusConflict))
+			Expect(f.transport.Requests()).To(BeEmpty())
+
+			// 7. Cancelled sensor placeholder
+			f.sessionID = "WOD-20261124-" + ulid.Make().String()
+			testhelpers.CreateSession(dbConn, &db.Session{
+				ProfileID:   f.profile.ID,
+				SessionID:   f.sessionID,
+				Status:      db.SessionStatusStarted,
+				WorkoutType: "wod",
+			})
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				ProfileID:                      f.profile.ID,
+				SessionID:                      f.sessionID,
+				Status:                         "PENDING",
+				SensorState:                    db.SensorStateUploading,
+				SensorVersion:                  1,
+				AutomaticProcessingCancelledAt: &now,
+			})
+			Expect(f.post("/api/v1/chunk-complete", f.chunkBody(1)).Code).To(Equal(http.StatusConflict))
+			Expect(f.transport.Requests()).To(BeEmpty())
+
+			// 8. Existing chunk_analysis_results row
+			f.sessionID = "WOD-20261124-" + ulid.Make().String()
+			testhelpers.CreateSession(dbConn, &db.Session{
+				ProfileID:   f.profile.ID,
+				SessionID:   f.sessionID,
+				Status:      db.SessionStatusStarted,
+				WorkoutType: "wod",
+			})
+			testhelpers.CreateChunkAnalysisResult(dbConn, &db.ChunkAnalysisResult{
+				ProfileID: f.profile.ID,
+				SessionID: f.sessionID,
+				FilePath:  "gs://test-bucket/videos/existing.mp4",
+				Status:    "COMPLETED",
+			})
+			chunkResp := f.post("/api/v1/chunk-complete", f.chunkBody(1))
+			Expect(chunkResp.Code).To(Equal(http.StatusConflict), chunkResp.Body.String())
+			chunkBody := decodeMapBody(chunkResp)
+			Expect(chunkBody["error_code"]).To(Equal("RECORDING_MEDIA_CONFLICT"))
+			Expect(chunkBody["error"]).To(ContainSubstring("only new recordings"))
 			Expect(f.transport.Requests()).To(BeEmpty())
 		})
 	})

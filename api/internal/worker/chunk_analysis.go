@@ -12,6 +12,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/gemini"
+	"github.com/wod-strategist/api/internal/modules/session"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -515,6 +516,11 @@ func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 
 	retryCount := getRetryCount(ctx)
 
+	if _, err := session.ValidateCanonicalSessionID(p.SessionID, ""); err != nil {
+		w.logger.Error("Invalid session ID", zap.String("session_id", p.SessionID), zap.Error(err))
+		return fmt.Errorf("invalid session ID: %w", asynq.SkipRetry)
+	}
+
 	w.logger.Info("Processing chunk analysis",
 		zap.String("session_id", p.SessionID),
 		zap.String("file_path", p.FilePath),
@@ -552,7 +558,7 @@ func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	}
 
 	var profile db.Profile
-	if err := w.DB.Where("id = ?", p.ProfileID).First(&profile).Error; err != nil {
+	if err := w.DB.WithContext(ctx).Where("id = ?", p.ProfileID).First(&profile).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			w.logger.Error("No profile found", zap.Uint("profile_id", p.ProfileID))
 			return fmt.Errorf("profile not found: %w", asynq.SkipRetry)
@@ -562,7 +568,7 @@ func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	}
 
 	var session db.Session
-	if err := w.DB.Where("session_id = ?", p.SessionID).First(&session).Error; err != nil {
+	if err := w.DB.WithContext(ctx).Where("session_id = ?", p.SessionID).First(&session).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			w.logger.Error("No session found", zap.String("session_id", p.SessionID))
 			return fmt.Errorf("session not found: %w", asynq.SkipRetry)
@@ -571,12 +577,22 @@ func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 		return fmt.Errorf("failed to load session: %w", err)
 	}
 
+	if session.ProfileID != p.ProfileID {
+		w.logger.Error("Session belongs to another profile", zap.String("session_id", p.SessionID), zap.Uint("profile_id", p.ProfileID))
+		return fmt.Errorf("session belongs to another profile: %w", asynq.SkipRetry)
+	}
+
 	localFilePath, err := createTempFile("chunk", ".mp4")
 	if err != nil {
 		return err
 	}
 
-	if err := w.downloadAnalysisInput(ctx, VideoAnalysisPayload{FilePath: p.FilePath, SourceGeneration: p.SourceGeneration}, localFilePath); err != nil {
+	err = w.downloadAnalysisInput(ctx, VideoAnalysisPayload{FilePath: p.FilePath, SourceGeneration: p.SourceGeneration}, localFilePath)
+	defer func() {
+		os.Remove(localFilePath)
+	}()
+
+	if err != nil {
 		return fmt.Errorf("failed to download chunk file from GCS: %w", err)
 	}
 
@@ -605,10 +621,6 @@ func (w *Worker) handleChunkAnalysisWithSessionTask(ctx context.Context, t *asyn
 	} else {
 		w.logger.Warn("motion probe failed for chunk analysis with session", zap.Error(pRes.err))
 	}
-
-	defer func() {
-		os.Remove(localFilePath)
-	}()
 
 	if geminiFile != "" {
 		defer func() {
@@ -731,9 +743,8 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 
 	if session != nil && IsRecoveryWorkoutType(session.WorkoutType) {
 		prompt += RecoveryChunkPolicyPrompt
-	} else {
-		fitnessLevel := w.lookupFitnessLevel(p.ProfileID)
-		prompt += levelPolicyForFitnessLevel(fitnessLevel)
+	} else if profile != nil {
+		prompt += levelPolicyForFitnessLevel(profile.FitnessLevel)
 	}
 
 	var wodDesc string
@@ -748,19 +759,22 @@ func (w *Worker) buildChunkAnalysisWithSessionPrompt(p VideoAnalysisWithSessionP
 
 	hints := normalizeMovementHintsForWOD(rawHints, wodDesc)
 	prompt += buildMovementHintsContext(hints)
-	if w.hasChunkTravelingPolicyContext(p.ProfileID, p.SessionID, hints, wodDesc) {
-		prompt += TravelingMovementPolicyPrompt
+	if profile != nil {
+		if w.hasChunkTravelingPolicyContext(p.ProfileID, p.SessionID, hints, wodDesc) {
+			prompt += TravelingMovementPolicyPrompt
+		}
+
+		if profile.Injuries != nil && *profile.Injuries != "" {
+			prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", *profile.Injuries)
+		}
+
+		personalProfile := w.getDetailFromProfile(profile)
+		prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
+		prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
+		prompt += buildHeartRateContext(p.HeartRateBPM)
+	} else {
+
 	}
-
-	if profile.Injuries != nil && *profile.Injuries != "" {
-		prompt += fmt.Sprintf("\n\n## 알려진 부상 사항\n%s\n(이 부위에 위험한 자세가 보이면 반드시 경고하세요)", *profile.Injuries)
-	}
-
-	personalProfile := w.lookupProfileString(p.ProfileID)
-	prompt += fmt.Sprintf("\n\n## 개인 프로필\n%s", personalProfile)
-	prompt += w.buildTargetPersonContext(p.ProfileID, p.SessionID)
-
-	prompt += buildHeartRateContext(p.HeartRateBPM)
 
 	// Add observed signals & target person requirement (tracking continuity supplies its own unified target_person block).
 	prompt += ObservedSignalsPrompt

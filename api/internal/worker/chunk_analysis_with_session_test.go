@@ -3,10 +3,14 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/oklog/ulid/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/zap"
@@ -144,7 +148,7 @@ var _ = Describe("HandleChunkAnalysisWithSessionTask", func() {
 			Injuries: &injuries,
 		})
 
-		sessionID = "WOD-202605221010-abcd"
+		sessionID = "WOD-20261124-" + ulid.Make().String()
 		testhelpers.CreateSession(dbConn, &db.Session{
 			SessionID:      sessionID,
 			ProfileID:      profile.ID,
@@ -166,7 +170,8 @@ var _ = Describe("HandleChunkAnalysisWithSessionTask", func() {
 		)
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(w.HandleChunkAnalysisTask(context.Background(), task)).To(Succeed())
+		Expect(w.HandleChunkAnalysisWithSessionTask(context.Background(), task)).To(Succeed())
+		Expect(storageTransport.Verify()).To(Succeed())
 		Expect(transport.Verify()).To(Succeed())
 		Expect(transport.Requests()).To(HaveLen(5))
 
@@ -262,8 +267,9 @@ var _ = Describe("HandleChunkAnalysisWithSessionTask", func() {
 		)
 		Expect(err).NotTo(HaveOccurred())
 
-		err = w.HandleChunkAnalysisTask(context.Background(), task)
+		err = w.HandleChunkAnalysisWithSessionTask(context.Background(), task)
 		Expect(err).To(MatchError(ContainSubstring("invalid file path")))
+		Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
 	})
 
 	It("marks chunk as FAILED and returns SkipRetry when retry count reaches 3", func() {
@@ -296,5 +302,197 @@ var _ = Describe("HandleChunkAnalysisWithSessionTask", func() {
 		Expect(dbConn.Model(&db.ChunkAnalysisResult{}).Where("session_id = ? AND file_path = ?", result.SessionID, result.FilePath).Count(&count).Error).To(Succeed())
 		Expect(count).To(Equal(int64(1)))
 
+	})
+
+	It("returns SkipRetry without storage access when session belongs to another profile", func() {
+		otherProfile := testhelpers.CreateProfile(dbConn, &db.Profile{})
+		otherSessionID := "WOD-20261124-01JOTHERPROFILE000000000000"
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:   otherSessionID,
+			ProfileID:   otherProfile.ID,
+			Status:      db.SessionStatusStarted,
+			WorkoutType: WorkoutTypeWOD,
+		})
+
+		task, err := NewChunkAnalysisWithSessionTask(
+			otherSessionID,
+			"gs://test-bucket/chunks/other/chunk_001.mp4",
+			profile.ID,
+			0.0, 10.0,
+			110,
+			0.3,
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = w.HandleChunkAnalysisWithSessionTask(context.Background(), task)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
+		Expect(storageTransport.Requests()).To(BeEmpty())
+
+		var count int64
+		Expect(dbConn.Model(&db.ChunkAnalysisResult{}).Where("session_id = ?", otherSessionID).Count(&count).Error).To(Succeed())
+		Expect(count).To(BeZero())
+	})
+
+	DescribeTable("rejects invalid session IDs with SkipRetry before storage access",
+		func(invalidSID string) {
+			task, err := NewChunkAnalysisWithSessionTask(
+				invalidSID,
+				"gs://test-bucket/chunks/invalid/chunk_001.mp4",
+				profile.ID,
+				0.0, 10.0,
+				110,
+				0.3,
+			)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = w.HandleChunkAnalysisWithSessionTask(context.Background(), task)
+			Expect(err).To(MatchError(ContainSubstring("invalid session ID")))
+			Expect(errors.Is(err, asynq.SkipRetry)).To(BeTrue())
+			Expect(storageTransport.Requests()).To(BeEmpty())
+		},
+		Entry("empty session ID", ""),
+		Entry("path traversal session ID", "../escape"),
+		Entry("malformed session ID", "bad session id"),
+	)
+
+	It("removes the temporary chunk file when GCS download fails", func() {
+		tmpDir := GinkgoT().TempDir()
+		GinkgoT().Setenv("TMPDIR", tmpDir)
+
+		storageTransport.New(testhelpers.GCSBaseURL).
+			Get("/test-bucket/chunks/sess-download-fail/chunk_001.mp4").
+			Reply(http.StatusNotFound).
+			BodyString("not found")
+
+		task, err := NewChunkAnalysisWithSessionTask(
+			sessionID,
+			"gs://test-bucket/chunks/sess-download-fail/chunk_001.mp4",
+			profile.ID,
+			0.0, 10.0,
+			110,
+			0.3,
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = w.HandleChunkAnalysisWithSessionTask(context.Background(), task)
+		Expect(err).To(MatchError(ContainSubstring("failed to download chunk file from GCS")))
+		Expect(storageTransport.Verify()).To(Succeed())
+
+		matches, globErr := filepath.Glob(filepath.Join(tmpDir, "chunk-*.mp4"))
+		Expect(globErr).NotTo(HaveOccurred())
+		Expect(matches).To(BeEmpty())
+	})
+
+	It("propagates a canceled context to profile and session DB lookups", func() {
+		tmpDir := GinkgoT().TempDir()
+		GinkgoT().Setenv("TMPDIR", tmpDir)
+
+		task, err := NewChunkAnalysisWithSessionTask(
+			sessionID,
+			"gs://test-bucket/chunks/sess-canceled/chunk_001.mp4",
+			profile.ID,
+			0.0, 10.0,
+			110,
+			0.3,
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		canceledCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err = w.handleChunkAnalysisWithSessionTask(canceledCtx, task)
+		Expect(errors.Is(err, context.Canceled)).To(BeTrue())
+		Expect(storageTransport.Requests()).To(BeEmpty())
+
+		matches, globErr := filepath.Glob(filepath.Join(tmpDir, "chunk-*.mp4"))
+		Expect(globErr).NotTo(HaveOccurred())
+		Expect(matches).To(BeEmpty())
+	})
+
+	It("preserves session metadata and updates activity summary when retry count reaches 3 with live analysis enabled", func() {
+		w.ActivityCountingEnabled = true
+		warmupSessionID := "WARMUP-20261124-" + ulid.Make().String()
+		testhelpers.CreateSession(dbConn, &db.Session{
+			SessionID:      warmupSessionID,
+			ProfileID:      profile.ID,
+			Status:         db.SessionStatusStarted,
+			WorkoutType:    WorkoutTypeWarmup,
+			WODDescription: "Mobility warmup",
+			MovementHints:  db.JSONDocument(`["Air Squat"]`),
+		})
+
+		raw, err := json.Marshal(VideoAnalysisWithSessionPayload{
+			LiveAnalysisVersion: 1,
+			SessionID:           warmupSessionID,
+			FilePath:            "gs://test-bucket/chunks/warmup-retry/chunk_001.mp4",
+			ProfileID:           profile.ID,
+			StartSecs:           0,
+			EndSecs:             10,
+			HeartRateBPM:        115,
+			WorkoutConfidence:   0.5,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		err = w.HandleChunkAnalysisWithSessionTask(WithRetryCount(context.Background(), 3), asynq.NewTask(TypeChunkAnalysisWithSession, raw))
+		Expect(err).To(Equal(asynq.SkipRetry))
+
+		var result db.ChunkAnalysisResult
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", warmupSessionID, profile.ID).First(&result).Error).To(Succeed())
+		Expect(result.Status).To(Equal("FAILED"))
+		Expect(result.MovementObservations).NotTo(BeEmpty())
+
+		var reloaded db.Session
+		Expect(dbConn.Where("session_id = ? AND profile_id = ?", warmupSessionID, profile.ID).First(&reloaded).Error).To(Succeed())
+		Expect(reloaded.WorkoutType).To(Equal(WorkoutTypeWarmup))
+		Expect(reloaded.WODDescription).To(Equal("Mobility warmup"))
+		Expect(strings.TrimSpace(string(reloaded.ActivitySummary))).NotTo(BeEmpty())
+		Expect(strings.TrimSpace(string(reloaded.ActivitySummary))).NotTo(Equal("null"))
+	})
+})
+
+var _ = Describe("buildChunkAnalysisWithSessionPrompt", func() {
+	It("formats profile attributes and fitness level from the loaded profile without querying DB", func() {
+		w := &Worker{DB: nil, logger: zap.NewNop()}
+		birthYear, birthMonth, birthDay := 1995, 3, 15
+		heightCm := 168
+		weightKg := 58.5
+		gender := "female"
+		injuries := "Left Shoulder"
+
+		prompt := w.buildChunkAnalysisWithSessionPrompt(
+			VideoAnalysisWithSessionPayload{},
+			&db.Profile{
+				BirthYear:    &birthYear,
+				BirthMonth:   &birthMonth,
+				BirthDay:     &birthDay,
+				Gender:       &gender,
+				HeightCm:     &heightCm,
+				WeightKg:     &weightKg,
+				FitnessLevel: "advanced",
+				Injuries:     &injuries,
+			},
+			&db.Session{
+				WorkoutType:    WorkoutTypeWOD,
+				WODDescription: "Fran",
+				MovementHints:  db.JSONDocument(`["Thruster","Pull-up"]`),
+			},
+		)
+
+		Expect(prompt).To(ContainSubstring(LevelPolicyAdvanced))
+		Expect(prompt).To(ContainSubstring("생년월일: 1995년 3월 15일, 성별: 여, 키: 168cm, 몸무게: 58.5kg, 피트니스 레벨: 고급"))
+		Expect(prompt).To(ContainSubstring("Left Shoulder"))
+		Expect(prompt).To(ContainSubstring("Fran"))
+		Expect(prompt).To(ContainSubstring("Thruster, Pull-up"))
+	})
+
+	It("handles a nil profile without panicking", func() {
+		w := &Worker{DB: nil, logger: zap.NewNop()}
+		var prompt string
+		Expect(func() {
+			prompt = w.buildChunkAnalysisWithSessionPrompt(VideoAnalysisWithSessionPayload{}, nil, &db.Session{WorkoutType: WorkoutTypeWOD})
+		}).NotTo(Panic())
+		Expect(prompt).NotTo(ContainSubstring("## 개인 프로필"))
+		Expect(prompt).NotTo(ContainSubstring("## 알려진 부상 사항"))
 	})
 })
