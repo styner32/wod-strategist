@@ -75,8 +75,25 @@ describe("API Client Methods", () => {
         body = await request.json();
         return HttpResponse.json({ task_id: "chunk-task", session_id: "warmup" });
       }));
-      await notifyChunkUploadComplete("warmup", "gs://bucket/chunk.mp4", [], [], "warmup", 1, start, end);
+      await notifyChunkUploadComplete(
+        "warmup",
+        "gs://bucket/chunk.mp4",
+        [],
+        [],
+        "warmup",
+        1,
+        start,
+        end,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { clientChunkId: "01JQXYZ3K4M5N6P7Q8R9ABCDEF", captureOrder: 1 },
+      );
       expect(body.live_analysis_version).toBe(version);
+      expect(body.media_pipeline_version).toBe(1);
+      expect(body.client_chunk_id).toBe("01JQXYZ3K4M5N6P7Q8R9ABCDEF");
+      expect(body.capture_order).toBe(1);
       expect(body.workout_type).toBe("warmup");
       expect(body.start_secs).toBe(start);
       expect(body.end_secs).toBe(end);
@@ -328,6 +345,8 @@ describe("API Client Methods", () => {
   describe("processWorkoutChunk retry behavior", () => {
     const chunkOptions = {
       profileId: 1,
+      clientChunkId: "01JQXYZ3K4M5N6P7Q8R9ABCDEF",
+      captureOrder: 1,
       maxRetries: 5,
       retryDelayMs: 1, // minimal delay for test execution
     };
@@ -344,6 +363,9 @@ describe("API Client Methods", () => {
           return HttpResponse.json({
             task_id: "chunk_task_123",
             session_id: "session_chunk_001",
+            chunk_id: "17",
+            source_generation: "9007199254740993",
+            gcs_uri: "gs://bucket/videos/1/test/chunk.mp4",
           });
         }),
       );
@@ -362,7 +384,7 @@ describe("API Client Methods", () => {
       expect(onRetry).not.toHaveBeenCalled();
     });
 
-    it("retries a v1 notification against the completed upload and preserves the server receipt as strings", async () => {
+    it("retries a chunk notification against the completed upload and preserves the server receipt as strings", async () => {
       const approvals: any[] = [];
       let uploadUrls = 0;
       server.use(
@@ -380,7 +402,7 @@ describe("API Client Methods", () => {
         }),
       );
       const result = await processWorkoutChunk("file:///native.mov", "session_chunk_001", {
-        ...chunkOptions, mediaPipelineVersion: 1, clientChunkId: "01JQXYZ3K4M5N6P7Q8R9ABCDEF", captureOrder: 2,
+        ...chunkOptions, clientChunkId: "01JQXYZ3K4M5N6P7Q8R9ABCDEF", captureOrder: 2,
       });
       expect(uploadUrls).toBe(1);
       expect(mockCreateUploadTask).toHaveBeenCalledTimes(1);
@@ -392,7 +414,7 @@ describe("API Client Methods", () => {
         sourceGeneration: "9007199254740993", gcsUri: "gs://bucket/accepted.mov" });
     });
 
-    it("uses a new object for each uncertain v1 upload while keeping the logical chunk ID", async () => {
+    it("uses a new object for each uncertain chunk upload while keeping the logical chunk ID", async () => {
       const filenames: string[] = [];
       let approval: any;
       mockUploadAsync.mockRejectedValueOnce(new Error("upload connection lost"));
@@ -409,7 +431,7 @@ describe("API Client Methods", () => {
         }),
       );
       await processWorkoutChunk("file:///compressed.mp4", "session_chunk_001", {
-        ...chunkOptions, mediaPipelineVersion: 1, clientChunkId: "01JQXYZ3K4M5N6P7Q8R9ABCDEF", captureOrder: 1,
+        ...chunkOptions, clientChunkId: "01JQXYZ3K4M5N6P7Q8R9ABCDEF", captureOrder: 1,
       });
       expect(filenames).toHaveLength(2);
       expect(new Set(filenames).size).toBe(2);
@@ -417,29 +439,35 @@ describe("API Client Methods", () => {
       expect(approval.gcs_uri).toBe(`gs://bucket/${filenames[1]}`);
     });
 
-    it("rejects a v1 response without a source receipt and never downgrades the request", async () => {
+    it("rejects a chunk response without a source receipt and never sends a legacy request", async () => {
       let body: any;
       server.use(http.post(`${API_BASE_URL}/chunk-complete`, async ({ request }) => {
         body = await request.json();
         return HttpResponse.json({ task_id: "old-server", session_id: "session_chunk_001" });
       }));
       await expect(processWorkoutChunk("file:///native.mp4", "session_chunk_001", {
-        ...chunkOptions, maxRetries: 1, mediaPipelineVersion: 1,
+        ...chunkOptions, maxRetries: 1,
         clientChunkId: "01JQXYZ3K4M5N6P7Q8R9ABCDEF", captureOrder: 1,
       })).rejects.toThrow("valid source receipt");
       expect(body.media_pipeline_version).toBe(1);
     });
 
-    it("omits all media preparation fields for legacy chunk uploads", async () => {
-      let body: any;
-      server.use(http.post(`${API_BASE_URL}/chunk-complete`, async ({ request }) => {
-        body = await request.json();
-        return HttpResponse.json({ task_id: "legacy", session_id: "session_chunk_001" });
-      }));
-      await processWorkoutChunk("file:///native.mp4", "session_chunk_001", chunkOptions);
-      expect(body).not.toHaveProperty("media_pipeline_version");
-      expect(body).not.toHaveProperty("client_chunk_id");
-      expect(body).not.toHaveProperty("capture_order");
+    it("rejects missing or invalid chunk identity before making upload requests", async () => {
+      const request = jest.fn();
+      server.use(
+        http.post(`${API_BASE_URL}/upload-url`, request),
+        http.post(`${API_BASE_URL}/chunk-complete`, request),
+      );
+      await expect(processWorkoutChunk("file:///native.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        clientChunkId: "",
+        captureOrder: 1,
+      })).rejects.toThrow("stable chunk ID and capture order");
+      await expect(processWorkoutChunk("file:///native.mp4", "session_chunk_001", {
+        ...chunkOptions,
+        captureOrder: 0,
+      })).rejects.toThrow("stable chunk ID and capture order");
+      expect(request).not.toHaveBeenCalled();
     });
 
     it("retries on transient failure (e.g. 500) and succeeds on next attempt", async () => {
@@ -562,7 +590,7 @@ describe("API Client Methods", () => {
   describe("mergeChunks retry behavior", () => {
     const { mergeChunks } = require("./api");
 
-    it("sends the ordered v1 receipt manifest without rounding source generations", async () => {
+    it("sends the ordered receipt manifest without rounding source generations", async () => {
       let body: any;
       server.use(http.post(`${API_BASE_URL}/merge-chunks`, async ({ request }) => {
         body = await request.json();
@@ -570,22 +598,29 @@ describe("API Client Methods", () => {
       }));
       const chunks = [{ chunk_id: "17", source_generation: "9007199254740993" }, { chunk_id: "18", source_generation: "9007199254740995" }];
       const result = await mergeChunks("session_merge_1", {
-        profileId: 1, mediaPipelineVersion: 1, expectedChunkCount: 2, chunks,
+        profileId: 1, expectedChunkCount: 2, chunks,
       });
       expect(body).toMatchObject({ media_pipeline_version: 1, expected_chunk_count: 2, chunks });
       expect(result.mediaRunId).toBe("19");
     });
 
-    it("rejects incomplete or duplicate v1 manifests before making a request", async () => {
+    it("rejects incomplete, partial, or duplicate manifests before making a request", async () => {
       const request = jest.fn();
       server.use(http.post(`${API_BASE_URL}/merge-chunks`, request));
       await expect(mergeChunks("session_merge_1", {
-        profileId: 1, mediaPipelineVersion: 1, expectedChunkCount: 2,
+        profileId: 1, expectedChunkCount: 2,
         chunks: [{ chunk_id: "17", source_generation: "10" }],
       })).rejects.toThrow("every captured chunk");
       await expect(mergeChunks("session_merge_1", {
-        profileId: 1, mediaPipelineVersion: 1, expectedChunkCount: 2,
+        profileId: 1, expectedChunkCount: 2,
         chunks: [{ chunk_id: "17", source_generation: "10" }, { chunk_id: "17", source_generation: "10" }],
+      })).rejects.toThrow("every captured chunk");
+      await expect(mergeChunks("session_merge_1", {
+        profileId: 1, expectedChunkCount: 2,
+      })).rejects.toThrow("every captured chunk");
+      await expect(mergeChunks("session_merge_1", {
+        profileId: 1,
+        chunks: [{ chunk_id: "17", source_generation: "10" }],
       })).rejects.toThrow("every captured chunk");
       expect(request).not.toHaveBeenCalled();
     });
