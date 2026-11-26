@@ -531,25 +531,34 @@ func interruptArchiveEnrichment(raw db.JSONDocument) db.JSONDocument {
 
 // requireSessionProcessing checks entry points; worker publication transactions
 // repeat the check so archive racing an enqueue cannot resurrect work.
+// check session ownership before checking session processing state
 func (ctl *Controller) requireSessionProcessing(c *gin.Context, sessionID string, profileID uint, automatic bool) bool {
 	var row db.AnalysisResult
 	err := ctl.db.WithContext(c.Request.Context()).Select("id,profile_id,archived_at,automatic_processing_cancelled_at").Where("session_id = ?", sessionID).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return true
 	}
+
 	if err != nil {
+		logger.Log.Error("failed to check session state", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "unable to check session state"})
 		return false
 	}
+
 	if profileID != 0 && row.ProfileID != profileID {
+		logger.Log.Warn("not authorized for this session", zap.Uint("profile_id", profileID), zap.String("session_id", sessionID))
 		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized for this session"})
 		return false
 	}
+
 	if row.ArchivedAt != nil {
+		logger.Log.Warn("session is archived", zap.Uint("profile_id", profileID), zap.String("session_id", sessionID))
 		c.JSON(http.StatusConflict, gin.H{"error": "session is archived", "error_code": "SESSION_ARCHIVED"})
 		return false
 	}
+
 	if automatic && row.AutomaticProcessingCancelledAt != nil {
+		logger.Log.Warn("session processing was cancelled", zap.Uint("profile_id", profileID), zap.String("session_id", sessionID))
 		c.JSON(http.StatusConflict, gin.H{"error": "session processing was cancelled", "error_code": "SESSION_PROCESSING_CANCELLED"})
 		return false
 	}

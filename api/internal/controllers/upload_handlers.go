@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -197,47 +196,6 @@ func (ctl *Controller) MergeChunks(c *gin.Context) {
 	if !ctl.requireSessionProcessing(c, req.SessionID, req.ProfileID, true) {
 		return
 	}
-	if ctl.handleRecordingMediaMerge(c, req) {
-		return
-	}
 
-	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
-
-	// The merge task uses profileID + sessionID to discover chunks in GCS.
-	// prefix = "videos/{profileId}/{sessionId}/"
-	placeholderGCSURI := fmt.Sprintf("gs://%s/videos/%d/%s/", ctl.bucketName, req.ProfileID, req.SessionID)
-
-	task, err := ctl.newMergeChunksTask(req.SessionID, placeholderGCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.EnableTTS, req.WODDescription)
-	if err != nil {
-		logger.Log.Error("failed to create merge task", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
-		return
-	}
-
-	info, err := ctl.enqueueSessionAutomaticTaskWithMetadata(c, req.SessionID, req.ProfileID, task, &sessionUploadMetadata{
-		Movements: req.Movements, WODDescription: req.WODDescription, AppearanceHints: req.AppearanceHints,
-	})
-	if err != nil {
-		if writeSessionProcessingConflict(c, err) {
-			return
-		}
-		if errors.Is(err, asynq.ErrDuplicateTask) {
-			logger.Log.Info("merge task already queued", zap.String("session_id", req.SessionID))
-			c.JSON(http.StatusAccepted, gin.H{
-				"message":    "Merge already queued",
-				"task_id":    "",
-				"session_id": req.SessionID,
-			})
-			return
-		}
-		logger.Log.Error("failed to enqueue merge task", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
-		return
-	}
-
-	c.JSON(http.StatusAccepted, gin.H{
-		"message":    "Merge started",
-		"task_id":    info.ID,
-		"session_id": req.SessionID,
-	})
+	ctl.handleRecordingMediaMerge(c, req)
 }

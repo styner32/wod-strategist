@@ -46,7 +46,7 @@ type RecordingMediaChunkReceipt struct {
 	SessionID        string `json:"session_id"`
 	MediaRunID       string `json:"media_run_id"`
 	ChunkID          string `json:"chunk_id"`
-	SourceGeneration string `json:"source_generation"`
+	SourceGeneration string `json:"source_generation"` // google cloud storage generation
 	GCSURI           string `json:"gcs_uri"`
 }
 
@@ -96,11 +96,9 @@ func (ctl *Controller) recordingMediaError(c *gin.Context, err error) {
 }
 
 func (ctl *Controller) kickRecordingMedia(c *gin.Context, runID uint) {
-	if ctl.queueClient == nil {
-		return
-	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 2*time.Second)
 	defer cancel()
+
 	if err := worker.DispatchRecordingMedia(ctx, ctl.db, ctl.queueClient, runID); err != nil {
 		// The accepted DB intent is authoritative; recovery retries a lost kick.
 		logger.Log.Warn("recording media dispatch deferred to recovery", zap.Uint("run_id", runID), zap.Error(err))
@@ -119,10 +117,46 @@ func recordingMediaChunkReceipt(runID uint, sessionID string, chunk db.Recording
 	}
 }
 
+func (ctl *Controller) getRecordingChunkIfExists(conn *gorm.DB, req ChunkCompleteRequest, run *db.RecordingMediaRun) (*db.RecordingChunk, error) {
+	if run.Version != db.RecordingMediaVersion {
+		return nil, fmt.Errorf("%w: existing recordings cannot change pipeline version", errRecordingMediaConflict)
+	}
+
+	var chunk db.RecordingChunk
+	err := conn.Where("run_id = ? AND client_chunk_id = ?", run.ID, req.ClientChunkID).First(&chunk).Error
+	if err == nil {
+		if chunk.CaptureOrder != req.CaptureOrder || chunk.CaptureStartSecs != req.StartSecs || chunk.CaptureEndSecs != req.EndSecs {
+			return nil, fmt.Errorf("%w: chunk identity already has a different capture interval or order", errRecordingMediaConflict)
+		}
+		return &chunk, nil
+	}
+
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	if run.State != "RECORDING" || run.ManifestHash != "" {
+		return nil, fmt.Errorf("%w: recording manifest is already sealed", errRecordingMediaConflict)
+	}
+
+	var count int64
+	if err := conn.Model(&db.RecordingChunk{}).Where("run_id = ? AND capture_order = ?", run.ID, req.CaptureOrder).Count(&count).Error; err != nil {
+		return nil, err
+	}
+
+	if count != 0 {
+		return nil, fmt.Errorf("%w: capture order already belongs to another chunk", errRecordingMediaConflict)
+	}
+
+	return nil, nil
+}
+
 func (ctl *Controller) precheckRecordingMediaChunk(ctx context.Context, req ChunkCompleteRequest) (object string, needOutputCheck bool, existingRunID uint, existingChunk *db.RecordingChunk, err error) {
 	if err := db.SessionAutomaticWorkAllowed(ctx, ctl.db, req.ProfileID, req.SessionID); err != nil {
+		logger.Log.Warn("session automatic work not allowed", zap.Uint("profile_id", req.ProfileID), zap.String("session_id", req.SessionID), zap.Error(err))
 		return "", false, 0, nil, err
 	}
+
 	conn := ctl.db.WithContext(ctx)
 	var preRun db.RecordingMediaRun
 	err = conn.Where("profile_id = ? AND session_id = ?", req.ProfileID, req.SessionID).First(&preRun).Error
@@ -139,30 +173,17 @@ func (ctl *Controller) precheckRecordingMediaChunk(ctx context.Context, req Chun
 	if err != nil {
 		return "", false, 0, nil, err
 	}
-	if preRun.Version != db.RecordingMediaVersion {
-		return "", false, 0, nil, fmt.Errorf("%w: existing recordings cannot change pipeline version", errRecordingMediaConflict)
-	}
-	var preChunk db.RecordingChunk
-	err = conn.Where("run_id = ? AND client_chunk_id = ?", preRun.ID, req.ClientChunkID).First(&preChunk).Error
-	if err == nil {
-		if preChunk.CaptureOrder != req.CaptureOrder || preChunk.CaptureStartSecs != req.StartSecs || preChunk.CaptureEndSecs != req.EndSecs {
-			return "", false, 0, nil, fmt.Errorf("%w: chunk identity already has a different capture interval or order", errRecordingMediaConflict)
-		}
-		return "", false, preRun.ID, &preChunk, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", false, 0, nil, err
-	}
-	if preRun.State != "RECORDING" || preRun.ManifestHash != "" {
-		return "", false, 0, nil, fmt.Errorf("%w: recording manifest is already sealed", errRecordingMediaConflict)
-	}
+
 	var count int64
-	if err := conn.Model(&db.RecordingChunk{}).Where("run_id = ? AND capture_order = ?", preRun.ID, req.CaptureOrder).Count(&count).Error; err != nil {
+	preChunk, err := ctl.getRecordingChunkIfExists(conn, req, &preRun)
+	if err != nil {
 		return "", false, 0, nil, err
 	}
-	if count != 0 {
-		return "", false, 0, nil, fmt.Errorf("%w: capture order already belongs to another chunk", errRecordingMediaConflict)
+
+	if preChunk != nil {
+		return "", false, preRun.ID, preChunk, nil
 	}
+
 	bucket, parsedObject, parseErr := storage.ParseGCSURI(req.GCSURI)
 	if parseErr != nil || bucket != ctl.bucketName || !validRecordingSourceObject(parsedObject, req.ProfileID, req.SessionID) {
 		return "", false, 0, nil, fmt.Errorf("%w: invalid original chunk object", errRecordingMediaConflict)
@@ -176,21 +197,114 @@ func (ctl *Controller) precheckRecordingMediaChunk(ctx context.Context, req Chun
 	return parsedObject, false, 0, nil, nil
 }
 
-func (ctl *Controller) handleRecordingMediaChunk(c *gin.Context, req ChunkCompleteRequest) bool {
-	if req.MediaPipelineVersion == 0 {
-		if req.ClientChunkID != "" || req.CaptureOrder != 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "chunk identity requires media_pipeline_version 1"})
-			return true
+func (ctl *Controller) admitRecordingMediaChunkTx(
+	ctx context.Context,
+	tx *gorm.DB,
+	req ChunkCompleteRequest,
+	object string,
+	attrs *gcs.ObjectAttrs,
+) (*db.RecordingMediaRun, *db.RecordingChunk, error) {
+	var run db.RecordingMediaRun
+	var chunk db.RecordingChunk
+
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("profile_id = ? AND session_id = ?", req.ProfileID, req.SessionID).First(&run).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if err := ensureNewRecordingMediaDB(tx, req.ProfileID, req.SessionID); err != nil {
+			return nil, nil, err
 		}
-		return false
+		now := time.Now().UTC()
+		run = db.RecordingMediaRun{ProfileID: req.ProfileID, SessionID: req.SessionID, Version: db.RecordingMediaVersion, State: "RECORDING", Manifest: db.JSONDocument(`[]`), Intervals: db.JSONDocument(`[]`), NextAttemptAt: &now}
+		if err := tx.Create(&run).Error; err != nil {
+			return nil, nil, err
+		}
+	} else if err != nil {
+		return nil, nil, err
 	}
-	if req.MediaPipelineVersion != db.RecordingMediaVersion || !clientChunkIDPattern.MatchString(req.ClientChunkID) || req.CaptureOrder < 1 || req.CaptureOrder > 10000 || !activity.ValidInterval(req.StartSecs, req.EndSecs) {
+
+	var count int64
+	existing, err := ctl.getRecordingChunkIfExists(tx, req, &run)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if existing != nil {
+		// The first accepted physical upload owns this logical capture. A
+		// retried notification does not replace its immutable source bytes.
+		chunk = *existing
+		return &run, &chunk, nil
+	}
+
+	if err := tx.Model(&db.RecordingChunk{}).Where("run_id = ? AND source_object = ?", run.ID, object).Count(&count).Error; err != nil {
+		return nil, nil, err
+	}
+
+	if count != 0 {
+		return nil, nil, fmt.Errorf("%w: a physical upload cannot represent multiple chunks", errRecordingMediaConflict)
+	}
+
+	chunk = db.RecordingChunk{RunID: run.ID, ProfileID: req.ProfileID, SessionID: req.SessionID, ClientChunkID: req.ClientChunkID, CaptureOrder: req.CaptureOrder, SourceURI: req.GCSURI, SourceObject: object, SourceGeneration: attrs.Generation, SourceBytes: attrs.Size, CaptureStartSecs: req.StartSecs, CaptureEndSecs: req.EndSecs}
+	if err := tx.Create(&chunk).Error; err != nil {
+		return nil, nil, err
+	}
+
+	var sessions int64
+	if err := tx.Model(&db.Session{}).Where("profile_id = ? AND session_id = ?", req.ProfileID, req.SessionID).Count(&sessions).Error; err != nil {
+		return nil, nil, err
+	}
+	var task *asynq.Task
+	if sessions > 0 {
+		task, err = worker.NewChunkAnalysisWithSessionTask(req.SessionID, chunk.SourceURI, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WorkoutConfidence)
+	} else {
+		task, err = worker.NewChunkAnalysisTask(req.SessionID, chunk.SourceURI, req.WorkoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WODDescription, req.WorkoutConfidence)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		return nil, nil, err
+	}
+
+	payload["recording_chunk_id"] = chunk.ID
+	payload["source_generation"] = chunk.SourceGeneration
+	payload["media_run_id"] = run.ID
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	chunk.AIType, chunk.AIPayload = task.Type(), db.JSONDocument(encoded)
+	if err := tx.Model(&chunk).Updates(map[string]any{"ai_type": chunk.AIType, "ai_payload": chunk.AIPayload}).Error; err != nil {
+		return nil, nil, err
+	}
+	now := time.Now().UTC()
+	prep := db.ChunkMediaPreparation{RunID: run.ID, ChunkID: chunk.ID, SourceGeneration: chunk.SourceGeneration, RecipeVersion: "concat-v1", ProfileKey: "native", State: "PENDING", NextAttemptAt: &now}
+	if err := tx.Create(&prep).Error; err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Model(&run).Update("next_attempt_at", now).Error; err != nil {
+		return nil, nil, err
+	}
+
+	if err := persistRecordingMediaMetadata(ctx, tx, req.SessionID, req.ProfileID, req.Movements, req.WODDescription, req.AppearanceHints); err != nil {
+		return nil, nil, err
+	}
+
+	return &run, &chunk, nil
+}
+
+func (ctl *Controller) handleRecordingMediaChunk(c *gin.Context, req ChunkCompleteRequest) {
+	if !clientChunkIDPattern.MatchString(req.ClientChunkID) || req.CaptureOrder < 1 || req.CaptureOrder > 10000 || !activity.ValidInterval(req.StartSecs, req.EndSecs) {
+		logger.Log.Warn("invalid recording media chunk identity, order, or interval", zap.Uint("profile_id", req.ProfileID), zap.String("session_id", req.SessionID), zap.String("client_chunk_id", req.ClientChunkID), zap.Int("capture_order", req.CaptureOrder), zap.Float64("start_secs", req.StartSecs), zap.Float64("end_secs", req.EndSecs))
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid recording media version, chunk identity, order, or interval"})
-		return true
+		return
 	}
+
+	// this is for mobile app to cancel the request if the context is cancelled
+	// mobile app often can be backgrounded and the request can be cancelled
 	if err := c.Request.Context().Err(); err != nil {
 		ctl.recordingMediaError(c, err)
-		return true
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), sessionUploadAcceptanceTimeout)
 	defer cancel()
@@ -199,133 +313,59 @@ func (ctl *Controller) handleRecordingMediaChunk(c *gin.Context, req ChunkComple
 	object, needOutputCheck, existingRunID, existingChunk, err := ctl.precheckRecordingMediaChunk(ctx, req)
 	if err != nil {
 		ctl.recordingMediaError(c, err)
-		return true
+		return
 	}
+
 	if existingChunk != nil {
 		ctl.kickRecordingMedia(c, existingRunID)
 		c.JSON(http.StatusAccepted, recordingMediaChunkReceipt(existingRunID, req.SessionID, *existingChunk))
-		return true
+		return
 	}
 
 	// Stage 2: External GCS metadata verification outside any DB transaction.
 	if needOutputCheck {
 		if err := ctl.ensureNoRecordingMediaOutputs(ctx, req.ProfileID, req.SessionID); err != nil {
 			ctl.recordingMediaError(c, err)
-			return true
+			return
 		}
 	}
+
 	attrs, err := ctl.storageClient.ObjectAttrs(ctx, object)
 	if errors.Is(err, gcs.ErrObjectNotExist) {
 		ctl.recordingMediaError(c, errRecordingMediaSource)
-		return true
+		return
 	}
+
 	if err != nil {
 		ctl.recordingMediaError(c, fmt.Errorf("read uploaded chunk metadata: %w", err))
-		return true
+		return
 	}
+
 	if attrs == nil || attrs.Generation <= 0 || attrs.Size <= 0 {
 		ctl.recordingMediaError(c, errRecordingMediaSource)
-		return true
+		return
 	}
 
 	// Stage 3: Short SQL transaction with zero external network I/O.
 	var run db.RecordingMediaRun
 	var chunk db.RecordingChunk
 	err = db.WithSessionAutomaticWork(ctx, ctl.db, req.ProfileID, req.SessionID, func(tx *gorm.DB) error {
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("profile_id = ? AND session_id = ?", req.ProfileID, req.SessionID).First(&run).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if err := ensureNewRecordingMediaDB(tx, req.ProfileID, req.SessionID); err != nil {
-				return err
-			}
-			now := time.Now().UTC()
-			run = db.RecordingMediaRun{ProfileID: req.ProfileID, SessionID: req.SessionID, Version: db.RecordingMediaVersion, State: "RECORDING", Manifest: db.JSONDocument(`[]`), Intervals: db.JSONDocument(`[]`), NextAttemptAt: &now}
-			if err := tx.Create(&run).Error; err != nil {
-				return err
-			}
-		} else if err != nil {
-			return err
+		runPtr, chunkPtr, txErr := ctl.admitRecordingMediaChunkTx(ctx, tx, req, object, attrs)
+		if txErr != nil {
+			return txErr
 		}
-		if run.Version != db.RecordingMediaVersion {
-			return fmt.Errorf("%w: existing recordings cannot change pipeline version", errRecordingMediaConflict)
-		}
-		err = tx.Where("run_id = ? AND client_chunk_id = ?", run.ID, req.ClientChunkID).First(&chunk).Error
-		if err == nil {
-			if chunk.CaptureOrder != req.CaptureOrder || chunk.CaptureStartSecs != req.StartSecs || chunk.CaptureEndSecs != req.EndSecs {
-				return fmt.Errorf("%w: chunk identity already has a different capture interval or order", errRecordingMediaConflict)
-			}
-			// The first accepted physical upload owns this logical capture. A
-			// retried notification does not replace its immutable source bytes.
-			return nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		if run.State != "RECORDING" || run.ManifestHash != "" {
-			return fmt.Errorf("%w: recording manifest is already sealed", errRecordingMediaConflict)
-		}
-		var count int64
-		if err := tx.Model(&db.RecordingChunk{}).Where("run_id = ? AND capture_order = ?", run.ID, req.CaptureOrder).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 0 {
-			return fmt.Errorf("%w: capture order already belongs to another chunk", errRecordingMediaConflict)
-		}
-		if err := tx.Model(&db.RecordingChunk{}).Where("run_id = ? AND source_object = ?", run.ID, object).Count(&count).Error; err != nil {
-			return err
-		}
-		if count != 0 {
-			return fmt.Errorf("%w: a physical upload cannot represent multiple chunks", errRecordingMediaConflict)
-		}
-		chunk = db.RecordingChunk{RunID: run.ID, ProfileID: req.ProfileID, SessionID: req.SessionID, ClientChunkID: req.ClientChunkID, CaptureOrder: req.CaptureOrder, SourceURI: req.GCSURI, SourceObject: object, SourceGeneration: attrs.Generation, SourceBytes: attrs.Size, CaptureStartSecs: req.StartSecs, CaptureEndSecs: req.EndSecs}
-		if err := tx.Create(&chunk).Error; err != nil {
-			return err
-		}
-		var sessions int64
-		if err := tx.Model(&db.Session{}).Where("profile_id = ? AND session_id = ?", req.ProfileID, req.SessionID).Count(&sessions).Error; err != nil {
-			return err
-		}
-		var task *asynq.Task
-		if sessions > 0 {
-			task, err = worker.NewChunkAnalysisWithSessionTask(req.SessionID, chunk.SourceURI, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WorkoutConfidence)
-		} else {
-			task, err = worker.NewChunkAnalysisTask(req.SessionID, chunk.SourceURI, req.WorkoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WODDescription, req.WorkoutConfidence)
-		}
-		if err != nil {
-			return err
-		}
-		var payload map[string]any
-		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
-			return err
-		}
-		payload["live_analysis_version"] = req.LiveAnalysisVersion
-		payload["recording_chunk_id"] = chunk.ID
-		payload["source_generation"] = chunk.SourceGeneration
-		payload["media_run_id"] = run.ID
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			return err
-		}
-		chunk.AIType, chunk.AIPayload = task.Type(), db.JSONDocument(encoded)
-		if err := tx.Model(&chunk).Updates(map[string]any{"ai_type": chunk.AIType, "ai_payload": chunk.AIPayload}).Error; err != nil {
-			return err
-		}
-		now := time.Now().UTC()
-		prep := db.ChunkMediaPreparation{RunID: run.ID, ChunkID: chunk.ID, SourceGeneration: chunk.SourceGeneration, RecipeVersion: "concat-v1", ProfileKey: "native", State: "PENDING", NextAttemptAt: &now}
-		if err := tx.Create(&prep).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&run).Update("next_attempt_at", now).Error; err != nil {
-			return err
-		}
-		return persistRecordingMediaMetadata(ctx, tx, req.SessionID, req.ProfileID, req.Movements, req.WODDescription, req.AppearanceHints)
+		run = *runPtr
+		chunk = *chunkPtr
+		return nil
 	})
+
 	if err != nil {
 		ctl.recordingMediaError(c, err)
-		return true
+		return
 	}
+
 	ctl.kickRecordingMedia(c, run.ID)
 	c.JSON(http.StatusAccepted, recordingMediaChunkReceipt(run.ID, req.SessionID, chunk))
-	return true
 }
 
 func validRecordingSourceObject(object string, profileID uint, sessionID string) bool {
@@ -465,43 +505,37 @@ func parseRecordingMediaManifest(receipts []RecordingMediaReceiptInput) ([]db.Re
 	return manifest, nil
 }
 
-func (ctl *Controller) handleRecordingMediaMerge(c *gin.Context, req MergeChunksRequest) bool {
-	if req.MediaPipelineVersion != 0 && req.MediaPipelineVersion != db.RecordingMediaVersion {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported media_pipeline_version"})
-		return true
-	}
+func (ctl *Controller) handleRecordingMediaMerge(c *gin.Context, req MergeChunksRequest) {
 	var existing db.RecordingMediaRun
 	err := ctl.db.WithContext(c.Request.Context()).Where("profile_id = ? AND session_id = ?", req.ProfileID, req.SessionID).First(&existing).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		ctl.recordingMediaError(c, err)
-		return true
+		return
 	}
-	if req.MediaPipelineVersion == 0 && (errors.Is(err, gorm.ErrRecordNotFound) || existing.Version == 0) {
-		if len(req.Chunks) > 0 || req.ExpectedChunkCount != 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "recording manifest requires media_pipeline_version 1"})
-			return true
-		}
-		return false
-	}
+
 	if errors.Is(err, gorm.ErrRecordNotFound) || existing.Version != db.RecordingMediaVersion {
 		ctl.recordingMediaError(c, fmt.Errorf("%w: recording has no v1 chunk admission", errRecordingMediaConflict))
-		return true
+		return
 	}
+
 	var requested []db.RecordingMediaManifestEntry
-	if req.MediaPipelineVersion == db.RecordingMediaVersion {
+	isSealedRetry := existing.ManifestHash != "" && req.ExpectedChunkCount == 0 && len(req.Chunks) == 0
+	if !isSealedRetry {
 		if req.ExpectedChunkCount < 1 || req.ExpectedChunkCount > 10000 || req.ExpectedChunkCount != len(req.Chunks) {
+			logger.Log.Warn("invalid merge manifest count", zap.Uint("profile_id", req.ProfileID), zap.String("session_id", req.SessionID), zap.Int("expected_chunk_count", req.ExpectedChunkCount), zap.Int("chunks_len", len(req.Chunks)))
 			c.JSON(http.StatusBadRequest, gin.H{"error": "expected_chunk_count must match the complete ordered receipt list"})
-			return true
+			return
 		}
 		requested, err = parseRecordingMediaManifest(req.Chunks)
 		if err != nil {
+			logger.Log.Warn("invalid merge manifest receipts", zap.Uint("profile_id", req.ProfileID), zap.String("session_id", req.SessionID), zap.Error(err))
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return true
+			return
 		}
 	}
 	if err := c.Request.Context().Err(); err != nil {
 		ctl.recordingMediaError(c, err)
-		return true
+		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), sessionUploadAcceptanceTimeout)
 	defer cancel()
@@ -557,11 +591,10 @@ func (ctl *Controller) handleRecordingMediaMerge(c *gin.Context, req MergeChunks
 	})
 	if err != nil {
 		ctl.recordingMediaError(c, err)
-		return true
+		return
 	}
 	ctl.kickRecordingMedia(c, run.ID)
 	c.JSON(http.StatusAccepted, MergeChunksResponse{Message: "Recording merge accepted", TaskID: fmt.Sprintf("recording-media-%d", run.ID), SessionID: req.SessionID, MediaRunID: strconv.FormatUint(uint64(run.ID), 10)})
-	return true
 }
 
 // A retry only rearms a previously sealed v1 run; it never discovers old media.
@@ -575,7 +608,8 @@ func (ctl *Controller) handleRecordingMediaRetry(c *gin.Context, sessionID strin
 		ctl.recordingMediaError(c, err)
 		return true
 	}
-	return ctl.handleRecordingMediaMerge(c, MergeChunksRequest{SessionID: sessionID, ProfileID: profileID})
+	ctl.handleRecordingMediaMerge(c, MergeChunksRequest{SessionID: sessionID, ProfileID: profileID})
+	return true
 }
 
 func rearmRecordingMediaRunTx(tx *gorm.DB, run *db.RecordingMediaRun) error {

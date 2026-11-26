@@ -1,17 +1,11 @@
 package controllers
 
 import (
-	"encoding/json"
-	"errors"
-	"github.com/gin-gonic/gin"
-	"github.com/hibiken/asynq"
-	"github.com/wod-strategist/api/internal/activity"
-	"github.com/wod-strategist/api/internal/db"
-	"github.com/wod-strategist/api/internal/logger"
-	"github.com/wod-strategist/api/internal/worker"
-	"go.uber.org/zap"
-	"gorm.io/gorm"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/wod-strategist/api/internal/logger"
+	"go.uber.org/zap"
 )
 
 // @Summary      Chunk Complete
@@ -31,14 +25,6 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		return
 	}
 
-	if req.LiveAnalysisVersion != 0 && req.LiveAnalysisVersion != 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported live_analysis_version"})
-		return
-	}
-	if req.LiveAnalysisVersion == 1 && !activity.ValidInterval(req.StartSecs, req.EndSecs) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "live recording requires a valid capture interval"})
-		return
-	}
 	req.SessionID = sanitizeIdentifier(req.SessionID)
 	req.GCSURI = trimRequiredString(req.GCSURI)
 	req.WorkoutType = trimRequiredString(req.WorkoutType)
@@ -47,10 +33,12 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
 		return
 	}
+
 	if !isValidSessionID(req.SessionID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session_id format"})
 		return
 	}
+
 	if req.GCSURI == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "gcs_uri is required"})
 		return
@@ -76,78 +64,10 @@ func (ctl *Controller) ChunkComplete(c *gin.Context) {
 	if !ctl.assertOwnsProfile(c, req.ProfileID) {
 		return
 	}
+
 	if !ctl.requireSessionProcessing(c, req.SessionID, req.ProfileID, true) {
 		return
 	}
-	if ctl.handleRecordingMediaChunk(c, req) {
-		return
-	}
 
-	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
-
-	logger.Log.Info("chunk-complete received",
-		zap.String("session_id", req.SessionID),
-		zap.Float64("workout_confidence", req.WorkoutConfidence),
-		zap.Int("heart_rate_bpm", req.HeartRateBPM),
-		zap.Float64("start_secs", req.StartSecs),
-		zap.Float64("end_secs", req.EndSecs),
-	)
-
-	var task *asynq.Task
-	_, err := gorm.G[db.Session](ctl.db).Where("session_id = ? AND profile_id = ?", req.SessionID, req.ProfileID).First(c)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			task, err = worker.NewChunkAnalysisTask(req.SessionID, req.GCSURI, workoutType, req.Movements, req.Injuries, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WODDescription, req.WorkoutConfidence)
-			if err != nil {
-				logger.Log.Error("failed to create chunk task", zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
-				return
-			}
-		} else {
-			logger.Log.Error("failed to get session", zap.Error(err), zap.String("session_id", req.SessionID), zap.Uint("profile_id", req.ProfileID))
-			c.JSON(http.StatusBadRequest, gin.H{"error": "failed to get session"})
-			return
-		}
-	}
-
-	if task == nil {
-		task, err = worker.NewChunkAnalysisWithSessionTask(req.SessionID, req.GCSURI, req.ProfileID, req.StartSecs, req.EndSecs, req.HeartRateBPM, req.WorkoutConfidence)
-		if err != nil {
-			logger.Log.Error("failed to create chunk task", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create task"})
-			return
-		}
-	}
-
-	if req.LiveAnalysisVersion == 1 {
-		var payload map[string]any
-		if err := json.Unmarshal(task.Payload(), &payload); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid chunk task"})
-			return
-		}
-		payload["live_analysis_version"] = req.LiveAnalysisVersion
-		encoded, err := json.Marshal(payload)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid chunk task"})
-			return
-		}
-		task = asynq.NewTask(task.Type(), encoded)
-	}
-	info, err := ctl.enqueueSessionAutomaticTaskWithMetadata(c, req.SessionID, req.ProfileID, task, &sessionUploadMetadata{
-		Movements: req.Movements, WODDescription: req.WODDescription, AppearanceHints: req.AppearanceHints,
-	})
-	if err != nil {
-		if writeSessionProcessingConflict(c, err) {
-			return
-		}
-		logger.Log.Error("failed to enqueue chunk task", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enqueue task"})
-		return
-	}
-
-	c.JSON(http.StatusAccepted, gin.H{
-		"message":    "Chunk analysis started",
-		"task_id":    info.ID,
-		"session_id": req.SessionID,
-	})
+	ctl.handleRecordingMediaChunk(c, req)
 }

@@ -94,6 +94,16 @@ func main() {
 		}
 	}
 
+	if dbConn == nil {
+		logger.Log.Fatal("Database connection is required")
+	}
+	if client == nil {
+		logger.Log.Fatal("Queue client is required")
+	}
+	if storageClient == nil {
+		logger.Log.Fatal("Storage client is required")
+	}
+
 	handlers, err := controllers.New(controllers.Config{
 		DB:                         dbConn,
 		QueueClient:                client,
