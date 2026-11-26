@@ -138,7 +138,7 @@ var _ = Describe("normalize workout", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		transport.New("https://normalize-workout.test").
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("weight_raw").
 			Reply(http.StatusOK).
 			JSON(map[string]any{

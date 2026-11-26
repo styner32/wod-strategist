@@ -109,6 +109,12 @@ export interface UploadResult {
   sourceGeneration?: string;
 }
 
+export interface ChunkUploadResult extends UploadResult {
+  chunkId: string;
+  gcsUri: string;
+  sourceGeneration: string;
+}
+
 export interface RecordingMediaChunkIdentity {
   clientChunkId: string;
   captureOrder: number;
@@ -137,9 +143,11 @@ export interface ProcessWorkoutVideoOptions {
   retryDelayMs?: number;
   stepTimeoutMs?: number;
   uploadTimeoutMs?: number;
-  mediaPipelineVersion?: 1;
-  clientChunkId?: string;
-  captureOrder?: number;
+}
+
+export interface ProcessWorkoutChunkOptions extends ProcessWorkoutVideoOptions {
+  clientChunkId: string;
+  captureOrder: number;
 }
 
 /**
@@ -349,6 +357,64 @@ export async function unarchiveProfile(id: number): Promise<void> {
   return apiClient(`/profiles/${id}/unarchive`, {
     method: "POST",
   });
+}
+
+export interface CreateSessionOptions {
+  profileId: number;
+  sessionId?: string;
+  idempotencyKey: string;
+  workoutType?: WorkoutType;
+  movements?: string[];
+  wodDescription?: string;
+  signal?: AbortSignal;
+  stepTimeoutMs?: number;
+}
+
+export interface CreateSessionResponse {
+  session_id: string;
+  status: string;
+  workout_type: string;
+}
+
+/** Step 0: Register a workout session before uploading video or chunks */
+export async function createSession(
+  options: CreateSessionOptions,
+): Promise<CreateSessionResponse> {
+  const {
+    profileId,
+    sessionId,
+    idempotencyKey,
+    workoutType = "wod",
+    movements = [],
+    wodDescription,
+    signal,
+    stepTimeoutMs = 15000,
+  } = options;
+  const trimmedWod = wodDescription?.trim();
+  const payload = {
+    profile_id: profileId,
+    idempotency_key: idempotencyKey,
+    workout_type: workoutType,
+    ...(sessionId ? { session_id: sessionId } : {}),
+    ...(movements.length > 0 ? { movements } : {}),
+    ...(trimmedWod ? { wod_description: trimmedWod } : {}),
+  };
+
+  const request = (requestSignal?: AbortSignal) =>
+    apiClient<CreateSessionResponse>("/sessions", {
+      method: "POST",
+      bodyPayload: payload,
+      signal: requestSignal,
+    });
+
+  const result = signal
+    ? await request(signal)
+    : await withStepTimeout(request, stepTimeoutMs, "createSession");
+
+  if (!result?.session_id) {
+    throw new Error("createSession did not return a session_id");
+  }
+  return result;
 }
 
 /** Step 1: Request a signed upload URL from our API */
@@ -611,24 +677,22 @@ export async function notifyChunkUploadComplete(
   injuries: string[],
   workoutType: string,
   profileId: number,
-  startSecs?: number,
-  endSecs?: number,
-  heartRateBpm?: number,
-  workoutConfidence?: number,
-  appearanceHints?: string,
-  signal?: AbortSignal,
-  mediaChunk?: RecordingMediaChunkIdentity,
+  startSecs: number | undefined,
+  endSecs: number | undefined,
+  heartRateBpm: number | undefined,
+  workoutConfidence: number | undefined,
+  appearanceHints: string | undefined,
+  signal: AbortSignal | undefined,
+  mediaChunk: RecordingMediaChunkIdentity,
 ): Promise<ChunkUploadCompleteResponse> {
   return apiClient<ChunkUploadCompleteResponse>("/chunk-complete", {
     method: "POST",
     signal,
     bodyPayload: {
       live_analysis_version: 1,
-      ...(mediaChunk ? {
-        media_pipeline_version: 1,
-        client_chunk_id: mediaChunk.clientChunkId,
-        capture_order: mediaChunk.captureOrder,
-      } : {}),
+      media_pipeline_version: 1,
+      client_chunk_id: mediaChunk.clientChunkId,
+      capture_order: mediaChunk.captureOrder,
       session_id: sessionId,
       gcs_uri: gcsUri,
       movements,
@@ -709,8 +773,8 @@ export async function processWorkoutVideo(
 export async function processWorkoutChunk(
   fileUri: string,
   sessionId: string,
-  options: ProcessWorkoutVideoOptions,
-): Promise<UploadResult> {
+  options: ProcessWorkoutChunkOptions,
+): Promise<ChunkUploadResult> {
   const {
     movements = [],
     injuries = [],
@@ -727,18 +791,14 @@ export async function processWorkoutChunk(
     stepTimeoutMs = 15000,
     uploadTimeoutMs = 30000,
     onRetry,
-    mediaPipelineVersion,
     clientChunkId,
     captureOrder,
   } = options;
   const filename = fileUri.split("/").pop() || "chunk.mp4";
-  let mediaChunk: RecordingMediaChunkIdentity | undefined;
-  if (mediaPipelineVersion === 1) {
-    if (!clientChunkId || typeof captureOrder !== "number" || !Number.isSafeInteger(captureOrder) || captureOrder <= 0) {
-      throw new Error("A version-1 chunk requires a stable chunk ID and capture order");
-    }
-    mediaChunk = { clientChunkId, captureOrder };
+  if (!clientChunkId || typeof captureOrder !== "number" || !Number.isSafeInteger(captureOrder) || captureOrder <= 0) {
+    throw new Error("A chunk upload requires a stable chunk ID and capture order");
   }
+  const mediaChunk: RecordingMediaChunkIdentity = { clientChunkId, captureOrder };
 
   // DEBUG: Simulate slow upload. Set to 0 for normal behavior.
   // e.g. 15000 = each upload takes 15s extra, causing pile-up with 10s chunks.
@@ -756,11 +816,9 @@ export async function processWorkoutChunk(
   let uploadedGcsUri: string | undefined;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      if (!mediaChunk || !uploadedGcsUri) {
+      if (!uploadedGcsUri) {
         const extension = filename.match(/\.(mp4|mov)$/i)?.[0] || ".mp4";
-        const attemptFilename = mediaChunk
-          ? `chunk_${mediaChunk.clientChunkId}_${ulid()}${extension}`
-          : filename;
+        const attemptFilename = `chunk_${mediaChunk.clientChunkId}_${ulid()}${extension}`;
         const { upload_url, gcs_uri } = await withStepTimeout(
           (signal) => getUploadUrl(sessionId, attemptFilename, profileId, signal),
           stepTimeoutMs,
@@ -798,19 +856,17 @@ export async function processWorkoutChunk(
         "notifyChunkUploadComplete",
       );
 
-      if (mediaChunk && (!isPositiveDecimalString(result.chunk_id) ||
-          !isPositiveDecimalString(result.source_generation) || !result.gcs_uri?.startsWith("gs://"))) {
-        throw new Error("Version-1 chunk approval did not include a valid source receipt");
+      if (!isPositiveDecimalString(result.chunk_id) ||
+          !isPositiveDecimalString(result.source_generation) || !result.gcs_uri?.startsWith("gs://")) {
+        throw new Error("Chunk approval did not include a valid source receipt");
       }
 
       return {
         taskId: result.task_id,
         sessionId: result.session_id,
-        ...(mediaChunk ? {
-          chunkId: result.chunk_id,
-          gcsUri: result.gcs_uri,
-          sourceGeneration: result.source_generation,
-        } : {}),
+        chunkId: result.chunk_id!,
+        gcsUri: result.gcs_uri!,
+        sourceGeneration: result.source_generation!,
       };
     } catch (error) {
       lastError = error;
@@ -861,7 +917,6 @@ export async function mergeChunks(
     enableTts?: boolean;
     wodDescription?: string;
     appearanceHints?: string;
-    mediaPipelineVersion?: 1;
     expectedChunkCount?: number;
     chunks?: RecordingMediaManifestChunk[];
     maxRetries?: number;
@@ -876,19 +931,19 @@ export async function mergeChunks(
     enableTts = false,
     wodDescription,
     appearanceHints,
-    mediaPipelineVersion,
     expectedChunkCount,
     chunks,
     maxRetries = 3,
     retryDelayMs = 3000,
   } = options;
 
-  if (mediaPipelineVersion === 1 && (typeof expectedChunkCount !== "number" ||
+  const hasManifest = expectedChunkCount !== undefined || chunks !== undefined;
+  if (hasManifest && (typeof expectedChunkCount !== "number" ||
       !Number.isSafeInteger(expectedChunkCount) || expectedChunkCount <= 0 || !chunks || chunks.length !== expectedChunkCount ||
       chunks.some((chunk) => !isPositiveDecimalString(chunk.chunk_id) ||
         !isPositiveDecimalString(chunk.source_generation)) ||
       new Set(chunks.map((chunk) => chunk.chunk_id)).size !== expectedChunkCount)) {
-    throw new Error("A version-1 merge requires one approved receipt for every captured chunk");
+    throw new Error("A merge manifest requires one approved receipt for every captured chunk");
   }
 
   let lastError: unknown;
@@ -908,7 +963,7 @@ export async function mergeChunks(
           injuries,
           profile_id: profileId,
           enable_tts: enableTts,
-          ...(mediaPipelineVersion === 1 ? {
+          ...(hasManifest ? {
             media_pipeline_version: 1,
             expected_chunk_count: expectedChunkCount,
             chunks,

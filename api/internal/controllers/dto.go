@@ -81,18 +81,17 @@ type ProfileResponse struct {
 }
 
 type MergeChunksRequest struct {
-	MediaPipelineVersion int                          `json:"media_pipeline_version,omitempty"`
-	ExpectedChunkCount   int                          `json:"expected_chunk_count,omitempty"`
-	Chunks               []RecordingMediaReceiptInput `json:"chunks,omitempty"`
-	SessionID            string                       `json:"session_id"`
-	WorkoutType          string                       `json:"workout_type"`
-	Movements            []string                     `json:"movements"`
-	Injuries             []string                     `json:"injuries"`
-	ProfileID            uint                         `json:"profile_id"`
-	EnableTTS            bool                         `json:"enable_tts,omitempty"`
-	WODDescription       string                       `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
-	PipelineMode         string                       `json:"pipeline_mode,omitempty"`
-	AppearanceHints      string                       `json:"appearance_hints,omitempty"`
+	ExpectedChunkCount int                          `json:"expected_chunk_count,omitempty"`
+	Chunks             []RecordingMediaReceiptInput `json:"chunks,omitempty"`
+	SessionID          string                       `json:"session_id"`
+	WorkoutType        string                       `json:"workout_type"`
+	Movements          []string                     `json:"movements"`
+	Injuries           []string                     `json:"injuries"`
+	ProfileID          uint                         `json:"profile_id"`
+	EnableTTS          bool                         `json:"enable_tts,omitempty"`
+	WODDescription     string                       `json:"wod_description,omitempty"` // e.g. "Fran" or "For Time: 5 rounds of..."
+	PipelineMode       string                       `json:"pipeline_mode,omitempty"`
+	AppearanceHints    string                       `json:"appearance_hints,omitempty"`
 }
 
 type MergeChunksResponse struct {
@@ -103,10 +102,8 @@ type MergeChunksResponse struct {
 }
 
 type ChunkCompleteRequest struct {
-	MediaPipelineVersion int    `json:"media_pipeline_version,omitempty"`
-	ClientChunkID        string `json:"client_chunk_id,omitempty"`
-	CaptureOrder         int    `json:"capture_order,omitempty"`
-	LiveAnalysisVersion  int    `json:"live_analysis_version,omitempty"`
+	ClientChunkID string `json:"client_chunk_id,omitempty"`
+	CaptureOrder  int    `json:"capture_order,omitempty"`
 
 	SessionID         string   `json:"session_id"`
 	GCSURI            string   `json:"gcs_uri"`
@@ -228,6 +225,7 @@ type ParseWorkoutImageResponse struct {
 }
 
 type CreateSessionRequest struct {
+	SessionID      string   `json:"session_id,omitempty"`
 	ProfileID      uint     `json:"profile_id"`
 	IdempotencyKey string   `json:"idempotency_key"`
 	Movements      []string `json:"movements,omitempty"`

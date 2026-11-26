@@ -3,13 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { uploadApi, uploadToGCS, validateFileSize } from '../api/upload';
 
-function generateSessionId() {
-  const now = new Date();
-  const date = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const rand = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
-  return `WOD-${date}-${rand}`;
-}
-
 export function UploadPage() {
   const { user } = useAuth();
   const profiles = user?.profiles || [];
@@ -28,11 +21,13 @@ export function UploadPage() {
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<'idle' | 'uploading' | 'completing'>('idle');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadIdempotencyKeyRef = useRef<string | null>(null);
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (!f) return;
 
+    uploadIdempotencyKeyRef.current = null;
     const validationError = validateFileSize(f);
     if (validationError) {
       setError(validationError);
@@ -54,7 +49,20 @@ export function UploadPage() {
     setProgress(0);
 
     try {
-      const sessionId = generateSessionId();
+      const idempotencyKey =
+        uploadIdempotencyKeyRef.current ?? (uploadIdempotencyKeyRef.current = crypto.randomUUID());
+
+      // 0. Register session on the backend
+      const { session_id: sessionId } = await uploadApi.createSession({
+        profile_id: selectedProfileId,
+        idempotency_key: idempotencyKey,
+        workout_type: workoutType,
+        wod_description: wodDescription.trim() || undefined,
+        movements: [],
+      });
+      if (!sessionId) {
+        throw new Error('Failed to create workout session');
+      }
 
       // 1. Get signed upload URL
       const { upload_url, gcs_uri } = await uploadApi.getUploadUrl(
@@ -79,6 +87,8 @@ export function UploadPage() {
         pipeline_mode: pipelineMode,
         ...(targetAppearance.trim() ? { appearance_hints: targetAppearance.trim() } : {}),
       });
+
+      uploadIdempotencyKeyRef.current = null;
 
       // 4. Navigate to session detail
       navigate(`/sessions/${sessionId}?profile_id=${selectedProfileId}`);

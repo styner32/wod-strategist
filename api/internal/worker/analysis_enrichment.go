@@ -214,7 +214,7 @@ func (w *Worker) scheduleEnrichment(ctx context.Context, sessionID string, agent
 				var highlights []HighlightSegment
 				decodeErr := json.Unmarshal([]byte(a.HighlightSegments), &highlights)
 				previous := b
-				b = AgenticHighlights{RunID: uuid.NewString(), Fingerprint: afp, Status: "pending", StartedAt: now, UpdatedAt: now, Person: w.buildTargetPersonContext(a.ProfileID, a.SessionID), Items: []AgenticHighlight{}, Model: gemini.ModelFlash38, Thinking: "HIGH", Resolution: "LOW", PromptVersion: enrichmentPromptVersion}
+				b = AgenticHighlights{RunID: uuid.NewString(), Fingerprint: afp, Status: "pending", StartedAt: now, UpdatedAt: now, Person: w.buildTargetPersonContext(a.ProfileID, a.SessionID), Items: []AgenticHighlight{}, Model: gemini.ModelHydrogen4, Thinking: "HIGH", Resolution: "LOW", PromptVersion: enrichmentPromptVersion}
 				for _, h := range highlights {
 					start, e1 := parseTimestampToSeconds(h.Start)
 					end, e2 := parseTimestampToSeconds(h.End)
@@ -853,7 +853,7 @@ func validateAgenticObservation(raw string, b AgenticHighlights, it AgenticHighl
 func (w *Worker) generateAgenticHighlight(ctx context.Context, a db.AnalysisResult, b AgenticHighlights, index int) {
 	it := &b.Items[index]
 	response := w.GeminiClient.AnalyzeHighlightAgentic(ctx, b.FileURI, b.MIMEType, agenticHighlightPrompt(b, *it))
-	w.saveTokenUsageForRequest(a.SessionID, a.ProfileID, "highlight:agentic", fmt.Sprintf("agentic:%s:%d:%s", b.RunID, index, it.Key), gemini.UsageFromComparisonWithThoughts(response.Usage, gemini.ModelFlash38, response.ThoughtSummary))
+	w.saveTokenUsageForRequest(a.SessionID, a.ProfileID, "highlight:agentic", fmt.Sprintf("agentic:%s:%d:%s", b.RunID, index, it.Key), gemini.UsageFromComparisonWithThoughts(response.Usage, gemini.ModelHydrogen4, response.ThoughtSummary))
 	// The public metrics contain neither raw SSE nor thought/request text.
 	metrics := response.VideoModeResult
 	metrics.Text = ""

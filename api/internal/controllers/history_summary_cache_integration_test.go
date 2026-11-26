@@ -25,11 +25,13 @@ import (
 )
 
 var _ = Describe("GET /api/v1/history", func() {
-	It("reuses backfilled session summaries for 20 sessions (2,500 chunks) with zero chunk queries, matches uncached JSON byte-for-byte, and rebuilds only trigger-invalidated sessions", func() {
+	BeforeEach(func() {
 		ensureTestDB()
 		testhelpers.CleanupDB(dbConn)
 		testhelpers.FlushRedis()
+	})
 
+	It("reuses backfilled session summaries for 20 sessions (2,500 chunks) with zero chunk queries, matches uncached JSON byte-for-byte, and rebuilds only trigger-invalidated sessions", func() {
 		profile := testhelpers.CreateProfile(dbConn, &db.Profile{Name: "History Cache Athlete"})
 		var user db.User
 		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())

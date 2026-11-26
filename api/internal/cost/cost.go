@@ -21,9 +21,17 @@ type ModelRate struct {
 }
 
 var ModelPricing = map[string]ModelRate{
+	gemini.ModelCarbon4: {
+		PromptPerMillion:    4.00,
+		CandidatePerMillion: 20.00,
+	},
 	gemini.ModelArgon4: {
 		PromptPerMillion:    4.00,
 		CandidatePerMillion: 20.00,
+	},
+	gemini.ModelHydrogen4: {
+		PromptPerMillion:    1.50,
+		CandidatePerMillion: 7.50,
 	},
 	"gemini-3.8-flash": {
 		PromptPerMillion:    1.50,
@@ -51,6 +59,12 @@ func GetModelRate(model string) ModelRate {
 	}
 	// Fallbacks for known prefixes/suffixes
 	switch {
+	case strings.Contains(normalized, "hydrogen"):
+		return ModelPricing[gemini.ModelHydrogen4]
+	case strings.Contains(normalized, "carbon"):
+		return ModelPricing[gemini.ModelCarbon4]
+	case strings.Contains(normalized, "argon"):
+		return ModelPricing[gemini.ModelArgon4]
 	case strings.Contains(normalized, "3.5-flash-lite"):
 		return ModelPricing["gemini-3.5-flash-lite"]
 	case strings.Contains(normalized, "flash"):
@@ -62,10 +76,15 @@ func GetModelRate(model string) ModelRate {
 	}
 }
 
-// Missing dates use the standard Argon rate rather than assuming eligibility
+func isIntroductoryFrontierModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return m == gemini.ModelArgon4 || m == gemini.ModelCarbon4
+}
+
+// Missing dates use the standard Frontier rate rather than assuming eligibility
 // for introductory pricing. Existing model rates remain unchanged.
 func GetModelRateAt(model string, createdAt time.Time) ModelRate {
-	if strings.EqualFold(strings.TrimSpace(model), gemini.ModelArgon4) &&
+	if isIntroductoryFrontierModel(model) &&
 		!createdAt.IsZero() && createdAt.Before(ArgonStandardPricingStartsAt) {
 		return ModelRate{PromptPerMillion: 2.00, CandidatePerMillion: 10.00}
 	}

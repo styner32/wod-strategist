@@ -51,7 +51,7 @@ var _ = Describe("POST /api/v1/history/:id/archive", func() {
 		testhelpers.CreateSession(dbConn, &db.Session{SessionID: "WOD-20261029-ARCHIVEINFLIGHT", ProfileID: profile.ID, WorkoutType: "wod", WODEvaluationVersion: 1, Effort: &effort})
 		analysis := testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{SessionID: "WOD-20261029-ARCHIVEINFLIGHT", ProfileID: profile.ID, Status: "COMPLETED", WorkoutAt: &at, WorkoutAtSource: &source, SessionScore: `{"intensity":85,"movements":{"Push Jerk":{"reps":30}}}`})
 		transport := testhelpers.NewMockTransport()
-		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(http.StatusOK).JSON(map[string]any{
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(http.StatusOK).JSON(map[string]any{
 			"candidates":    []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"target_rpe":{"score":9,"label":"RPE 9","pacing_strategy":"stale-ai-advice"},"overall_summary":"stale-ai-advice"}`}}}}},
 			"usageMetadata": map[string]int{"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
 		})

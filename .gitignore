@@ -50,6 +50,7 @@ infra/.terraform/
 infra/*.tfstate
 infra/*.tfstate.backup
 infra/*.tfvars
+infra/.terraform.tfstate.lock.info
 
 # gcp key
 api/gcp-key.json

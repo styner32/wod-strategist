@@ -2,6 +2,12 @@ import { api } from './client';
 
 const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2 GB
 
+export interface CreateSessionResponse {
+  session_id: string;
+  status: string;
+  workout_type: string;
+}
+
 export interface UploadUrlResponse {
   upload_url: string;
   gcs_uri: string;
@@ -21,6 +27,14 @@ export function validateFileSize(file: File): string | null {
 }
 
 export const uploadApi = {
+  createSession: (params: {
+    profile_id: number;
+    idempotency_key: string;
+    workout_type?: string;
+    wod_description?: string;
+    movements?: string[];
+  }) => api.post<CreateSessionResponse>('/sessions', params),
+
   getUploadUrl: (sessionId: string, filename: string, profileId: number) =>
     api.post<UploadUrlResponse>('/upload-url', {
       session_id: sessionId,

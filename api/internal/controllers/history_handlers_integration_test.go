@@ -16,12 +16,14 @@ import (
 	"github.com/wod-strategist/api/internal/testhelpers"
 	"github.com/wod-strategist/api/internal/wodeval"
 	"github.com/wod-strategist/api/internal/workoutprogress"
+	"gorm.io/gorm"
 )
 
 var _ = Describe("GET /api/v1/history", func() {
 	var router *gin.Engine
 	var profileID uint
 	var user db.User
+
 	BeforeEach(func() {
 		profile, owner, testRouter := historyArchiveOwner()
 		profileID, user, router = profile.ID, owner, testRouter
@@ -466,6 +468,53 @@ var _ = Describe("GET /api/v1/history", func() {
 		Expect(json.Unmarshal(anyPage2.Body.Bytes(), &page2Rows)).To(Succeed())
 		Expect(page2Rows).To(HaveLen(1))
 		Expect(page2Rows[0].ID).To(Equal(aMissingEffort.ID))
+	})
+
+	It("stops reading completed history once the missing-input page is full", func() {
+		// With limit=2 the existing scan budget is 60 candidates per batch.
+		// Put the two matches in separate batches and leave a third batch of older rows.
+		const batchSize = 60
+		sessionID := func(rank int) string { return fmt.Sprintf("WOD-BATCH-%03d", rank) }
+		effort := 8
+		for rank := 3 * batchSize; rank >= 1; rank-- {
+			session := db.Session{
+				ProfileID: profileID, SessionID: sessionID(rank), WorkoutType: "wod",
+				WODEvaluationVersion: wodeval.Version, Effort: &effort,
+			}
+			if rank == 1 || rank == batchSize+1 {
+				session.Effort = nil
+			}
+			testhelpers.CreateSession(dbConn, &session)
+			testhelpers.CreateAnalysisResult(dbConn, &db.AnalysisResult{
+				ProfileID: profileID, SessionID: session.SessionID, Status: "COMPLETED",
+			})
+		}
+
+		var batchRows []int64
+		queries := dbConn.Callback().Query()
+		const callback = "test:missing_input_history_batches"
+		Expect(queries.After("gorm:query").Register(callback, func(tx *gorm.DB) {
+			if tx.Statement.Table == "analysis_results" {
+				batchRows = append(batchRows, tx.RowsAffected)
+			}
+		})).To(Succeed())
+		DeferCleanup(queries.Remove, callback)
+
+		path := fmt.Sprintf("/api/v1/history?profile_id=%d&missing=any&limit=2", profileID)
+		response := historyArchiveRequest(router, user, http.MethodGet, path, "")
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		var rows []db.AnalysisResult
+		Expect(json.Unmarshal(response.Body.Bytes(), &rows)).To(Succeed())
+		Expect(rows).To(HaveExactElements(
+			HaveField("SessionID", sessionID(1)), HaveField("SessionID", sessionID(batchSize+1)),
+		))
+		Expect(batchRows).NotTo(BeEmpty())
+		var totalRead int64
+		for _, count := range batchRows {
+			totalRead += count
+		}
+		Expect(totalRead).To(BeNumerically("<=", 2*batchSize), "candidate rows read per query: %v", batchRows)
+		Expect(batchRows).To(HaveEach(BeNumerically("<=", batchSize)))
 	})
 
 	It("embeds batched completed highlights and compact activity summaries while clearing raw workout_progress", func() {

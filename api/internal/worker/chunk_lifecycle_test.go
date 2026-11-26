@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/oklog/ulid/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/db"
@@ -23,8 +24,8 @@ var _ = Describe("Chunk lifecycle recovery", Ordered, func() {
 	var queue *asynq.Client
 	var inspector *asynq.Inspector
 	var transport *testhelpers.MockTransport
-	const sid = "sess-chunk-lifecycle"
-	const uri = "gs://test-bucket/videos/sess-chunk-lifecycle/chunk_001.mp4"
+	var sid string
+	var uri string
 
 	BeforeAll(func() {
 		var err error
@@ -38,6 +39,7 @@ var _ = Describe("Chunk lifecycle recovery", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(sqlDB.Close)
 	})
+
 	BeforeEach(func() {
 		testhelpers.CleanupDB(database)
 		testhelpers.FlushRedis()
@@ -47,6 +49,9 @@ var _ = Describe("Chunk lifecycle recovery", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		w = &Worker{DB: database, QueueClient: queue, QueueInspector: inspector,
 			StorageClient: storageClient, BucketName: "test-bucket", logger: zap.NewNop()}
+
+		sid = "WOD-20260916-" + ulid.Make().String()
+		uri = "gs://test-bucket/videos/" + sid + "/chunk_001.mp4"
 	})
 
 	DescribeTable("serializes concurrent terminal writes and preserves success", func(seedFailure bool) {
@@ -94,12 +99,14 @@ var _ = Describe("Chunk lifecycle recovery", Ordered, func() {
 
 	DescribeTable("retries final status persistence after a real database write failure",
 		func(kind string) {
-			p := VideoAnalysisPayload{SessionID: sid, ProfileID: profile.ID, FilePath: uri, StartSecs: 0, EndSecs: 10}
+			sessionID := "WOD-20260916-" + ulid.Make().String()
+			p := VideoAnalysisPayload{SessionID: sessionID, ProfileID: profile.ID, FilePath: uri, StartSecs: 0, EndSecs: 10}
 			body, err := json.Marshal(p)
 			Expect(err).NotTo(HaveOccurred())
 			task := asynq.NewTask(kind, body)
 			handler := w.HandleChunkAnalysisTask
 			if kind == TypeChunkAnalysisWithSession {
+				testhelpers.CreateSession(database, &db.Session{SessionID: sessionID, ProfileID: profile.ID})
 				handler = w.HandleChunkAnalysisWithSessionTask
 			} else if kind == TypeVideoAnalysis {
 				handler = w.HandleVideoAnalysisTask

@@ -104,9 +104,6 @@ func enqueueRecordingMedia(queue QueueClient, kind string, payload recordingMedi
 // DispatchRecordingMedia publishes the durable outbox after ingress commits.
 // Repeating it is safe; recovery also calls it after a queue outage or restart.
 func DispatchRecordingMedia(ctx context.Context, database *gorm.DB, queue QueueClient, runID uint) error {
-	if database == nil || queue == nil {
-		return errors.New("recording media dependencies are unavailable")
-	}
 	queue = recordingBaseQueue(queue)
 	var run db.RecordingMediaRun
 	if err := database.WithContext(ctx).Where("id = ? AND version = ?", runID, db.RecordingMediaVersion).First(&run).Error; err != nil {

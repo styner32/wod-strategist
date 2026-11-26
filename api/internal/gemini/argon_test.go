@@ -20,8 +20,8 @@ func (f argonRequestObserver) RoundTrip(req *http.Request) (*http.Response, erro
 	return f(req)
 }
 
-var _ = Describe("Argon generation", func() {
-	const baseURL = "https://argon.test"
+var _ = Describe("Carbon and Gemini 4 generation", func() {
+	const baseURL = "https://carbon.test"
 	var transport *testhelpers.MockTransport
 	var client *Client
 	BeforeEach(func() {
@@ -36,14 +36,14 @@ var _ = Describe("Argon generation", func() {
 	})
 	AfterEach(func() { Expect(transport.Verify()).To(Succeed()) })
 
-	It("defaults to HIGH without a budget and preserves exact segment metadata", func() {
-		Expect(client.Model()).To(Equal(ModelArgon4))
-		transport.New(baseURL).Post("/v1beta/models/" + ModelArgon4 + ":generateContent").Reply(200).
+	It("defaults to Carbon HIGH without a budget and preserves exact segment metadata", func() {
+		Expect(client.Model()).To(Equal(ModelCarbon4))
+		transport.New(baseURL).Post("/v1beta/models/" + ModelCarbon4 + ":generateContent").Reply(200).
 			BodyString(`{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"observed movement"}]}}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,"thoughtsTokenCount":40,"totalTokenCount":160}}`)
 		text, usage, err := client.AnalyzeSegment(context.Background(), baseURL+"/files/video", "video/mp4", 10250*time.Millisecond, 20750*time.Millisecond, "analyze")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(text).To(Equal("observed movement"))
-		Expect(usage.Model).To(Equal(ModelArgon4))
+		Expect(usage.Model).To(Equal(ModelCarbon4))
 		body := string(transport.Requests()[0].Body)
 		Expect(body).To(ContainSubstring(`"thinkingLevel":"HIGH"`))
 		Expect(body).NotTo(ContainSubstring("thinkingBudget"))
@@ -57,11 +57,11 @@ var _ = Describe("Argon generation", func() {
 
 	DescribeTable("rejects incomplete and empty answers while retaining usage",
 		func(answer, message string) {
-			transport.New(baseURL).Post("/v1beta/models/" + ModelArgon4 + ":generateContent").Reply(200).BodyString(answer)
+			transport.New(baseURL).Post("/v1beta/models/" + ModelCarbon4 + ":generateContent").Reply(200).BodyString(answer)
 			text, usage, err := client.AnalyzeSegment(context.Background(), baseURL+"/files/video", "video/mp4", 0, time.Second, "analyze")
 			Expect(err).To(MatchError(ContainSubstring(message)))
 			Expect(text).To(BeEmpty())
-			Expect(usage.Model).To(Equal(ModelArgon4))
+			Expect(usage.Model).To(Equal(ModelCarbon4))
 			Expect(usage.Details.Total).To(HaveValue(Equal(int64(32768))))
 			Expect(transport.Requests()).To(HaveLen(1))
 		},
@@ -88,7 +88,7 @@ var _ = Describe("Argon generation", func() {
 				}
 				return transport.RoundTrip(req)
 			})
-			transport.New(baseURL).Post("/v1beta/models/" + ModelArgon4 + ":generateContent").Reply(200).
+			transport.New(baseURL).Post("/v1beta/models/" + ModelCarbon4 + ":generateContent").Reply(200).
 				BodyString(`{"candidates":[{"content":{"parts":[{"text":"answer"}]}}]}`)
 			_, _, err := client.AnalyzeSegment(ctx, baseURL+"/files/video", "video/mp4", 0, time.Second, "analyze")
 			Expect(err).NotTo(HaveOccurred())
@@ -96,28 +96,29 @@ var _ = Describe("Argon generation", func() {
 	})
 
 	It("returns a provider timeout with missing usage and no hidden retry", func() {
-		transport.New(baseURL).Post("/v1beta/models/" + ModelArgon4 + ":generateContent").Reply(504).
+		transport.New(baseURL).Post("/v1beta/models/" + ModelCarbon4 + ":generateContent").Reply(504).
 			BodyString(`{"error":{"code":504,"message":"deadline exceeded","status":"DEADLINE_EXCEEDED"}}`)
 		text, usage, err := client.AnalyzeSegment(context.Background(), baseURL+"/files/video", "video/mp4", 0, time.Second, "analyze")
 		Expect(err).To(HaveOccurred())
 		Expect(text).To(BeEmpty())
-		Expect(usage.Model).To(Equal(ModelArgon4))
+		Expect(usage.Model).To(Equal(ModelCarbon4))
 		Expect(usage.Details).To(BeNil())
 		Expect(transport.Requests()).To(HaveLen(1))
 	})
 
-	It("keeps indexing and text parsing on Flash after changing the client default", func() {
+	It("routes indexing and text parsing to Hydrogen without thinkingBudget", func() {
 		for range 2 {
-			transport.New(baseURL).Post("/v1beta/models/" + ModelFlash38 + ":generateContent").Reply(200).
+			transport.New(baseURL).Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").Reply(200).
 				BodyString(`{"candidates":[{"content":{"parts":[{"text":"answer"}]}}]}`)
 		}
 		_, usage, err := client.IndexVideo(context.Background(), baseURL+"/files/video", "video/mp4", "index")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(usage.Model).To(Equal(ModelFlash38))
+		Expect(usage.Model).To(Equal(ModelHydrogen4))
 		_, usage, err = client.ParseText(context.Background(), "summarize")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(usage.Model).To(Equal(ModelFlash38))
+		Expect(usage.Model).To(Equal(ModelHydrogen4))
 		for _, request := range transport.Requests() {
+			Expect(string(request.Body)).NotTo(ContainSubstring("thinkingBudget"))
 			var body map[string]any
 			Expect(json.Unmarshal(request.Body, &body)).To(Succeed())
 			config, _ := body["generationConfig"].(map[string]any)
@@ -125,40 +126,59 @@ var _ = Describe("Argon generation", func() {
 		}
 	})
 
-	It("retains explicit legacy Pro requests for comparison and rollback", func() {
+	It("retains explicit legacy Argon and Pro requests for comparison and rollback", func() {
+		transport.New(baseURL).Post("/v1beta/models/" + ModelArgon4 + ":generateContent").Reply(200).
+			BodyString(`{"candidates":[{"content":{"parts":[{"text":"argon answer"}]}}]}`)
+		text, usage, err := client.AnalyzeSegmentWithModel(context.Background(), baseURL+"/files/video", "video/mp4", 0, time.Second, "analyze", ModelArgon4)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(text).To(Equal("argon answer"))
+		Expect(usage.Model).To(Equal(ModelArgon4))
+		Expect(string(transport.Requests()[0].Body)).To(ContainSubstring(`"maxOutputTokens":32768`))
+		Expect(string(transport.Requests()[0].Body)).NotTo(ContainSubstring("thinkingBudget"))
+
 		transport.New(baseURL).Post("/v1beta/models/" + ModelPro31Preview + ":generateContent").Reply(200).
 			BodyString(`{"candidates":[{"content":{"parts":[{"text":"legacy answer"}]}}]}`)
-		text, usage, err := client.AnalyzeSegmentWithModel(context.Background(), baseURL+"/files/video", "video/mp4", 0, time.Second, "analyze", ModelPro31Preview)
+		text, usage, err = client.AnalyzeSegmentWithModel(context.Background(), baseURL+"/files/video", "video/mp4", 0, time.Second, "analyze", ModelPro31Preview)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(text).To(Equal("legacy answer"))
 		Expect(usage.Model).To(Equal(ModelPro31Preview))
-		Expect(string(transport.Requests()[0].Body)).NotTo(ContainSubstring("maxOutputTokens"))
+		Expect(string(transport.Requests()[1].Body)).NotTo(ContainSubstring("maxOutputTokens"))
 	})
 
-	It("uses HIGH thinking when analyzing segments with Flash 3.8", func() {
-		transport.New(baseURL).Post("/v1beta/models/" + ModelFlash38 + ":generateContent").Reply(200).
+	It("uses HIGH thinking when analyzing segments with Hydrogen 4", func() {
+		transport.New(baseURL).Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").Reply(200).
 			BodyString(`{"candidates":[{"content":{"parts":[{"text":"unknown segment answer"}]}}]}`)
-		text, usage, err := client.AnalyzeSegmentWithModel(context.Background(), baseURL+"/files/video", "video/mp4", 45*time.Second, 50*time.Second, "analyze unknown", ModelFlash38)
+		text, usage, err := client.AnalyzeSegmentWithModel(context.Background(), baseURL+"/files/video", "video/mp4", 45*time.Second, 50*time.Second, "analyze unknown", ModelHydrogen4)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(text).To(Equal("unknown segment answer"))
-		Expect(usage.Model).To(Equal(ModelFlash38))
+		Expect(usage.Model).To(Equal(ModelHydrogen4))
 		body := string(transport.Requests()[0].Body)
 		Expect(body).To(ContainSubstring(`"thinkingLevel":"HIGH"`))
+		Expect(body).NotTo(ContainSubstring("thinkingBudget"))
 		Expect(body).To(ContainSubstring(`"mediaResolution":"MEDIA_RESOLUTION_MEDIUM"`))
 	})
 
-	It("honors an explicit thinking level while stripping the unsupported budget", func() {
+	It("honors an explicit thinking level while stripping the unsupported budget on Carbon and Hydrogen", func() {
 		config := &genai.GenerateContentConfig{ThinkingConfig: &genai.ThinkingConfig{
 			ThinkingLevel: genai.ThinkingLevelMedium, ThinkingBudget: genai.Ptr(int32(4096)),
 		}}
-		transport.New(baseURL).Post("/v1beta/models/" + ModelArgon4 + ":generateContent").Reply(200).
+		transport.New(baseURL).Post("/v1beta/models/" + ModelCarbon4 + ":generateContent").Reply(200).
 			BodyString(`{"candidates":[{"content":{"parts":[{"text":"answer"}]}}]}`)
-		_, _, err := client.generateContent(context.Background(), ModelArgon4, genai.Text("analyze"), config)
+		_, _, err := client.generateContent(context.Background(), ModelCarbon4, genai.Text("analyze"), config)
 		Expect(err).NotTo(HaveOccurred())
 		body := string(transport.Requests()[0].Body)
 		Expect(body).To(ContainSubstring(`"thinkingLevel":"MEDIUM"`))
 		Expect(body).NotTo(ContainSubstring("thinkingBudget"))
 		Expect(config.ThinkingConfig.ThinkingBudget).NotTo(BeNil(), "do not mutate caller configuration")
 		Expect(config.MaxOutputTokens).To(BeZero())
+
+		transport.New(baseURL).Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").Reply(200).
+			BodyString(`{"candidates":[{"content":{"parts":[{"text":"answer"}]}}]}`)
+		_, _, err = client.generateContent(context.Background(), ModelHydrogen4, genai.Text("analyze"), config)
+		Expect(err).NotTo(HaveOccurred())
+		hBody := string(transport.Requests()[1].Body)
+		Expect(hBody).To(ContainSubstring(`"thinkingLevel":"MEDIUM"`))
+		Expect(hBody).NotTo(ContainSubstring("thinkingBudget"))
+		Expect(config.ThinkingConfig.ThinkingBudget).NotTo(BeNil(), "do not mutate caller configuration")
 	})
 })

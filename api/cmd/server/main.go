@@ -82,7 +82,7 @@ func main() {
 	if cfg.GeminiAPIKey != "" {
 		geminiClient, geminiErr := gemini.NewClientWithOptions(context.Background(), logger.Log, gemini.Options{
 			APIKey:          cfg.GeminiAPIKey,
-			Model:           gemini.ModelFlash38,
+			Model:           gemini.ModelHydrogen4,
 			IncludeThoughts: cfg.GeminiIncludeThoughts,
 		})
 		if geminiErr != nil {
@@ -90,8 +90,18 @@ func main() {
 		} else {
 			imageParser = geminiClient
 			textParser = geminiClient
-			logger.Log.Info("Gemini image/text parser initialized (" + gemini.ModelFlash38 + ")")
+			logger.Log.Info("Gemini image/text parser initialized (" + gemini.ModelHydrogen4 + ")")
 		}
+	}
+
+	if dbConn == nil {
+		logger.Log.Fatal("Database connection is required")
+	}
+	if client == nil {
+		logger.Log.Fatal("Queue client is required")
+	}
+	if storageClient == nil {
+		logger.Log.Fatal("Storage client is required")
 	}
 
 	handlers, err := controllers.New(controllers.Config{

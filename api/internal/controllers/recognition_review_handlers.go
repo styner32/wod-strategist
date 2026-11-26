@@ -243,7 +243,7 @@ func (ctl *Controller) CreateRecognitionReview(c *gin.Context) {
 		idsJSON, _ := json.Marshal(req.RecordIDs)
 		model := strings.TrimSpace(ctl.recognitionReviewModel)
 		if model == "" {
-			model = gemini.ModelArgon4
+			model = gemini.ModelCarbon4
 		}
 		now := time.Now().UTC()
 		run = db.RecognitionReviewRun{SessionID: sid, ProfileID: pid, ClientRequestID: req.ClientRequestID, RequestHash: hash, TaskID: uuid.NewString(), Status: db.RecognitionReviewStatusQueued, SourceVersion: req.SourceVersion, EvaluationFingerprint: req.EvaluationFingerprint, SourceGCSURI: fmt.Sprintf("gs://%s/%s", ctl.bucketName, object), SourceObject: object, SourceGeneration: attrs.Generation, RecordIDs: db.JSONDocument(idsJSON), StartSecs: req.StartSecs, EndSecs: req.EndSecs, Snapshot: db.JSONDocument(snapshotJSON), Batches: db.JSONDocument(batchJSON), Model: model, PromptVersion: recognitionreview.PromptVersion, SchemaVersion: recognitionreview.SchemaVersion, CreatedAt: now, UpdatedAt: now}

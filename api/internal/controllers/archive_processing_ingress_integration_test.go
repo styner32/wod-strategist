@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -84,7 +85,7 @@ func (f archiveIngressFixture) originalBody() map[string]any {
 	return map[string]any{"session_id": archiveIngressSessionID, "profile_id": f.profile.ID,
 		"gcs_uri":      fmt.Sprintf("gs://test-bucket/videos/%d/%s/chunk_001.mp4", f.profile.ID, archiveIngressSessionID),
 		"workout_type": "wod", "movements": []string{"Air Squat"}, "injuries": []string{},
-		"start_secs": 0, "end_secs": 10, "live_analysis_version": 1, "max_duration": 60,
+		"start_secs": 0, "end_secs": 10, "max_duration": 60,
 		"wod_description": "must not replace original plan", "appearance_hints": "must not replace session appearance"}
 }
 func (f archiveIngressFixture) expectNoWork() {
@@ -233,22 +234,135 @@ func expectIngressMetadataAndTask(f archiveIngressFixture, response *httptest.Re
 	Expect(err).NotTo(HaveOccurred())
 	Expect(tasks).To(HaveLen(1))
 	Expect(tasks[0].Type).To(Equal(taskType))
-	if taskType == worker.TypeChunkAnalysisWithSession {
-		var payload worker.VideoAnalysisWithSessionPayload
-		Expect(json.Unmarshal(tasks[0].Payload, &payload)).To(Succeed())
-		Expect(payload.SessionID).To(Equal(archiveIngressSessionID))
-		Expect(payload.ProfileID).To(Equal(f.profile.ID))
-		Expect(payload.LiveAnalysisVersion).To(Equal(1))
-	} else {
-		var payload worker.VideoAnalysisPayload
-		Expect(json.Unmarshal(tasks[0].Payload, &payload)).To(Succeed())
-		Expect(payload.SessionID).To(Equal(archiveIngressSessionID))
-		Expect(payload.ProfileID).To(Equal(f.profile.ID))
-		Expect(payload.Movements).To(Equal([]string{"Air Squat"}))
-		Expect(payload.WODDescription).To(Equal(session.WODDescription))
-	}
+	var payload worker.VideoAnalysisPayload
+	Expect(json.Unmarshal(tasks[0].Payload, &payload)).To(Succeed())
+	Expect(payload.SessionID).To(Equal(archiveIngressSessionID))
+	Expect(payload.ProfileID).To(Equal(f.profile.ID))
+	Expect(payload.Movements).To(Equal([]string{"Air Squat"}))
+	Expect(payload.WODDescription).To(Equal(session.WODDescription))
 	Expect(f.transport.Requests()).To(BeEmpty())
 }
+
+func newFreshRecordingIngressFixture() archiveIngressFixture {
+	ensureTestDB()
+	testhelpers.CleanupDB(dbConn)
+	testhelpers.FlushRedis()
+	profile := testhelpers.CreateProfile(dbConn, &db.Profile{})
+	var owner db.User
+	Expect(dbConn.First(&owner, profile.UserID).Error).To(Succeed())
+	testhelpers.CreateSession(dbConn, &db.Session{
+		SessionID:      archiveIngressSessionID,
+		ProfileID:      profile.ID,
+		Status:         db.SessionStatusStarted,
+		WorkoutType:    "wod",
+		WODDescription: "preserved original plan",
+	})
+	queue := testhelpers.NewQueueClient()
+	DeferCleanup(queue.Close)
+	transport := testhelpers.NewMockTransport()
+	storage, err := testhelpers.NewStorageClient("test-bucket", transport)
+	Expect(err).NotTo(HaveOccurred())
+	router := newTestRouterWithAuthService(controllers.Config{
+		QueueClient:             queue,
+		StorageClient:           storage,
+		BucketName:              "test-bucket",
+		EnableChunkReanalysis:   true,
+		EnableSessionReanalysis: true,
+		EnableAgenticHighlights: true,
+	})
+	return archiveIngressFixture{router: router, profile: profile, owner: owner, transport: transport}
+}
+
+func mockFreshRecordingChunkUpload(f archiveIngressFixture) string {
+	object := fmt.Sprintf("videos/%d/%s/chunk_001.mp4", f.profile.ID, archiveIngressSessionID)
+	testhelpers.MockGCSListObjects(f.transport, "test-bucket", fmt.Sprintf("videos/%d/%s/", f.profile.ID, archiveIngressSessionID), []string{object})
+	f.transport.New(testhelpers.GCSBaseURL).
+		Get("/storage/v1/b/test-bucket/o/" + url.PathEscape(object)).
+		Reply(http.StatusOK).
+		JSON(map[string]any{"name": object, "generation": "1", "size": "2048"})
+	return fmt.Sprintf("gs://test-bucket/%s", object)
+}
+
+func expectRecordingChunkMetadataAndTasks(f archiveIngressFixture, response *httptest.ResponseRecorder, plan string) {
+	Expect(response.Code).To(Equal(http.StatusAccepted), response.Body.String())
+	var session db.Session
+	Expect(dbConn.Where("session_id = ?", archiveIngressSessionID).First(&session).Error).To(Succeed())
+	Expect(session.WODDescription).To(Equal(plan))
+	Expect(string(session.MovementHints)).To(MatchJSON(`["Air Squat"]`))
+	var appearance db.SessionAppearanceHint
+	Expect(dbConn.Where("session_id = ?", archiveIngressSessionID).First(&appearance).Error).To(Succeed())
+	Expect(string(appearance.Hints)).To(MatchJSON(`{"appearance":"must not replace session appearance"}`))
+
+	defaultTasks, err := inspector.ListPendingTasks("default")
+	Expect(err).NotTo(HaveOccurred())
+	Expect(defaultTasks).To(HaveLen(1))
+	Expect(defaultTasks[0].Type).To(Equal(worker.TypeChunkAnalysisWithSession))
+	var payload worker.VideoAnalysisWithSessionPayload
+	Expect(json.Unmarshal(defaultTasks[0].Payload, &payload)).To(Succeed())
+	Expect(payload.SessionID).To(Equal(archiveIngressSessionID))
+	Expect(payload.ProfileID).To(Equal(f.profile.ID))
+
+	prepTasks, err := inspector.ListPendingTasks(worker.RecordingChunkQueueName)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(prepTasks).To(HaveLen(1))
+	Expect(prepTasks[0].Type).To(Equal(worker.TypePrepareRecordingChunk))
+	Expect(f.transport.Verify()).To(Succeed())
+}
+
+func seedMergeableRecordingMedia(f archiveIngressFixture) (db.RecordingMediaRun, db.RecordingChunk) {
+	run := testhelpers.CreateRecordingMediaRun(dbConn, &db.RecordingMediaRun{
+		ProfileID: f.profile.ID,
+		SessionID: archiveIngressSessionID,
+		Version:   db.RecordingMediaVersion,
+		State:     "RECORDING",
+		Manifest:  db.JSONDocument(`[]`),
+		Intervals: db.JSONDocument(`[]`),
+	})
+	object := fmt.Sprintf("videos/%d/%s/chunk_001.mp4", f.profile.ID, archiveIngressSessionID)
+	chunk := testhelpers.CreateRecordingChunk(dbConn, &db.RecordingChunk{
+		RunID:            run.ID,
+		ProfileID:        f.profile.ID,
+		SessionID:        archiveIngressSessionID,
+		ClientChunkID:    "capture-1",
+		CaptureOrder:     1,
+		SourceURI:        fmt.Sprintf("gs://test-bucket/%s", object),
+		SourceObject:     object,
+		SourceGeneration: 1,
+		SourceBytes:      2048,
+		CaptureStartSecs: 0,
+		CaptureEndSecs:   10,
+		AIDispatched:     true,
+	})
+	return run, chunk
+}
+
+func expectRecordingMergeMetadataAndTask(f archiveIngressFixture, response *httptest.ResponseRecorder, runID uint, plan string) {
+	Expect(response.Code).To(Equal(http.StatusAccepted), response.Body.String())
+	var run db.RecordingMediaRun
+	Expect(dbConn.First(&run, runID).Error).To(Succeed())
+	Expect(run.State).To(Equal("WAITING_PREPARATION"))
+	Expect(run.ManifestHash).NotTo(BeEmpty())
+
+	var session db.Session
+	Expect(dbConn.Where("session_id = ?", archiveIngressSessionID).First(&session).Error).To(Succeed())
+	Expect(session.WODDescription).To(Equal(plan))
+	Expect(string(session.MovementHints)).To(MatchJSON(`["Air Squat"]`))
+	var appearance db.SessionAppearanceHint
+	Expect(dbConn.Where("session_id = ?", archiveIngressSessionID).First(&appearance).Error).To(Succeed())
+	Expect(string(appearance.Hints)).To(MatchJSON(`{"appearance":"must not replace session appearance"}`))
+
+	tasks, err := inspector.ListPendingTasks("default")
+	Expect(err).NotTo(HaveOccurred())
+	Expect(tasks).To(HaveLen(1))
+	Expect(tasks[0].Type).To(Equal(worker.TypeCoordinateRecordingMedia))
+	var payload struct {
+		RunID uint `json:"run_id"`
+	}
+	Expect(json.Unmarshal(tasks[0].Payload, &payload)).To(Succeed())
+	Expect(payload.RunID).To(Equal(runID))
+	Expect(f.transport.Requests()).To(BeEmpty())
+}
+
 func expectOriginalArchiveIngressBlocked(route string) {
 	f := newArchiveIngressFixture()
 	body := f.originalBody()
@@ -292,23 +406,170 @@ var _ = Describe("POST /api/v1/upload-complete", func() {
 
 var _ = Describe("POST /api/v1/chunk-complete", func() {
 	It("fences archived and restored original processing without outbound requests or queue tasks", func() { expectOriginalArchiveIngressBlocked("/api/v1/chunk-complete") })
-	It("preserves source metadata when archive wins after the first state check", func() { expectArchiveWinningMetadataRace("/api/v1/chunk-complete") })
-	It("rolls back source metadata when the queue rejects processing", func() { expectIngressMetadataRollbackOnQueueFailure("/api/v1/chunk-complete") })
 	It("commits source metadata with accepted processing", func() {
-		expectAcceptedIngressMetadataAndTask("/api/v1/chunk-complete", worker.TypeChunkAnalysisWithSession)
+		f := newFreshRecordingIngressFixture()
+		gcsURI := mockFreshRecordingChunkUpload(f)
+		plan := "accepted plan " + uuid.NewString()
+		response := f.post("/api/v1/chunk-complete", map[string]any{
+			"session_id":       archiveIngressSessionID,
+			"profile_id":       f.profile.ID,
+			"client_chunk_id":  "capture-1",
+			"capture_order":    1,
+			"gcs_uri":          gcsURI,
+			"workout_type":     "wod",
+			"movements":        []string{"Air Squat"},
+			"start_secs":       0,
+			"end_secs":         10,
+			"wod_description":  plan,
+			"appearance_hints": "must not replace session appearance",
+		})
+		expectRecordingChunkMetadataAndTasks(f, response, plan)
 	})
 	It("commits accepted source metadata when the caller disconnects before SQL commit", func() {
-		expectIngressMetadataCommitAfterDisconnect("/api/v1/chunk-complete", worker.TypeChunkAnalysisWithSession)
+		f := newFreshRecordingIngressFixture()
+		gcsURI := mockFreshRecordingChunkUpload(f)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var fired atomic.Bool
+		const callbackName = "test:chunk_complete_disconnect_before_commit"
+		Expect(dbConn.Callback().Create().Before("gorm:create").Register(callbackName, func(tx *gorm.DB) {
+			if _, ok := tx.Statement.Dest.(*db.RecordingChunk); ok && fired.CompareAndSwap(false, true) {
+				cancel()
+			}
+		})).To(Succeed())
+		defer dbConn.Callback().Create().Remove(callbackName)
+
+		plan := "accepted plan " + uuid.NewString()
+		encoded, err := json.Marshal(map[string]any{
+			"session_id":       archiveIngressSessionID,
+			"profile_id":       f.profile.ID,
+			"client_chunk_id":  "capture-1",
+			"capture_order":    1,
+			"gcs_uri":          gcsURI,
+			"workout_type":     "wod",
+			"movements":        []string{"Air Squat"},
+			"start_secs":       0,
+			"end_secs":         10,
+			"wod_description":  plan,
+			"appearance_hints": "must not replace session appearance",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		response := httptest.NewRecorder()
+		request := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/chunk-complete", string(encoded), &f.owner).WithContext(ctx)
+		f.router.ServeHTTP(response, request)
+		Expect(fired.Load()).To(BeTrue())
+		Expect(ctx.Err()).To(MatchError(context.Canceled))
+		expectRecordingChunkMetadataAndTasks(f, response, plan)
 	})
 })
 
 var _ = Describe("POST /api/v1/merge-chunks", func() {
 	It("fences archived and restored original processing without outbound requests or queue tasks", func() { expectOriginalArchiveIngressBlocked("/api/v1/merge-chunks") })
-	It("preserves source metadata when archive wins after the first state check", func() { expectArchiveWinningMetadataRace("/api/v1/merge-chunks") })
-	It("rolls back source metadata when the queue rejects processing", func() { expectIngressMetadataRollbackOnQueueFailure("/api/v1/merge-chunks") })
-	It("commits source metadata with accepted processing", func() { expectAcceptedIngressMetadataAndTask("/api/v1/merge-chunks", worker.TypeMergeChunks) })
+	It("preserves source metadata when archive wins after the first state check", func() {
+		f := newArchiveIngressFixture()
+		run := testhelpers.CreateRecordingMediaRun(dbConn, &db.RecordingMediaRun{
+			ProfileID:    f.profile.ID,
+			SessionID:    archiveIngressSessionID,
+			Version:      db.RecordingMediaVersion,
+			State:        "FAILED",
+			ManifestHash: "sealed",
+			Manifest:     db.JSONDocument(`[]`),
+			Payload:      db.JSONDocument(`{}`),
+		})
+		entered, release := make(chan struct{}), make(chan struct{})
+		var paused atomic.Bool
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		defer unblock()
+		const callbackName = "test:merge_archive_ingress_state_read"
+		Expect(dbConn.Callback().Query().After("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+			if _, ok := tx.Statement.Dest.(*db.AnalysisResult); ok && strings.Contains(tx.Statement.SQL.String(), "automatic_processing_cancelled_at") && paused.CompareAndSwap(false, true) {
+				close(entered)
+				<-release
+			}
+		})).To(Succeed())
+		defer dbConn.Callback().Query().Remove(callbackName)
+
+		body, err := json.Marshal(map[string]any{
+			"session_id":       archiveIngressSessionID,
+			"profile_id":       f.profile.ID,
+			"workout_type":     "wod",
+			"movements":        []string{"Air Squat"},
+			"wod_description":  "must not replace original plan",
+			"appearance_hints": "must not replace session appearance",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		response := httptest.NewRecorder()
+		request := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", string(body), &f.owner)
+		done := make(chan struct{})
+		go func() {
+			defer GinkgoRecover()
+			defer close(done)
+			f.router.ServeHTTP(response, request)
+		}()
+		DeferCleanup(func() { unblock(); Eventually(done, 5*time.Second).Should(BeClosed()) })
+		Eventually(entered, 5*time.Second).Should(BeClosed())
+		f.archive()
+		unblock()
+		Eventually(done, 5*time.Second).Should(BeClosed())
+		Expect(response.Code).To(Equal(http.StatusConflict), response.Body.String())
+		Expect(decodeMapBody(response)["error_code"]).To(Equal("SESSION_PROCESSING_CANCELLED"))
+		Expect(dbConn.First(&run, run.ID).Error).To(Succeed())
+		Expect(run.State).To(Equal("CANCELLED"))
+		f.expectNoWork()
+	})
+	It("commits source metadata with accepted processing", func() {
+		f := newFreshRecordingIngressFixture()
+		run, chunk := seedMergeableRecordingMedia(f)
+		plan := "accepted plan " + uuid.NewString()
+		response := f.post("/api/v1/merge-chunks", map[string]any{
+			"session_id":           archiveIngressSessionID,
+			"profile_id":           f.profile.ID,
+			"expected_chunk_count": 1,
+			"chunks": []controllers.RecordingMediaReceiptInput{
+				{ChunkID: strconv.FormatUint(uint64(chunk.ID), 10), SourceGeneration: "1"},
+			},
+			"workout_type":     "wod",
+			"movements":        []string{"Air Squat"},
+			"wod_description":  plan,
+			"appearance_hints": "must not replace session appearance",
+		})
+		expectRecordingMergeMetadataAndTask(f, response, run.ID, plan)
+	})
 	It("commits accepted source metadata when the caller disconnects before SQL commit", func() {
-		expectIngressMetadataCommitAfterDisconnect("/api/v1/merge-chunks", worker.TypeMergeChunks)
+		f := newFreshRecordingIngressFixture()
+		run, chunk := seedMergeableRecordingMedia(f)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var fired atomic.Bool
+		const callbackName = "test:merge_chunks_disconnect_before_commit"
+		Expect(dbConn.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+			if _, ok := tx.Statement.Model.(*db.RecordingMediaRun); ok && fired.CompareAndSwap(false, true) {
+				cancel()
+			}
+		})).To(Succeed())
+		defer dbConn.Callback().Update().Remove(callbackName)
+
+		plan := "accepted plan " + uuid.NewString()
+		encoded, err := json.Marshal(map[string]any{
+			"session_id":           archiveIngressSessionID,
+			"profile_id":           f.profile.ID,
+			"expected_chunk_count": 1,
+			"chunks": []controllers.RecordingMediaReceiptInput{
+				{ChunkID: strconv.FormatUint(uint64(chunk.ID), 10), SourceGeneration: "1"},
+			},
+			"workout_type":     "wod",
+			"movements":        []string{"Air Squat"},
+			"wod_description":  plan,
+			"appearance_hints": "must not replace session appearance",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		response := httptest.NewRecorder()
+		request := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", string(encoded), &f.owner).WithContext(ctx)
+		f.router.ServeHTTP(response, request)
+		Expect(fired.Load()).To(BeTrue())
+		Expect(ctx.Err()).To(MatchError(context.Canceled))
+		expectRecordingMergeMetadataAndTask(f, response, run.ID, plan)
 	})
 })
 

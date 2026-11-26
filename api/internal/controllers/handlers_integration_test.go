@@ -10,12 +10,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
+	"github.com/oklog/ulid/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/auth"
@@ -24,6 +26,7 @@ import (
 	"github.com/wod-strategist/api/internal/logger"
 	"github.com/wod-strategist/api/internal/server"
 	"github.com/wod-strategist/api/internal/testhelpers"
+	"github.com/wod-strategist/api/internal/wodeval"
 	"github.com/wod-strategist/api/internal/worker"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
@@ -1001,6 +1004,20 @@ var _ = Describe("Controller handlers", func() {
 		var profile db.Profile
 		var user db.User
 
+		canonicalPattern := regexp.MustCompile(`^(WOD|WARMUP|ACCESSORY|COOLDOWN)-(\d{8})-([0-9A-HJKMNP-TV-Z]{26})$`)
+		expectCanonicalSessionID := func(sessionID, expectedPrefix, beforeUTCDate, afterUTCDate string) {
+			GinkgoHelper()
+
+			matches := canonicalPattern.FindStringSubmatch(sessionID)
+			Expect(matches).To(HaveLen(4), "expected canonical session ID, got %q", sessionID)
+			Expect(matches[1]).To(Equal(expectedPrefix))
+			Expect(matches[2]).To(BeElementOf(beforeUTCDate, afterUTCDate))
+
+			parsed, err := ulid.ParseStrict(matches[3])
+			Expect(err).NotTo(HaveOccurred(), "expected valid ULID in %q", sessionID)
+			Expect(parsed.Time()).To(BeNumerically(">", 0))
+		}
+
 		BeforeEach(func() {
 			router = newTestRouter(controllers.Config{})
 			profile = testhelpers.CreateProfile(dbConn, &db.Profile{})
@@ -1009,9 +1026,11 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("creates a session", func() {
+			beforeDate := time.Now().UTC().Format("20060102")
 			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d, "movements": ["Pull-up", "Sandbag Over Shoulder"]}`, profile.ID), &user)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
+			afterDate := time.Now().UTC().Format("20060102")
 
 			Expect(w.Code).To(Equal(http.StatusOK))
 
@@ -1019,14 +1038,15 @@ var _ = Describe("Controller handlers", func() {
 			Expect(dbConn.Where("profile_id = ?", profile.ID).First(&newSession).Error).To(BeNil())
 			Expect(newSession.SessionID).NotTo(BeEmpty())
 			Expect(newSession.Status).To(Equal(db.SessionStatus("started")))
+			Expect(newSession.WODEvaluationVersion).To(Equal(wodeval.Version))
 			Expect(string(newSession.MovementHints)).To(MatchJSON(`["Pull-up", "Sandbag Over Shoulder"]`))
-
-			formattedTime := "WOD-" + time.Now().Format("200601021504")
-			Expect(newSession.SessionID).To(HavePrefix(formattedTime))
+			expectCanonicalSessionID(newSession.SessionID, "WOD", beforeDate, afterDate)
 
 			var response controllers.CreateSessionResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.SessionID).To(Equal(newSession.SessionID))
+			Expect(response.Status).To(Equal("started"))
+			Expect(response.WorkoutType).To(Equal("wod"))
 		})
 
 		It("returns an error if profile id does not exists", func() {
@@ -1034,8 +1054,8 @@ var _ = Describe("Controller handlers", func() {
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
 
-			Expect(w.Code).To(Equal(http.StatusBadRequest))
-			Expect(w.Body.String()).To(ContainSubstring("profile not found"))
+			Expect(w.Code).To(Equal(http.StatusForbidden))
+			Expect(w.Body.String()).To(ContainSubstring("not authorized for this profile"))
 
 			var newSession db.Session
 			Expect(dbConn.First(&newSession).Error).To(Equal(gorm.ErrRecordNotFound))
@@ -1059,19 +1079,24 @@ var _ = Describe("Controller handlers", func() {
 		})
 
 		It("stores workout_type when provided", func() {
+			beforeDate := time.Now().UTC().Format("20060102")
 			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", fmt.Sprintf(`{"profile_id": %d, "workout_type": "warmup"}`, profile.ID), &user)
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, req)
+			afterDate := time.Now().UTC().Format("20060102")
 
 			Expect(w.Code).To(Equal(http.StatusOK))
 
 			var response controllers.CreateSessionResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.WorkoutType).To(Equal("warmup"))
+			Expect(response.Status).To(Equal("started"))
+			expectCanonicalSessionID(response.SessionID, "WARMUP", beforeDate, afterDate)
 
 			var newSession db.Session
 			Expect(dbConn.Where("profile_id = ?", profile.ID).First(&newSession).Error).To(BeNil())
 			Expect(newSession.WorkoutType).To(Equal("warmup"))
+			Expect(newSession.WODEvaluationVersion).To(Equal(0))
 		})
 
 		It("defaults workout_type to wod when not provided", func() {
@@ -1084,10 +1109,12 @@ var _ = Describe("Controller handlers", func() {
 			var response controllers.CreateSessionResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.WorkoutType).To(Equal("wod"))
+			Expect(response.Status).To(Equal("started"))
 
 			var newSession db.Session
 			Expect(dbConn.Where("profile_id = ?", profile.ID).First(&newSession).Error).To(BeNil())
 			Expect(newSession.WorkoutType).To(Equal("wod"))
+			Expect(newSession.WODEvaluationVersion).To(Equal(wodeval.Version))
 		})
 
 		It("normalizes unknown workout_type to wod", func() {
@@ -1100,9 +1127,155 @@ var _ = Describe("Controller handlers", func() {
 			var response controllers.CreateSessionResponse
 			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
 			Expect(response.WorkoutType).To(Equal("wod"))
+			Expect(response.Status).To(Equal("started"))
+
+			var newSession db.Session
+			Expect(dbConn.Where("profile_id = ?", profile.ID).First(&newSession).Error).To(BeNil())
+			Expect(newSession.WODEvaluationVersion).To(Equal(wodeval.Version))
+		})
+
+		It("creates a session with a client-supplied session_id and infers workout_type from its prefix", func() {
+			const sid = "WARMUP-20260407-01ARZ3NDEKTSV4RRFFQ69G5FAV"
+			body := fmt.Sprintf(`{"profile_id": %d, "session_id": %q, "idempotency_key": "http-client-1"}`, profile.ID, sid)
+			req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", body, &user)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			Expect(w.Code).To(Equal(http.StatusOK), w.Body.String())
+
+			var response controllers.CreateSessionResponse
+			Expect(json.Unmarshal(w.Body.Bytes(), &response)).To(Succeed())
+			Expect(response.SessionID).To(Equal(sid))
+			Expect(response.WorkoutType).To(Equal("warmup"))
+			Expect(response.Status).To(Equal("started"))
+
+			var stored db.Session
+			Expect(dbConn.Where("session_id = ?", sid).First(&stored).Error).To(BeNil())
+			Expect(stored.WODEvaluationVersion).To(Equal(0))
+		})
+
+		It("returns the existing session idempotently on retry with the same idempotency_key", func() {
+			body := fmt.Sprintf(`{"profile_id": %d, "idempotency_key": "http-idem-1", "workout_type": "wod", "wod_description": "Fran"}`, profile.ID)
+
+			req1 := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", body, &user)
+			w1 := httptest.NewRecorder()
+			router.ServeHTTP(w1, req1)
+			Expect(w1.Code).To(Equal(http.StatusOK), w1.Body.String())
+
+			var resp1 controllers.CreateSessionResponse
+			Expect(json.Unmarshal(w1.Body.Bytes(), &resp1)).To(Succeed())
+
+			req2 := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", body, &user)
+			w2 := httptest.NewRecorder()
+			router.ServeHTTP(w2, req2)
+			Expect(w2.Code).To(Equal(http.StatusOK), w2.Body.String())
+
+			var resp2 controllers.CreateSessionResponse
+			Expect(json.Unmarshal(w2.Body.Bytes(), &resp2)).To(Succeed())
+			Expect(resp2.SessionID).To(Equal(resp1.SessionID))
+
+			var count int64
+			Expect(dbConn.Model(&db.Session{}).Where("profile_id = ?", profile.ID).Count(&count).Error).To(BeNil())
+			Expect(count).To(Equal(int64(1)))
+		})
+
+		It("returns bad request for invalid client session_id or mismatched workout_type", func() {
+			cases := []string{
+				fmt.Sprintf(`{"profile_id": %d, "session_id": "P1-WOD-2026-04-07-10-00", "idempotency_key": "http-bad-1"}`, profile.ID),
+				fmt.Sprintf(`{"profile_id": %d, "session_id": "WOD-20260230-01ARZ3NDEKTSV4RRFFQ69G5FAV", "idempotency_key": "http-bad-2"}`, profile.ID),
+				fmt.Sprintf(`{"profile_id": %d, "session_id": "WARMUP-20260407-01ARZ3NDEKTSV4RRFFQ69G5FAV", "workout_type": "wod", "idempotency_key": "http-bad-3"}`, profile.ID),
+			}
+
+			for _, body := range cases {
+				req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/sessions", body, &user)
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, req)
+
+				Expect(w.Code).To(Equal(http.StatusBadRequest), "body=%s resp=%s", body, w.Body.String())
+				Expect(decodeMapBody(w)["error"]).NotTo(BeEmpty())
+			}
+
+			var count int64
+			Expect(dbConn.Model(&db.Session{}).Count(&count).Error).To(BeNil())
+			Expect(count).To(Equal(int64(0)))
+		})
+
+		It("returns conflict when client session_id belongs to another profile", func() {
+			const sid = "WOD-20260407-01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+			req1 := newAuthorizedJSONRequest(
+				http.MethodPost,
+				"/api/v1/sessions",
+				fmt.Sprintf(`{"profile_id": %d, "session_id": %q, "idempotency_key": "http-owner"}`, profile.ID, sid),
+				&user,
+			)
+			w1 := httptest.NewRecorder()
+			router.ServeHTTP(w1, req1)
+			Expect(w1.Code).To(Equal(http.StatusOK), w1.Body.String())
+
+			profile2 := testhelpers.CreateProfile(dbConn, &db.Profile{})
+			var user2 db.User
+			Expect(dbConn.Where("id = ?", profile2.UserID).First(&user2).Error).To(BeNil())
+
+			req2 := newAuthorizedJSONRequest(
+				http.MethodPost,
+				"/api/v1/sessions",
+				fmt.Sprintf(`{"profile_id": %d, "session_id": %q, "idempotency_key": "http-other"}`, profile2.ID, sid),
+				&user2,
+			)
+			w2 := httptest.NewRecorder()
+			router.ServeHTTP(w2, req2)
+			Expect(w2.Code).To(Equal(http.StatusConflict), w2.Body.String())
+			Expect(decodeMapBody(w2)["error"]).NotTo(BeEmpty())
+
+			var stored db.Session
+			Expect(dbConn.Where("session_id = ?", sid).First(&stored).Error).To(BeNil())
+			Expect(stored.ProfileID).To(Equal(profile.ID))
+		})
+
+		It("returns conflict when idempotency_key conflicts with an existing session on the same profile", func() {
+			const (
+				sid1 = "WOD-20260407-01ARZ3NDEKTSV4RRFFQ69G5FAV"
+				sid2 = "WOD-20260407-01ARZ3NDEKTSV4RRFFQ69G5FAW"
+			)
+
+			req1 := newAuthorizedJSONRequest(
+				http.MethodPost,
+				"/api/v1/sessions",
+				fmt.Sprintf(`{"profile_id": %d, "session_id": %q, "idempotency_key": "http-conflict-key"}`, profile.ID, sid1),
+				&user,
+			)
+			w1 := httptest.NewRecorder()
+			router.ServeHTTP(w1, req1)
+			Expect(w1.Code).To(Equal(http.StatusOK), w1.Body.String())
+
+			req2 := newAuthorizedJSONRequest(
+				http.MethodPost,
+				"/api/v1/sessions",
+				fmt.Sprintf(`{"profile_id": %d, "session_id": %q, "idempotency_key": "http-conflict-key"}`, profile.ID, sid2),
+				&user,
+			)
+			w2 := httptest.NewRecorder()
+			router.ServeHTTP(w2, req2)
+			Expect(w2.Code).To(Equal(http.StatusConflict), w2.Body.String())
+			Expect(decodeMapBody(w2)["error"]).NotTo(BeEmpty())
+
+			req3 := newAuthorizedJSONRequest(
+				http.MethodPost,
+				"/api/v1/sessions",
+				fmt.Sprintf(`{"profile_id": %d, "session_id": %q, "idempotency_key": "http-conflict-key-2"}`, profile.ID, sid1),
+				&user,
+			)
+			w3 := httptest.NewRecorder()
+			router.ServeHTTP(w3, req3)
+			Expect(w3.Code).To(Equal(http.StatusConflict), w3.Body.String())
+			Expect(decodeMapBody(w3)["error"]).NotTo(BeEmpty())
+
+			var count int64
+			Expect(dbConn.Model(&db.Session{}).Where("profile_id = ?", profile.ID).Count(&count).Error).To(BeNil())
+			Expect(count).To(Equal(int64(1)))
 		})
 	})
-
 })
 
 func repeatedJSONString(value string, count int) string {

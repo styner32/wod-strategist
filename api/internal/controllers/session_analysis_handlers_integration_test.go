@@ -278,12 +278,13 @@ var _ = Describe("GET /api/v1/sessions/:session_id/analysis", func() {
 	})
 })
 
-var _ = Describe("POST /api/v1/merge-chunks", func() {
+var _ = Describe("MergeChunks", func() {
 	var (
 		router  *gin.Engine
 		profile db.Profile
 		user    db.User
 		session db.Session
+		chunk   db.RecordingChunk
 	)
 
 	BeforeEach(func() {
@@ -294,19 +295,34 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 		Expect(dbConn.First(&user, profile.UserID).Error).NotTo(HaveOccurred())
 		defaultTestUser = user
 		session = testhelpers.CreateSession(dbConn, &db.Session{
-			SessionID:     "session-merge-hints",
+			SessionID:     "WOD-20261125-01JTESTSESSIONANALYSIS00",
 			ProfileID:     profile.ID,
+			Status:        db.SessionStatusStarted,
 			MovementHints: db.JSONDocument(`["Old hint"]`),
 		})
+		run := testhelpers.CreateRecordingMediaRun(dbConn, &db.RecordingMediaRun{
+			ProfileID: profile.ID,
+			SessionID: session.SessionID,
+			Version:   db.RecordingMediaVersion,
+		})
+		chunk = testhelpers.CreateRecordingChunk(dbConn, &db.RecordingChunk{
+			RunID:            run.ID,
+			CaptureOrder:     1,
+			CaptureStartSecs: 0,
+			CaptureEndSecs:   10,
+			SourceGeneration: 1001,
+			AIDispatched:     true,
+		})
+		queue := testhelpers.NewQueueClient()
+		DeferCleanup(queue.Close)
 		router = newTestRouter(controllers.Config{
-			QueueClient:        testhelpers.NewQueueClient(),
-			BucketName:         "test-bucket",
-			NewMergeChunksTask: worker.NewMergeChunksTask,
+			QueueClient: queue,
+			BucketName:  "test-bucket",
 		})
 	})
 
 	It("updates movement hints and wod_description for the exact existing session", func() {
-		body := fmt.Sprintf(`{"session_id":"%s","profile_id":%d,"movements":["Power Snatch","Custom Carry"],"wod_description":"For Time: 30 Power Snatches (135 lb)","workout_type":"wod"}`, session.SessionID, profile.ID)
+		body := fmt.Sprintf(`{"session_id":"%s","profile_id":%d,"expected_chunk_count":1,"chunks":[{"chunk_id":"%d","source_generation":"%d"}],"movements":["Power Snatch","Custom Carry"],"wod_description":"For Time: 30 Power Snatches (135 lb)","workout_type":"wod"}`, session.SessionID, profile.ID, chunk.ID, chunk.SourceGeneration)
 		req := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", body, &user)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -316,30 +332,5 @@ var _ = Describe("POST /api/v1/merge-chunks", func() {
 		Expect(dbConn.First(&updated, session.ID).Error).NotTo(HaveOccurred())
 		Expect(string(updated.MovementHints)).To(MatchJSON(`["Power Snatch","Custom Carry"]`))
 		Expect(updated.WODDescription).To(Equal("For Time: 30 Power Snatches (135 lb)"))
-	})
-
-	It("deduplicates repeated merge-chunks requests and returns 202 Accepted", func() {
-		body := fmt.Sprintf(`{"session_id":"%s","profile_id":%d,"movements":["Pull-up"],"workout_type":"wod"}`, session.SessionID, profile.ID)
-
-		req1 := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", body, &user)
-		w1 := httptest.NewRecorder()
-		router.ServeHTTP(w1, req1)
-		Expect(w1.Code).To(Equal(http.StatusAccepted), w1.Body.String())
-
-		req2 := newAuthorizedJSONRequest(http.MethodPost, "/api/v1/merge-chunks", body, &user)
-		w2 := httptest.NewRecorder()
-		router.ServeHTTP(w2, req2)
-		Expect(w2.Code).To(Equal(http.StatusAccepted), w2.Body.String())
-		Expect(w2.Body.String()).To(ContainSubstring("Merge already queued"))
-
-		pending, err := inspector.ListPendingTasks("default")
-		Expect(err).NotTo(HaveOccurred())
-		mergeCount := 0
-		for _, t := range pending {
-			if t.Type == worker.TypeMergeChunks {
-				mergeCount++
-			}
-		}
-		Expect(mergeCount).To(Equal(1))
 	})
 })

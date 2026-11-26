@@ -173,6 +173,7 @@ func recentCoachingSources(current db.ChunkAnalysisResult, rows []db.ChunkAnalys
 	if !coachingEligible(current) {
 		return nil
 	}
+
 	rows = activity.CanonicalChunks(rows)
 	cutoff, next := *current.StartSecs-60, *current.StartSecs
 	sources := []coachingSource{}

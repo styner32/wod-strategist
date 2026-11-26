@@ -28,7 +28,7 @@ func imageUsageSpec(route, task string) {
 		transport := testhelpers.NewMockTransport()
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", HTTPClient: &http.Client{Transport: transport}})
 		Expect(err).NotTo(HaveOccurred())
-		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).Body([]byte(`{"usageMetadata":{"promptTokenCount":15,"thoughtsTokenCount":8,"totalTokenCount":23}}`))
+		transport.New("https://generativelanguage.googleapis.com").Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(200).Body([]byte(`{"usageMetadata":{"promptTokenCount":15,"thoughtsTokenCount":8,"totalTokenCount":23}}`))
 		var body bytes.Buffer
 		form := multipart.NewWriter(&body)
 		part, err := form.CreateFormFile("image", "photo.png")

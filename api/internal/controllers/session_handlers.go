@@ -1,18 +1,12 @@
 package controllers
 
 import (
-	"errors"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/oklog/ulid/v2"
-	"github.com/wod-strategist/api/internal/db"
 	"github.com/wod-strategist/api/internal/logger"
-	"github.com/wod-strategist/api/internal/worker"
+	"github.com/wod-strategist/api/internal/modules/session"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 )
 
 func (ctl *Controller) CreateSession(c *gin.Context) {
@@ -23,46 +17,39 @@ func (ctl *Controller) CreateSession(c *gin.Context) {
 		return
 	}
 
-	wodDescription := ""
-	if req.WODDescription != "" {
-		wodDescription = req.WODDescription
-	} else if len(req.Movements) > 0 {
-		wodDescription = "Individual movements: " + strings.Join(req.Movements, ",")
-	} else {
-		logger.Log.Warn("No WOD description or movements provided for CreateSession", zap.Any("request", req))
+	if !ctl.assertOwnsProfile(c, req.ProfileID) {
+		return
 	}
 
-	profile, err := gorm.G[db.Profile](ctl.db).Where("id = ?", req.ProfileID).First(c)
+	newSession, err := session.Create(c.Request.Context(), ctl.db, session.CreateSessionAttr{
+		ProfileID:      req.ProfileID,
+		SessionID:      req.SessionID,
+		Movements:      req.Movements,
+		WODDescription: req.WODDescription,
+		WorkoutType:    req.WorkoutType,
+		IdempotencyKey: req.IdempotencyKey,
+	})
+
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "profile not found"})
+		logger.Log.Error("Failed to create session", zap.Any("request", req), zap.Error(err))
+
+		switch err {
+		case session.ErrInvalidSessionID:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+			return
+		case session.ErrWorkoutTypeMismatch:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "workout type mismatch"})
+			return
+		case session.ErrSessionProfileConflict:
+			c.JSON(http.StatusConflict, gin.H{"error": "session already exists for another profile"})
+			return
+		case session.ErrIdempotencyConflict:
+			c.JSON(http.StatusConflict, gin.H{"error": "session already exists with this key"})
+			return
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
 			return
 		}
-
-		logger.Log.Error("Failed to find profile", zap.Any("request", req), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to find profile"})
-		return
-	}
-
-	if !ctl.assertOwnsProfile(c, profile.ID) {
-		return
-	}
-
-	workoutType := worker.NormalizeWorkoutType(req.WorkoutType)
-	movementHints, err := movementHintsDocument(req.Movements)
-	if err != nil {
-		logger.Log.Error("Failed to encode movement hints", zap.Any("request", req), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
-		return
-	}
-
-	// WOD-{YYYYMMDDHHMM}-{ULID}
-	sessionName := "WOD-" + time.Now().Format("200601021504") + "-" + ulid.Make().String()
-	newSession := db.Session{SessionID: sessionName, ProfileID: req.ProfileID, IdempotencyKey: req.IdempotencyKey, WODDescription: wodDescription, MovementHints: movementHints, WorkoutType: workoutType, WODEvaluationVersion: 1}
-	if err := gorm.G[db.Session](ctl.db).Select("SessionID", "ProfileID", "IdempotencyKey", "WODDescription", "MovementHints", "WorkoutType", "WODEvaluationVersion").Create(c, &newSession); err != nil {
-		logger.Log.Error("Failed to create session", zap.Any("request", req), zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
-		return
 	}
 
 	c.JSON(http.StatusOK, CreateSessionResponse{

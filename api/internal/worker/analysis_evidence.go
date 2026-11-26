@@ -379,23 +379,34 @@ func formatTargetPersonContext(merged string) string {
 }
 
 func resolveReanalysisModel(raw string) string {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "flash", "flash38", "flash37", "flash36", "flash35", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash":
-		return gemini.ModelFlash38
-	case "argon", "argon4", "gemini-4-argon", "pro", "gemini-pro":
-		return gemini.ModelArgon4
-	case "pro31", "gemini-3.1-pro-preview":
-		return gemini.ModelPro31Preview
-	default:
-		return gemini.ModelFlash38
-	}
+	return resolveReanalysisModelWithDefault(raw, gemini.ModelCarbon4)
 }
 
 func resolveReanalysisModelWithDefault(raw string, defaultModel string) string {
-	if strings.TrimSpace(raw) == "" && strings.TrimSpace(defaultModel) != "" {
-		return defaultModel
+	fallback := strings.TrimSpace(defaultModel)
+	if fallback == "" {
+		fallback = gemini.ModelCarbon4
 	}
-	return resolveReanalysisModel(raw)
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return fallback
+	case "carbon", "carbon4", "gemini-4-carbon":
+		return gemini.ModelCarbon4
+	case "argon", "argon4", "gemini-4-argon":
+		return gemini.ModelArgon4
+	case "hydrogen", "hydrogen4", "gemini-4-hydrogen":
+		return gemini.ModelHydrogen4
+	case "pro", "gemini-pro", "pro31", "gemini-3.1-pro-preview":
+		return gemini.ModelPro31Preview
+	case "flash", "flash38", "flash36", "flash35", "gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.8-flash":
+		return gemini.ModelFlash38
+	case "flash37", "gemini-3.7-flash":
+		return gemini.ModelFlash37
+	case "flash35-lite", "gemini-3.5-flash-lite":
+		return gemini.ModelFlash35Lite
+	default:
+		return fallback
+	}
 }
 
 func isNonExerciseMovement(value string) bool {

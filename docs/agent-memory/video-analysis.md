@@ -127,7 +127,7 @@ person (`chunk_continuity.go`, shared by `buildChunkSegments` and
   (≤0.05 s) and no capture pause.
 - Continuous active chunks form one bout regardless of label changes (Row →
   Burpee without rest is one bout). Type is the majority concrete label
-  (`Unknown` → Flash only when every chunk is Unknown); several labels are
+  (`Unknown` → Hydrogen only when every chunk is Unknown); several labels are
   listed as `청크 후보 종목: ...` at the start of `Description`. Only that
   label list reaches the Pass 2 prompt — chunk coaching text never does.
 - Bouts are not padded into adjacent rest: skipped media stays skipped so
@@ -196,7 +196,7 @@ Constrain analysis to the exact time range.
 
 - `NewVideoAnalysisTask` sets an explicit 1-hour Asynq timeout (`videoAnalysisTaskTimeout = time.Hour`).
 - Pass 2 analyzes segments concurrently against the uploaded full-video URI (`maxConcurrentSegmentAnalyses = 5`), then aggregates token usage, `wodEvidence`, `workout_progress` intervals/gaps, highlights, and markdown output in chronological segment index order (`0..len(segments)-1`).
-- Segments with `Type == "Unknown"` (case-insensitive, including `Unknown` chunk windows) route to `gemini-3.8-flash` with `HIGH` thinking (`AnalyzeSegmentWithModel(..., gemini.ModelFlash38)`); non-`Unknown` exercise segments use the client's Pro model (`gemini-4-argon`, `HIGH` thinking).
+- Segments with `Type == "Unknown"` (case-insensitive, including `Unknown` chunk windows) route to `gemini-4-hydrogen` with `HIGH` thinking (`AnalyzeSegmentWithModel(..., gemini.ModelHydrogen4)`); non-`Unknown` exercise segments use the client's Frontier model (`gemini-4-carbon`, `HIGH` thinking).
 - `GET /api/v1/sessions/:session_id/cost` returns `total_duration_ms` and `by_stage` (`[]StageDurationItem`) aggregated from `pipeline_stage_metrics` so the web UI (`SessionCostCard` and `SessionDetailPage`) can display total and per-stage analysis duration.
 
 Current-window observation includes time-bounded complete-cycle/form/ROM/pace
@@ -211,7 +211,7 @@ is evaluated at final assessment, preserving controlled early/late ROM changes.
 See [`workout-progress.md`](workout-progress.md) for storage, confirmation and
 the one-way observation/timeline/assessment boundary.
 
-Argon and Flash use the same observation-only prompt. `ObservationOnlyRulesPrompt`
+Carbon and Hydrogen use the same observation-only prompt. `ObservationOnlyRulesPrompt`
 and the final `ObservationOnlyOutputCheckPrompt` apply to prose, coaching,
 highlight reasons and every form/ROM/pace/rep JSON evidence string. Record visible
 positions, trajectories, alignment, ranges and timed pauses; do not infer fatigue
@@ -335,7 +335,7 @@ Do not disable the filter based on session drift or missing capture offsets.
   1. Verified `media_start_secs`/`media_end_secs` on `chunk_analysis_results` (`buildSessionDebugSegments`). When a completed original chunk's object has no verified interval on any row (`sessionDebugTimelineIncomplete`), `reconstructSessionDebugMediaIntervals` rebuilds the **whole** concat timeline with `retainedChunkTimeline` (shared with chunk debug). Each retained URI is probed once (duplicate rows share it, like merge). Any unavailable object writes nothing, and rebuilt offsets that disagree with verified ones by >0.05s abort. Unmapped chunks stay unobserved (`not_analyzed`). Duplicate rows are observed once; corrections on any duplicate row apply. A failed rebuild records `sessionDebugTimelineFingerprint(chunks)` (id, file_path, status, media offsets) as `source_context_snapshot.timeline_rebuild_failed` on the run; later runs skip the rebuild (no chunk downloads) while a run within `sessionDebugTimelineRebuildRetryAfter = 24h` recorded the same fingerprint. A skipped rebuild does not re-record it.
   2. Only when no chunk has a verified interval: stored `analysis_results.workout_progress` intervals (`storedProgressSegments`), and only if `MediaSourceID` equals `progressMediaSource` of this run's Files URI or local file. `analysis_results.output` headers are never parsed: legacy headers can carry capture-clock offsets.
   3. `IndexVideo`, filtered to the source duration before `filterExerciseAndUnknownSegments(segments, workoutType)` merges.
-- Selection keeps exercise and `Unknown` segments (`Unknown` routed to `gemini-3.8-flash`; an unlabelled index segment becomes `Unknown`). Explicit non-exercise (`[NO_EXERCISE]`, `Rest`, `Walking`, `Setup`) is skipped and recorded as `skipped_non_exercise`; recovery workouts keep rest/setup and skip only walking (same as `includeChunkInDeepAnalysis`). No between-set `Unknown` windows are inserted and `maxSegmentsForDuration` does not truncate session reanalysis.
+- Selection keeps exercise and `Unknown` segments (`Unknown` routed to `gemini-4-hydrogen`; an unlabelled index segment becomes `Unknown`). Explicit non-exercise (`[NO_EXERCISE]`, `Rest`, `Walking`, `Setup`) is skipped and recorded as `skipped_non_exercise`; recovery workouts keep rest/setup and skip only walking (same as `includeChunkInDeepAnalysis`). No between-set `Unknown` windows are inserted and `maxSegmentsForDuration` does not truncate session reanalysis.
 - Completed-segment checkpoints and terminal/retry state writes use `sessionDebugPersistContext` (`context.WithoutCancel` + 30s timeout), so a task deadline cannot leave a run `RUNNING` or lose finished segments; retries reuse checkpointed segments.
 - Only the latest active, non-retracted structured chunk corrections are
   included. Free-text notes and unconfirmed re-analysis candidates are never
@@ -418,23 +418,23 @@ Chunks are processed in parallel with bounded concurrency.
 - `db.FilterRedundantSplitChunks` deduplicates per-file rows (`COMPLETED` first, then lowest ID) and omits `split_chunk_*` rows (`heart_rate_bpm = 0`) that overlap `COMPLETED` original mobile chunks (or exceed a fully mapped original concat timeline), while retaining uploaded-video-only `split_chunk_*` sessions and genuine gap-filling `split_chunk_*` rows where an original mobile chunk `FAILED`. Applied across `FindChunksBySessionID`, `GetSessionAnalysis`, `GetSensorTimeline`, `HandleGenerateHardSubTask`, `buildChunkSegments`, and `NewSessionTimelineFromAnalysisResults`.
 
 ## Gemini Model & Thinking Configuration
-- Worker and bare-client deep video analysis default: `gemini-4-argon` (2026-10-14). General session segments, chunk/session reanalysis, injury follow-ups, and legacy whole-video analysis inherit it.
+- Worker and bare-client deep video analysis default: `gemini-4-carbon` (Carbon 4; updated from `gemini-4-argon`). General session segments, chunk/session reanalysis, injury follow-ups, and legacy whole-video analysis inherit it.
 - Config env vars:
-  - `GEMINI_MODEL`: Deep video model name (default `gemini-4-argon`). Set an explicit old model ID to roll back; existing Terraform variable overrides take precedence over defaults.
+  - `GEMINI_MODEL`: Deep video model name (default `gemini-4-carbon`). Set an explicit old model ID to roll back; existing Terraform variable overrides take precedence over defaults.
   - `GEMINI_THINKING_LEVEL`: Full video / deep segment analysis thinking level (default `HIGH`). Valid: `HIGH`, `MEDIUM`, `LOW`.
   - `GEMINI_THINKING_CHUNK`: Short video (~10s chunk) analysis thinking level (default `LOW`). Valid: `HIGH`, `MEDIUM`, `LOW`. Minimizes response latency and thinking token costs for real-time coaching feedback.
   - `GEMINI_CHUNK_FPS`: Short chunk video sampling frame rate (default `2.0`; valid `0` or `[1, 24]`, validated at worker startup). When `> 0`, attaches `VideoMetadata.FPS` exclusively to `AnalyzeChunkVideo` and `AnalyzeChunkVideoWithImages` so ~2s cycles (`Box Step-up`, fast lifts) are sampled reliably; `0` omits `VideoMetadata.FPS`. Never attached to full-video `AnalyzeVideo` / `AnalyzeVideoWithModel` or frame-grid calls.
-  - `GEMINI_THINKING_BUDGET`: Optional integer thinking budget in tokens; omitted from Argon requests even when set.
+  - `GEMINI_THINKING_BUDGET`: Optional integer thinking budget in tokens; omitted from all Gemini 4 (`carbon`, `hydrogen`, `argon`) requests even when set.
 - Stage-specific thinking levels:
-  - Short video / chunk analysis: Uses `AnalyzeChunkVideo`, which resolves to `GEMINI_THINKING_CHUNK` (`LOW` by default). Note that `MINIMAL` is not supported on Gemini 3.8 / 3.7 Flash and will be rejected.
+  - Short video / chunk analysis: Uses `AnalyzeChunkVideo`, which resolves to `GEMINI_THINKING_CHUNK` (`LOW` by default). Note that `MINIMAL` is not supported on Gemini 4 Hydrogen and will be rejected.
   - Full video / deep segment analysis: Uses `AnalyzeSegmentWithModel` / `AnalyzeVideo`, which resolves to `GEMINI_THINKING_LEVEL` (`HIGH` by default) to maximize accuracy and temporal grounding.
-- Thinking config supports Argon plus names containing `3.8`, `3.7`, or `2.5`. Argon defaults to `HIGH` even with bare-client options. Legacy `gemini-3.1-pro-preview` keeps its existing request behavior.
-- Argon `GenerateContent` calls have `maxOutputTokens=32768` and a 20-minute context deadline, bounded by any earlier caller/task deadline. SDK remains `google.golang.org/genai v1.71.0`; no automatic continuation. `MAX_TOKENS` or a `continuationToken` returns an incomplete-output error with retained usage before any analysis parsing.
-- Reanalysis accepts `argon`, `argon4`, `gemini-4-argon`, `pro`, and `gemini-pro` as Argon. `pro31` and `gemini-3.1-pro-preview` explicitly select the old model. Stored historical model IDs are not rewritten.
+- Thinking config supports Gemini 4 (`carbon`, `hydrogen`, `argon`) plus names containing `3.8`, `3.7`, or `2.5`. Gemini 4 Frontier models (`gemini-4-carbon` and `gemini-4-argon`) default to `HIGH` even with bare-client options. Legacy `gemini-3.1-pro-preview` keeps its existing request behavior.
+- Carbon and Argon `GenerateContent` calls have `maxOutputTokens=32768` and a 20-minute context deadline, bounded by any earlier caller/task deadline. SDK remains `google.golang.org/genai v1.71.0`; no automatic continuation. `MAX_TOKENS` or a `continuationToken` returns an incomplete-output error with retained usage before any analysis parsing.
+- Reanalysis (`resolveReanalysisModel` / `resolveReanalysisModelWithDefault`) uses the configured default (`gemini-4-carbon`) when unspecified or unknown, never silently falling back to legacy Flash or Pro. Explicit model aliases map directly: `carbon`/`carbon4`/`gemini-4-carbon` → `gemini-4-carbon`, `hydrogen`/`hydrogen4`/`gemini-4-hydrogen` → `gemini-4-hydrogen`, `argon`/`argon4`/`gemini-4-argon` → `gemini-4-argon`, `pro`/`gemini-pro`/`pro31`/`gemini-3.1-pro-preview` → `gemini-3.1-pro-preview`, `flash`/`flash38`/`gemini-3.8-flash` → `gemini-3.8-flash` (plus `flash37`/`flash35`). Stored historical model IDs are not rewritten.
 
-Short chunks, indexing, video count review, real-time feedback, image/text parsing, WOD evaluation/summary, and Agentic highlights continue to use Flash explicitly. Web reanalysis omits the model and inherits the worker default; chunk creation does not accept a model field, while whole-session creation does. No UI/API schema or DB migration is required.
+Short chunks, indexing, video count review, real-time feedback, image/text parsing, WOD evaluation/summary, and Agentic highlights use Gemini 4 Hydrogen (`gemini-4-hydrogen`, `flashModel`) explicitly. Web reanalysis omits the model and inherits the worker default; chunk creation does not accept a model field, while whole-session creation does. No UI/API schema or DB migration is required.
 
-Deployment acceptance still requires matched, annotated-video comparison of Argon HIGH against the previous model for evidence quality, counts/timestamps, complete output, latency, and tokens. Transport tests do not establish model accuracy or deployed settings.
+Deployment acceptance still requires matched, annotated-video comparison of Carbon HIGH / Hydrogen against the previous models for evidence quality, counts/timestamps, complete output, latency, and tokens. Transport tests do not establish model accuracy or deployed settings.
 
 ## Whole-Workout Re-Analysis & Apply Workflow
 - **Re-analysis with custom WOD description**: When an athlete updates their workout description or appearance hints in the web app, a new `session_reanalysis_runs` record is created with `wod_description`.
@@ -447,12 +447,13 @@ Deployment acceptance still requires matched, annotated-video comparison of Argo
 
 ## AI Cost & Token Tracking
 - Repository estimate constants in `internal/cost/cost.go` (not a verified current vendor quote):
-  - `gemini-3.8-flash`: $1.50 / 1M prompt tokens, $9.00 / 1M candidate tokens.
+  - `gemini-4-hydrogen`: $1.50 / 1M prompt tokens, $7.50 / 1M candidate tokens.
+  - `gemini-3.8-flash` (historical): $1.50 / 1M prompt tokens, $9.00 / 1M candidate tokens.
   - `gemini-3.5-flash-lite`: $0.25 / 1M prompt tokens, $1.50 / 1M candidate tokens.
   - `gemini-3.1-pro-preview`: $1.25 / 1M prompt tokens, $5.00 / 1M candidate tokens.
-  - `gemini-4-argon`: Standard $2/$10 per 1M input/output through 2026-11-30; $4/$20 from `2026-12-01T00:00:00Z`. Use each ledger row's `created_at`, not the query date.
+  - `gemini-4-carbon` & `gemini-4-argon`: Standard $2/$10 per 1M input/output through 2026-11-30; $4/$20 from `2026-12-01T00:00:00Z`. Use each ledger row's `created_at`, not the query date.
   - Exchange rate: 1,380 KRW / USD.
-- Calculation includes prompt + tool input and candidate + thinking output with the fixed exchange rate. Argon dates are preserved in account aggregation by splitting the two pricing periods. Other configured model rates are unchanged. Cache discounts, service tiers, and invoice reconciliation remain outside these estimates; see [token-usage.md](token-usage.md).
+- Calculation includes prompt + tool input and candidate + thinking output with the fixed exchange rate. Carbon and Argon dates are preserved in account aggregation by splitting the two pricing periods. Other configured model rates are unchanged. Cache discounts, service tiers, and invoice reconciliation remain outside these estimates; see [token-usage.md](token-usage.md).
 - Endpoints:
   - `GET /api/v1/sessions/:session_id/cost`: Cost breakdown for a single session.
   - `GET /api/v1/analytics/cost`: Cumulative token/cost totals for owned profiles (optionally one `profile_id`); task/model breakdown arrays are on the session-cost response only.
@@ -482,7 +483,7 @@ Deployment acceptance still requires matched, annotated-video comparison of Argo
   - `chunk_debug_reanalysis.go`: Supports `reuse_previous: true` in `SourceContextSnapshot` (reusing a matching `COMPLETED` `ChunkReanalysisRun` with identical `(chunk_analysis_result_id, model, source_gcs_uri, media_start_secs, media_end_secs, schema_version)` and a `prompt_hash` of either analysis mode, `chunkDebugPromptHash`) and checks both `ChunkReanalysisRun` and `SessionReanalysisRun` when reusing active Gemini Files uploads.
   - `session_debug_reanalysis.go`: Filters prompt corrections per segment (`correctionsForSegment`) and caches/reuses completed segments by `sha256(model|mode|start|end|prompt)` (analysis mode: `frame-grid-v1`/`video`) across both intra-run retries (`run.SourceContextSnapshot["completed_segments"]`) and prior `COMPLETED` `SessionReanalysisRun` rows for the same `(session_id, profile_id, source_gcs_uri)`.
 - **Bounded parallelism (`maxConcurrentSegmentAnalyses = 5`)**:
-  - Applied across `video_analysis.go` (Pass 2), `session_debug_reanalysis.go` (Pass 2 + `Unknown` routing to `gemini-3.8-flash`), `activity_review.go` (rows loop with mutex-protected DB checkpointing), `injury_analysis.go` (intervals loop), and `generate_hardsub.go` (TTS chunks loop).
+  - Applied across `video_analysis.go` (Pass 2), `session_debug_reanalysis.go` (Pass 2 + `Unknown` routing to `gemini-4-hydrogen`), `activity_review.go` (rows loop with mutex-protected DB checkpointing), `injury_analysis.go` (intervals loop), and `generate_hardsub.go` (TTS chunks loop).
 - **Batch chunk re-analysis API**:
   - `POST /api/v1/sessions/:session_id/chunks/batch-reanalyses` (`CreateBatchChunkReanalysis`) accepts `chunk_ids` (1..50), `client_request_id`, and optional `reuse_previous` (default `true`), enforcing profile quota and enqueueing `chunk:debug-reanalysis` tasks in one request.
 - **Gemini Batch API & 50% cost discount**:
@@ -500,6 +501,6 @@ Deployment acceptance still requires matched, annotated-video comparison of Argo
 - **Gemini Inline Frame-Grid Analysis (`internal/gemini/client.go`)**:
   - `Client.AnalyzeFrameGrids` and `Client.AnalyzeFrameGridsWithModel(ctx, images, mimeType, prompt, model)` send one or more contact-sheet images inline (`InlineData`) with `MediaResolutionHigh` and configured thinking (`HIGH` default, overridable per call via `gemini.WithThinkingLevel`), excluding `Thought` parts from the returned text. The worker `GeminiClient` interface exposes only `AnalyzeFrameGridsWithModel`.
   - `(w *Worker) AnalyzeVideoIntervalWithFrameGrids(ctx, videoPath, start, end, prompt, model, opts)` combines `GenerateFrameGrids`, frame-grid reading prompt instructions, and `GeminiClient.AnalyzeFrameGridsWithModel`.
-  - `HandleActivityReviewTask` (`activity_review.go`) uses `AnalyzeVideoIntervalWithFrameGrids` (`FormatSecondsBadge: true`, `ThinkingLevel: "MEDIUM"`, `gemini-3.8-flash`) for each 30s sliding window when `probeVideoDuration` succeeds on the downloaded merged video, skipping `UploadVideo` and avoiding Gemini gateway HTTP 504 `DEADLINE_EXCEEDED` timeouts on concurrent `VideoMetadata` calls (lazily uploading and falling back to `AnalyzeSegmentWithModel` only if local probing/extraction fails). For future cost reduction via multi-chunk Frame-Grid batching (Option 2: Batch-2 windows), see [`live-activity-feedback.md`](live-activity-feedback.md#review-lifecycle).
+  - `HandleActivityReviewTask` (`activity_review.go`) uses `AnalyzeVideoIntervalWithFrameGrids` (`FormatSecondsBadge: true`, `ThinkingLevel: "MEDIUM"`, `gemini-4-hydrogen`) for each 30s sliding window when `probeVideoDuration` succeeds on the downloaded merged video, skipping `UploadVideo` and avoiding Gemini gateway HTTP 504 `DEADLINE_EXCEEDED` timeouts on concurrent `VideoMetadata` calls (lazily uploading and falling back to `AnalyzeSegmentWithModel` only if local probing/extraction fails). For future cost reduction via multi-chunk Frame-Grid batching (Option 2: Batch-2 windows), see [`live-activity-feedback.md`](live-activity-feedback.md#review-lifecycle).
   - Both `HandleSessionDebugReanalysisTask` and `HandleChunkDebugReanalysisTask` may retain the downloaded local `.mp4` for the duration of the task and analyze eligible segments/chunks via `AnalyzeVideoIntervalWithFrameGrids` (with fallback to `AnalyzeSegmentWithModel` if a local video file is unavailable, the interval is too long, or FFmpeg cannot decode it). The worker's temp dir is memory-backed on Cloud Run, so a copy is kept only while it fits `maxRetainedReanalysisMediaBytes = 1 GiB`, a budget shared by all concurrent runs (`keepLocalForFrameGrids` / `retainReanalysisMedia`). A copy that does not fit is deleted right after upload or duration probe, and that run uses VideoMetadata. Clean up with `defer file.removeLocal()` (deletes the file and returns the budget), never a bare `os.Remove(file.LocalPath)`. A chunk run on a session video that reuses a cached Files object has no local media and deliberately uses VideoMetadata, avoiding a second download of the whole session video.
   - The analysis mode (`debugAnalysisModeFrameGrid = "frame-grid-v1"` or `debugAnalysisModeVideo = "video"`) is part of the reuse identity: `sessionDebugSegmentCacheKey(model, mode, start, end, prompt)` and `chunkDebugPromptHash(prompt, mode)` (stored as `prompt_hash`, with the mode actually used). `reuse_previous` accepts a completed candidate of either mode and keeps that candidate's own `prompt_hash`.

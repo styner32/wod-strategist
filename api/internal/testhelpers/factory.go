@@ -13,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 	g "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/db"
+	"github.com/wod-strategist/api/internal/wodeval"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -234,6 +235,20 @@ func CreateAnalysisResult(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.Ana
 	}
 
 	return result
+}
+
+func CreateAnalysisResultWithSession(dbConn *gorm.DB, resultAttr *db.AnalysisResult) db.AnalysisResult {
+	session := db.Session{
+		SessionID:            resultAttr.SessionID,
+		ProfileID:            resultAttr.ProfileID,
+		WorkoutType:          "wod",
+		WODEvaluationVersion: wodeval.Version,
+		Effort:               nil,
+	}
+	CreateSession(dbConn, &session)
+
+	resultAttr.SessionID = session.SessionID
+	return CreateAnalysisResult(dbConn, resultAttr)
 }
 
 func CreateChunkAnalysisResult(dbConn *gorm.DB, resultAttr *db.ChunkAnalysisResult) db.ChunkAnalysisResult {

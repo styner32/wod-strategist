@@ -26,14 +26,14 @@ var _ = Describe("Gemini client", func() {
 		It("exposes the configured segment-analysis model", func() {
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey: "test-api-key",
-				Model:  ModelFlash38,
+				Model:  ModelHydrogen4,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(client.Model()).To(Equal(ModelFlash38))
+			Expect(client.Model()).To(Equal(ModelHydrogen4))
 			Expect((*Client)(nil).Model()).To(BeEmpty())
 		})
 
-		It("configures thinking level and budget for supported models", func() {
+		It("configures thinking level and budget for supported models and strips budget for Gemini 4", func() {
 			budget := int32(4096)
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:         "test-api-key",
@@ -43,11 +43,22 @@ var _ = Describe("Gemini client", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Flash 3.8 supports thinking
+			// Flash 3.8 supports thinking and thinkingBudget
 			tc := client.thinkingConfigForModel(ModelFlash38)
 			Expect(tc).NotTo(BeNil())
 			Expect(string(tc.ThinkingLevel)).To(Equal("HIGH"))
 			Expect(tc.ThinkingBudget).To(Equal(&budget))
+
+			// Gemini 4 Hydrogen & Carbon strip thinkingBudget
+			tcHydrogen := client.thinkingConfigForModel(ModelHydrogen4)
+			Expect(tcHydrogen).NotTo(BeNil())
+			Expect(string(tcHydrogen.ThinkingLevel)).To(Equal("HIGH"))
+			Expect(tcHydrogen.ThinkingBudget).To(BeNil())
+
+			tcCarbon := client.thinkingConfigForModel(ModelCarbon4)
+			Expect(tcCarbon).NotTo(BeNil())
+			Expect(string(tcCarbon.ThinkingLevel)).To(Equal("HIGH"))
+			Expect(tcCarbon.ThinkingBudget).To(BeNil())
 
 			// Pro 3.1 preview does not support thinking config
 			tcPro := client.thinkingConfigForModel(ModelPro31Preview)
@@ -57,24 +68,24 @@ var _ = Describe("Gemini client", func() {
 		It("configures distinct thinking level for chunk analysis and falls back when unset", func() {
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:             "test-api-key",
-				Model:              ModelFlash38,
+				Model:              ModelHydrogen4,
 				ThinkingLevel:      "HIGH",
 				ThinkingLevelChunk: "LOW",
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			tcFull := client.thinkingConfigForModel(ModelFlash38)
+			tcFull := client.thinkingConfigForModel(ModelHydrogen4)
 			Expect(tcFull).NotTo(BeNil())
 			Expect(string(tcFull.ThinkingLevel)).To(Equal("HIGH"))
 
-			tcChunk := client.thinkingConfigForModelAndLevel(ModelFlash38, client.thinkingLevelChunk)
+			tcChunk := client.thinkingConfigForModelAndLevel(ModelHydrogen4, client.thinkingLevelChunk)
 			Expect(tcChunk).NotTo(BeNil())
 			Expect(string(tcChunk.ThinkingLevel)).To(Equal("LOW"))
 
 			// Fallback behavior when ThinkingLevelChunk is empty
 			clientFallback, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:        "test-api-key",
-				Model:         ModelFlash38,
+				Model:         ModelHydrogen4,
 				ThinkingLevel: "MEDIUM",
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -168,7 +179,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelArgon4+":generateContent").
+				Post("/v1beta/models/"+ModelCarbon4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -236,7 +247,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				Post("/v1beta/models/"+ModelHydrogen4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -252,7 +263,7 @@ var _ = Describe("Gemini client", func() {
 					},
 				})
 
-			result, geminiFile, _, err := client.AnalyzeVideoWithModel(context.Background(), videoPath, "analyze this", ModelFlash38)
+			result, geminiFile, _, err := client.AnalyzeVideoWithModel(context.Background(), videoPath, "analyze this", ModelHydrogen4)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("flash 3.5 response"))
 			Expect(geminiFile).To(Equal("files/mock-file"))
@@ -295,7 +306,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				Post("/v1beta/models/"+ModelHydrogen4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -310,7 +321,7 @@ var _ = Describe("Gemini client", func() {
 					},
 				})
 
-			result, geminiFile, _, err := client.AnalyzeChunkVideo(context.Background(), videoPath, "analyze chunk", ModelFlash38)
+			result, geminiFile, _, err := client.AnalyzeChunkVideo(context.Background(), videoPath, "analyze chunk", ModelHydrogen4)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("chunk response"))
 			Expect(geminiFile).To(Equal("files/mock-chunk"))
@@ -345,7 +356,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				Post("/v1beta/models/"+ModelHydrogen4+":generateContent").
 				Reply(http.StatusOK).
 				JSON(map[string]any{
 					"candidates": []map[string]any{{
@@ -357,7 +368,7 @@ var _ = Describe("Gemini client", func() {
 
 			ref := encodeJPEG(makeTestImage(32, 32))
 			result, geminiFile, _, err := client.AnalyzeChunkVideoWithImages(
-				context.Background(), videoPath, "analyze chunk with ref", ModelFlash38, [][]byte{ref},
+				context.Background(), videoPath, "analyze chunk with ref", ModelHydrogen4, [][]byte{ref},
 			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("[EXERCISE: Deadlift]"))
@@ -408,7 +419,7 @@ var _ = Describe("Gemini client", func() {
 						"state": "ACTIVE",
 					})
 				transport.New(baseURL).
-					Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+					Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").
 					Reply(http.StatusOK).
 					JSON(map[string]any{
 						"candidates": []map[string]any{{
@@ -420,18 +431,18 @@ var _ = Describe("Gemini client", func() {
 			}
 
 			mockUploadAndGenerate("fps-chunk", "[EXERCISE: Box Step-up]")
-			_, _, _, err = chunkClient.AnalyzeChunkVideo(context.Background(), videoPath, "chunk prompt", ModelFlash38)
+			_, _, _, err = chunkClient.AnalyzeChunkVideo(context.Background(), videoPath, "chunk prompt", ModelHydrogen4)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(transport.Requests()[3].Body)).To(ContainSubstring(`"videoMetadata":{"fps":2}`))
 
 			mockUploadAndGenerate("fps-chunk-img", "[EXERCISE: Power Snatch]")
 			ref := encodeJPEG(makeTestImage(16, 16))
-			_, _, _, err = chunkClient.AnalyzeChunkVideoWithImages(context.Background(), videoPath, "chunk img prompt", ModelFlash38, [][]byte{ref})
+			_, _, _, err = chunkClient.AnalyzeChunkVideoWithImages(context.Background(), videoPath, "chunk img prompt", ModelHydrogen4, [][]byte{ref})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(transport.Requests()[7].Body)).To(ContainSubstring(`"videoMetadata":{"fps":2}`))
 
 			mockUploadAndGenerate("full-video", "full video response")
-			_, _, _, err = chunkClient.AnalyzeVideoWithModel(context.Background(), videoPath, "full prompt", ModelFlash38)
+			_, _, _, err = chunkClient.AnalyzeVideoWithModel(context.Background(), videoPath, "full prompt", ModelHydrogen4)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(string(transport.Requests()[11].Body)).NotTo(ContainSubstring("videoMetadata"))
 		})
@@ -623,7 +634,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelArgon4 + ":generateContent").
+				Post("/v1beta/models/" + ModelCarbon4 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{
@@ -665,7 +676,7 @@ var _ = Describe("Gemini client", func() {
 				})
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelArgon4 + ":generateContent").
+				Post("/v1beta/models/" + ModelCarbon4 + ":generateContent").
 				Reply(http.StatusOK).
 				JSON(map[string]any{
 					"candidates": []map[string]any{},
@@ -739,7 +750,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				Post("/v1beta/models/"+ModelHydrogen4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -767,7 +778,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+				Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{"message": "indexing failed"},
@@ -798,7 +809,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelArgon4+":generateContent").
+				Post("/v1beta/models/"+ModelCarbon4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -853,7 +864,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/" + ModelArgon4 + ":generateContent").
+				Post("/v1beta/models/" + ModelCarbon4 + ":generateContent").
 				Reply(http.StatusInternalServerError).
 				JSON(map[string]any{
 					"error": map[string]any{"message": "analysis failed"},
@@ -880,7 +891,7 @@ var _ = Describe("Gemini client", func() {
 	})
 
 	Describe("Model option", func() {
-		It("defaults to "+ModelArgon4, func() {
+		It("defaults to "+ModelCarbon4, func() {
 			transport := testhelpers.NewMockTransport()
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:     "test-key",
@@ -888,7 +899,7 @@ var _ = Describe("Gemini client", func() {
 				HTTPClient: &http.Client{Transport: transport},
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(client.model).To(Equal(ModelArgon4))
+			Expect(client.model).To(Equal(ModelCarbon4))
 		})
 
 		It("uses the configured model", func() {
@@ -914,7 +925,7 @@ var _ = Describe("Gemini client", func() {
 			transport := testhelpers.NewMockTransport()
 
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelArgon4+":batchGenerateContent").
+				Post("/v1beta/models/"+ModelCarbon4+":batchGenerateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -965,7 +976,7 @@ var _ = Describe("Gemini client", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			results, err := client.AnalyzeSegmentsBatch(context.Background(), ModelArgon4, []BatchSegmentRequest{
+			results, err := client.AnalyzeSegmentsBatch(context.Background(), ModelCarbon4, []BatchSegmentRequest{
 				{
 					FileURI:  "https://example.test/files/mock-file",
 					MIMEType: "video/mp4",
@@ -1008,7 +1019,7 @@ var _ = Describe("Gemini client", func() {
 		It("sends multiple inline frame-grid images with HIGH media resolution and thinking config", func() {
 			transport := testhelpers.NewMockTransport()
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelArgon4+":generateContent").
+				Post("/v1beta/models/"+ModelCarbon4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -1030,7 +1041,7 @@ var _ = Describe("Gemini client", func() {
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:        apiKey,
 				BaseURL:       baseURL,
-				Model:         ModelArgon4,
+				Model:         ModelCarbon4,
 				ThinkingLevel: "HIGH",
 				HTTPClient:    &http.Client{Transport: transport},
 			})
@@ -1070,7 +1081,7 @@ var _ = Describe("Gemini client", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("at least one frame grid image is required"))
 
-			_, _, err = client.AnalyzeFrameGridsWithModel(context.Background(), [][]byte{nil}, "image/jpeg", "prompt", ModelFlash38)
+			_, _, err = client.AnalyzeFrameGridsWithModel(context.Background(), [][]byte{nil}, "image/jpeg", "prompt", ModelHydrogen4)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("frame grid image at index 0 is empty"))
 		})
@@ -1078,7 +1089,7 @@ var _ = Describe("Gemini client", func() {
 		It("honors per-call WithThinkingLevel override on AnalyzeFrameGridsWithModel", func() {
 			transport := testhelpers.NewMockTransport()
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				Post("/v1beta/models/"+ModelHydrogen4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -1094,7 +1105,7 @@ var _ = Describe("Gemini client", func() {
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:        apiKey,
 				BaseURL:       baseURL,
-				Model:         ModelArgon4,
+				Model:         ModelCarbon4,
 				ThinkingLevel: "HIGH",
 				HTTPClient:    &http.Client{Transport: transport},
 			})
@@ -1102,7 +1113,7 @@ var _ = Describe("Gemini client", func() {
 
 			sheet := encodeJPEG(makeTestImage(64, 32))
 			ctx := WithThinkingLevel(context.Background(), "MEDIUM")
-			result, _, err := client.AnalyzeFrameGridsWithModel(ctx, [][]byte{sheet}, "image/jpeg", "prompt", ModelFlash38)
+			result, _, err := client.AnalyzeFrameGridsWithModel(ctx, [][]byte{sheet}, "image/jpeg", "prompt", ModelHydrogen4)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("ok"))
 			Expect(transport.Verify()).To(Succeed())
@@ -1114,7 +1125,7 @@ var _ = Describe("Gemini client", func() {
 		It("honors per-call WithThinkingLevel override on AnalyzeSegmentWithModelAndImages", func() {
 			transport := testhelpers.NewMockTransport()
 			transport.New(baseURL).
-				Post("/v1beta/models/"+ModelFlash38+":generateContent").
+				Post("/v1beta/models/"+ModelHydrogen4+":generateContent").
 				MatchHeader("X-Goog-Api-Key", apiKey).
 				Reply(http.StatusOK).
 				JSON(map[string]any{
@@ -1130,7 +1141,7 @@ var _ = Describe("Gemini client", func() {
 			client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 				APIKey:        apiKey,
 				BaseURL:       baseURL,
-				Model:         ModelArgon4,
+				Model:         ModelCarbon4,
 				ThinkingLevel: "HIGH",
 				HTTPClient:    &http.Client{Transport: transport},
 			})
@@ -1139,7 +1150,7 @@ var _ = Describe("Gemini client", func() {
 			ref := encodeJPEG(makeTestImage(32, 32))
 			ctx := WithThinkingLevel(context.Background(), "MEDIUM")
 			result, _, err := client.AnalyzeSegmentWithModelAndImages(
-				ctx, "https://example.test/files/vid1", "video/mp4", 10*time.Second, 20*time.Second, "prompt", ModelFlash38, [][]byte{ref},
+				ctx, "https://example.test/files/vid1", "video/mp4", 10*time.Second, 20*time.Second, "prompt", ModelHydrogen4, [][]byte{ref},
 			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal("segment ok"))

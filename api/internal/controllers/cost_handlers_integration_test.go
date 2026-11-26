@@ -222,6 +222,38 @@ var _ = Describe("GET /api/v1/analytics/cost", func() {
 		}
 	})
 
+	It("separates Carbon pricing dates and prices Hydrogen usage accurately", func() {
+		for _, date := range []time.Time{cost.ArgonStandardPricingStartsAt.Add(-time.Second), cost.ArgonStandardPricingStartsAt} {
+			testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{ProfileID: profile1.ID, SessionID: "carbon-session", TaskType: "video:segment",
+				Model: "gemini-4-carbon", CreatedAt: date, PromptTokens: 1000000, CandidateTokens: 500000,
+				UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":1000000,"candidatesTokenCount":500000,"thoughtsTokenCount":500000,"totalTokenCount":2000000}`)})
+		}
+		testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{ProfileID: profile1.ID, SessionID: "carbon-session", TaskType: "video:segment:batch",
+			Model: "gemini-4-carbon", CreatedAt: cost.ArgonStandardPricingStartsAt, PromptTokens: 1000000, CandidateTokens: 1000000})
+		testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{ProfileID: profile1.ID, SessionID: "carbon-session", TaskType: "video:index",
+			Model: "gemini-4-hydrogen", CreatedAt: cost.ArgonStandardPricingStartsAt.Add(-time.Second), PromptTokens: 1000000, CandidateTokens: 500000,
+			UsageMetadata: db.NullableJSONDocument(`{"promptTokenCount":1000000,"candidatesTokenCount":500000,"thoughtsTokenCount":500000,"totalTokenCount":2000000}`)})
+		testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{UserID: &user.ID, TaskType: "image:workout", Model: "gemini-4-carbon",
+			CreatedAt: cost.ArgonStandardPricingStartsAt.Add(-time.Second), PromptTokens: 1000000, CandidateTokens: 1000000})
+
+		// Profile 1: Carbon intro ($12) + Carbon standard ($24) + Carbon batch ($12) + Hydrogen ($9) = $57
+		// Account total: $57 + Carbon intro account-only ($12) = $69
+		for _, test := range []struct {
+			url string
+			usd float64
+		}{
+			{"/api/v1/analytics/cost", 69.0},
+			{fmt.Sprintf("/api/v1/analytics/cost?profile_id=%d", profile1.ID), 57.0},
+		} {
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, newAuthorizedJSONRequest(http.MethodGet, test.url, "", &user))
+			Expect(response.Code).To(Equal(http.StatusOK))
+			var body cost.TotalCostResponse
+			Expect(json.Unmarshal(response.Body.Bytes(), &body)).To(Succeed())
+			Expect(body.CostUSD).To(Equal(test.usd))
+		}
+	})
+
 	It("returns cumulative totals across all user sessions and profiles", func() {
 		testhelpers.CreateTokenUsage(dbConn, &db.TokenUsage{
 			SessionID:       "WOD-1",

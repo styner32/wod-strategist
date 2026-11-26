@@ -131,7 +131,7 @@ func (c *Client) CompareVideoModeStream(ctx context.Context, fileURI, mimeType, 
 	}
 	config := &genai.GenerateContentConfig{
 		MediaResolution: resolution,
-		ThinkingConfig:  c.thinkingConfigForModel(ModelFlash38),
+		ThinkingConfig:  c.thinkingConfigForModel(ModelHydrogen4),
 		HTTPOptions:     &genai.HTTPOptions{RetryOptions: &genai.HTTPRetryOptions{Attempts: genai.Ptr(int32(1))}},
 	}
 	contents := []*genai.Content{{Role: genai.RoleUser, Parts: []*genai.Part{
@@ -139,7 +139,7 @@ func (c *Client) CompareVideoModeStream(ctx context.Context, fileURI, mimeType, 
 		genai.NewPartFromText(prompt),
 	}}}
 	var streamErr error
-	for chunk, err := range c.client.Models.GenerateContentStream(ctx, ModelFlash38, contents, config) {
+	for chunk, err := range c.client.Models.GenerateContentStream(ctx, ModelHydrogen4, contents, config) {
 		if err != nil {
 			streamErr = err
 			break

@@ -35,7 +35,7 @@ var _ = Describe("Retry-After and HTTP status extraction", func() {
 		const baseURL = "https://example.test"
 		transport := testhelpers.NewMockTransport()
 		transport.New(baseURL).
-			Post("/v1beta/models/"+ModelFlash38+":generateContent").
+			Post("/v1beta/models/"+ModelHydrogen4+":generateContent").
 			Reply(http.StatusTooManyRequests).
 			Header("Retry-After", "9").
 			JSON(map[string]any{
@@ -46,7 +46,7 @@ var _ = Describe("Retry-After and HTTP status extraction", func() {
 				},
 			})
 		transport.New(baseURL).
-			Post("/v1beta/models/" + ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + ModelHydrogen4 + ":generateContent").
 			Reply(http.StatusServiceUnavailable).
 			JSON(map[string]any{
 				"error": map[string]any{
@@ -59,7 +59,7 @@ var _ = Describe("Retry-After and HTTP status extraction", func() {
 		client, err := NewClientWithOptions(context.Background(), zap.NewNop(), Options{
 			APIKey:     "test-api-key",
 			BaseURL:    baseURL,
-			Model:      ModelFlash38,
+			Model:      ModelHydrogen4,
 			HTTPClient: &http.Client{Transport: transport},
 			Sleep:      func(time.Duration) {},
 		})

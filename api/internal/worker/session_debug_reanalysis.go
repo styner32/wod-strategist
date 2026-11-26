@@ -320,7 +320,7 @@ func (w *Worker) handleSessionDebugReanalysisTask(ctx context.Context, task *asy
 
 		selectedModel := resolveReanalysisModelWithDefault(run.Model, defaultClientModel)
 		if strings.TrimSpace(run.Model) == "" && isUnknownSegment(segment) {
-			selectedModel = gemini.ModelFlash38
+			selectedModel = gemini.ModelHydrogen4
 		}
 		cacheKey := sessionDebugSegmentCacheKey(selectedModel, plannedMode, segment.Start, segment.End, prompt)
 		if cached, ok := reusableSegments[cacheKey]; ok && strings.TrimSpace(cached.Analysis) != "" {

@@ -41,11 +41,11 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 		Expect(w.HandleAnalysisEnrichmentTask(context.Background(), asynq.NewTask(TypeAnalysisEnrichment, raw))).To(Succeed())
 	}
 	summary := func(text string) {
-		transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).JSON(map[string]any{"usageMetadata": map[string]int{"promptTokenCount": 20, "candidatesTokenCount": 5, "thoughtsTokenCount": 10, "totalTokenCount": 35}, "candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": text}}}}}})
+		transport.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(200).JSON(map[string]any{"usageMetadata": map[string]int{"promptTokenCount": 20, "candidatesTokenCount": 5, "thoughtsTokenCount": 10, "totalTokenCount": 35}, "candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": text}}}}}})
 	}
 	stream := func(text string) {
 		body, _ := json.Marshal(map[string]any{"candidates": []any{map[string]any{"finishReason": "STOP", "content": map[string]any{"parts": []any{map[string]any{"toolCall": map[string]string{"toolType": "MEDIA_PROCESSING"}}, map[string]any{"toolResponse": map[string]string{"toolType": "MEDIA_PROCESSING"}}, map[string]string{"text": text}}}}}, "usageMetadata": map[string]int{"promptTokenCount": 10, "candidatesTokenCount": 5, "thoughtsTokenCount": 20, "toolUsePromptTokenCount": 65, "totalTokenCount": 100}})
-		transport.New(base).Post("/v1beta/models/"+gemini.ModelFlash38+":streamGenerateContent?alt=sse").MatchBodyContains(`"thinkingLevel":"HIGH"`).MatchBodyContains(`"mediaResolution":"MEDIA_RESOLUTION_LOW"`).MatchBodyContains(`"fileUri":"https://example.test/shared"`).Reply(200).Header("Content-Type", "text/event-stream").Body([]byte("data: " + string(body) + "\n\n"))
+		transport.New(base).Post("/v1beta/models/"+gemini.ModelHydrogen4+":streamGenerateContent?alt=sse").MatchBodyContains(`"thinkingLevel":"HIGH"`).MatchBodyContains(`"mediaResolution":"MEDIA_RESOLUTION_LOW"`).MatchBodyContains(`"fileUri":"https://example.test/shared"`).Reply(200).Header("Content-Type", "text/event-stream").Body([]byte("data: " + string(body) + "\n\n"))
 	}
 	BeforeAll(func() {
 		var err error
@@ -142,7 +142,7 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 		Expect(usages).To(HaveLen(1))
 		Expect(usages[0].TotalTokens).To(Equal(int64(100)))
 		// Retrying the persistence step must not double-count a generated request.
-		w.saveTokenUsageForRequest(sid, a.ProfileID, "highlight:agentic", *usages[0].RequestKey, gemini.UsageFromComparison(nil, gemini.ModelFlash38))
+		w.saveTokenUsageForRequest(sid, a.ProfileID, "highlight:agentic", *usages[0].RequestKey, gemini.UsageFromComparison(nil, gemini.ModelHydrogen4))
 		Expect(conn.Where("session_id = ?", sid).Find(&usages).Error).To(Succeed())
 		Expect(usages).To(HaveLen(1))
 	})
@@ -385,7 +385,7 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 		Expect(err).NotTo(HaveOccurred())
 		s, _ = load()
 		Expect(s.RunID).NotTo(Equal(oldRun))
-		transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("warmup").MatchBodyContains("early catch").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overview":"current progress","strengths":[],"improvements":[],"limitations":[]}`}}}}}})
+		transport.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").MatchBodyContains("workout_progress").MatchBodyContains("warmup").MatchBodyContains("early catch").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": `{"overview":"current progress","strengths":[],"improvements":[],"limitations":[]}`}}}}}})
 		task(s.RunID, "summary", 0)
 		s, _ = load()
 		Expect(s.Status).To(Equal("completed"))
@@ -520,7 +520,7 @@ var _ = Describe("Analysis enrichment lifecycle", func() {
 			"usageMetadata": map[string]int{"promptTokenCount": 10, "candidatesTokenCount": 5, "thoughtsTokenCount": 42, "toolUsePromptTokenCount": 65, "totalTokenCount": 122},
 		})
 		transport.New(base).
-			Post("/v1beta/models/"+gemini.ModelFlash38+":streamGenerateContent?alt=sse").
+			Post("/v1beta/models/"+gemini.ModelHydrogen4+":streamGenerateContent?alt=sse").
 			MatchBodyContains(`"includeThoughts":true`).
 			Reply(200).
 			Header("Content-Type", "text/event-stream").

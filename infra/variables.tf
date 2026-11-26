@@ -34,9 +34,9 @@ variable "gemini_api_key" {
 }
 
 variable "gemini_model" {
-  description = "Default Gemini model for deep video analysis; short chunks and indexing use Flash"
+  description = "Default Gemini model for deep video analysis; short chunks and indexing use Gemini 4 Hydrogen"
   type        = string
-  default     = "gemini-4-argon"
+  default     = "gemini-4-carbon"
 }
 
 variable "gemini_thinking_chunk" {
@@ -54,7 +54,7 @@ variable "gemini_thinking_level" {
 variable "gemini_include_thoughts" {
   description = "Request Gemini thought summaries and persist them to gemini_thought_logs (requires migration 000059)"
   type        = bool
-  default     = true 
+  default     = true
 }
 
 variable "jwt_secret" {

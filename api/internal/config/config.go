@@ -70,7 +70,7 @@ type Worker struct {
 	Common
 	Concurrency          int // WORKER_CONCURRENCY — max concurrent video tasks; defaults to 5
 	GeminiAPIKey         string
-	GeminiModel          string  // GEMINI_MODEL — default "gemini-4-argon" (deep video analysis)
+	GeminiModel          string  // GEMINI_MODEL — default "gemini-4-carbon" (deep video analysis)
 	GeminiThinkingLevel  string  // GEMINI_THINKING_LEVEL — default "HIGH"
 	GeminiThinkingChunk  string  // GEMINI_THINKING_CHUNK — default "LOW"
 	GeminiChunkFPS       float64 // GEMINI_CHUNK_FPS — default 2.0; 0 omits explicit FPS metadata
@@ -118,7 +118,7 @@ func InitServer() (Server, error) {
 		cfg.Port = defaultPort
 	}
 	if cfg.GeminiModel == "" {
-		cfg.GeminiModel = gemini.ModelArgon4
+		cfg.GeminiModel = gemini.ModelCarbon4
 	}
 
 	if err := validateRequired(
@@ -172,7 +172,7 @@ func InitWorker() (Worker, error) {
 
 	model := strings.TrimSpace(os.Getenv("GEMINI_MODEL"))
 	if model == "" {
-		model = gemini.ModelArgon4
+		model = gemini.ModelCarbon4
 	}
 
 	thinkingLevel := strings.ToUpper(strings.TrimSpace(os.Getenv("GEMINI_THINKING_LEVEL")))
@@ -371,7 +371,7 @@ func validateThinkingLevel(name, level string) error {
 	case "HIGH", "MEDIUM", "LOW":
 		return nil
 	case "MINIMAL":
-		return fmt.Errorf("%s %q is not supported by Gemini 3.8 Flash (use LOW, MEDIUM, or HIGH)", name, level)
+		return fmt.Errorf("%s %q is not supported by Gemini 4 Hydrogen (use LOW, MEDIUM, or HIGH)", name, level)
 	default:
 		return fmt.Errorf("invalid %s %q: must be one of HIGH, MEDIUM, LOW", name, level)
 	}

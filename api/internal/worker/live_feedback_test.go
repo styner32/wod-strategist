@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/oklog/ulid/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/wod-strategist/api/internal/activity"
@@ -31,7 +32,8 @@ func liveTestObservations(start, end float64) db.NullableJSONDocument {
 	return raw
 }
 func liveTestRow(id uint, start, end float64) db.ChunkAnalysisResult {
-	return db.ChunkAnalysisResult{ID: id, ProfileID: 1, SessionID: "s", FilePath: fmt.Sprintf("chunk%d.mp4", id), Status: "COMPLETED", ExerciseType: "Air Squat", Output: "current cue", ObservedSignals: `{"form_issues_seen":["knee position"]}`, TargetConfidence: 0.9, StartSecs: &start, EndSecs: &end, MediaStartSecs: &start, MediaEndSecs: &end, MovementObservations: liveTestObservations(1, 3)}
+	sessionID := "WOD-20260916-01JACTIVITYTEST0000000000"
+	return db.ChunkAnalysisResult{ID: id, ProfileID: 1, SessionID: sessionID, FilePath: fmt.Sprintf("chunk%d.mp4", id), Status: "COMPLETED", ExerciseType: "Air Squat", Output: "current cue", ObservedSignals: `{"form_issues_seen":["knee position"]}`, TargetConfidence: 0.9, StartSecs: &start, EndSecs: &end, MediaStartSecs: &start, MediaEndSecs: &end, MovementObservations: liveTestObservations(1, 3)}
 }
 
 var _ = Describe("Live coaching evidence window", func() {
@@ -43,6 +45,7 @@ var _ = Describe("Live coaching evidence window", func() {
 		Expect(string(row.CaptureAssessment)).To(ContainSubstring("Improve lighting"))
 		Expect(strings.TrimSpace(liveBlocks.ReplaceAllString(raw, ""))).To(Equal("[NO_EXERCISE]"))
 	})
+
 	It("uses at most six previous chunks inside sixty seconds in capture order", func() {
 		current := liveTestRow(99, 80, 90)
 		rows := []db.ChunkAnalysisResult{}
@@ -61,7 +64,7 @@ var _ = Describe("Live coaching evidence window", func() {
 		prior.ProfileID = 2
 		Expect(recentCoachingSources(current, []db.ChunkAnalysisResult{prior})).To(BeEmpty())
 		prior = liveTestRow(3, 20, 30)
-		prior.SessionID = "other"
+		prior.SessionID = "WOD-20260917-" + ulid.Make().String()
 		Expect(recentCoachingSources(current, []db.ChunkAnalysisResult{prior})).To(BeEmpty())
 		prior = liveTestRow(3, 10, 20)
 		sources := recentCoachingSources(current, []db.ChunkAnalysisResult{prior})
@@ -274,7 +277,8 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 	BeforeEach(func() {
 		testhelpers.CleanupDB(conn)
 		profile = testhelpers.CreateProfile(conn, &db.Profile{})
-		session = testhelpers.CreateSession(conn, &db.Session{SessionID: "WOD-20260916-01JACTIVITYTEST0000000000", ProfileID: profile.ID, WorkoutType: "wod"})
+		sessionID := "WOD-20260916-" + ulid.Make().String()
+		session = testhelpers.CreateSession(conn, &db.Session{SessionID: sessionID, ProfileID: profile.ID, WorkoutType: "wod"})
 		transport = testhelpers.NewMockTransport()
 		storageTransport = testhelpers.NewMockTransport()
 		client, err := gemini.NewClientWithOptions(context.Background(), zap.NewNop(), gemini.Options{APIKey: "test", BaseURL: base, HTTPClient: &http.Client{Transport: transport}, PollInterval: time.Millisecond, Sleep: func(time.Duration) {}})
@@ -289,7 +293,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 	})
 	AfterEach(func() { Expect(queue.Close()).To(Succeed()) })
 	mockGeneration := func(reply string) {
-		transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": reply}}}}}})
+		transport.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": reply}}}}}})
 	}
 	mockFile := func(duration string) {
 		transport.New(base).Post("/upload/v1beta/files").Reply(200).Header("X-Goog-Upload-Url", base+"/upload-session").JSON(map[string]any{})
@@ -354,7 +358,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(err).NotTo(HaveOccurred())
 		mockGeneration("[EXERCISE: Air Squat]\n현재 구간의 자세 안내입니다.\n```target_person\n{\"matched_cues\":[\"target\"],\"ambiguous\":false,\"confidence\":0.9}\n```\n```movement_observations\n" + string(observations) + "\n```")
 		if enabled {
-			transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").MatchBodyContains("current_observations").MatchBodyContains("PRIOR_ASSESSMENT_MUST_STAY_OUT").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": fmt.Sprintf(`{"text":{"ko":"최근 같은 동작과 연결한 안내입니다.","en":"A cue connected to the recent same movement."},"current_chunk_id":%d,"source_chunk_ids":[%d]}`, current.ID, prior.ID)}}}}}})
+			transport.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").MatchBodyContains("current_observations").MatchBodyContains("PRIOR_ASSESSMENT_MUST_STAY_OUT").Reply(200).JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]string{"text": fmt.Sprintf(`{"text":{"ko":"최근 같은 동작과 연결한 안내입니다.","en":"A cue connected to the recent same movement."},"current_chunk_id":%d,"source_chunk_ids":[%d]}`, current.ID, prior.ID)}}}}}})
 		}
 		payload, err := json.Marshal(VideoAnalysisPayload{SessionID: session.SessionID, ProfileID: profile.ID, FilePath: uri, StartSecs: 10, EndSecs: 11, LiveAnalysisVersion: 1})
 		Expect(err).NotTo(HaveOccurred())
@@ -439,7 +443,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 	It("retains basic coaching when optional generation fails and keeps old records unopted", func() {
 		createRow(0, 10)
 		current := createRow(10, 20)
-		transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(400).JSON(map[string]any{"error": map[string]any{"message": "bad response", "code": 400}})
+		transport.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(400).JSON(map[string]any{"error": map[string]any{"message": "bad response", "code": 400}})
 		w.addContextualCoaching(context.Background(), 1, &current)
 		var saved db.ChunkAnalysisResult
 		Expect(conn.First(&saved, current.ID).Error).To(Succeed())
@@ -601,7 +605,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		object := fmt.Sprintf("videos/%d/%s/merged.mp4", profile.ID, session.SessionID)
 		testhelpers.MockGCSDownloadWithBody(storageTransport, "gs://test-bucket/"+object, []byte("video"))
 		mockFile("10s")
-		transport.New(base).Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").Reply(400).JSON(map[string]any{"error": map[string]any{"code": 400, "message": "failed review"}})
+		transport.New(base).Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").Reply(400).JSON(map[string]any{"error": map[string]any{"code": 400, "message": "failed review"}})
 		payload, _ := json.Marshal(activityReviewPayload{session.SessionID, profile.ID, activity.SourceVersion(rows), object, 1})
 		Expect(w.HandleActivityReviewTask(WithRetryCount(context.Background(), 2), asynq.NewTask(TypeActivityReview, payload))).To(Succeed())
 		Expect(conn.First(&session, session.ID).Error).To(Succeed())
@@ -870,7 +874,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(err).NotTo(HaveOccurred())
 		for i := 0; i < 2; i++ {
 			transport.New(base).
-				Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+				Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 				MatchBodyContains(`"includeThoughts":true`).
 				Reply(200).
 				JSON(map[string]any{
@@ -992,12 +996,12 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 			Unassessed: []activity.Interval{{Start: 20, End: 38, Reason: "target_not_visible"}},
 		})
 		transport.New(base).
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("문맥 구간 0.000000~30.000000초").
 			Reply(200).
 			JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "```movement_observations\n" + string(batch1Obs) + "\n```"}}}}}})
 		transport.New(base).
-			Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+			Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 			MatchBodyContains("문맥 구간 20.000000~50.000000초").
 			Reply(200).
 			JSON(map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "```movement_observations\n" + string(batch2Obs) + "\n```"}}}}}})
@@ -1060,7 +1064,7 @@ var _ = Describe("Live feedback worker integration", Ordered, ContinueOnFailure,
 		Expect(err).NotTo(HaveOccurred())
 		for i := 0; i < 2; i++ {
 			transport.New(base).
-				Post("/v1beta/models/" + gemini.ModelFlash38 + ":generateContent").
+				Post("/v1beta/models/" + gemini.ModelHydrogen4 + ":generateContent").
 				MatchBodyContains(`"thinkingLevel":"MEDIUM"`).
 				MatchBodyContains(`"mimeType":"image/jpeg"`).
 				MatchBodyContains("초록 박스와 TARGET 라벨").

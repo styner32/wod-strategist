@@ -8,7 +8,7 @@ Gemini API (`google.golang.org/genai v1.70.0+`) provides two distinct video proc
 |---|---|---|
 | **Mechanism** | Extracts frames at fixed rate (default 1 FPS) and loads all frames into context in a single pass. | Dynamically navigates timeline via internal backend `MEDIA_PROCESSING` tool calls. |
 | **Inference Flow** | Single-turn standard completion. | Multi-turn internal agent loop (Model $\leftrightarrow$ Video Decode Tool). |
-| **Supported Models** | All Gemini 2.5 / 3.x models | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite` |
+| **Supported Models** | All Gemini 2.5 / 3.x / 4.x models | `gemini-4-hydrogen`, `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash-lite` |
 | **Token Efficiency** | Linear ($\approx 260$ tokens/sec of video). Full context consumed. | Up to 88% token reduction on long videos for targeted queries. |
 | **Latency Profile** | Predictable, bounded single-turn latency. | Highly variable; scales with the number of internal tool navigation hops. |
 | **Best For** | Short clips (< 5m) or **exhaustive full-timeline indexing** (00:00 to end). | Long videos (> 5m) with **targeted queries**, specific event search, or QA. |
@@ -122,7 +122,7 @@ func (c *Client) AnalyzeVideoAgentic(ctx context.Context, fileURI, mimeType, pro
 	var thoughtText strings.Builder
 
 	// 4. STREAMING CONSUMPTION: keeps connection active and prevents idle timeout
-	for resp, err := range c.client.Models.GenerateContentStream(ctx, ModelFlash38, contents, config) {
+	for resp, err := range c.client.Models.GenerateContentStream(ctx, ModelHydrogen4, contents, config) {
 		if err != nil {
 			return nil, fmt.Errorf("agentic stream error: %w", err)
 		}

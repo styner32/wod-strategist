@@ -75,6 +75,7 @@ import {
   flushPendingUploads,
 } from "../../features/debug/telemetryUpload";
 import {
+  createSession,
   mergeChunks,
   processWorkoutChunk,
   is4xxError,
@@ -107,7 +108,7 @@ type FailedChunkRecoveryItem = {
   startSecs: number;
   endSecs: number;
   heartRateBpm?: number;
-  mediaChunk?: RecordingMediaChunkIdentity;
+  mediaChunk: RecordingMediaChunkIdentity;
   release: () => void;
 };
 type OriginalCapture = {
@@ -120,9 +121,13 @@ type OriginalCapture = {
   failedUploads: number;
   pendingUploads: number;
   completedUploads: number;
-  mediaPipelineVersion: 0 | 1;
   mediaChunkCount: number;
   mediaReceipts: Map<number, RecordingMediaManifestChunk>;
+  sessionIdempotencyKey: string;
+  sessionCreated: boolean;
+  sessionCreationFailedPermanently?: boolean;
+  sessionCreationPermanentError?: unknown;
+  creatingSession?: Promise<void>;
   failedChunks: FailedChunkRecoveryItem[];
   recoveringChunks?: Promise<void>;
   recoveryFinished?: boolean;
@@ -133,8 +138,7 @@ type OriginalCapture = {
 };
 const IS_ANDROID = Platform.OS === "android";
 
-function acceptMediaReceipt(capture: OriginalCapture, chunk: RecordingMediaChunkIdentity | undefined, result: UploadResult): void {
-  if (!chunk) return;
+function acceptMediaReceipt(capture: OriginalCapture, chunk: RecordingMediaChunkIdentity, result: UploadResult): void {
   if (!result?.chunkId || !result.sourceGeneration) {
     throw new Error("Cannot complete a media chunk without its approved source receipt");
   }
@@ -457,6 +461,7 @@ function VisionTestPageContent() {
 
   // Session ID computed once at recording start, reused for all chunks + merge
   const sessionIdRef = useRef<string>("");
+  const liveFeedbackSessionIdRef = useRef<string>("");
   const capturedProfileIdRef = useRef<number | null>(null);
 
   // Track recording session start time for chunk timing
@@ -623,7 +628,7 @@ function VisionTestPageContent() {
 
   const profileId = useProfileStore((s) => s.activeProfileId);
   const activeRecordingProfile = useRef(profileId); activeRecordingProfile.current = profileId;
-  const liveFeedback = useLiveWorkoutFeedback(isRecording, profileId ?? 0, sessionIdRef, recordingStartTime);
+  const liveFeedback = useLiveWorkoutFeedback(isRecording, profileId ?? 0, liveFeedbackSessionIdRef, recordingStartTime);
   const chunkFeedback = liveFeedback.coaching;
   const [isFeedbackCollapsed, setIsFeedbackCollapsed] = useState(false);
   const prevChunkFeedbackRef = useRef<string | null>(null);
@@ -924,6 +929,72 @@ function VisionTestPageContent() {
 
   // --- Chunk Recording Logic (Raw Camera) ---
 
+  const ensureSessionCreated = async (
+    capture: OriginalCapture,
+    options: { maxRetries?: number; retryDelayMs?: number } = {},
+  ): Promise<void> => {
+    if (capture.sessionCreated) return;
+    if (capture.sessionCreationFailedPermanently) {
+      throw capture.sessionCreationPermanentError ?? new Error("Session creation rejected");
+    }
+    const { maxRetries = 1, retryDelayMs = 2000 } = options;
+    if (capture.creatingSession) {
+      try {
+        await capture.creatingSession;
+      } catch (error) {
+        if (maxRetries <= 1 || capture.sessionCreationFailedPermanently || is4xxError(error)) {
+          throw error;
+        }
+      }
+      if (capture.sessionCreated) return;
+      if (capture.sessionCreationFailedPermanently) {
+        throw capture.sessionCreationPermanentError ?? new Error("Session creation rejected");
+      }
+    }
+
+    const movementsArray = movements ? movements.split(", ") : [];
+    const run = (async () => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          await createSession({
+            profileId: capture.ref.profileId,
+            sessionId: capture.ref.sessionId,
+            idempotencyKey: capture.sessionIdempotencyKey,
+            workoutType,
+            movements: movementsArray,
+            wodDescription: wodDescription || undefined,
+          });
+          capture.sessionCreated = true;
+          if (originalCapture.current === capture && isRecordingRef.current) {
+            liveFeedbackSessionIdRef.current = capture.ref.sessionId;
+          }
+          clearRetryBanner();
+          return;
+        } catch (error) {
+          lastError = error;
+          if (is4xxError(error)) {
+            capture.sessionCreationFailedPermanently = true;
+            capture.sessionCreationPermanentError = error;
+            throw error;
+          }
+          if (attempt < maxRetries) {
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+          }
+        }
+      }
+      throw lastError;
+    })();
+
+    const creating = run.finally(() => {
+      if (capture.creatingSession === creating) {
+        capture.creatingSession = undefined;
+      }
+    });
+    capture.creatingSession = creating;
+    await creating;
+  };
+
   const releaseFailedChunks = (capture: OriginalCapture) => {
     capture.recoveryFinished = true;
     while (capture.failedChunks.length > 0) {
@@ -941,6 +1012,20 @@ function VisionTestPageContent() {
       return;
     }
     const run = (async () => {
+      if (!capture.sessionCreated) {
+        try {
+          await ensureSessionCreated(
+            capture,
+            finalPass ? { maxRetries: 3, retryDelayMs: 2000 } : { maxRetries: 1 },
+          );
+        } catch (sessionError) {
+          console.warn("Session creation unavailable during chunk recovery", sessionError);
+          if (finalPass || is4xxError(sessionError) || !mounted.current) {
+            releaseFailedChunks(capture);
+          }
+          return;
+        }
+      }
       const remaining: FailedChunkRecoveryItem[] = [];
       while (capture.failedChunks.length > 0) {
         const item = capture.failedChunks.shift()!;
@@ -954,7 +1039,7 @@ function VisionTestPageContent() {
             endSecs: item.endSecs,
             heartRateBpm: item.heartRateBpm,
             appearanceHints,
-            ...(item.mediaChunk ? { mediaPipelineVersion: 1 as const, ...item.mediaChunk } : {}),
+            ...item.mediaChunk,
             maxRetries: 2,
             retryDelayMs: 2000,
           });
@@ -999,9 +1084,7 @@ function VisionTestPageContent() {
     const startSecs = Math.max(0, (start - capture.startedAt) / 1000);
     const endSecs = Math.max(startSecs, (end - capture.startedAt) / 1000);
     const heartRateBpm = heartRateWindow.current.peak(start, end);
-    const mediaChunk = capture.mediaPipelineVersion === 1
-      ? { clientChunkId: ulid(), captureOrder: ++capture.mediaChunkCount }
-      : undefined;
+    const mediaChunk: RecordingMediaChunkIdentity = { clientChunkId: ulid(), captureOrder: ++capture.mediaChunkCount };
     const rawRelease = holdOriginalFiles(capture.ref);
     let isReleased = false;
     const release = () => {
@@ -1039,13 +1122,39 @@ function VisionTestPageContent() {
       }
       const upload = async () => {
         let heldForRecovery = false;
+        let failedDuringSessionCreation = false;
         try {
+          const waitingForSession = !capture.sessionCreated;
+          try {
+            await ensureSessionCreated(capture);
+          } catch (sessionError) {
+            failedDuringSessionCreation = true;
+            throw sessionError;
+          }
+          if (waitingForSession && capture.failedChunks.length > 0 && !capture.recoveryFinished) {
+            await retryFailedChunks(capture, false);
+            if (capture.failedChunks.length > 0 && !capture.recoveryFinished) {
+              capture.failedUploads += 1;
+              if (mounted.current) {
+                heldForRecovery = true;
+                capture.failedChunks.push({
+                  path,
+                  startSecs,
+                  endSecs,
+                  heartRateBpm,
+                  mediaChunk,
+                  release,
+                });
+              }
+              return;
+            }
+          }
           const result = await processWorkoutChunk(uri, capture.ref.sessionId, {
             movements: movements ? movements.split(", ") : [],
             injuries: injuries ? injuries.split(", ") : [],
             workoutType, profileId: capture.ref.profileId, startSecs, endSecs,
             heartRateBpm, appearanceHints,
-            ...(mediaChunk ? { mediaPipelineVersion: 1 as const, ...mediaChunk } : {}),
+            ...mediaChunk,
             maxRetries: 5,
             retryDelayMs: 5000,
             onRetry: (attempt, maxRetries) => {
@@ -1094,9 +1203,11 @@ function VisionTestPageContent() {
             showUploadBanner(
               {
                 type: "error",
-                message: t("overlay.recording.chunkUploadFailed", {
-                  maxRetries: 5,
-                }),
+                message: failedDuringSessionCreation
+                  ? t("overlay.recording.sessionCreateDeferred")
+                  : t("overlay.recording.chunkUploadFailed", {
+                      maxRetries: 5,
+                    }),
               },
               8000,
             );
@@ -1163,6 +1274,9 @@ function VisionTestPageContent() {
         await validateRecordingSetup(capture.setupSnapshot, { ownerUserId: capture.ref.ownerUserId, profileId: capture.ref.profileId });
         if (!mounted.current || originalCapture.current !== capture || activeRecordingProfile.current !== capture.ref.profileId
           || useAuthStore.getState().userId !== capture.ref.ownerUserId) throw new Error("recording_scope_changed_before_capture");
+        void ensureSessionCreated(capture).catch((error) => {
+          console.warn("Initial session registration failed; chunks will retry once connected", error);
+        });
       }
       const startedAt = Date.now();
       isChunkRecordingActive.current = true;
@@ -1323,8 +1437,9 @@ function VisionTestPageContent() {
       originalCapture.current = {
         ref, startedAt, setupSnapshot: recordingSetup, order: 0, complete: true,
         failedUploads: 0, pendingUploads: 0, completedUploads: 0, failedChunks: [], drains: [],
-        mediaPipelineVersion: process.env.EXPO_PUBLIC_MEDIA_PIPELINE_VERSION === "1" ? 1 : 0,
-        mediaChunkCount: 0, mediaReceipts: new Map(), release: holdOriginalFiles(ref),
+        mediaChunkCount: 0, mediaReceipts: new Map(),
+        sessionIdempotencyKey: ulid(), sessionCreated: false,
+        release: holdOriginalFiles(ref),
       };
       heartRateWindow.current.clear();
       stoppingWorkout.current = false;
@@ -1341,6 +1456,7 @@ function VisionTestPageContent() {
 
       // Compute session ID once for the entire recording session
       sessionIdRef.current = sessionId;
+      liveFeedbackSessionIdRef.current = "";
       recordingStartTime.current = startedAt;
       capturedProfileIdRef.current = profileId!;
       outstandingUploads.current = 0;
@@ -1405,6 +1521,7 @@ function VisionTestPageContent() {
       // the auth store stay in a recording state that no camera is backing,
       // and the `if (isRecording) return` guard blocks any retry.
       isRecordingRef.current = false;
+      liveFeedbackSessionIdRef.current = "";
       setIsRecording(false);
       setIsPaused(false);
       useAuthStore.getState().setRecordingActive(false);
@@ -1498,6 +1615,7 @@ function VisionTestPageContent() {
         void environment.stop().catch(console.warn);
       }
       isRecordingRef.current = false;
+      liveFeedbackSessionIdRef.current = "";
       setIsRecording(false);
       setIsPaused(false);
 
@@ -1582,11 +1700,11 @@ function VisionTestPageContent() {
               console.warn("Server merge skipped because no chunks were uploaded");
               return;
             }
-            const missingMediaReceipts = capture.mediaPipelineVersion === 1 &&
-              (capture.mediaReceipts.size !== capture.mediaChunkCount ||
-                Array.from({ length: capture.mediaChunkCount }, (_, index) => index + 1)
-                  .some((order) => !capture.mediaReceipts.has(order)));
-            if (capture.pendingUploads > 0 || capture.failedUploads > 0 || missingMediaReceipts) {
+            const missingMediaReceipts =
+              capture.mediaReceipts.size !== capture.mediaChunkCount ||
+              Array.from({ length: capture.mediaChunkCount }, (_, index) => index + 1)
+                .some((order) => !capture.mediaReceipts.has(order));
+            if (capture.pendingUploads > 0 || capture.failedUploads > 0 || missingMediaReceipts || !capture.sessionCreated) {
               console.warn(
                 `⚠️ Server merge withheld: ${capture.completedUploads} uploaded, ${capture.failedUploads} failed, ${capture.pendingUploads} pending`,
               );
@@ -1600,13 +1718,10 @@ function VisionTestPageContent() {
               profileId: capturedProfileIdRef.current!,
               wodDescription: wodDescription || undefined,
               appearanceHints,
-              ...(capture.mediaPipelineVersion === 1 ? {
-                mediaPipelineVersion: 1 as const,
-                expectedChunkCount: capture.mediaChunkCount,
-                chunks: [...capture.mediaReceipts.entries()]
-                  .sort(([first], [second]) => first - second)
-                  .map(([, receipt]) => receipt),
-              } : {}),
+              expectedChunkCount: capture.mediaChunkCount,
+              chunks: [...capture.mediaReceipts.entries()]
+                .sort(([first], [second]) => first - second)
+                .map(([, receipt]) => receipt),
             });
             console.log(`✅ Auto-merge triggered for ${Platform.OS} session`);
           } catch (e) {

@@ -57,7 +57,7 @@ func (b *gatedStreamBody) Read(p []byte) (int, error) {
 
 var _ = Describe("Streaming video comparison", func() {
 	const base = "https://example.test"
-	const path = "/v1beta/models/" + ModelFlash38 + ":streamGenerateContent?alt=sse"
+	const path = "/v1beta/models/" + ModelHydrogen4 + ":streamGenerateContent?alt=sse"
 	const first = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"toolCall\":{\"toolType\":\"MEDIA_PROCESSING\"},\"text\":\"private thought\"}]}}]}\n\n"
 	const last = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"toolResponse\":{\"toolType\":\"MEDIA_PROCESSING\"}},{\"text\":\"[]\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":0,\"totalTokenCount\":12},\"futureField\":true}\n\n"
 	var transport *testhelpers.MockTransport
@@ -177,7 +177,7 @@ var _ = Describe("Streaming video comparison", func() {
 		Expect(r.Outcome).To(Equal("completed"))
 		Expect(r.Text).To(Equal("[]"))
 		Expect(r.ThoughtSummary).To(Equal("private thought"))
-		u := UsageFromComparisonWithThoughts(r.Usage, ModelFlash38, r.ThoughtSummary)
+		u := UsageFromComparisonWithThoughts(r.Usage, ModelHydrogen4, r.ThoughtSummary)
 		Expect(u.ThoughtSummary).To(Equal("private thought"))
 	})
 })

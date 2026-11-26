@@ -156,7 +156,7 @@ make migrate-test-up
 Mobile captures whiteboard photo
   → POST /api/v1/parse-workout-image (multipart: image)
   → Server: DetectImageMIME → NormalizeImage (max 1024px, JPEG q85)
-  → Gemini Flash (gemini-3.8-flash) with inline InlineData part
+  → Gemini 4 Hydrogen (gemini-4-hydrogen) with inline InlineData part
   → Parse ```workout { ... } ``` block
   → Response: { wod_description, movements[], raw_text }
 ```

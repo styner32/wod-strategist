@@ -102,56 +102,6 @@ const (
 	SensorStateCancelled = "CANCELLED"
 )
 
-type AnalysisResult struct {
-	AutomaticProcessingCancelledAt *time.Time           `json:"automatic_processing_cancelled_at,omitempty"`
-	WorkoutProgress                NullableJSONDocument `json:"workout_progress" swaggertype:"object"`
-
-	AnalysisSummary          JSONDocument `json:"analysis_summary"`
-	AgenticHighlightAnalysis JSONDocument `json:"-"`
-	ID                       uint         `gorm:"primaryKey" json:"id"`
-	SessionID                string       `gorm:"uniqueIndex;not null" json:"session_id"`
-	ProfileID                uint         `gorm:"index;not null" json:"profile_id"`
-	AnalysisType             string       `gorm:"default:wod" json:"analysis_type"` // wod, injury_supplement
-	Status                   string       `json:"status"`                           // PENDING, COMPLETED, FAILED
-	Output                   string       `json:"output"`
-	InjuryOutput             string       `json:"injury_output,omitempty"` // Injury supplement analysis (appended, not overwritten)
-	InjuryOutputAlt          string       `json:"-"`
-	GeminiFileURI            string       `json:"-"`
-	GeminiFileName           string       `json:"-"`
-	GeminiMIMEType           string       `json:"-"`
-	GeminiFileExpiresAt      *time.Time   `json:"-"`
-	HighlightSegments        string       `json:"highlight_segments"` // JSON array of highlight segments
-	Verified                 *bool        `json:"verified,omitempty"` // nil=unchecked, true=confirmed, false=hallucination detected
-	// WODDescription is the user-supplied workout descriptor (e.g. "Fran", "For Time: 5 rounds of...").
-	// Injected into analysis prompts to enable benchmark comparison and WOD-type-aware scoring.
-	WODDescription string `gorm:"type:text;not null;default:''" json:"wod_description,omitempty"`
-	// SessionScore is a compact JSON blob of per-dimension scores (0–100) produced at analysis time.
-	// Schema: {"overall":74,"form":68,"intensity":82,"consistency":72,"movements":{},"summary":"..."}
-	// Used to inject historical performance context into future analysis prompts.
-	SessionScore           string           `gorm:"type:text;not null;default:'{}'" json:"session_score,omitempty"`
-	SessionFatigue         *SessionFatigue  `gorm:"-" json:"session_fatigue,omitempty"`
-	NormalizedWorkout      string           `json:"normalized_workout,omitempty"`
-	MobilityObservations   string           `gorm:"type:text;not null;default:'[]'" json:"mobility_observations,omitempty"`
-	StretchRecommendations string           `gorm:"type:text;not null;default:'[]'" json:"stretch_recommendations,omitempty"`
-	AvailableVideos        CommaStringArray `gorm:"column:available_videos;type:text;not null;default:'merged'" json:"available_videos"`
-	SensorVersion          int64            `gorm:"column:sensor_version;not null;default:0" json:"sensor_version,string"`
-	SensorState            string           `gorm:"column:sensor_state;not null;default:NONE" json:"sensor_state"`
-	SensorProcessing       JSONDocument     `gorm:"column:sensor_processing;type:jsonb;not null;default:'{}'" json:"-"`
-	SensorSummary          JSONDocument     `gorm:"column:sensor_summary;type:jsonb;not null;default:'{}'" json:"sensor_summary,omitempty"`
-	SensorTimeline         JSONDocument     `gorm:"column:sensor_timeline;type:jsonb" json:"-"`
-	SensorNextAttemptAt    *time.Time       `gorm:"column:sensor_next_attempt_at" json:"-"`
-	WorkoutAt              *time.Time       `gorm:"column:workout_at" json:"workout_at,omitempty"`
-	WorkoutAtSource        *string          `gorm:"column:workout_at_source" json:"workout_at_source,omitempty"`
-	ArchivedAt             *time.Time       `json:"archived_at,omitempty"`
-	CreatedAt              time.Time        `json:"created_at"`
-	UpdatedAt              time.Time        `json:"updated_at"`
-
-	HeartRate       *HeartRateSummaryDTO `gorm:"-" json:"heart_rate,omitempty"`
-	InputStatus     *HistoryInputStatus  `gorm:"-" json:"input_status,omitempty"`
-	Highlights      *[]HighlightResult   `gorm:"-" json:"highlights,omitempty"`
-	ActivitySummary any                  `gorm:"-" json:"activity_summary,omitempty" swaggertype:"object"`
-}
-
 type HistoryInputStatus struct {
 	EffortEligible         bool `json:"effort_eligible"`
 	Effort                 *int `json:"effort"`
@@ -238,7 +188,7 @@ type TokenUsage struct {
 	SessionID       string               `gorm:"index;not null" json:"session_id"`
 	ProfileID       uint                 `gorm:"index;not null" json:"profile_id"`
 	TaskType        string               `gorm:"not null" json:"task_type"` // chunk:analysis, video:index, video:segment, etc.
-	Model           string               `gorm:"not null" json:"model"`     // gemini-3.1-pro-preview, gemini-3.5-flash-lite, gemini-3.8-flash
+	Model           string               `gorm:"not null" json:"model"`     // gemini-4-carbon, gemini-4-hydrogen, gemini-4-argon, gemini-3.8-flash, etc.
 	PromptTokens    int64                `gorm:"not null;default:0" json:"prompt_tokens"`
 	CandidateTokens int64                `gorm:"not null;default:0" json:"candidate_tokens"`
 	TotalTokens     int64                `gorm:"not null;default:0" json:"total_tokens"`
@@ -321,37 +271,6 @@ type GeminiThoughtLog struct {
 	ThinkingTokens int64     `json:"thinking_tokens"`
 	ThoughtSummary string    `json:"thought_summary"`
 	CreatedAt      time.Time `json:"created_at"`
-}
-
-const (
-	SessionStatusStarted   = "started"
-	SessionStatusCompleted = "completed"
-	SessionStatusFailed    = "failed"
-)
-
-type SessionStatus string
-
-func (s SessionStatus) String() string {
-	return string(s)
-}
-
-type Session struct {
-	WODEvaluationVersion        int                  `json:"wod_evaluation_version"`
-	Effort                      *int                 `json:"effort"`
-	ActivitySummary             NullableJSONDocument `json:"activity_summary,omitempty" swaggertype:"object"`
-	ActivityReviewAttempts      NullableJSONDocument `gorm:"column:activity_review_attempts;type:jsonb" json:"-"`
-	ActivitySummaryCacheVersion int                  `gorm:"column:activity_summary_cache_version" json:"-"`
-
-	ID             uint          `gorm:"primaryKey" json:"id"`
-	SessionID      string        `gorm:"uniqueIndex;not null" json:"session_id"`
-	Status         SessionStatus `json:"status"` // started, completed, failed
-	ProfileID      uint          `gorm:"index;not null" json:"profile_id"`
-	IdempotencyKey string        `gorm:"index;not null" json:"idempotency_key"`
-	WODDescription string        `gorm:"not null" json:"wod_description"`
-	MovementHints  JSONDocument  `json:"movement_hints"`
-	WorkoutType    string        `json:"workout_type"`
-	UpdatedAt      time.Time     `json:"updated_at"`
-	CreatedAt      time.Time     `json:"created_at"`
 }
 
 type SessionAppearanceHint struct {

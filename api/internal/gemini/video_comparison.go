@@ -89,7 +89,7 @@ func (t comparisonTransport) RoundTrip(req *http.Request) (*http.Response, error
 // NewComparisonClient shares the existing SDK configuration and Files lifecycle;
 // its per-request recorder is also used for normal generation usage accounting.
 func NewComparisonClient(ctx context.Context, options Options) (*Client, error) {
-	options.Model = ModelFlash38
+	options.Model = ModelHydrogen4
 	return NewClientWithOptions(ctx, zap.NewNop(), options)
 }
 
@@ -137,10 +137,10 @@ func (c *Client) CompareVideoMode(ctx context.Context, fileURI, mimeType, prompt
 	ctx = context.WithValue(ctx, comparisonKey{}, &r)
 	config := &genai.GenerateContentConfig{
 		MediaResolution: genai.MediaResolutionHigh,
-		ThinkingConfig:  c.thinkingConfigForModel(ModelFlash38),
+		ThinkingConfig:  c.thinkingConfigForModel(ModelHydrogen4),
 		HTTPOptions:     &genai.HTTPOptions{RetryOptions: &genai.HTTPRetryOptions{Attempts: genai.Ptr(int32(1))}},
 	}
-	_, err := c.client.Models.GenerateContent(ctx, ModelFlash38, []*genai.Content{{
+	_, err := c.client.Models.GenerateContent(ctx, ModelHydrogen4, []*genai.Content{{
 		Role: genai.RoleUser,
 		Parts: []*genai.Part{
 			{FileData: &genai.FileData{FileURI: fileURI, MIMEType: mimeType}, MediaProcessing: mode},

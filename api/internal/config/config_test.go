@@ -35,12 +35,12 @@ var _ = Describe("InitServer", func() {
 		setEnv("GEMINI_MODEL", "")
 		cfg, err := config.InitServer()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.GeminiModel).To(Equal(gemini.ModelArgon4))
+		Expect(cfg.GeminiModel).To(Equal(gemini.ModelCarbon4))
 
-		setEnv("GEMINI_MODEL", "  gemini-3.8-flash  ")
+		setEnv("GEMINI_MODEL", "  gemini-4-hydrogen  ")
 		cfg, err = config.InitServer()
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.GeminiModel).To(Equal(gemini.ModelFlash38))
+		Expect(cfg.GeminiModel).To(Equal(gemini.ModelHydrogen4))
 	})
 
 	It("keeps Agentic highlights disabled by default and enables only an explicit true value", func() {
@@ -367,7 +367,7 @@ var _ = Describe("InitWorker", func() {
 	})
 
 	Context("GeminiModel and ThinkingConfig", func() {
-		It("defaults to ModelArgon4, HIGH thinking level, and LOW chunk thinking level", func() {
+		It("defaults to ModelCarbon4, HIGH thinking level, and LOW chunk thinking level", func() {
 			setEnv("GEMINI_MODEL", "")
 			setEnv("GEMINI_THINKING_LEVEL", "")
 			setEnv("GEMINI_THINKING_CHUNK", "")
@@ -376,7 +376,7 @@ var _ = Describe("InitWorker", func() {
 
 			cfg, err := config.InitWorker()
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.GeminiModel).To(Equal(gemini.ModelArgon4))
+			Expect(cfg.GeminiModel).To(Equal(gemini.ModelCarbon4))
 			Expect(cfg.GeminiThinkingLevel).To(Equal("HIGH"))
 			Expect(cfg.GeminiThinkingChunk).To(Equal("LOW"))
 			Expect(cfg.GeminiThinkingBudget).To(BeNil())
@@ -407,7 +407,7 @@ var _ = Describe("InitWorker", func() {
 			setEnv("GEMINI_THINKING_CHUNK", "MINIMAL")
 			_, err := config.InitWorker()
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("not supported by Gemini 3.8 Flash"))
+			Expect(err.Error()).To(ContainSubstring("not supported by Gemini 4 Hydrogen"))
 		})
 
 		It("rejects invalid thinking level strings", func() {

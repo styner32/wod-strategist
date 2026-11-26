@@ -104,6 +104,19 @@ func main() {
 	queueClient := asynq.NewClient(redisOpt)
 	defer queueClient.Close()
 
+	if dbConn == nil {
+		logger.Log.Fatal("Database connection is required")
+	}
+	if storageClient == nil {
+		logger.Log.Fatal("Storage client is required")
+	}
+	if geminiClient == nil {
+		logger.Log.Fatal("Gemini client is required")
+	}
+	if queueClient == nil {
+		logger.Log.Fatal("Queue client is required")
+	}
+
 	w := worker.NewWorker(dbConn, storageClient, cfg.GCSBucketName, geminiClient, queueClient, logger.Log)
 	w.QueueInspector = asynq.NewInspector(redisOpt)
 	defer w.QueueInspector.Close()

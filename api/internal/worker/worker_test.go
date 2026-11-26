@@ -3,6 +3,7 @@ package worker
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/wod-strategist/api/internal/db"
 )
 
 var _ = Describe("validateSessionID", func() {
@@ -47,4 +48,44 @@ var _ = Describe("workoutTypeFromSessionID", func() {
 		Entry("no type prefix", "session-hints", ""),
 		Entry("type word later in the ID", "split-WARMUP-session", ""),
 	)
+})
+
+var _ = Describe("getDetailFromProfile", func() {
+	var w *Worker
+
+	BeforeEach(func() {
+		w = &Worker{}
+	})
+
+	It("returns empty string for a nil profile", func() {
+		Expect(w.getDetailFromProfile(nil)).To(Equal(""))
+	})
+
+	It("formats full profile attributes when birthdate, height, and weight are present", func() {
+		birthYear, birthMonth, birthDay := 1995, 3, 15
+		heightCm := 168
+		weightKg := 58.5
+		gender := "female"
+
+		detail := w.getDetailFromProfile(&db.Profile{
+			BirthYear:    &birthYear,
+			BirthMonth:   &birthMonth,
+			BirthDay:     &birthDay,
+			Gender:       &gender,
+			HeightCm:     &heightCm,
+			WeightKg:     &weightKg,
+			FitnessLevel: "advanced",
+		})
+		Expect(detail).To(Equal("생년월일: 1995년 3월 15일, 성별: 여, 키: 168cm, 몸무게: 58.5kg, 피트니스 레벨: 고급"))
+	})
+
+	It("falls back to gender and fitness level when body metrics are missing", func() {
+		gender := "male"
+
+		detail := w.getDetailFromProfile(&db.Profile{
+			Gender:       &gender,
+			FitnessLevel: "beginner",
+		})
+		Expect(detail).To(Equal("성별: 남, 피트니스 레벨: 초급"))
+	})
 })

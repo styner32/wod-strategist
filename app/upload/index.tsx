@@ -2,18 +2,19 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 import { Fonts, TacticalTheme } from "@/constants/theme";
 import { t, useLocale } from "@/features/i18n";
 import {
+  createSession,
   fetchMovementGroups,
   getUploadUrl,
   notifyUploadComplete,
   uploadToGcs,
   type MovementGroup,
 } from "@/features/wod/api";
-import { buildWorkoutSessionId } from "@/features/wod/workoutType";
 import { useProfileId } from "@/store/useProfileStore";
 import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { ulid } from "ulid";
 import {
   ActivityIndicator,
   Alert,
@@ -51,6 +52,7 @@ export default function UploadScreen() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const uploadIdempotencyKeyRef = useRef<string | null>(null);
 
   const [movementGroups, setMovementGroups] = useState<MovementGroup[]>([]);
   const [selectedMovements, setSelectedMovements] = useState<string[]>([]);
@@ -143,6 +145,7 @@ export default function UploadScreen() {
       quality: 1,
     });
     if (!result.canceled && result.assets[0]) {
+      uploadIdempotencyKeyRef.current = null;
       setSelectedVideo(result.assets[0].uri);
       setFileName(
         result.assets[0].fileName ??
@@ -164,7 +167,15 @@ export default function UploadScreen() {
     setProgress(0);
 
     try {
-      const sessionId = buildWorkoutSessionId("wod");
+      const idempotencyKey =
+        uploadIdempotencyKeyRef.current ?? (uploadIdempotencyKeyRef.current = ulid());
+      const created = await createSession({
+        profileId,
+        idempotencyKey,
+        workoutType: "wod",
+        movements: selectedMovements,
+      });
+      const sessionId = created.session_id;
       const name = fileName ?? "video.mp4";
 
       const { upload_url, gcs_uri } = await getUploadUrl(
@@ -193,6 +204,7 @@ export default function UploadScreen() {
         },
       ]);
 
+      uploadIdempotencyKeyRef.current = null;
       setSelectedVideo(null);
       setFileName(null);
     } catch (e: any) {
